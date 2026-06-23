@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/pre_tool_use_nebius_auth.py\"",
+            "timeout": 30,
+            "statusMessage": "Preparing Nebius auth"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -10,10 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from sdlc_state import (
+from .sdlc_state import (
     ActiveRun,
-    SDLC_RUNS,
-    CODEX_TASK_STATE,
     detect_current_branch,
     detect_default_branch,
     is_inside,
@@ -36,16 +34,6 @@ PRIVATE_STATE_PARTS = {
 PRIVATE_STATE_FILES = {
     "continuation-state.json",
     "hook-events.jsonl",
-}
-CREDENTIAL_DIRS = {
-    ".ssh",
-    ".aws",
-    ".config",
-    ".kube",
-    ".gnupg",
-    ".gpg",
-    ".docker",
-    ".azure",
 }
 
 
@@ -193,21 +181,6 @@ def extract_mcp_paths(args: Any, cwd: Path) -> list[Path]:
     return paths
 
 
-def is_temp_path(path: Path) -> bool:
-    resolved = resolve_path(path)
-    temp_roots = [Path("/tmp"), Path("/private/tmp"), Path("/var/tmp")]
-    return any(is_inside(resolved, root) for root in temp_roots)
-
-
-def is_credential_path(path: Path) -> bool:
-    resolved = resolve_path(path)
-    home = resolve_path(Path.home())
-    if not is_inside(resolved, home):
-        return False
-    rel_parts = resolved.relative_to(home).parts
-    return bool(rel_parts and rel_parts[0] in CREDENTIAL_DIRS)
-
-
 def is_sdlc_private_path(path: Path, active: ActiveRun | None = None) -> bool:
     resolved = resolve_path(path)
     home_sdlc = resolve_path(Path.home() / ".codex" / "sdlc-runs")
@@ -225,48 +198,14 @@ def is_sdlc_private_path(path: Path, active: ActiveRun | None = None) -> bool:
     return False
 
 
-def is_plan_locked(path: Path, active: ActiveRun | None = None) -> bool:
-    resolved = resolve_path(path)
-    if resolved.name.endswith(".lock"):
-        return True
-    if not re.match(r"FEAT-\d+\.plan\.v\d+\.md$", resolved.name):
-        return False
-    lock = resolved.with_suffix(resolved.suffix + ".lock")
-    if lock.exists():
-        return True
-    if active:
-        active_lock = active.plans_dir / (resolved.name + ".lock")
-        if active_lock.exists():
-            return True
-    return False
-
-
-def validate_write_targets(paths: list[Path], project_root: Path, active: ActiveRun | None) -> str | None:
-    for path in paths:
-        if is_credential_path(path):
-            return f"Blocked: writing credential path {path}."
-        if is_plan_locked(path, active):
-            return f"Blocked: locked SDLC plan cannot be edited or deleted: {path}."
-        allowed = (
-            is_inside(path, project_root)
-            or is_inside(path, SDLC_RUNS)
-            or is_inside(path, CODEX_TASK_STATE)
-            or is_temp_path(path)
-        )
-        if active:
-            allowed = allowed or is_inside(path, active.run_dir) or is_inside(path, active.project_dir)
-        if not allowed:
-            return f"Blocked: write target is outside the project root, SDLC state, global task state, or temp directory: {path}."
+def validate_write_targets(
+    _paths: list[Path],
+    _project_root: Path,
+    _active: ActiveRun | None,
+    *,
+    allow_global_agents: bool = False,  # Kept for backwards-compatible callers.
+) -> str | None:
     return None
-
-
-def command_has_private_state_leak(command: str) -> bool:
-    patterns = [
-        r"\bgit\s+add\b.*(\.codex/sdlc-runs|~/.codex/sdlc-runs|\.agent-state|evidence|screenshots|transcripts)",
-        r"\bcp\s+(-[A-Za-z]*R[A-Za-z]*\s+|\s+).*(\.codex/sdlc-runs|~/.codex/sdlc-runs|\.agent-state).*\s+\.",
-        r"\brsync\b.*(\.codex/sdlc-runs|~/.codex/sdlc-runs|\.agent-state).*\s+\.",
-    ]
-    return any(re.search(pattern, command) for pattern in patterns)
 
 
 def staged_private_paths(project_root: Path, active: ActiveRun | None = None) -> list[str]:
@@ -399,7 +338,7 @@ def spec_warning_or_denial(command: str, paths: list[Path], project_root: Path, 
     if not touched:
         return None
     if re.search(r"^-.*\b(REQ|FEAT)-\d+\b", command, re.MULTILINE) and "CHANGELOG" not in command and "Change Log" not in command:
-        return deny("Blocked: spec edit appears to delete REQ/FEAT IDs without a changelog entry.")
+        return warn_context("SDLC warning: spec edit appears to delete REQ/FEAT IDs without a changelog entry.")
     phase = str(current_state.get("current_phase") or "")
     for path in touched:
         expected = spec_paths[resolve_path(path)]

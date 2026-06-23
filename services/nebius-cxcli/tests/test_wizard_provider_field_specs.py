@@ -4,6 +4,7 @@ from typing import Any
 
 from nebius_cxcli.cli import (
     _provider_allowed_values_for_field,
+    _provider_prompt_dependencies_ready,
     _provider_source_specs_for_field,
     _resolve_dynamic_field_choices,
     _resolve_wizard_field_spec,
@@ -105,6 +106,35 @@ def test_provider_specs_return_empty_for_undeclared_field() -> None:
     )
 
     assert specs == ()
+
+
+def test_mk8s_platform_provider_waits_for_cluster_k8s_version() -> None:
+    entry = _infra_entry(
+        "mk8s",
+        wizard_fields={
+            "inputs.node_group_defaults.cpu.platform": {
+                "options": {
+                    "from": "mk8s_compatible_platforms",
+                    "args": {"platform_prefix": "cpu-"},
+                }
+            }
+        },
+    )
+    field_path = "infra.components[0].inputs.node_group_defaults.cpu.platform"
+    payload = {"infra": {"components": [{"inputs": {"cluster": {}}}]}}
+
+    assert not _provider_prompt_dependencies_ready(
+        payload=payload,
+        entry=entry,
+        full_path_label=field_path,
+    )
+
+    payload["infra"]["components"][0]["inputs"]["cluster"]["k8s_version"] = "1.31"
+    assert _provider_prompt_dependencies_ready(
+        payload=payload,
+        entry=entry,
+        full_path_label=field_path,
+    )
 
 
 class _StubProviderLookup(ProviderOptionLookup):

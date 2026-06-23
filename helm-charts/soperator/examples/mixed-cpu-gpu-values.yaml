@@ -14,11 +14,19 @@ partitionConfiguration:
     - name: cpu
       nodeSetRefs:
         - worker-cpu
-      config: Default=YES MaxTime=INFINITE State=UP PriorityTier=5
+      policy:
+        default: true
+        maxTime: INFINITE
+        state: UP
+        priorityTier: 5
     - name: gpu
       nodeSetRefs:
         - worker-gpu
-      config: Default=NO MaxTime=INFINITE State=UP PriorityTier=10
+      policy:
+        default: false
+        maxTime: INFINITE
+        state: UP
+        priorityTier: 10
 
 nodesets:
   - name: worker-cpu

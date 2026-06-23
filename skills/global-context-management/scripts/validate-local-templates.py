@@ -36,11 +36,16 @@ def skill_dir() -> Path:
 def parse_templates(root: Path) -> dict:
     hooks_template = root / "assets" / "hooks.json.template"
     hooks = json.loads(hooks_template.read_text(encoding="utf-8"))
-    json.loads(
+    policy = json.loads(
         (root / "assets" / "global_context_policy.json.template").read_text(
             encoding="utf-8"
         )
     )
+    if policy.get("auto_read_only_subagents") is not True:
+        raise AssertionError(
+            "optional global_context_policy template must enable read-only "
+            "subagent delegation"
+        )
 
     for path in sorted((root / "assets").glob("*.toml.template")):
         tomllib.loads(path.read_text(encoding="utf-8"))
@@ -189,14 +194,19 @@ def assert_agent_delegation_context(context: str) -> None:
     if "agents/alpha_mapper.toml" in context:
         raise AssertionError("agent config path leaked into context")
     if (
-        "Local policy requests bounded read-only subagent delegation"
+        "Local policy asks the main Codex agent to dynamically spawn bounded "
+        "read-only helpers"
         not in context
     ):
         raise AssertionError("delegation policy context missing")
+    if "do not wait for another user prompt" not in context:
+        raise AssertionError("dynamic subagent spawning guidance missing")
     if "Available read-only roles:" not in context:
         raise AssertionError("read-only role list missing")
     if "Suggested role timing:" not in context:
         raise AssertionError("role timing hint missing")
+    if "Choose the smallest useful set of targeted roles" not in context:
+        raise AssertionError("targeted subagent selection guidance missing")
     if "do not spawn every role by default" not in context:
         raise AssertionError("bounded subagent selection guidance missing")
     forbidden = (
@@ -520,7 +530,7 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
         raise AssertionError("UserPromptSubmit should not route sdlc-start")
     if "Apply the `global-context-management` skill" in context:
         raise AssertionError("UserPromptSubmit should not directly select skills")
-    if "Local policy requests bounded read-only subagent delegation" in context:
+    if "Local policy asks the main Codex agent" in context:
         raise AssertionError("delegation context appeared before policy opt-in")
     if "For every subagent you spawn" in context:
         raise AssertionError("UserPromptSubmit repeated subagent workflow detail")
@@ -580,7 +590,7 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
         "additionalContext"
     ]
     if (
-        "Local policy requests bounded read-only subagent delegation"
+        "Local policy asks the main Codex agent"
         in env_override_context
     ):
         raise AssertionError("environment override unexpectedly enabled delegation")

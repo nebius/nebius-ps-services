@@ -5,8 +5,8 @@ set -euo pipefail
 #
 # Usage: ./install-skills.sh [source] [destination_dir]
 #        ./install-skills.sh --remove-skill <skill_name> [destination_dir]
-#        ./install-skills.sh --install-hooks <source_hook_dir>
-#        ./install-skills.sh --install-all-hooks
+#        ./install-skills.sh --install-hooks <source_hook_dir> [--register-hooks] [--replace-hooks-json]
+#        ./install-skills.sh --install-all-hooks [--register-hooks] [--replace-hooks-json]
 #        ./install-skills.sh --help
 # No-argument install: source is this script's directory and destination is
 # ~/.agents/skills. --remove-skill without a destination removes from the same
@@ -16,7 +16,8 @@ set -euo pipefail
 #   - https://github.com/<owner>/<repo>/tree/<ref>/<subpath>
 #
 # Requirements: bash, rsync, and git (GitHub sources only). Hook installation
-# also uses install, find, cmp, chmod, awk, cut, sort, and mktemp.
+# also uses install, find, cmp, chmod, awk, cut, sort, and mktemp. Hook
+# registration also uses python3.
 # How behavior is enforced:
 #   - Skill detection: only directories containing SKILL.md are treated as skills.
 #   - Idempotency: rsync keeps destination in sync (--delete, --omit-dir-times) and
@@ -28,6 +29,10 @@ set -euo pipefail
 #   - Drift visibility: destination skills missing from the selected source are
 #     listed at the end with a --remove-skill hint instead of being removed unless
 #     they are still marked as owned by the same source.
+#   - Hook drift visibility: hook installation lists extra installed hook files
+#     and hooks.json registrations that are not present in the selected source
+#     manifests, but it never deletes them automatically unless
+#     --replace-hooks-json is explicitly set for registrations.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_SRC_DIR="${SCRIPT_DIR}"
@@ -84,8 +89,8 @@ show_usage() {
   printf '%b\n' "${S_BOLD}Usage:${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}[source] [destination_dir]${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}--remove-skill <skill_name> [destination_dir]${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}--install-hooks <source_hook_dir>${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}--install-all-hooks${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}--install-hooks <source_hook_dir> [--register-hooks] [--replace-hooks-json]${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}--install-all-hooks [--register-hooks] [--replace-hooks-json]${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}--help${S_RESET}"
   printf '\n'
 
@@ -110,10 +115,17 @@ show_usage() {
   printf '%b\n' "  ${S_YELLOW}--remove-skill${S_RESET}   Remove one skill by its visible Codex skill name or folder name"
   printf '%b\n' "  ${S_YELLOW}--install-hooks${S_RESET}  Copy hook files from a source hook directory into"
   printf '%b\n' "                    ${S_CYAN}\${CODEX_HOME:-~/.codex}/hooks${S_RESET}, stripping .template suffixes"
-  printf '%b\n' "                    without modifying hooks.json"
+  printf '%b\n' "                    without modifying hooks.json unless --register-hooks is also set"
   printf '%b\n' "  ${S_YELLOW}--install-all-hooks${S_RESET}"
   printf '%b\n' "                    Copy hook files from every ${S_CYAN}*/assets/hooks${S_RESET} directory"
   printf '%b\n' "                    under this source skills folder"
+  printf '%b\n' "  ${S_YELLOW}--register-hooks${S_RESET}"
+  printf '%b\n' "                    With --install-hooks or --install-all-hooks, merge"
+  printf '%b\n' "                    selected source manifest(s) into"
+  printf '%b\n' "                    ${S_CYAN}\${CODEX_HOME:-~/.codex}/hooks.json${S_RESET}"
+  printf '%b\n' "  ${S_YELLOW}--replace-hooks-json${S_RESET}"
+  printf '%b\n' "                    With --register-hooks, replace hooks.json with a clean"
+  printf '%b\n' "                    file built only from selected source manifest(s)"
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Examples:${S_RESET}"
@@ -124,8 +136,9 @@ show_usage() {
   printf '%b\n' "  ${S_CYAN}./install-skills.sh --remove-skill nebius${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./install-skills.sh --remove-skill nebius \"~/custom-skills\"${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./install-skills.sh --install-hooks sdlc-start/assets/hooks${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./install-skills.sh --install-hooks config-codex/assets/hooks${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./install-skills.sh --install-all-hooks${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./install-skills.sh --install-hooks config-codex/assets/hooks --register-hooks${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./install-skills.sh --install-all-hooks --register-hooks${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./install-skills.sh --install-all-hooks --register-hooks --replace-hooks-json${S_RESET}"
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Notes:${S_RESET}"
@@ -138,6 +151,10 @@ show_usage() {
   printf '%b\n' "  - Reinstalling from a source that still contains the skill will add it back."
   printf '%b\n' "  - ${S_CYAN}--install-hooks${S_RESET} is opt-in because hooks are runtime guardrails, not skills."
   printf '%b\n' "  - ${S_CYAN}--install-all-hooks${S_RESET} discovers only hook-only ${S_CYAN}*/assets/hooks${S_RESET} directories under this source."
+  printf '%b\n' "  - ${S_CYAN}--register-hooks${S_RESET} preserves existing ${S_CYAN}hooks.json${S_RESET} entries and appends missing source entries."
+  printf '%b\n' "  - ${S_CYAN}--register-hooks${S_RESET} refuses duplicate Python hook files within the same hook event."
+  printf '%b\n' "  - ${S_CYAN}--replace-hooks-json${S_RESET} explicitly backs up and replaces ${S_CYAN}hooks.json${S_RESET} with selected source entries."
+  printf '%b\n' "  - Hook installation reports extra installed hook files and ${S_CYAN}hooks.json${S_RESET} entries not present in the selected source."
   printf '%b\n' "  - After installing hooks, restart Codex and review/trust the hook entries in ${S_CYAN}/hooks${S_RESET}."
   printf '%b\n' "  - If newly installed skills are not visible, restart the VS Code extension host ${S_DIM}(Developer: Restart Extension Host)${S_RESET}."
 }
@@ -532,9 +549,533 @@ is_installable_hook_rel() {
   esac
 }
 
+find_hook_registration_manifest() {
+  local hook_src="$1"
+  local parent_dir=""
+  local candidate=""
+  local candidates=()
+
+  parent_dir="$(dirname "${hook_src}")"
+  candidates=(
+    "${hook_src}/hooks.json"
+    "${hook_src}/hooks.json.template"
+    "${parent_dir}/hooks.json"
+    "${parent_dir}/hooks.json.template"
+  )
+
+  for candidate in "${candidates[@]}"; do
+    if [[ -f "${candidate}" ]]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+write_source_hook_files_manifest() {
+  local output_file="$1"
+  local hook_src=""
+  local src=""
+  local rel=""
+  local dest_rel=""
+
+  shift
+  : > "${output_file}"
+  for hook_src in "$@"; do
+    while IFS= read -r -d '' src; do
+      rel="${src#"${hook_src}/"}"
+      is_installable_hook_rel "${rel}" || continue
+      dest_rel="${rel%.template}"
+      printf '%s\n' "${dest_rel}" >> "${output_file}"
+    done < <(find "${hook_src}" -type f -print0)
+  done
+  sort -u "${output_file}" -o "${output_file}"
+}
+
+print_extra_destination_hook_files() {
+  local hook_dest="$1"
+  local source_files_file="$2"
+  local dest_files_file=""
+  local dest_file=""
+  local rel=""
+  local extra_count=0
+
+  [[ -d "${hook_dest}" ]] || return 0
+
+  dest_files_file="$(mktemp)"
+  while IFS= read -r -d '' dest_file; do
+    rel="${dest_file#"${hook_dest}/"}"
+    is_installable_hook_rel "${rel}" || continue
+    printf '%s\n' "${rel}" >> "${dest_files_file}"
+  done < <(find "${hook_dest}" -type f -print0)
+  sort -u "${dest_files_file}" -o "${dest_files_file}"
+
+  while IFS= read -r rel; do
+    [[ -n "${rel}" ]] || continue
+    if grep -Fxq -- "${rel}" "${source_files_file}"; then
+      continue
+    fi
+    if [[ "${extra_count}" -eq 0 ]]; then
+      printf '\n%b\n' "${S_YELLOW}${S_BOLD}Extra installed hook files not present in selected source:${S_RESET}"
+    fi
+    printf '%b\n' "  - ${rel}"
+    extra_count=$((extra_count + 1))
+  done < "${dest_files_file}"
+
+  rm -f "${dest_files_file}"
+
+  if [[ "${extra_count}" -gt 0 ]]; then
+    printf '%b\n' "Review before deleting. Remove one manually if obsolete: ${S_CYAN}rm \"${hook_dest}/<relative_path>\"${S_RESET}"
+  fi
+}
+
+print_extra_hook_registrations() {
+  local codex_home="$1"
+  local hooks_json="${codex_home}/hooks.json"
+  local manifest_paths=()
+  local hook_src=""
+  local manifest_src=""
+  local extra_output=""
+
+  shift
+  [[ -f "${hooks_json}" ]] || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+
+  for hook_src in "$@"; do
+    if manifest_src="$(find_hook_registration_manifest "${hook_src}")"; then
+      manifest_paths+=("${manifest_src}")
+    fi
+  done
+  [[ "${#manifest_paths[@]}" -gt 0 ]] || return 0
+
+  extra_output="$(
+    python3 - "${codex_home}" "${hooks_json}" "${manifest_paths[@]}" <<'PY'
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+
+def load_json(path: Path) -> dict[str, Any] | None:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def load_manifest(path: Path, codex_home: Path) -> dict[str, list[dict[str, Any]]]:
+    hooks_dir = codex_home / "hooks"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    for needle, replacement in {
+        "{{CODEX_HOME}}": str(codex_home),
+        "__CODEX_HOME__": str(codex_home),
+        "{{HOOKS_DIR}}": str(hooks_dir),
+        "__HOOKS_DIR__": str(hooks_dir),
+    }.items():
+        text = text.replace(needle, replacement)
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+    hooks = value.get("hooks") if isinstance(value, dict) else None
+    if not isinstance(hooks, dict):
+        return {}
+    result: dict[str, list[dict[str, Any]]] = {}
+    for event_name, entries in hooks.items():
+        if isinstance(event_name, str) and isinstance(entries, list):
+            result[event_name] = [entry for entry in entries if isinstance(entry, dict)]
+    return result
+
+
+def summarize(event_name: str, entry: dict[str, Any]) -> str:
+    matcher = entry.get("matcher", "")
+    commands: list[str] = []
+    for hook in entry.get("hooks", []):
+        if isinstance(hook, dict):
+            command = hook.get("command")
+            if isinstance(command, str):
+                commands.append(command)
+    command_text = "; ".join(commands) if commands else "<no command>"
+    timeout_values = [
+        str(hook.get("timeout"))
+        for hook in entry.get("hooks", [])
+        if isinstance(hook, dict) and hook.get("timeout") is not None
+    ]
+    timeout_text = f" timeout={','.join(timeout_values)}" if timeout_values else ""
+    matcher_text = f" matcher={matcher!r}" if matcher else ""
+    return f"  - {event_name}{matcher_text} command={command_text!r}{timeout_text}"
+
+
+codex_home = Path(sys.argv[1]).expanduser()
+hooks_json = Path(sys.argv[2]).expanduser()
+manifest_paths = [Path(value).expanduser() for value in sys.argv[3:]]
+
+target = load_json(hooks_json)
+if target is None:
+    raise SystemExit(0)
+target_hooks = target.get("hooks")
+if not isinstance(target_hooks, dict):
+    raise SystemExit(0)
+
+source: dict[str, list[dict[str, Any]]] = {}
+for manifest_path in manifest_paths:
+    for event_name, entries in load_manifest(manifest_path, codex_home).items():
+        source.setdefault(event_name, []).extend(entries)
+
+for event_name in sorted(target_hooks):
+    entries = target_hooks[event_name]
+    if not isinstance(entries, list):
+        continue
+    source_entries = source.get(event_name, [])
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        if entry in source_entries:
+            continue
+        print(summarize(event_name, entry))
+PY
+  )"
+
+  if [[ -n "${extra_output}" ]]; then
+    printf '\n%b\n' "${S_YELLOW}${S_BOLD}Extra hook registrations not present in selected source manifests:${S_RESET}"
+    printf '%s\n' "${extra_output}"
+    printf '%b\n' "Review before editing. Remove obsolete entries manually from: ${S_CYAN}${hooks_json}${S_RESET}"
+  fi
+}
+
+print_extra_destination_hooks() {
+  local codex_home="$1"
+  local hook_dest="${codex_home}/hooks"
+  local source_files_file=""
+
+  shift
+  source_files_file="$(mktemp)"
+  write_source_hook_files_manifest "${source_files_file}" "$@"
+  print_extra_destination_hook_files "${hook_dest}" "${source_files_file}"
+  rm -f "${source_files_file}"
+  print_extra_hook_registrations "${codex_home}" "$@"
+}
+
+register_hooks_manifests() {
+  local codex_home="$1"
+  local replace_hooks_json="$2"
+  local hook_src=""
+  local manifest_src=""
+  local manifest_paths=()
+
+  shift 2
+  require_command "python3" "for hooks.json registration"
+
+  for hook_src in "$@"; do
+    if ! manifest_src="$(find_hook_registration_manifest "${hook_src}")"; then
+      log_error "--register-hooks could not find hooks.json or hooks.json.template for: ${hook_src}"
+      log_note "Place the registration manifest in the hook directory or its parent directory."
+      exit 1
+    fi
+    manifest_paths+=("${manifest_src}")
+  done
+
+  python3 - "${codex_home}" "${replace_hooks_json}" "${manifest_paths[@]}" <<'PY'
+import json
+import os
+import re
+import shutil
+import shlex
+import stat
+import sys
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def fail(message: str) -> None:
+    print(f"ERROR: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def load_manifest(path: Path, codex_home: Path) -> dict[str, list[dict[str, object]]]:
+    hooks_dir = codex_home / "hooks"
+    manifest_text = path.read_text(encoding="utf-8")
+    for needle, replacement in {
+        "{{CODEX_HOME}}": str(codex_home),
+        "__CODEX_HOME__": str(codex_home),
+        "{{HOOKS_DIR}}": str(hooks_dir),
+        "__HOOKS_DIR__": str(hooks_dir),
+    }.items():
+        manifest_text = manifest_text.replace(needle, replacement)
+
+    try:
+        source = json.loads(manifest_text)
+    except json.JSONDecodeError as exc:
+        fail(f"{path} is not valid JSON: {exc}")
+
+    if not isinstance(source, dict) or not isinstance(source.get("hooks"), dict):
+        fail(f"{path} must contain a top-level hooks object")
+
+    hooks: dict[str, list[dict[str, object]]] = {}
+    for event_name, source_entries in sorted(source["hooks"].items()):
+        if not isinstance(event_name, str):
+            fail(f"{path} hooks keys must be strings")
+        if not isinstance(source_entries, list):
+            fail(f"{path} hooks.{event_name} must be an array")
+        event_entries: list[dict[str, object]] = []
+        for entry in source_entries:
+            if not isinstance(entry, dict) or not isinstance(entry.get("hooks"), list):
+                fail(f"{path} hooks.{event_name} entries must contain a hooks array")
+            event_entries.append(entry)
+        hooks[event_name] = event_entries
+    return hooks
+
+
+def count_entries(value: object) -> int:
+    if not isinstance(value, dict):
+        return 0
+    hooks = value.get("hooks")
+    if not isinstance(hooks, dict):
+        return 0
+    return sum(len(entries) for entries in hooks.values() if isinstance(entries, list))
+
+
+def command_python_script_names(command: str) -> list[str]:
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = command.replace('"', " ").replace("'", " ").split()
+
+    names: list[str] = []
+    for token in tokens:
+        candidate = token.rstrip(";),")
+        if candidate.endswith(".py"):
+            names.append(Path(candidate).name)
+
+    if names:
+        return sorted(set(names))
+
+    return sorted(
+        {
+            Path(match.group(1)).name
+            for match in re.finditer(r"([A-Za-z0-9_$/{\}:.~+\-]+\.py)\b", command)
+        }
+    )
+
+
+def entry_python_script_names(entry: dict[str, object]) -> list[str]:
+    hooks = entry.get("hooks")
+    if not isinstance(hooks, list):
+        return []
+
+    names: set[str] = set()
+    for hook in hooks:
+        if not isinstance(hook, dict):
+            continue
+        command = hook.get("command")
+        if isinstance(command, str):
+            names.update(command_python_script_names(command))
+    return sorted(names)
+
+
+def validate_source_script_uniqueness(
+    source_hooks: dict[str, list[dict[str, object]]]
+) -> None:
+    seen: dict[tuple[str, str], dict[str, object]] = {}
+    for event_name, entries in source_hooks.items():
+        for entry in entries:
+            for script_name in entry_python_script_names(entry):
+                key = (event_name, script_name)
+                previous = seen.get(key)
+                if previous is not None and previous != entry:
+                    fail(
+                        "Selected source manifests contain multiple "
+                        f"{event_name} registrations for Python hook script "
+                        f"{script_name!r}. Keep one registration per hook event "
+                        "and Python file."
+                    )
+                seen[key] = entry
+
+
+def existing_script_index(
+    hooks_json: Path, target_hooks: dict[str, object]
+) -> dict[tuple[str, str], dict[str, object]]:
+    seen: dict[tuple[str, str], dict[str, object]] = {}
+    for event_name, entries in target_hooks.items():
+        if not isinstance(event_name, str) or not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            for script_name in entry_python_script_names(entry):
+                key = (event_name, script_name)
+                if key in seen:
+                    fail(
+                        f"{hooks_json} already contains duplicate {event_name} "
+                        f"registrations for Python hook script {script_name!r}. "
+                        "Remove the duplicate manually or rerun with "
+                        "--replace-hooks-json when the selected source manifests "
+                        "should be authoritative."
+                    )
+                seen[key] = entry
+    return seen
+
+
+codex_home = Path(sys.argv[1]).expanduser()
+replace_hooks_json = sys.argv[2] == "1"
+manifest_paths = [Path(value).expanduser() for value in sys.argv[3:]]
+hooks_json = codex_home / "hooks.json"
+if not manifest_paths:
+    fail("--register-hooks requires at least one source manifest")
+
+source_hooks: dict[str, list[dict[str, object]]] = {}
+for manifest_path in manifest_paths:
+    for event_name, entries in load_manifest(manifest_path, codex_home).items():
+        target_entries = source_hooks.setdefault(event_name, [])
+        for entry in entries:
+            if entry not in target_entries:
+                target_entries.append(entry)
+
+validate_source_script_uniqueness(source_hooks)
+
+new_target = {"hooks": source_hooks}
+source_count = count_entries(new_target)
+existing_target: object = None
+existing_valid = False
+existing_count = 0
+had_existing = hooks_json.exists()
+added = 0
+unchanged_entries = 0
+
+if had_existing:
+    try:
+        existing_target = json.loads(hooks_json.read_text(encoding="utf-8"))
+        existing_valid = isinstance(existing_target, dict)
+    except json.JSONDecodeError:
+        existing_target = None
+    if existing_valid:
+        existing_count = count_entries(existing_target)
+
+if replace_hooks_json:
+    target = new_target
+else:
+    if had_existing:
+        if not existing_valid:
+            fail(f"{hooks_json} is not valid JSON; use --replace-hooks-json to rebuild it from source manifests")
+        target = existing_target
+    else:
+        target = {"hooks": {}}
+
+    if not isinstance(target, dict):
+        fail(f"{hooks_json} must contain a JSON object")
+    target_hooks = target.setdefault("hooks", {})
+    if not isinstance(target_hooks, dict):
+        fail(f"{hooks_json} must contain a top-level hooks object")
+    target_script_entries = existing_script_index(hooks_json, target_hooks)
+
+    for event_name, source_entries in source_hooks.items():
+        target_entries = target_hooks.setdefault(event_name, [])
+        if not isinstance(target_entries, list):
+            fail(f"{hooks_json} hooks.{event_name} must be an array")
+        for entry in source_entries:
+            if entry in target_entries:
+                unchanged_entries += 1
+                continue
+            for script_name in entry_python_script_names(entry):
+                existing_entry = target_script_entries.get((event_name, script_name))
+                if existing_entry is not None:
+                    fail(
+                        "Refusing to register duplicate "
+                        f"{event_name} hook script {script_name!r}: {hooks_json} "
+                        "already has a different entry for that Python file. "
+                        "Remove the obsolete entry manually or rerun with "
+                        "--replace-hooks-json when the selected source manifests "
+                        "should be authoritative."
+                    )
+            target_entries.append(entry)
+            added += 1
+            for script_name in entry_python_script_names(entry):
+                target_script_entries[(event_name, script_name)] = entry
+
+if replace_hooks_json:
+    unchanged = existing_valid and existing_target == target
+else:
+    unchanged = had_existing and existing_valid and added == 0
+
+codex_home.mkdir(parents=True, exist_ok=True)
+backup_path = ""
+if not unchanged:
+    if hooks_json.exists():
+        backup_path = str(
+            hooks_json.with_name(
+                f"hooks.json.bak.{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
+            )
+        )
+        shutil.copy2(hooks_json, backup_path)
+
+    mode = 0o644
+    if hooks_json.exists():
+        mode = stat.S_IMODE(hooks_json.stat().st_mode)
+
+    fd, tmp_name = tempfile.mkstemp(prefix=".hooks.json.", dir=str(codex_home))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(target, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+        os.chmod(tmp_name, mode)
+        os.replace(tmp_name, hooks_json)
+    finally:
+        if os.path.exists(tmp_name):
+            os.unlink(tmp_name)
+
+    if replace_hooks_json:
+        print(
+            f"Rebuilt hook registrations: {source_count} entries from "
+            f"{len(manifest_paths)} source manifest(s) -> {hooks_json}"
+        )
+        if existing_valid:
+            removed = max(existing_count - source_count, 0)
+            if removed:
+                print(f"Removed existing hook registrations not in selected source manifests: {removed}")
+        else:
+            if had_existing:
+                print("Previous hooks.json was not valid JSON and was replaced from source manifests.")
+    else:
+        print(
+            f"Registered hook entries added: {added}, unchanged: {unchanged_entries} "
+            f"from {len(manifest_paths)} source manifest(s) -> {hooks_json}"
+        )
+    if backup_path:
+        print(f"Backed up previous hooks.json: {backup_path}")
+else:
+    if replace_hooks_json:
+        print(
+            f"Hook registrations unchanged: {source_count} source entries from "
+            f"{len(manifest_paths)} source manifest(s) -> {hooks_json}"
+        )
+    else:
+        print(
+            f"Registered hook entries added: 0, unchanged: {unchanged_entries} "
+            f"from {len(manifest_paths)} source manifest(s) -> {hooks_json}"
+        )
+PY
+}
+
+register_hooks_manifest() {
+  local hook_src="$1"
+  local codex_home="$2"
+  local replace_hooks_json="${3:-0}"
+
+  register_hooks_manifests "${codex_home}" "${replace_hooks_json}" "${hook_src}"
+}
+
 install_hooks() {
   local hook_source_arg="$1"
   local codex_home="$2"
+  local register_hooks="${3:-0}"
+  local report_extras="${4:-1}"
+  local replace_hooks_json="${5:-0}"
   local hook_src=""
   local hook_dest="${codex_home}/hooks"
   local src=""
@@ -553,6 +1094,15 @@ install_hooks() {
     log_error "hook source directory not found: ${hook_source_arg}"
     log_note "Pass a hook-only source directory, for example sdlc-start/assets/hooks or config-codex/assets/hooks."
     exit 1
+  fi
+
+  if [[ "${register_hooks}" -eq 1 ]]; then
+    require_command "python3" "for hooks.json registration"
+    if ! find_hook_registration_manifest "${hook_src}" >/dev/null; then
+      log_error "--register-hooks could not find hooks.json or hooks.json.template for: ${hook_src}"
+      log_note "Place the registration manifest in the hook directory or its parent directory."
+      exit 1
+    fi
   fi
 
   mkdir -p "${hook_dest}"
@@ -582,8 +1132,16 @@ install_hooks() {
 
   log_success "Done. Hook files installed/updated: ${installed}, unchanged: ${unchanged} from ${hook_src} -> ${hook_dest}"
   log_note "Template suffixes were stripped for installed hook files."
-  log_note "This did not modify hooks.json or trust hooks."
+  if [[ "${register_hooks}" -eq 1 ]]; then
+    register_hooks_manifest "${hook_src}" "${codex_home}" "${replace_hooks_json}"
+  else
+    log_note "This did not modify hooks.json. Pass --register-hooks to merge a source registration manifest."
+  fi
+  log_note "This did not trust hooks."
   log_note "Restart Codex, open /hooks, and review the hook entries before relying on them."
+  if [[ "${report_extras}" -eq 1 ]]; then
+    print_extra_destination_hooks "${codex_home}" "${hook_src}"
+  fi
 }
 
 discover_hook_source_dirs() {
@@ -663,6 +1221,8 @@ validate_hook_dest_collisions() {
 install_all_hooks() {
   local source_root_arg="$1"
   local codex_home="$2"
+  local register_hooks="${3:-0}"
+  local replace_hooks_json="${4:-0}"
   local source_root=""
   local hook_src=""
   local hook_dirs=()
@@ -687,6 +1247,17 @@ install_all_hooks() {
 
   validate_hook_dest_collisions "${hook_dirs[@]}"
 
+  if [[ "${register_hooks}" -eq 1 ]]; then
+    require_command "python3" "for hooks.json registration"
+    for hook_src in "${hook_dirs[@]}"; do
+      if ! find_hook_registration_manifest "${hook_src}" >/dev/null; then
+        log_error "--register-hooks could not find hooks.json or hooks.json.template for: ${hook_src}"
+        log_note "Place the registration manifest in the hook directory or its parent directory."
+        exit 1
+      fi
+    done
+  fi
+
   log_note "Discovered hook source directories:"
   for hook_src in "${hook_dirs[@]}"; do
     displayed="${hook_src#"${source_root}/"}"
@@ -694,9 +1265,16 @@ install_all_hooks() {
   done
 
   for hook_src in "${hook_dirs[@]}"; do
-    install_hooks "${hook_src}" "${codex_home}"
+    install_hooks "${hook_src}" "${codex_home}" 0 0
   done
 
+  if [[ "${register_hooks}" -eq 1 ]]; then
+    register_hooks_manifests "${codex_home}" "${replace_hooks_json}" "${hook_dirs[@]}"
+  else
+    log_note "This did not modify hooks.json. Pass --register-hooks to merge discovered source registration manifests."
+  fi
+
+  print_extra_destination_hooks "${codex_home}" "${hook_dirs[@]}"
   log_success "Done. Processed all hooks from ${#hook_dirs[@]} source directorie(s)."
 }
 
@@ -705,6 +1283,8 @@ init_output_style
 REMOVE_SKILL=""
 HOOK_INSTALL_SOURCE=""
 INSTALL_ALL_HOOKS=0
+REGISTER_HOOKS=0
+REPLACE_HOOKS_JSON=0
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -749,6 +1329,24 @@ while [[ $# -gt 0 ]]; do
       INSTALL_ALL_HOOKS=1
       shift
       ;;
+    --register-hooks)
+      if [[ "${REGISTER_HOOKS}" -eq 1 ]]; then
+        log_error "--register-hooks may only be specified once."
+        show_usage >&2
+        exit 1
+      fi
+      REGISTER_HOOKS=1
+      shift
+      ;;
+    --replace-hooks-json)
+      if [[ "${REPLACE_HOOKS_JSON}" -eq 1 ]]; then
+        log_error "--replace-hooks-json may only be specified once."
+        show_usage >&2
+        exit 1
+      fi
+      REPLACE_HOOKS_JSON=1
+      shift
+      ;;
     --)
       shift
       while [[ $# -gt 0 ]]; do
@@ -780,6 +1378,18 @@ if [[ ( -n "${HOOK_INSTALL_SOURCE}" || "${INSTALL_ALL_HOOKS}" -eq 1 ) && -n "${R
   exit 1
 fi
 
+if [[ "${REGISTER_HOOKS}" -eq 1 && -z "${HOOK_INSTALL_SOURCE}" && "${INSTALL_ALL_HOOKS}" -eq 0 ]]; then
+  log_error "--register-hooks must be combined with --install-hooks or --install-all-hooks."
+  show_usage >&2
+  exit 1
+fi
+
+if [[ "${REPLACE_HOOKS_JSON}" -eq 1 && "${REGISTER_HOOKS}" -eq 0 ]]; then
+  log_error "--replace-hooks-json must be combined with --register-hooks."
+  show_usage >&2
+  exit 1
+fi
+
 if [[ "${INSTALL_ALL_HOOKS}" -eq 1 ]]; then
   if [[ "${#POSITIONAL[@]}" -gt 0 ]]; then
     log_error "--install-all-hooks does not accept positional arguments."
@@ -789,7 +1399,7 @@ if [[ "${INSTALL_ALL_HOOKS}" -eq 1 ]]; then
     exit 1
   fi
   CODEX_HOME_DIR="$(expand_home_path "${CODEX_HOME:-${HOME}/.codex}")"
-  install_all_hooks "${DEFAULT_SRC_DIR}" "${CODEX_HOME_DIR}"
+  install_all_hooks "${DEFAULT_SRC_DIR}" "${CODEX_HOME_DIR}" "${REGISTER_HOOKS}" "${REPLACE_HOOKS_JSON}"
   exit 0
 fi
 
@@ -801,7 +1411,7 @@ if [[ -n "${HOOK_INSTALL_SOURCE}" ]]; then
     exit 1
   fi
   CODEX_HOME_DIR="$(expand_home_path "${CODEX_HOME:-${HOME}/.codex}")"
-  install_hooks "${HOOK_INSTALL_SOURCE}" "${CODEX_HOME_DIR}"
+  install_hooks "${HOOK_INSTALL_SOURCE}" "${CODEX_HOME_DIR}" "${REGISTER_HOOKS}" 1 "${REPLACE_HOOKS_JSON}"
   exit 0
 fi
 

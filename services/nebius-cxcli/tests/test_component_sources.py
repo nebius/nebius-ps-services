@@ -47,6 +47,7 @@ _NEBIUS_CPU_ONLY_AFFINITY = {
     }
 }
 
+
 def _required[T](value: T | None) -> T:
     assert value is not None
     return value
@@ -320,7 +321,7 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
 
     nccl_chart = next(chart for chart in sources.helm_charts if chart.name == "nccl-test")
     assert nccl_chart.usage.lifecycle == "transient"
-    assert nccl_chart.usage.config_ref == "deploy.targets[].validations.mk8s_gpu.nccl"
+    assert nccl_chart.usage.config_ref == ""
     assert nfs_wizard_fields["inputs.platform"]["options"] == {
         "from": "compute_platforms",
     }
@@ -578,15 +579,12 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
             )
     cpu_profile = soperator.soperator_nodesets.profiles["nebius-cpu-v1"]
     assert cpu_profile["mk8s"]["worker_nodesets"][0]["total_nodes_input"] == (
-        "soperator.worker_total_nodes"
+        "soperator.worker_cpu_total_nodes"
     )
     assert cpu_profile["mk8s"]["worker_nodesets"][0]["nodes_per_group_input"] == (
-        "soperator.worker_nodes_per_group"
+        "soperator.worker_cpu_nodes_per_group"
     )
-    assert (
-        cpu_profile["mk8s"]["worker_nodesets"][0]["autoscaling_input"]
-        == "soperator.worker_autoscaling"
-    )
+    assert "autoscaling_input" not in cpu_profile["mk8s"]["worker_nodesets"][0]
     assert "srunReadyPartition" not in cpu_profile["chart"]["values"]["soperator-activechecks"]
     assert cpu_profile["chart"]["activechecks"]["srunReadyPartition"] == "cpu"
     assert (
@@ -640,9 +638,13 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
         "controller-spool",
     ]
     assert profile["mk8s"]["worker_nodesets"][0]["max_nodes_per_group"] == 100
-    assert profile["mk8s"]["worker_nodesets"][0]["autoscaling_input"] == (
-        "soperator.worker_autoscaling"
+    assert profile["mk8s"]["worker_nodesets"][0]["total_nodes_input"] == (
+        "soperator.worker_gpu_total_nodes"
     )
+    assert profile["mk8s"]["worker_nodesets"][0]["nodes_per_group_input"] == (
+        "soperator.worker_gpu_nodes_per_group"
+    )
+    assert "autoscaling_input" not in profile["mk8s"]["worker_nodesets"][0]
     assert profile["mk8s"]["worker_nodesets"][0]["node_group_prefix"] == "worker"
     assert profile["mk8s"]["worker_nodesets"][0]["nodeset_name"] == "worker"
     assert profile["chart"]["values"]["partitionConfiguration"]["partitions"][0]["name"] == "gpu"
@@ -694,27 +696,44 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
         worker["nodeset_name"]: (
             worker["total_nodes_input"],
             worker["nodes_per_group_input"],
-            worker["autoscaling_input"],
             worker["default_total_nodes"],
             worker["default_nodes_per_group"],
         )
         for worker in mixed_profile["mk8s"]["worker_nodesets"]
     } == {
         "worker-cpu": (
-            "soperator.worker_total_nodes",
-            "soperator.worker_nodes_per_group",
-            "soperator.worker_autoscaling",
+            "soperator.worker_cpu_total_nodes",
+            "soperator.worker_cpu_nodes_per_group",
             1,
             100,
         ),
         "worker-gpu": (
-            "soperator.worker_total_nodes",
-            "soperator.worker_nodes_per_group",
-            "soperator.worker_autoscaling",
+            "soperator.worker_gpu_total_nodes",
+            "soperator.worker_gpu_nodes_per_group",
             1,
             100,
         ),
     }
+    assert all(
+        "autoscaling_input" not in worker
+        for worker in mixed_profile["mk8s"]["worker_nodesets"]
+    )
+    all_worker_inputs = {
+        value
+        for profile_name in ("nebius-cpu-v1", "nebius-gpu-v1", "nebius-mixed-v1")
+        for worker in soperator.soperator_nodesets.profiles[profile_name]["mk8s"][
+            "worker_nodesets"
+        ]
+        for value in (
+            worker["total_nodes_input"],
+            worker["nodes_per_group_input"],
+        )
+    }
+    assert {
+        "soperator.worker_total_nodes",
+        "soperator.worker_nodes_per_group",
+        "soperator.worker_autoscaling",
+    }.isdisjoint(all_worker_inputs)
     assert mixed_profile["placements"]["worker"]["nodeset_templates"] == [
         "worker-cpu",
         "worker-gpu",
@@ -787,16 +806,13 @@ def test_soperator_parent_dependencies_match_folded_child_chart_family() -> None
         str(dependency.get("name")): dependency for dependency in chart_yaml.get("dependencies", [])
     }
     lock_dependencies_by_name = {
-        str(dependency.get("name")): dependency
-        for dependency in chart_lock.get("dependencies", [])
+        str(dependency.get("name")): dependency for dependency in chart_lock.get("dependencies", [])
     }
     for dependency_name in sorted(parent_child_dependencies):
         dependency = dependencies_by_name[dependency_name]
         lock_dependency = lock_dependencies_by_name[dependency_name]
         child_chart = yaml.safe_load(
-            (repo_root / "helm-charts" / dependency_name / "Chart.yaml").read_text(
-                encoding="utf-8"
-            )
+            (repo_root / "helm-charts" / dependency_name / "Chart.yaml").read_text(encoding="utf-8")
         )
         expected_repository = f"file://../{dependency_name}"
         assert dependency["version"] == str(child_chart["version"])
@@ -2879,11 +2895,9 @@ def test_component_sources_rejects_invalid_observability_gpu_node_label_stack_so
 
 
 def _repo_soperator_nodesets_profiles() -> dict:
-    profiles = (
-        _repo_component_cli_settings_payload()["components"]["apps"]["soperator"]["cli"][
-            "soperator_nodesets_profile"
-        ]["profiles"]
-    )
+    profiles = _repo_component_cli_settings_payload()["components"]["apps"]["soperator"]["cli"][
+        "soperator_nodesets_profile"
+    ]["profiles"]
     assert isinstance(profiles, dict)
     return profiles
 
@@ -2899,9 +2913,7 @@ def test_bundled_soperator_profile_service_role_defaults_are_consistent() -> Non
             "max_node_count": 5,
         }
         assert node_groups["system"]["node_count_input"] == "soperator.system_node_count"
-        assert (
-            node_groups["system"]["autoscaling_input"] == "soperator.system_autoscaling"
-        )
+        assert node_groups["system"]["autoscaling_input"] == "soperator.system_autoscaling"
         for role in ("controller", "login", "accounting"):
             assert node_groups[role]["node_count"] == 2
             assert node_groups[role]["node_count_input"] == f"soperator.{role}_node_count"
@@ -2983,6 +2995,24 @@ def test_bundled_soperator_profile_service_role_defaults_are_consistent() -> Non
             },
             r"components\.apps\.soperator\.cli\.soperator_nodesets_profile\.profiles\.bad\.mk8s\.worker_nodesets\[0\]\.node_group_key_prefix is no longer supported",
         ),
+        (
+            {
+                "placements": {
+                    "worker": {
+                        "kind": "slurm-worker-nodeset",
+                    }
+                },
+                "mk8s": {
+                    "worker_nodesets": [
+                        {
+                            "nodeset_name": "worker",
+                            "total_nodes_input": "soperator.worker_total_nodes",
+                        }
+                    ]
+                },
+            },
+            r"components\.apps\.soperator\.cli\.soperator_nodesets_profile\.profiles\.bad\.mk8s\.worker_nodesets\[0\]\.total_nodes_input must not use removed helper soperator\.worker_total_nodes",
+        ),
     ],
 )
 def test_load_component_sources_rejects_legacy_soperator_placement_profile_keys(
@@ -3040,7 +3070,7 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
     )
     mk8s = next(item for item in loaded.tf_modules if item.module == "mk8s")
 
-    assert mk8s.mk8s_gpu.validations.nccl.rdma_mpi_extra_args == (
+    assert mk8s.mk8s_gpu.benchmarks.nccl.rdma_mpi_extra_args == (
         "-x",
         "NCCL_DMABUF_ENABLE=1",
     )
@@ -3070,14 +3100,41 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         "auto_select_first": True,
     }
     assert mk8s_wizard_fields["inputs.cluster.k8s_version"]["required"] is True
+    assert mk8s_wizard_fields["inputs.cluster.k8s_version"]["write_default_to_config"] is True
     assert mk8s_wizard_fields["inputs.cluster.public_endpoint"] == {
         "default": True,
         "write_default_to_config": True,
         "type_hint": "bool",
     }
+    assert mk8s_wizard_fields["inputs.node_group_defaults.cpu.platform"] == {
+        "options": {
+            "from": "mk8s_compatible_platforms",
+            "args": {"platform_prefix": "cpu-"},
+            "auto_select_first": True,
+        },
+        "required": True,
+        "type_hint": "string",
+    }
+    assert mk8s_wizard_fields["inputs.node_group_defaults.cpu.preset"] == {
+        "options": {
+            "from": "compute_platform_presets",
+            "args": {"platform_path": "inputs.node_group_defaults.cpu.platform"},
+            "auto_select_first": True,
+        },
+        "required": True,
+        "type_hint": "string",
+    }
     assert mk8s_wizard_fields["inputs.node_group_defaults.gpu.platform"]["options"] == {
         "from": "mk8s_compatible_platforms",
         "args": {"platform_prefix": "gpu-"},
+    }
+    assert mk8s_wizard_fields["inputs.node_group_defaults.gpu.preset"]["options"] == {
+        "from": "mk8s_gpu_capacity_choices",
+        "args": {
+            "platform_path": "inputs.node_group_defaults.gpu.platform",
+            "reservation_policy_path": "inputs.node_group_defaults.gpu.reservation.policy",
+        },
+        "auto_select_single": True,
     }
     assert mk8s_wizard_fields["inputs.node_groups"]["prompt"] is False
     assert mk8s_wizard_fields["inputs.node_groups.system.node_count"] == {
@@ -3105,19 +3162,72 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         ]
         is True
     )
+    assert mk8s_wizard_fields["inputs.node_group_defaults.gpu.reservation.policy"] == {
+        "sources": [
+            {
+                "source": "static",
+                "values": [
+                    {
+                        "value": "AUTO",
+                        "label": "AUTO  (try selected reservations, then suitable capacity)",
+                    },
+                    {
+                        "value": "FORBID",
+                        "label": "FORBID  (do not use reservations)",
+                    },
+                    {
+                        "value": "STRICT",
+                        "label": "STRICT  (use only selected/suitable reservations)",
+                    },
+                ],
+            }
+        ],
+        "default": "AUTO",
+        "write_default_to_config": True,
+        "type_hint": "string",
+    }
     assert mk8s_wizard_fields["inputs.gpu_clusters.workers.infiniband_fabric"] == {
         "options": {
             "from": "mk8s_infiniband_fabrics",
             "args": {
                 "platform_path": "inputs.node_group_defaults.gpu.platform",
                 "preset_path": "inputs.node_group_defaults.gpu.preset",
+                "reservation_policy_path": "inputs.node_group_defaults.gpu.reservation.policy",
             },
             "auto_select_first": True,
             "skip_prompt_if_no_choices": True,
-        }
+        },
+        "prompt": False,
     }
-    assert mk8s_wizard_fields["inputs.soperator.worker_total_nodes"] == {
-        "default": 1,
+    for field in (
+        "worker_cpu_total_nodes",
+        "worker_gpu_total_nodes",
+    ):
+        assert mk8s_wizard_fields[f"inputs.soperator.{field}"] == {
+            "default": 1,
+            "write_default_to_config": True,
+            "type_hint": "number",
+        }
+    for field in (
+        "worker_cpu_nodes_per_group",
+        "worker_gpu_nodes_per_group",
+    ):
+        assert mk8s_wizard_fields[f"inputs.soperator.{field}"] == {
+            "default": 100,
+            "write_default_to_config": True,
+            "type_hint": "number",
+        }
+    for legacy_field in (
+        "worker_total_nodes",
+        "worker_nodes_per_group",
+        "worker_autoscaling.enabled",
+        "worker_cpu_autoscaling.enabled",
+        "worker_gpu_autoscaling.enabled",
+        "worker_ephemeral_nodes.enabled",
+    ):
+        assert f"inputs.soperator.{legacy_field}" not in mk8s_wizard_fields
+    assert mk8s_wizard_fields["inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds"] == {
+        "default": 300,
         "write_default_to_config": True,
         "type_hint": "number",
     }
@@ -3147,7 +3257,7 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         "write_default_to_config": True,
         "type_hint": "number",
     }
-    for role in ("controller", "login", "accounting", "worker"):
+    for role in ("controller", "login", "accounting"):
         assert mk8s_wizard_fields[f"inputs.soperator.{role}_autoscaling.enabled"] == {
             "default": False,
             "write_default_to_config": True,
@@ -3167,25 +3277,22 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
     assert "inputs.gpu_node_groups" not in mk8s_wizard_fields
     assert "inputs.mk8s_gpu_node_group_overrides" not in mk8s_wizard_fields
     assert mk8s_wizard_fields[
-        "deploy.targets[].validations.mk8s_gpu.operator_readiness.enabled"
+        "deploy.targets[].deployment_testing.mk8s_gpu.operator_readiness.enabled"
     ] == {
         "default": True,
         "write_default_to_config": True,
         "required": True,
         "type_hint": "bool",
     }
+    assert "deploy.targets[].deployment_testing.mk8s_gpu.cluster_smoke.enabled" not in mk8s_wizard_fields
     assert mk8s_wizard_fields[
-        "deploy.targets[].validations.mk8s_gpu.gpu_visibility.max_nodes"
+        "deploy.targets[].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes"
     ] == {
         "default": 3,
         "write_default_to_config": True,
         "type_hint": "number",
     }
-    assert mk8s_wizard_fields["deploy.targets[].validations.mk8s_gpu.nccl.max_nodes"] == {
-        "default": 8,
-        "write_default_to_config": True,
-        "type_hint": "number",
-    }
+    assert "deploy.targets[].deployment_testing.mk8s_gpu.nccl.max_nodes" not in mk8s_wizard_fields
     assert mk8s_wizard_fields["deploy.targets[].observability.kubernetes.logs.enabled"] == {
         "default": True,
     }
@@ -4015,7 +4122,7 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                                 "preferred_gpu_stack_presets": ["cuda13.0", "cuda12.8"],
                                 "preferred_os": ["ubuntu24.04", "ubuntu22.04"],
                             },
-                            "validations": {
+                            "deployment_testing": {
                                 "operator_readiness": {
                                     "enabled_by_default": True,
                                     "timeout": "20m",
@@ -4027,8 +4134,9 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                                     "timeout": "10m",
                                     "max_nodes": 4,
                                 },
+                            },
+                            "benchmarks": {
                                 "nccl": {
-                                    "enabled_by_default": True,
                                     "chart_component_id": "nccl-test",
                                     "timeout": "45m",
                                     "training_operator_manifest": "github.com/example/training-operator?ref=v1.0.0",
@@ -4237,9 +4345,6 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                     },
                     "usage": {
                         "lifecycle": "transient",
-                        "config": {
-                            "ref": "deploy.targets[].validations.mk8s_gpu.nccl",
-                        },
                     },
                     "release": {
                         "namespace": "nccl-test",
@@ -4362,13 +4467,13 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
     assert [item.target_path for item in operator_managed_b200_nfd_rule.defaults] == [
         "values.nfd.enabled",
     ]
-    assert mk8s.mk8s_gpu.validations.operator_readiness.timeout == "20m"
-    assert mk8s.mk8s_gpu.validations.gpu_visibility.namespace == "gpu-validation"
-    assert mk8s.mk8s_gpu.validations.gpu_visibility.max_nodes == 4
-    assert mk8s.mk8s_gpu.validations.nccl.chart_component_id == "nccl-test"
-    assert mk8s.mk8s_gpu.validations.nccl.max_nodes == 6
+    assert mk8s.mk8s_gpu.deployment_testing.operator_readiness.timeout == "20m"
+    assert mk8s.mk8s_gpu.deployment_testing.gpu_visibility.namespace == "gpu-validation"
+    assert mk8s.mk8s_gpu.deployment_testing.gpu_visibility.max_nodes == 4
+    assert mk8s.mk8s_gpu.benchmarks.nccl.chart_component_id == "nccl-test"
+    assert mk8s.mk8s_gpu.benchmarks.nccl.max_nodes == 6
     assert nccl_chart.usage.lifecycle == "transient"
-    assert nccl_chart.usage.config_ref == "deploy.targets[].validations.mk8s_gpu.nccl"
+    assert nccl_chart.usage.config_ref == ""
     assert mk8s.observability.mode == "kubernetes_agent"
     assert mk8s.observability.chart_component_id == "nebius-observability-agent"
     assert mk8s.observability.logs.excluded_namespaces == ("kube-system",)
@@ -4397,6 +4502,45 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
     assert gpu_operator.observability.metric_targets[0].required_gpu_node_label_stack_sources == (
         "nebius_image",
     )
+
+
+def test_load_component_sources_rejects_legacy_gpu_validations_settings(tmp_path: Path) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    _write_catalog_file(
+        sources_file,
+        _catalog(
+            infra={
+                "mk8s": {
+                    "source": {
+                        "portable": "git::https://example.invalid/modules/mk8s?ref=main",
+                        "local": "../../platform-infra/modules/mk8s",
+                    },
+                    "ui": {"enabled": True},
+                    "cli": {
+                        "gpu": {
+                            "validations": {
+                                "gpu_visibility": {
+                                    "enabled_by_default": True,
+                                    "namespace": "gpu-validation",
+                                    "image": "nvcr.io/example/vectoradd:latest",
+                                    "timeout": "10m",
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"components\.infra\.mk8s\.cli\.gpu "
+            r"has unsupported field\(s\): validations"
+        ),
+    ):
+        load_component_sources(explicit=sources_file)
 
 
 def test_load_component_sources_parses_vm_cli_settings(tmp_path: Path) -> None:
@@ -4562,9 +4706,8 @@ def test_load_component_sources_resolves_local_nccl_chart_source(tmp_path: Path)
                     "ui": {"enabled": True},
                     "cli": {
                         "gpu": {
-                            "validations": {
+                            "benchmarks": {
                                 "nccl": {
-                                    "enabled_by_default": True,
                                     "chart_component_id": "nccl-test",
                                     "timeout": "45m",
                                     "training_operator_manifest": (
@@ -4586,9 +4729,6 @@ def test_load_component_sources_resolves_local_nccl_chart_source(tmp_path: Path)
                     },
                     "usage": {
                         "lifecycle": "transient",
-                        "config": {
-                            "ref": "deploy.targets[].validations.mk8s_gpu.nccl",
-                        },
                     },
                     "release": {
                         "namespace": "nccl-test",
@@ -4607,12 +4747,12 @@ def test_load_component_sources_resolves_local_nccl_chart_source(tmp_path: Path)
     mk8s = next(module for module in loaded.tf_modules if module.module == "mk8s")
     nccl_chart = next(chart for chart in loaded.helm_charts if chart.name == "nccl-test")
 
-    assert mk8s.mk8s_gpu.validations.nccl.chart_component_id == "nccl-test"
+    assert mk8s.mk8s_gpu.benchmarks.nccl.chart_component_id == "nccl-test"
     assert nccl_chart.path == str(chart_dir.resolve())
     assert nccl_chart.chart_name == "nccl-test"
     assert nccl_chart.version == "0.1.0"
     assert nccl_chart.usage.lifecycle == "transient"
-    assert nccl_chart.usage.config_ref == "deploy.targets[].validations.mk8s_gpu.nccl"
+    assert nccl_chart.usage.config_ref == ""
 
 
 @pytest.mark.parametrize(
@@ -4660,7 +4800,7 @@ def test_load_component_sources_rejects_transient_chart_enabled_or_selectable(
         load_component_sources(explicit=sources_file)
 
 
-def test_load_component_sources_rejects_transient_chart_without_config_ref(
+def test_load_component_sources_accepts_transient_chart_without_config_ref(
     tmp_path: Path,
 ) -> None:
     sources_file = tmp_path / "component_sources.yaml"
@@ -4686,11 +4826,11 @@ def test_load_component_sources_rejects_transient_chart_without_config_ref(
         ),
     )
 
-    with pytest.raises(
-        ValueError,
-        match=r"components\.apps\.transient-tool\.usage\.config\.ref is required",
-    ):
-        load_component_sources(explicit=sources_file)
+    loaded = load_component_sources(explicit=sources_file)
+
+    transient_tool = next(chart for chart in loaded.helm_charts if chart.name == "transient-tool")
+    assert transient_tool.usage.lifecycle == "transient"
+    assert transient_tool.usage.config_ref == ""
 
 
 def test_load_component_sources_rejects_usage_config_without_lifecycle(
@@ -5318,9 +5458,8 @@ def test_validate_sources_reports_nccl_chart_without_transient_lifecycle(
                     "ui": {"enabled": True},
                     "cli": {
                         "gpu": {
-                            "validations": {
+                            "benchmarks": {
                                 "nccl": {
-                                    "enabled_by_default": True,
                                     "chart_component_id": "nccl-test",
                                     "timeout": "45m",
                                     "training_operator_manifest": "github.com/example/training-operator?ref=v1.0.0",
@@ -5362,7 +5501,7 @@ def test_validate_sources_reports_nccl_chart_without_transient_lifecycle(
     _resolved_path, issues, _warnings = _validate_component_sources_registry()
 
     assert any(
-        "components.infra.mk8s.cli.gpu.validations.nccl.chart_component_id "
+        "components.infra.mk8s.cli.gpu.benchmarks.nccl.chart_component_id "
         "references apps component 'nccl-test', which must declare "
         "usage.lifecycle=transient" in issue
         for issue in issues

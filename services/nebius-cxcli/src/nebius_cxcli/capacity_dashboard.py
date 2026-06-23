@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -27,6 +28,7 @@ class CapacityResourceAdvice:
     on_demand: CapacityAdviceAvailability
     reserved: CapacityAdviceAvailability
     preemptible: CapacityAdviceAvailability
+    gpu_count: int = 0
 
     @property
     def best_regular_available(self) -> int:
@@ -70,6 +72,22 @@ def capacity_mode_available(item: CapacityResourceAdvice, *, mode: str) -> tuple
         return "auto", item.reserved.available + item.on_demand.available
     lane_name, lane = capacity_lane(item, mode=mode)
     return lane_name, lane.available
+
+
+def _vm_word(count: int) -> str:
+    return "VM" if count == 1 else "VMs"
+
+
+def _gpu_word(count: int) -> str:
+    return "GPU" if count == 1 else "GPUs"
+
+
+def capacity_vm_slots_text(vm_count: int, gpu_count: int) -> str:
+    base = f"{vm_count} {_vm_word(vm_count)}"
+    if vm_count <= 0 or gpu_count <= 0:
+        return base
+    total_gpus = vm_count * gpu_count
+    return f"{base} ({vm_count} x {gpu_count}-GPU = {total_gpus} {_gpu_word(total_gpus)})"
 
 
 def capacity_level_rank(level: str) -> int:
@@ -124,7 +142,10 @@ def capacity_mode_sort_key(
 
 
 def capacity_summary_text(item: CapacityResourceAdvice) -> str:
-    return f"live on-demand VMs={item.on_demand.available}, reserved VMs={item.reserved.available}"
+    return (
+        f"regular-vm {capacity_vm_slots_text(item.on_demand.available, item.gpu_count)}, "
+        f"reserved {capacity_vm_slots_text(item.reserved.available, item.gpu_count)}"
+    )
 
 
 def filter_capacity_resource_advice(
@@ -151,6 +172,23 @@ def _compute_instance_details(spec: object) -> object | None:
         return compute_instance
     resource_details = getattr(spec, "resource_details", None)
     return getattr(resource_details, "compute_instance", None)
+
+
+def _gpu_count_from_preset_name(preset_name: str) -> int:
+    match = re.match(r"^(\d+)gpu(?:-|$)", preset_name)
+    if not match:
+        return 0
+    return int(match.group(1))
+
+
+def _compute_instance_gpu_count(compute_instance: object | None, preset_name: str) -> int:
+    preset = getattr(compute_instance, "preset", None)
+    resources = getattr(preset, "resources", None)
+    try:
+        gpu_count = int(getattr(resources, "gpu_count", 0) or 0)
+    except (TypeError, ValueError):
+        gpu_count = 0
+    return gpu_count if gpu_count > 0 else _gpu_count_from_preset_name(preset_name)
 
 
 def list_capacity_resource_advice(
@@ -194,6 +232,7 @@ def list_capacity_resource_advice(
                     on_demand=capacity_availability(getattr(status, "on_demand", None)),
                     reserved=capacity_availability(getattr(status, "reserved", None)),
                     preemptible=capacity_availability(getattr(status, "preemptible", None)),
+                    gpu_count=_compute_instance_gpu_count(compute_instance, preset),
                 )
             )
         page_token = _as_text(getattr(response, "next_page_token", None))

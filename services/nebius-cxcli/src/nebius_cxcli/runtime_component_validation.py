@@ -253,7 +253,10 @@ def validate_soperator_qos_partition_profiles(
 
         field_prefix = f"apps.charts[{index}].values"
         qos_configuration = _mapping_path_value(values, "qosConfiguration")
-        if not isinstance(qos_configuration, Mapping) or qos_configuration.get("enabled") is not True:
+        if (
+            not isinstance(qos_configuration, Mapping)
+            or qos_configuration.get("enabled") is not True
+        ):
             raise ValueError(
                 f"{field_prefix}.partitionProfile='{partition_profile_name}' uses "
                 "Slurm preempt/qos and partition AllowQos lists. Matching SlurmDBD "
@@ -292,7 +295,7 @@ def _validate_mk8s_gpu(
         if legacy_gpu_validation_overrides is not None:
             raise ValueError(
                 f"{inputs_label}.gpu_validation_overrides is no longer supported; use "
-                "deploy.targets[].validations.mk8s_gpu.*"
+                "deploy.targets[].deployment_testing.mk8s_gpu.*"
             )
         _validate_mk8s_inputs(
             payload,
@@ -397,12 +400,7 @@ def _validate_mk8s_node_group_scale(base: str, key: str, group: Mapping[str, Any
     max_raw = autoscaling.get("max_node_count")
     min_count = _integer_or_none(min_raw)
     max_count = _integer_or_none(max_raw)
-    if (
-        min_count is None
-        or max_count is None
-        or min_count < 0
-        or max_count < min_count
-    ):
+    if min_count is None or max_count is None or min_count < 0 or max_count < min_count:
         raise ValueError(
             f"{label}.autoscaling requires integer min_node_count >= 0 "
             "and max_node_count >= min_node_count"
@@ -425,9 +423,7 @@ def _validate_mk8s_inputs(
         )
     node_group_defaults = inputs.get("node_group_defaults")
     gpu_defaults = (
-        node_group_defaults.get("gpu")
-        if isinstance(node_group_defaults, Mapping)
-        else None
+        node_group_defaults.get("gpu") if isinstance(node_group_defaults, Mapping) else None
     )
     if isinstance(gpu_defaults, Mapping) and "infiniband_fabric" in gpu_defaults:
         raise ValueError(
@@ -440,20 +436,28 @@ def _validate_mk8s_inputs(
     selected_gpu_enabled = gpu_enabled(inputs)
     gpu_fabric_checks: list[tuple[str, str, str]] = []
     mig_configured = _mk8s_mig_configured(inputs, as_text)
-    project_gpu_validations_by_label: list[tuple[str, Mapping[str, Any]]] = []
+    project_gpu_deployment_testing_by_label: list[tuple[str, Mapping[str, Any]]] = []
     deploy = payload.get("deploy")
     targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
     if isinstance(targets, list):
         for index, raw_target in enumerate(targets):
             if not isinstance(raw_target, Mapping):
                 continue
-            validations = raw_target.get("validations")
-            if not isinstance(validations, Mapping):
+            if "validations" in raw_target:
+                raise ValueError(
+                    f"deploy.targets[{index}].validations is no longer supported; "
+                    "use deploy.targets[].deployment_testing"
+                )
+            deployment_testing = raw_target.get("deployment_testing")
+            if not isinstance(deployment_testing, Mapping):
                 continue
-            mk8s_gpu_validations = validations.get("mk8s_gpu")
-            if isinstance(mk8s_gpu_validations, Mapping):
-                project_gpu_validations_by_label.append(
-                    (f"deploy.targets[{index}].validations.mk8s_gpu", mk8s_gpu_validations)
+            mk8s_gpu_deployment_testing = deployment_testing.get("mk8s_gpu")
+            if isinstance(mk8s_gpu_deployment_testing, Mapping):
+                project_gpu_deployment_testing_by_label.append(
+                    (
+                        f"deploy.targets[{index}].deployment_testing.mk8s_gpu",
+                        mk8s_gpu_deployment_testing,
+                    )
                 )
 
     if not node_groups:
@@ -479,7 +483,18 @@ def _validate_mk8s_inputs(
                     "GPU node_groups entries require gpu_stack_source to be "
                     "'nebius_image' or 'operator_managed' when set"
                 )
+            if group.reservation_policy not in {"AUTO", "FORBID", "STRICT"}:
+                raise ValueError(
+                    "GPU node_groups entries require reservation.policy to be one of: "
+                    "AUTO, FORBID, STRICT"
+                )
             fabric = gpu_cluster_fabric(inputs, group)
+            if group.gpu_cluster_key and not fabric:
+                raise ValueError(
+                    f"GPU node_groups entry '{group.key}' references gpu_cluster_key "
+                    f"'{group.gpu_cluster_key}', but inputs.gpu_clusters."
+                    f"{group.gpu_cluster_key}.infiniband_fabric is missing"
+                )
             if fabric:
                 gpu_fabric_checks.append((group.platform, group.preset, fabric))
 
@@ -531,11 +546,26 @@ def _validate_mk8s_inputs(
     if mig_configured and not selected_gpu_enabled:
         raise ValueError("mig_strategy/mig_parted_config require at least one GPU node group")
 
-    for validation_label, project_gpu_validations in project_gpu_validations_by_label:
-        operator_readiness = project_gpu_validations.get("operator_readiness", {})
-        gpu_visibility = project_gpu_validations.get("gpu_visibility", {})
-        nccl = project_gpu_validations.get("nccl", {})
-        health_checker = project_gpu_validations.get("health_checker", {})
+    for validation_label, project_gpu_deployment_testing in project_gpu_deployment_testing_by_label:
+        unknown_keys = sorted(
+            str(key)
+            for key in project_gpu_deployment_testing
+            if str(key) not in {"operator_readiness", "gpu_visibility", "health_checker"}
+        )
+        if unknown_keys:
+            hint = ""
+            if "cuda_smoke" in unknown_keys:
+                hint = "; use gpu_visibility for the bounded deploy probe"
+            if "nccl" in unknown_keys:
+                hint = "; use acceptance-test benchmark for NCCL"
+            raise ValueError(
+                f"{validation_label} has unsupported field(s): "
+                + ", ".join(unknown_keys)
+                + hint
+            )
+        operator_readiness = project_gpu_deployment_testing.get("operator_readiness", {})
+        gpu_visibility = project_gpu_deployment_testing.get("gpu_visibility", {})
+        health_checker = project_gpu_deployment_testing.get("health_checker", {})
         operator_enabled = (
             operator_readiness.get("enabled") if isinstance(operator_readiness, Mapping) else None
         )
@@ -545,10 +575,6 @@ def _validate_mk8s_inputs(
             (
                 f"{validation_label}.gpu_visibility.enabled",
                 gpu_visibility.get("enabled") if isinstance(gpu_visibility, Mapping) else None,
-            ),
-            (
-                f"{validation_label}.nccl.enabled",
-                nccl.get("enabled") if isinstance(nccl, Mapping) else None,
             ),
             (
                 f"{validation_label}.health_checker.enabled",
@@ -566,25 +592,6 @@ def _validate_mk8s_inputs(
             and _coerce_int(gpu_visibility_max_nodes, default=0) <= 0
         ):
             raise ValueError(f"{validation_label}.gpu_visibility.max_nodes must be > 0")
-
-        nccl_max_nodes = nccl.get("max_nodes") if isinstance(nccl, Mapping) else None
-        if nccl_max_nodes is not None and _coerce_int(nccl_max_nodes, default=0) <= 0:
-            raise ValueError(f"{validation_label}.nccl.max_nodes must be > 0")
-
-        nccl_threshold = (
-            nccl.get("average_bus_bandwidth_threshold_gbps") if isinstance(nccl, Mapping) else None
-        )
-        if nccl_threshold is not None:
-            try:
-                parsed_threshold = float(nccl_threshold)
-            except (TypeError, ValueError) as exc:
-                raise ValueError(
-                    f"{validation_label}.nccl.average_bus_bandwidth_threshold_gbps must be numeric"
-                ) from exc
-            if parsed_threshold <= 0:
-                raise ValueError(
-                    f"{validation_label}.nccl.average_bus_bandwidth_threshold_gbps must be > 0"
-                )
 
 
 def _validate_sfs_csi(
@@ -763,9 +770,7 @@ def _validate_wireguard(
                 f"{base}.create_public_ip_allocation must be false "
                 "when public_ip_allocation_id is set"
             )
-        public_ip_allocation_name = as_text(
-            get_path(payload, f"{base}.public_ip_allocation_name")
-        )
+        public_ip_allocation_name = as_text(get_path(payload, f"{base}.public_ip_allocation_name"))
         if public_ip_allocation_name and not id_pattern.fullmatch(public_ip_allocation_name):
             raise ValueError(
                 f"{base}.public_ip_allocation_name must use lowercase letters, digits, and hyphens"
@@ -910,9 +915,7 @@ def _validate_ssh_jumphost(
     if ssh_jump_enabled:
         ssh_user_name = as_text(get_path(payload, f"{base}.ssh_user_name"))
         _validate_linux_user_name(ssh_user_name, field_label=f"{base}.ssh_user_name")
-        public_ip_allocation_name = as_text(
-            get_path(payload, f"{base}.public_ip_allocation_name")
-        )
+        public_ip_allocation_name = as_text(get_path(payload, f"{base}.public_ip_allocation_name"))
         if public_ip_allocation_name and not id_pattern.fullmatch(public_ip_allocation_name):
             raise ValueError(
                 f"{base}.public_ip_allocation_name must use lowercase letters, digits, and hyphens"

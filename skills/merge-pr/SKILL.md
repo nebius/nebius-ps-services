@@ -1,0 +1,98 @@
+---
+name: merge-pr
+description: "Use for merging GitHub pull requests outside Agentic SDLC: verify PR checks, reviews, mergeability, branch state, and head SHA, then merge with gh pr merge without admin bypass. Use after create-pr or review-pr when the user explicitly asks to merge a ready PR."
+---
+
+# Merge PR
+
+Merge a GitHub pull request only after explicit merge intent and final
+readiness verification.
+
+## Use This Skill For
+
+- Merging a specific GitHub PR by number, URL, or current branch.
+- Completing a release-prep flow after `create-pr` opens or reuses a PR.
+- Verifying checks, review state, mergeability, base branch, and head SHA
+  immediately before merge.
+- Merging with a selected non-admin method: `squash`, `merge`, or `rebase`, or
+  the no-strategy path required by GitHub merge queues.
+
+## Inputs Accepted
+
+- PR number, PR URL, or current branch PR.
+- Optional `--merge-method squash|merge|rebase`; default `squash` when the base
+  branch does not require a merge queue.
+- Optional `--delete-branch`; default is to keep the branch unless the user or
+  calling skill explicitly asks to delete it.
+
+## Workflow
+
+1. Confirm the user or calling skill explicitly requested the merge.
+2. Resolve the PR with `gh pr view` and collect:
+   - number, URL, title, base branch, head branch, head repository
+   - `isDraft`, `mergeable`, `mergeStateStatus`, `reviewDecision`
+   - `headRefOid`, `statusCheckRollup`
+3. Stop before merging when the PR is draft, closed, conflicted, has failing
+   required checks, has unresolved required review state, or GitHub reports it
+   cannot merge.
+4. Run `gh pr checks <pr> --watch --fail-fast` when checks are still pending.
+   If checks finish failing, report the failing checks and do not merge.
+5. Refresh PR metadata after checks finish and use the latest `headRefOid` as
+   the merge guard.
+6. If the base branch requires a merge queue, do not pass a merge strategy.
+   After checks/reviews are ready, run
+   `gh pr merge <pr> --match-head-commit <sha>` so GitHub adds the PR to the
+   queue without admin bypass.
+7. Otherwise, merge with one explicit method and
+   `--match-head-commit <headRefOid>`:
+   - `squash`: `gh pr merge <pr> --squash --match-head-commit <sha>`
+   - `merge`: `gh pr merge <pr> --merge --match-head-commit <sha>`
+   - `rebase`: `gh pr merge <pr> --rebase --match-head-commit <sha>`
+8. Never pass `--admin`. Never force merge or bypass branch protection.
+9. Verify the post-merge or queued state with
+   `gh pr view <pr> --json state,mergedAt,mergeStateStatus`.
+
+## Guardrails
+
+- This skill is separate from `sdlc-merge-pr`; do not write Agentic SDLC run
+  state or SDLC authorization files.
+- Do not merge without explicit merge intent from the user or a calling skill
+  that already has explicit publish/complete authorization.
+- Do not use `--auto` as the default. For merge queues, prefer the no-strategy
+  `gh pr merge <pr> --match-head-commit <sha>` path after checks are ready.
+  Report a blocker only when GitHub still requires delayed auto-merge or human
+  approval that the user did not explicitly authorize.
+- Do not merge with failing, cancelled, timed-out, missing-required, or
+  unknown required checks.
+- Do not dismiss or ignore unresolved requested changes.
+- Do not delete the branch unless `--delete-branch` was explicitly requested.
+- Do not modify files, create commits, rebase branches, or push branch updates;
+  use `review-pr` or `create-pr` for those jobs.
+
+## Learning Loop
+
+When using this skill, capture durable, reusable, public-safe learnings back
+into this skill's local source materials before completion when the current task
+contract allows source edits. Update the narrowest appropriate surface:
+`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
+for reusable templates, `scripts/` for deterministic helpers, and README or
+changelog entries for human-facing or release-note updates.
+
+If the current task is explicitly read-only/report-only, or source writes are
+outside this skill's task contract, do not edit skill sources; report the
+skipped source update instead.
+
+Do not capture secrets, private URLs, customer data, raw logs, one-off local
+state, or unverified/vendor-specific claims. If a useful learning is not safe,
+not evidence-backed, or outside this skill's scope, report that it was skipped.
+
+## Output Contract
+
+Return:
+
+- PR number and URL.
+- Merge method used.
+- Head SHA guarded by `--match-head-commit`.
+- Checks/review/mergeability status verified.
+- Merge, queue, or exact blocker result.
+- Whether branch deletion was requested and performed.

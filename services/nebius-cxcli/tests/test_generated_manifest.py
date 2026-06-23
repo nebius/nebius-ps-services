@@ -90,7 +90,7 @@ def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> No
     validations = [
         {
             "kind": "mk8s_gpu_visibility",
-            "name": "GPU Visibility test",
+            "name": "GPU visibility probe",
             "namespace": "gpu-validation",
         }
     ]

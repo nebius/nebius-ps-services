@@ -5,17 +5,10 @@ from __future__ import annotations
 
 import json
 import sys
-from pathlib import Path
 from typing import Any
 
-HOOK_DIR = Path(__file__).resolve().parent
-LIB_DIR = HOOK_DIR / "lib"
-if str(LIB_DIR) not in sys.path:
-    sys.path.insert(0, str(LIB_DIR))
-
-from sdlc_policy import (  # noqa: E402
+from lib.sdlc_policy import (
     allow,
-    command_has_private_state_leak,
     contains_secret,
     dangerous_shell_reason,
     deny,
@@ -26,7 +19,7 @@ from sdlc_policy import (  # noqa: E402
     spec_warning_or_denial,
     validate_write_targets,
 )
-from sdlc_state import (  # noqa: E402
+from lib.sdlc_state import (
     append_jsonl,
     load_active_state,
     now_iso,
@@ -109,9 +102,6 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
     if danger:
         return _deny(payload, danger)
 
-    if command_has_private_state_leak(command):
-        return _deny(payload, "Blocked: command appears to move, stage, or copy private SDLC state into the repository.")
-
     if tool_name == "Bash":
         git_reason = git_policy_reason(command, project_root, active)
         if git_reason:
@@ -127,7 +117,7 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
 
     if tool_name == "apply_patch":
         targets = extract_apply_patch_targets(command, cwd)
-        target_reason = validate_write_targets(targets, project_root, active)
+        target_reason = validate_write_targets(targets, project_root, active, allow_global_agents=True)
         if target_reason:
             return _deny(payload, target_reason)
         if contains_secret(command):

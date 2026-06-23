@@ -1,4 +1,4 @@
 {
-  "auto_read_only_subagents": false,
+  "auto_read_only_subagents": true,
   "include_agent_descriptions": false
 }

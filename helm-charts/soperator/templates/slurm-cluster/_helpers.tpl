@@ -66,14 +66,79 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 {{- end -}}
 
+{{- define "validateCxcliRenderedConfig" -}}
+{{- if hasKey .Values "nodeGroupMapping" -}}
+  {{- fail "values.nodeGroupMapping is not supported. Use chart-native nodesets[] and partitionConfiguration.partitions[].nodeSetRefs; cxcli must materialize worker groups before Helm." -}}
+{{- end -}}
+{{- $inputs := get .Values "inputs" | default dict -}}
+{{- if kindIs "map" $inputs -}}
+  {{- $soperatorInputs := get $inputs "soperator" | default dict -}}
+  {{- if kindIs "map" $soperatorInputs -}}
+    {{- range $key := list
+      "worker_total_nodes"
+      "worker_nodes_per_group"
+      "worker_autoscaling"
+      "worker_cpu_total_nodes"
+      "worker_cpu_nodes_per_group"
+      "worker_cpu_autoscaling"
+      "worker_gpu_total_nodes"
+      "worker_gpu_nodes_per_group"
+      "worker_gpu_autoscaling"
+      "worker_node_groups"
+      "worker_ephemeral_nodes"
+    -}}
+      {{- if hasKey $soperatorInputs $key -}}
+        {{- fail (printf "inputs.soperator.%s is a cxcli helper input, not a Soperator chart value. Render through cxcli or pass chart-native nodesets[] and partitionConfiguration.partitions[].nodeSetRefs." $key) -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "validateNodeSets" -}}
 {{- $names := list -}}
+{{- $hasEphemeralNodes := false -}}
 {{- range .Values.nodesets -}}
   {{- $name := required ".Values.nodesets[*].name must be provided." .name -}}
   {{- if has $name $names -}}
     {{- fail (printf "Duplicate nodesets name %q." $name) -}}
   {{- end -}}
   {{- $names = append $names $name -}}
+  {{- if .ephemeralNodes -}}
+    {{- $hasEphemeralNodes = true -}}
+    {{- if not (hasKey . "replicas") -}}
+      {{- fail (printf ".Values.nodesets[%s].replicas is required when ephemeralNodes=true." $name) -}}
+    {{- end -}}
+    {{- $replicasText := printf "%v" .replicas -}}
+    {{- if not (regexMatch "^[0-9]+$" $replicasText) -}}
+      {{- fail (printf ".Values.nodesets[%s].replicas must be an integer >= 0 when ephemeralNodes=true." $name) -}}
+    {{- end -}}
+    {{- if not (hasKey . "initialNumberEphemeralNodes") -}}
+      {{- fail (printf ".Values.nodesets[%s].initialNumberEphemeralNodes is required when ephemeralNodes=true." $name) -}}
+    {{- end -}}
+    {{- $initialText := printf "%v" .initialNumberEphemeralNodes -}}
+    {{- if not (regexMatch "^[0-9]+$" $initialText) -}}
+      {{- fail (printf ".Values.nodesets[%s].initialNumberEphemeralNodes must be an integer >= 0 when ephemeralNodes=true." $name) -}}
+    {{- end -}}
+    {{- $replicas := int .replicas -}}
+    {{- $initial := int .initialNumberEphemeralNodes -}}
+    {{- if gt $initial $replicas -}}
+      {{- fail (printf ".Values.nodesets[%s].initialNumberEphemeralNodes must be less than or equal to replicas." $name) -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- if $hasEphemeralNodes -}}
+  {{- $slurmConfig := .Values.slurmConfig | default dict -}}
+  {{- if not (kindIs "map" $slurmConfig) -}}
+    {{- fail ".Values.slurmConfig must be a map when any nodeset has ephemeralNodes=true." -}}
+  {{- end -}}
+  {{- if not (hasKey $slurmConfig "suspendTime") -}}
+    {{- fail ".Values.slurmConfig.suspendTime is required when any nodeset has ephemeralNodes=true." -}}
+  {{- end -}}
+  {{- $suspendTimeText := printf "%v" (get $slurmConfig "suspendTime") -}}
+  {{- if not (regexMatch "^[0-9]+$" $suspendTimeText) -}}
+    {{- fail ".Values.slurmConfig.suspendTime must be an integer >= 0 when any nodeset has ephemeralNodes=true." -}}
+  {{- end -}}
 {{- end -}}
 {{- $partitionConfig := .Values.partitionConfiguration | default dict -}}
 {{- $configType := default "structured" $partitionConfig.configType -}}

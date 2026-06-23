@@ -13,6 +13,7 @@ from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -752,6 +753,7 @@ def compare_chart_versions(live: str, pinned: str) -> str:
     return "equal"
 
 
+@lru_cache(maxsize=1)
 def _load_soperator_migration_profile_data() -> Mapping[str, Any]:
     with suppress(Exception):
         payload = yaml.safe_load(SOPERATOR_MIGRATION_PROFILE_DATA_FILE.read_text(encoding="utf-8"))
@@ -2178,7 +2180,7 @@ def analyze_soperator_onboarding_snapshot(
             gpu_stack_message = (
                 "Live GPU stack evidence is healthy for the discovered GPU node groups; "
                 "cxcli will keep the target GPU stack selected for adoption/reconciliation "
-                "and deploy-time GPU readiness, GPU Visibility, and NCCL validations. "
+                "with deploy-time GPU readiness/GPU visibility and explicit NCCL benchmark commands. "
                 "This is not a failure signal."
             )
         elif gpu_stack_evidence.get("live_evidence_available"):
@@ -2188,7 +2190,7 @@ def analyze_soperator_onboarding_snapshot(
                 "GPU node groups were discovered, but live GPU-stack evidence is incomplete "
                 "or not fully healthy in the onboarding snapshot; cxcli will reconcile the "
                 "target GPU Operator, Network Operator when GPU-cluster/RDMA-capable, and "
-                "deploy-time GPU readiness, GPU Visibility, and NCCL validations."
+                "deploy-time GPU readiness/GPU visibility plus explicit NCCL benchmark commands."
             )
         else:
             gpu_stack_status = "reconcile-planned"
@@ -2196,8 +2198,8 @@ def analyze_soperator_onboarding_snapshot(
             gpu_stack_message = (
                 "GPU node groups were discovered; cxcli will manage the target GPU stack as "
                 "desired state, including GPU Operator, Network Operator when the target is "
-                "GPU-cluster/RDMA-capable, and deploy-time GPU readiness, GPU Visibility, "
-                "and NCCL validations. This does not mean the current stack is broken."
+                "GPU-cluster/RDMA-capable, deploy-time GPU readiness/GPU visibility, and "
+                "explicit NCCL benchmark commands. This does not mean the current stack is broken."
             )
         findings.append(
             SoperatorOnboardingFinding(

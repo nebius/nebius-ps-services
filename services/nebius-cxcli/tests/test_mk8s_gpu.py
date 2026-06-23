@@ -21,8 +21,8 @@ from nebius_cxcli.component_sources import (
 )
 from nebius_cxcli.components import component_entries, reset_component_entry_cache
 from nebius_cxcli.mk8s_gpu import (
+    _cuda_smoke_node_report,
     _gpu_device_plugin_snapshot,
-    _gpu_visibility_node_report,
     _interesting_allocatable_resources,
     _nccl_dmabuf_metadata,
     _nccl_json_report_summary,
@@ -30,11 +30,13 @@ from nebius_cxcli.mk8s_gpu import (
     _report_log_excerpt,
     _run_operator_readiness_validation,
     ensure_mk8s_gpu_app_rows,
+    mk8s_acceptance_benchmark_validation_specs,
+    mk8s_cluster_smoke_validation_specs,
     mk8s_gpu_dependency_issues,
     mk8s_gpu_flux_release_dependencies,
-    mk8s_gpu_project_validation_defaults,
+    mk8s_gpu_project_deployment_testing_defaults,
     mk8s_gpu_validation_specs,
-    normalize_mk8s_gpu_project_validation_settings,
+    normalize_mk8s_gpu_project_deployment_testing_settings,
     prune_inactive_mk8s_gpu_app_rows,
     resolve_mk8s_gpu_app_selection,
 )
@@ -245,7 +247,7 @@ def test_normalize_runtime_config_payload_keeps_cpu_only_gpu_settings_unmaterial
 
     inputs = payload["infra"]["components"][0]["inputs"]
     assert inputs["node_groups"]["cpu"]["gpu"] is False
-    assert "mk8s_gpu" not in payload["deploy"]["targets"][0].get("validations", {})
+    assert "mk8s_gpu" not in payload["deploy"]["targets"][0].get("deployment_testing", {})
 
 
 def _set_mk8s_gpu_validation_config(
@@ -258,7 +260,7 @@ def _set_mk8s_gpu_validation_config(
         "targets": [
             {
                 "instance_id": instance_id,
-                "validations": {
+                "deployment_testing": {
                     "mk8s_gpu": config,
                 },
             }
@@ -308,7 +310,7 @@ def test_mk8s_gpu_app_selection_rejects_disabled_dcgm_exporter() -> None:
     )
 
 
-def test_mk8s_gpu_cluster_adds_network_operator_and_nccl_validation() -> None:
+def test_mk8s_gpu_cluster_adds_network_operator_and_nccl_benchmark() -> None:
     payload = _mk8s_payload(infiniband_fabric="fabric-1")
 
     selection = resolve_mk8s_gpu_app_selection(
@@ -317,6 +319,7 @@ def test_mk8s_gpu_cluster_adds_network_operator_and_nccl_validation() -> None:
         app_entries=component_entries("apps"),
     )
     validations = mk8s_gpu_validation_specs(payload)
+    benchmark_validations = mk8s_acceptance_benchmark_validation_specs(payload)
     dependencies = mk8s_gpu_flux_release_dependencies(
         payload,
         release_entry_ids=set(selection.selected_app_ids),
@@ -329,17 +332,14 @@ def test_mk8s_gpu_cluster_adds_network_operator_and_nccl_validation() -> None:
     assert {item["kind"] for item in validations} == {
         "mk8s_gpu_operator_readiness",
         "mk8s_gpu_visibility",
-        "mk8s_nccl",
     }
     assert [item["kind"] for item in validations] == [
         "mk8s_gpu_operator_readiness",
         "mk8s_gpu_visibility",
-        "mk8s_nccl",
     ]
-    nccl_spec = next(item for item in validations if item["kind"] == "mk8s_nccl")
-    gpu_visibility_spec = next(
-        item for item in validations if item["kind"] == "mk8s_gpu_visibility"
-    )
+    assert [item["kind"] for item in benchmark_validations] == ["mk8s_nccl"]
+    nccl_spec = benchmark_validations[0]
+    gpu_visibility_spec = next(item for item in validations if item["kind"] == "mk8s_gpu_visibility")
     assert nccl_spec["chart_component_id"] == "nccl-test"
     assert nccl_spec["chart_name_or_ref"].endswith("/helm-charts/nccl-test")
     assert nccl_spec["chart_repo"] == ""
@@ -427,6 +427,88 @@ def test_mk8s_gpu_app_selection_uses_all_gpu_node_groups_in_target() -> None:
         "nvidia-gpu-operator",
         "nvidia-network-operator",
     )
+
+
+def test_mk8s_gpu_validation_specs_are_target_scoped_for_multiple_gpu_groups() -> None:
+    payload = _mk8s_payload(
+        platform="gpu-h100-sxm",
+        preset="1gpu-16vcpu-200gb",
+    )
+    inputs = payload["infra"]["components"][0]["inputs"]
+    inputs["node_groups"] = {
+        "ethernet": {
+            "node_count": 1,
+            "gpu": True,
+            "platform": "gpu-h100-sxm",
+            "preset": "1gpu-16vcpu-200gb",
+            "gpu_stack_source": "nebius_image",
+        },
+        "rdma": {
+            "node_count": 2,
+            "gpu": True,
+            "platform": "gpu-h100-sxm",
+            "preset": "8gpu-128vcpu-1600gb",
+            "gpu_stack_source": "nebius_image",
+            "gpu_cluster_key": "rdma",
+        },
+    }
+    inputs["gpu_clusters"] = {"rdma": {"infiniband_fabric": "fabric-1"}}
+
+    smoke_validations = mk8s_cluster_smoke_validation_specs(payload)
+    validations = mk8s_gpu_validation_specs(payload)
+    benchmark_validations = mk8s_acceptance_benchmark_validation_specs(payload)
+
+    assert [item["kind"] for item in validations] == [
+        "mk8s_gpu_operator_readiness",
+        "mk8s_gpu_visibility",
+    ]
+    assert [item["report_file"] for item in validations] == [
+        "deploy-gpu-stack-readiness-report-mk8s.json",
+        "deploy-gpu-visibility-report-mk8s.json",
+    ]
+    assert len({item["report_file"] for item in validations}) == len(validations)
+    assert [item["kind"] for item in smoke_validations] == ["mk8s_cluster_smoke"]
+    cluster_smoke = smoke_validations[0]
+    assert cluster_smoke["required"] is True
+    assert cluster_smoke["expected_gpu_node_count"] == 3
+    assert cluster_smoke["expected_gpu_node_groups"] == ("ethernet", "rdma")
+    assert cluster_smoke["expected_gpu_node_group_counts"] == {"ethernet": 1, "rdma": 2}
+    assert cluster_smoke["gpu_cluster_enabled"] is True
+    nccl = next(item for item in benchmark_validations if item["kind"] == "mk8s_nccl")
+    assert nccl["transport_mode"] == "rdma"
+    assert nccl["gpu_cluster_enabled"] is True
+
+
+def test_mk8s_cluster_smoke_validation_specs_cover_cpu_only_targets() -> None:
+    payload = _mk8s_payload()
+    payload["infra"]["components"][0]["inputs"] = {
+        "node_groups": {
+            "system": {
+                "node_count": 2,
+                "gpu": False,
+                "platform": "cpu-d3",
+                "preset": "32vcpu-128gb",
+            }
+        }
+    }
+
+    validations = mk8s_cluster_smoke_validation_specs(payload)
+
+    assert validations == [
+        {
+            "kind": "mk8s_cluster_smoke",
+            "target_ref": "mk8s",
+            "name": "MK8s node inventory smoke (mk8s)",
+            "required": True,
+            "expect_gpu_nodes": False,
+            "expected_gpu_node_count": None,
+            "expected_gpu_node_groups": (),
+            "expected_gpu_node_group_counts": {},
+            "gpu_cluster_enabled": False,
+            "report_file": "cluster-inventory-report-mk8s.json",
+        }
+    ]
+    assert mk8s_gpu_validation_specs(payload) == []
 
 
 def test_materialize_mk8s_gpu_app_values_heals_stale_network_operator_affinity_defaults() -> None:
@@ -777,16 +859,16 @@ def test_external_mk8s_inventory_enables_gpu_cluster_operator_stack() -> None:
     assert selection.cluster_contexts[0].gpu_stack_source == "nebius_image"
     assert selection.cluster_contexts[0].gpu_cluster_enabled is True
 
-    assert normalize_mk8s_gpu_project_validation_settings(payload) is True
+    assert normalize_mk8s_gpu_project_deployment_testing_settings(payload) is True
     assert ensure_mk8s_gpu_app_rows(payload, app_entries=component_entries("apps")) is True
 
-    mk8s_gpu_validations = payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]
-    assert mk8s_gpu_validations["operator_readiness"]["enabled"] is True
-    assert mk8s_gpu_validations["gpu_visibility"]["enabled"] is True
-    assert mk8s_gpu_validations["nccl"]["enabled"] is True
+    mk8s_gpu_deployment_testing = payload["deploy"]["targets"][0]["deployment_testing"]["mk8s_gpu"]
+    assert mk8s_gpu_deployment_testing["operator_readiness"]["enabled"] is True
+    assert "cluster_smoke" not in mk8s_gpu_deployment_testing
+    assert mk8s_gpu_deployment_testing["gpu_visibility"]["enabled"] is True
+    assert "nccl" not in mk8s_gpu_deployment_testing
     assert {
-        (row["id"], row["instance_id"], row["target_ref"])
-        for row in payload["apps"]["charts"]
+        (row["id"], row["instance_id"], row["target_ref"]) for row in payload["apps"]["charts"]
     } == {
         ("nvidia-gpu-operator", "legacy-cluster", "legacy-cluster"),
         ("nvidia-network-operator", "legacy-cluster", "legacy-cluster"),
@@ -805,6 +887,25 @@ def test_external_mk8s_single_gpu_inventory_enables_gpu_operator_only() -> None:
     selection = resolve_mk8s_gpu_app_selection(payload, app_entries=component_entries("apps"))
 
     assert selection.auto_enabled_app_ids == ("nvidia-gpu-operator",)
+
+
+def test_external_mk8s_single_gpu_inventory_persists_deployment_testing_only() -> None:
+    payload = _external_h100_sxm_payload()
+    gpu_group = payload["deploy"]["targets"][0]["inventory"]["node_groups"]["gpu-h100-sxm"]
+    gpu_group["labels"] = {
+        "nebius.com/driverful": "true",
+        "nebius.com/resource-preset": "1gpu-16vcpu-200gb",
+    }
+    gpu_group["allocatable"] = {"nvidia.com/gpu": "1"}
+
+    changed = normalize_mk8s_gpu_project_deployment_testing_settings(payload)
+
+    assert changed is True
+    mk8s_gpu_deployment_testing = payload["deploy"]["targets"][0]["deployment_testing"]["mk8s_gpu"]
+    assert mk8s_gpu_deployment_testing["operator_readiness"]["enabled"] is True
+    assert "cluster_smoke" not in mk8s_gpu_deployment_testing
+    assert mk8s_gpu_deployment_testing["gpu_visibility"]["enabled"] is True
+    assert "nccl" not in mk8s_gpu_deployment_testing
 
 
 def test_prune_inactive_mk8s_gpu_app_rows_removes_stale_operator_only_apps() -> None:
@@ -931,7 +1032,7 @@ def test_prune_inactive_mk8s_gpu_app_rows_keeps_required_and_applicable_gpu_apps
             "enabled": True,
             "target_ref": "mk8s",
             "values": {},
-        }
+        },
     ]
 
     changed = prune_inactive_mk8s_gpu_app_rows(payload)
@@ -956,30 +1057,79 @@ def test_mk8s_gpu_post_render_patches_are_target_scoped() -> None:
     assert ("cluster2", "nvidia-network-operator") not in patches
 
 
-def test_mk8s_gpu_validation_overrides_can_disable_defaults_and_tune_nccl() -> None:
+def test_mk8s_gpu_deployment_testing_can_disable_defaults_and_benchmark_overrides_are_cli_only() -> None:
     payload = _mk8s_payload(infiniband_fabric="fabric-1")
     _set_mk8s_gpu_validation_config(
         payload,
         {
             "operator_readiness": {"enabled": False},
             "gpu_visibility": {"enabled": False, "max_nodes": 2},
-            "nccl": {
-                "enabled": True,
-                "max_nodes": 4,
-                "average_bus_bandwidth_threshold_gbps": 350,
-            },
         },
     )
 
-    validations = mk8s_gpu_validation_specs(payload)
+    deploy_validations = mk8s_gpu_validation_specs(payload)
+    validations = mk8s_acceptance_benchmark_validation_specs(
+        payload,
+        max_nodes=4,
+        average_bus_bandwidth_threshold_gbps=350,
+    )
 
+    assert deploy_validations == []
     assert {item["kind"] for item in validations} == {"mk8s_nccl"}
     nccl_spec = validations[0]
     assert nccl_spec["max_nodes"] == 4
     assert nccl_spec["average_bus_bandwidth_threshold_gbps"] == 350
 
 
-def test_mk8s_gpu_validation_warnings_flag_single_gpu_nccl_override(
+def test_mk8s_acceptance_benchmark_uses_socket_transport_for_single_gpu_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "nebius_cxcli.provider_options.ProviderOptionLookup.compute_platform_preset_resources",
+        lambda self, *, project_id, platform_name, preset_name: (16, 200, 1),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.provider_options.ProviderOptionLookup.compute_platform_preset_allows_gpu_clustering",
+        lambda self, *, project_id, platform_name, preset_name: False,
+    )
+    payload = {
+        "client_info": {
+            "nebius": {
+                "project_id": "project-1",
+            }
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "inputs": _mk8s_inputs(
+                        platform="gpu-h100-sxm",
+                        preset="1gpu-16vcpu-200gb",
+                    ),
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+    warnings = mk8s_gpu.mk8s_gpu_validation_warnings(payload)
+    validations = mk8s_gpu_validation_specs(payload)
+    benchmark_validations = mk8s_acceptance_benchmark_validation_specs(payload)
+
+    assert warnings == ()
+    assert {item["kind"] for item in validations} == {
+        "mk8s_gpu_operator_readiness",
+        "mk8s_gpu_visibility",
+    }
+    nccl_spec = next(item for item in benchmark_validations if item["kind"] == "mk8s_nccl")
+    assert nccl_spec["transport_mode"] == "socket"
+    assert nccl_spec["threshold_enforced"] is False
+    assert nccl_spec["chart_values"]["benchmark"]["transport"] == {"mode": "socket"}
+    assert nccl_spec["chart_values"]["worker"]["gpus"] == 1
+
+
+def test_mk8s_gpu_validation_warnings_are_empty_without_deploy_nccl_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -1015,23 +1165,11 @@ def test_mk8s_gpu_validation_warnings_flag_single_gpu_nccl_override(
     warnings = mk8s_gpu.mk8s_gpu_validation_warnings(payload)
     validations = mk8s_gpu_validation_specs(payload)
 
-    assert len(warnings) == 1
-    assert warnings[0] == (
-        "NCCL validation is enabled for 1-GPU Ethernet-only MK8s shape "
-        "gpu-h100-sxm/1gpu-16vcpu-200gb; it will use Ethernet/TCPIP, not InfiniBand / "
-        "GPUDirect-RDMA, so the run is a smoke check only: no collective bandwidth is "
-        "expected and the result is not production-training representative."
-    )
+    assert warnings == ()
     assert {item["kind"] for item in validations} == {
         "mk8s_gpu_operator_readiness",
         "mk8s_gpu_visibility",
-        "mk8s_nccl",
     }
-    nccl_spec = next(item for item in validations if item["kind"] == "mk8s_nccl")
-    assert nccl_spec["transport_mode"] == "socket"
-    assert nccl_spec["threshold_enforced"] is False
-    assert nccl_spec["chart_values"]["benchmark"]["transport"] == {"mode": "socket"}
-    assert nccl_spec["chart_values"]["worker"]["gpus"] == 1
 
 
 def test_mk8s_gpu_validation_warnings_flag_soperator_activechecks_nccl_overlap() -> None:
@@ -1045,18 +1183,9 @@ def test_mk8s_gpu_validation_warnings_flag_soperator_activechecks_nccl_overlap()
             "values": {"soperator-activechecks": {"enabled": True}},
         }
     ]
-    _set_mk8s_gpu_validation_config(payload, {"nccl": {"enabled": True}})
-
     warnings = mk8s_gpu.mk8s_gpu_validation_warnings(payload)
 
-    assert warnings == (
-        "Soperator NCCL ActiveChecks and deploy-time NCCL validation are both enabled "
-        "for MK8s target mk8s; the Soperator Slurm NCCL checks and cxcli Kubernetes "
-        "MPIJob can compete for GPUs and RDMA bandwidth, skew benchmark results, "
-        "delay deploy, or skip/fail after Soperator workers consume the GPUs. Prefer "
-        "one validation path, or run cxcli NCCL before Soperator workers and "
-        "ActiveChecks occupy the GPU nodes.",
-    )
+    assert warnings == ()
 
 
 def test_mk8s_gpu_validation_warnings_skip_default_disabled_soperator_activechecks() -> None:
@@ -1087,8 +1216,6 @@ def test_mk8s_gpu_validation_warnings_skip_disabled_soperator_activechecks() -> 
             "values": {"soperator-activechecks": {"enabled": False}},
         }
     ]
-    _set_mk8s_gpu_validation_config(payload, {"nccl": {"enabled": True}})
-
     assert mk8s_gpu.mk8s_gpu_validation_warnings(payload) == ()
 
 
@@ -1112,8 +1239,6 @@ def test_mk8s_gpu_validation_warnings_skip_disabled_soperator_nccl_activechecks(
             },
         }
     ]
-    _set_mk8s_gpu_validation_config(payload, {"nccl": {"enabled": True}})
-
     assert mk8s_gpu.mk8s_gpu_validation_warnings(payload) == ()
 
 
@@ -1128,14 +1253,6 @@ def test_mk8s_gpu_validation_warnings_are_target_scoped_for_soperator_activechec
             "enabled": True,
         }
     ]
-    _set_mk8s_gpu_validation_config(payload, {"nccl": {"enabled": True}})
-    payload["deploy"]["targets"].append(
-        {
-            "instance_id": "cluster2",
-            "validations": {"mk8s_gpu": {"nccl": {"enabled": False}}},
-        }
-    )
-
     warnings = mk8s_gpu.mk8s_gpu_validation_warnings(payload)
 
     assert all("Soperator NCCL ActiveChecks" not in warning for warning in warnings)
@@ -1458,17 +1575,17 @@ def test_mk8s_gpu_health_checker_override_reports_missing_catalog_role() -> None
     )
 
     assert selection.issues == (
-        "deploy.targets[].validations.mk8s_gpu.health_checker.enabled requires one apps "
+        "deploy.targets[].deployment_testing.mk8s_gpu.health_checker.enabled requires one apps "
         "component with cli.mk8s_gpu_policy.role: health_checker",
     )
 
 
-def test_mk8s_gpu_project_validation_defaults_include_health_checker_for_custom_catalog_role(
+def test_mk8s_gpu_project_deployment_testing_defaults_include_health_checker_for_custom_catalog_role(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(mk8s_gpu, "has_mk8s_gpu_health_checker_app", lambda: True)
 
-    defaults = mk8s_gpu_project_validation_defaults()
+    defaults = mk8s_gpu_project_deployment_testing_defaults()
 
     assert defaults["health_checker"] == {"enabled": False}
 
@@ -1532,7 +1649,7 @@ def test_operator_managed_blackwell_nccl_validation_keeps_hcoll_mpi_overlay(
         gpu_stack_source="operator_managed",
     )
 
-    validations = mk8s_gpu_validation_specs(payload)
+    validations = mk8s_acceptance_benchmark_validation_specs(payload)
 
     nccl_spec = next(item for item in validations if item["kind"] == "mk8s_nccl")
 
@@ -1588,7 +1705,9 @@ def test_nccl_validation_chart_values_render_with_transport_mode(
     transport_mode: str,
     expected_tokens: tuple[str, ...],
 ) -> None:
-    validations = mk8s_gpu_validation_specs(payload)
+    if transport_mode == "socket":
+        _set_mk8s_gpu_validation_config(payload, {"nccl": {"enabled": True}})
+    validations = mk8s_acceptance_benchmark_validation_specs(payload)
     nccl_spec = next(item for item in validations if item["kind"] == "mk8s_nccl")
 
     assert nccl_spec["transport_mode"] == transport_mode
@@ -1609,7 +1728,7 @@ def test_nccl_validation_keeps_local_chart_defaults_without_helm(
     reset_runtime_introspection_cache()
 
     payload = _mk8s_payload(infiniband_fabric="fabric-1")
-    validations = mk8s_gpu_validation_specs(payload)
+    validations = mk8s_acceptance_benchmark_validation_specs(payload)
     nccl_spec = next(item for item in validations if item["kind"] == "mk8s_nccl")
 
     assert (
@@ -1723,6 +1842,351 @@ def test_nccl_dmabuf_metadata_reports_rendered_mpi_env() -> None:
     }
 
 
+def test_cluster_smoke_validation_reports_all_nodes_without_workload_pods(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    spec = {
+        "kind": "mk8s_cluster_smoke",
+        "name": "MK8s node inventory smoke",
+        "target_ref": "mk8s",
+        "expect_gpu_nodes": True,
+        "gpu_cluster_enabled": True,
+        "expected_gpu_node_count": 2,
+        "expected_gpu_node_groups": ("gpu-workers",),
+        "expected_gpu_node_group_counts": {"gpu-workers": 2},
+        "report_file": "cluster-inventory-report.json",
+    }
+    emits: list[str] = []
+
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_node_inventory",
+        lambda **_kwargs: [
+            {
+                "name": "cpu-node-a",
+                "ready": True,
+                "node_group": "cpu-workers",
+                "instance_type": "cpu-d3",
+                "gpu_count": 0,
+                "allocatable_resources": {},
+            },
+            {
+                "name": "gpu-node-a",
+                "ready": True,
+                "node_group": "gpu-workers",
+                "instance_type": "gpu-h100-sxm",
+                "gpu_count": 8,
+                "allocatable_resources": {
+                    "nvidia.com/gpu": "8",
+                    "rdma/shared_device": "8",
+                },
+            },
+            {
+                "name": "gpu-node-b",
+                "ready": True,
+                "node_group": "gpu-workers",
+                "instance_type": "gpu-h100-sxm",
+                "gpu_count": 8,
+                "allocatable_resources": {
+                    "nvidia.com/gpu": "8",
+                    "rdma/shared_device": "8",
+                },
+            },
+        ],
+    )
+    monkeypatch.setattr(mk8s_gpu, "_apply_docs", lambda *_args, **_kwargs: pytest.fail())
+
+    report_path = mk8s_gpu._run_cluster_smoke_validation(
+        spec=spec,
+        reports_dir=tmp_path,
+        extra_env=None,
+        emit=emits.append,
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["schema"] == "nebius-cxcli-cluster-inventory/v1"
+    assert report["test_purpose"] == "inventory"
+    assert report["scope"] == "read-only-inventory"
+    assert report["passed"] is True
+    assert report["read_only"] is True
+    assert report["total_node_count"] == 3
+    assert report["ready_node_count"] == 3
+    assert report["cpu_node_count"] == 1
+    assert report["ready_gpu_node_count"] == 2
+    assert report["allocatable_gpu_count"] == 16
+    assert report["expected_gpu_node_count"] == 2
+    assert report["expected_gpu_node_groups"] == ["gpu-workers"]
+    assert report["expected_gpu_node_group_counts"] == {"gpu-workers": 2}
+    assert report["ready_gpu_node_counts_by_expected_group"] == {"gpu-workers": 2}
+    assert len(report["nodes"]) == 3
+    assert report["node_groups"] == [
+        {
+            "node_group": "cpu-workers",
+            "node_count": 1,
+            "ready_node_count": 1,
+            "cpu_node_count": 1,
+            "gpu_node_count": 0,
+            "allocatable_gpu_count": 0,
+            "rdma_resource_node_count": 0,
+            "nvidia_resource_names": [],
+            "rdma_resource_names": [],
+            "nodes": [
+                {
+                    "node_name": "cpu-node-a",
+                    "ready": True,
+                    "node_group": "cpu-workers",
+                    "instance_type": "cpu-d3",
+                    "gpu_count": 0,
+                }
+            ],
+        },
+        {
+            "node_group": "gpu-workers",
+            "node_count": 2,
+            "ready_node_count": 2,
+            "cpu_node_count": 0,
+            "gpu_node_count": 2,
+            "allocatable_gpu_count": 16,
+            "rdma_resource_node_count": 2,
+            "nvidia_resource_names": ["nvidia.com/gpu"],
+            "rdma_resource_names": ["rdma/shared_device"],
+            "nodes": [
+                {
+                    "node_name": "gpu-node-a",
+                    "ready": True,
+                    "node_group": "gpu-workers",
+                    "instance_type": "gpu-h100-sxm",
+                    "gpu_count": 8,
+                    "allocatable_resources": {
+                        "nvidia.com/gpu": "8",
+                        "rdma/shared_device": "8",
+                    },
+                },
+                {
+                    "node_name": "gpu-node-b",
+                    "ready": True,
+                    "node_group": "gpu-workers",
+                    "instance_type": "gpu-h100-sxm",
+                    "gpu_count": 8,
+                    "allocatable_resources": {
+                        "nvidia.com/gpu": "8",
+                        "rdma/shared_device": "8",
+                    },
+                },
+            ],
+        },
+    ]
+    assert report["device_plugin_snapshot"]["ready_gpu_node_count"] == 2
+    checks = {item["name"]: item for item in report["checks"]}
+    assert checks["Minimum expected Ready GPU nodes"]["passed"] is True
+    assert checks["Expected GPU node groups"]["passed"] is True
+    assert checks["Minimum expected Ready GPU nodes per group"]["passed"] is True
+    assert "3/3 Kubernetes node(s) Ready" in emits[0]
+
+
+def test_cluster_smoke_validation_ready_gpu_summary_excludes_not_ready_nodes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    spec = {
+        "kind": "mk8s_cluster_smoke",
+        "name": "MK8s node inventory smoke",
+        "target_ref": "mk8s",
+        "expect_gpu_nodes": True,
+        "report_file": "cluster-inventory-report.json",
+    }
+
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_node_inventory",
+        lambda **_kwargs: [
+            {
+                "name": "gpu-node-ready",
+                "ready": True,
+                "node_group": "gpu-workers",
+                "instance_type": "gpu-h100-sxm",
+                "gpu_count": 8,
+                "allocatable_resources": {"nvidia.com/gpu": "8"},
+            },
+            {
+                "name": "gpu-node-not-ready",
+                "ready": False,
+                "node_group": "gpu-workers",
+                "instance_type": "gpu-h100-sxm",
+                "gpu_count": 8,
+                "allocatable_resources": {"nvidia.com/gpu": "8"},
+            },
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="MK8s node inventory smoke failed"):
+        mk8s_gpu._run_cluster_smoke_validation(
+            spec=spec,
+            reports_dir=tmp_path,
+            extra_env=None,
+            emit=None,
+        )
+
+    report = json.loads((tmp_path / spec["report_file"]).read_text(encoding="utf-8"))
+    assert report["passed"] is False
+    assert report["total_node_count"] == 2
+    assert report["ready_node_count"] == 1
+    assert report["non_ready_node_count"] == 1
+    assert report["gpu_node_count"] == 2
+    assert report["ready_gpu_node_count"] == 1
+    assert report["allocatable_gpu_count"] == 8
+    assert "1 Ready GPU node(s) advertise 8 allocatable GPU(s)" in report["summary"]
+
+
+def test_cluster_smoke_validation_fails_when_gpu_inventory_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    spec = {
+        "kind": "mk8s_cluster_smoke",
+        "name": "MK8s node inventory smoke",
+        "expect_gpu_nodes": True,
+        "report_file": "cluster-inventory-report.json",
+    }
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_node_inventory",
+        lambda **_kwargs: [
+            {
+                "name": "cpu-node-a",
+                "ready": True,
+                "node_group": "cpu-workers",
+                "instance_type": "cpu-d3",
+                "gpu_count": 0,
+                "allocatable_resources": {},
+            }
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="MK8s node inventory smoke failed"):
+        mk8s_gpu._run_cluster_smoke_validation(
+            spec=spec,
+            reports_dir=tmp_path,
+            extra_env=None,
+            emit=None,
+        )
+
+    report = json.loads((tmp_path / "cluster-inventory-report.json").read_text(encoding="utf-8"))
+    assert report["passed"] is False
+    assert report["checks"][1]["name"] == "Scheduler-visible GPU inventory"
+    assert report["checks"][1]["passed"] is False
+
+
+def test_cluster_smoke_validation_fails_when_expected_gpu_group_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    spec = {
+        "kind": "mk8s_cluster_smoke",
+        "name": "MK8s node inventory smoke",
+        "expect_gpu_nodes": True,
+        "expected_gpu_node_count": 3,
+        "expected_gpu_node_groups": ("ethernet", "rdma"),
+        "expected_gpu_node_group_counts": {"ethernet": 1, "rdma": 2},
+        "report_file": "cluster-inventory-report.json",
+    }
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_node_inventory",
+        lambda **_kwargs: [
+            {
+                "name": "gpu-node-a",
+                "ready": True,
+                "node_group": "rdma",
+                "instance_type": "gpu-h100-sxm",
+                "gpu_count": 8,
+                "allocatable_resources": {"nvidia.com/gpu": "8"},
+            },
+            {
+                "name": "gpu-node-b",
+                "ready": True,
+                "node_group": "rdma",
+                "instance_type": "gpu-h100-sxm",
+                "gpu_count": 8,
+                "allocatable_resources": {"nvidia.com/gpu": "8"},
+            },
+            {
+                "name": "gpu-node-c",
+                "ready": True,
+                "node_group": "rdma",
+                "instance_type": "gpu-h100-sxm",
+                "gpu_count": 8,
+                "allocatable_resources": {"nvidia.com/gpu": "8"},
+            },
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="MK8s node inventory smoke failed"):
+        mk8s_gpu._run_cluster_smoke_validation(
+            spec=spec,
+            reports_dir=tmp_path,
+            extra_env=None,
+            emit=None,
+        )
+
+    report = json.loads((tmp_path / "cluster-inventory-report.json").read_text(encoding="utf-8"))
+    checks = {item["name"]: item for item in report["checks"]}
+    assert report["passed"] is False
+    assert checks["Minimum expected Ready GPU nodes"]["passed"] is True
+    assert checks["Expected GPU node groups"]["passed"] is False
+    assert checks["Expected GPU node groups"]["summary"] == (
+        "Missing Ready GPU nodes in expected group(s): ethernet"
+    )
+    assert checks["Minimum expected Ready GPU nodes per group"]["passed"] is False
+    assert checks["Minimum expected Ready GPU nodes per group"]["summary"] == (
+        "Minimum expected Ready GPU nodes per group missed: ethernet=0/1"
+    )
+
+
+def test_cluster_smoke_validation_fails_below_expected_gpu_node_count(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    spec = {
+        "kind": "mk8s_cluster_smoke",
+        "name": "MK8s node inventory smoke",
+        "expect_gpu_nodes": True,
+        "expected_gpu_node_count": 2,
+        "report_file": "cluster-inventory-report.json",
+    }
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_node_inventory",
+        lambda **_kwargs: [
+            {
+                "name": "gpu-node-a",
+                "ready": True,
+                "node_group": "gpu-workers",
+                "instance_type": "gpu-h100-sxm",
+                "gpu_count": 8,
+                "allocatable_resources": {"nvidia.com/gpu": "8"},
+            }
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="MK8s node inventory smoke failed"):
+        mk8s_gpu._run_cluster_smoke_validation(
+            spec=spec,
+            reports_dir=tmp_path,
+            extra_env=None,
+            emit=None,
+        )
+
+    report = json.loads((tmp_path / "cluster-inventory-report.json").read_text(encoding="utf-8"))
+    assert report["passed"] is False
+    checks = {item["name"]: item for item in report["checks"]}
+    assert checks["Minimum expected Ready GPU nodes"]["passed"] is False
+    assert checks["Minimum expected Ready GPU nodes"]["summary"] == (
+        "1 Ready GPU node(s) discovered; configured minimum expected Ready GPU nodes: 2"
+    )
+
+
 def test_run_kubectl_timeout_reports_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
     def _timeout(*_args, **_kwargs):  # type: ignore[no-untyped-def]
         raise subprocess.TimeoutExpired(["kubectl", "get", "pod"], timeout=30)
@@ -1753,18 +2217,20 @@ def test_run_kubectl_adds_explicit_context_from_extra_env(
     assert calls == [["kubectl", "--context", "external-context", "get", "nodes"]]
 
 
-def test_gpu_visibility_retries_transient_pod_phase_timeout(
+def test_cuda_smoke_retries_transient_pod_phase_timeout(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     node_name = "gpu-node-a"
     spec = {
+        "kind": "mk8s_gpu_visibility",
+        "target_ref": "mk8s",
         "namespace": "gpu-validation",
         "image": "cuda-sample",
         "cleanup": True,
         "timeout": "1m",
         "max_nodes": 1,
-        "report_file": "gpu-visibility-report.json",
+        "report_file": "deploy-gpu-visibility-report.json",
     }
     emits: list[str] = []
     snapshot_calls = 0
@@ -1802,7 +2268,7 @@ def test_gpu_visibility_retries_transient_pod_phase_timeout(
         ),
     )
 
-    report_path = mk8s_gpu._run_gpu_visibility_validation(
+    report_path = mk8s_gpu._run_cuda_smoke_validation(
         spec=spec,
         reports_dir=tmp_path,
         extra_env=None,
@@ -1810,13 +2276,224 @@ def test_gpu_visibility_retries_transient_pod_phase_timeout(
     )
 
     report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["schema"] == "nebius-cxcli-mk8s-deployment-testing/v1"
+    assert report["kind"] == "mk8s_gpu_visibility"
+    assert report["target_ref"] == "mk8s"
+    assert report["test_purpose"] == "deployment-testing"
+    assert report["scope"] == "bounded-gpu-visibility"
     assert snapshot_calls == 2
     assert report["passed"] is True
     assert report["passed_node_count"] == 1
     assert any("last kubectl poll failed" in item for item in emits)
 
 
-def test_gpu_visibility_skips_when_all_gpus_are_already_allocated(
+def test_cuda_smoke_pods_use_dedicated_service_account(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    spec = {
+        "kind": "mk8s_cuda_smoke",
+        "target_ref": "mk8s",
+        "namespace": "gpu-validation",
+        "image": "cuda-sample",
+        "cleanup": True,
+        "timeout": "1m",
+        "max_nodes": 1,
+        "report_file": "deploy-gpu-visibility-report.json",
+    }
+    applied_docs: list[list[dict[str, Any]]] = []
+
+    monkeypatch.setattr(mk8s_gpu, "_validation_run_token", lambda: "run-token")
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_gpu_nodes",
+        lambda **_kwargs: [
+            {
+                "name": "gpu-node-a",
+                "gpu_count": 1,
+                "allocatable_resources": {"nvidia.com/gpu": "1"},
+            }
+        ],
+    )
+    monkeypatch.setattr(mk8s_gpu, "_gpu_device_plugin_snapshot", lambda _nodes: {})
+    monkeypatch.setattr(mk8s_gpu, "_pod_request_totals_by_node", lambda **_kwargs: {})
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_apply_docs",
+        lambda docs, **_kwargs: applied_docs.append(list(docs)),
+    )
+    monkeypatch.setattr(mk8s_gpu, "_delete_resource", lambda _args, **_kwargs: None)
+
+    def _succeeded_snapshot(*, pod_names: list[str], **_kwargs: Any):
+        return {pod_names[0]: "Succeeded"}, True, False, "Succeeded=1"
+
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_pod_phase_snapshot",
+        _succeeded_snapshot,
+    )
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_run_kubectl",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            ["kubectl"], 0, stdout="Test PASSED\n", stderr=""
+        ),
+    )
+
+    report_path = mk8s_gpu._run_cuda_smoke_validation(
+        spec=spec,
+        reports_dir=tmp_path,
+        extra_env=None,
+        emit=None,
+    )
+
+    assert json.loads(report_path.read_text(encoding="utf-8"))["passed"] is True
+    assert applied_docs[0] == [
+        {"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": "gpu-validation"}}
+    ]
+    service_account = applied_docs[1][0]
+    assert service_account["kind"] == "ServiceAccount"
+    assert service_account["metadata"]["name"] == "cuda-smoke-validation"
+    assert service_account["metadata"]["namespace"] == "gpu-validation"
+    pod = next(doc for doc in applied_docs[1] if doc["kind"] == "Pod")
+    assert pod["metadata"]["namespace"] == "gpu-validation"
+    assert pod["spec"]["serviceAccountName"] == "cuda-smoke-validation"
+    assert pod["spec"]["automountServiceAccountToken"] is False
+
+
+def test_cuda_acceptance_smoke_runs_all_free_gpu_nodes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    spec = {
+        "kind": "mk8s_cuda_smoke",
+        "target_ref": "mk8s",
+        "namespace": "gpu-validation",
+        "image": "cuda-sample",
+        "cleanup": True,
+        "timeout": "1m",
+        "max_nodes": 1,
+        "all_nodes": True,
+        "acceptance": True,
+        "report_file": "acceptance-smoke-report-mk8s.json",
+    }
+    applied_pod_nodes: list[str] = []
+
+    monkeypatch.setattr(mk8s_gpu, "_validation_run_token", lambda: "run-token")
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_gpu_nodes",
+        lambda **_kwargs: [
+            {
+                "name": "gpu-node-b",
+                "gpu_count": 1,
+                "allocatable_resources": {"nvidia.com/gpu": "1"},
+            },
+            {
+                "name": "gpu-node-a",
+                "gpu_count": 1,
+                "allocatable_resources": {"nvidia.com/gpu": "1"},
+            },
+        ],
+    )
+    monkeypatch.setattr(mk8s_gpu, "_gpu_device_plugin_snapshot", lambda _nodes: {})
+    monkeypatch.setattr(mk8s_gpu, "_pod_request_totals_by_node", lambda **_kwargs: {})
+    monkeypatch.setattr(mk8s_gpu, "_delete_resource", lambda _args, **_kwargs: None)
+
+    def _apply_docs(docs: list[dict[str, Any]], **_kwargs: Any) -> None:
+        for doc in docs:
+            if doc.get("kind") == "Pod":
+                applied_pod_nodes.append(doc["spec"]["nodeName"])
+
+    monkeypatch.setattr(mk8s_gpu, "_apply_docs", _apply_docs)
+
+    def _succeeded_snapshot(*, pod_names: list[str], **_kwargs: Any):
+        return {pod_name: "Succeeded" for pod_name in pod_names}, True, False, "Succeeded=2"
+
+    monkeypatch.setattr(mk8s_gpu, "_pod_phase_snapshot", _succeeded_snapshot)
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_run_kubectl",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            ["kubectl"], 0, stdout="Test PASSED\n", stderr=""
+        ),
+    )
+
+    report_path = mk8s_gpu._run_cuda_smoke_validation(
+        spec=spec,
+        reports_dir=tmp_path,
+        extra_env=None,
+        emit=None,
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert applied_pod_nodes == ["gpu-node-a", "gpu-node-b"]
+    assert report["schema"] == "nebius-cxcli-mk8s-acceptance-smoke/v1"
+    assert report["kind"] == "mk8s_cuda_smoke"
+    assert report["target_ref"] == "mk8s"
+    assert report["test_purpose"] == "acceptance-smoke"
+    assert report["scope"] == "all-node-gpu-smoke"
+    assert report["validation"] == "K8s CUDA acceptance smoke"
+    assert report["acceptance"] is True
+    assert report["all_nodes"] is True
+    assert report["selected_node_count"] == 2
+    assert report["skipped_node_count"] == 0
+    assert report["passed_node_count"] == 2
+    assert [item["node_name"] for item in report["nodes"]] == ["gpu-node-a", "gpu-node-b"]
+
+
+def test_run_mk8s_gpu_validations_writes_cuda_smoke_apply_error_report(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    spec = {
+        "kind": "mk8s_gpu_visibility",
+        "name": "CUDA smoke test",
+        "namespace": "gpu-validation",
+        "image": "cuda-sample",
+        "cleanup": True,
+        "timeout": "1m",
+        "max_nodes": 1,
+        "report_file": "deploy-gpu-visibility-report.json",
+    }
+
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_gpu_nodes",
+        lambda **_kwargs: [
+            {
+                "name": "gpu-node-a",
+                "gpu_count": 1,
+                "allocatable_resources": {"nvidia.com/gpu": "1"},
+            }
+        ],
+    )
+    monkeypatch.setattr(mk8s_gpu, "_gpu_device_plugin_snapshot", lambda _nodes: {})
+    monkeypatch.setattr(mk8s_gpu, "_pod_request_totals_by_node", lambda **_kwargs: {})
+    monkeypatch.setattr(mk8s_gpu, "_delete_resource", lambda _args, **_kwargs: None)
+
+    def _apply_docs(docs: list[dict[str, Any]], **_kwargs: Any) -> None:
+        if any(doc.get("kind") == "Pod" for doc in docs):
+            raise RuntimeError("serviceaccount cuda-smoke-validation not found")
+
+    monkeypatch.setattr(mk8s_gpu, "_apply_docs", _apply_docs)
+
+    with pytest.raises(RuntimeError, match="cuda-smoke-validation"):
+        mk8s_gpu.run_mk8s_gpu_validations(
+            [spec],
+            reports_dir=tmp_path,
+            extra_env=None,
+            emit=None,
+        )
+
+    report = json.loads((tmp_path / "deploy-gpu-visibility-report.json").read_text(encoding="utf-8"))
+    assert report["validation"] == "CUDA smoke test"
+    assert report["kind"] == "mk8s_gpu_visibility"
+    assert report["passed"] is False
+    assert "cuda-smoke-validation not found" in report["error"]
+
+
+def test_cuda_smoke_skips_when_all_gpus_are_already_allocated(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1826,7 +2503,7 @@ def test_gpu_visibility_skips_when_all_gpus_are_already_allocated(
         "cleanup": True,
         "timeout": "1m",
         "max_nodes": 1,
-        "report_file": "gpu-visibility-report.json",
+        "report_file": "deploy-gpu-visibility-report.json",
     }
     emits: list[str] = []
 
@@ -1848,7 +2525,7 @@ def test_gpu_visibility_skips_when_all_gpus_are_already_allocated(
     )
     monkeypatch.setattr(mk8s_gpu, "_apply_docs", lambda _docs, **_kwargs: pytest.fail())
 
-    report_path = mk8s_gpu._run_gpu_visibility_validation(
+    report_path = mk8s_gpu._run_cuda_smoke_validation(
         spec=spec,
         reports_dir=tmp_path,
         extra_env=None,
@@ -1861,7 +2538,7 @@ def test_gpu_visibility_skips_when_all_gpus_are_already_allocated(
     assert report["selected_node_count"] == 0
     assert report["saturated_node_count"] == 1
     assert "already have their GPUs allocated" in report["skip_reason"]
-    assert any("Skipping GPU Visibility test" in item for item in emits)
+    assert any("Skipping GPU visibility probe" in item for item in emits)
 
 
 def test_nccl_validation_skips_when_all_gpus_are_already_allocated(
@@ -1869,6 +2546,8 @@ def test_nccl_validation_skips_when_all_gpus_are_already_allocated(
     tmp_path: Path,
 ) -> None:
     spec = {
+        "kind": "mk8s_nccl",
+        "target_ref": "mk8s",
         "namespace": "nccl-test",
         "gpu_platform": "gpu-h100-sxm",
         "transport_mode": "rdma",
@@ -1876,7 +2555,7 @@ def test_nccl_validation_skips_when_all_gpus_are_already_allocated(
         "average_bus_bandwidth_threshold_gbps": 300.0,
         "timeout": "1m",
         "max_nodes": 2,
-        "report_file": "nccl-test-report.json",
+        "report_file": "acceptance-benchmark-report.json",
     }
     emits: list[str] = []
 
@@ -1906,6 +2585,12 @@ def test_nccl_validation_skips_when_all_gpus_are_already_allocated(
     )
 
     report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["schema"] == "nebius-cxcli-mk8s-acceptance-benchmark/v1"
+    assert report["kind"] == "mk8s_nccl"
+    assert report["target_ref"] == "mk8s"
+    assert report["test_purpose"] == "acceptance-benchmark"
+    assert report["scope"] == "k8s-nccl"
+    assert report["benchmark_type"] == "nccl"
     assert report["passed"] is True
     assert report["skipped"] is True
     assert report["selected_worker_node_count"] == 0
@@ -1926,7 +2611,7 @@ def test_nccl_validation_passes_single_rank_smoke_without_collective_bandwidth(
         "average_bus_bandwidth_threshold_gbps": 300.0,
         "timeout": "1m",
         "max_nodes": 1,
-        "report_file": "nccl-test-report.json",
+        "report_file": "acceptance-benchmark-report.json",
         "chart_values": {
             "image": {"repository": "nccl-test", "tag": "0.2.0"},
             "benchmark": {"args": [], "mpiBaseArgs": [], "mpiExtraArgs": []},
@@ -2038,7 +2723,7 @@ def test_nccl_validation_skips_when_gpu_workload_preempts_launcher(
         "average_bus_bandwidth_threshold_gbps": 300.0,
         "timeout": "1m",
         "max_nodes": 1,
-        "report_file": "nccl-test-report.json",
+        "report_file": "acceptance-benchmark-report.json",
     }
     emits: list[str] = []
     request_snapshots = [
@@ -2112,7 +2797,7 @@ def test_run_mk8s_gpu_validations_writes_error_report_on_nccl_exception(
         {
             "kind": "mk8s_nccl",
             "name": "NCCL test",
-            "report_file": "nccl-test-report.json",
+            "report_file": "acceptance-benchmark-report.json",
             "transport_mode": "socket",
             "threshold_enforced": False,
             "chart_values": {
@@ -2130,7 +2815,7 @@ def test_run_mk8s_gpu_validations_writes_error_report_on_nccl_exception(
             extra_env=None,
         )
 
-    report = json.loads((tmp_path / "nccl-test-report.json").read_text(encoding="utf-8"))
+    report = json.loads((tmp_path / "acceptance-benchmark-report.json").read_text(encoding="utf-8"))
     assert report["validation"] == "NCCL test"
     assert report["passed"] is False
     assert report["launcher_phase"] == "error"
@@ -2144,25 +2829,25 @@ def test_report_log_excerpt_keeps_tail_only() -> None:
     assert _report_log_excerpt("abc", limit=4) == "abc"
 
 
-def test_gpu_visibility_node_report_omits_success_logs_and_trims_failure_logs() -> None:
-    assert _gpu_visibility_node_report(
+def test_cuda_smoke_node_report_omits_success_logs_and_trims_failure_logs() -> None:
+    assert _cuda_smoke_node_report(
         node_name="node-a",
-        pod_name="gpu-visibility-node-a",
+        pod_name="cuda-smoke-node-a",
         gpu_count=8,
         phase="Succeeded",
         passed=True,
         logs="Test PASSED",
     ) == {
         "node_name": "node-a",
-        "pod_name": "gpu-visibility-node-a",
+        "pod_name": "cuda-smoke-node-a",
         "gpu_count": 8,
         "phase": "Succeeded",
         "passed": True,
     }
 
-    failure = _gpu_visibility_node_report(
+    failure = _cuda_smoke_node_report(
         node_name="node-b",
-        pod_name="gpu-visibility-node-b",
+        pod_name="cuda-smoke-node-b",
         gpu_count=8,
         phase="Failed",
         passed=False,
@@ -2170,7 +2855,7 @@ def test_gpu_visibility_node_report_omits_success_logs_and_trims_failure_logs() 
     )
     assert failure == {
         "node_name": "node-b",
-        "pod_name": "gpu-visibility-node-b",
+        "pod_name": "cuda-smoke-node-b",
         "gpu_count": 8,
         "phase": "Failed",
         "passed": False,
@@ -2178,10 +2863,10 @@ def test_gpu_visibility_node_report_omits_success_logs_and_trims_failure_logs() 
     }
 
 
-def test_gpu_visibility_node_report_includes_allocatable_resources_when_provided() -> None:
-    assert _gpu_visibility_node_report(
+def test_cuda_smoke_node_report_includes_allocatable_resources_when_provided() -> None:
+    assert _cuda_smoke_node_report(
         node_name="node-a",
-        pod_name="gpu-visibility-node-a",
+        pod_name="cuda-smoke-node-a",
         gpu_count=8,
         allocatable_resources={"nvidia.com/gpu": "8", "rdma/shared_device": "16"},
         phase="Succeeded",
@@ -2189,7 +2874,7 @@ def test_gpu_visibility_node_report_includes_allocatable_resources_when_provided
         logs="Test PASSED",
     ) == {
         "node_name": "node-a",
-        "pod_name": "gpu-visibility-node-a",
+        "pod_name": "cuda-smoke-node-a",
         "gpu_count": 8,
         "allocatable_resources": {
             "nvidia.com/gpu": "8",
@@ -2296,10 +2981,11 @@ def test_operator_readiness_uses_allocatable_gpu_nodes_for_nebius_images(
     emitted: list[str] = []
     report_path = _run_operator_readiness_validation(
         spec={
+            "target_ref": "mk8s",
             "timeout": "30s",
             "gpu_operator_namespace": "nvidia-gpu-operator",
             "network_operator_required": False,
-            "report_file": "gpu-stack-readiness-report.json",
+            "report_file": "deploy-gpu-stack-readiness-report.json",
         },
         reports_dir=tmp_path,
         extra_env=None,
@@ -2307,6 +2993,11 @@ def test_operator_readiness_uses_allocatable_gpu_nodes_for_nebius_images(
     )
 
     report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["schema"] == "nebius-cxcli-mk8s-deployment-testing/v1"
+    assert report["kind"] == "mk8s_gpu_operator_readiness"
+    assert report["target_ref"] == "mk8s"
+    assert report["test_purpose"] == "deployment-testing"
+    assert report["scope"] == "operator-readiness"
     assert report["passed"] is True
     assert report["gpu_operator"]["ready_condition"]["reason"] == "NoGPUNodes"
     assert report["gpu_operator"]["gpu_nodes"] == [{"name": "gpu-node-a", "gpu_count": 8}]
@@ -2364,7 +3055,7 @@ def test_operator_readiness_collects_daemonset_summaries_only_after_readiness_lo
             "network_operator_namespace": "nvidia-network-operator",
             "network_operator_required": True,
             "gpu_cluster_enabled": True,
-            "report_file": "gpu-stack-readiness-report.json",
+            "report_file": "deploy-gpu-stack-readiness-report.json",
         },
         reports_dir=tmp_path,
         extra_env=None,
@@ -2445,14 +3136,14 @@ def test_operator_readiness_requires_rdma_resources_for_gpu_cluster_shapes(
                 "network_operator_namespace": "nvidia-network-operator",
                 "network_operator_required": True,
                 "gpu_cluster_enabled": True,
-                "report_file": "gpu-stack-readiness-report.json",
+                "report_file": "deploy-gpu-stack-readiness-report.json",
             },
             reports_dir=tmp_path,
             extra_env=None,
             emit=None,
         )
 
-    report = json.loads((tmp_path / "gpu-stack-readiness-report.json").read_text(encoding="utf-8"))
+    report = json.loads((tmp_path / "deploy-gpu-stack-readiness-report.json").read_text(encoding="utf-8"))
     assert report["passed"] is False
     assert report["network_operator"]["ready"] is False
     assert report["network_operator"]["rdma_required"] is True
@@ -2508,7 +3199,7 @@ def test_mk8s_gpu_dependency_issues_report_disabled_dcgm_exporter() -> None:
     ]
 
 
-def test_normalize_mk8s_gpu_project_validation_settings_prunes_stale_block_without_mk8s() -> None:
+def test_normalize_mk8s_gpu_project_deployment_testing_settings_prunes_stale_block_without_mk8s() -> None:
     payload = {
         "infra": {
             "components": [
@@ -2524,7 +3215,7 @@ def test_normalize_mk8s_gpu_project_validation_settings_prunes_stale_block_witho
             "targets": [
                 {
                     "instance_id": "mk8s",
-                    "validations": {
+                    "deployment_testing": {
                         "mk8s_gpu": {
                             "operator_readiness": {"enabled": True},
                         }
@@ -2534,13 +3225,73 @@ def test_normalize_mk8s_gpu_project_validation_settings_prunes_stale_block_witho
         },
     }
 
-    changed = normalize_mk8s_gpu_project_validation_settings(payload)
+    changed = normalize_mk8s_gpu_project_deployment_testing_settings(payload)
 
     assert changed is True
     assert "deploy" not in payload
 
 
-def test_normalize_mk8s_gpu_project_validation_settings_keeps_soperator_workload_defaults() -> None:
+def test_normalize_mk8s_gpu_project_deployment_testing_settings_omits_nccl_for_single_gpu_plain_mk8s() -> (
+    None
+):
+    payload = _mk8s_payload(preset="1gpu-16vcpu-200gb")
+
+    changed = normalize_mk8s_gpu_project_deployment_testing_settings(payload)
+
+    assert changed is True
+    mk8s_gpu_deployment_testing = payload["deploy"]["targets"][0]["deployment_testing"]["mk8s_gpu"]
+    assert mk8s_gpu_deployment_testing["operator_readiness"]["enabled"] is True
+    assert "cluster_smoke" not in mk8s_gpu_deployment_testing
+    assert mk8s_gpu_deployment_testing["gpu_visibility"]["enabled"] is True
+    assert mk8s_gpu_deployment_testing["gpu_visibility"]["max_nodes"] == 3
+    assert "nccl" not in mk8s_gpu_deployment_testing
+
+
+def test_normalize_mk8s_gpu_project_deployment_testing_settings_omits_nccl_for_single_gpu_soperator() -> (
+    None
+):
+    payload = _mk8s_payload(preset="1gpu-16vcpu-200gb")
+    payload["apps"]["charts"] = [
+        {
+            "id": "soperator",
+            "instance_id": "mk8s",
+            "target_ref": "mk8s",
+            "enabled": True,
+        }
+    ]
+    payload["infra"]["components"][0]["inputs"]["node_groups"]["worker"]["gpu_cluster_key"] = (
+        "workers"
+    )
+
+    assert "nccl" not in mk8s_gpu_project_deployment_testing_defaults(
+        payload=payload,
+        target_ref="mk8s",
+    )
+
+    changed = normalize_mk8s_gpu_project_deployment_testing_settings(payload)
+
+    assert changed is True
+    mk8s_gpu_deployment_testing = payload["deploy"]["targets"][0]["deployment_testing"]["mk8s_gpu"]
+    assert mk8s_gpu_deployment_testing["operator_readiness"]["enabled"] is True
+    assert "cluster_smoke" not in mk8s_gpu_deployment_testing
+    assert mk8s_gpu_deployment_testing["gpu_visibility"]["enabled"] is True
+    assert mk8s_gpu_deployment_testing["gpu_visibility"]["max_nodes"] == 3
+    assert "nccl" not in mk8s_gpu_deployment_testing
+
+
+def test_normalize_mk8s_gpu_project_deployment_testing_settings_has_no_nccl_default() -> (
+    None
+):
+    payload = _mk8s_payload(preset="1gpu-16vcpu-200gb")
+
+    changed = normalize_mk8s_gpu_project_deployment_testing_settings(payload)
+
+    assert changed is True
+    mk8s_gpu_deployment_testing = payload["deploy"]["targets"][0]["deployment_testing"]["mk8s_gpu"]
+    assert "nccl" not in mk8s_gpu_deployment_testing
+
+
+def test_normalize_mk8s_gpu_project_deployment_testing_settings_keeps_soperator_workload_defaults() -> None:
     payload = _mk8s_payload()
     payload["apps"]["charts"] = [
         {
@@ -2551,18 +3302,18 @@ def test_normalize_mk8s_gpu_project_validation_settings_keeps_soperator_workload
         }
     ]
 
-    changed = normalize_mk8s_gpu_project_validation_settings(payload)
+    changed = normalize_mk8s_gpu_project_deployment_testing_settings(payload)
 
     assert changed is True
-    mk8s_gpu_validations = payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]
-    assert mk8s_gpu_validations["operator_readiness"]["enabled"] is True
-    assert mk8s_gpu_validations["gpu_visibility"]["enabled"] is True
-    assert mk8s_gpu_validations["gpu_visibility"]["max_nodes"] == 3
-    assert mk8s_gpu_validations["nccl"]["enabled"] is True
-    assert mk8s_gpu_validations["nccl"]["max_nodes"] == 8
+    mk8s_gpu_deployment_testing = payload["deploy"]["targets"][0]["deployment_testing"]["mk8s_gpu"]
+    assert mk8s_gpu_deployment_testing["operator_readiness"]["enabled"] is True
+    assert "cluster_smoke" not in mk8s_gpu_deployment_testing
+    assert mk8s_gpu_deployment_testing["gpu_visibility"]["enabled"] is True
+    assert mk8s_gpu_deployment_testing["gpu_visibility"]["max_nodes"] == 3
+    assert "nccl" not in mk8s_gpu_deployment_testing
 
 
-def test_normalize_mk8s_gpu_project_validation_settings_preserves_explicit_soperator_workload_validations() -> (
+def test_normalize_mk8s_gpu_project_deployment_testing_settings_preserves_explicit_soperator_workload_validations() -> (
     None
 ):
     payload = _mk8s_payload()
@@ -2578,19 +3329,19 @@ def test_normalize_mk8s_gpu_project_validation_settings_preserves_explicit_soper
         payload,
         {
             "gpu_visibility": {"enabled": True},
-            "nccl": {"enabled": True},
         },
     )
 
-    changed = normalize_mk8s_gpu_project_validation_settings(payload)
+    changed = normalize_mk8s_gpu_project_deployment_testing_settings(payload)
 
     assert changed is True
-    mk8s_gpu_validations = payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]
-    assert mk8s_gpu_validations["gpu_visibility"]["enabled"] is True
-    assert mk8s_gpu_validations["nccl"]["enabled"] is True
+    mk8s_gpu_deployment_testing = payload["deploy"]["targets"][0]["deployment_testing"]["mk8s_gpu"]
+    assert "cluster_smoke" not in mk8s_gpu_deployment_testing
+    assert mk8s_gpu_deployment_testing["gpu_visibility"]["enabled"] is True
+    assert "nccl" not in mk8s_gpu_deployment_testing
 
 
-def test_normalize_mk8s_gpu_project_validation_settings_preserves_generated_soperator_workload_defaults() -> (
+def test_normalize_mk8s_gpu_project_deployment_testing_settings_preserves_generated_soperator_workload_defaults() -> (
     None
 ):
     payload = _mk8s_payload()
@@ -2602,14 +3353,14 @@ def test_normalize_mk8s_gpu_project_validation_settings_preserves_generated_sope
             "enabled": True,
         }
     ]
-    _set_mk8s_gpu_validation_config(payload, mk8s_gpu_project_validation_defaults())
+    _set_mk8s_gpu_validation_config(payload, mk8s_gpu_project_deployment_testing_defaults())
 
-    changed = normalize_mk8s_gpu_project_validation_settings(payload)
+    changed = normalize_mk8s_gpu_project_deployment_testing_settings(payload)
 
     assert changed is False
-    mk8s_gpu_validations = payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]
-    assert mk8s_gpu_validations["operator_readiness"]["enabled"] is True
-    assert mk8s_gpu_validations["gpu_visibility"]["enabled"] is True
-    assert mk8s_gpu_validations["gpu_visibility"]["max_nodes"] == 3
-    assert mk8s_gpu_validations["nccl"]["enabled"] is True
-    assert mk8s_gpu_validations["nccl"]["max_nodes"] == 8
+    mk8s_gpu_deployment_testing = payload["deploy"]["targets"][0]["deployment_testing"]["mk8s_gpu"]
+    assert mk8s_gpu_deployment_testing["operator_readiness"]["enabled"] is True
+    assert "cluster_smoke" not in mk8s_gpu_deployment_testing
+    assert mk8s_gpu_deployment_testing["gpu_visibility"]["enabled"] is True
+    assert mk8s_gpu_deployment_testing["gpu_visibility"]["max_nodes"] == 3
+    assert "nccl" not in mk8s_gpu_deployment_testing

@@ -1,4 +1,4 @@
 interface:
   display_name: "Align"
   short_description: "Safe end-to-end code review and alignment"
-  default_prompt: "Use $align to perform a cautious senior code-review style alignment pass, understand the project contract first, fix only clear low-risk issues across code, tests, CI, CLI, docs, and workflows, and report validation plus unresolved risks."
+  default_prompt: "Use $align to perform a cautious senior code-review style alignment pass: synthesize the current thread, relevant Agent Memory, and task-state context; understand the project contract; fix only clear low-risk issues across code, tests, CI, CLI, docs, and workflows; and report validation plus unresolved risks."

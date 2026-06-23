@@ -236,7 +236,9 @@ runtime artifacts and can drift, so maintainers should patch the source bundle
 first, run its hook tests, and then sync it intentionally with
 `install-skills.sh --install-all-hooks`, or with
 `install-skills.sh --install-hooks sdlc-start/assets/hooks` when only the SDLC
-hook bundle should be refreshed.
+hook bundle should be refreshed. Add `--register-hooks` when the installer
+should also merge the SDLC `PreToolUse` and `Stop` registration entries into
+`$CODEX_HOME/hooks.json`.
 
 The Stop hook continuation prompt must route through `sdlc-start` and emit
 canonical `sdlc-*` skill names. It may normalize short phase values when

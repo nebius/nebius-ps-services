@@ -171,6 +171,135 @@ class HookTestCase(unittest.TestCase):
         result = run_hook(PRE_TOOL, self.pre_payload("apply_patch", patch), self.codex_home)
         self.assertEqual(result, {})
 
+    def test_pretool_allows_outside_project_patch(self) -> None:
+        outside_path = self.root / "outside-project" / "note.md"
+        patch = f"*** Begin Patch\n*** Add File: {outside_path}\n+external note\n*** End Patch\n"
+        result = run_hook(PRE_TOOL, self.pre_payload("apply_patch", patch), self.codex_home)
+        self.assertEqual(result, {})
+
+    def test_pretool_allows_outside_project_delete_patch(self) -> None:
+        outside_path = self.root / "outside-project" / "old-note.md"
+        patch = f"*** Begin Patch\n*** Delete File: {outside_path}\n*** End Patch\n"
+        result = run_hook(PRE_TOOL, self.pre_payload("apply_patch", patch), self.codex_home)
+        self.assertEqual(result, {})
+
+    def test_pretool_allows_outside_project_bash_write(self) -> None:
+        outside_path = self.root / "outside-project" / "note.md"
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", f"tee {outside_path}"), self.codex_home)
+        self.assertEqual(result, {})
+
+    def test_pretool_allows_outside_project_bash_delete(self) -> None:
+        outside_path = self.root / "outside-project" / "old-note.md"
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", f"rm {outside_path}"), self.codex_home)
+        self.assertEqual(result, {})
+
+    def test_pretool_allows_mcp_outside_project_write(self) -> None:
+        outside_path = self.root / "outside-project" / "note.md"
+        result = run_hook(
+            PRE_TOOL,
+            self.pre_payload(
+                "mcp__filesystem__write_file",
+                tool_input={"path": str(outside_path), "content": "external note\n"},
+            ),
+            self.codex_home,
+        )
+        self.assertEqual(result, {})
+
+    def test_pretool_allows_mcp_outside_project_delete(self) -> None:
+        outside_path = self.root / "outside-project" / "old-note.md"
+        result = run_hook(
+            PRE_TOOL,
+            self.pre_payload("mcp__filesystem__delete_file", tool_input={"path": str(outside_path)}),
+            self.codex_home,
+        )
+        self.assertEqual(result, {})
+
+    def test_pretool_allows_global_agents_apply_patch(self) -> None:
+        codex_home = Path("/codex-hook-fixture")
+        agents_path = codex_home / "AGENTS.md"
+        patch = f"*** Begin Patch\n*** Add File: {agents_path}\n+# Global AGENTS.md\n*** End Patch\n"
+        result = run_hook(PRE_TOOL, self.pre_payload("apply_patch", patch), codex_home)
+        self.assertEqual(result, {})
+
+    def test_pretool_allows_global_agents_delete_patch(self) -> None:
+        codex_home = Path("/codex-hook-fixture")
+        agents_path = codex_home / "AGENTS.md"
+        patch = f"*** Begin Patch\n*** Delete File: {agents_path}\n*** End Patch\n"
+        result = run_hook(PRE_TOOL, self.pre_payload("apply_patch", patch), codex_home)
+        self.assertEqual(result, {})
+
+    def test_pretool_allows_move_from_global_agents(self) -> None:
+        codex_home = Path("/codex-hook-fixture")
+        agents_path = codex_home / "AGENTS.md"
+        patch = (
+            "*** Begin Patch\n"
+            f"*** Update File: {agents_path}\n"
+            "*** Move to: docs/moved-agents.md\n"
+            "@@\n"
+            "-# Global AGENTS.md\n"
+            "+# Moved\n"
+            "*** End Patch\n"
+        )
+        result = run_hook(PRE_TOOL, self.pre_payload("apply_patch", patch), codex_home)
+        self.assertEqual(result, {})
+
+    def test_pretool_allows_move_to_global_agents(self) -> None:
+        codex_home = Path("/codex-hook-fixture")
+        agents_path = codex_home / "AGENTS.md"
+        patch = (
+            "*** Begin Patch\n"
+            "*** Update File: src/module.py\n"
+            f"*** Move to: {agents_path}\n"
+            "@@\n"
+            "-print('hello')\n"
+            "+# Global AGENTS.md\n"
+            "*** End Patch\n"
+        )
+        result = run_hook(PRE_TOOL, self.pre_payload("apply_patch", patch), codex_home)
+        self.assertEqual(result, {})
+
+    def test_pretool_allows_global_hooks_apply_patch(self) -> None:
+        codex_home = Path("/codex-hook-fixture")
+        hook_path = codex_home / "hooks" / "user_prompt_context.py"
+        patch = f"*** Begin Patch\n*** Add File: {hook_path}\n+print('blocked')\n*** End Patch\n"
+        result = run_hook(PRE_TOOL, self.pre_payload("apply_patch", patch), codex_home)
+        self.assertEqual(result, {})
+
+    def test_pretool_allows_global_config_apply_patch(self) -> None:
+        codex_home = Path("/codex-hook-fixture")
+        config_path = codex_home / "config.toml"
+        patch = f"*** Begin Patch\n*** Add File: {config_path}\n+[features]\n*** End Patch\n"
+        result = run_hook(PRE_TOOL, self.pre_payload("apply_patch", patch), codex_home)
+        self.assertEqual(result, {})
+
+    def test_pretool_allows_bash_global_agents_write(self) -> None:
+        codex_home = Path("/codex-hook-fixture")
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", f"tee {codex_home / 'AGENTS.md'}"), codex_home)
+        self.assertEqual(result, {})
+
+    def test_pretool_allows_non_obvious_bash_global_agents_write(self) -> None:
+        codex_home = Path("/codex-hook-fixture")
+        command = f"python3 -c \"open('{codex_home / 'AGENTS.md'}','w').write('x')\""
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), codex_home)
+        self.assertEqual(result, {})
+
+    def test_pretool_allows_bash_global_agents_read_only_inspection(self) -> None:
+        codex_home = Path("/codex-hook-fixture")
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", f"cat {codex_home / 'AGENTS.md'}"), codex_home)
+        self.assertEqual(result, {})
+
+    def test_pretool_allows_mcp_global_agents_write(self) -> None:
+        codex_home = Path("/codex-hook-fixture")
+        result = run_hook(
+            PRE_TOOL,
+            self.pre_payload(
+                "mcp__filesystem__write_file",
+                tool_input={"path": str(codex_home / "AGENTS.md"), "content": "# Global AGENTS.md\n"},
+            ),
+            codex_home,
+        )
+        self.assertEqual(result, {})
+
     def test_pretool_allows_mcp_read(self) -> None:
         result = run_hook(
             PRE_TOOL,
@@ -179,12 +308,12 @@ class HookTestCase(unittest.TestCase):
         )
         self.assertEqual(result, {})
 
-    def test_pretool_denies_credential_patch(self) -> None:
+    def test_pretool_allows_credential_patch(self) -> None:
         patch = "*** Begin Patch\n*** Add File: ~/.ssh/config\n+Host example\n*** End Patch\n"
         result = run_hook(PRE_TOOL, self.pre_payload("apply_patch", patch), self.codex_home)
-        self.assert_denied(result, "credential path")
+        self.assertEqual(result, {})
 
-    def test_pretool_denies_locked_plan_patch(self) -> None:
+    def test_pretool_allows_locked_plan_patch(self) -> None:
         run_dir = self.active_run()
         plan = run_dir / "plans" / "FEAT-001.plan.v1.md"
         plan.parent.mkdir(parents=True, exist_ok=True)
@@ -192,7 +321,29 @@ class HookTestCase(unittest.TestCase):
         plan.with_suffix(plan.suffix + ".lock").write_text("locked\n", encoding="utf-8")
         patch = f"*** Begin Patch\n*** Update File: {plan}\n@@\n-# Plan\n+# Changed\n*** End Patch\n"
         result = run_hook(PRE_TOOL, self.pre_payload("apply_patch", patch), self.codex_home)
-        self.assert_denied(result, "locked SDLC plan")
+        self.assertEqual(result, {})
+
+    def test_pretool_allows_private_state_copy_command(self) -> None:
+        command = "cp -R ~/." + "codex/sdlc-runs/demo ."
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
+        self.assertEqual(result, {})
+
+    def test_pretool_allows_private_state_stage_command(self) -> None:
+        command = "git " + "add ~/." + "codex/sdlc-runs/demo"
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
+        self.assertEqual(result, {})
+
+    def test_pretool_allows_external_network_curl(self) -> None:
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", "curl -I https://example.com"), self.codex_home)
+        self.assertEqual(result, {})
+
+    def test_pretool_allows_external_network_ssh(self) -> None:
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", "ssh example.com true"), self.codex_home)
+        self.assertEqual(result, {})
+
+    def test_pretool_allows_external_network_scp(self) -> None:
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", "scp local.txt example.com:/tmp/local.txt"), self.codex_home)
+        self.assertEqual(result, {})
 
     def test_pretool_denies_commit_on_main(self) -> None:
         (self.project / "src" / "main_change.py").write_text("print('x')\n", encoding="utf-8")
@@ -264,6 +415,13 @@ class HookTestCase(unittest.TestCase):
         patch = "*** Begin Patch\n*** Update File: docs/design.md\n@@\n # Design\n+More\n*** End Patch\n"
         result = run_hook(PRE_TOOL, self.pre_payload("apply_patch", patch), self.codex_home)
         self.assertIn("additionalContext", result.get("hookSpecificOutput", {}))
+
+    def test_pretool_warns_spec_id_delete_without_blocking(self) -> None:
+        self.active_run(phase="design_update")
+        patch = "*** Begin Patch\n*** Update File: docs/design.md\n@@\n-FEAT-001\n+Removed\n*** End Patch\n"
+        result = run_hook(PRE_TOOL, self.pre_payload("apply_patch", patch), self.codex_home)
+        self.assertIn("additionalContext", result.get("hookSpecificOutput", {}))
+        self.assertNotEqual(result.get("hookSpecificOutput", {}).get("permissionDecision"), "deny")
 
     def test_pretool_allows_design_edit_in_design_phase(self) -> None:
         self.active_run(phase="design_update")

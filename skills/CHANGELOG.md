@@ -6,6 +6,12 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Added
 
+- Added the `agent-nebius-auth` setup-only skill for bootstrapping and
+  repairing Codex Agent Nebius service-account authentication, including an
+  idempotent setup script and a `PreToolUse` hook that injects short-lived
+  Nebius token environment variables into matching Bash commands without
+  returning token material as model context, fail-closed token disclosure
+  guardrails, and local hook regression tests.
 - Added `docs/agentic-sdlc-design.md` to document the Agentic SDLC
   architecture, requirements/design templates, local run state, hook
   boundaries, MCP role, and skill-by-skill lifecycle.
@@ -37,6 +43,11 @@ All notable changes to the reusable Codex skills are tracked here.
   Agent Skill folders, including `SKILL.md`, references, assets, scripts,
   official vendor-doc verification, safety guardrails, canonical structure, and
   validation evidence.
+- Added the `agentic-sdlc-test` Codex skill for safely verifying the Agentic
+  SDLC workflow from outside the workflow with global `sdlc-*` skill discovery,
+  hook configuration inspection, disposable PreToolUse and Stop hook fixture
+  tests, disposable golden-path guidance, idempotency and failure-loop checks,
+  and a report under `~/.codex/sdlc-verification/`.
 - Added the `apply-security` Codex skill for security scans, remediation
   plans, safe patching, verification, and explanation across Terraform,
   Kubernetes, Helm, CI/CD, Bash, Python, Java, JavaScript, TypeScript, and Rust
@@ -51,6 +62,10 @@ All notable changes to the reusable Codex skills are tracked here.
 - Added the `commit-push` Codex skill for committing all current feature-branch
   changes with `git add -A`, pushing the branch to `origin`, and reporting
   final worktree cleanliness without opening a pull request.
+- Added the `commit` Codex skill for fast local commits on the current branch:
+  it stages the complete repository diff with repo-root `git add -A`, runs
+  lightweight staged validation, commits with normal hooks, and intentionally
+  does not push, create PRs, or participate in Agentic SDLC state.
 - Added the `code-info` Codex skill for copy/paste-friendly project code
   metrics, including LOC by language and component, repo size and link,
   test-file counts, CLI command detection, module/package counts, artifact
@@ -58,6 +73,9 @@ All notable changes to the reusable Codex skills are tracked here.
   remote GitHub repositories that are not cloned locally by reading a temporary
   repository archive with local GitHub token discovery when needed.
 - Added the `create-pr` Codex skill for branch-safe GitHub PR creation.
+- Added the `merge-pr` Codex skill for non-SDLC GitHub PR merging that verifies
+  PR metadata, checks, reviews, mergeability, base branch, and head SHA before
+  calling `gh pr merge --match-head-commit` without admin bypass.
 - Added the `config-codex` Codex skill for bootstrapping public-safe local
   Codex runtime setup, including global `AGENTS.md`, `config.toml` features
   and MCP servers, hooks, task-state layout, read-only custom agents, and a
@@ -79,13 +97,84 @@ All notable changes to the reusable Codex skills are tracked here.
   `services/nebius-cxcli`, including catalog-first onboarding and optional
   code-owned layers for wizard/provider, runtime validation, status polling,
   and cluster handoff behavior.
-- Added the `publish-helm` Codex skill for creating Nebius OCI Helm chart
-  publication flows.
+- Added the `publish-helm` Codex skill for OCI Helm chart publishing.
 - Added the `review-pr` Codex skill for GitHub-backed PR review and
   merge-readiness work.
 
 ### Changed
 
+- Added an explicit `install-skills.sh --replace-hooks-json` opt-in for hook
+  registration cleanup so normal `--register-hooks` preserves hand-written
+  entries while the intentional clean-reset mode backs up and replaces
+  `$CODEX_HOME/hooks.json` from the selected source manifest or manifests.
+- Added a hook-registration guardrail that refuses multiple registrations for
+  the same hook event and Python hook filename, preventing stale entries such
+  as duplicate `Stop` hooks for `stop_sdlc_continue.py` from being merged.
+- Standardized the `agent-nebius-auth` hook payload under
+  `agent-nebius-auth/assets/hooks/` so `--install-all-hooks` discovers and
+  registers it with the other reviewed hook bundles.
+- Relaxed the Agentic SDLC PreToolUse write-target policy so file targets are
+  no longer blocked by path, including outside-repo files, credential
+  directories, Codex runtime files, global `AGENTS.md`, locked SDLC plans, and
+  private SDLC state. Ordinary outbound network commands are allowed while
+  secret-bearing payloads, dangerous shell patterns, and guarded Git/GitHub
+  actions remain blocked.
+- Packaged the Agentic SDLC hook helper library with `lib/__init__.py` and
+  explicit `lib.*` imports so direct script execution and Pyright/Pylance
+  import resolution stay aligned.
+- Refactored `publish-helm`, `publish-image`, and `publish-release` from
+  generator-first guidance into doer-first release skills that can run setup,
+  prep, publish, or complete end-to-end flows from the current project folder.
+- Added deterministic skill-owned publish helper scripts for Helm charts,
+  container images, and GitHub Releases, including strict clean-worktree checks,
+  tag normalization, duplicate tag prevention, changelog release-section
+  validation, upstream push setup, and artifact-specific publish verification.
+- Hardened the skill-owned publish helpers so rerunning prep for an existing
+  unreleased tag section merges new `Unreleased` bullets into that section
+  instead of clearing them.
+- Hardened publish helper scripts and setup templates to reject prep on the
+  default branch and push feature branches explicitly to `origin`.
+- Updated Helm chart prep to include generated dependency lock/archive outputs
+  in the release-prep commit when `helm dependency update` creates them.
+- Aligned the Helm setup helper template with the canonical doer so generated
+  project-local helpers build or update chart dependencies before linting.
+- Clarified `publish-helm` chart-version ownership so `Chart.yaml` updates are
+  release-prep changes that must be merged before the publish/tag phase, with
+  publish helpers now pointing mismatched versions back to prep.
+- Fixed Helm release prep to avoid passing ignored generated chart archive
+  directories to `git commit` when no dependency archives are staged.
+- Added image publish workflow tag ancestry validation and removed shallow
+  history from release publish ancestry checks.
+- Aligned `merge-pr` with GitHub merge-queue behavior by using the no-strategy
+  `gh pr merge --match-head-commit` path for merge-queue branches instead of
+  treating a ready queue as an admin-bypass case.
+- Expanded `docs/agentic-sdlc-design.md` with an explicit SDLC workflow
+  verification procedure, including quick preflight usage, full disposable
+  golden-path testing, report status interpretation, and fix/rerun policy for
+  `agentic-sdlc-test`.
+- Hardened `agentic-sdlc-test` hook fixture execution so subprocesses disable
+  Python bytecode writes and do not create `__pycache__` artifacts in skill
+  source folders.
+- Aligned `global-context-management` and `config-codex` local setup guidance
+  to syntax-check rendered hooks without bytecode writes, and clarified that
+  installable global-context hook bundle sync is owned by `config-codex`.
+- Strengthened `agentic-sdlc-test` design-contract preflight so it verifies the
+  Agentic SDLC design document includes the workflow verification procedure and
+  report path, not only the core SDLC lifecycle terms.
+- Updated `align` so alignment decisions first synthesize the active thread,
+  relevant Agent Memory, and durable task-state or workflow state files, while
+  treating those sources as leads that must be verified against current
+  repository or runtime evidence before safe fixes.
+- Clarified `sdlc-commit` boundaries so ordinary local commits use `commit`
+  and publish commits use `commit-push`; `sdlc-commit` remains Agentic
+  SDLC-only.
+- Tightened `create-pr` so dirty PR work runs safe formatting, whitespace,
+  lint, build, and focused test checks before `git add -A` and commit, waits
+  for local tests to finish, and uses `git fetch origin` plus
+  `git merge --no-edit origin/<base>` before PR creation so branches receive
+  the latest base updates without rewriting history. Pushing now uses explicit
+  refspecs, and available GitHub checks must reach a terminal state before the
+  PR is reported ready.
 - Relaxed `global-context-management` subagent guidance so, after a prompt or
   user-enabled local hook policy authorizes delegation, Codex should choose
   useful targeted read-only helper roles instead of waiting for the prompt to
@@ -93,6 +182,22 @@ All notable changes to the reusable Codex skills are tracked here.
   instructions as hard gates; `SKILL.md` now also has explicit stateful
   workflow sections for inputs, required reads, writes, idempotency, failure
   handling, must-not rules, process, and completion criteria.
+- Aligned optional hook-assisted subagent delegation so the opt-in policy
+  template is enabled, hook context explicitly asks the parent Codex agent to
+  dynamically spawn useful read-only helpers, the local idempotency preflight
+  flags present-but-disabled policy files, and docs keep hook-direct tool calls
+  out of scope.
+- Updated `config-codex` output guidance so local setup runs report aligned,
+  not-aligned, and locally blocked surfaces explicitly, including exact manual
+  out-of-band remediation steps when a PreToolUse or permission guard blocks a
+  safe patch, and added disposable fixture coverage for local idempotency
+  policy-file edge cases.
+- Narrowed the Agentic SDLC PreToolUse guard so `apply_patch` may align only the
+  exact resolved `$CODEX_HOME/AGENTS.md` file, while deletion, moves, shell
+  writes, MCP writes, `$CODEX_HOME/config.toml`, and `$CODEX_HOME/hooks` remain
+  blocked; the Agentic SDLC verifier now requires this contract in the design
+  document and can locate the repo design doc when run from an installed skill
+  copy.
 - Renamed SDLC-only workflow skills and the coordinator to `sdlc-*` names, and
   made their front matter descriptions start with
   `Use only as part of the Agentic SDLC workflow;` so tool discovery separates
@@ -114,6 +219,14 @@ All notable changes to the reusable Codex skills are tracked here.
   skill-owned hook bundle from `*/assets/hooks` under the source skills folder,
   with destination collision checks and idempotent unchanged reporting for hook
   files.
+- Extended `install-skills.sh` hook installation with an explicit
+  `--register-hooks` option that semantically merges source `hooks.json` or
+  `hooks.json.template` registrations into `$CODEX_HOME/hooks.json`, preserving
+  existing hook entries and backing up the file before changes.
+- Added an idempotent, report-only hook drift summary to `install-skills.sh`
+  that lists extra installed hook files and `hooks.json` registrations not
+  present in the selected source manifests, with manual cleanup guidance
+  instead of automatic deletion.
 - Aligned `config-codex` idempotency checks with the current local setup model:
   exact global `AGENTS.md` parity when requested, required global hook
   registrations as a `hooks.json` subset, and required public-safe MCP servers
@@ -229,11 +342,12 @@ All notable changes to the reusable Codex skills are tracked here.
   `${CODEX_HOME:-$HOME/.codex}`, and the skill READMEs plus `SKILL.md`
   contracts now state the same installer-versus-runtime split.
 - Clarified that `multi_agent`, configured `[agents.*]` roles, hooks, and skill
-  activation make subagent delegation possible but do not force automatic
-  delegation. Current runtime probes must explicitly ask Codex to use or spawn
-  subagents, use delegation, or run parallel agents; the `codex exec` examples
-  now use the current `--sandbox read-only` flag instead of the obsolete
-  `--ask-for-approval` option.
+  activation make subagent delegation possible but do not directly spawn
+  helpers. Current runtime probes must explicitly ask Codex to use or spawn
+  subagents, use delegation, or run parallel agents, or rely on a user-enabled
+  local hook policy that injects that explicit request; the `codex exec`
+  examples now use the current `--sandbox read-only` flag instead of the
+  obsolete `--ask-for-approval` option.
 - Added opt-in hook-assisted read-only subagent delegation for
   `global-context-management`: the `UserPromptSubmit` hook can now discover
   configured read-only agents from `$CODEX_HOME/config.toml` and

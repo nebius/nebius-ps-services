@@ -5,16 +5,10 @@ from __future__ import annotations
 
 import json
 import sys
-from pathlib import Path
 from typing import Any
 
-HOOK_DIR = Path(__file__).resolve().parent
-LIB_DIR = HOOK_DIR / "lib"
-if str(LIB_DIR) not in sys.path:
-    sys.path.insert(0, str(LIB_DIR))
-
-from sdlc_policy import continue_with, stop  # noqa: E402
-from sdlc_state import (  # noqa: E402
+from lib.sdlc_policy import continue_with, stop
+from lib.sdlc_state import (
     append_jsonl,
     git_head,
     hash_state,

@@ -4,6 +4,25 @@ All notable changes to this chart are tracked here.
 
 ## [Unreleased]
 
+## [soperator-chart-v4.0.2-ps.2] - 2026-06-23
+
+- Aligned the mixed CPU+GPU worker examples and design guide with cxcli's
+  shape-specific generated NodeSet names. The chart now has a mixed worker
+  test fixture covering separate CPU/GPU NodeSets and generated shard
+  `nodeSetRefs`, and it fails fast if stale cxcli worker helper inputs or the
+  old `nodeGroupMapping` value are passed directly to Helm.
+- Added explicit chart schema, validation, and tests for upstream Soperator
+  ephemeral worker NodeSets. Ephemeral NodeSets now require non-negative integer
+  `slurmConfig.suspendTime`, explicit non-negative `replicas`, and
+  `initialNumberEphemeralNodes <= replicas`; explicit `replicas: 0` now renders
+  as zero instead of falling back to one. The docs describe cxcli per-shard
+  `worker_node_groups.<worker>.ephemeral_nodes.enabled=true` controls, global
+  `worker_ephemeral_nodes.suspend_time_seconds`, and preserve the one Slurm
+  worker pod to one Kubernetes worker VM scaling contract.
+- Expanded the README and design guide with a dedicated Soperator autoscaling
+  section covering fixed workers, infrastructure autoscaling, ephemeral
+  NodeSets, `NodeSetPowerState`, `power-manager`, `suspendTime`, and the cxcli
+  materialization boundary.
 - Clarified the design guide's Soperator resource model: `slurmNodes.*`
   renders Slurm service roles inside `SlurmCluster`, `nodesets[]` renders
   worker `NodeSet` resources, structured partitions reference only NodeSet

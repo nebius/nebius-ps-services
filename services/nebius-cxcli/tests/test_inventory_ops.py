@@ -1289,7 +1289,7 @@ def test_write_inventory_merges_validation_status_into_deploy_report(tmp_path: P
     paths = resolve_project_paths(config_path)
     validate_path_alignment(config, paths)
     paths.reports_dir.mkdir(parents=True, exist_ok=True)
-    (paths.reports_dir / "gpu-visibility-report.json").write_text(
+    (paths.reports_dir / "deploy-gpu-visibility-report.json").write_text(
         json.dumps(
             {
                 "passed": True,
@@ -1309,8 +1309,8 @@ def test_write_inventory_merges_validation_status_into_deploy_report(tmp_path: P
         validations=[
             {
                 "kind": "mk8s_gpu_visibility",
-                "name": "GPU Visibility test",
-                "report_file": "gpu-visibility-report.json",
+                "name": "GPU visibility probe",
+                "report_file": "deploy-gpu-visibility-report.json",
             }
         ],
     )
@@ -1320,8 +1320,8 @@ def test_write_inventory_merges_validation_status_into_deploy_report(tmp_path: P
     assert "## Apps" in markdown
     assert "## Validations" in markdown
     assert "- Overall status: `PASS`" in markdown
-    assert "### GPU Visibility test" in markdown
-    assert "- Detail report: `gpu-visibility-report.json`" in markdown
+    assert "### GPU visibility probe" in markdown
+    assert "- Detail report: `deploy-gpu-visibility-report.json`" in markdown
     assert not markdown.endswith("\n\n")
 
 

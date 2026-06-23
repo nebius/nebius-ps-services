@@ -332,6 +332,59 @@ def test_estimate_mk8s_requirements_add_gpu_capacity_shape_for_infiniband_nodes(
     )
 
 
+def test_estimate_mk8s_requirements_reports_gap_for_missing_keyed_gpu_fabric() -> None:
+    class _Session:
+        def preset_resources(self, *, project_id: str, platform: str, preset: str):
+            assert project_id == "project-1"
+            assert platform == "gpu-b300-sxm"
+            assert preset == "8gpu-192vcpu-2768gb"
+            return _resources(
+                platform=platform,
+                preset=preset,
+                vcpu_count=192,
+                memory_gibibytes=2768,
+                gpu_count=8,
+                allow_gpu_clustering=True,
+            )
+
+    requirements: list[QuotaRequirement] = []
+    gaps: list[QuotaCoverageGap] = []
+
+    _estimate_mk8s_requirements(
+        session=cast(Any, _Session()),
+        project_id="project-1",
+        region="uk-south1",
+        component_id="mk8s",
+        instance_id="mk8s",
+        inputs={
+            "node_groups": {
+                "worker": {
+                    "node_count": 1,
+                    "gpu": True,
+                    "platform": "gpu-b300-sxm",
+                    "preset": "8gpu-192vcpu-2768gb",
+                    "gpu_cluster_key": "workers",
+                    "reservation": {"policy": "AUTO"},
+                }
+            },
+            "gpu_clusters": {"workers": {}},
+        },
+        requirements=requirements,
+        gaps=gaps,
+    )
+
+    gpu_quota_requirement = next(
+        item for item in requirements if item.quota_name == "compute.instance.gpu.b300"
+    )
+
+    assert gpu_quota_requirement.gpu_capacity_shape is None
+    assert len(gaps) == 1
+    assert (
+        "inputs.gpu_clusters.workers.infiniband_fabric is missing; "
+        "fabric-bound GPU capacity was not checked"
+    ) in gaps[0].message
+
+
 def test_estimate_mk8s_requirements_cover_boot_disk_quota_from_explicit_inputs() -> None:
     class _Session:
         def preset_resources(self, *, project_id: str, platform: str, preset: str):
@@ -503,7 +556,7 @@ def test_evaluate_requirement_uses_matching_capacity_dashboard_row_for_gpu_quota
     assert check.source_scope == "capacity-dashboard/on-demand"
     assert check.description == (
         "Capacity Dashboard GPU availability "
-        "(on-demand VM slots, fabric uk-south1-a, converted to GPU units)"
+        "(regular-vm slots, fabric uk-south1-a, converted to GPU units)"
     )
 
 
@@ -597,7 +650,7 @@ def test_evaluate_requirement_auto_reservation_policy_can_mix_capacity_lanes() -
     assert check.source_scope == "capacity-dashboard/auto"
     assert check.description == (
         "Capacity Dashboard GPU availability "
-        "(AUTO reservation policy: reserved + on-demand VM slots, fabric fabric-6, "
+        "(AUTO reservation policy: reserved + regular-vm slots, fabric fabric-6, "
         "converted to GPU units)"
     )
 
@@ -647,7 +700,7 @@ def test_evaluate_requirement_forbid_reservation_policy_checks_common_pool_only(
     assert check.source_scope == "capacity-dashboard/on-demand"
     assert check.description == (
         "Capacity Dashboard GPU availability "
-        "(FORBID reservation policy: on-demand VM slots, fabric fabric-6, "
+        "(FORBID reservation policy: regular-vm slots, fabric fabric-6, "
         "converted to GPU units)"
     )
 
@@ -745,7 +798,7 @@ def test_evaluate_requirement_picks_best_capacity_dashboard_row_when_fabric_is_n
     assert check.source_scope == "capacity-dashboard/on-demand"
     assert check.description == (
         "Capacity Dashboard GPU availability "
-        "(on-demand VM slots, fabric fabric-2, converted to GPU units)"
+        "(regular-vm slots, fabric fabric-2, converted to GPU units)"
     )
 
 
@@ -967,9 +1020,7 @@ def test_assess_live_quota_requirements_preserves_gaps_and_lookup_errors(
 
     assert report.coverage_gaps == (gap,)
     assert report.checks[0].sufficient is True
-    assert report.errors == (
-        "tenant quota lookup failed for tenant-1: tenant lookup unavailable",
-    )
+    assert report.errors == ("tenant quota lookup failed for tenant-1: tenant lookup unavailable",)
 
 
 def test_assess_live_quota_requirements_uses_capacity_dashboard_for_gpu_shape(
@@ -1449,7 +1500,7 @@ def test_format_quota_report_lines_marks_capacity_dashboard_shortages() -> None:
                 source_scope="capacity-dashboard/auto",
                 description=(
                     "Capacity Dashboard GPU availability "
-                    "(AUTO reservation policy: reserved + on-demand VM slots, "
+                    "(AUTO reservation policy: reserved + regular-vm slots, "
                     "fabric fabric-6, converted to GPU units)"
                 ),
                 contributors=(),
@@ -1462,8 +1513,7 @@ def test_format_quota_report_lines_marks_capacity_dashboard_shortages() -> None:
     assert any("detected insufficient Nebius quota/capacity" in line for line in lines)
     assert any(
         "available 0 via Capacity Dashboard GPU availability "
-        "(AUTO reservation policy: reserved + on-demand VM slots, fabric fabric-6"
-        in line
+        "(AUTO reservation policy: reserved + regular-vm slots, fabric fabric-6" in line
         for line in lines
     )
 

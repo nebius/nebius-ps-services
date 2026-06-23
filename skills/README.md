@@ -4,10 +4,10 @@ This folder contains public, reusable Codex skills for common engineering
 workflows. Each skill lives in its own folder and is discovered by the presence
 of `SKILL.md`.
 
-This root README is the concise index and install guide. Each skill folder also
-has a local `README.md` that explains what the skill does, its architecture,
-core concepts, workflow, and important files. `SKILL.md` remains the runtime
-instruction file Codex loads when the skill is used.
+This root README is the concise index and install guide. Most skill folders
+also have a local `README.md` that explains what the skill does, its
+architecture, core concepts, workflow, and important files. `SKILL.md` remains
+the runtime instruction file Codex loads when the skill is used.
 
 Every reusable skill includes a `## Learning Loop` section in `SKILL.md`. When
 durable, public-safe, evidence-backed knowledge is discovered while using a
@@ -21,6 +21,9 @@ For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 ## Included Skills
 
 - End-to-end project alignment: `align`
+- Codex Agent Nebius service-account auth bootstrap and repair:
+  `agent-nebius-auth`
+- Agentic SDLC workflow verification: `agentic-sdlc-test`
 - Agentic SDLC workflow skills: `sdlc-create-requirements`, `sdlc-start`,
   `sdlc-gather-context`, `sdlc-create-design`, `sdlc-create-plan`,
   `sdlc-tdd`, `sdlc-implement-plan`, `sdlc-validate-codes`,
@@ -32,8 +35,10 @@ For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 - Security review and safe remediation across infra, CI/CD, shell, and app
   code: `apply-security`
 - Disposable Ubuntu project container setup: `attach-ubuntu`
+- Fast local whole-repository commits on the current branch: `commit`
 - Commit and push the current feature branch: `commit-push`
 - Branch-safe GitHub pull request creation with safe check repair: `create-pr`
+- Branch-protection-respecting GitHub pull request merging: `merge-pr`
 - Read-only copy/paste-friendly local or GitHub repo code metrics: `code-info`
 - Public-safe local Codex runtime configuration: `config-codex`
 - GitHub Actions authoring and review: `github-workflows`
@@ -45,9 +50,9 @@ For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 - Shell, Markdown, and Python linting: `linter`
 - Nebius cloud automation, quota, and MK8s GPU workflows: `nebius`
 - Nebius cxcli component onboarding: `onboard-nebius-cxcli`
-- Helm chart release publishing: `publish-helm`
-- Container image release publishing: `publish-image`
-- Application release publishing: `publish-release`
+- End-to-end OCI Helm chart publishing: `publish-helm`
+- End-to-end container image publishing: `publish-image`
+- End-to-end GitHub Release publishing: `publish-release`
 - Python project scaffolding and hardening: `python-project`
 - Manual release-script generation: `release-generator`
 - GitHub pull request review and merge-readiness repair: `review-pr`
@@ -64,6 +69,8 @@ review Terraform code.
 ### Prompt Examples
 
 ```text
+$commit Quickly commit all current local changes on this branch without pushing.
+
 $commit-push Commit all current changes on this feature branch, generate a commit message, push it to origin, and tell me whether the worktree is clean.
 
 $create-pr Create a PR for the current local work, using a new prep branch if I am still on the default branch.
@@ -73,6 +80,12 @@ $create-pr Resolve conflicts for the current branch against main, open or reuse 
 $review-pr Review PR #110 against the base branch, fix safe issues on the branch, and tell me whether it is ready to merge.
 
 $review-pr Review https://github.com/example-org/example-repo/pull/42, resolve straightforward conflicts against main if the branch is writable, and report remaining blockers.
+
+$merge-pr Merge PR #110 with squash after verifying checks, reviews, mergeability, and the head SHA without using admin bypass.
+
+$publish-image --mode complete --tag 1.2.3 --image-name ghcr.io/example-org/example-app prep, PR, merge, tag, wait for CI, verify the image digest, and report the published artifact.
+
+$agentic-sdlc-test Verify the Agentic SDLC workflow against docs/agentic-sdlc-design.md and write a safe report.
 
 $align-skill Review and standardize skills/foo against the canonical skill structure and official vendor docs.
 
@@ -94,14 +107,17 @@ $review-pr Review this Helm chart PR, apply the relevant sibling skills, resolve
 ```
 
 These prompts should work when the skill is installed and the local environment
-matches the task. For Git-backed flows such as `commit-push`, `create-pr`, and
-`review-pr`, that means:
+matches the task. For Git-backed flows such as `commit`, `commit-push`,
+`create-pr`, `merge-pr`, and `review-pr`, that means the current directory is
+inside a Git repository. For remote-backed flows such as `commit-push`,
+`create-pr`, `merge-pr`, `review-pr`, and the `publish-*` complete flows, that
+also means:
 
 - the repository has an `origin` remote
 - the branch state allows the requested operation
 
-For GitHub CLI backed flows such as `create-pr` and `review-pr`, that also
-means:
+For GitHub CLI backed flows such as `create-pr`, `merge-pr`, `review-pr`, and
+the `publish-*` complete flows, that also means:
 
 - `gh` is authenticated for the target repository
 
@@ -121,7 +137,10 @@ otherwise read the script or report the command that would be used.
 `align` is the end-to-end repair and consistency skill. Use it when a project
 needs code, module wiring, tests, CI, CLI behavior, config, examples, help
 output, README/design docs, workflows, and applicable project skills reviewed
-together as a cautious senior code-review style alignment pass.
+together as a cautious senior code-review style alignment pass. It first
+synthesizes the current thread, relevant Agent Memory, and durable task-state
+context, then verifies that context against current repository or runtime
+evidence before making safe fixes.
 
 ### `align-skill`
 
@@ -132,6 +151,25 @@ multi-skill parent folders, GitHub skill repositories, or GitHub tree URLs when
 official vendor-doc verification, canonical structure, validation evidence, fast
 authoring practices, optional stateful-workflow section profiles, and reusable
 learning capture in local skill source materials need to be aligned.
+
+### `agentic-sdlc-test`
+
+`agentic-sdlc-test` verifies the Agentic SDLC workflow from outside the
+workflow. It checks `docs/agentic-sdlc-design.md`, global `sdlc-*` skill
+discovery, hook configuration, disposable PreToolUse and Stop hook fixture
+behavior, idempotency, failure routing, steering, and disposable golden-path
+execution. It writes the report under `~/.codex/sdlc-verification/` and must
+not change real projects, installed skills, hooks, hook trust, or agent
+configuration.
+
+### `agent-nebius-auth`
+
+`agent-nebius-auth` is a setup-only skill for bootstrapping or repairing local
+Codex Agent Nebius authentication. It uses a service account, tenant group,
+project-level access permit, authorized-key credential file, CLI profile, and a
+Codex `PreToolUse` hook that injects short-lived Nebius token environment
+variables into matching Bash commands without returning token material as model
+context.
 
 ### Agentic SDLC Skills
 
@@ -190,7 +228,8 @@ local state layout, hook boundaries, and full skill-by-skill lifecycle.
 - `sdlc-tui-test`: controls and evaluates terminal, CLI wizard, or TUI flows with
   transcripts and exit-code evidence.
 - `sdlc-commit`: creates local feature-scoped Git commits after validation, tests,
-  and evaluation pass; it never pushes and does not replace `commit-push`.
+  and evaluation pass; it never pushes and does not replace the general
+  `commit` or `commit-push` skills.
 - `sdlc-uat-tests`: runs product-level user acceptance testing before PR creation.
 - `create-pr`: existing PR skill reused as the SDLC handoff after UAT passes;
   it opens or reuses the PR and summarizes SDLC evidence.
@@ -214,6 +253,14 @@ container, mounts the project at `/workdir`, prepares attached-container VS
 Code defaults, and helps create a disposable Ubuntu environment for local
 testing on macOS with Docker Desktop and the Dev Containers extension.
 
+### `commit`
+
+`commit` creates a fast local Git commit on the current branch without pushing.
+It stages the complete monorepo diff with repo-root `git add -A`, runs
+lightweight staged validation, uses a provided or generated commit message,
+preserves normal hooks, and stops instead of pushing, creating PRs, repairing
+branches, or writing Agentic SDLC evidence.
+
 ### `commit-push`
 
 `commit-push` commits all current local changes on the active non-default
@@ -229,9 +276,23 @@ without leaving new work on the default branch. It can prepare conflict-free
 PRs, repair safe branch-owned validation or GitHub check failures before
 presenting the PR as handled, avoid duplicate PRs for the same head branch,
 preserve one PR per branch, stage complete monorepo local work with
-`git add -A` when committing current dirty changes, validate the staged diff,
-reuse the current non-default branch without creating another branch, and
+`git add -A` only after safe formatting, whitespace, lint, build, and focused
+test checks finish, validate the staged diff, merge `origin/<base>` into the PR
+branch before PR creation without rewriting history, reuse the current
+non-default branch without creating another branch, push with explicit
+refspecs, wait for available GitHub checks before calling the PR ready, and
 report readiness plus manual merge order.
+
+### `merge-pr`
+
+`merge-pr` verifies and merges a GitHub pull request outside the Agentic SDLC
+workflow. It checks PR metadata, checks, review state, mergeability, base
+branch, and the exact head SHA, waits for pending checks when useful, then
+merges with `gh pr merge --match-head-commit` using `squash` by default, or the
+no-strategy merge-queue path when the base branch requires one. It does not use
+admin bypass, force-push, delete branches by default, or merge when branch
+protection, required reviews, environment approvals, conflicts, or failing
+checks still block the PR.
 
 ### `code-info`
 
@@ -315,21 +376,32 @@ Terraform-backed components into `nebius-cxcli`.
 
 ### `publish-helm`
 
-`publish-helm` generates a Nebius OCI Helm chart publication flow with a
-chart-local `CHANGELOG.md`, `publish-helm.sh`, and a tag-driven GitHub Actions
-workflow.
+`publish-helm` publishes an OCI Helm chart end to end from the current project
+folder. It collects chart and OCI repository inputs, can create setup assets
+when missing or explicitly requested, preps chart release changes on a feature
+branch including the `Chart.yaml` version bump, hands off to `create-pr` and
+`merge-pr`, tags from the default branch, waits for the tag-triggered
+workflow, verifies the pushed chart with `helm pull`, and returns a publish
+report.
 
 ### `publish-image`
 
-`publish-image` generates the release assets for container images, including
-`CHANGELOG.md`, `publish-image.sh`, and a tag-driven image publication
-workflow.
+`publish-image` publishes a container image end to end from the current project
+folder. It collects image and registry inputs without storing secret values,
+can create setup assets when missing or explicitly requested, preps changelog
+release changes on a feature branch, hands off to `create-pr` and `merge-pr`,
+tags from the default branch, waits for the tag-triggered workflow, verifies
+the image with `docker buildx imagetools inspect`, and returns a publish
+report.
 
 ### `publish-release`
 
-`publish-release` generates the default application release flow for this skill
-set: a `CHANGELOG.md`, `publish-release.sh`, and a tag-driven GitHub Release
-workflow.
+`publish-release` publishes a package or application release to GitHub Releases
+end to end from the current project folder. It collects package and artifact
+inputs, can create setup assets when missing or explicitly requested, preps
+release changes on a feature branch, hands off to `create-pr` and `merge-pr`,
+tags from the default branch, waits for the tag-triggered workflow, verifies
+the GitHub Release and expected assets, and returns a publish report.
 
 ### `python-project`
 
@@ -379,14 +451,15 @@ be removed with `--remove-skill` when they are not same-source managed.
 - `git` for GitHub sources
 - standard POSIX-style utilities for hook installation: `install`, `find`,
   `cmp`, `chmod`, `awk`, `cut`, `sort`, and `mktemp`
+- `python3` when using hook registration
 
 ### Usage
 
 ```bash
 ./install-skills.sh [source] [destination_dir]
 ./install-skills.sh --remove-skill <skill_name> [destination_dir]
-./install-skills.sh --install-hooks <source_hook_dir>
-./install-skills.sh --install-all-hooks
+./install-skills.sh --install-hooks <source_hook_dir> [--register-hooks] [--replace-hooks-json]
+./install-skills.sh --install-all-hooks [--register-hooks] [--replace-hooks-json]
 ./install-skills.sh --help
 ```
 
@@ -396,10 +469,20 @@ script as the source and installs every sibling skill folder that contains
 The `--install-hooks` option is deliberately separate from normal skill
 installation. It copies hook files from an explicit source hook directory into
 `${CODEX_HOME:-$HOME/.codex}/hooks`, stripping `.template` suffixes for
-installed files, without modifying `hooks.json` or trusting hooks.
+installed files. Add `--register-hooks` to merge that bundle's
+`hooks.json` or `hooks.json.template` registration manifest into
+`${CODEX_HOME:-$HOME/.codex}/hooks.json`.
 The `--install-all-hooks` option is also explicit, but discovers every reviewed
 hook-only `*/assets/hooks` directory under this source skills folder and syncs
 those payload files in one pass. It does not scan mixed `assets/` directories.
+With `--register-hooks`, it also merges each discovered bundle's registration
+manifest while preserving existing hook entries. Add `--replace-hooks-json`
+only when you intentionally want to back up and replace `hooks.json` with a
+clean file built from the selected source manifests. Hook install modes are
+idempotent: unchanged files are not recopied, registration appends only missing
+source entries by default, refuses duplicate Python hook files within the same
+hook event, and any extra installed hook files or hook registrations are
+reported for review instead of removed automatically.
 
 ### Supported Sources
 
@@ -447,14 +530,17 @@ those payload files in one pass. It does not scan mixed `assets/` directories.
 # Copy optional Agentic SDLC hooks into the default local Codex home
 ./install-skills.sh --install-hooks sdlc-start/assets/hooks
 
-# Copy global context-management hook templates into the default local Codex home
-./install-skills.sh --install-hooks config-codex/assets/hooks
+# Copy and register global context-management hooks
+./install-skills.sh --install-hooks config-codex/assets/hooks --register-hooks
 
-# Copy every reviewed hook-only bundle into the default local Codex home
-./install-skills.sh --install-all-hooks
+# Copy and register every reviewed hook-only bundle
+./install-skills.sh --install-all-hooks --register-hooks
+
+# Copy all reviewed hook bundles and replace hooks.json with only those entries
+./install-skills.sh --install-all-hooks --register-hooks --replace-hooks-json
 
 # Copy hooks into a non-default Codex home
-CODEX_HOME=~/custom-codex ./install-skills.sh --install-all-hooks
+CODEX_HOME=~/custom-codex ./install-skills.sh --install-all-hooks --register-hooks
 ```
 
 ### Notes
@@ -490,9 +576,30 @@ CODEX_HOME=~/custom-codex ./install-skills.sh --install-all-hooks
   source.
 - `--install-hooks <source_hook_dir>` is opt-in because hooks are local runtime
   guardrails, not skills. Use a hook-only source directory such as
-  `sdlc-start/assets/hooks` or `config-codex/assets/hooks`. After syncing them,
-  restart Codex and review/trust the hook entries in `/hooks`.
+  `sdlc-start/assets/hooks` or `config-codex/assets/hooks`. Without
+  `--register-hooks`, this only syncs files under
+  `${CODEX_HOME:-$HOME/.codex}/hooks`.
 - `--install-all-hooks` discovers only skill-owned hook-only directories named
   `*/assets/hooks` under this source folder, checks for conflicting installed
   file names, and syncs all reviewed hook bundles into
   `${CODEX_HOME:-$HOME/.codex}/hooks`.
+- `--register-hooks` can be combined with either hook-install mode. It looks
+  for `hooks.json` or `hooks.json.template` in the hook directory or its parent,
+  validates the source and destination JSON, backs up an existing
+  `${CODEX_HOME:-$HOME/.codex}/hooks.json` before changing it, preserves
+  existing entries, and appends only missing source entries. It refuses to
+  create or preserve multiple registrations for the same hook event and Python
+  hook filename, such as two `Stop` entries pointing at
+  `stop_sdlc_continue.py`.
+- `--replace-hooks-json` can be combined with `--register-hooks` to replace
+  `${CODEX_HOME:-$HOME/.codex}/hooks.json` with a clean file built from the
+  selected source manifest or manifests. This removes hand-written and stale
+  registrations that are not in the selected source. Use
+  `--install-all-hooks --register-hooks --replace-hooks-json` for a clean file
+  containing every reviewed hook bundle under this source folder.
+- Hook install modes report extra files under
+  `${CODEX_HOME:-$HOME/.codex}/hooks` and extra `hooks.json` registrations that
+  are not present in the selected source manifests. These reports are advisory:
+  review the entries and remove obsolete files or JSON entries manually.
+- Hook registration does not trust hooks. Restart Codex and review/trust new or
+  changed hook entries in `/hooks`.

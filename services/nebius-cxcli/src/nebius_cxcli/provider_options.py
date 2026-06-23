@@ -20,6 +20,7 @@ from .capacity_dashboard import (
     capacity_level_rank,
     capacity_regular_sort_key,
     capacity_summary_text,
+    capacity_vm_slots_text,
     filter_capacity_resource_advice,
     list_capacity_resource_advice,
 )
@@ -31,6 +32,7 @@ SUPPORTED_PROVIDER_OPTION_SOURCES = frozenset(
         "mk8s_compatible_platforms",
         "mk8s_gpu_stack_presets",
         "mk8s_node_group_os_values",
+        "mk8s_gpu_capacity_choices",
         "mk8s_infiniband_fabrics",
         "compute_platforms",
         "compute_platform_presets",
@@ -442,8 +444,23 @@ def _capacity_fabric_sort_key(
     item: CapacityResourceAdvice,
     *,
     prefer_reserved: bool,
+    reservation_policy: str = "AUTO",
 ) -> tuple[int, int, int, int, int, int, int, str]:
     regular_key = _capacity_advice_sort_key(item)
+    if reservation_policy == "FORBID":
+        return (
+            0 if item.on_demand.available > 0 else 1,
+            -item.on_demand.available,
+            capacity_level_rank(item.on_demand.availability_level),
+            *regular_key,
+        )
+    if reservation_policy == "STRICT":
+        return (
+            0 if item.reserved.available > 0 else 1,
+            -item.reserved.available,
+            capacity_level_rank(item.reserved.availability_level),
+            *regular_key,
+        )
     return (
         0 if not prefer_reserved or item.reserved.available > 0 else 1,
         -item.reserved.available if prefer_reserved else 0,
@@ -452,7 +469,72 @@ def _capacity_fabric_sort_key(
     )
 
 
-def _capacity_summary_text(item: CapacityResourceAdvice) -> str:
+def _capacity_preset_choice_sort_key(
+    summary: _PresetCapacitySummary,
+    *,
+    prefer_reserved: bool,
+    reservation_policy: str = "AUTO",
+) -> tuple[int, int, int, int, int, int, int, str]:
+    regular_key = _capacity_advice_sort_key(summary.best_regular)
+    if reservation_policy == "FORBID":
+        return (
+            0 if summary.on_demand.availability.available > 0 else 1,
+            -summary.on_demand.availability.available,
+            capacity_level_rank(summary.on_demand.availability.availability_level),
+            *regular_key,
+        )
+    if reservation_policy == "STRICT":
+        return (
+            0 if summary.reserved.availability.available > 0 else 1,
+            -summary.reserved.availability.available,
+            capacity_level_rank(summary.reserved.availability.availability_level),
+            *regular_key,
+        )
+    return (
+        0 if not prefer_reserved or summary.reserved.availability.available > 0 else 1,
+        -summary.reserved.availability.available if prefer_reserved else 0,
+        capacity_level_rank(summary.reserved.availability.availability_level)
+        if prefer_reserved
+        else 0,
+        *regular_key,
+    )
+
+
+def _normalize_reservation_policy(value: object | None) -> str:
+    policy = (_as_str(value) or "").strip().upper()
+    return policy if policy in {"AUTO", "FORBID", "STRICT"} else "AUTO"
+
+
+def _capacity_policy_available(summary: _PresetCapacitySummary, *, policy: str) -> bool:
+    if policy == "STRICT":
+        return summary.reserved.availability.available > 0
+    if policy == "FORBID":
+        return summary.on_demand.availability.available > 0
+    return summary.reserved.availability.available + summary.on_demand.availability.available > 0
+
+
+def _capacity_row_available(item: CapacityResourceAdvice, *, policy: str) -> bool:
+    if policy == "STRICT":
+        return item.reserved.available > 0
+    if policy == "FORBID":
+        return item.on_demand.available > 0
+    return item.reserved.available + item.on_demand.available > 0
+
+
+def _capacity_row_choice_value(item: CapacityResourceAdvice) -> str:
+    return f"{item.preset}|{item.fabric or 'no-fabric'}"
+
+
+def _capacity_summary_text(
+    item: CapacityResourceAdvice,
+    *,
+    reservation_policy: str = "AUTO",
+) -> str:
+    policy = _normalize_reservation_policy(reservation_policy)
+    if policy == "FORBID":
+        return f"regular-vm {capacity_vm_slots_text(item.on_demand.available, item.gpu_count)}"
+    if policy == "STRICT":
+        return f"reserved {capacity_vm_slots_text(item.reserved.available, item.gpu_count)}"
     return capacity_summary_text(item)
 
 
@@ -496,10 +578,26 @@ def _capacity_preset_summary(items: Iterable[CapacityResourceAdvice]) -> _Preset
     )
 
 
-def _capacity_preset_summary_text(summary: _PresetCapacitySummary) -> str:
+def _capacity_preset_summary_text(
+    summary: _PresetCapacitySummary,
+    *,
+    reservation_policy: str = "AUTO",
+) -> str:
+    policy = _normalize_reservation_policy(reservation_policy)
+    gpu_count = summary.best_regular.gpu_count
+    if policy == "FORBID":
+        return (
+            "regular-vm "
+            f"{capacity_vm_slots_text(summary.on_demand.availability.available, gpu_count)}"
+        )
+    if policy == "STRICT":
+        return (
+            f"reserved {capacity_vm_slots_text(summary.reserved.availability.available, gpu_count)}"
+        )
     return (
-        f"live on-demand VMs={summary.on_demand.availability.available}, "
-        f"reserved VMs={summary.reserved.availability.available}"
+        "regular-vm "
+        f"{capacity_vm_slots_text(summary.on_demand.availability.available, gpu_count)}, "
+        f"reserved {capacity_vm_slots_text(summary.reserved.availability.available, gpu_count)}"
     )
 
 
@@ -507,13 +605,27 @@ def _capacity_preset_fabric_summary_parts(
     summary: _PresetCapacitySummary,
     *,
     allow_gpu_clustering: bool,
+    reservation_policy: str = "AUTO",
 ) -> tuple[str, ...]:
     if not allow_gpu_clustering:
         return ()
+    policy = _normalize_reservation_policy(reservation_policy)
     parts: list[str] = []
-    best_fabric = summary.best_regular.fabric
-    if best_fabric:
+    if policy == "STRICT":
+        reserved_fabric = summary.reserved.fabric
+        if reserved_fabric and summary.reserved.availability.available > 0:
+            parts.append(f"best reserved fabric {reserved_fabric}")
+        return tuple(parts)
+    if policy == "FORBID":
+        best_fabric = summary.on_demand.fabric
+        best_fabric_available = summary.on_demand.availability.available
+    else:
+        best_fabric = summary.best_regular.fabric
+        best_fabric_available = summary.best_regular.best_regular_available
+    if best_fabric and best_fabric_available > 0:
         parts.append(f"best fabric {best_fabric}")
+    if policy == "FORBID":
+        return tuple(parts)
     reserved_fabric = summary.reserved.fabric
     if (
         reserved_fabric
@@ -582,6 +694,7 @@ class ProviderOptionLookup:
                 "mk8s_compatible_platforms": self._resolve_mk8s_compatible_platforms,
                 "mk8s_gpu_stack_presets": self._resolve_mk8s_gpu_stack_presets,
                 "mk8s_node_group_os_values": self._resolve_mk8s_node_group_os_values,
+                "mk8s_gpu_capacity_choices": self._resolve_mk8s_gpu_capacity_choices,
                 "mk8s_infiniband_fabrics": self._resolve_mk8s_infiniband_fabrics,
                 "compute_boot_disk_types": self._resolve_compute_boot_disk_types,
                 "capacity_block_groups": self._resolve_capacity_block_groups,
@@ -729,6 +842,24 @@ class ProviderOptionLookup:
             if _is_live_fabric_name(item.fabric)
         )
         return resolved
+
+    def compute_platform_capacity_advice(
+        self,
+        *,
+        tenant_id: str,
+        region_id: str,
+        platform_name: str,
+    ) -> tuple[CapacityResourceAdvice, ...]:
+        normalized_tenant_id = _as_str(tenant_id)
+        normalized_region_id = _as_str(region_id)
+        normalized_platform_name = _as_str(platform_name)
+        if not normalized_tenant_id or not normalized_region_id or not normalized_platform_name:
+            return ()
+        return self._capacity_resource_advice_for_shape(
+            tenant_id=normalized_tenant_id,
+            region_id=normalized_region_id,
+            platform_name=normalized_platform_name,
+        )
 
     def validate_tenant_project_scope(
         self,
@@ -1670,12 +1801,18 @@ class ProviderOptionLookup:
             _payload_value(payload, "client_info.nebius.region_id")
         )
         tenant_id = self._resolve_tenant_id(payload, args)
+        reservation_policy = _as_str(args.get("reservation_policy"))
+        reservation_policy_path = _as_str(args.get("reservation_policy_path"))
+        if not reservation_policy and reservation_policy_path:
+            reservation_policy = _as_str(_payload_value(payload, reservation_policy_path))
+        reservation_policy = _normalize_reservation_policy(reservation_policy)
         cache_key = (
             "mk8s_infiniband_fabrics",
             platform_name,
             region_id,
             preset_name,
             tenant_id,
+            reservation_policy,
         )
         if cache_key in self._cache:
             return self._cache[cache_key]
@@ -1691,18 +1828,36 @@ class ProviderOptionLookup:
                 preset_name=preset_name,
             )
             if matching_advice:
-                prefer_reserved = any(item.reserved.available > 0 for item in matching_advice)
+                matching_advice = tuple(
+                    item
+                    for item in matching_advice
+                    if _capacity_row_available(item, policy=reservation_policy)
+                )
+                if not matching_advice:
+                    self._last_error = (
+                        "Live Capacity Dashboard returned no fabric rows matching "
+                        f"reservation policy {reservation_policy} for selected "
+                        f"cluster-capable GPU shape {platform_name}/{preset_name} in {region_id}."
+                    )
+                    return ()
+                prefer_reserved = any(
+                    item.reserved.available > 0 for item in matching_advice
+                ) and reservation_policy in {"AUTO", "STRICT"}
                 matching_advice = tuple(
                     sorted(
                         matching_advice,
                         key=lambda item: _capacity_fabric_sort_key(
                             item,
                             prefer_reserved=prefer_reserved,
+                            reservation_policy=reservation_policy,
                         ),
                     )
                 )
                 if prefer_reserved:
                     if matching_advice[0].reserved.available > 0:
+                        recommended_fabric = matching_advice[0].fabric
+                elif reservation_policy == "FORBID":
+                    if matching_advice[0].on_demand.available > 0:
                         recommended_fabric = matching_advice[0].fabric
                 elif matching_advice[0].best_regular_available > 0:
                     recommended_fabric = matching_advice[0].fabric
@@ -1719,10 +1874,14 @@ class ProviderOptionLookup:
                 value=item.fabric,
                 label=(
                     f"{item.fabric}  ({platform_name}, {region_id}), "
-                    f"{_capacity_summary_text(item)}"
+                    + _capacity_summary_text(item, reservation_policy=reservation_policy)
                     + (
                         ", recommended for reservations"
-                        if item.fabric == recommended_fabric and item.reserved.available > 0
+                        if (
+                            item.fabric == recommended_fabric
+                            and prefer_reserved
+                            and item.reserved.available > 0
+                        )
                         else ", recommended"
                         if item.fabric == recommended_fabric
                         else ""
@@ -1736,6 +1895,169 @@ class ProviderOptionLookup:
             )
             for item in advice_by_fabric.values()
         )
+        self._cache[cache_key] = resolved
+        return resolved
+
+    def _resolve_mk8s_gpu_capacity_choices(
+        self,
+        *,
+        args: dict[str, Any],
+        payload: dict[str, Any],
+        field_path: str,
+    ) -> tuple[OptionChoice, ...]:
+        project_id = self._resolve_project_id(payload, args)
+        if not project_id:
+            return ()
+
+        platform_name = _as_str(args.get("platform"))
+        platform_path = _as_str(args.get("platform_path"))
+        if not platform_path and field_path.endswith(".preset"):
+            platform_path = f"{field_path[: -len('.preset')]}.platform"
+        if not platform_name and platform_path:
+            platform_name = _as_str(_payload_value(payload, platform_path))
+        if not platform_name:
+            return ()
+
+        reservation_policy = _as_str(args.get("reservation_policy"))
+        reservation_policy_path = _as_str(args.get("reservation_policy_path"))
+        if not reservation_policy and reservation_policy_path:
+            reservation_policy = _as_str(_payload_value(payload, reservation_policy_path))
+        reservation_policy = _normalize_reservation_policy(reservation_policy)
+        tenant_id = self._resolve_tenant_id(payload, args)
+        region_id = self._resolve_region_id(payload, args)
+
+        cache_key = (
+            "mk8s_gpu_capacity_choices",
+            project_id,
+            platform_name,
+            reservation_policy,
+            tenant_id,
+            region_id,
+        )
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        if not tenant_id or not region_id or not platform_name.startswith("gpu-"):
+            resolved = self._resolve_compute_platform_presets(
+                args=args,
+                payload=payload,
+                field_path=field_path,
+            )
+            self._cache[cache_key] = resolved
+            return resolved
+
+        preset_by_name = {
+            preset.name: preset
+            for preset in self._resolve_compute_platform_preset_inventory(
+                project_id=project_id,
+                platform_name=platform_name,
+            )
+        }
+        capacity_rows = tuple(
+            item
+            for item in self._capacity_resource_advice_for_shape(
+                tenant_id=tenant_id,
+                region_id=region_id,
+                platform_name=platform_name,
+            )
+            if item.preset
+        )
+        if not capacity_rows:
+            resolved = self._resolve_compute_platform_presets(
+                args=args,
+                payload=payload,
+                field_path=field_path,
+            )
+            self._cache[cache_key] = resolved
+            return resolved
+
+        matching_rows = tuple(
+            item
+            for item in capacity_rows
+            if _capacity_row_available(item, policy=reservation_policy)
+        )
+        if not matching_rows:
+            self._last_error = (
+                "Live Capacity Dashboard returned no GPU capacity rows matching "
+                f"reservation policy {reservation_policy} for selected platform "
+                f"{platform_name} in {region_id}."
+            )
+            return ()
+        missing_metadata_presets = sorted(
+            {item.preset for item in matching_rows if item.preset not in preset_by_name}
+        )
+        if missing_metadata_presets:
+            self._last_error = (
+                "Live Capacity Dashboard returned GPU capacity rows for selected "
+                f"platform {platform_name} in {region_id}, but Compute preset metadata "
+                "was unavailable for: "
+                + ", ".join(missing_metadata_presets)
+                + ". Cannot determine GPU clustering support for row materialization."
+            )
+            return ()
+
+        prefer_reserved = any(item.reserved.available > 0 for item in matching_rows) and (
+            reservation_policy in {"AUTO", "STRICT"}
+        )
+        ranked_rows = tuple(
+            sorted(
+                matching_rows,
+                key=lambda item: (
+                    _capacity_fabric_sort_key(
+                        item,
+                        prefer_reserved=prefer_reserved,
+                        reservation_policy=reservation_policy,
+                    ),
+                    item.preset,
+                ),
+            )
+        )
+        recommended_value = ""
+        if ranked_rows:
+            recommended_value = _capacity_row_choice_value(ranked_rows[0])
+
+        seen: set[str] = set()
+        choices: list[OptionChoice] = []
+        for item in ranked_rows:
+            choice_value = _capacity_row_choice_value(item)
+            if choice_value in seen:
+                continue
+            seen.add(choice_value)
+            preset = preset_by_name.get(item.preset)
+            allow_gpu_clustering = bool(preset and preset.allow_gpu_clustering)
+            materialized_fabric = (
+                item.fabric if allow_gpu_clustering and _is_live_fabric_name(item.fabric) else ""
+            )
+            recommended = choice_value == recommended_value
+            choices.append(
+                OptionChoice(
+                    value=choice_value,
+                    label=(
+                        f"{item.preset} on {item.fabric or '(no fabric)'}: "
+                        + _capacity_summary_text(item, reservation_policy=reservation_policy)
+                        + (
+                            ", recommended for reservations"
+                            if recommended and prefer_reserved and item.reserved.available > 0
+                            else ", recommended"
+                            if recommended
+                            else ""
+                        )
+                    ),
+                    recommended=recommended,
+                    metadata={
+                        "mk8s_gpu_capacity_choice": True,
+                        "preset": item.preset,
+                        "fabric": materialized_fabric,
+                        "capacity_fabric": item.fabric,
+                        "allow_gpu_clustering": allow_gpu_clustering,
+                        "on_demand_vms": item.on_demand.available,
+                        "reserved_vms": item.reserved.available,
+                        "gpu_count": item.gpu_count,
+                    },
+                )
+            )
+
+        resolved = tuple(choices)
         self._cache[cache_key] = resolved
         return resolved
 
@@ -1791,6 +2113,11 @@ class ProviderOptionLookup:
             require_gpu_clustering = bool(
                 _as_str(_payload_value(payload, gpu_cluster_required_path))
             )
+        reservation_policy = _as_str(args.get("reservation_policy"))
+        reservation_policy_path = _as_str(args.get("reservation_policy_path"))
+        if not reservation_policy and reservation_policy_path:
+            reservation_policy = _as_str(_payload_value(payload, reservation_policy_path))
+        reservation_policy = _normalize_reservation_policy(reservation_policy)
         tenant_id = self._resolve_tenant_id(payload, args)
         region_id = self._resolve_region_id(payload, args)
 
@@ -1799,6 +2126,7 @@ class ProviderOptionLookup:
             project_id,
             platform_name,
             require_gpu_clustering,
+            reservation_policy,
             tenant_id,
             region_id,
         )
@@ -1817,13 +2145,11 @@ class ProviderOptionLookup:
                 continue
             preset_by_name[preset_name] = preset
             suffix_parts: list[str] = []
-            if preset.vcpu_count is not None:
-                suffix_parts.append(f"vCPU={preset.vcpu_count}")
-            if preset.memory_gibibytes is not None:
-                suffix_parts.append(f"RAM={preset.memory_gibibytes}GiB")
-            if preset.gpu_count not in (None, 0):
-                suffix_parts.append(f"GPU={preset.gpu_count}")
-            suffix_parts.extend(_gpu_preset_interconnect_suffix(preset))
+            if not platform_name.startswith("gpu-"):
+                if preset.vcpu_count is not None:
+                    suffix_parts.append(f"vCPU={preset.vcpu_count}")
+                if preset.memory_gibibytes is not None:
+                    suffix_parts.append(f"RAM={preset.memory_gibibytes}GiB")
             label = f"{preset_name}  ({', '.join(suffix_parts)})" if suffix_parts else preset_name
             options.append(OptionChoice(value=preset_name, label=label))
 
@@ -1838,27 +2164,59 @@ class ProviderOptionLookup:
                     continue
                 advice_rows_by_preset.setdefault(item.preset, []).append(item)
 
-            advice_by_preset = {
+            all_advice_by_preset = {
                 preset: _capacity_preset_summary(rows)
                 for preset, rows in advice_rows_by_preset.items()
                 if rows
             }
+            advice_by_preset = {
+                preset: summary
+                for preset, summary in all_advice_by_preset.items()
+                if _capacity_policy_available(summary, policy=reservation_policy)
+            }
 
             recommended_preset = ""
+            prefer_reserved = any(
+                summary.reserved.availability.available > 0 for summary in advice_by_preset.values()
+            ) and reservation_policy in {"AUTO", "STRICT"}
             ranked_advice = sorted(
                 advice_by_preset.values(),
-                key=lambda item: _capacity_advice_sort_key(item.best_regular),
+                key=lambda item: _capacity_preset_choice_sort_key(
+                    item,
+                    prefer_reserved=prefer_reserved,
+                    reservation_policy=reservation_policy,
+                ),
             )
-            if ranked_advice and ranked_advice[0].best_regular_available > 0:
-                recommended_preset = ranked_advice[0].preset
+            if ranked_advice:
+                best_summary = ranked_advice[0]
+                if reservation_policy == "STRICT":
+                    has_recommended_capacity = best_summary.reserved.availability.available > 0
+                elif reservation_policy == "FORBID":
+                    has_recommended_capacity = best_summary.on_demand.availability.available > 0
+                else:
+                    has_recommended_capacity = (
+                        best_summary.reserved.availability.available
+                        + best_summary.on_demand.availability.available
+                        > 0
+                    )
+                if has_recommended_capacity:
+                    recommended_preset = best_summary.preset
 
             original_order = {choice.value: index for index, choice in enumerate(options)}
+            capacity_filtered_options = (
+                [choice for choice in options if choice.value in advice_by_preset]
+                if all_advice_by_preset
+                else options
+            )
             options = [
                 OptionChoice(
                     value=choice.value,
                     label=(
                         f"{choice.label}, "
-                        f"{_capacity_preset_summary_text(advice_by_preset[choice.value])}"
+                        + _capacity_preset_summary_text(
+                            advice_by_preset[choice.value],
+                            reservation_policy=reservation_policy,
+                        )
                         + "".join(
                             f", {part}"
                             for part in _capacity_preset_fabric_summary_parts(
@@ -1867,9 +2225,21 @@ class ProviderOptionLookup:
                                     preset_by_name.get(choice.value) is not None
                                     and preset_by_name[choice.value].allow_gpu_clustering
                                 ),
+                                reservation_policy=reservation_policy,
                             )
                         )
-                        + (", recommended" if choice.value == recommended_preset else "")
+                        + (
+                            ", recommended for reservations"
+                            if (
+                                choice.value == recommended_preset
+                                and prefer_reserved
+                                and advice_by_preset[choice.value].reserved.availability.available
+                                > 0
+                            )
+                            else ", recommended"
+                            if choice.value == recommended_preset
+                            else ""
+                        )
                     )
                     if choice.value in advice_by_preset
                     else choice.label,
@@ -1889,12 +2259,16 @@ class ProviderOptionLookup:
                     ),
                 )
                 for choice in sorted(
-                    options,
+                    capacity_filtered_options,
                     key=lambda choice: (
                         0 if choice.value in advice_by_preset else 1,
-                        _capacity_advice_sort_key(advice_by_preset[choice.value].best_regular)
+                        _capacity_preset_choice_sort_key(
+                            advice_by_preset[choice.value],
+                            prefer_reserved=prefer_reserved,
+                            reservation_policy=reservation_policy,
+                        )
                         if choice.value in advice_by_preset
-                        else (0, 0, 0, 0, ""),
+                        else (0, 0, 0, 0, 0, 0, 0, ""),
                         original_order[choice.value],
                     ),
                 )
@@ -2175,12 +2549,12 @@ class ProviderOptionLookup:
             name = _as_str(getattr(metadata, "name", None))
             status_private_cidrs = tuple(
                 str(cidr).strip()
-                for cidr in (list(getattr(status, "ipv4_private_cidrs", [])) if status is not None else [])
+                for cidr in (
+                    list(getattr(status, "ipv4_private_cidrs", [])) if status is not None else []
+                )
                 if str(cidr).strip()
             )
-            cidr_suffix = (
-                f" ({', '.join(status_private_cidrs)})" if status_private_cidrs else ""
-            )
+            cidr_suffix = f" ({', '.join(status_private_cidrs)})" if status_private_cidrs else ""
             label = f"{subnet_id}  ({name}){cidr_suffix}" if name else f"{subnet_id}{cidr_suffix}"
             private_pools = getattr(spec, "ipv4_private_pools", None)
             use_network_private_pools = (

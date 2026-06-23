@@ -54,7 +54,7 @@ jobs:
       - name: Ensure tag commit belongs to main history
         run: |
           set -euo pipefail
-          git fetch origin "${MAIN_BRANCH}" --depth=1
+          git fetch origin "${MAIN_BRANCH}:refs/remotes/origin/${MAIN_BRANCH}" --prune
           if ! git merge-base --is-ancestor "${{ steps.revision.outputs.commit }}" "origin/${MAIN_BRANCH}"; then
             echo "::error::Tag commit ${{ steps.revision.outputs.commit }} is not in origin/${MAIN_BRANCH} history"
             exit 1
@@ -132,9 +132,10 @@ jobs:
         id: asset
         run: |
           set -euo pipefail
-          shopt -s nullglob
-          assets=( ${ASSET_GLOB} )
-          shopt -u nullglob
+          assets=()
+          while IFS= read -r asset; do
+            assets+=("${asset}")
+          done < <(compgen -G "${ASSET_GLOB}" | sort)
           if [[ "${#assets[@]}" -eq 0 ]]; then
             echo "::error::No release asset found with glob ${ASSET_GLOB}"
             exit 1

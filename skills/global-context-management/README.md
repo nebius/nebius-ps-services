@@ -159,15 +159,17 @@ enabling `multi_agent` makes the tools available but does not by itself count
 as a user request to use them. Current public Codex docs say Codex only spawns
 subagents when explicitly asked. In this workflow, that explicit request can
 come from the user prompt or from a user-enabled local hook policy that adds a
-lightweight delegation request for complex prompts, when the active runtime and
-instruction policy accept that hook context. Once either source authorizes
-delegation, the main agent should choose targeted helper roles itself; the user
-does not need to name `repo_mapper`, `test_strategist`, or `risk_reviewer`. If
-delegation is authorized and useful but subagent controls are not visible, and
-`tool_search` is available, the main agent should first search for
-multi-agent/subagent tools before reporting delegation unavailable. If a
-session still cannot spawn a subagent, the main agent should keep working with
-narrower reads and report that delegation was unavailable or not permitted.
+per-turn delegation request for complex prompts, when the active runtime and
+instruction policy accept that hook context. That is the supported automatic
+mode from the user's perspective: enable the local policy once, let the hook
+inject the request, and let the parent agent dynamically choose and spawn
+useful targeted helpers. The user does not need to name `repo_mapper`,
+`test_strategist`, or `risk_reviewer` in each prompt. If delegation is
+authorized and useful but subagent controls are not visible, and `tool_search`
+is available, the main agent should first search for multi-agent/subagent tools
+before reporting delegation unavailable. If a session still cannot spawn a
+subagent, the main agent should keep working with narrower reads and report
+that delegation was unavailable or not permitted.
 
 The optional hook policy lives only under `$CODEX_HOME`:
 
@@ -185,8 +187,9 @@ referenced files under `$CODEX_HOME`. It injects agent names only by default,
 not local paths. This is still best-effort model-visible guidance; hooks do
 not directly call the subagent tool or repeat the full helper lifecycle. When
 this policy context is present, the main agent should treat it as an explicit
-request to consider bounded read-only delegation for that turn, then use
-targeted helpers when they are useful, available, and permitted.
+request for bounded read-only delegation for that turn, then dynamically choose
+and spawn the smallest useful set of targeted helpers when they are available
+and permitted.
 
 This skill's local hook layer owns only the non-SDLC global-context events:
 `SessionStart` for stable global context and task-state path injection, and
@@ -310,8 +313,9 @@ and current public Codex docs say Codex only spawns subagents when explicitly
 asked. A prompt can explicitly ask for subagents, delegation, or parallel
 agents; a user-enabled local hook policy can also inject that explicit request
 for complex prompts. After either source authorizes delegation, Codex should
-choose useful targeted roles instead of waiting for the prompt to name one.
-Either way, spawning remains subject to active runtime and instruction policy.
+dynamically choose and spawn useful targeted roles instead of waiting for the
+prompt to name one. Either way, spawning remains subject to active runtime and
+instruction policy; hooks still do not call subagent tools directly.
 
 ## File Responsibilities
 
@@ -431,5 +435,5 @@ repo, create `$CODEX_HOME/hooks/global_context_policy.json` locally, restart
 Codex, trust the updated hook in `/hooks`, and run a complex prompt that does
 not mention a specific subagent. The hook should discover read-only agents from
 `$CODEX_HOME/config.toml` and request bounded read-only delegation by
-configured name. Codex should then choose targeted roles when useful, or state
-the active runtime/tool reason it cannot spawn them.
+configured name. Codex should then dynamically choose and spawn targeted roles
+when useful, or state the active runtime/tool reason it cannot spawn them.

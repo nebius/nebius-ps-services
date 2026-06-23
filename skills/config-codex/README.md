@@ -162,9 +162,11 @@ same path while continuing to protect unrelated runtime files such as
 If a user deliberately opts in by creating
 `$CODEX_HOME/hooks/global_context_policy.json`, the `UserPromptSubmit` hook can
 also discover configured read-only agents from `$CODEX_HOME/config.toml` and
-add a lightweight bounded delegation request for complex prompts. The hook
-injects agent names only by default, does not directly call subagent tools, and
-leaves detailed helper lifecycle rules to `global-context-management`.
+add an explicit per-turn bounded delegation request for complex prompts. The
+hook injects agent names only by default and does not directly call subagent
+tools. The parent Codex agent then dynamically decides whether to spawn the
+smallest useful set of read-only helpers, while detailed helper lifecycle rules
+remain in `global-context-management`.
 
 This global-context setup owns only the non-SDLC hook events: `SessionStart`
 for stable global context and task-state path injection, and `UserPromptSubmit`
@@ -189,8 +191,8 @@ state path. It tells Codex when to read and update task state, how to avoid
 parent-thread noise, when to use read-only subagents if delegation is
 authorized by the prompt or a user-enabled local hook policy and the current
 runtime permits it, and how to validate and review risk. Once delegation is
-authorized, Codex should choose targeted helper roles when useful; the prompt
-does not need to name a specific role.
+authorized, Codex should dynamically choose and spawn targeted helper roles
+when useful; the prompt does not need to name a specific role.
 
 ### Custom Agents Are Read-Only Helpers
 
@@ -224,13 +226,14 @@ Custom agents require the `multi_agent` feature, the configured `[agents.*]`
 roles, a restarted Codex session, and a surface that exposes subagent tools.
 They may not appear as separate user-visible controls in every surface. In
 current Codex surfaces, this setup makes subagent tools available but does not
-force automatic delegation; prompts that need subagents should explicitly say
-to use or spawn subagents, use delegation, or run parallel agents, unless the
-local hook policy adds a lightweight bounded delegation request for the prompt.
-After either source authorizes delegation, Codex should choose the useful
-targeted role instead of waiting for the prompt to name one. For users who want
-hook-assisted delegation, a private local policy file can opt in to adding that
-request for complex prompts without hardcoding agent names in the public repo:
+make hooks call subagent tools directly. Prompts that need subagents can
+explicitly say to use or spawn subagents, use delegation, or run parallel
+agents. For automatic behavior from the user's perspective, the private local
+hook policy injects that explicit bounded delegation request for each complex
+prompt. After either source authorizes delegation, Codex should dynamically
+choose and spawn the useful targeted role instead of waiting for the prompt to
+name one. The policy file keeps that opt-in local without hardcoding agent
+names in the public repo:
 
 When delegation is authorized and useful but subagent controls are not visible,
 and `tool_search` is available, Codex should search for multi-agent/subagent
@@ -294,12 +297,28 @@ setup.
    templates in `assets/`. Existing `AGENTS.md` and `config.toml` must be
    patched in place, not replaced.
 
-6. Validate the rendered setup:
+6. If a local guard blocks a safe patch, stop rather than bypassing it. Report
+   the blocked surface, the exact intended change, and the manual out-of-band
+   action. Keep the recommendation narrow. For example, if only the
+   `Context Management` bullet in `$CODEX_HOME/AGENTS.md` is stale, tell the
+   user to patch only that bullet and leave `config.toml`, hooks, hook policy,
+   agent TOMLs, and `hooks.json` untouched.
+
+7. Validate the rendered setup:
 
    ```bash
-   python3 -m py_compile \
-     "$CODEX_HOME/hooks/session_start_context.py" \
-     "$CODEX_HOME/hooks/user_prompt_context.py"
+   python3 - <<'PY'
+   import os
+   from pathlib import Path
+
+   codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
+   for path in (
+       codex_home / "hooks/session_start_context.py",
+       codex_home / "hooks/user_prompt_context.py",
+   ):
+       compile(path.read_text(encoding="utf-8"), str(path), "exec")
+   print("hook scripts parse")
+   PY
 
    python3 - <<'PY'
    import os
@@ -322,7 +341,7 @@ setup.
    PY
    ```
 
-7. Confirm feature flags:
+8. Confirm feature flags:
 
    ```bash
    codex features list | rg '^(hooks|multi_agent)\s'
@@ -335,7 +354,20 @@ setup.
    multi_agent  stable  true
    ```
 
-8. Restart Codex. For Codex CLI, exit the current session:
+9. Return an alignment report before final restart instructions:
+
+   ```text
+   Aligned: hooks/user_prompt_context.py matches the installed template.
+   Aligned: hooks/global_context_policy.json enables read-only delegation.
+   Aligned: hooks and multi_agent are enabled.
+   Aligned: repo_mapper, test_strategist, and risk_reviewer are read-only.
+   Aligned: hooks.json has required global hooks and preserves workflow hooks.
+   Not aligned: AGENTS.md has one stale Context Management bullet.
+   Manual action: patch only that bullet from assets/AGENTS.md.template.
+   Leave untouched: config.toml, hooks, hook policy, agent TOMLs, hooks.json.
+   ```
+
+10. Restart Codex. For Codex CLI, exit the current session:
 
    ```text
    /quit
@@ -357,7 +389,7 @@ setup.
    For the VS Code extension, run `Developer: Restart Extension Host` from the
    Command Palette, then open a new Codex chat for the target repo.
 
-9. In the fresh session, open:
+1. In the fresh session, open:
 
    ```text
    /hooks
@@ -376,7 +408,7 @@ setup.
    expected. If other workflows add their own hooks, review those separately
    and keep their event ownership distinct.
 
-10. Run a non-mutating probe:
+1. Run a non-mutating probe:
 
    ```bash
    codex exec --sandbox read-only --cd <PROJECT_ROOT> \
@@ -391,11 +423,12 @@ setup.
    ```
 
    The probe should also show that complex-task guidance tells Codex to read
-   current task state when prior context may matter, update it at checkpoints,
-   and avoid claiming automatic subagent delegation. To prove subagent
-   activation, run a second probe whose prompt explicitly asks Codex to spawn a
-   read-only helper, or enable the local hook policy and run a complex prompt
-   that should discover configured read-only agents from `$CODEX_HOME`.
+   current task state when prior context may matter and update it at
+   checkpoints. To prove subagent activation, run a second probe whose prompt
+   explicitly asks Codex to spawn a read-only helper, or enable the local hook
+   policy and run a complex prompt that should discover configured read-only
+   agents from `$CODEX_HOME` and authorize the parent agent to dynamically
+   choose useful helpers.
 
    If subagent controls are not visible in an otherwise authorized probe, the
    agent should use `tool_search` to look for deferred multi-agent/subagent
@@ -437,14 +470,16 @@ Low-level hook file sync can use the root installer:
 
 ```bash
 ./install-skills.sh --install-all-hooks
-./install-skills.sh --install-hooks config-codex/assets/hooks
+./install-skills.sh --install-hooks config-codex/assets/hooks --register-hooks
 ```
 
 The first command syncs every reviewed hook-only bundle under the source skills
 folder. The second command syncs only this skill's hook payload templates. Both
 copy into `$CODEX_HOME/hooks` with `.template` stripped from installed file
-names. Neither updates `$CODEX_HOME/hooks.json`, trusts hooks, patches
-`config.toml`, or replaces the full `config-codex` setup workflow.
+names. Add `--register-hooks` when the installer should semantically merge the
+bundle's hook registration into `$CODEX_HOME/hooks.json`; registration still
+does not trust hooks, patch `config.toml`, or replace the full `config-codex`
+setup workflow.
 
 - `agents/openai.yaml`: UI metadata and implicit invocation policy.
 
@@ -458,6 +493,7 @@ python3 align-skill/scripts/validate-skill-structure.py global-context-managemen
 python3 config-codex/scripts/check-local-idempotency.py \
   --codex-home "$HOME/.codex" \
   --strict-agents-template
+python3 config-codex/scripts/test-check-local-idempotency.py
 python3 global-context-management/scripts/validate-local-templates.py
 markdownlint README.md CHANGELOG.md config-codex/**/*.md
 git diff --check

@@ -35,6 +35,11 @@ python3 config-codex/scripts/check-local-idempotency.py \
 If the check passes, report that no local changes are required for the checked
 surfaces. If it fails, patch only the failed surfaces.
 
+When local policy blocks an otherwise safe patch, do not work around the
+guard. Report the blocked file, the smallest intended edit, and the manual
+out-of-band action. The report should also name files that are already aligned
+and should not be touched.
+
 ## Backup
 
 Back up only files that the patch plan will change. Do not create backup files
@@ -115,6 +120,19 @@ are present, but preserve additional reviewed workflow entries such as Agentic
 SDLC `PreToolUse` and `Stop` hooks. Do not replace `hooks.json` just to match
 the template byte-for-byte.
 
+The root `install-skills.sh --register-hooks` path follows the same semantic
+merge model for hook bundles by default: it validates `hooks.json`, preserves
+existing entries, and appends only missing source entries. It also refuses
+duplicate Python hook files within the same hook event so stale variants cannot
+silently run alongside current registrations. It still does not trust hooks or
+patch `config.toml`. Add `--replace-hooks-json` only when the operator
+intentionally wants to back up and replace `hooks.json` with a clean file built
+from the selected source manifests. Hook install modes are idempotent and
+report extra installed hook files or `hooks.json` entries that are not present
+in the selected source manifests; those reports are advisory and do not delete
+files or edit existing registrations unless `--replace-hooks-json` is
+explicitly set.
+
 If `$CODEX_HOME/AGENTS.md` is missing, create it from
 `assets/AGENTS.md.template`. If it exists, do not replace it. Append or update a
 small managed section for `config-codex`/`global-context-management` guidance
@@ -168,15 +186,17 @@ read-only subagents for complex prompts, create this local-only file:
 }
 ```
 
-Save it as `$CODEX_HOME/hooks/global_context_policy.json`. The public templates
-do not hardcode agent names for this path. The hook reads
+Save it as `$CODEX_HOME/hooks/global_context_policy.json`. The optional policy
+template is enabled because creating this local file is the deliberate opt-in.
+The public templates do not hardcode agent names for this path. The hook reads
 `$CODEX_HOME/config.toml`, discovers `[agents.<name>]` entries whose referenced
 config files have `sandbox_mode = "read-only"`, and injects those agent names
-into model-visible context as a bounded read-only delegation request. It does
-not inject local agent config paths, and it does not directly call the subagent
-tool. The hint is local-policy context for that turn, so the main agent still
-uses targeted read-only helpers only when useful, available, and permitted.
-After authorization, the prompt does not need to name a specific helper role.
+into model-visible context as an explicit bounded read-only delegation request.
+It does not inject local agent config paths, and it does not directly call the
+subagent tool. The hint is local-policy context for that turn, so the main
+agent dynamically decides whether to spawn the smallest useful set of targeted
+read-only helpers. After authorization, the prompt does not need to name a
+specific helper role.
 The parent agent still owns lifecycle cleanup: wait for returned summaries,
 consolidate them, and close completed subagent threads when close controls are
 available and no follow-up is needed.
@@ -215,12 +235,38 @@ python3 config-codex/scripts/check-local-idempotency.py \
 The preflight checks the required global hook registrations as a subset and
 allows extra reviewed workflow hooks to coexist in `hooks.json`.
 
-Compile hooks:
+Summarize the result as an alignment matrix before making or recommending
+changes:
+
+```text
+Aligned: <surface and evidence>
+Not aligned: <surface and exact drift>
+Blocked: <surface Codex could not patch because of local guard policy>
+Manual action: <narrow edit the user can apply after review>
+Leave untouched: <aligned local files that should not be changed>
+```
+
+For example, if only `$CODEX_HOME/AGENTS.md` differs from
+`assets/AGENTS.md.template`, report the exact stale bullet and tell the user to
+patch only that bullet. Do not recommend replacing the whole file, and do not
+touch `config.toml`, hooks, hook policy, custom-agent TOMLs, or `hooks.json`
+when those surfaces already validate.
+
+Syntax-check rendered hooks without bytecode writes:
 
 ```bash
-python3 -m py_compile \
-  "$CODEX_HOME/hooks/session_start_context.py" \
-  "$CODEX_HOME/hooks/user_prompt_context.py"
+python3 - <<'PY'
+import os
+from pathlib import Path
+
+codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
+for path in (
+    codex_home / "hooks/session_start_context.py",
+    codex_home / "hooks/user_prompt_context.py",
+):
+    compile(path.read_text(encoding="utf-8"), str(path), "exec")
+print("hook scripts parse")
+PY
 ```
 
 Parse TOML:
@@ -352,8 +398,8 @@ configuration is working; the remaining gate is delegation authorization. A
 prompt can explicitly ask for subagents, delegation, or parallel agents, and
 the optional local hook policy can inject that request for complex prompts
 after it is enabled and trusted in a fresh session. Once authorization is
-present, Codex may choose useful targeted roles itself; the prompt does not
-need to name the exact role.
+present, Codex should dynamically choose and spawn useful targeted roles
+itself; the prompt does not need to name the exact role.
 
 If the explicit probe does not see subagent controls but `tool_search` is
 available, the agent should search for multi-agent/subagent tools before

@@ -9,6 +9,7 @@ import shlex
 import subprocess
 import time
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -17,11 +18,15 @@ from .component_instances import normalize_component_token
 from .runtime_config import to_plain_data
 
 SOPERATOR_CLUSTER_VALIDATION_KIND = "soperator_cluster_smoke"
-SOPERATOR_CLUSTER_VALIDATION_SCHEMA = "nebius-cxcli-soperator-cluster-validation/v1"
+SOPERATOR_CLUSTER_VALIDATION_SCHEMA = "nebius-cxcli-soperator-cluster-validation/v2"
 SOPERATOR_NAMESPACE = "soperator"
+SOPERATOR_DEPLOY_SMOKE_MODE = "deploy"
+SOPERATOR_ACCEPTANCE_SMOKE_MODE = "acceptance"
+SOPERATOR_ACCEPTANCE_BENCHMARK_MODE = "benchmark"
 
 _SMOKE_MARKER = "cxcli-soperator-srun-ok"
-_GPU_VISIBILITY_MARKER = "cxcli-soperator-gpu-visibility-ok"
+_PARTITION_HOSTNAME_MARKER = "cxcli-soperator-partition-hostnames-ok"
+_GPU_ALLOCATION_MARKER = "cxcli-soperator-gpu-allocation-ok"
 _NCCL_MARKER = "cxcli-soperator-nccl-ok"
 _NCCL_SKIP_MARKER = "cxcli-soperator-nccl-skipped:"
 _NCCL_RUN_RE = re.compile(
@@ -29,34 +34,124 @@ _NCCL_RUN_RE = re.compile(
     r"nodes=(?P<nodes>[0-9]+)\s+gpus_per_node=(?P<gpus_per_node>[0-9]+)\s+"
     r"ranks=(?P<ranks>[0-9]+)"
 )
+_GPU_ALLOCATION_HOST_RE = re.compile(
+    rf"^{re.escape(_GPU_ALLOCATION_MARKER)}\s+host=(?P<host>\S+)"
+    r"(?:\s+evidence=(?P<evidence>\S+))?"
+)
+_GPU_GRES_RE = re.compile(r"gpu(?::[A-Za-z0-9_.-]+)?:(?P<count>[0-9]+)")
 _NCCL_LARGE_MESSAGE_BYTES = (2 * 1024**3, 4 * 1024**3, 8 * 1024**3)
+_NCCL_MIN_GPUS_PER_NODE = 8
+_GPU_ALLOCATION_VALID_EVIDENCE = {"nvidia-smi", "proc-driver-device"}
+_REPORT_OUTPUT_MAX_LINES = 10000
+_REPORT_OUTPUT_MAX_LINE_CHARS = 1200
 _SOPERATOR_CLUSTER_READY_WAIT_SECONDS = 20 * 60
 _SOPERATOR_CLUSTER_READY_POLL_SECONDS = 15.0
+_SOPERATOR_DEPLOY_SNAPSHOT_COMMAND_TIMEOUT_SECONDS = 30
+_SOPERATOR_RUNTIME_COMMAND_TIMEOUT_SECONDS = 120
+_SRUN_SMOKE_IMMEDIATE_SECONDS = 60
+_SRUN_SMOKE_CLOUD_IMMEDIATE_SECONDS = 600
+_SLURM_SMOKE_SAMPLE_NODES_PER_PARTITION = 1
+_SLURM_PARTITION_HOSTNAME_RETRY_ATTEMPTS = 3
+_SLURM_PARTITION_HOSTNAME_RETRY_DELAY_SECONDS = 30.0
+_SOPERATOR_STORAGE_VOLUME_NAME = "jail"
+_SOPERATOR_STORAGE_PVC_NAME = "jail-pvc"
+_SOPERATOR_STORAGE_PV_NAME = "jail-pv"
+_SOPERATOR_STORAGE_MOUNT_DAEMONSET_NAME = "jail-mount"
+_SOPERATOR_STORAGE_LOCAL_PATH = "/mnt/jail"
+_SOPERATOR_STORAGE_PENDING_MARKERS = (
+    "failedmount",
+    "mountvolume",
+    "volume",
+)
 
 
-def _smoke_script(*, partition: str = "") -> str:
+def _smoke_script(
+    *,
+    partition: str = "",
+    immediate_seconds: int = _SRUN_SMOKE_IMMEDIATE_SECONDS,
+) -> str:
     partition_arg = f" --partition={shlex.quote(partition)}" if partition else ""
     return "\n".join(
         [
             "set -euo pipefail",
             "srun --job-name=cxcli-soperator-smoke"
             f"{partition_arg} --nodes=1 --ntasks=1 "
-            "--cpus-per-task=1 --time=00:02:00 --immediate=60 "
+            f"--cpus-per-task=1 --time=00:02:00 --immediate={immediate_seconds} "
             "bash -lc 'set -euo pipefail; echo cxcli-soperator-srun-ok; hostname'",
         ]
     )
 
 
-def _gpu_visibility_script(*, partition: str) -> str:
+def _partition_hostname_script(
+    *,
+    partition: str,
+    nodes: int,
+    nodelist: Sequence[str] = (),
+    immediate_seconds: int = _SRUN_SMOKE_IMMEDIATE_SECONDS,
+) -> str:
     partition_arg = f" --partition={shlex.quote(partition)}" if partition else ""
+    nodelist_arg = (
+        f" --nodelist={shlex.quote(','.join(node for node in nodelist if node))}"
+        if nodelist
+        else ""
+    )
+    node_count = max(int(nodes), 1)
     return "\n".join(
         [
             "set -euo pipefail",
-            "srun --job-name=cxcli-soperator-gpu-visibility"
-            f"{partition_arg} --nodes=1 --ntasks=1 --gres=gpu:1 "
-            "--time=00:03:00 --immediate=60 "
-            "bash -lc 'set -euo pipefail; echo cxcli-soperator-gpu-visibility-ok; "
-            "hostname; nvidia-smi -L'",
+            "srun --job-name=cxcli-soperator-partition-hostnames"
+            f"{partition_arg}{nodelist_arg} --nodes={node_count} --ntasks={node_count} "
+            "--ntasks-per-node=1 --time=00:05:00 "
+            f"--immediate={immediate_seconds} hostname | sort",
+            f"echo {_PARTITION_HOSTNAME_MARKER} partition={shlex.quote(partition)} nodes={node_count}",
+        ]
+    )
+
+
+def _gpu_allocation_script(
+    *,
+    partition: str,
+    nodes: int,
+    nodelist: Sequence[str] = (),
+    immediate_seconds: int = _SRUN_SMOKE_IMMEDIATE_SECONDS,
+) -> str:
+    partition_arg = f" --partition={shlex.quote(partition)}" if partition else ""
+    nodelist_arg = (
+        f" --nodelist={shlex.quote(','.join(node for node in nodelist if node))}"
+        if nodelist
+        else ""
+    )
+    node_count = max(int(nodes), 1)
+    return "\n".join(
+        [
+            "set -euo pipefail",
+            "srun --job-name=cxcli-soperator-gpu-allocation"
+            f"{partition_arg}{nodelist_arg} --nodes={node_count} --ntasks={node_count} "
+            "--ntasks-per-node=1 --gres=gpu:1 --time=00:05:00 "
+            f"--immediate={immediate_seconds} "
+            'bash -lc \'set -euo pipefail; host="$(hostname)"; '
+            'evidence=""; nvidia_smi_path="$(command -v nvidia-smi || true)"; '
+            'gpu_output=""; '
+            'if [[ -n "$nvidia_smi_path" && -s "$nvidia_smi_path" ]]; then '
+            'gpu_output="$(nvidia-smi -L || true)"; printf "%s\\n" "$gpu_output"; '
+            'if grep -q "^GPU " <<< "$gpu_output"; then evidence="nvidia-smi"; fi; '
+            'elif [[ -n "$nvidia_smi_path" ]]; then '
+            'echo "cxcli-soperator-gpu-allocation-warning host=$host '
+            'nvidia-smi-unusable path=$nvidia_smi_path"; '
+            "fi; "
+            'if [[ -z "$evidence" ]]; then '
+            'proc_model="$(grep -h "^Model:" /proc/driver/nvidia/gpus/*/information '
+            '2>/dev/null | head -n 1 || true)"; '
+            'device_path="$(ls /dev/nvidia[0-9]* 2>/dev/null | head -n 1 || true)"; '
+            '[[ -n "$proc_model" ]] && echo "cxcli-soperator-gpu-proc host=$host $proc_model"; '
+            '[[ -n "$device_path" ]] && echo "cxcli-soperator-gpu-device host=$host '
+            'path=$device_path"; '
+            'if [[ -n "$proc_model" && -n "$device_path" ]]; then '
+            'evidence="proc-driver-device"; fi; '
+            "fi; "
+            'if [[ -z "$evidence" ]]; then '
+            "echo cxcli-soperator-gpu-allocation-missing host=$host >&2; exit 1; fi; "
+            f"echo {_GPU_ALLOCATION_MARKER} host=$host evidence=$evidence'",
         ]
     )
 
@@ -69,50 +164,64 @@ def _nccl_script(*, partition: str) -> str:
             f"partition={partition_value}",
             'sinfo_output="$(sinfo -N -h -p "$partition" -o "%N|%t|%G|%c" || true)"',
             "total_gpu_nodes=()",
-            "idle_gpu_nodes=()",
+            "eligible_gpu_nodes=()",
+            "idle_eligible_gpu_nodes=()",
             'while IFS="|" read -r node state gres cpus; do',
             '  [[ -n "${node:-}" ]] || continue',
-            '  if [[ "${gres:-}" =~ gpu:([0-9]+) ]]; then',
-            '    gpu_count="${BASH_REMATCH[1]}"',
+            '  if [[ "${gres:-}" =~ gpu(:[[:alnum:]_.-]+)?:([0-9]+) ]]; then',
+            '    gpu_count="${BASH_REMATCH[2]}"',
             '    cpu_count="${cpus:-0}"',
             '    [[ "$cpu_count" =~ ^[0-9]+$ ]] || cpu_count=0',
             '    total_gpu_nodes+=("$node|$gpu_count|$cpu_count")',
             '    state_lower="$(printf "%s" "${state:-}" | tr "[:upper:]" "[:lower:]")"',
-            '    if [[ "$state_lower" == idle* ]]; then',
-            '      idle_gpu_nodes+=("$node|$gpu_count|$cpu_count")',
+            f"    if (( gpu_count >= {_NCCL_MIN_GPUS_PER_NODE} )); then",
+            '      eligible_gpu_nodes+=("$node|$gpu_count|$cpu_count")',
+            '      if [[ "$state_lower" == idle* ]]; then',
+            '        idle_eligible_gpu_nodes+=("$node|$gpu_count|$cpu_count")',
+            "      fi",
             "    fi",
             "  fi",
             'done <<< "$sinfo_output"',
             "target_nodes=0",
             "benchmark_mode=",
-            'if (( ${#total_gpu_nodes[@]} == 0 )); then',
+            "if (( ${#total_gpu_nodes[@]} == 0 )); then",
             '  echo "cxcli-soperator-nccl-skipped: full Slurm NCCL benchmark requires '
             'at least one GPU node on partition $partition; found 0 GPU node(s)."',
             "  exit 0",
             "fi",
-            'if (( ${#total_gpu_nodes[@]} >= 2 )); then',
+            "if (( ${#eligible_gpu_nodes[@]} == 0 )); then",
+            '  echo "cxcli-soperator-nccl-skipped: full Slurm NCCL benchmark requires '
+            f"at least one {_NCCL_MIN_GPUS_PER_NODE}-GPU Slurm node on partition $partition; "
+            'found 0 eligible node(s), ${#total_gpu_nodes[@]} total GPU node(s)."',
+            "  exit 0",
+            "fi",
+            "if (( ${#eligible_gpu_nodes[@]} >= 2 )); then",
             "  target_nodes=2",
             '  benchmark_mode="multi-node"',
-            '  if (( ${#idle_gpu_nodes[@]} < target_nodes )); then',
+            "  if (( ${#idle_eligible_gpu_nodes[@]} < target_nodes )); then",
             '    echo "cxcli-soperator-nccl-skipped: full Slurm NCCL benchmark requires '
-            '2 idle GPU nodes on partition $partition; found ${#idle_gpu_nodes[@]} idle '
-            'GPU node(s), ${#total_gpu_nodes[@]} total GPU node(s)."',
+            f"2 idle {_NCCL_MIN_GPUS_PER_NODE}-GPU Slurm nodes on partition $partition; "
+            "found ${#idle_eligible_gpu_nodes[@]} idle eligible node(s), "
+            "${#eligible_gpu_nodes[@]} total eligible node(s), "
+            '${#total_gpu_nodes[@]} total GPU node(s)."',
             "    exit 0",
             "  fi",
             "else",
             "  target_nodes=1",
             '  benchmark_mode="single-node-multi-gpu"',
-            '  if (( ${#idle_gpu_nodes[@]} < target_nodes )); then',
+            "  if (( ${#idle_eligible_gpu_nodes[@]} < target_nodes )); then",
             '    echo "cxcli-soperator-nccl-skipped: full Slurm NCCL benchmark requires '
-            'the only GPU node on partition $partition to be idle; found '
-            '${#idle_gpu_nodes[@]} idle GPU node(s), ${#total_gpu_nodes[@]} total GPU node(s)."',
+            f"the only {_NCCL_MIN_GPUS_PER_NODE}-GPU Slurm node on partition $partition "
+            "to be idle; found ${#idle_eligible_gpu_nodes[@]} idle eligible node(s), "
+            "${#eligible_gpu_nodes[@]} total eligible node(s), "
+            '${#total_gpu_nodes[@]} total GPU node(s)."',
             "    exit 0",
             "  fi",
             "fi",
             "selected=()",
             "gpus_per_node=999999",
             "cpus_per_node=999999",
-            "for entry in \"${idle_gpu_nodes[@]:0:$target_nodes}\"; do",
+            'for entry in "${idle_eligible_gpu_nodes[@]:0:$target_nodes}"; do',
             '  IFS="|" read -r node gpu_count cpu_count <<< "$entry"',
             '  selected+=("$node")',
             "  if (( gpu_count < gpus_per_node )); then",
@@ -127,22 +236,22 @@ def _nccl_script(*, partition: str) -> str:
             'resolve GPU count for selected nodes on partition $partition."',
             "  exit 0",
             "fi",
+            f"if (( gpus_per_node < {_NCCL_MIN_GPUS_PER_NODE} )); then",
+            '  echo "cxcli-soperator-nccl-skipped: full Slurm NCCL benchmark runs only '
+            f"on {_NCCL_MIN_GPUS_PER_NODE}-GPU Slurm nodes; selected partition $partition "
+            'reported $gpus_per_node GPU(s) per node."',
+            "  exit 0",
+            "fi",
             "if (( cpus_per_node == 999999 )); then",
             "  cpus_per_node=$((gpus_per_node * 4))",
             "fi",
             'reported_gpus_per_node="$gpus_per_node"',
-            'if (( target_nodes == 1 && gpus_per_node < 2 )); then',
-            '  echo "cxcli-soperator-nccl-skipped: full Slurm NCCL benchmark requires '
-            'at least 2 GPUs on the only GPU node in partition $partition; found '
-            '$gpus_per_node GPU(s)."',
-            "  exit 0",
-            "fi",
             'node_list="$(IFS=,; echo "${selected[*]}")"',
             "allocatable_gpus_per_node=0",
             "allocatable_cpus_per_task=0",
             "probe_output=",
             'probe_file="$(mktemp)"',
-            'trap \'rm -f "$probe_file"\' EXIT',
+            "trap 'rm -f \"$probe_file\"' EXIT",
             'candidate_gpus="$gpus_per_node"',
             "while (( candidate_gpus >= 1 )); do",
             "  candidate_cpus=$((candidate_gpus * 4))",
@@ -164,16 +273,17 @@ def _nccl_script(*, partition: str) -> str:
             "done",
             "if (( allocatable_gpus_per_node < 1 )); then",
             '  echo "cxcli-soperator-nccl-allocation-failed: could not allocate any GPU '
-            'count on $target_nodes selected node(s) from reported $reported_gpus_per_node '
+            "count on $target_nodes selected node(s) from reported $reported_gpus_per_node "
             'GPU(s) per node. Last probe: ${probe_output:-empty}" >&2',
             "  exit 1",
             "fi",
             'gpus_per_node="$allocatable_gpus_per_node"',
             'cpus_per_task="$allocatable_cpus_per_task"',
-            'if (( target_nodes == 1 && gpus_per_node < 2 )); then',
+            f"if (( gpus_per_node < {_NCCL_MIN_GPUS_PER_NODE} )); then",
             '  echo "cxcli-soperator-nccl-skipped: full Slurm NCCL benchmark requires '
-            'at least 2 allocatable GPUs on the only GPU node in partition $partition; '
-            'reported $reported_gpus_per_node GPU(s), allocatable $gpus_per_node."',
+            f"at least {_NCCL_MIN_GPUS_PER_NODE} allocatable GPUs per selected Slurm node "
+            "on partition $partition; reported $reported_gpus_per_node GPU(s), "
+            'allocatable $gpus_per_node."',
             "  exit 0",
             "fi",
             "ranks=$((target_nodes * gpus_per_node))",
@@ -186,8 +296,8 @@ def _nccl_script(*, partition: str) -> str:
             "runner_script=$(cat <<'CXCLI_NCCL_RUNNER'",
             "set -euo pipefail",
             'echo "cxcli-soperator-nccl-ok mode=${CXCLI_NCCL_MODE} '
-            'partition=${CXCLI_NCCL_PARTITION} nodes=${CXCLI_NCCL_NODES} '
-            'gpus_per_node=${CXCLI_NCCL_GPUS_PER_NODE} ranks=${CXCLI_NCCL_RANKS} '
+            "partition=${CXCLI_NCCL_PARTITION} nodes=${CXCLI_NCCL_NODES} "
+            "gpus_per_node=${CXCLI_NCCL_GPUS_PER_NODE} ranks=${CXCLI_NCCL_RANKS} "
             'reported_gpus_per_node=${CXCLI_NCCL_REPORTED_GPUS_PER_NODE}"',
             "export PATH=/usr/mpi/gcc/openmpi-4.1.7a1/bin:$PATH",
             "export OMPI_ALLOW_RUN_AS_ROOT=1",
@@ -195,14 +305,14 @@ def _nccl_script(*, partition: str) -> str:
             "command -v mpirun",
             "command -v /usr/bin/all_reduce_perf_mpi",
             'hostfile="$(mktemp)"',
-            'trap \'rm -f "$hostfile"\' EXIT',
+            "trap 'rm -f \"$hostfile\"' EXIT",
             'scontrol show hostnames "$SLURM_JOB_NODELIST" '
             '| awk -v slots="$CXCLI_NCCL_GPUS_PER_NODE" '
             '\'{print $1 " slots=" slots}\' > "$hostfile"',
             'echo "cxcli-soperator-nccl-hostfile"',
             'cat "$hostfile"',
-            "mpirun --allow-run-as-root --hostfile \"$hostfile\" "
-            "-np \"$CXCLI_NCCL_RANKS\" -N \"$CXCLI_NCCL_GPUS_PER_NODE\" --bind-to none "
+            'mpirun --allow-run-as-root --hostfile "$hostfile" '
+            '-np "$CXCLI_NCCL_RANKS" -N "$CXCLI_NCCL_GPUS_PER_NODE" --bind-to none '
             "--oversubscribe -mca coll ^hcoll "
             "/usr/bin/all_reduce_perf_mpi -b 512M -e 8G -f 2 -g 1",
             "CXCLI_NCCL_RUNNER",
@@ -213,8 +323,8 @@ def _nccl_script(*, partition: str) -> str:
             "--kill-on-bad-exit=1 bash -lc %q' "
             '"$cpus_per_task" "$gpus_per_node" "$runner_script")',
             "salloc --job-name=cxcli-soperator-nccl "
-            "--partition=\"$partition\" --nodelist=\"$node_list\" "
-            "--nodes=\"$target_nodes\" --ntasks=\"$target_nodes\" --ntasks-per-node=1 "
+            '--partition="$partition" --nodelist="$node_list" '
+            '--nodes="$target_nodes" --ntasks="$target_nodes" --ntasks-per-node=1 '
             '--gres="gpu:$gpus_per_node" '
             '--cpus-per-task="$cpus_per_task" --time=00:30:00 --immediate=60 '
             'bash -lc "$launcher_script"',
@@ -228,6 +338,28 @@ class SoperatorValidationCommandResult:
     returncode: int
     stdout: str = ""
     stderr: str = ""
+
+
+@dataclass(frozen=True)
+class _PendingSoperatorPod:
+    name: str
+    message: str
+    storage_related: bool = False
+
+
+@dataclass(frozen=True)
+class _SoperatorJailStorage:
+    pvc_name: str = _SOPERATOR_STORAGE_PVC_NAME
+    pv_name: str = _SOPERATOR_STORAGE_PV_NAME
+    mount_daemonset_name: str = _SOPERATOR_STORAGE_MOUNT_DAEMONSET_NAME
+    local_path: str = _SOPERATOR_STORAGE_LOCAL_PATH
+
+
+@dataclass(frozen=True)
+class _SrunBatchResult:
+    partition: str
+    nodes: tuple[str, ...]
+    result: SoperatorValidationCommandResult
 
 
 class SoperatorValidationCommandRunner(Protocol):
@@ -260,11 +392,230 @@ def _command_detail(result: SoperatorValidationCommandResult) -> str:
     return result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
 
 
+def _compact_output_line(value: str, *, limit: int = _REPORT_OUTPUT_MAX_LINE_CHARS) -> str:
+    text = str(value or "").rstrip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 24].rstrip() + " ... line truncated ..."
+
+
 def _compact_output(value: str, *, limit: int = 2000) -> str:
     text = str(value or "").strip()
     if len(text) <= limit:
         return text
     return text[: limit - 20].rstrip() + "\n... output truncated ..."
+
+
+def _compact_output_lines(
+    value: str,
+    *,
+    max_lines: int = _REPORT_OUTPUT_MAX_LINES,
+) -> list[str]:
+    lines = [
+        _compact_output_line(line) for line in str(value or "").strip().splitlines() if line.strip()
+    ]
+    if len(lines) <= max_lines:
+        return lines
+    omitted = len(lines) - max_lines
+    return lines[:max_lines] + [f"... output truncated: {omitted} additional line(s) ..."]
+
+
+def _partition_hostname_lines(stdout: str) -> list[str]:
+    hostnames: list[str] = []
+    for line in str(stdout or "").splitlines():
+        text = line.strip()
+        if not text or text.startswith(_PARTITION_HOSTNAME_MARKER):
+            continue
+        if text.startswith(("srun:", "slurmstepd:")):
+            continue
+        hostnames.append(text)
+    return hostnames
+
+
+def _gpu_allocation_hosts(stdout: str) -> list[str]:
+    return sorted(_gpu_allocation_evidence(stdout))
+
+
+def _gpu_allocation_evidence(stdout: str) -> dict[str, str]:
+    evidence_by_host: dict[str, str] = {}
+    for line in str(stdout or "").splitlines():
+        match = _GPU_ALLOCATION_HOST_RE.match(line.strip())
+        if match is None:
+            continue
+        host = match.group("host").strip()
+        evidence = (match.group("evidence") or "").strip()
+        if host and evidence in _GPU_ALLOCATION_VALID_EVIDENCE:
+            evidence_by_host[host] = evidence
+    return dict(sorted(evidence_by_host.items()))
+
+
+def _slurm_allocation_unavailable(result: SoperatorValidationCommandResult) -> bool:
+    output = "\n".join(part for part in (result.stdout, result.stderr) if part).lower()
+    markers = (
+        "requested node configuration is not available",
+        "resources are not available",
+        "resource temporarily unavailable",
+        "unable to allocate",
+        "job allocation disabled",
+        "job request does not match any supported policy",
+        "still queued and hence no node list",
+        "job submit/allocate failed",
+        "requested nodes are busy",
+        "nodes required for job are down",
+    )
+    return (
+        result.returncode != 0
+        and _GPU_ALLOCATION_MARKER not in result.stdout
+        and any(marker in output for marker in markers)
+    )
+
+
+def _slurm_partition_hostname_transient_failure(
+    result: SoperatorValidationCommandResult,
+) -> bool:
+    if _PARTITION_HOSTNAME_MARKER in result.stdout:
+        return False
+    output = "\n".join(part for part in (result.stdout, result.stderr) if part).lower()
+    markers = (
+        "copying stdout failed",
+        "copying stderr failed",
+        "error reading from error stream",
+        "connection reset by peer",
+        "required node not available",
+        "resources are not available",
+        "resource temporarily unavailable",
+        "unable to allocate",
+        "queued and waiting for resources",
+        "has been allocated resources",
+        "nodes required for job are down",
+    )
+    return any(marker in output for marker in markers)
+
+
+def _parse_positive_int(value: str) -> int:
+    try:
+        parsed = int(str(value or "").strip())
+    except ValueError:
+        return 0
+    return parsed if parsed > 0 else 0
+
+
+def _slurm_smoke_sample_nodes(nodes: int) -> int:
+    return min(max(int(nodes), 1), _SLURM_SMOKE_SAMPLE_NODES_PER_PARTITION)
+
+
+def _validation_mode(spec: Mapping[str, Any]) -> str:
+    mode = str(spec.get("mode", "") or "").strip().lower()
+    if mode == SOPERATOR_ACCEPTANCE_SMOKE_MODE:
+        return SOPERATOR_ACCEPTANCE_SMOKE_MODE
+    if mode == SOPERATOR_ACCEPTANCE_BENCHMARK_MODE:
+        return SOPERATOR_ACCEPTANCE_BENCHMARK_MODE
+    return SOPERATOR_DEPLOY_SMOKE_MODE
+
+
+def _snapshot_command_timeout_seconds(spec: Mapping[str, Any]) -> int:
+    if _validation_mode(spec) == SOPERATOR_DEPLOY_SMOKE_MODE:
+        return _SOPERATOR_DEPLOY_SNAPSHOT_COMMAND_TIMEOUT_SECONDS
+    return _SOPERATOR_RUNTIME_COMMAND_TIMEOUT_SECONDS
+
+
+def _acceptance_batch_size(spec: Mapping[str, Any]) -> int:
+    try:
+        value = int(spec.get("batch_size", 128) or 128)
+    except (TypeError, ValueError):
+        return 128
+    return max(1, value)
+
+
+def _acceptance_concurrency(spec: Mapping[str, Any]) -> int:
+    try:
+        value = int(spec.get("concurrency", 8) or 8)
+    except (TypeError, ValueError):
+        return 8
+    return max(1, value)
+
+
+def _acceptance_continue_on_failure(spec: Mapping[str, Any]) -> bool:
+    return bool(spec.get("continue_on_failure", True))
+
+
+def _partition_name(value: str) -> str:
+    return str(value or "").strip().rstrip("*").strip()
+
+
+def _gpu_count_from_gres(value: str) -> int:
+    counts = [
+        _parse_positive_int(match.group("count"))
+        for match in _GPU_GRES_RE.finditer(str(value or ""))
+    ]
+    return max(counts, default=0)
+
+
+def _partition_node_counts(stdout: str) -> tuple[tuple[str, int], ...]:
+    counts: dict[str, int] = {}
+    for line in (stdout or "").splitlines():
+        parts = [item.strip() for item in line.split("|")]
+        if len(parts) < 2:
+            continue
+        partition = _partition_name(parts[0])
+        node_count = _parse_positive_int(parts[1])
+        if not partition or partition == "hidden" or node_count <= 0:
+            continue
+        counts[partition] = counts.get(partition, 0) + node_count
+    return tuple((partition, count) for partition, count in counts.items() if count > 0)
+
+
+def _gpu_partition_node_counts(stdout: str) -> tuple[tuple[str, int], ...]:
+    counts: dict[str, int] = {}
+    for line in (stdout or "").splitlines():
+        parts = [item.strip() for item in line.split("|")]
+        if len(parts) < 3:
+            continue
+        partition = _partition_name(parts[0])
+        node_count = _parse_positive_int(parts[1])
+        gpu_count = _gpu_count_from_gres(parts[2])
+        if not partition or partition == "hidden" or node_count <= 0 or gpu_count <= 0:
+            continue
+        counts[partition] = counts.get(partition, 0) + node_count
+    return tuple((partition, count) for partition, count in counts.items() if count > 0)
+
+
+def _partition_nodes(stdout: str) -> dict[str, list[str]]:
+    nodes_by_partition: dict[str, list[str]] = {}
+    for line in (stdout or "").splitlines():
+        parts = [item.strip() for item in line.split("|")]
+        if len(parts) < 2:
+            continue
+        partition = _partition_name(parts[0])
+        node_name = parts[1]
+        if not partition or partition == "hidden" or not node_name:
+            continue
+        bucket = nodes_by_partition.setdefault(partition, [])
+        if node_name not in bucket:
+            bucket.append(node_name)
+    return {partition: sorted(nodes) for partition, nodes in nodes_by_partition.items()}
+
+
+def _gpu_partition_nodes(stdout: str) -> dict[str, list[str]]:
+    nodes_by_partition: dict[str, list[str]] = {}
+    for line in (stdout or "").splitlines():
+        parts = [item.strip() for item in line.split("|")]
+        if len(parts) < 3:
+            continue
+        partition = _partition_name(parts[0])
+        node_name = parts[1]
+        gpu_count = _gpu_count_from_gres(parts[2])
+        if not partition or partition == "hidden" or not node_name or gpu_count <= 0:
+            continue
+        bucket = nodes_by_partition.setdefault(partition, [])
+        if node_name not in bucket:
+            bucket.append(node_name)
+    return {partition: sorted(nodes) for partition, nodes in nodes_by_partition.items()}
+
+
+def _batches(items: Sequence[str], *, size: int) -> list[list[str]]:
+    batch_size = max(1, int(size))
+    return [list(items[index : index + batch_size]) for index in range(0, len(items), batch_size)]
 
 
 def _format_gib_label(size_bytes: int) -> str:
@@ -352,14 +703,57 @@ def _default_command_runner(
     return result
 
 
-def _validation_report_file(target_ref: str) -> str:
+def _validation_report_file(
+    target_ref: str,
+    *,
+    mode: str = SOPERATOR_DEPLOY_SMOKE_MODE,
+) -> str:
     normalized = normalize_component_token(target_ref) or "soperator"
-    return f"soperator-cluster-validation-report-{normalized}.json"
+    if mode == SOPERATOR_ACCEPTANCE_SMOKE_MODE:
+        return f"acceptance-smoke-report-{normalized}.json"
+    if mode == SOPERATOR_ACCEPTANCE_BENCHMARK_MODE:
+        return f"acceptance-benchmark-report-{normalized}.json"
+    return f"deploy-smoke-report-{normalized}.json"
+
+
+def _resolve_validation_report_file(spec: Mapping[str, Any], *, mode: str) -> str:
+    target_ref = str(spec.get("target_ref") or "")
+    expected = _validation_report_file(target_ref, mode=mode)
+    configured = str(spec.get("report_file") or "").strip()
+    if configured and configured != expected:
+        raise ValueError(
+            f"Soperator {mode} report_file must be {expected}; got {configured}. "
+            "Rerender or regenerate the acceptance-test spec with canonical report names."
+        )
+    return expected
+
+
+def _cluster_inventory_report_file(target_ref: str) -> str:
+    normalized = normalize_component_token(target_ref) or "cluster"
+    return f"cluster-inventory-report-{normalized}.json"
+
+
+def _validation_test_purpose(mode: str) -> str:
+    if mode == SOPERATOR_ACCEPTANCE_SMOKE_MODE:
+        return "acceptance-smoke"
+    if mode == SOPERATOR_ACCEPTANCE_BENCHMARK_MODE:
+        return "acceptance-benchmark"
+    return "deployment-testing"
+
+
+def _validation_scope(mode: str) -> str:
+    if mode == SOPERATOR_ACCEPTANCE_SMOKE_MODE:
+        return "all-node-slurm-smoke"
+    if mode == SOPERATOR_ACCEPTANCE_BENCHMARK_MODE:
+        return "slurm-nccl"
+    return "soperator-deployment-snapshot"
 
 
 def _soperator_cluster_name(row: Mapping[str, Any], *, target_ref: str) -> str:
     values = _as_mapping(row.get("values"))
-    cluster_name = str(values.get("clusterName", "") or values.get("cluster_name", "") or "").strip()
+    cluster_name = str(
+        values.get("clusterName", "") or values.get("cluster_name", "") or ""
+    ).strip()
     return cluster_name or target_ref
 
 
@@ -367,7 +761,112 @@ def _soperator_chart_version(row: Mapping[str, Any]) -> str:
     return str(row.get("version", "") or row.get("chart_version", "") or "").strip()
 
 
-def soperator_cluster_validation_specs(payload_or_config: Any) -> list[dict[str, Any]]:
+def _soperator_storage_mashed_kebab(value: Any) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"([a-z])([A-Z])", r"\1-\2", text)
+    text = re.sub(r"([A-Z])([A-Z][a-z])", r"\1-\2", text)
+    text = re.sub(r"[^a-z0-9]+", "-", text.lower())
+    return re.sub(r"-{2,}", "-", text)
+
+
+def _soperator_jail_storage_from_chart_row(row: Mapping[str, Any]) -> dict[str, str]:
+    values = _as_mapping(row.get("values"))
+    volume = _as_mapping(values.get("volume"))
+    jail = _as_mapping(volume.get("jail"))
+    volume_name = (
+        _soperator_storage_mashed_kebab(jail.get("name")) or _SOPERATOR_STORAGE_VOLUME_NAME
+    )
+    local_path = str(jail.get("localPath", "") or _SOPERATOR_STORAGE_LOCAL_PATH).strip()
+    return {
+        "pvc_name": _soperator_storage_mashed_kebab(f"{volume_name} pvc"),
+        "pv_name": _soperator_storage_mashed_kebab(f"{volume_name} pv"),
+        "mount_daemonset_name": _soperator_storage_mashed_kebab(f"{volume_name} mount"),
+        "local_path": local_path or _SOPERATOR_STORAGE_LOCAL_PATH,
+    }
+
+
+def _soperator_deployment_smoke_enabled_by_target(
+    deploy_targets: Sequence[Any],
+) -> dict[str, bool]:
+    enabled_by_target: dict[str, bool] = {}
+    for row in deploy_targets:
+        if not isinstance(row, Mapping):
+            continue
+        target_ref = normalize_component_token(
+            row.get("instance_id") or row.get("target_ref") or row.get("id")
+        )
+        if not target_ref:
+            continue
+        deployment_testing = _as_mapping(row.get("deployment_testing"))
+        soperator = _as_mapping(deployment_testing.get("soperator"))
+        smoke = _as_mapping(soperator.get("smoke"))
+        enabled_by_target[target_ref] = smoke.get("enabled") is not False
+    return enabled_by_target
+
+
+def normalize_soperator_project_deployment_testing_settings(payload: dict[str, Any]) -> bool:
+    plain_payload = to_plain_data(payload)
+    if not isinstance(plain_payload, Mapping):
+        return False
+    charts = _as_sequence(_as_mapping(plain_payload.get("apps")).get("charts"))
+    soperator_target_refs = {
+        normalize_component_token(row.get("instance_id") or row.get("target_ref"))
+        for row in charts
+        if isinstance(row, Mapping)
+        and str(row.get("id", "") or "").strip() == "soperator"
+        and row.get("enabled") is not False
+    }
+    soperator_target_refs.discard("")
+
+    deploy = payload.get("deploy")
+    if not isinstance(deploy, dict):
+        return False
+    targets = deploy.get("targets")
+    if not isinstance(targets, list):
+        return False
+
+    changed = False
+    for row in targets:
+        if not isinstance(row, dict):
+            continue
+        target_ref = normalize_component_token(
+            row.get("instance_id") or row.get("target_ref") or row.get("id")
+        )
+        deployment_testing = row.get("deployment_testing")
+        if target_ref not in soperator_target_refs:
+            if isinstance(deployment_testing, dict):
+                soperator = deployment_testing.get("soperator")
+                if soperator is not None:
+                    deployment_testing.pop("soperator", None)
+                    changed = True
+                    if not deployment_testing:
+                        row.pop("deployment_testing", None)
+            continue
+        if not isinstance(deployment_testing, dict):
+            deployment_testing = {}
+            row["deployment_testing"] = deployment_testing
+            changed = True
+        soperator = deployment_testing.get("soperator")
+        if not isinstance(soperator, dict):
+            soperator = {}
+            deployment_testing["soperator"] = soperator
+            changed = True
+        smoke = soperator.get("smoke")
+        if not isinstance(smoke, dict):
+            smoke = {}
+            soperator["smoke"] = smoke
+            changed = True
+        if "enabled" not in smoke:
+            smoke["enabled"] = True
+            changed = True
+    return changed
+
+
+def soperator_cluster_validation_specs(
+    payload_or_config: Any,
+    *,
+    respect_deployment_testing: bool = True,
+) -> list[dict[str, Any]]:
     payload = to_plain_data(payload_or_config)
     if not isinstance(payload, Mapping):
         return []
@@ -382,6 +881,7 @@ def soperator_cluster_validation_specs(payload_or_config: Any) -> list[dict[str,
         if not target_ref:
             continue
         target_context_by_ref[target_ref] = str(row.get("kube_context", "") or "").strip()
+    smoke_enabled_by_target = _soperator_deployment_smoke_enabled_by_target(deploy_targets)
     charts = _as_sequence(_as_mapping(payload.get("apps")).get("charts"))
     specs: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -395,6 +895,8 @@ def soperator_cluster_validation_specs(payload_or_config: Any) -> list[dict[str,
         target_ref = normalize_component_token(row.get("instance_id") or row.get("target_ref"))
         if not target_ref or target_ref in seen:
             continue
+        if respect_deployment_testing and smoke_enabled_by_target.get(target_ref, True) is False:
+            continue
         seen.add(target_ref)
         specs.append(
             {
@@ -404,13 +906,72 @@ def soperator_cluster_validation_specs(payload_or_config: Any) -> list[dict[str,
                 "namespace": SOPERATOR_NAMESPACE,
                 "cluster_name": _soperator_cluster_name(row, target_ref=target_ref),
                 "target_version": _soperator_chart_version(row),
+                "jail_storage": _soperator_jail_storage_from_chart_row(row),
                 "kube_context": target_context_by_ref.get(target_ref, ""),
                 "report_file": _validation_report_file(target_ref),
+                "inventory_report_file": _cluster_inventory_report_file(target_ref),
                 "readiness_timeout_seconds": _SOPERATOR_CLUSTER_READY_WAIT_SECONDS,
                 "readiness_poll_seconds": _SOPERATOR_CLUSTER_READY_POLL_SECONDS,
                 "required": True,
+                "mode": SOPERATOR_DEPLOY_SMOKE_MODE,
             }
         )
+    return specs
+
+
+def soperator_acceptance_smoke_specs(
+    payload_or_config: Any,
+    *,
+    batch_size: int = 128,
+    concurrency: int = 8,
+    continue_on_failure: bool = True,
+) -> list[dict[str, Any]]:
+    specs: list[dict[str, Any]] = []
+    for spec in soperator_cluster_validation_specs(
+        payload_or_config,
+        respect_deployment_testing=False,
+    ):
+        target_ref = str(spec.get("target_ref", "") or "")
+        item = dict(spec)
+        item.update(
+            {
+                "mode": SOPERATOR_ACCEPTANCE_SMOKE_MODE,
+                "name": f"Soperator acceptance smoke test ({target_ref})",
+                "report_file": _validation_report_file(
+                    target_ref,
+                    mode=SOPERATOR_ACCEPTANCE_SMOKE_MODE,
+                ),
+                "batch_size": max(1, int(batch_size)),
+                "concurrency": max(1, int(concurrency)),
+                "continue_on_failure": bool(continue_on_failure),
+                "required": True,
+            }
+        )
+        specs.append(item)
+    return specs
+
+
+def soperator_acceptance_benchmark_specs(payload_or_config: Any) -> list[dict[str, Any]]:
+    specs: list[dict[str, Any]] = []
+    for spec in soperator_cluster_validation_specs(
+        payload_or_config,
+        respect_deployment_testing=False,
+    ):
+        target_ref = str(spec.get("target_ref", "") or "")
+        item = dict(spec)
+        item.update(
+            {
+                "mode": SOPERATOR_ACCEPTANCE_BENCHMARK_MODE,
+                "name": f"Soperator NCCL benchmark ({target_ref})",
+                "report_file": _validation_report_file(
+                    target_ref,
+                    mode=SOPERATOR_ACCEPTANCE_BENCHMARK_MODE,
+                ),
+                "include_nccl_benchmark": True,
+                "required": True,
+            }
+        )
+        specs.append(item)
     return specs
 
 
@@ -508,11 +1069,14 @@ def _pod_ready(item: Mapping[str, Any]) -> bool:
 def _login_pod_name(
     runner: SoperatorValidationCommandRunner,
     spec: Mapping[str, Any],
+    *,
+    timeout_seconds: int = _SOPERATOR_RUNTIME_COMMAND_TIMEOUT_SECONDS,
 ) -> str:
     namespace = str(spec.get("namespace", "") or SOPERATOR_NAMESPACE).strip()
     payload = _json_command(
         runner,
         _kubectl_args(spec, "-n", namespace, "get", "pods", "-o", "json"),
+        timeout_seconds=timeout_seconds,
     )
     best_name = ""
     for item in _as_sequence(payload.get("items")):
@@ -539,7 +1103,11 @@ def _exec_login(
     timeout_seconds: int = 300,
 ) -> SoperatorValidationCommandResult:
     namespace = str(spec.get("namespace", "") or SOPERATOR_NAMESPACE).strip()
-    pod = _login_pod_name(runner, spec)
+    login_timeout_seconds = min(
+        max(int(timeout_seconds), 1),
+        _SOPERATOR_RUNTIME_COMMAND_TIMEOUT_SECONDS,
+    )
+    pod = _login_pod_name(runner, spec, timeout_seconds=login_timeout_seconds)
     if not pod:
         return SoperatorValidationCommandResult(tuple(args), 1, "", "login pod not found")
     return runner(
@@ -571,13 +1139,13 @@ def _append_check(
     if command:
         item["command"] = _command_text(command)
     if stdout:
-        item["stdout"] = _compact_output(stdout)
+        item["stdout"] = _compact_output_lines(stdout)
     if stderr:
-        item["stderr"] = _compact_output(stderr)
+        item["stderr"] = _compact_output_lines(stderr)
     checks.append(item)
 
 
-def _check_rollout(
+def _check_soperator_manager_deployment(
     runner: SoperatorValidationCommandRunner,
     spec: Mapping[str, Any],
     checks: list[dict[str, Any]],
@@ -587,31 +1155,78 @@ def _check_rollout(
         spec,
         "-n",
         namespace,
-        "rollout",
-        "status",
-        "deployment/soperator-manager",
-        "--timeout=10m",
+        "get",
+        "deployment",
+        "soperator-manager",
+        "-o",
+        "json",
     )
-    result = runner(command, timeout_seconds=900, check=False)
-    if result.returncode == 0:
+    result = runner(command, timeout_seconds=_snapshot_command_timeout_seconds(spec), check=False)
+    if result.returncode != 0:
         _append_check(
             checks,
-            name="Soperator manager rollout",
-            status="passed",
-            summary="soperator-manager deployment rollout is healthy.",
-            command=command,
-            stdout=result.stdout,
-        )
-    else:
-        _append_check(
-            checks,
-            name="Soperator manager rollout",
+            name="Soperator manager deployment",
             status="failed",
-            summary="soperator-manager deployment rollout did not complete.",
+            summary="soperator-manager deployment is not readable.",
             command=command,
             stdout=result.stdout,
             stderr=result.stderr,
         )
+        return
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        _append_check(
+            checks,
+            name="Soperator manager deployment",
+            status="failed",
+            summary=f"soperator-manager deployment returned invalid JSON: {exc}.",
+            command=command,
+            stdout=result.stdout,
+            stderr=result.stderr,
+        )
+        return
+    spec_payload = _as_mapping(_as_mapping(payload).get("spec"))
+    status_payload = _as_mapping(_as_mapping(payload).get("status"))
+    desired = int(spec_payload.get("replicas") or status_payload.get("replicas") or 0)
+    ready = int(status_payload.get("readyReplicas") or 0)
+    available = int(status_payload.get("availableReplicas") or 0)
+    updated = int(status_payload.get("updatedReplicas") or 0)
+    if desired <= 0:
+        _append_check(
+            checks,
+            name="Soperator manager deployment",
+            status="failed",
+            summary="soperator-manager deployment has no desired replicas.",
+            command=command,
+            stdout=result.stdout,
+        )
+        return
+    if available <= 0 or ready <= 0:
+        _append_check(
+            checks,
+            name="Soperator manager deployment",
+            status="failed",
+            summary=(
+                "soperator-manager deployment has no available ready replicas "
+                f"(ready={ready}/{desired}, available={available}/{desired}, "
+                f"updated={updated}/{desired})."
+            ),
+            command=command,
+            stdout=result.stdout,
+        )
+        return
+    _append_check(
+        checks,
+        name="Soperator manager deployment",
+        status="passed",
+        summary=(
+            "soperator-manager deployment is visible with "
+            f"ready={ready}/{desired}, available={available}/{desired}, "
+            f"updated={updated}/{desired}."
+        ),
+        command=command,
+    )
 
 
 def _flux_helmrelease_chart_text(item: Mapping[str, Any]) -> str:
@@ -660,7 +1275,7 @@ def _check_old_source_flux_desired_state(
 ) -> None:
     target_version = str(spec.get("target_version", "") or "").strip()
     command = _kubectl_args(spec, "get", "helmreleases.helm.toolkit.fluxcd.io", "-A", "-o", "json")
-    result = runner(command, timeout_seconds=120, check=False)
+    result = runner(command, timeout_seconds=_snapshot_command_timeout_seconds(spec), check=False)
     if result.returncode != 0:
         detail = _command_detail(result).lower()
         if "the server doesn't have a resource type" in detail or "not found" in detail:
@@ -706,27 +1321,115 @@ def _pending_pod_scheduling_message(item: Mapping[str, Any]) -> str:
             continue
         if str(condition.get("type", "") or "").strip() != "PodScheduled":
             continue
+        condition_status = str(condition.get("status", "") or "").strip().lower()
+        if condition_status == "true":
+            continue
         message = str(condition.get("message", "") or "").strip()
         if message:
             return message
     return str(status.get("message", "") or "").strip()
 
 
-def _check_soperator_pod_scheduling(
+def _soperator_pod_event_messages(
     runner: SoperatorValidationCommandRunner,
     spec: Mapping[str, Any],
-    checks: list[dict[str, Any]],
-) -> None:
+    *,
+    pod_name: str,
+) -> list[str]:
     namespace = str(spec.get("namespace", "") or SOPERATOR_NAMESPACE).strip()
-    command = _kubectl_args(spec, "-n", namespace, "get", "pods", "-o", "json")
-    result = runner(command, timeout_seconds=120, check=False)
+    command = _kubectl_args(
+        spec,
+        "-n",
+        namespace,
+        "get",
+        "events",
+        "--field-selector",
+        f"involvedObject.name={pod_name}",
+        "-o",
+        "json",
+    )
+    result = runner(command, timeout_seconds=_snapshot_command_timeout_seconds(spec), check=False)
     if result.returncode != 0:
-        return
+        return []
     try:
         payload = json.loads(result.stdout or "{}")
     except json.JSONDecodeError:
-        return
-    pending: list[str] = []
+        return []
+    messages: list[str] = []
+    for item in _as_sequence(payload.get("items")):
+        if not isinstance(item, Mapping):
+            continue
+        event_type = str(item.get("type", "") or "").strip().lower()
+        reason = str(item.get("reason", "") or "").strip()
+        message = str(item.get("message", "") or "").strip()
+        if event_type and event_type != "warning" and reason not in {"FailedMount"}:
+            continue
+        if not reason and not message:
+            continue
+        if reason and message:
+            messages.append(f"{reason}: {message}")
+        else:
+            messages.append(reason or message)
+    return [_compact_output(message, limit=300) for message in messages[-3:]]
+
+
+def _soperator_jail_storage(spec: Mapping[str, Any]) -> _SoperatorJailStorage:
+    raw = _as_mapping(spec.get("jail_storage"))
+    return _SoperatorJailStorage(
+        pvc_name=str(raw.get("pvc_name") or _SOPERATOR_STORAGE_PVC_NAME).strip()
+        or _SOPERATOR_STORAGE_PVC_NAME,
+        pv_name=str(raw.get("pv_name") or _SOPERATOR_STORAGE_PV_NAME).strip()
+        or _SOPERATOR_STORAGE_PV_NAME,
+        mount_daemonset_name=str(
+            raw.get("mount_daemonset_name") or _SOPERATOR_STORAGE_MOUNT_DAEMONSET_NAME
+        ).strip()
+        or _SOPERATOR_STORAGE_MOUNT_DAEMONSET_NAME,
+        local_path=str(raw.get("local_path") or _SOPERATOR_STORAGE_LOCAL_PATH).strip()
+        or _SOPERATOR_STORAGE_LOCAL_PATH,
+    )
+
+
+def _pod_uses_soperator_jail_pvc(item: Mapping[str, Any], *, pvc_name: str) -> bool:
+    spec = _as_mapping(item.get("spec"))
+    for volume in _as_sequence(spec.get("volumes")):
+        if not isinstance(volume, Mapping):
+            continue
+        claim = _as_mapping(volume.get("persistentVolumeClaim"))
+        claim_name = str(claim.get("claimName", "") or "").strip()
+        if claim_name == pvc_name:
+            return True
+    return False
+
+
+def _pending_message_is_storage_related(message: str, *, storage: _SoperatorJailStorage) -> bool:
+    text = str(message or "").lower()
+    markers = (
+        *_SOPERATOR_STORAGE_PENDING_MARKERS,
+        storage.pvc_name.lower(),
+        storage.pv_name.lower(),
+        storage.mount_daemonset_name.lower(),
+        storage.local_path.lower(),
+    )
+    return any(marker and marker in text for marker in markers)
+
+
+def _pending_soperator_pods(
+    runner: SoperatorValidationCommandRunner,
+    spec: Mapping[str, Any],
+    *,
+    include_events: bool = False,
+) -> tuple[list[_PendingSoperatorPod], Sequence[str]]:
+    namespace = str(spec.get("namespace", "") or SOPERATOR_NAMESPACE).strip()
+    storage = _soperator_jail_storage(spec)
+    command = _kubectl_args(spec, "-n", namespace, "get", "pods", "-o", "json")
+    result = runner(command, timeout_seconds=_snapshot_command_timeout_seconds(spec), check=False)
+    if result.returncode != 0:
+        return [], command
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return [], command
+    pending: list[_PendingSoperatorPod] = []
     for item in _as_sequence(payload.get("items")):
         if not isinstance(item, Mapping):
             continue
@@ -738,18 +1441,209 @@ def _check_soperator_pod_scheduling(
         if not name:
             continue
         message = _pending_pod_scheduling_message(item)
-        pending.append(f"{name}: {message or 'Pending'}")
+        event_messages = (
+            _soperator_pod_event_messages(runner, spec, pod_name=name) if include_events else []
+        )
+        if event_messages:
+            event_text = "; ".join(event_messages)
+            message = f"{message}; {event_text}" if message else event_text
+        storage_related = _pod_uses_soperator_jail_pvc(
+            item,
+            pvc_name=storage.pvc_name,
+        ) or _pending_message_is_storage_related(
+            message,
+            storage=storage,
+        )
+        pending.append(
+            _PendingSoperatorPod(
+                name=name,
+                message=message or "Pending",
+                storage_related=storage_related,
+            )
+        )
+    return pending, command
+
+
+def _soperator_storage_unready_summaries(
+    runner: SoperatorValidationCommandRunner,
+    spec: Mapping[str, Any],
+) -> list[str]:
+    namespace = str(spec.get("namespace", "") or SOPERATOR_NAMESPACE).strip()
+    storage = _soperator_jail_storage(spec)
+    summaries: list[str] = []
+
+    pvc_command = _kubectl_args(
+        spec,
+        "-n",
+        namespace,
+        "get",
+        "pvc",
+        storage.pvc_name,
+        "-o",
+        "json",
+    )
+    pvc_result = runner(
+        pvc_command,
+        timeout_seconds=_snapshot_command_timeout_seconds(spec),
+        check=False,
+    )
+    if pvc_result.returncode != 0:
+        summaries.append(
+            f"pvc/{storage.pvc_name} lookup failed: "
+            f"{_compact_output(_command_detail(pvc_result), limit=300)}"
+        )
+    else:
+        try:
+            pvc_payload = json.loads(pvc_result.stdout or "{}")
+        except json.JSONDecodeError:
+            pvc_payload = {}
+        phase = str(_as_mapping(pvc_payload.get("status")).get("phase", "") or "").strip()
+        if phase and phase != "Bound":
+            summaries.append(f"pvc/{storage.pvc_name}={phase}")
+
+    pv_command = _kubectl_args(spec, "get", "pv", storage.pv_name, "-o", "json")
+    pv_result = runner(
+        pv_command,
+        timeout_seconds=_snapshot_command_timeout_seconds(spec),
+        check=False,
+    )
+    if pv_result.returncode != 0:
+        summaries.append(
+            f"pv/{storage.pv_name} lookup failed: "
+            f"{_compact_output(_command_detail(pv_result), limit=300)}"
+        )
+    else:
+        try:
+            pv_payload = json.loads(pv_result.stdout or "{}")
+        except json.JSONDecodeError:
+            pv_payload = {}
+        phase = str(_as_mapping(pv_payload.get("status")).get("phase", "") or "").strip()
+        if phase and phase != "Bound":
+            summaries.append(f"pv/{storage.pv_name}={phase}")
+
+    daemonset_command = _kubectl_args(
+        spec,
+        "-n",
+        namespace,
+        "get",
+        "daemonset",
+        storage.mount_daemonset_name,
+        "-o",
+        "json",
+    )
+    daemonset_result = runner(
+        daemonset_command,
+        timeout_seconds=_snapshot_command_timeout_seconds(spec),
+        check=False,
+    )
+    if daemonset_result.returncode != 0:
+        summaries.append(
+            f"daemonset/{storage.mount_daemonset_name} lookup failed: "
+            f"{_compact_output(_command_detail(daemonset_result), limit=300)}"
+        )
+    else:
+        try:
+            daemonset_payload = json.loads(daemonset_result.stdout or "{}")
+        except json.JSONDecodeError:
+            daemonset_payload = {}
+        status = _as_mapping(daemonset_payload.get("status"))
+        desired = int(status.get("desiredNumberScheduled") or 0)
+        ready = int(status.get("numberReady") or 0)
+        available = int(status.get("numberAvailable") or ready)
+        if desired > 0 and (ready < desired or available < desired):
+            summaries.append(
+                f"daemonset/{storage.mount_daemonset_name} "
+                f"ready={ready}/{desired} available={available}/{desired}"
+            )
+    return summaries
+
+
+def _wait_for_soperator_storage_and_pods(
+    runner: SoperatorValidationCommandRunner,
+    spec: Mapping[str, Any],
+) -> None:
+    timeout_seconds = _float_setting(spec.get("readiness_timeout_seconds"), default=0.0)
+    if timeout_seconds <= 0:
+        return
+    poll_seconds = _float_setting(
+        spec.get("readiness_poll_seconds"),
+        default=_SOPERATOR_CLUSTER_READY_POLL_SECONDS,
+    )
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        storage_unready = _soperator_storage_unready_summaries(runner, spec)
+        pending, _command = _pending_soperator_pods(runner, spec, include_events=True)
+        if not storage_unready and not pending:
+            return
+        if pending and not storage_unready and not any(item.storage_related for item in pending):
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(max(poll_seconds, 0.1), remaining))
+
+
+def _check_soperator_storage_readiness(
+    runner: SoperatorValidationCommandRunner,
+    spec: Mapping[str, Any],
+    checks: list[dict[str, Any]],
+    *,
+    fail_on_unready: bool = True,
+) -> None:
+    unready = _soperator_storage_unready_summaries(runner, spec)
+    if not unready:
+        _append_check(
+            checks,
+            name="Soperator storage snapshot",
+            status="passed",
+            summary="Soperator jail storage objects are visible and ready.",
+        )
+        return
+    shown = "; ".join(unready[:5])
+    if len(unready) > 5:
+        shown += f"; +{len(unready) - 5} more"
+    _append_check(
+        checks,
+        name="Soperator storage snapshot",
+        status="failed" if fail_on_unready else "skipped",
+        summary="Soperator jail storage is not ready in the fast snapshot: " + shown,
+        extra={"progressing": not fail_on_unready} if not fail_on_unready else None,
+    )
+
+
+def _check_soperator_pod_scheduling(
+    runner: SoperatorValidationCommandRunner,
+    spec: Mapping[str, Any],
+    checks: list[dict[str, Any]],
+    *,
+    fail_on_pending: bool = True,
+) -> None:
+    pending_items, command = _pending_soperator_pods(runner, spec, include_events=True)
+    pending = [f"{item.name}: {item.message}" for item in pending_items]
     if not pending:
+        _append_check(
+            checks,
+            name="Soperator pod scheduling snapshot",
+            status="passed",
+            summary="No Pending Soperator pods were visible in the fast snapshot.",
+            command=command,
+        )
         return
     shown = "; ".join(pending[:5])
     if len(pending) > 5:
         shown += f"; +{len(pending) - 5} more"
+    has_storage_failure = any(item.storage_related for item in pending_items)
+    status = "failed" if fail_on_pending or has_storage_failure else "skipped"
     _append_check(
         checks,
-        name="Soperator pod scheduling",
-        status="failed",
-        summary="pending Soperator pod(s) block Slurm readiness: " + shown,
+        name="Soperator pod scheduling snapshot",
+        status=status,
+        summary="Pending Soperator pod(s) visible in the fast snapshot: " + shown,
         command=command,
+        extra={
+            "progressing": status == "skipped",
+            "storage_related": has_storage_failure,
+        },
     )
 
 
@@ -757,13 +1651,18 @@ def _check_slurmcluster(
     runner: SoperatorValidationCommandRunner,
     spec: Mapping[str, Any],
     checks: list[dict[str, Any]],
+    *,
+    require_available: bool = True,
 ) -> None:
     namespace = str(spec.get("namespace", "") or SOPERATOR_NAMESPACE).strip()
     cluster_name = str(spec.get("cluster_name", "") or spec.get("target_ref") or "").strip()
+    command = _kubectl_args(spec, "-n", namespace, "get", "slurmclusters", "-o", "json")
     payload = _json_command(
         runner,
-        _kubectl_args(spec, "-n", namespace, "get", "slurmclusters", "-o", "json"),
+        command,
+        timeout_seconds=_snapshot_command_timeout_seconds(spec),
     )
+    check_name = "SlurmCluster availability" if require_available else "SlurmCluster visibility"
     clusters: list[str] = []
     target_phase = ""
     for item in _as_sequence(payload.get("items")):
@@ -777,12 +1676,24 @@ def _check_slurmcluster(
         clusters.append(f"{name}={phase}")
         if name == cluster_name:
             target_phase = phase
+    if target_phase and not require_available:
+        _append_check(
+            checks,
+            name=check_name,
+            status="passed",
+            summary=f"target SlurmCluster {cluster_name} is visible with phase {target_phase}.",
+            command=command,
+            extra={"phase": target_phase},
+        )
+        return
     if target_phase == "Available":
         _append_check(
             checks,
-            name="SlurmCluster availability",
+            name=check_name,
             status="passed",
             summary=f"target SlurmCluster {cluster_name} is Available.",
+            command=command,
+            extra={"phase": target_phase},
         )
     else:
         summary = (
@@ -791,10 +1702,80 @@ def _check_slurmcluster(
         )
         _append_check(
             checks,
-            name="SlurmCluster availability",
+            name=check_name,
             status="failed",
             summary=summary,
+            command=command,
+            extra={"phase": target_phase or "missing"},
         )
+
+
+def _resource_item_name(item: Mapping[str, Any]) -> str:
+    return str(_as_mapping(item.get("metadata")).get("name", "") or "").strip()
+
+
+def _check_nodeset_visibility(
+    runner: SoperatorValidationCommandRunner,
+    spec: Mapping[str, Any],
+    checks: list[dict[str, Any]],
+) -> None:
+    namespace = str(spec.get("namespace", "") or SOPERATOR_NAMESPACE).strip()
+    command = _kubectl_args(spec, "-n", namespace, "get", "nodesets", "-o", "json")
+    result = runner(command, timeout_seconds=_snapshot_command_timeout_seconds(spec), check=False)
+    if result.returncode != 0:
+        _append_check(
+            checks,
+            name="NodeSet visibility",
+            status="failed",
+            summary="Soperator NodeSet resources are not readable.",
+            command=command,
+            stdout=result.stdout,
+            stderr=result.stderr,
+        )
+        return
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        _append_check(
+            checks,
+            name="NodeSet visibility",
+            status="failed",
+            summary=f"Soperator NodeSet query returned invalid JSON: {exc}.",
+            command=command,
+            stdout=result.stdout,
+            stderr=result.stderr,
+        )
+        return
+    nodesets: list[dict[str, str]] = []
+    for item in _as_sequence(_as_mapping(payload).get("items")):
+        if not isinstance(item, Mapping):
+            continue
+        name = _resource_item_name(item)
+        if not name:
+            continue
+        status = _as_mapping(item.get("status"))
+        phase = str(status.get("phase", "") or status.get("state", "") or "present").strip()
+        nodesets.append({"name": name, "phase": phase})
+    if not nodesets:
+        _append_check(
+            checks,
+            name="NodeSet visibility",
+            status="failed",
+            summary="No Soperator NodeSet resources are visible.",
+            command=command,
+        )
+        return
+    shown = ", ".join(f"{item['name']}={item['phase']}" for item in nodesets[:8])
+    if len(nodesets) > 8:
+        shown += f", +{len(nodesets) - 8} more"
+    _append_check(
+        checks,
+        name="NodeSet visibility",
+        status="passed",
+        summary=f"Soperator NodeSets are visible: {shown}.",
+        command=command,
+        extra={"nodeset_count": len(nodesets), "nodesets": nodesets},
+    )
 
 
 def _check_slurm_status(
@@ -806,7 +1787,7 @@ def _check_slurm_status(
         runner,
         spec,
         ("sinfo", "-h", "-o", "%t"),
-        timeout_seconds=120,
+        timeout_seconds=_snapshot_command_timeout_seconds(spec),
     )
     if sinfo.returncode != 0:
         _append_check(
@@ -883,6 +1864,99 @@ def _check_slurm_queue(
     )
 
 
+def _write_slurm_inventory_report(
+    runner: SoperatorValidationCommandRunner,
+    spec: Mapping[str, Any],
+    *,
+    reports_dir: Path,
+) -> None:
+    report_file = str(spec.get("inventory_report_file", "") or "").strip()
+    if not report_file:
+        return
+    report_path = reports_dir / report_file
+    try:
+        existing = json.loads(report_path.read_text(encoding="utf-8"))
+        if not isinstance(existing, dict):
+            existing = {}
+    except Exception:
+        existing = {}
+
+    sinfo = _exec_login(
+        runner,
+        spec,
+        ("sinfo", "-N", "-h", "-o", "%P|%N|%t|%G"),
+        timeout_seconds=_snapshot_command_timeout_seconds(spec),
+    )
+    partitions: dict[str, dict[str, Any]] = {}
+    inventory_error = ""
+    if sinfo.returncode != 0:
+        inventory_error = _command_detail(sinfo)
+    else:
+        for line in sinfo.stdout.splitlines():
+            parts = [item.strip() for item in line.split("|")]
+            if len(parts) < 4:
+                continue
+            partition = _partition_name(parts[0])
+            node_name = parts[1]
+            if not partition or partition == "hidden" or not node_name:
+                continue
+            bucket = partitions.setdefault(
+                partition,
+                {
+                    "partition": partition,
+                    "node_count": 0,
+                    "gpu_node_count": 0,
+                    "nodes": [],
+                },
+            )
+            gpu_count = _gpu_count_from_gres(parts[3])
+            bucket["node_count"] += 1
+            if gpu_count > 0:
+                bucket["gpu_node_count"] += 1
+            bucket["nodes"].append(
+                {
+                    "node_name": node_name,
+                    "state": parts[2],
+                    "gres": parts[3],
+                    "gpu_count": gpu_count,
+                }
+            )
+
+    slurm_inventory: dict[str, Any] = {
+        "kind": "slurm_inventory",
+        "target_ref": str(spec.get("target_ref", "") or ""),
+        "cluster_name": str(spec.get("cluster_name", "") or ""),
+        "test_purpose": "inventory",
+        "mode": "deploy",
+        "scope": "read-only-slurm-inventory",
+        "read_only": True,
+        "partitions": [
+            {
+                **partition,
+                "nodes": sorted(
+                    partition.get("nodes", []),
+                    key=lambda item: str(item.get("node_name", "")),
+                ),
+            }
+            for partition in sorted(partitions.values(), key=lambda item: item["partition"])
+        ],
+    }
+    if inventory_error:
+        slurm_inventory["error"] = inventory_error
+
+    existing.setdefault("target_ref", str(spec.get("target_ref", "") or ""))
+    existing.setdefault("schema", "nebius-cxcli-cluster-inventory/v1")
+    existing.setdefault("kind", "cluster_inventory")
+    existing.setdefault("validation", "Cluster inventory")
+    existing.setdefault("test_purpose", "inventory")
+    existing.setdefault("mode", "deploy")
+    existing.setdefault("scope", "read-only-inventory")
+    existing.setdefault("read_only", True)
+    existing["slurm"] = slurm_inventory
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(existing, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def _sinfo_partition_candidates(stdout: str) -> tuple[str, ...]:
     preferred: list[str] = []
     fallback: list[str] = []
@@ -902,8 +1976,73 @@ def _sinfo_partition_candidates(stdout: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys([*preferred, *fallback]))
 
 
+def _partition_has_powered_down_nodes(
+    runner: SoperatorValidationCommandRunner,
+    spec: Mapping[str, Any],
+    *,
+    partition: str,
+) -> bool:
+    args = ["sinfo", "-h", "-o", "%t"]
+    if partition:
+        args[2:2] = ["-p", partition]
+    sinfo = _exec_login(
+        runner,
+        spec,
+        tuple(args),
+        timeout_seconds=120,
+    )
+    if sinfo.returncode != 0:
+        return False
+    states = [line.strip().lower() for line in sinfo.stdout.splitlines() if line.strip()]
+    return any("~" in state or "%" in state or "power" in state for state in states)
+
+
+def _run_srun_batches(
+    *,
+    runner: SoperatorValidationCommandRunner,
+    spec: Mapping[str, Any],
+    partition: str,
+    batches: Sequence[Sequence[str]],
+    script_factory: Callable[[Sequence[str]], str],
+    timeout_seconds: int,
+    stop_on_failure: bool = False,
+    batch_succeeded: Callable[[_SrunBatchResult], bool] | None = None,
+) -> list[_SrunBatchResult]:
+    concurrency = _acceptance_concurrency(spec)
+
+    def _run_batch(nodes: Sequence[str]) -> _SrunBatchResult:
+        node_tuple = tuple(str(node).strip() for node in nodes if str(node).strip())
+        result = _exec_login(
+            runner,
+            spec,
+            ("bash", "-lc", script_factory(node_tuple)),
+            timeout_seconds=timeout_seconds,
+        )
+        return _SrunBatchResult(partition=partition, nodes=node_tuple, result=result)
+
+    if stop_on_failure:
+        results: list[_SrunBatchResult] = []
+        for nodes in batches:
+            batch_result = _run_batch(nodes)
+            results.append(batch_result)
+            if batch_succeeded is not None and not batch_succeeded(batch_result):
+                break
+        return results
+
+    if concurrency <= 1 or len(batches) <= 1:
+        return [_run_batch(nodes) for nodes in batches]
+
+    ordered: dict[int, _SrunBatchResult] = {}
+    with ThreadPoolExecutor(max_workers=min(concurrency, len(batches))) as executor:
+        futures = {executor.submit(_run_batch, nodes): index for index, nodes in enumerate(batches)}
+        for future in as_completed(futures):
+            ordered[futures[future]] = future.result()
+    return [ordered[index] for index in sorted(ordered)]
+
+
 def _sinfo_gpu_partition_candidates(stdout: str) -> tuple[str, ...]:
-    preferred: list[str] = []
+    preferred: list[tuple[int, int, int, str]] = []
+    order = 0
     for line in stdout.splitlines():
         parts = [item.strip() for item in line.split("|")]
         if len(parts) < 3:
@@ -916,8 +2055,11 @@ def _sinfo_gpu_partition_candidates(stdout: str) -> tuple[str, ...]:
         if "gpu" not in partition.lower() and "gpu" not in gres:
             continue
         if state in {"idle", "mix", "mixed"}:
-            preferred.append(partition)
-    return tuple(dict.fromkeys(preferred))
+            gpu_count = _gpu_count_from_gres(gres)
+            floor_rank = 0 if gpu_count >= _NCCL_MIN_GPUS_PER_NODE else 1
+            preferred.append((floor_rank, -gpu_count, order, partition))
+            order += 1
+    return tuple(dict.fromkeys(item[3] for item in sorted(preferred)))
 
 
 def _select_srun_smoke_partition(
@@ -958,11 +2100,16 @@ def _check_srun_smoke(
     checks: list[dict[str, Any]],
 ) -> None:
     partition = _select_srun_smoke_partition(runner, spec)
+    immediate_seconds = _SRUN_SMOKE_IMMEDIATE_SECONDS
+    timeout_seconds = 360
+    if _partition_has_powered_down_nodes(runner, spec, partition=partition):
+        immediate_seconds = _SRUN_SMOKE_CLOUD_IMMEDIATE_SECONDS
+        timeout_seconds = immediate_seconds + 300
     result = _exec_login(
         runner,
         spec,
-        ("bash", "-lc", _smoke_script(partition=partition)),
-        timeout_seconds=360,
+        ("bash", "-lc", _smoke_script(partition=partition, immediate_seconds=immediate_seconds)),
+        timeout_seconds=timeout_seconds,
     )
     if result.returncode == 0 and _SMOKE_MARKER in result.stdout:
         partition_summary = f" on partition {partition}" if partition else ""
@@ -989,42 +2136,443 @@ def _check_srun_smoke(
         )
 
 
-def _check_slurm_gpu_visibility(
+def _check_slurm_partition_hostnames_acceptance(
     runner: SoperatorValidationCommandRunner,
     spec: Mapping[str, Any],
     checks: list[dict[str, Any]],
 ) -> None:
-    partition = _select_gpu_smoke_partition(runner, spec)
-    if not partition:
-        return
-    result = _exec_login(
+    sinfo = _exec_login(
         runner,
         spec,
-        ("bash", "-lc", _gpu_visibility_script(partition=partition)),
-        timeout_seconds=420,
+        ("sinfo", "-N", "-h", "-o", "%P|%N"),
+        timeout_seconds=120,
     )
-    if result.returncode == 0 and _GPU_VISIBILITY_MARKER in result.stdout and "GPU " in result.stdout:
+    if sinfo.returncode != 0:
         _append_check(
             checks,
-            name="Slurm GPU visibility test",
+            name="Slurm all-node hostname acceptance",
+            status="failed",
+            summary="sinfo could not list Slurm partition nodes for acceptance hostname checks.",
+            command=sinfo.args,
+            stdout=sinfo.stdout,
+            stderr=sinfo.stderr,
+        )
+        return
+    partitions = _partition_nodes(sinfo.stdout)
+    if not partitions:
+        return
+    batch_size = _acceptance_batch_size(spec)
+    continue_on_failure = _acceptance_continue_on_failure(spec)
+    outputs: list[str] = []
+    errors: list[str] = []
+    partition_reports: list[dict[str, Any]] = []
+    failed_partitions: list[str] = []
+    stopped = False
+    for partition, nodes in sorted(partitions.items()):
+        immediate_seconds = _SRUN_SMOKE_IMMEDIATE_SECONDS
+        timeout_seconds = 420
+        if _partition_has_powered_down_nodes(runner, spec, partition=partition):
+            immediate_seconds = _SRUN_SMOKE_CLOUD_IMMEDIATE_SECONDS
+            timeout_seconds = immediate_seconds + 300
+        partition_batches = _batches(nodes, size=batch_size)
+
+        def _hostname_batch_succeeded(batch_result: _SrunBatchResult) -> bool:
+            result = batch_result.result
+            reported = set(_partition_hostname_lines(result.stdout))
+            return (
+                result.returncode == 0
+                and _PARTITION_HOSTNAME_MARKER in result.stdout
+                and set(batch_result.nodes).issubset(reported)
+            )
+
+        batch_results = _run_srun_batches(
+            runner=runner,
+            spec=spec,
+            partition=partition,
+            batches=partition_batches,
+            script_factory=lambda batch_nodes, _partition=partition, _immediate_seconds=immediate_seconds: (
+                _partition_hostname_script(
+                    partition=_partition,
+                    nodes=len(batch_nodes),
+                    nodelist=batch_nodes,
+                    immediate_seconds=_immediate_seconds,
+                )
+            ),
+            timeout_seconds=timeout_seconds,
+            stop_on_failure=not continue_on_failure,
+            batch_succeeded=_hostname_batch_succeeded,
+        )
+        node_reports: list[dict[str, Any]] = []
+        partition_failed = False
+        for batch_result in batch_results:
+            result = batch_result.result
+            if result.stdout:
+                outputs.append(result.stdout)
+            if result.stderr:
+                errors.append(result.stderr)
+            batch_passed = result.returncode == 0 and _PARTITION_HOSTNAME_MARKER in result.stdout
+            reported = set(_partition_hostname_lines(result.stdout))
+            for node in batch_result.nodes:
+                passed = batch_passed and node in reported
+                if not passed:
+                    partition_failed = True
+                node_reports.append(
+                    {
+                        "node_name": node,
+                        "status": "passed" if passed else "failed",
+                        "reported": node in reported,
+                    }
+                )
+            if partition_failed and not continue_on_failure:
+                stopped = True
+                break
+        if stopped and len(node_reports) < len(nodes):
+            tested = {str(item.get("node_name", "")) for item in node_reports}
+            for node in nodes:
+                if node not in tested:
+                    node_reports.append(
+                        {
+                            "node_name": node,
+                            "status": "not_run",
+                            "reported": False,
+                        }
+                    )
+        passed_count = sum(1 for item in node_reports if item["status"] == "passed")
+        failed_count = sum(1 for item in node_reports if item["status"] == "failed")
+        not_run_count = sum(1 for item in node_reports if item["status"] == "not_run")
+        if partition_failed or not_run_count:
+            failed_partitions.append(partition)
+        partition_reports.append(
+            {
+                "partition": partition,
+                "expected_node_count": len(nodes),
+                "tested_node_count": len(node_reports) - not_run_count,
+                "passed_node_count": passed_count,
+                "failed_node_count": failed_count,
+                "not_run_node_count": not_run_count,
+                "batch_size": batch_size,
+                "batch_count": len(partition_batches),
+                "status": "failed" if partition_failed or not_run_count else "passed",
+                "nodes": sorted(node_reports, key=lambda item: str(item.get("node_name", ""))),
+            }
+        )
+        if stopped:
+            break
+    total_nodes = sum(int(item["expected_node_count"]) for item in partition_reports)
+    passed_nodes = sum(int(item["passed_node_count"]) for item in partition_reports)
+    failed_nodes = sum(int(item["failed_node_count"]) for item in partition_reports)
+    not_run_nodes = sum(int(item["not_run_node_count"]) for item in partition_reports)
+    extra = {"partition_hostnames": partition_reports}
+    if not failed_partitions:
+        _append_check(
+            checks,
+            name="Slurm all-node hostname acceptance",
             status="passed",
-            summary=f"one-GPU Slurm allocation reported NVIDIA GPUs on partition {partition}.",
-            command=result.args,
-            stdout=result.stdout,
+            summary=(
+                f"hostname acceptance jobs passed on {passed_nodes}/{total_nodes} Slurm "
+                f"node(s) across {len(partition_reports)} partition(s)."
+            ),
+            stdout="\n".join(outputs),
+            extra=extra,
         )
     else:
         _append_check(
             checks,
-            name="Slurm GPU visibility test",
+            name="Slurm all-node hostname acceptance",
             status="failed",
             summary=(
-                "one-GPU Slurm allocation failed or did not report an NVIDIA GPU "
-                f"on partition {partition}."
+                f"hostname acceptance jobs passed on {passed_nodes}/{total_nodes} Slurm "
+                f"node(s); failed={failed_nodes}, not_run={not_run_nodes}; affected "
+                "partition(s): " + ", ".join(failed_partitions) + "."
             ),
-            command=result.args,
-            stdout=result.stdout,
-            stderr=result.stderr,
+            stdout="\n".join(outputs),
+            stderr="\n".join(errors),
+            extra=extra,
         )
+
+
+def _check_slurm_partition_hostnames(
+    runner: SoperatorValidationCommandRunner,
+    spec: Mapping[str, Any],
+    checks: list[dict[str, Any]],
+) -> None:
+    if _validation_mode(spec) == SOPERATOR_ACCEPTANCE_SMOKE_MODE:
+        _check_slurm_partition_hostnames_acceptance(runner, spec, checks)
+        return
+    sinfo = _exec_login(
+        runner,
+        spec,
+        ("sinfo", "-h", "-o", "%P|%D"),
+        timeout_seconds=120,
+    )
+    if sinfo.returncode != 0:
+        _append_check(
+            checks,
+            name="Slurm all-partition hostname check",
+            status="failed",
+            summary="sinfo could not list Slurm partitions for all-node hostname checks.",
+            command=sinfo.args,
+            stdout=sinfo.stdout,
+            stderr=sinfo.stderr,
+        )
+        return
+    partitions = _partition_node_counts(sinfo.stdout)
+    if not partitions:
+        return
+    outputs: list[str] = []
+    errors: list[str] = []
+    failed: list[str] = []
+    summary_parts: list[str] = []
+    partition_hostnames: list[dict[str, Any]] = []
+    for partition, node_count in partitions:
+        sampled_node_count = _slurm_smoke_sample_nodes(node_count)
+        passed = False
+        result: SoperatorValidationCommandResult | None = None
+        for attempt in range(1, _SLURM_PARTITION_HOSTNAME_RETRY_ATTEMPTS + 1):
+            immediate_seconds = _SRUN_SMOKE_IMMEDIATE_SECONDS
+            timeout_seconds = 420
+            if _partition_has_powered_down_nodes(runner, spec, partition=partition):
+                immediate_seconds = _SRUN_SMOKE_CLOUD_IMMEDIATE_SECONDS
+                timeout_seconds = immediate_seconds + 300
+            result = _exec_login(
+                runner,
+                spec,
+                (
+                    "bash",
+                    "-lc",
+                    _partition_hostname_script(
+                        partition=partition,
+                        nodes=sampled_node_count,
+                        immediate_seconds=immediate_seconds,
+                    ),
+                ),
+                timeout_seconds=timeout_seconds,
+            )
+            if result.stdout:
+                outputs.append(result.stdout)
+            if result.stderr:
+                errors.append(result.stderr)
+            if result.returncode == 0 and _PARTITION_HOSTNAME_MARKER in result.stdout:
+                passed = True
+                break
+            if (
+                attempt < _SLURM_PARTITION_HOSTNAME_RETRY_ATTEMPTS
+                and _slurm_partition_hostname_transient_failure(result)
+            ):
+                time.sleep(_SLURM_PARTITION_HOSTNAME_RETRY_DELAY_SECONDS)
+                continue
+            break
+        summary_parts.append(f"{partition}={sampled_node_count}/{node_count}")
+        hostnames = _partition_hostname_lines(result.stdout if result is not None else "")
+        partition_hostnames.append(
+            {
+                "partition": partition,
+                "expected_node_count": node_count,
+                "sampled_node_count": sampled_node_count,
+                "reported_hostname_count": len(hostnames),
+                "status": "passed" if passed else "failed",
+                "hostnames": hostnames,
+            }
+        )
+        if not passed:
+            failed.append(partition)
+    extra = {"partition_hostnames": partition_hostnames}
+    if not failed:
+        _append_check(
+            checks,
+            name="Slurm all-partition hostname check",
+            status="passed",
+            summary=(
+                "hostname smoke jobs completed on sampled Slurm partition nodes: "
+                + ", ".join(summary_parts)
+                + "."
+            ),
+            stdout="\n".join(outputs),
+            extra=extra,
+        )
+    else:
+        _append_check(
+            checks,
+            name="Slurm all-partition hostname check",
+            status="failed",
+            summary=(
+                "hostname smoke job failed or did not report the expected marker on partition(s): "
+                + ", ".join(failed)
+                + "."
+            ),
+            stdout="\n".join(outputs),
+            stderr="\n".join(errors),
+            extra=extra,
+        )
+
+
+def _check_slurm_gpu_allocation_acceptance(
+    runner: SoperatorValidationCommandRunner,
+    spec: Mapping[str, Any],
+    checks: list[dict[str, Any]],
+) -> None:
+    sinfo = _exec_login(
+        runner,
+        spec,
+        ("sinfo", "-N", "-h", "-o", "%P|%N|%G"),
+        timeout_seconds=120,
+    )
+    if sinfo.returncode != 0:
+        _append_check(
+            checks,
+            name="Slurm all-node GPU allocation acceptance",
+            status="failed",
+            summary="sinfo could not list Slurm GPU partition nodes for acceptance allocation checks.",
+            command=sinfo.args,
+            stdout=sinfo.stdout,
+            stderr=sinfo.stderr,
+        )
+        return
+    partitions = _gpu_partition_nodes(sinfo.stdout)
+    if not partitions:
+        return
+    batch_size = _acceptance_batch_size(spec)
+    continue_on_failure = _acceptance_continue_on_failure(spec)
+    outputs: list[str] = []
+    errors: list[str] = []
+    allocation_reports: list[dict[str, Any]] = []
+    failed_partitions: list[str] = []
+    stopped = False
+    for partition, nodes in sorted(partitions.items()):
+        immediate_seconds = _SRUN_SMOKE_IMMEDIATE_SECONDS
+        timeout_seconds = 420
+        if _partition_has_powered_down_nodes(runner, spec, partition=partition):
+            immediate_seconds = _SRUN_SMOKE_CLOUD_IMMEDIATE_SECONDS
+            timeout_seconds = immediate_seconds + 300
+        partition_batches = _batches(nodes, size=batch_size)
+
+        def _gpu_batch_succeeded(batch_result: _SrunBatchResult) -> bool:
+            result = batch_result.result
+            reported_hosts = set(_gpu_allocation_hosts(result.stdout))
+            return (
+                result.returncode == 0
+                and _GPU_ALLOCATION_MARKER in result.stdout
+                and set(batch_result.nodes).issubset(reported_hosts)
+            )
+
+        batch_results = _run_srun_batches(
+            runner=runner,
+            spec=spec,
+            partition=partition,
+            batches=partition_batches,
+            script_factory=lambda batch_nodes, _partition=partition, _immediate_seconds=immediate_seconds: (
+                _gpu_allocation_script(
+                    partition=_partition,
+                    nodes=len(batch_nodes),
+                    nodelist=batch_nodes,
+                    immediate_seconds=_immediate_seconds,
+                )
+            ),
+            timeout_seconds=timeout_seconds,
+            stop_on_failure=not continue_on_failure,
+            batch_succeeded=_gpu_batch_succeeded,
+        )
+        node_reports: list[dict[str, Any]] = []
+        partition_failed = False
+        for batch_result in batch_results:
+            result = batch_result.result
+            if result.stdout:
+                outputs.append(result.stdout)
+            if result.stderr:
+                errors.append(result.stderr)
+            batch_passed = (
+                result.returncode == 0
+                and _GPU_ALLOCATION_MARKER in result.stdout
+            )
+            evidence_by_host = _gpu_allocation_evidence(result.stdout)
+            reported_hosts = set(evidence_by_host)
+            for node in batch_result.nodes:
+                passed = batch_passed and node in reported_hosts
+                if not passed:
+                    partition_failed = True
+                node_report = {
+                    "node_name": node,
+                    "status": "passed" if passed else "failed",
+                    "reported": node in reported_hosts,
+                }
+                if node in evidence_by_host:
+                    node_report["evidence"] = evidence_by_host[node]
+                node_reports.append(node_report)
+            if partition_failed and not continue_on_failure:
+                stopped = True
+                break
+        if stopped and len(node_reports) < len(nodes):
+            tested = {str(item.get("node_name", "")) for item in node_reports}
+            for node in nodes:
+                if node not in tested:
+                    node_reports.append(
+                        {
+                            "node_name": node,
+                            "status": "not_run",
+                            "reported": False,
+                        }
+                    )
+        passed_count = sum(1 for item in node_reports if item["status"] == "passed")
+        failed_count = sum(1 for item in node_reports if item["status"] == "failed")
+        not_run_count = sum(1 for item in node_reports if item["status"] == "not_run")
+        if partition_failed or not_run_count:
+            failed_partitions.append(partition)
+        allocation_reports.append(
+            {
+                "partition": partition,
+                "expected_node_count": len(nodes),
+                "tested_node_count": len(node_reports) - not_run_count,
+                "passed_node_count": passed_count,
+                "failed_node_count": failed_count,
+                "not_run_node_count": not_run_count,
+                "batch_size": batch_size,
+                "batch_count": len(partition_batches),
+                "status": "failed" if partition_failed or not_run_count else "passed",
+                "nodes": sorted(node_reports, key=lambda item: str(item.get("node_name", ""))),
+            }
+        )
+        if stopped:
+            break
+    total_nodes = sum(int(item["expected_node_count"]) for item in allocation_reports)
+    passed_nodes = sum(int(item["passed_node_count"]) for item in allocation_reports)
+    failed_nodes = sum(int(item["failed_node_count"]) for item in allocation_reports)
+    not_run_nodes = sum(int(item["not_run_node_count"]) for item in allocation_reports)
+    extra = {"gpu_allocations": allocation_reports}
+    if not failed_partitions:
+        _append_check(
+            checks,
+            name="Slurm all-node GPU allocation acceptance",
+            status="passed",
+            summary=(
+                f"one-GPU Slurm acceptance allocations passed on {passed_nodes}/{total_nodes} "
+                f"GPU node(s) across {len(allocation_reports)} partition(s)."
+            ),
+            stdout="\n".join(outputs),
+            extra=extra,
+        )
+    else:
+        _append_check(
+            checks,
+            name="Slurm all-node GPU allocation acceptance",
+            status="failed",
+            summary=(
+                f"one-GPU Slurm acceptance allocations passed on {passed_nodes}/{total_nodes} "
+                f"GPU node(s); failed={failed_nodes}, not_run={not_run_nodes}; affected "
+                "partition(s): " + ", ".join(failed_partitions) + "."
+            ),
+            stdout="\n".join(outputs),
+            stderr="\n".join(errors),
+            extra=extra,
+        )
+
+
+def _check_slurm_gpu_allocation(
+    runner: SoperatorValidationCommandRunner,
+    spec: Mapping[str, Any],
+    checks: list[dict[str, Any]],
+) -> None:
+    if _validation_mode(spec) == SOPERATOR_ACCEPTANCE_SMOKE_MODE:
+        _check_slurm_gpu_allocation_acceptance(runner, spec, checks)
 
 
 def _check_slurm_nccl_benchmark(
@@ -1034,6 +2582,19 @@ def _check_slurm_nccl_benchmark(
 ) -> None:
     partition = _select_gpu_smoke_partition(runner, spec)
     if not partition:
+        _append_check(
+            checks,
+            name="Slurm NCCL benchmark",
+            status="failed",
+            summary=(
+                "No eligible Slurm GPU partition was available for the explicit NCCL "
+                "benchmark."
+            ),
+            extra={
+                "selected_partition": "",
+                "failure_reason": "no_eligible_gpu_partition",
+            },
+        )
         return
     result = _exec_login(
         runner,
@@ -1055,9 +2616,7 @@ def _check_slurm_nccl_benchmark(
             extra={"skipped": True, "skip_reason": summary},
         )
         return
-    avg_bus_bandwidth, large_message_bus_bandwidth = _nccl_large_message_bus_bandwidth_gbps(
-        output
-    )
+    avg_bus_bandwidth, large_message_bus_bandwidth = _nccl_large_message_bus_bandwidth_gbps(output)
     metadata = _nccl_run_metadata(output)
     if result.returncode == 0 and _NCCL_MARKER in output and avg_bus_bandwidth is not None:
         nodes = metadata.get("nodes", 2)
@@ -1082,8 +2641,7 @@ def _check_slurm_nccl_benchmark(
             name="Slurm NCCL benchmark",
             status="passed",
             summary=(
-                benchmark_summary
-                + f"average bus bandwidth {avg_bus_bandwidth:.1f} Gbps across "
+                benchmark_summary + f"average bus bandwidth {avg_bus_bandwidth:.1f} Gbps across "
                 f"{bandwidth_sizes} message sizes."
             ),
             command=result.args,
@@ -1126,29 +2684,87 @@ def run_soperator_cluster_validations(
     for index, spec in enumerate(validations, start=1):
         if str(spec.get("kind", "") or "").strip() != SOPERATOR_CLUSTER_VALIDATION_KIND:
             continue
+        mode = _validation_mode(spec)
+        try:
+            report_file = _resolve_validation_report_file(spec, mode=mode)
+        except ValueError as exc:
+            target_ref = str(spec.get("target_ref", "") or "")
+            report_file = _validation_report_file(target_ref, mode=mode)
+            report = {
+                "schema": SOPERATOR_CLUSTER_VALIDATION_SCHEMA,
+                "kind": SOPERATOR_CLUSTER_VALIDATION_KIND,
+                "mode": mode,
+                "test_purpose": _validation_test_purpose(mode),
+                "scope": _validation_scope(mode),
+                "validation": "Soperator validation report-file contract",
+                "target_ref": target_ref,
+                "name": str(spec.get("name", "") or "Soperator cluster smoke test"),
+                "status": "failed",
+                "passed": False,
+                "summary": str(exc),
+                "checks": [
+                    {
+                        "name": "Soperator report file contract",
+                        "status": "failed",
+                        "passed": False,
+                        "summary": str(exc),
+                    }
+                ],
+            }
+            report_path = reports_dir / report_file
+            report_path.write_text(
+                json.dumps(report, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            written.append(report_path)
+            continue
         if emit:
             emit(f"Starting validation {index}/{len(validations)}: {spec.get('name')}.")
         runner = command_runner or (
-            lambda args, *, input_text=None, timeout_seconds=300, check=True: _default_command_runner(
-                args,
-                input_text=input_text,
-                timeout_seconds=timeout_seconds,
-                check=check,
-                extra_env=extra_env,
+            lambda args, *, input_text=None, timeout_seconds=300, check=True: (
+                _default_command_runner(
+                    args,
+                    input_text=input_text,
+                    timeout_seconds=timeout_seconds,
+                    check=check,
+                    extra_env=extra_env,
+                )
             )
         )
         checks: list[dict[str, Any]] = []
         try:
-            _check_rollout(runner, spec, checks)
-            _check_old_source_flux_desired_state(runner, spec, checks)
-            _wait_for_slurmcluster_available(runner, spec)
-            _check_soperator_pod_scheduling(runner, spec, checks)
-            _check_slurmcluster(runner, spec, checks)
-            _check_slurm_status(runner, spec, checks)
-            _check_slurm_queue(runner, spec, checks)
-            _check_srun_smoke(runner, spec, checks)
-            _check_slurm_gpu_visibility(runner, spec, checks)
-            _check_slurm_nccl_benchmark(runner, spec, checks)
+            deploy_mode = mode == SOPERATOR_DEPLOY_SMOKE_MODE
+            _check_soperator_manager_deployment(runner, spec, checks)
+            if bool(spec.get("check_old_source_flux", False)):
+                _check_old_source_flux_desired_state(runner, spec, checks)
+            if not deploy_mode:
+                _wait_for_slurmcluster_available(runner, spec)
+                _wait_for_soperator_storage_and_pods(runner, spec)
+            _check_soperator_storage_readiness(
+                runner,
+                spec,
+                checks,
+                fail_on_unready=not deploy_mode,
+            )
+            _check_soperator_pod_scheduling(
+                runner,
+                spec,
+                checks,
+                fail_on_pending=not deploy_mode,
+            )
+            _check_slurmcluster(runner, spec, checks, require_available=not deploy_mode)
+            _check_nodeset_visibility(runner, spec, checks)
+            if not deploy_mode:
+                _check_slurm_status(runner, spec, checks)
+                _check_slurm_queue(runner, spec, checks)
+            if mode != SOPERATOR_ACCEPTANCE_BENCHMARK_MODE:
+                _write_slurm_inventory_report(runner, spec, reports_dir=reports_dir)
+            if mode == SOPERATOR_ACCEPTANCE_SMOKE_MODE:
+                _check_srun_smoke(runner, spec, checks)
+                _check_slurm_partition_hostnames(runner, spec, checks)
+                _check_slurm_gpu_allocation(runner, spec, checks)
+            if bool(spec.get("include_nccl_benchmark", False)):
+                _check_slurm_nccl_benchmark(runner, spec, checks)
         except Exception as exc:
             _append_check(
                 checks,
@@ -1168,18 +2784,40 @@ def run_soperator_cluster_validations(
         report = {
             "schema": SOPERATOR_CLUSTER_VALIDATION_SCHEMA,
             "kind": SOPERATOR_CLUSTER_VALIDATION_KIND,
-            "validation": "Soperator cluster smoke test",
+            "mode": mode,
+            "test_purpose": _validation_test_purpose(mode),
+            "scope": _validation_scope(mode),
+            "validation": (
+                "Soperator acceptance smoke test"
+                if mode == SOPERATOR_ACCEPTANCE_SMOKE_MODE
+                else "Soperator NCCL benchmark"
+                if mode == SOPERATOR_ACCEPTANCE_BENCHMARK_MODE
+                else "Soperator deployment test"
+            ),
             "target_ref": str(spec.get("target_ref", "") or ""),
             "name": str(spec.get("name", "") or "Soperator cluster smoke test"),
+            "batch_size": spec.get("batch_size")
+            if mode == SOPERATOR_ACCEPTANCE_SMOKE_MODE
+            else None,
+            "concurrency": spec.get("concurrency")
+            if mode == SOPERATOR_ACCEPTANCE_SMOKE_MODE
+            else None,
+            "continue_on_failure": spec.get("continue_on_failure")
+            if mode == SOPERATOR_ACCEPTANCE_SMOKE_MODE
+            else None,
             "status": "failed" if failed else "passed",
             "passed": not failed,
             "summary": summary,
             "checks": checks,
         }
-        report_path = reports_dir / str(
-            spec.get("report_file") or _validation_report_file(str(spec.get("target_ref") or ""))
+        if mode != SOPERATOR_ACCEPTANCE_SMOKE_MODE:
+            report.pop("batch_size", None)
+            report.pop("concurrency", None)
+            report.pop("continue_on_failure", None)
+        report_path = reports_dir / report_file
+        report_path.write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
-        report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         written.append(report_path)
         if failed:
             names = ", ".join(str(item.get("name") or "check") for item in failed)
@@ -1191,6 +2829,9 @@ __all__ = [
     "SOPERATOR_CLUSTER_VALIDATION_KIND",
     "SOPERATOR_CLUSTER_VALIDATION_SCHEMA",
     "SoperatorValidationCommandResult",
+    "normalize_soperator_project_deployment_testing_settings",
     "run_soperator_cluster_validations",
+    "soperator_acceptance_benchmark_specs",
+    "soperator_acceptance_smoke_specs",
     "soperator_cluster_validation_specs",
 ]

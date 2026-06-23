@@ -261,7 +261,6 @@ def test_deploy_managed_soperator_runs_gpu_validations_before_full_flux(
     validations = [
         {"kind": "mk8s_gpu_operator_readiness", "target_ref": "mk8s"},
         {"kind": "mk8s_gpu_visibility", "target_ref": "mk8s"},
-        {"kind": "mk8s_nccl", "target_ref": "mk8s"},
         {"kind": "soperator_cluster_smoke", "target_ref": "mk8s", "required": True},
     ]
     manifest = {
@@ -352,7 +351,6 @@ def test_deploy_managed_soperator_runs_gpu_validations_before_full_flux(
             (
                 "mk8s_gpu_operator_readiness",
                 "mk8s_gpu_visibility",
-                "mk8s_nccl",
             ),
         ),
         ("apply", True),
@@ -495,6 +493,8 @@ def _reset_runtime_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
             return [cli_module.OptionChoice(value="vpcnetwork-123", label="default network")]
         if full_path_label.endswith(".subnet_id"):
             return [cli_module.OptionChoice(value="vpcsubnet-123", label="default subnet")]
+        if full_path_label.endswith(".infiniband_fabric"):
+            return [cli_module.OptionChoice(value="fabric-1", label="default fabric")]
         return original_dynamic_choices(**kwargs)
 
     monkeypatch.setattr(
@@ -1681,6 +1681,32 @@ spec:
             "external-context",
             "-n",
             "soperator",
+            "get",
+            "nodesets",
+            "-o",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "worker", "namespace": "soperator"},
+                                "spec": {"replicas": 1},
+                                "status": {"phase": "Ready", "replicas": 1},
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:8] == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
             "exec",
             "login-0",
             "--",
@@ -2830,7 +2856,7 @@ def test_create_no_validate_config_still_prints_mk8s_gpu_validation_warning(
         cli_module,
         "mk8s_gpu_validation_warnings",
         lambda _payload: (
-            "deploy.targets[].validations.mk8s_gpu.nccl.enabled is set on an Ethernet-only test shape.",
+            "deploy.targets[].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes is high for deploy-time testing.",
         ),
     )
 
@@ -2838,7 +2864,7 @@ def test_create_no_validate_config_still_prints_mk8s_gpu_validation_warning(
 
     assert result.exit_code == 0, result.output
     assert "Deploy validation warning:" in result.output
-    assert "Ethernet-only test shape" in result.output
+    assert "deployment_testing.mk8s_gpu.gpu_visibility.max_nodes" in result.output
 
 
 def test_create_interactive_existing_project_requires_confirmation(
@@ -3050,6 +3076,7 @@ def test_create_writes_deployments_gitignore_when_target_is_in_git_repo(tmp_path
 
     result = _create_non_interactive(deployments_root)
     assert result.exit_code == 0, result.output
+    assert "keep this customer repository private" in result.output
 
     gitignore_path = deployments_root / ".gitignore"
     assert gitignore_path.exists()
@@ -3078,11 +3105,14 @@ def test_create_writes_deployments_gitignore_when_target_is_in_git_repo(tmp_path
 def test_create_skips_deployments_gitignore_when_target_not_in_git_repo(tmp_path: Path) -> None:
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
+    local_gitignore = deployments_root / ".gitignore"
+    local_gitignore.write_text("# local ignores\n", encoding="utf-8")
 
     result = _create_non_interactive(deployments_root)
     assert result.exit_code == 0, result.output
+    assert "keep this customer repository private" not in result.output
 
-    assert not (deployments_root / ".gitignore").exists()
+    assert local_gitignore.read_text(encoding="utf-8") == "# local ignores\n"
 
 
 def test_create_rejects_nested_deployments_root_with_managed_parent_gitignore(
@@ -3972,8 +4002,8 @@ def test_create_soperator_cpu_worker_count_prompt_updates_persisted_node_groups(
         )
         mk8s.setdefault("inputs", {}).setdefault("soperator", {}).update(
             {
-                "worker_total_nodes": 3,
-                "worker_nodes_per_group": 2,
+                "worker_cpu_total_nodes": 3,
+                "worker_cpu_nodes_per_group": 2,
             }
         )
         return yaml.safe_dump(payload, sort_keys=False), True
@@ -4031,8 +4061,8 @@ def test_create_soperator_cpu_worker_count_prompt_updates_persisted_node_groups(
         if str(item.get("name", "")).startswith("worker-cpu")
     ]
     assert [(item["name"], item["replicas"]) for item in worker_nodesets] == [
-        ("worker-cpu-worker-cpu-0", 2),
-        ("worker-cpu-worker-cpu-1", 1),
+        ("worker-cpu-0", 2),
+        ("worker-cpu-1", 1),
     ]
     assert "Enabled apps components: cert-manager, soperator" in result.output
     assert "nvidia-gpu-operator" not in result.output
@@ -5464,7 +5494,9 @@ def test_soperator_onboard_deployments_root_creates_project_config(
         ("cert-manager", "training-cluster"),
         ("nvidia-gpu-operator", "training-cluster"),
     ]
-    assert payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]["nccl"]["enabled"] is True
+    target = payload["deploy"]["targets"][0]
+    assert "validations" not in target
+    assert target["deployment_testing"]["soperator"]["smoke"]["enabled"] is True
 
 
 def test_soperator_onboard_project_directory_updates_existing_config(
@@ -7318,7 +7350,8 @@ def test_soperator_onboard_noninteractive_options_add_external_target(
         ("cert-manager", "training-cluster"),
         ("nvidia-gpu-operator", "training-cluster"),
     ]
-    assert payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]["nccl"]["enabled"] is True
+    assert "validations" not in target
+    assert target["deployment_testing"]["soperator"]["smoke"]["enabled"] is True
 
 
 def test_soperator_onboard_target_match_hides_stale_source_release_from_summary(
@@ -7613,10 +7646,12 @@ def test_soperator_onboard_gpu_cluster_inventory_adds_network_operator(
         ("nvidia-gpu-operator", "legacy-cluster"),
         ("nvidia-network-operator", "legacy-cluster"),
     }
-    mk8s_gpu_validations = payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]
-    assert mk8s_gpu_validations["operator_readiness"]["enabled"] is True
-    assert mk8s_gpu_validations["gpu_visibility"]["enabled"] is True
-    assert mk8s_gpu_validations["nccl"]["enabled"] is True
+    mk8s_gpu_deployment_testing = payload["deploy"]["targets"][0]["deployment_testing"][
+        "mk8s_gpu"
+    ]
+    assert mk8s_gpu_deployment_testing["operator_readiness"]["enabled"] is True
+    assert mk8s_gpu_deployment_testing["gpu_visibility"]["enabled"] is True
+    assert "nccl" not in mk8s_gpu_deployment_testing
 
 
 def test_soperator_onboard_rejects_managed_mk8s_target_ref(
@@ -8059,6 +8094,7 @@ def test_create_field_wizard_uses_entered_cluster_name_for_app_defaults(
     )
 
     previewed_app_targets: list[tuple[str, str, str]] = []
+    prompted_paths: list[str] = []
     sfs_name_prompt_defaults: dict[str, str] = {}
     sfs_mount_tag_prompt_defaults: dict[str, str] = {}
 
@@ -8076,6 +8112,7 @@ def test_create_field_wizard_uses_entered_cluster_name_for_app_defaults(
         )
 
     def _prompt_scalar_override(path_label, current, **_kwargs):  # type: ignore[no-untyped-def]
+        prompted_paths.append(path_label)
         if path_label.endswith(".inputs.cluster.cluster_name"):
             return "soperator-cluster1", False
         if path_label.endswith(".inputs.cluster.network_id"):
@@ -8123,8 +8160,18 @@ def test_create_field_wizard_uses_entered_cluster_name_for_app_defaults(
     assert charts["cert-manager"]["instance_id"] == "soperator-cluster1"
     assert ("soperator", "soperator-cluster1", "soperator-cluster1") in previewed_app_targets
     assert all(target != "mk8s" for _app_id, target, _cluster_name in previewed_app_targets)
+    assert "infra.components[1].inputs.type" in prompted_paths
+    assert "infra.components[1].inputs.name" not in prompted_paths
+    assert "infra.components[1].inputs.size_gib" not in prompted_paths
+    assert "infra.components[1].inputs.mount_tag" not in prompted_paths
+    assert prompted_paths.index("infra.components[1].inputs.type") < prompted_paths.index(
+        "infra.components[1].inputs.filesystems.jail.name"
+    )
 
     sfs = next(row for row in updated["infra"]["components"] if row["id"] == "sfs")
+    assert "name" not in sfs["inputs"]
+    assert "size_gib" not in sfs["inputs"]
+    assert "mount_tag" not in sfs["inputs"]
     sfs_filesystems = sfs["inputs"]["filesystems"]
     assert sfs_filesystems["jail"]["name"] == "soperator-cluster1-jail"
     assert sfs_filesystems["controller-spool"]["name"] == ("soperator-cluster1-controller-spool")
@@ -8142,6 +8189,67 @@ def test_create_field_wizard_uses_entered_cluster_name_for_app_defaults(
         sfs_mount_tag_prompt_defaults["infra.components[1].inputs.filesystems.accounting.mount_tag"]
         == "soperator-cluster1-accounting"
     )
+
+
+def test_create_field_wizard_keeps_standalone_sfs_when_mk8s_has_no_soperator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    infra_entries = cli_module._with_infra_provider_groups(component_entries("infra"))
+    app_entries = component_entries("apps")
+    payload = cli_module._starter_component_payload(
+        client_name="client-a",
+        tenant_id="tenant-123",
+        project_id="project-456",
+        region_id="eu-north1",
+        email=None,
+        selected_infra={"mk8s", "sfs"},
+        selected_apps=set(),
+        infra_entries=infra_entries,
+        app_entries=app_entries,
+    )
+
+    decisions = iter([False, True])
+    monkeypatch.setattr(
+        cli_module,
+        "_wizard_continue_phase",
+        lambda *_args, **_kwargs: next(decisions, False),
+    )
+    monkeypatch.setattr(cli_module, "_resolve_dynamic_field_choices", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        cli_module,
+        "_provider_allowed_values_for_field",
+        lambda **_kwargs: (set(), ()),
+    )
+
+    prompted_paths: list[str] = []
+
+    def _prompt_scalar_override(path_label, current, **_kwargs):  # type: ignore[no-untyped-def]
+        prompted_paths.append(path_label)
+        return current, False
+
+    monkeypatch.setattr(cli_module, "_prompt_scalar_override", _prompt_scalar_override)
+
+    updated_yaml, completed = cli_module._run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra={"mk8s", "sfs"},
+        selected_apps=set(),
+        infra_entries=infra_entries,
+        app_entries=app_entries,
+    )
+
+    assert completed is True
+    updated = yaml.safe_load(updated_yaml)
+    sfs = next(row for row in updated["infra"]["components"] if row["id"] == "sfs")
+    assert sfs["inputs"]["name"] == "sfs"
+    assert sfs["inputs"]["size_gib"] == 1024
+    assert sfs["inputs"]["type"] == "NETWORK_SSD"
+    assert sfs["inputs"]["block_size_kib"] == 4
+    assert sfs["inputs"]["forbid_deletion"] is False
+    assert "mount_tag" not in sfs["inputs"]
+    assert "filesystems" not in sfs["inputs"]
+    assert "infra.components[1].inputs.type" in prompted_paths
+    assert "infra.components[1].inputs.name" in prompted_paths
+    assert not any(".inputs.filesystems." in path for path in prompted_paths)
 
 
 def test_create_auto_enables_observability_agent_when_wizard_turns_on_observability(
@@ -8217,6 +8325,63 @@ def test_create_vm_only_omits_kubernetes_observability_defaults(tmp_path: Path) 
     assert observability["vm"]["logs"]["enabled"] is True
     deploy = payload.get("deploy", {})
     assert "validations" not in deploy
+
+
+def test_prune_redundant_app_chart_default_values_skips_chart_lookup_without_scalar_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = {
+        "apps": {
+            "charts": [
+                {
+                    "id": "demo-app",
+                    "instance_id": "demo-empty",
+                    "enabled": True,
+                    "repo": "oci://example.com/charts/demo-app",
+                    "version": "1.0.0",
+                    "values": {},
+                },
+                {
+                    "id": "demo-app",
+                    "instance_id": "demo-nested",
+                    "enabled": True,
+                    "repo": "oci://example.com/charts/demo-app",
+                    "version": "1.0.0",
+                    "values": {"nested": {}},
+                },
+                {
+                    "id": "demo-app",
+                    "instance_id": "demo-list",
+                    "enabled": True,
+                    "repo": "oci://example.com/charts/demo-app",
+                    "version": "1.0.0",
+                    "values": {"items": [{"name": "keep"}]},
+                },
+            ]
+        }
+    }
+    app_entry = ComponentEntry(
+        id="demo-app",
+        scope="apps",
+        config_path="apps.platform.demo-app",
+        description="Demo app",
+        chart_name="demo-app",
+    )
+
+    def _unexpected_chart_defaults(**_kwargs: object) -> dict[str, object]:
+        pytest.fail("chart defaults should not be loaded when there are no scalar values")
+
+    monkeypatch.setattr(cli_module, "_app_chart_default_values", _unexpected_chart_defaults)
+
+    cli_module._prune_redundant_app_chart_default_values(
+        payload=payload,
+        app_entries=(app_entry,),
+    )
+
+    charts = payload["apps"]["charts"]
+    assert charts[0]["values"] == {}
+    assert charts[1]["values"] == {"nested": {}}
+    assert charts[2]["values"] == {"items": [{"name": "keep"}]}
 
 
 def test_create_prunes_redundant_live_chart_default_values_from_existing_config(
@@ -9555,7 +9720,7 @@ def test_create_rejects_internal_nccl_test_app_with_validation_guidance(
     assert result.exit_code == 1, result.output
     assert "transient runtime chart" in result.output
     assert "not a selectable persistent app" in result.output
-    assert "deploy.targets[].validations.mk8s_gpu.nccl" in result.output
+    assert "nebius-cxcli acceptance-test benchmark" in result.output
     assert "--app" in result.output
     assert not _project_config_path(deployments_root).exists()
 
@@ -11002,6 +11167,59 @@ def test_component_add_explains_soperator_required_component_selection(
     assert infra_enabled["sfs"] is True
     assert apps_enabled["soperator"] is True
     assert apps_enabled["cert-manager"] is True
+
+
+def test_component_add_rejects_soperator_on_managed_mk8s_without_service_roles(
+    tmp_path: Path,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "mk8s",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    mk8s_row = next(
+        row
+        for row in payload["infra"]["components"]
+        if isinstance(row, dict) and row.get("id") == "mk8s"
+    )
+    mk8s_inputs = mk8s_row.setdefault("inputs", {})
+    mk8s_inputs["node_groups"] = {
+        "cpu-nodes": {
+            "node_count": 2,
+            "gpu": False,
+            "platform": "cpu-d3",
+            "preset": "32vcpu-128gb",
+        },
+        "gpu-nodes": {
+            "node_count": 2,
+            "gpu": True,
+            "platform": "gpu-h100-sxm",
+            "preset": "1gpu-16vcpu-200gb",
+        },
+    }
+    original_config = yaml.safe_dump(payload, sort_keys=False)
+    config_path.write_text(original_config, encoding="utf-8")
+
+    result = _component_add(config_path, "soperator", "--no-interactive")
+
+    assert result.exit_code != 0
+    output = _normalized_cli_output(result.output)
+    assert "apps:soperator production-cluster cannot be added" in output
+    assert (
+        "missing required Soperator service-role node groups: accounting, controller, "
+        "login, system"
+    ) in output
+    assert config_path.read_text(encoding="utf-8") == original_config
 
 
 def test_component_add_prompts_soperator_profile_before_field_wizard(

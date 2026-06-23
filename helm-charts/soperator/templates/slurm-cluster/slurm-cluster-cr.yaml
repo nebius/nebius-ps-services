@@ -1,5 +1,6 @@
 {{- include "validateAccountingConfig" . -}}
 {{- include "validateDependencyConfig" . -}}
+{{- include "validateCxcliRenderedConfig" . -}}
 {{- include "validatePartitionConfig" . -}}
 {{- include "validateK8sNodeFilters" . -}}
 {{- include "validateNodeSets" . -}}

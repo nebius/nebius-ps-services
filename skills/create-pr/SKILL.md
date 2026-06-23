@@ -1,6 +1,6 @@
 ---
 name: create-pr
-description: "Use for GitHub PR creation from local work or named branches: reuse or prepare feature branches, stage repo-root changes with git add -A when committing, push, open or reuse PRs, resolve safe conflicts/check failures, and report PR URLs/readiness. Do not use for direct commit-and-push only."
+description: "Use for GitHub PR creation from local work or named branches: reuse or prepare feature branches, run format/whitespace/lint/test gates before committing, stage repo-root changes with git add -A, merge the latest base branch into the PR branch, push with explicit refspecs, open or reuse PRs, repair safe check failures, and report PR URLs/readiness. Do not use for direct commit-and-push only."
 ---
 
 # Create PR
@@ -17,14 +17,22 @@ branch, and report the order the user should merge the PRs manually.
 - Moving in-progress work off the default branch before publishing it.
 - Always staging current local work from the repository root with `git add -A`
   when committing changes for a PR.
+- Running and repairing safe formatting, whitespace, lint, build, and test
+  gates before committing local dirty work for a PR.
+- Waiting for local test commands to finish before staging and committing
+  dirty work.
 - Reusing the current feature branch instead of creating extra branches.
 - Treating the current non-default branch as the normal PR path: stage existing
   work with `git add -A`, commit on that branch, push it, and open or reuse the
   PR without creating another branch.
+- Merging the latest `origin/<base>` into each target branch before PR creation
+  so the branch includes the current base without rewriting branch history.
 - Making each target branch conflict-free against the default branch, usually
   `main`, before returning the PR.
 - Repairing safe branch-owned validation, build, lint, test, or GitHub check
   failures before presenting PR creation as handled.
+- Waiting for GitHub PR checks to reach a terminal state when those checks are
+  available before reporting the PR as ready.
 - Planning an ordered multi-branch merge path when several branches may overlap.
 - Treating the current non-default branch as the target when the user invokes
   the skill without naming a branch.
@@ -42,6 +50,60 @@ branch, and report the order the user should merge the PRs manually.
 - A clean worktree before switching between existing branches or updating
   remote PR branches. If local work is dirty on the active branch, move or
   commit it before updating other branches.
+
+## Local Check Order
+
+For any dirty local work this skill will commit:
+
+- Work from the repository root.
+- Inspect `git status --short` and the dirty diff before staging.
+- Run pre-test hygiene before tests: scan for conflict markers, run
+  `git diff --check`, and run the relevant existing formatter or lint command
+  for touched files when that command is available and safe. Apply only safe,
+  mechanical fixes. Do not run broad formatters over generated, vendored, or
+  exact upstream-imported files.
+- Run the focused local tests after formatting, whitespace, and lint fixes.
+  Wait for each test command to finish before staging or committing. If a test
+  is still running, pending, or waiting on external state, do not commit yet
+  unless the user explicitly asked for an early draft PR and the blocker is
+  recorded.
+- If validation fails and the failure is plausibly caused by branch work,
+  repair it, rerun the failed check, and keep the loop bounded to safe,
+  branch-owned fixes.
+- Stage only after the working tree passes the selected checks:
+  `git add -A`, then `git diff --cached --check`, then inspect
+  `git diff --cached --stat` and any needed focused staged diff before
+  committing.
+- If staged validation finds only simple mechanical whitespace issues, repair
+  the smallest safe whitespace-only issue, rerun `git add -A` and
+  `git diff --cached --check`, and rerun affected local checks when the repair
+  touches executable or source files. Stop on conflict markers, unresolved
+  conflicts, broad formatter churn, generated-artifact uncertainty, semantic
+  failures, or any staged-validation problem that is not plainly mechanical.
+
+## Base Merge Policy
+
+Before creating or updating a PR, fetch the current base branch and merge it
+into the target PR branch. This keeps the PR branch current with the base
+without rewriting branch history.
+
+- Refresh first with `git fetch origin`.
+- Run the merge while the target PR branch is checked out. Do not merge the PR
+  branch into the default branch.
+- Merge with `git merge --no-edit origin/<base>` after local dirty work has
+  been validated and committed. For a `main` base branch, this is
+  `git merge --no-edit origin/main`.
+- If the target branch is unpublished, publish with
+  `git push -u origin HEAD:<branch>`.
+- If the target branch already exists on `origin`, push with
+  `git push origin HEAD:<branch>`.
+- Use explicit refspecs instead of a plain ambiguous `git push` when creating
+  or updating PR branches.
+- Do not rebase or force-push as part of this skill. Use non-destructive merges
+  from `origin/<base>` so shared, protected, and already-published branches keep
+  their existing history.
+- After a successful merge from the base, rerun the focused checks that prove
+  the branch still works on the current base before pushing.
 
 ## Branch Selection
 
@@ -80,12 +142,13 @@ branch, and report the order the user should merge the PRs manually.
    - If no branch is named and the current branch is already non-default,
      reuse it as the only target branch. Do not create another branch.
    - If this current feature branch has a dirty worktree and the user invoked
-     this skill to create or update the PR for current work, stage the complete
-     repository diff from the repository root with `git add -A`, including
-     modified, deleted, and untracked files across monorepo projects. Then
-     run `git diff --cached --check`, inspect the staged diff, and commit it
-     on the current branch with a concise message before merging the base
-     branch, switching branches, pushing, or opening the PR.
+     this skill to create or update the PR for current work, follow
+     `Local Check Order`: run and repair safe pre-test hygiene, wait for local
+     tests to finish, stage the complete repository diff from the repository
+     root with `git add -A`, run `git diff --cached --check`, inspect the
+     staged diff, and commit it on the current branch with a concise message
+     before merging the base branch, switching branches, pushing, or
+     opening the PR.
    - Do not stage only selected paths. If the dirty worktree contains changes
      that should not be part of the PR, stop before staging and tell the user
      that `create-pr` is configured for repo-wide `git add -A` commits.
@@ -108,9 +171,11 @@ branch, and report the order the user should merge the PRs manually.
    - If the worktree is dirty on the default branch, create the feature branch
      first so the in-progress work moves off the default branch safely.
    - If the worktree is still dirty after branch selection and the user clearly
-     wants to submit the current local work, stage the complete repository diff
-     from the repository root with `git add -A`, including modified, deleted,
-     and untracked files across monorepo projects. Then run
+     wants to submit the current local work, follow `Local Check Order`: run
+     and repair safe formatting, whitespace, lint, build, and test issues
+     first, wait for local tests to finish, then stage the complete repository
+     diff from the repository root with `git add -A`, including modified,
+     deleted, and untracked files across monorepo projects. Then run
      `git diff --cached --check`, inspect the staged diff, and commit it with
      a concise message.
    - Do not stage only selected paths. If the dirty worktree contains changes
@@ -125,13 +190,13 @@ branch, and report the order the user should merge the PRs manually.
    - First test each target branch against `origin/<base>` without changing it,
      for example with
      `git merge-tree --write-tree origin/<base> <branch-or-origin/branch>`.
-   - For a branch with conflicts against the current base, update that branch
-     non-destructively by merging `origin/<base>` into it. Resolve only
-     straightforward conflicts where both sides are clear and preserving
-     current logic is possible.
-   - Do not rebase or force-push shared PR branches by default. Use rebase or
-     force-with-lease only when the user explicitly asks for it and the branch
-     ownership is clear.
+   - Update every target branch non-destructively with the `Base Merge Policy`:
+     `git fetch origin`, then `git merge --no-edit origin/<base>`, then rerun
+     focused validation before pushing. For a `main` base branch, merge
+     `origin/main`.
+   - Resolve only straightforward conflicts where both sides are clear and
+     preserving current logic is possible.
+   - Do not rebase or force-push PR branches in this skill.
    - Never use blanket `ours` or `theirs` conflict resolution. Keep both sides
      when they are additive, preserve the branch behavior when the base only
      moved nearby code, and stop when the conflict needs product or business
@@ -147,14 +212,17 @@ branch, and report the order the user should merge the PRs manually.
      current branch history or the user asked for an ordered multi-branch PR
      flow.
 8. Validate after conflict resolution.
-   Run focused checks based on touched files. At minimum, scan for conflict
-   markers and whitespace errors before pushing. If relevant sibling skills
-   apply to the touched surfaces, use them after the branch edits and keep the
-   scope limited to the PR branches. If validation fails and the failures are
-   plausibly caused by the branch, continue repairing the branch before
-   treating PR creation as complete. Do not stop at opening a PR link when the
-   branch has fixable local test, lint, build, or CI failures. Commit and push
-   the repair, then rerun the focused failing checks.
+   Run focused checks based on touched files after any merge, conflict
+   resolution, or validation repair. At minimum, scan for conflict markers and
+   whitespace errors before pushing. Run formatting/lint checks before tests
+   when they can change files, then run the relevant local tests and wait for
+   them to finish. If relevant sibling skills apply to the touched surfaces,
+   use them after the branch edits and keep the scope limited to the PR
+   branches. If validation fails and the failures are plausibly caused by the
+   branch, continue repairing the branch before treating PR creation as
+   complete. Do not stop at opening a PR link when the branch has fixable local
+   test, lint, build, or CI failures. Commit and push the repair, then rerun
+   the focused failing checks.
 9. Publish each branch.
    In an Agentic SDLC run, write
    `permissions/pr-authorization.json` in the active run directory immediately
@@ -163,7 +231,8 @@ branch, and report the order the user should merge the PRs manually.
    timestamp. If UAT failed or is missing, create this authorization only when
    the user explicitly requested an early draft PR and record that scope.
    If a branch has no upstream yet, push it with upstream tracking. If conflict
-   resolution created new commits, push those commits to the same branch.
+   resolution or base merge work created new commits, push those commits to the
+   same branch with an explicit `HEAD:<branch>` refspec.
 10. Avoid duplicate PRs.
    Check for an existing open PR for each head branch. If one already exists,
    return that PR instead of creating another.
@@ -185,6 +254,11 @@ branch, and report the order the user should merge the PRs manually.
    after the PR is opened and the failures are available and branch-caused,
    keep working on the same branch until the failures are resolved or clearly
    blocked by external state.
+   When GitHub checks are expected and available, watch or poll them until
+   they reach a terminal pass, fail, skip, or cancel state before reporting the
+   PR as ready. If checks remain pending because external CI is delayed or
+   unavailable, report the PR as pending instead of ready and include the last
+   observed check state.
    In an Agentic SDLC run, include requirements covered, feature list,
    validation, tests, evaluation, and UAT evidence summary in the PR body when
    that local evidence exists. If UAT failed or is missing, use a draft PR only
@@ -211,15 +285,24 @@ branch, and report the order the user should merge the PRs manually.
   - `gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name'`
   - fallback: `git symbolic-ref --short refs/remotes/origin/HEAD | sed 's#^origin/##'`
 - Refresh refs:
-  - `git fetch origin --prune`
+  - `git fetch origin`
+- Pre-test hygiene and local validation before committing:
+  - `git status --short`
+  - `rg -n '^(<{7}|={7}|>{7})'`
+  - `git diff --check`
+  - run existing formatter/lint commands for touched files when available
+  - run focused local tests and wait for completion
 - Conflict checks:
   - `git merge-tree --write-tree origin/<base> <branch-or-origin/branch>`
   - `git diff --name-only --diff-filter=U`
   - `rg -n '^(<{7}|={7}|>{7})'`
-- Non-destructive branch update:
-  - `git switch <branch>`
+- Base branch merge before PR creation:
+  - `git fetch origin`
+  - `git merge-tree --write-tree origin/<base> HEAD`
   - `git merge --no-edit origin/<base>`
-  - `git push origin <branch>`
+  - rerun focused validation after the merge
+  - new remote branch: `git push -u origin HEAD:<branch>`
+  - existing remote branch: `git push origin HEAD:<branch>`
 - Complete local-work staging:
   - `git status --short`
   - `git add -A`
@@ -229,13 +312,19 @@ branch, and report the order the user should merge the PRs manually.
 - Current feature-branch PR path:
   - `git branch --show-current`
   - `git status --short`
+  - `git diff --check`
+  - run existing formatter/lint commands for touched files when available
+  - run focused local tests and wait for completion
   - `git add -A`
   - `git diff --cached --check`
   - `git diff --cached --stat`
   - `git commit -m "<concise message>"`
-  - `git fetch origin --prune`
+  - `git fetch origin`
   - `git merge-tree --write-tree origin/<base> HEAD`
-  - `git push -u origin HEAD:<branch>`
+  - `git merge --no-edit origin/<base>`
+  - rerun focused validation after merge
+  - new remote branch: `git push -u origin HEAD:<branch>`
+  - existing remote branch: `git push origin HEAD:<branch>`
   - `gh pr create --base <base> --head <branch> --title <title> --body <body>`
 - Ordered merge simulation:
   - `git switch --detach origin/<base>`
@@ -250,6 +339,7 @@ branch, and report the order the user should merge the PRs manually.
 - PR readiness:
   - `gh pr view <number> --json number,url,headRefName,baseRefName,mergeable,mergeStateStatus`
   - `gh pr checks <number>`
+  - `gh pr checks <number> --watch`
 - PR creation:
   - `gh pr create --base <base> --head <branch> --title <title> --body <body>`
   - draft variant: `gh pr create --draft ...`
@@ -289,8 +379,16 @@ not evidence-backed, or outside this skill's scope, report that it was skipped.
   ask the user to split or clean the worktree first.
 - Do not open an empty PR with no branch diff against the base branch.
 - Do not combine multiple requested branches into one PR.
-- Do not rewrite published branch history unless the user explicitly asks and
-  the branch is safe to rewrite.
+- Do not rewrite published branch history in this skill. Do not rebase or
+  force-push; merge the current base branch instead.
+- Do not run `git merge --no-edit origin/<base>` with uncommitted work.
+  Validate and commit the dirty work first, then merge the current base branch
+  into the committed branch.
+- Do not stage or commit while local tests are still running or pending. Wait
+  for terminal pass/fail status, repair branch-caused failures when safe, and
+  rerun the failed checks before committing or reporting readiness.
+- Do not use plain ambiguous `git push`. Use explicit refspecs such as
+  `git push origin HEAD:<branch>` or `git push -u origin HEAD:<branch>`.
 - Do not treat a conflict-free current-base PR as enough when the user asked
   for multiple branches. Also check the proposed manual merge order.
 - Do not resolve semantic conflicts by guessing. Prefer a small merge commit

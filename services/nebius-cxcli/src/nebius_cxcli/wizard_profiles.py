@@ -196,7 +196,7 @@ def _soperator_placement_fields() -> dict[str, dict[str, Any]]:
 
 def _mk8s_soperator_autoscaling_fields() -> dict[str, dict[str, Any]]:
     fields: dict[str, dict[str, Any]] = {}
-    for role in ("system", "controller", "login", "accounting", "worker"):
+    for role in ("system", "controller", "login", "accounting"):
         prefix = f"inputs.soperator.{role}_autoscaling"
         fields[f"{prefix}.enabled"] = (
             {
@@ -214,6 +214,32 @@ def _mk8s_soperator_autoscaling_fields() -> dict[str, dict[str, Any]]:
         }
         fields[f"{prefix}.max_node_count"] = {
             "default": 5 if role == "system" else 1,
+            "write_default_to_config": True,
+            "type_hint": "number",
+        }
+    return fields
+
+
+def _mk8s_soperator_worker_ephemeral_fields() -> dict[str, dict[str, Any]]:
+    return {
+        "inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds": {
+            "default": 300,
+            "write_default_to_config": True,
+            "type_hint": "number",
+        },
+    }
+
+
+def _mk8s_soperator_worker_shape_fields() -> dict[str, dict[str, Any]]:
+    fields: dict[str, dict[str, Any]] = {}
+    for shape in ("cpu", "gpu"):
+        fields[f"inputs.soperator.worker_{shape}_total_nodes"] = {
+            "default": 1,
+            "write_default_to_config": True,
+            "type_hint": "number",
+        }
+        fields[f"inputs.soperator.worker_{shape}_nodes_per_group"] = {
+            "default": 100,
             "write_default_to_config": True,
             "type_hint": "number",
         }
@@ -396,6 +422,7 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
             },
             "required": True,
             "type_hint": "string",
+            "write_default_to_config": True,
         },
         "inputs.cluster.public_endpoint": {
             "default": True,
@@ -406,13 +433,19 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
             "options": {
                 "from": "mk8s_compatible_platforms",
                 "prefix": "cpu-",
-            }
+                "auto_select_first": True,
+            },
+            "required": True,
+            "type_hint": "string",
         },
         "inputs.node_group_defaults.cpu.preset": {
             "options": {
                 "from": "compute_platform_presets",
                 "depends_on": "inputs.node_group_defaults.cpu.platform",
-            }
+                "auto_select_first": True,
+            },
+            "required": True,
+            "type_hint": "string",
         },
         "inputs.node_group_defaults.cpu.os": {
             "options": {
@@ -439,13 +472,29 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
         },
         "inputs.node_group_defaults.gpu.preset": {
             "options": {
-                "from": "compute_platform_presets",
+                "from": "mk8s_gpu_capacity_choices",
                 "depends_on": "inputs.node_group_defaults.gpu.platform",
                 "args": {
-                    "gpu_cluster_required_path": "inputs.gpu_clusters.workers.infiniband_fabric"
+                    "reservation_policy_path": "inputs.node_group_defaults.gpu.reservation.policy",
                 },
                 "auto_select_single": True,
             }
+        },
+        "inputs.node_group_defaults.gpu.reservation.policy": {
+            **_static_sources(
+                (
+                    "AUTO",
+                    "AUTO  (try selected reservations, then suitable capacity)",
+                ),
+                ("FORBID", "FORBID  (do not use reservations)"),
+                (
+                    "STRICT",
+                    "STRICT  (use only selected/suitable reservations)",
+                ),
+            ),
+            "default": "AUTO",
+            "write_default_to_config": True,
+            "type_hint": "string",
         },
         "inputs.node_group_defaults.gpu.gpu_stack_source": {
             **_static_sources(
@@ -474,10 +523,12 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
                 "args": {
                     "platform_path": "inputs.node_group_defaults.gpu.platform",
                     "preset_path": "inputs.node_group_defaults.gpu.preset",
+                    "reservation_policy_path": "inputs.node_group_defaults.gpu.reservation.policy",
                 },
                 "auto_select_first": True,
                 "skip_prompt_if_no_choices": True,
-            }
+            },
+            "prompt": False,
         },
         "inputs.node_group_defaults.gpu.gpu_stack_preset": {
             "options": {
@@ -577,16 +628,8 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
             "type_hint": "number",
         },
         **_mk8s_soperator_autoscaling_fields(),
-        "inputs.soperator.worker_total_nodes": {
-            "default": 1,
-            "write_default_to_config": True,
-            "type_hint": "number",
-        },
-        "inputs.soperator.worker_nodes_per_group": {
-            "default": 100,
-            "write_default_to_config": True,
-            "type_hint": "number",
-        },
+        **_mk8s_soperator_worker_ephemeral_fields(),
+        **_mk8s_soperator_worker_shape_fields(),
         "deploy.targets[].secrets.mysterybox.enabled": {
             "default": True,
             "write_default_to_config": True,

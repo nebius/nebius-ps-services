@@ -1,6 +1,6 @@
 ---
 name: sdlc-commit
-description: "Use only as part of the Agentic SDLC workflow; use after a single Agentic SDLC feature has passed validation, tests, and evaluation to create a local feature-scoped Git commit. This skill does not push and does not replace `commit-push`."
+description: "Use only as part of the Agentic SDLC workflow; use after a single Agentic SDLC feature has passed validation, tests, and evaluation to create a local feature-scoped Git commit. This skill does not push and does not replace the general `commit` or `commit-push` skills."
 ---
 
 # SDLC Commit
@@ -17,6 +17,7 @@ Create a local commit for one completed feature as a durable checkpoint without 
 
 ## When Not To Use
 
+- Do not use for ordinary local commits outside Agentic SDLC; use `commit`.
 - Do not use to push; use `commit-push` only when explicitly requested outside this SDLC local-commit path.
 - Do not use to create or merge PRs.
 - Do not use before evidence passes.

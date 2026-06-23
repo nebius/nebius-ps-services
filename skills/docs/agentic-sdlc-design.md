@@ -12,6 +12,12 @@
   - [MCP servers and external capabilities](#mcp-servers-and-external-capabilities)
 - [Requirements And Design Templates](#requirements-and-design-templates)
 - [Workflow](#workflow)
+- [Workflow Verification](#workflow-verification)
+  - [Verification principles](#verification-principles)
+  - [Quick preflight test](#quick-preflight-test)
+  - [Full workflow test](#full-workflow-test)
+  - [Report interpretation](#report-interpretation)
+  - [Fix and rerun policy](#fix-and-rerun-policy)
 - [Skill Responsibilities](#skill-responsibilities)
   - [`sdlc-create-requirements`](#sdlc-create-requirements)
   - [`sdlc-start`](#sdlc-start)
@@ -141,6 +147,7 @@ The bundle contains:
 
 - `pre_tool_use_sdlc_policy.py`
 - `stop_sdlc_continue.py`
+- `lib/__init__.py`
 - `lib/sdlc_policy.py`
 - `lib/sdlc_state.py`
 - `tests/test_sdlc_hooks.py`
@@ -157,13 +164,16 @@ persisted, all features are committed and UAT still needs to run, or UAT failed
 with an addressable classification. It never auto-continues into
 `sdlc-merge-pr`; merge requires an explicit user request.
 
-The PreToolUse hook can deny unsafe actions such as out-of-scope writes,
-credential writes, secret-bearing shell or patch content, locked-plan edits,
-private SDLC state leaks into the repository, destructive Git commands,
-protected-branch commit or push attempts, force pushes, branch deletion, and
-guarded Git or GitHub actions without valid short-lived authorization. It also
-allows writes under `$CODEX_HOME/task-state` so global task-state checkpoints
-remain separate from private SDLC run state.
+The PreToolUse hook does not deny filesystem targets by path. File reads,
+writes, updates, deletes, and moves may target repository files, outside-repo
+files, credential directories, Codex runtime files, global `AGENTS.md`, locked
+SDLC plans, and private SDLC state when the operator needs that flexibility.
+The hook can still deny unsafe content or action shapes such as secret-bearing
+shell, patch, or MCP payloads, destructive shell commands, destructive Git
+commands, protected-branch commit or push attempts, force pushes, branch
+deletion, and guarded Git or GitHub actions without valid short-lived
+authorization. Ordinary outbound network commands are not restricted by the
+hook unless they match those unsafe content or action checks.
 
 The hook bundle is source code in the skills repository. Installed copies under
 `$CODEX_HOME/hooks` are runtime artifacts and can drift. Hook fixes should be
@@ -325,6 +335,167 @@ The implementation state schema uses this phase order:
 a normal happy-path phase. It records the failure class and sends the loop back
 to the earliest responsible phase, or stops for human input, policy, or
 environment blockers.
+
+## Workflow Verification
+
+`agentic-sdlc-test` is the external verification skill for this workflow. It is
+not an SDLC phase and does not use the `sdlc-` prefix. Use it to verify the
+workflow against this design, inspect global `sdlc-*` skill discovery, check
+hook configuration, run disposable PreToolUse and Stop hook fixture tests, and
+write a verification report to `~/.codex/sdlc-verification/report.md`.
+
+### Verification principles
+
+The design document is the workflow contract. The verifier must compare the
+installed SDLC skills, hook configuration, disposable run state, and report
+evidence back to this document instead of relying on conversation memory or
+stale prior reports.
+
+The verifier must remain safe and idempotent:
+
+- use a disposable verification project only
+- keep private verification state out of committed repositories
+- avoid changing installed skills, hooks, hook trust, or agent configuration
+- avoid pushing, opening real PRs, merging, publishing, or touching production
+  resources
+- route the disposable golden-path run through the normal SDLC phase skills
+  instead of creating a workflow CLI
+
+The verifier writes only verification-owned state under:
+
+```text
+~/.codex/sdlc-verification/
+```
+
+### Quick preflight test
+
+Use the quick preflight when the SDLC skills, hook source, hook configuration,
+or this design document changed and you need a safe readiness check:
+
+```text
+$agentic-sdlc-test Verify the Agentic SDLC workflow against docs/agentic-sdlc-design.md and write a safe report.
+```
+
+The skill runs the deterministic helper from the skills repository:
+
+```bash
+python3 agentic-sdlc-test/scripts/verify_agentic_sdlc.py
+```
+
+The preflight must verify and record:
+
+- global `sdlc-*` skill folders and `SKILL.md` front matter
+- duplicate SDLC skill-name detection
+- configured PreToolUse and Stop hooks
+- preservation of non-SDLC hook boundaries such as `SessionStart` and
+  `UserPromptSubmit`
+- PreToolUse allow and deny fixture cases
+- Stop terminal cases: no active run, complete, paused, blocked, human input,
+  max iteration, retry budget, no progress, and merge without explicit request
+- Stop continuation cases through `sdlc-start`
+- disposable-project creation and private-state staging checks
+- report generation at `~/.codex/sdlc-verification/report.md`
+
+A successful quick preflight may still return `PARTIAL` when the full
+agent-driven golden path has not been completed. That status is expected until
+the disposable workflow run, idempotency run, change-request run, failure-loop
+run, and steering checks have evidence.
+
+### Full workflow test
+
+Use the full workflow test before treating the Agentic SDLC system as validated
+end to end. It must run only in the disposable verification project created
+under `~/.codex/sdlc-verification/disposable-project/`.
+
+The golden-path feature is intentionally small:
+
+```text
+Create a Python validator for a Nebius-style resource name:
+- lowercase letters, numbers, and hyphens only
+- starts with a letter
+- 3 to 32 characters
+- structured validation errors
+- tests and evaluation evidence
+```
+
+Run the normal SDLC phase skills through the disposable project. Do not add a
+new workflow CLI and do not let hooks orchestrate phases.
+
+Required happy-path evidence:
+
+- `sdlc-create-requirements` creates committed requirements with stable
+  `REQ-*` IDs.
+- `sdlc-start` creates or resumes private local run state and recommends one
+  next skill.
+- `sdlc-gather-context` records a compact context pack.
+- `sdlc-create-design` creates committed design with stable `FEAT-*` IDs.
+- `sdlc-create-plan` writes a private locked plan version.
+- `sdlc-tdd` records test intent before implementation.
+- `sdlc-implement-plan` changes only the disposable project for the current
+  feature.
+- `sdlc-validate-codes`, `sdlc-unit-tests`, and `sdlc-evaluate` record passing
+  evidence or route failures for classification.
+- `sdlc-align-specs` confirms requirements, design, plan, implementation, and
+  evidence agree.
+- `sdlc-commit` creates one local feature-scoped commit only after evidence
+  passes.
+- `sdlc-uat-tests` records product-level UAT evidence after all features are
+  committed.
+- private SDLC state, plans, screenshots, transcripts, and evidence stay out
+  of the disposable project Git index.
+
+After the happy path, verify these recovery behaviors:
+
+- rerun with no product change and confirm no duplicate requirements, design
+  features, plans, tests, commits, or evidence
+- apply the change request `Allow underscores when explicitly configured` and
+  confirm stable IDs, a new plan version only when needed, scoped code and test
+  changes, refreshed evidence, and a new local feature commit
+- inject one controlled validation, test, bad-test, design, spec-gap, or
+  environment failure at a time, then confirm `sdlc-classify-failure` routes to
+  the earliest responsible phase before retry
+- add `Pause after the current feature. Do not create a PR.` to `STEERING.md`
+  and confirm `sdlc-start` and Stop continuation honor it
+- confirm clearing steering allows resume
+- run optional GUI or TUI smoke checks only against harmless local disposable
+  targets when the required harness is available
+
+The full workflow test must not call `create-pr`, `review-pr`, or
+`sdlc-merge-pr` against a real remote. Merge remains outside verification
+unless the user explicitly requests a separate merge exercise.
+
+### Report interpretation
+
+The report status means:
+
+- `PASS`: required static, hook, golden-path, idempotency, change-request,
+  failure-loop, steering, and continuation checks passed; optional GUI or TUI
+  smoke checks may be `NOT APPLICABLE`.
+- `PARTIAL`: the automated preflight passed, or a non-critical optional check
+  is unavailable, but one or more full workflow checks still need disposable
+  evidence.
+- `FAIL`: safety hooks, Stop continuation, state persistence, private-state
+  protection, or the disposable golden-path workflow failed.
+
+`PARTIAL` is not a production-readiness result. It means the workflow is safe
+enough to continue disposable verification, not that it is proven for real
+project use.
+
+### Fix and rerun policy
+
+When verification finds a gap, fix the source of truth at the narrowest
+responsible layer:
+
+- update this design document when the contract is unclear, incomplete, or
+  contradictory
+- update the relevant `sdlc-*` skill when the phase contract is wrong
+- update `sdlc-start/assets/hooks/` when the guardrail source is wrong
+- sync installed hooks only through the approved hook installer flow after
+  source fixes are reviewed
+- rerun `$agentic-sdlc-test` after every fix
+
+Do not update the report to hide a real failure. The report is evidence, not
+the contract.
 
 ## Skill Responsibilities
 

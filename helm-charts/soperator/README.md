@@ -19,6 +19,7 @@ only the integration values that matter for the combined Soperator install.
 - [Bundled Child Charts](#bundled-child-charts)
 - [Production Install](#production-install)
 - [Configuration](#configuration)
+- [Soperator Autoscaling](#soperator-autoscaling)
 - [Examples](#examples)
 - [Validation](#validation)
 - [Chart Release And OCI Publish](#chart-release-and-oci-publish)
@@ -50,6 +51,10 @@ storage, Helm dependency, and cxcli wiring design.
 - Optional MariaDB Operator dependency for Slurm accounting.
 - CPU-only, GPU-only, and mixed CPU+GPU Slurm worker layouts.
 - Slurm partitions and node features through chart values.
+- Production worker profiles follow a one-to-one worker contract: one Slurm
+  worker pod equals one Kubernetes worker VM. The chart achieves this through
+  NodeSet replica counts plus worker pod resource requests, not through a
+  DaemonSet.
 - One-replica OpenKruise manager default for small-cluster portability; set
   `kruise.manager.replicas` higher when the target has enough system capacity.
 - Slurm topology is disabled by default for generic-cluster portability; enable
@@ -235,7 +240,18 @@ Common direct Helm settings:
   `srun` / `sbatch` scripts; those use the native Slurm client path from the
   login or check-job environment.
 - `nodesets[]`: Slurm worker NodeSets such as `worker`, `worker-cpu`,
-  `worker-gpu`, or hardware-specific NodeSets.
+  `worker-gpu`, or hardware-specific NodeSets. `nodesets[].replicas` is the
+  Slurm worker pod count for fixed workers. For Nebius production profiles,
+  keep it aligned with the matching MK8s worker VM count and set
+  `nodesets[].slurmd.resources.gpu` to the GPU count of one worker VM, for
+  example five `1gpu-*` hosts means five replicas with `gpu: 1`, and five
+  `8gpu-*` hosts means five replicas with `gpu: 8`. When cxcli manages the
+  profile, `inputs.soperator.worker_cpu_total_nodes` and
+  `inputs.soperator.worker_gpu_total_nodes` are Kubernetes worker host counts
+  for the matching worker shape, not total GPU count or an aggregate CPU/GPU
+  split. Those `inputs.soperator.*` helpers are cxcli inputs, not Helm values;
+  the chart expects the rendered `nodesets[]` contract and fails fast if helper
+  inputs or the old `nodeGroupMapping` value are passed directly to Helm.
 - `partitionConfiguration`: Slurm partitions and their NodeSet mappings.
   Each partition supports a typed `policy` block (`priorityTier`,
   `preemptMode`, `default`, `hidden`, `state`, `maxTime`, `defaultTime`,
@@ -295,6 +311,24 @@ Common direct Helm settings:
   worker nodes have accurate tier labels. Manual pre-labeling can work, but
   incorrect or stale labels can produce poor placement, worker initialization
   waits, or multi-node jobs placed across incompatible domains.
+- `nodesets[].ephemeralNodes`, `nodesets[].initialNumberEphemeralNodes`, and
+  `slurmConfig.suspendTime`: the upstream Soperator path for Slurm-demand worker
+  elasticity. In that model, `nodesets[].replicas` is maximum worker capacity,
+  `initialNumberEphemeralNodes` is the initial active baseline, and
+  `suspendTime` must be finite and non-negative so idle cloud workers can power
+  down. Do not treat MK8s node-group autoscaling by itself as Slurm-demand
+  autoscaling; without ephemeral NodeSets, a NodeSet with `replicas: 5` still
+  desires five worker pods. For cxcli-managed production profiles, use
+  `inputs.soperator.worker_node_groups.<worker>.ephemeral_nodes.enabled=true`
+  together with the same shard's autoscaling block; cxcli derives
+  `initialNumberEphemeralNodes` from that shard's autoscaling `min_node_count`
+  for CPU workers, raises GPU worker shards to at least one initial active
+  worker when max capacity is positive so Soperator can seed GPU libraries into
+  the jail, and writes global `suspendTime` from
+  `inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds`. Day-2
+  active-node changes happen through Slurm power control and Soperator
+  `NodeSetPowerState`, not by changing that initial value.
+  See [Soperator Autoscaling](#soperator-autoscaling).
 - `soperator-checks.enabled`, `soperator-activechecks.enabled`,
   `soperator-notifier.enabled`, `soperator-backup-config.enabled`,
   and `soperator-dcgm-exporter.enabled`: optional child chart gates. Keep these
@@ -337,6 +371,123 @@ Common direct Helm settings:
   `customContent` only for one-off inline overrides.
 - `uninstallCleanup.image`: `kubectl` image used by the pre-delete cleanup
   hook. Override in restricted-egress clusters.
+
+## Soperator Autoscaling
+
+Soperator worker autoscaling has two layers that must stay aligned:
+
+- Kubernetes worker hosts: cloud VM capacity managed by the Kubernetes node
+  group or cluster autoscaler.
+- Slurm workers: Soperator `NodeSet` pods that run `slurmd` and register Slurm
+  nodes.
+
+Changing only one layer is incomplete. Extra Kubernetes hosts without matching
+Slurm workers are idle capacity. Extra non-ephemeral Slurm worker pods without
+matching hosts remain pending and can pull the Kubernetes autoscaler back toward
+the maximum. Soperator worker pods are not a DaemonSet; the chart keeps the
+production one-Slurm-worker-pod-to-one-Kubernetes-worker-VM contract by matching
+`nodesets[].replicas` and worker pod resource requests to the target worker VM
+shape.
+
+Fixed worker capacity is the default:
+
+```yaml
+nodesets:
+  - name: worker
+    replicas: 5
+```
+
+This means Soperator should keep five Slurm worker pods. If the underlying
+Kubernetes worker pool has five matching hosts, Slurm sees five workers. If the
+host pool is smaller, the missing worker pods can stay pending until Kubernetes
+adds hosts.
+
+Plain Kubernetes worker node-group autoscaling is infrastructure autoscaling,
+not Slurm-demand autoscaling. For example, if cxcli materializes a worker node
+group as `min_node_count: 1` and `max_node_count: 5` but the generated NodeSet
+is still non-ephemeral with `replicas: 5`, Soperator continues to desire five
+worker pods. That is useful for declaring maximum-capacity host ranges, but it
+does not let Slurm power idle workers down.
+
+Slurm-demand elasticity uses upstream Soperator ephemeral NodeSets:
+
+```yaml
+slurmConfig:
+  suspendTime: 300
+
+nodesets:
+  - name: worker
+    replicas: 5
+    ephemeralNodes: true
+    initialNumberEphemeralNodes: 1
+```
+
+In this mode:
+
+- `nodesets[].replicas` is the maximum Slurm worker ordinal range.
+- `nodesets[].initialNumberEphemeralNodes` is the number of active ordinals
+  when the `NodeSetPowerState` is first created. It is not a permanent minimum;
+  day-2 active nodes are controlled by Slurm power management.
+- `slurmConfig.suspendTime` is the idle time, in seconds, after which Slurm
+  marks ephemeral cloud nodes eligible for automatic power down. It must be a
+  finite non-negative integer.
+- `nodesets[].ephemeralTopologyWaitTimeout`, when set, is passed through to the
+  Soperator NodeSet for topology-aware ephemeral startup waits.
+- `slurmNodes.controller.serviceAccount.create: true` and
+  `slurmNodes.controller.rbac.create: true` are enabled by default so the
+  `slurmctld` pod can run Soperator `power-manager` with permission to update
+  `NodeSetPowerState`.
+
+The runtime flow is:
+
+1. Soperator creates one `NodeSetPowerState` per ephemeral NodeSet.
+2. `NodeSetPowerState.spec.activeNodes` stores the currently powered-on worker
+   ordinals.
+3. Slurm `ResumeProgram` / `SuspendProgram` calls the Soperator
+   `power-manager` binary from `slurmctld`.
+4. `power-manager` updates `NodeSetPowerState.spec.activeNodes`.
+5. Soperator reconciles the worker OpenKruise StatefulSet so pods exist only
+   for active ordinals.
+6. The Kubernetes autoscaler adds hosts for newly active worker pods and can
+   remove idle hosts after workers power down.
+
+For cxcli-managed production clusters, enable a shard's explicit helper
+together with that same shard's worker host autoscaling:
+
+```yaml
+inputs:
+  soperator:
+    worker_gpu_total_nodes: 5
+    worker_ephemeral_nodes:
+      suspend_time_seconds: 300
+    worker_node_groups:
+      worker:
+        autoscaling:
+          enabled: true
+          min_node_count: 1
+          max_node_count: 5
+        ephemeral_nodes:
+          enabled: true
+```
+
+cxcli then renders the MK8s node-group range, `nodesets[].replicas: 5`,
+`ephemeralNodes: true`, `initialNumberEphemeralNodes: 1`, and
+`slurmConfig.suspendTime: 300` together. It derives the initial active worker
+count from the same shard's worker autoscaling minimum for CPU workers and keeps
+at least one positive-capacity GPU worker active at first bootstrap so Soperator
+can populate GPU libraries into the shared jail before Slurm power management
+later suspends idle workers.
+
+The chart fails fast when an ephemeral NodeSet is partially configured:
+
+- `nodesets[].replicas` must be present and non-negative.
+- `nodesets[].initialNumberEphemeralNodes` must be present, non-negative, and
+  less than or equal to `replicas`.
+- `slurmConfig.suspendTime` must be present and non-negative.
+
+Ephemeral NodeSets only manage worker capacity. They do not autoscale
+controller, login, accounting, REST, exporter, or populate-jail service roles.
+Those roles use normal chart values and Kubernetes scheduling controls.
 
 ## Examples
 

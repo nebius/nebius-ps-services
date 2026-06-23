@@ -98,7 +98,7 @@ normalize_tag() {
 
 ensure_clean_worktree() {
   local status_output=""
-  status_output="$(git status --short --untracked-files=normal)"
+  status_output="$(git status --short --untracked-files=all)"
   if [[ -n "${status_output}" ]]; then
     log_error "Working tree is not clean."
     printf '%s\n' "${status_output}" >&2
@@ -114,22 +114,18 @@ ensure_named_branch() {
   fi
 }
 
-branch_has_upstream() {
-  local branch="$1"
-  git rev-parse --abbrev-ref --symbolic-full-name "${branch}@{upstream}" >/dev/null 2>&1
-}
-
 push_current_branch() {
   local branch="$1"
   ensure_named_branch "${branch}"
+  git push --set-upstream origin "HEAD:${branch}"
+}
 
-  if branch_has_upstream "${branch}"; then
-    git push
-    return 0
+ensure_not_default_branch() {
+  local branch="$1"
+  if [[ "${branch}" == "${MAIN_BRANCH}" ]]; then
+    log_error "--prep must run from a feature branch, not ${MAIN_BRANCH}."
+    exit 1
   fi
-
-  log_note "No upstream configured for ${branch}; pushing to origin and setting upstream..."
-  git push --set-upstream origin "${branch}"
 }
 
 ensure_branch_synced() {
@@ -281,6 +277,7 @@ prep_release() {
 
   ensure_clean_worktree
   ensure_named_branch "${branch}"
+  ensure_not_default_branch "${branch}"
   ensure_tag_absent "${tag}"
   log_note "Updating ${CHANGELOG_FILE} for ${tag}..."
   update_changelog "${tag}"

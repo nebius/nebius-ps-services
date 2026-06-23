@@ -6,6 +6,167 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Updated the bundled Soperator portable chart pin to `4.0.2-ps.2`, matching
+  the current parent chart package release while keeping local-source
+  resolution tied to `helm-charts/soperator/Chart.yaml`.
+- Changed `component add apps:soperator` so production-cluster adds fail fast on
+  existing managed MK8s targets whose non-empty `inputs.node_groups` do not
+  include the required Soperator service-role groups (`system`, `controller`,
+  `login`, and `accounting`) and do not provide a complete explicit
+  `apps.charts[].placements` map. The guard runs before raw config
+  normalization can auto-enable GPU app rows, so non-standard existing clusters
+  should use `ext-soperator onboard` or an explicit placement-bearing config
+  path instead of generated production placement inference.
+- Aligned `nebius-cxcli component` help examples so the group and
+  `list`/`add`/`remove` subcommands consistently show `--config` as the
+  required config path option, matching the enforced day-2 component editing
+  contract.
+- Added a required MK8s node inventory smoke validation for every MK8s deploy
+  target. It performs one read-only all-node Kubernetes inventory query,
+  reports Ready/CPU/GPU/node-group totals, checks scheduler-visible
+  `nvidia.com/gpu` inventory before workload validation, enforces configured
+  or inventoried GPU node-group presence and minimum expected Ready GPU node
+  counts when available, keeps validation reports target-scoped for multi-target and
+  multi-GPU-node-group deployments, is generated outside the configurable
+  `deploy.targets[].deployment_testing.mk8s_gpu.*` block so it cannot be
+  disabled, and keeps the bounded GPU visibility node cap separate from explicit
+  `acceptance-test benchmark` NCCL options.
+- Fixed rendered MK8s node groups so they carry the canonical
+  `nebius.com/node-group` label. The required node inventory smoke can now match
+  live Kubernetes nodes back to configured node-group names on plain MK8s GPU
+  deployments and reports nodes grouped by node group instead of failing minimum
+  expected Ready GPU node checks when Nebius exposes only
+  `nebius.com/node-group-id` on the nodes.
+- Added the `generated/reports/` validation-detail directory to the final
+  `deploy` Deployment summary footer so the per-validation JSON smoke reports
+  are visible beside the customer-facing `deploy-report.md`.
+- Replaced the persistent deploy-time MK8s GPU test contract with
+  `deploy.targets[].deployment_testing.*`. Deploy config now carries only fast,
+  declarative checks such as operator readiness and bounded GPU visibility;
+  NCCL is no longer persisted in `config.yaml` and is selected only through
+  explicit `acceptance-test benchmark` flags.
+- Fixed the Soperator create wizard so 1-GPU Soperator production targets no
+  longer materialize deploy-time NCCL settings while profile-backed worker
+  defaults still carry transient GPU-cluster keys before shape cleanup runs.
+- Fixed wizard backtracking for numeric fields such as
+  `infra.components[0].inputs.soperator.worker_gpu_nodes_per_group`, so entering
+  `q` goes back instead of being rejected by Typer as an invalid integer.
+- Removed deploy-time NCCL validation support from generated manifests; bundles
+  that still contain `mk8s_nccl` must be rerendered and fail fast instead of
+  running benchmark work during deploy.
+- Fixed the MK8s create wizard so the auto-selected Kubernetes version is
+  written before `mk8s_compatible_platforms` resolves CPU/GPU platform choices.
+  This prevents required platform prompts from falling back to manual input
+  after `inputs.cluster.public_endpoint` when the provider depends on
+  `inputs.cluster.k8s_version`.
+- Added `nebius-cxcli acceptance-test smoke` and
+  `nebius-cxcli acceptance-test benchmark` as explicit post-deploy validation
+  surfaces, with deterministic target-scoped reports:
+  `cluster-inventory-report-<target>.json`,
+  `deploy-gpu-stack-readiness-report-<target>.json`,
+  `deploy-gpu-visibility-report-<target>.json`,
+  `deploy-smoke-report-<target>.json`,
+  `acceptance-smoke-report-<target>.json`,
+  and `acceptance-benchmark-report-<target>.json`. JSON detail reports now
+  include `test_purpose`, `mode`, `scope`, `kind`, and `target_ref` metadata
+  so copied reports remain self-describing. Required Soperator deploy smoke is
+  now a fast Kubernetes deployment snapshot that checks the
+  `soperator-manager` Deployment, jail storage objects, Pending Soperator
+  pods/events, target `SlurmCluster`, and `NodeSet` resources; it no longer
+  waits for rollout/storage convergence or starts Slurm jobs. Exhaustive
+  all-node Slurm smoke moves to
+  `acceptance-test smoke --soperator`, and K8s/Slurm NCCL performance work
+  moves to explicit `acceptance-test benchmark` runs. These
+  commands require either `--target <target>` or `--all-targets` so exhaustive
+  checks do not fan out across every generated target by omission. The
+  Soperator validation JSON detail report schema remains
+  `nebius-cxcli-soperator-cluster-validation/v2`; it stores command output as
+  line arrays and keeps structured per-partition `partition_hostnames` and
+  `gpu_allocations` evidence so thousand-node clusters remain inspectable
+  without parsing escaped multiline strings. Acceptance GPU allocation entries
+  now record whether each Slurm job proved GPU visibility through `nvidia-smi`
+  or through NVIDIA proc-driver plus `/dev/nvidia*` device evidence, avoiding a
+  false failure when the Slurm jail exposes an unusable `nvidia-smi` stub.
+- Soperator validation now enforces mode-specific report filenames, so stale
+  specs cannot write acceptance smoke or benchmark results into
+  `deploy-smoke-report-<target>.json`.
+- Clarified `acceptance-test --help`, `acceptance-test smoke --help`, and
+  `acceptance-test benchmark --help` so the examples show JSON-only reports,
+  run-only benchmark overrides, and explicit suite selection for K8s NCCL on
+  Soperator-owned GPU targets during maintenance.
+- Fixed deploy-time GPU visibility validation so fresh `gpu-validation`
+  namespaces no longer race Kubernetes creation of the implicit `default`
+  ServiceAccount. cxcli now applies the namespace before the sampled CUDA pods,
+  creates a dedicated `cuda-smoke-validation` ServiceAccount, and has the
+  pods explicitly use it with token automount disabled.
+- Fixed the Soperator `create` wizard so generated worker shards use
+  `worker_node_groups.<worker>.autoscaling.enabled` as the per-shard Infra/MK8s
+  worker autoscaling toggle. Answering `true` automatically writes the matching
+  `worker_node_groups.<worker>.ephemeral_nodes.enabled=true` and asks min/max;
+  the max prompt defaults to the generated shard capacity, such as `4` for a
+  single CPU worker shard created from `worker_cpu_total_nodes=4`. Answering
+  `false` clears the same shard's autoscaling bounds and writes
+  `ephemeral_nodes.enabled=false`. The wizard now asks
+  `worker_ephemeral_nodes.suspend_time_seconds` only after at least one shard has
+  autoscaling-backed ephemeral nodes enabled. Multi-shard worker layouts now
+  get a synthetic bulk apply-to-all wizard choice for all CPU worker shards,
+  all GPU worker shards, or all worker shards in mixed CPU+GPU layouts. The
+  mixed-layout helper is shown as `all_worker_shards_apply_to_all`, defaults to
+  `true`, writes only canonical per-shard controls when accepted, and saves no
+  bulk key.
+  `worker_*_nodes_per_group` values now fail fast when they exceed the selected
+  profile's per-group limit instead of silently clamping the generated shard
+  size.
+- Fixed Soperator deploy smoke validation so first-run storage convergence no
+  longer fails immediately on transient `jail-pv` `FailedMount` Pending pods.
+  The validation now waits for `jail-pvc`/`jail-pv` binding, `jail-mount`
+  DaemonSet readiness, and storage-related Pending pods to clear before final
+  sign-off, while persistent Pending pods report Kubernetes event causes such
+  as `FailedMount`.
+- Fixed SFS/Soperator wizard output so the component-level filesystem `type`
+  prompt is ordered before generated `jail`, `controller-spool`, and
+  `accounting` fields, and mapped SFS configs prune stale single-filesystem
+  `name`, `size_gib`, and `mount_tag` inputs.
+- Clarified Soperator `shape-default` partition documentation so CPU-only,
+  GPU-only, and mixed profiles match the rendered default partition contract,
+  while the internal `hidden` partition is documented only as render-time
+  ActiveChecks plumbing.
+- Fixed `create <deployments-root>` so the customer-repository privacy warning
+  prints only when the target deployments root is inside a git repository, not
+  for operator-local non-git folders.
+- Fixed Soperator CPU worker NodeSet materialization so profile-managed
+  non-GPU workers request a host-sized CPU/memory slice from the selected MK8s
+  worker preset and advertise matching Slurm CPU topology. This preserves the
+  one Slurm worker pod to one Kubernetes worker VM contract and gives MK8s
+  autoscaling real scheduler pressure for CPU-only worker pools.
+- Fixed sharded Soperator worker NodeSet names so generated NodeSets use the
+  matching MK8s worker shard key (`worker-0`, `worker-cpu-0`) instead of
+  duplicating the template prefix (`worker-worker-0`,
+  `worker-cpu-worker-cpu-0`).
+- Fixed Soperator smoke validation for ephemeral worker clusters so the
+  one-task `srun` check allows a longer Slurm resume window when the selected
+  partition is backed by cloud/powered-down workers.
+- Fixed Soperator GPU worker autoscaling from zero so cxcli applies Soperator,
+  runs the required Soperator smoke validation first to create Slurm/GPU
+  allocation pressure, and only then runs MK8s GPU validations. This keeps GPU
+  stack readiness from failing on an intentionally empty scale-to-zero worker
+  pool while still surfacing Soperator/Slurm resume failures from the smoke
+  report. Also downsized generated GPU worker `nodeConfig.static` CPU topology
+  when a selected preset, such as `1gpu-16vcpu-200gb`, has fewer vCPUs than the
+  profile template.
+- Changed Soperator production worker sizing to shape-specific fixed capacity
+  plus per-generated-shard `worker_node_groups` controls. cxcli now writes
+  disabled `autoscaling` and `ephemeral_nodes` controls for each generated
+  worker shard, such as `worker-cpu-0` and `worker-gpu-2`; enabled shard
+  autoscaling renders K8s autoscaling min/max instead of fixed `node_count`.
+  Enabled shard `ephemeral_nodes` requires that same shard's autoscaling,
+  renders upstream Soperator ephemeral NodeSet fields, derives
+  `initialNumberEphemeralNodes` from the shard's autoscaling `min_node_count`
+  for CPU workers, raises GPU worker shards to at least one initial active
+  worker when max capacity is positive so Soperator can seed GPU libraries into
+  the jail, and writes finite non-negative global `slurmConfig.suspendTime` from
+  `worker_ephemeral_nodes.suspend_time_seconds`. Legacy worker autoscaling and
+  `worker_ephemeral_nodes.enabled` helpers now fail fast.
 - Refactored lifecycle report naming under the single `generated/reports/`
   folder. `upgrade node-template` now writes
   `upgrade-node-template-report.md` / `.json` after readiness verification,
@@ -37,6 +198,41 @@ All notable changes to this project are tracked here. This changelog follows
   stale `inputs.node_group_defaults.gpu.infiniband_fabric`, and raw fabric drift
   is blocked during render/deploy/direct Terraform apply with guidance to run
   the new `upgrade node-group ... --dry-run` planner.
+- Aligned MK8s/Soperator GPU wizard ordering and live fabric selection: CPU
+  defaults are prompted first and required, GPU defaults stay optional so blank
+  means no GPU worker shape, cluster-capable GPU presets derive the canonical
+  `inputs.gpu_clusters.<key>.infiniband_fabric` from live Capacity Dashboard
+  rows without a raw fabric prompt, and validation/quota checks now reject or
+  report keyed GPU clusters missing that fabric.
+- Changed MK8s GPU preset prompts to use live Capacity Dashboard rows as the
+  selectable choices for the selected platform and region. Selecting a
+  cluster-capable multi-GPU row now materializes both the Terraform preset and
+  `inputs.gpu_clusters.<key>.infiniband_fabric`, while selecting a 1-GPU
+  Ethernet-only row materializes only the preset and omits the GPU-cluster
+  fabric. Soperator GPU profile-backed creates now also keep regular 1-GPU
+  presets selectable when a previous derived fabric exists, ask
+  `inputs.node_group_defaults.gpu.reservation.policy`, default it to `AUTO`,
+  materialize it into generated GPU worker node groups, and validate edited GPU
+  `reservation.policy` values.
+- Fixed Soperator profile-backed 1-GPU materialization to clear
+  profile-managed `inputs.gpu_clusters` entries and worker `gpu_cluster_key`
+  references together. Strict validation now runs the bundled component runtime
+  rules before live quota/capacity checks, so stale GPU-cluster references fail
+  deterministically instead of being masked by unrelated quota shortages.
+- Made MK8s GPU capacity row selection fail closed when live Capacity Dashboard
+  rows exist but matching Compute preset metadata is unavailable, preventing
+  cluster-capable rows from being silently treated as Ethernet-only.
+- Moved MK8s GPU reservation policy before GPU preset selection for both
+  profile-backed and plain node-group flows. The selected policy now filters
+  live Capacity Dashboard preset/fabric choices (`AUTO`, `STRICT`, `FORBID`),
+  and GPU preset menu labels omit redundant vCPU/RAM/GPU parentheticals.
+- Fixed MK8s GPU capacity display for selected reservation policies: `FORBID`
+  live rows and menu labels now show only regular-vm slots, while `STRICT`
+  labels show only reserved slots.
+- Improved GPU Capacity Dashboard choice labels and recommendations: live
+  advice rows now display VM slots with the selected preset's GPU totals, and
+  GPU preset/fabric recommendations prefer matching reserved-capacity rows
+  before falling back to regular-vm capacity.
 - Folded MK8s Kubernetes-version and OS image rolling updates into
   `upgrade node-template`, making it the single public command for
   Terraform-managed MK8s node-template version, OS, and Nebius-image GPU stack
@@ -100,6 +296,10 @@ All notable changes to this project are tracked here. This changelog follows
   non-catalog chart versions before writing `config.yaml`, so a published
   rollback/test package such as `soperator=4.0.1-ps.2` can be selected
   explicitly while unknown versions fail fast.
+- Improved create/component-add and Soperator onboarding performance by
+  skipping Helm chart default lookups when app rows have no explicit scalar
+  values to prune, and by caching parsed Soperator migration-profile data
+  during source-version checks.
 - Fixed source validation against Terraform 1.15 remote module probes: cxcli now
   treats Terraform's post-download missing-required-argument diagnostic as a
   successful module download for introspection, and resolves Git module
@@ -118,10 +318,10 @@ All notable changes to this project are tracked here. This changelog follows
 - Fixed cxcli-managed Soperator GPU NodeSet defaults so 8-GPU worker profiles
   expose/request 32 Slurm CPUs, matching the chart's `DefCpuPerGPU=4` default
   and avoiding impossible CPU under-reporting for GPU jobs.
-- Made the Soperator Slurm NCCL smoke validation probe the largest GPU count
-  Slurm can allocate on the selected nodes before running `all_reduce_perf_mpi`,
-  so the report reflects live Slurm policy instead of assuming every reported
-  GPU can be allocated by one task.
+- Made the Soperator Slurm NCCL smoke validation probe allocatable GPU count on
+  the selected 8-GPU Slurm nodes before running `all_reduce_perf_mpi`, so the
+  report reflects live Slurm policy and skips the full benchmark when fewer than
+  8 GPUs per selected node are allocatable.
 - Fixed Soperator mixed-profile rematerialization so configs edited from the
   generated GPU baseline to `nebius-mixed-v1` prune stale managed `worker`
   state, materialize `worker-cpu` and `worker-gpu` MK8s groups, and render only
@@ -274,13 +474,12 @@ All notable changes to this project are tracked here. This changelog follows
   row-level planned VPC network/subnet bindings.
 - Improved Soperator-owned Slurm NCCL validation. The Soperator validation now
   replaces the old one-rank smoke with one Slurm-owned
-  `mpirun /usr/bin/all_reduce_perf_mpi` benchmark that uses two idle GPU Slurm
-  nodes when available and otherwise uses the only idle multi-GPU Slurm node,
-  parses the 2G/4G/8G large-message `busbw` rows, records
+  `mpirun /usr/bin/all_reduce_perf_mpi` benchmark that uses selected 8-GPU Slurm
+  nodes, parses the 2G/4G/8G large-message `busbw` rows, records
   `avg_large_message_bus_bandwidth_gbps` plus per-size bandwidths in the JSON
   check, and includes that value in deploy/migration summaries when Kubernetes
   NCCL is skipped because Soperator workers already own the Ready GPUs.
-  Single-GPU-only Slurm clusters report the Slurm NCCL benchmark as skipped.
+  One-GPU Slurm clusters report the Slurm NCCL benchmark as skipped.
 - Fixed external Soperator migration validation resume. The Slurm NCCL
   validation now holds the selected multi-node allocation with `salloc` and
   launches the MPI benchmark once from a nested one-task `srun`, so Slurm does
@@ -455,22 +654,22 @@ All notable changes to this project are tracked here. This changelog follows
   readiness, scheduler-visible GPU/RDMA resources, and Nebius driver labels so
   healthy clusters report `gpu-stack: verified` instead of implying that every
   GPU target needs active remediation.
-- Improved required Soperator/Slurm smoke validation: the one-task `srun`
-  smoke job now prefers an idle non-GPU partition when available, while Slurm
-  node status treats `inval` as unhealthy so invalid GPU workers remain a
-  visible pending validation gate. When Slurm exposes an idle or mixed GPU
-  partition, the smoke report now also runs Slurm-side one-GPU visibility and
-  a Slurm NCCL benchmark that uses two idle GPU Slurm nodes when available or
-  one idle multi-GPU Slurm node when it is the only GPU node.
+- Improved Soperator testing split: deploy-time Soperator testing now stays on
+  fast Kubernetes resource snapshots, while `acceptance-test smoke --soperator`
+  owns Slurm CLI, `srun`, all-node hostname, and all-node GPU allocation checks.
+  Slurm node status still treats `inval` as unhealthy in the explicit
+  acceptance smoke path, Slurm GPU allocation reports include the per-node
+  evidence source, and Slurm NCCL remains reserved for explicit
+  `acceptance-test benchmark` runs.
 - Fixed `deploy-report.md` Soperator GPU validation summaries so Kubernetes
-  GPU Visibility and NCCL scheduler skips caused by Soperator worker pod GPU
-  reservations lead with the same target's passed Slurm-side GPU visibility or
-  NCCL benchmark result, while raw detail JSON keeps the Kubernetes skip
-  evidence.
+  GPU visibility scheduler skips caused by Soperator worker pod GPU reservations
+  remain visible as GPU visibility skips instead of being overwritten by Slurm
+  allocation evidence from a different test purpose.
 - Changed local `deploy` for cxcli-managed Soperator targets to stage app
   reconciliation: cxcli now applies platform/GPU operator Flux resources and
-  runs MK8s GPU stack, GPU Visibility, and NCCL validations before applying the
-  full Soperator bundle that starts Slurm worker pods.
+  runs MK8s inventory, GPU stack, and GPU visibility validations before applying
+  the full Soperator bundle that starts Slurm worker pods; NCCL/performance work is
+  left to explicit `acceptance-test benchmark` runs.
 - Changed `ext-soperator onboard` non-interactive identity flags: onboarding now
   selects the Nebius MK8s cluster with `--cluster-id`, derives temporary
   kubeconfig access through the Nebius API by default, and uses optional
@@ -530,9 +729,10 @@ All notable changes to this project are tracked here. This changelog follows
   reconciliation waits for target worker NodeSets to report desired-ready
   replicas before returning `Pending phase: none`.
 - Changed `ext-soperator migrate --execute` validation hold to run the
-  target-scoped `deploy.targets[].validations.mk8s_gpu.*` checks for the
-  onboarded external target, including operator readiness, GPU Visibility, and
-  NCCL when enabled. The MK8s GPU rollup is written to
+  target-scoped `deploy.targets[].deployment_testing.mk8s_gpu.*` checks for the
+  onboarded external target, including operator readiness and bounded GPU
+  visibility when enabled. NCCL/performance work remains an explicit
+  `acceptance-test benchmark` run. The MK8s GPU rollup is written to
   `generated/reports/ext-soperator-migrate-report.md`; `generated/reports/deploy-report.md`
   is refreshed as a secondary deploy-compatible summary.
 - Added required Soperator/Slurm smoke validation for enabled Soperator
@@ -982,18 +1182,18 @@ All notable changes to this project are tracked here. This changelog follows
   SFS-derived jail/controller-spool/accounting sizes while SFS remains the
   capacity source of truth and the app row mirrors those sizes into chart
   storage values.
-- Fixed the Soperator production MK8s wizard so GPU Visibility and NCCL
-  deploy-time validation toggles are prompted alongside GPU stack readiness
-  instead of being suppressed by the Soperator app policy. Soperator
-  ActiveChecks and Soperator DCGM child charts remain disabled by default;
-  validation continues to use cxcli-owned deploy-time checks such as the
-  transient `nccl-test` chart.
+- Fixed the Soperator production MK8s wizard so bounded GPU visibility is
+  prompted alongside GPU stack readiness instead of being suppressed by the
+  Soperator app policy. Soperator ActiveChecks and Soperator DCGM child charts
+  remain disabled by default; NCCL/performance work stays under explicit
+  `acceptance-test benchmark` commands.
 - Fixed the interactive Soperator production-cluster `create` and
   `component add` wizards so the worker layout profile is selected immediately
   after `install_mode`, before MK8s shape/fabric helpers and target GPU
-  validation prompts. CPU-only Soperator profiles now also skip and prune the
-  inactive `inputs.node_group_defaults.gpu.*` helper scope instead of offering
-  GPU fabric fields, including during direct `config.yaml` normalization.
+  deployment-testing prompts. CPU-only Soperator profiles now also skip and prune
+  the inactive `inputs.node_group_defaults.gpu.*` helper scope instead of
+  offering GPU fabric fields, including during direct `config.yaml`
+  normalization.
   Soperator onboarding mode now also skips same-transaction `mk8s`/`sfs` infra
   selections so external MK8s onboarding does not create Terraform-managed
   cluster rows. Soperator worker profile materialization now honors
@@ -1049,7 +1249,7 @@ All notable changes to this project are tracked here. This changelog follows
   GPU shapes auto-select the provider-ranked InfiniBand fabric when live fabric
   choices are available, keeping generated H100/H200/B200-style profiles on the
   reserved/fabric-aware GPU-cluster path instead of accidentally trying
-  unclustered on-demand capacity.
+  unclustered regular-vm capacity.
 - Fixed Soperator GPU and mixed production worker profiles to render
   `reservation.policy: AUTO` on GPU worker node groups, so reserved-capacity
   fabric recommendations can actually use matching reservations while still
@@ -1107,11 +1307,10 @@ All notable changes to this project are tracked here. This changelog follows
   reconciliation, SSSD, and NodeConfigurator rebooter now default off, with
   deploy-validation warnings when production-impacting Soperator check or DCGM
   child charts are explicitly enabled.
-- Fixed MK8s GPU validation prompts so enabled GPU visibility and NCCL checks
-  materialize their default `max_nodes` caps. Soperator ActiveChecks remain
-  opt-in diagnostics rather than production-training defaults, while cxcli
-  deploy-time GPU visibility/NCCL validations stay available on Soperator
-  targets.
+- Fixed MK8s GPU deployment-testing prompts so enabled GPU visibility settings
+  materialize their default `max_nodes` cap. Soperator ActiveChecks remain
+  opt-in diagnostics rather than production-training defaults, while cxcli keeps
+  NCCL as an explicit `acceptance-test benchmark` setting.
 - Clarified the SFS wizard's Weka/VAST choices as advanced quota-gated
   filesystem types after live validation showed Weka is not currently
   provisionable in the tested project because its Weka filesystem quota is zero.
@@ -1122,10 +1321,10 @@ All notable changes to this project are tracked here. This changelog follows
   Slurm worker role only to the generated `worker-cpu` node group, keeps service
   groups out of the CPU partition, and disables the Soperator DCGM exporter when
   no GPU node groups exist.
-- Added a deploy-validation warning when Soperator NCCL ActiveChecks and cxcli
-  deploy-time NCCL validation are both runnable on the same MK8s target,
-  explaining that the Slurm NCCL checks and transient Kubernetes `MPIJob` can
-  compete for GPUs/RDMA and skew, delay, or skip results.
+- Added a benchmark warning when Soperator NCCL ActiveChecks and the cxcli K8s
+  NCCL benchmark are both runnable on the same MK8s target, explaining that the
+  Slurm NCCL checks and transient Kubernetes `MPIJob` can compete for GPUs/RDMA
+  and skew, delay, or skip results.
 - Migrated all bundled Soperator partition profiles (CPU / GPU / Mixed
   base partitions and the `with-debug-long`, `with-qos-preemption`, and
   `with-h100-infiniband-debug-long` overlays) from raw Slurm.conf strings
@@ -1245,11 +1444,11 @@ All notable changes to this project are tracked here. This changelog follows
   for shape-specific boot-disk defaults, materializes singleton compatible OS
   choices without a redundant prompt, defaults the SSH toggle to enabled, and
   keeps `q` within the current draft node group. GPU-cluster fabric is now
-  offered and accepted only after live metadata confirms the selected GPU shape
-  supports clustering, and the plain MK8s wizard defaults that toggle to enabled
-  for live-confirmed cluster-capable shapes. Reservation policy now defaults to
-  `AUTO` when the selected live GPU shape/fabric exposes reserved capacity and
-  otherwise keeps `FORBID`.
+  derived only after live metadata confirms the selected GPU shape supports
+  clustering, and the plain MK8s wizard writes the provider-ranked fabric for
+  live-confirmed cluster-capable shapes without a raw toggle/fabric prompt.
+  Reservation policy now defaults to `AUTO` when the selected live GPU
+  shape/fabric exposes reserved capacity and otherwise keeps `FORBID`.
 - Cleaned up wizard ordering and profile coverage: component selection now
   prints one target-aware summary after infra/app dependency resolution,
   component Terraform inputs finish before deploy-target observability/GPU
@@ -1276,11 +1475,11 @@ All notable changes to this project are tracked here. This changelog follows
   and keep production-impacting child-chart gates disabled by default:
   ActiveChecks, ActiveChecks install wait, the checks controller, and Soperator
   DCGM job mapping.
-- For Soperator targets, default generic MK8s GPU workload validations off so
-  deploy-time CUDA/NCCL test pods do not compete with Slurm worker pods; keep
-  the non-workload GPU stack readiness validation enabled. The generated
-  profiles also avoid topology or node-health initial runs unless the matching
-  profile enables them.
+- For Soperator targets, default generic MK8s NCCL benchmark workloads off so
+  transient K8s benchmark pods do not compete with Slurm worker pods; keep the
+  non-workload GPU stack readiness validation enabled. The generated profiles
+  also avoid topology or node-health initial runs unless the matching profile
+  enables them.
 - Moved K8up under the Soperator Helm chart as an optional dependency gated by
   `values.soperator-backup-config.enabled`, removing the standalone
   `apps:k8up` selection path from cxcli.
@@ -1639,10 +1838,10 @@ All notable changes to this project are tracked here. This changelog follows
   `incoming-webhook` setup, rejects webhook URLs in generated values, and fails
   fast when VictoriaMetrics Operator CRDs are missing.
 - Made MK8s GPU workload deploy validations aware of live GPU allocations:
-  GPU Visibility and NCCL now skip with an explicit report when existing
-  workloads already reserve every GPU on every Ready GPU node, and NCCL caps
-  worker GPU requests to scheduler-free GPUs when only part of a node is free.
-- Updated the bundled GPU Visibility CUDA sample image to NVIDIA's CUDA 12.5
+  GPU visibility now skips with an explicit report when existing workloads
+  already reserve every GPU on every Ready GPU node. NCCL caps and scheduler
+  allocation behavior now belong to explicit `acceptance-test benchmark` runs.
+- Updated the bundled CUDA smoke sample image to NVIDIA's CUDA 12.5
   vectoradd sample tag for better fit with current Nebius GPU stacks.
 - Hardened local post-Flux apply for Soperator upgrades by replacing only
   rendered PriorityClasses whose immutable numeric `value` differs from the
@@ -1980,7 +2179,7 @@ All notable changes to this project are tracked here. This changelog follows
 - Aligned bundled-catalog diagnostics and release-helper help with the split
   catalog contract so missing packaged `component_cli_settings.yaml` errors and
   `verify-wheel` help both name the paired settings file explicitly.
-- Hardened the MK8s GPU Visibility deploy-time validation against transient
+- Hardened the MK8s GPU visibility deploy-time validation against transient
   Kubernetes API slowness. A single `kubectl get pod` timeout while polling
   validation pods is now retried within the configured validation timeout
   instead of failing an otherwise healthy new cluster immediately.
@@ -2167,8 +2366,8 @@ All notable changes to this project are tracked here. This changelog follows
   `create --validate-sources` preflight coverage before identity prompts.
 - Moved target-scoped deploy settings to a single `deploy.targets[]` contract
   keyed by `instance_id`. MK8s Kubernetes observability now lives under
-  `deploy.targets[].observability.*`, MK8s GPU validation settings remain under
-  `deploy.targets[].validations.mk8s_gpu.*`, and root `deploy.observability.*`
+  `deploy.targets[].observability.*`, MK8s GPU deployment-testing settings live
+  under `deploy.targets[].deployment_testing.mk8s_gpu.*`, and root `deploy.observability.*`
   is kept for VM observability settings that are not Kubernetes target installs.
 - Simplified target-bound app chart config by removing
   `apps.charts[].target_ref` from user-authored `config.yaml`. App rows now
@@ -2256,9 +2455,9 @@ All notable changes to this project are tracked here. This changelog follows
   project-wide destructive teardown path for all rendered resources represented
   by the sibling generated bundle and generated manifest.
 - Moved deploy-time MK8s GPU validation settings to target-scoped
-  `deploy.targets[].validations.mk8s_gpu.*` rows. Multi-cluster configs can now
-  enable validations on one MK8s target and disable them on another without
-  carrying a project-global validation block.
+  `deploy.targets[].deployment_testing.mk8s_gpu.*` rows. Multi-cluster configs
+  can now enable deployment testing on one MK8s target and disable it on another
+  without carrying a project-global validation block.
 - Tightened Kubernetes observability collector validation so an enabled
   `nebius-observability-agent` app row must be backed by observability enabled
   on that same target `instance_id`, instead of passing because another MK8s target has
@@ -2313,7 +2512,7 @@ All notable changes to this project are tracked here. This changelog follows
   Network Operator, and observability-agent rows before render/deploy, then
   materializes their managed chart values against the mutable runtime payload.
 - Fixed GPU Capacity Dashboard preflight math for MK8s quota checks. cxcli now
-  treats `resource-advice` on-demand/reserved/preemptible availability as VM
+  treats `resource-advice` regular-vm/reserved/preemptible availability as VM
   slots for the selected preset and converts those slots to GPU units before
   comparing them with `compute.instance.gpu.*` quota requirements. For example,
   three reserved `8gpu-*` H100 VM slots now count as 24 available GPUs for a
@@ -2324,10 +2523,10 @@ All notable changes to this project are tracked here. This changelog follows
   aggregates live Capacity Dashboard rows per exact selected
   platform/region/preset instead of keeping only one fabric row, so matching
   H100 and H200 preset names stay separated and reserved VM availability is not
-  hidden when the best reserved fabric differs from the best on-demand fabric.
+  hidden when the best reserved fabric differs from the best regular-vm fabric.
 - Fixed MK8s InfiniBand fabric recommendations for reserved GPU capacity. When
   live Capacity Dashboard rows show reservation slots on a different fabric
-  than the strongest on-demand lane, the wizard now recommends the reserved
+  than the strongest regular-vm lane, the wizard now recommends the reserved
   fabric first and labels it `recommended for reservations`.
 - Closed Nebius SDK instances used by runtime-auth IAM bootstrap and stale-profile
   validation and added a token-exchange readiness wait after new runtime auth
@@ -2496,8 +2695,9 @@ All notable changes to this project are tracked here. This changelog follows
   only the RDMA-specific threshold field until the current shape is actually on
   the GPU-cluster / fabric path.
 - Removed the hardcoded MK8s InfiniBand fabric table from the wizard/provider
-  path. For cluster-capable GPU presets, `inputs.infiniband_fabric` choices now
-  come from live Nebius Capacity Dashboard fabric rows, while live preset
+  path. For cluster-capable GPU presets,
+  `inputs.gpu_clusters.<key>.infiniband_fabric` values now come from live
+  Nebius Capacity Dashboard fabric rows, while live preset
   `allow_gpu_clustering` metadata remains the gate that decides whether a shape
   is actually GPU-cluster / RDMA-capable. Runtime validation now also rejects a
   configured fabric that does not match the live Capacity Dashboard rows for
@@ -2609,9 +2809,9 @@ All notable changes to this project are tracked here. This changelog follows
 - Improved live GPU wizard guidance across bundled infra flows: GPU preset
   prompts now annotate/rank supported GPU shapes with live Nebius Capacity
   Dashboard `resource-advice` availability when tenant/region context is
-  available, optional InfiniBand fabric prompts now annotate the exact
-  platform+preset fabrics with live on-demand/reserved availability and
-  highlight the recommended default without forcing the field to be set, and
+  available, derived InfiniBand fabric selections now use exact
+  platform+preset fabrics with live regular-vm/reserved availability and
+  persist the recommended default without showing a raw fabric prompt, and
   `create` quota warnings now print the exact `quota-request <config.yaml>`
   follow-up command instead of stopping the config workflow.
 - Aligned shared GPU interconnect guidance across MK8s and VM wizard flows:
@@ -2660,7 +2860,7 @@ All notable changes to this project are tracked here. This changelog follows
   for overwrite, the client name / region / notification prompts restart from
   the normal create defaults instead of reusing the old config values.
 - Fixed the MK8s GPU validation wizard to hide the
-  `deploy.targets[].validations.mk8s_gpu.health_checker.enabled` toggle unless the active
+  `deploy.targets[].deployment_testing.mk8s_gpu.health_checker.enabled` toggle unless the active
   catalog actually exposes an apps component with
   `cli.mk8s_gpu_policy.role: health_checker`, so bundled catalogs no longer
   present an impossible health-checker prompt during `create` / `component add`.
@@ -2702,24 +2902,25 @@ All notable changes to this project are tracked here. This changelog follows
   behavior.
 - Clarified and locked in the layered MK8s GPU validation contract: source
   comments, README/design docs, and regression tests now explicitly treat
-  `operator_readiness`, `gpu_visibility`, and `nccl` as a cheapest-to-most-
-  expensive chain with distinct responsibilities rather than overlapping
+  deploy `operator_readiness`, bounded `gpu_visibility`, and explicit NCCL
+  acceptance benchmarks as distinct responsibilities rather than overlapping
   duplicate checks.
 - Ignored local coverage data files and packaged chart archives in the service
   repo `.gitignore`, and clarified that the managed customer deployments
   `.gitignore` stays intentionally narrow to generated Terraform runtime files
   and tfvars instead of acting like a generic developer ignore file.
-- Exposed bundled MK8s GPU validation controls as a target-facing deploy
-  contract under `deploy.targets[].validations.mk8s_gpu.*`, so these CLI deploy checks
+- Exposed bundled MK8s GPU deployment-testing controls as a target-facing deploy
+  contract under `deploy.targets[].deployment_testing.mk8s_gpu.*`, so these CLI deploy checks
   no longer masquerade as Terraform inputs. The wizard still surfaces the same
   toggles from catalog defaults, but the resulting values now persist in
   `config.yaml` as deploy settings, and local `deploy` also supports one-run
   `--skip-validations` / `--skip-validation <kind>` overrides.
 - Removed the temporary backward-compatibility shims from that MK8s GPU
-  validation contract: `infra.components[].inputs.gpu_validation_overrides`
-  now fails fast instead of being migrated, and local `deploy` now requires
-  generated-manifest `deploy.validations` metadata instead of recomputing GPU
-  validation specs from older bundles at runtime.
+  deployment-testing contract: `infra.components[].inputs.gpu_validation_overrides`
+  and the old `deploy.targets[].validations.*` path now fail fast instead of
+  being migrated, and local `deploy` requires generated-manifest
+  `deploy.validations` metadata instead of recomputing GPU validation specs from
+  older bundles at runtime.
 - Tightened the interactive MK8s GPU app flow: when the infra prompts turn on
   a GPU shape that requires `nvidia-gpu-operator` or
   `nvidia-network-operator`, the wizard now auto-enables those app rows before
@@ -2727,7 +2928,7 @@ All notable changes to this project are tracked here. This changelog follows
   show their prompts instead of only materializing them later in `config.yaml`.
 - Simplified the bundled `mk8s` source catalog by removing the one-off raw
   `wizard:` block for GPU validation helper defaults. cxcli now derives those
-  virtual prompt defaults directly from `components.infra.mk8s.cli.gpu.validations`
+  virtual prompt defaults directly from `components.infra.mk8s.cli.gpu.deployment_testing`
   during source parsing, so the catalog keeps one source of truth while the
   interactive wizard behavior stays unchanged.
 - Removed the now-unused YAML anchors from the bundled MK8s
@@ -2757,7 +2958,7 @@ All notable changes to this project are tracked here. This changelog follows
   `deploy.validations` as a required part of the generated-bundle contract
   instead of recomputing runtime-derived GPU validation specs from older
   bundles.
-- Refined the bundled GPU Visibility reporting contract: the validation still
+- Refined the bundled GPU visibility reporting contract: the validation still
   uses a sampled CUDA workload as the authoritative pass/fail gate, but its
   saved report now also captures the Ready GPU nodes' allocatable
   device-plugin resources so operators can inspect `nvidia.com/gpu` and any
@@ -2853,7 +3054,7 @@ All notable changes to this project are tracked here. This changelog follows
   `component_sources.yaml`, README, and the design doc: the bundled
   `-mca coll ^hcoll` override stays catalog-owned for platform-specific
   Blackwell cases instead of becoming a shared chart default.
-- Tightened MK8s in-cluster deploy validation behavior so `deploy`, `flux apply`, and `flux bootstrap` no longer block on a generic all-nodes-ready pre-wait, MK8s GPU validations now emit live Kubernetes status instead of silently polling, local `deploy` keeps a continuous spinner alive across those validation phase transitions with non-TTY log fallback, and the bundled GPU Visibility/NCCL checks now bound their default node fan-out with catalog-owned `max_nodes` caps plus shorter default timeouts to keep deploy-time validation fast on large clusters.
+- Tightened MK8s in-cluster deploy validation behavior so `deploy`, `flux apply`, and `flux bootstrap` no longer block on a generic all-nodes-ready pre-wait, MK8s GPU validations now emit live Kubernetes status instead of silently polling, local `deploy` keeps a continuous spinner alive across those validation phase transitions with non-TTY log fallback, and the bundled GPU visibility probe bounds its default node fan-out with catalog-owned `max_nodes` caps plus shorter default timeouts to keep deploy-time validation fast on large clusters. NCCL fan-out now belongs to explicit `acceptance-test benchmark` runs.
 - Simplified the bundled app-side MK8s GPU catalog contract: `components.apps.<id>.cli.mk8s_gpu_policy` now uses one conditional `rules` list where each rule can auto-enable the app and/or contribute conditional chart defaults, replacing the earlier split between `auto_enable` and `value_overrides` while keeping top-level app `defaults` as the unconditional chart-default layer.
 - Added the published portable OCI source for the bundled `nccl-test` Helm chart in `component_sources.yaml`, so the NCCL validation chart now resolves through the same dual `source.local` / `source.portable` contract as the other bundled charts.
 - Aligned the bundled NCCL validation image overrides with the first-party `services/nccl-test` release path, so `component_sources.yaml` now points at `cr.<region>.nebius.cloud/<registry-short-id>/images/nccl-test` SemVer tags instead of the legacy `nebius-benchmarks/nccl-tests` repository.
@@ -2864,7 +3065,7 @@ All notable changes to this project are tracked here. This changelog follows
 - Aligned the remaining strict-validation and docs surfaces with the current Helm/source contract: the MK8s GPU strict-validation coverage now enables `nvidia-gpu-operator` before asserting missing GPU shape fields, and the README/design examples now consistently show app charts under `source.portable` instead of the removed top-level `source.repo/chart/version` layout.
 - Added a bundled `vm` infra component backed by `platform-infra/modules/vm`: the catalog now exposes guided project-subnet and live compute platform/preset selection, resolves `source_image_family` from the live Nebius public image inventory without a bundled hardcoded family default, preserves static public-IP mode choices plus optional GPU-cluster fabric guidance, and includes runtime validation/quota estimation for standalone Nebius VMs so the new module behaves like a first-class `nebius-cxcli` component instead of a raw custom Terraform source.
 - Refactored the bundled MK8s GPU contract around the actual Nebius node-group model: `inputs.gpu_stack_source` and `inputs.gpu_stack_preset` now replace the earlier driver-centric terminology in the customer- and catalog-facing contracts, the MK8s module/docs now describe Nebius-managed `gpu_settings.drivers_preset` vs operator-managed GPU stacks explicitly, and the NCCL path now renders a first-party `helm-charts/nccl-test` chart selected through the same Helm `source.portable` / `source.local` contract used by other bundled charts instead of assembling the raw `MPIJob` manifest in Python.
-- Replaced the old MK8s GPU hardcoded profile split with component-local settings policy: `component_cli_settings.yaml` now keeps MK8s GPU image preferences and validations under `components.infra.mk8s.cli.gpu`, keeps GPU operator/network operator auto-enable rules and Helm value overrides on the operator app entries under `components.apps.<id>.cli.mk8s_gpu_policy`, while `component_sources.yaml` keeps the reusable Terraform/Helm source and release metadata. The catalog pair removes the unused standalone `nvidia-device-plugin` entry, still materializes Nebius-image vs operator-managed MK8s defaults from the live Nebius compatibility matrix, keeps the GPU Operator B300 driver pin out of Python, and still persists deploy-time GPU readiness/visibility/NCCL reports under `generated/reports/`.
+- Replaced the old MK8s GPU hardcoded profile split with component-local settings policy: `component_cli_settings.yaml` now keeps MK8s GPU image preferences and validation defaults under `components.infra.mk8s.cli.gpu`, keeps GPU operator/network operator auto-enable rules and Helm value overrides on the operator app entries under `components.apps.<id>.cli.mk8s_gpu_policy`, while `component_sources.yaml` keeps the reusable Terraform/Helm source and release metadata. The catalog pair removes the unused standalone `nvidia-device-plugin` entry, materializes Nebius-image vs operator-managed MK8s defaults from the live Nebius compatibility matrix, and keeps generated GPU validation reports under `generated/reports/`.
 - Changed interactive `create` overwrite UX so it now resolves `tenant_id` / `project_id` before showing any overwrite warning: existing deployments roots no longer emit a root-wide pre-warning, and confirmation appears only when the chosen resolved project folder already exists.
 - Changed the canonical project layout to match the two-level project hierarchy under the deployments root: project configs now live at `<deployments-root>/<tenant-folder>/<project-folder>/config.yaml`, and `create <deployments-root>` is a bootstrap/overwrite command instead of an existing-config reconcile path. Once that resolved project folder already exists, interactive reruns now require explicit overwrite confirmation unless `--force` is provided, non-interactive reruns require `--force`, overwrite recreates only that one resolved project folder from scratch, client-info prompts restart from the normal create defaults, and infra/apps selections plus component values are rebuilt from the current create inputs instead of being merged from the old config; docs/help/tests were realigned to make `component list/add/remove` the default day-2 editing surface.
 - Tightened the remaining help/docs wording around the project-folder layout so `create --help`, README, and the design doc consistently describe the canonical overwrite target and the generated customer workflow's canonical `<tenant-folder>/<project-folder>/generated/**` watch scope.
@@ -2875,7 +3076,7 @@ All notable changes to this project are tracked here. This changelog follows
 - Changed `render <config.yaml>` to always run pre-render runtime validation before writing artifacts, so active-source drift, unresolved component dependencies, and Terraform module schema/input mismatches fail before any generated bundle side effects.
 - Changed long-running `deploy` / `terraform apply` / `terraform destroy` MK8s monitoring from passive alerting to active fail-fast behavior: node-group API event levels are now read correctly from the live SDK enum fields, terminal node-group failures surface their Nebius error detail directly in status/recovery output without leaking raw SDK object reprs, and apply/destroy abort their Terraform wait loop instead of idling until a generic timeout when the live MK8s API already shows the operation has failed.
 - Added live MK8s GPU stack-preset selection to the bundled `mk8s` wizard profile: `inputs.gpu_stack_preset` now comes from the MK8s compatibility matrix, the wizard can auto-select and materialize a singleton compatible preset into `config.yaml`, and new provider option source `mk8s_gpu_stack_presets` is available for other catalog wiring.
-- Tightened bundled MK8s GPU-cluster guidance around live preset capability instead of guesswork: the wizard now selects `inputs.gpu_nodes_preset` before `inputs.infiniband_fabric`, the later fabric prompt is shown only when the chosen preset's live SDK metadata allows GPU clustering, stale `infiniband_fabric` values are cleared during interactive edits when the selected GPU shape no longer supports clustering, and runtime validation now fails early on invalid fabric+preset combinations instead of deferring them to Terraform/MK8s admission errors.
+- Tightened bundled MK8s GPU-cluster guidance around live preset capability instead of guesswork: the wizard now resolves the GPU preset before deriving canonical `inputs.gpu_clusters.<key>.infiniband_fabric`, fabric is written only when the chosen preset's live SDK metadata allows GPU clustering, stale fabric values fail during validation when the selected GPU shape no longer supports clustering, and runtime validation now fails early on invalid fabric+preset combinations instead of deferring them to Terraform/MK8s admission errors.
 - Fixed `component_sources.yaml` wizard-option normalization so explicit `options.args` entries and `skip_prompt_if_no_choices` survive catalog loading; bundled MK8s profile expansions now keep extra provider args such as `preset_path` instead of silently dropping them.
 - Standardized explicit CLI severity colors so warnings now render in amber and errors continue to render in red, and aligned the shared shell-scripting skill/template to the same warning/error color contract.
 - Refined quota coverage-gap terminal output so repeated internal gap reasons for one component collapse to one concise per-component summary entry in explicit `quota-check`, while routine `create`/`render`/`deploy` output keeps those non-blocking coverage-gap details in the manifest instead of printing them every time.
@@ -2893,7 +3094,7 @@ All notable changes to this project are tracked here. This changelog follows
 - Improved complex wizard prompt wording to ask for single-line YAML/JSON values for maps, objects, and object lists, and stopped app components with an empty top-level `values: {}` block from showing a confusing whole-map prompt when no concrete Helm value leaves are known yet.
 - Added `wizard.<field>.prompt: false` support so bundled profiles can suppress optional advanced fields from the interactive wizard; the MK8s profile now hides the raw `mk8s_*_overrides` passthrough maps while keeping them available for manual `config.yaml` edits.
 - Hardened `create --force` guard rails for existing projects: the CLI emits a force-specific overwrite warning before overwriting an existing resolved project folder and documents that `create --force` does not delete the deployments root or unrelated projects.
-- Wired MK8s `inputs.infiniband_fabric` into the built-in wizard profile with a guided, optional fabric selector keyed by the chosen GPU platform and `client_info.nebius.region_id`, using the Nebius GPU-cluster fabric matrix instead of a raw free-text prompt.
+- Wired canonical MK8s `inputs.gpu_clusters.<key>.infiniband_fabric` materialization into the built-in wizard profile with a provider-ranked derived fabric selection keyed by the chosen GPU platform/preset and `client_info.nebius.region_id`, using live Nebius GPU-cluster capacity rows instead of a raw free-text prompt.
 - Fixed `create` wizard prompt helper late-binding closures in `cli.py` so Ruff no longer flags `B023` on the deferred module-prompt builders, and tightened the runtime-shape unit coverage to skip post-write validation in the test that only asserts generated config structure.
 - Added a central Codex skill at `../../skills/onboard-nebius-cxcli/` for onboarding Nebius Terraform modules into `nebius-cxcli`; it documents the catalog-first onboarding flow, the code-owned layers (`wizard_profiles.py`, `provider_options.py`, `validation_profiles.py`, `runtime_component_validation.py`, `cluster_handoffs.py`, `deployment_status.py`), and the focused test/doc updates expected for each change shape.
 - Refined MK8s wizard platform discovery to use live Nebius platform inventory at runtime: CPU/GPU platform prompts now intersect the MK8s compatibility matrix with the selected project's compute-platform list, so the wizard only shows currently available supported platforms while preset choices remain live per selected platform.

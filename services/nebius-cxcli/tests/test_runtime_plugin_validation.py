@@ -614,6 +614,40 @@ def test_runtime_validation_plugins_allow_generic_mk8s_gpu_node_groups(
     )
 
 
+def test_runtime_validation_plugins_reject_invalid_mk8s_gpu_reservation_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "NEBIUS_CXCLI_RUNTIME_VALIDATION_PLUGINS",
+        "nebius_cxcli.runtime_component_validation:validate_component_runtime_rules",
+    )
+    payload = {
+        "__shared_admin_ssh_user_name__": "ubuntu",
+        "infra": {
+            "mk8s": {
+                "node_groups": {
+                    "worker": {
+                        "gpu": True,
+                        "node_count": 1,
+                        "platform": "gpu-h100-sxm",
+                        "preset": "8gpu-128vcpu-1600gb",
+                        "reservation": {"policy": "SOMETIMES"},
+                    }
+                },
+            }
+        },
+    }
+
+    with pytest.raises(ValueError, match="reservation\\.policy"):
+        run_runtime_validation_plugins(
+            payload=payload,
+            get_path=_get_path,
+            as_text=_as_text,
+            id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
+            env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
+        )
+
+
 def test_runtime_validation_plugins_allow_mk8s_autoscaling_node_groups(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -723,6 +757,44 @@ def test_runtime_validation_plugins_reject_non_clusterable_mk8s_gpu_preset_with_
     }
 
     with pytest.raises(ValueError, match="does not have confirmed GPU clustering support"):
+        run_runtime_validation_plugins(
+            payload=payload,
+            get_path=_get_path,
+            as_text=_as_text,
+            id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
+            env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
+        )
+
+
+def test_runtime_validation_plugins_reject_mk8s_gpu_cluster_key_without_fabric(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "NEBIUS_CXCLI_RUNTIME_VALIDATION_PLUGINS",
+        "nebius_cxcli.runtime_component_validation:validate_component_runtime_rules",
+    )
+    payload = {
+        "__shared_admin_ssh_user_name__": "ubuntu",
+        "infra": {
+            "mk8s": {
+                "gpu_clusters": {"workers": {}},
+                "node_groups": {
+                    "worker": {
+                        "gpu": True,
+                        "node_count": 1,
+                        "platform": "gpu-h100-sxm",
+                        "preset": "8gpu-128vcpu-1600gb",
+                        "gpu_cluster_key": "workers",
+                    }
+                },
+            }
+        },
+    }
+
+    with pytest.raises(
+        ValueError,
+        match=r"inputs\.gpu_clusters\.workers\.infiniband_fabric is missing",
+    ):
         run_runtime_validation_plugins(
             payload=payload,
             get_path=_get_path,
@@ -939,7 +1011,7 @@ def test_runtime_validation_plugins_reject_second_mk8s_gpu_group_invalid_fabric(
         )
 
 
-def test_runtime_validation_plugins_reject_invalid_mk8s_gpu_validation_override(
+def test_runtime_validation_plugins_reject_invalid_mk8s_gpu_deployment_testing_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv(
@@ -952,7 +1024,7 @@ def test_runtime_validation_plugins_reject_invalid_mk8s_gpu_validation_override(
             "targets": [
                 {
                     "instance_id": "mk8s",
-                    "validations": {
+                    "deployment_testing": {
                         "mk8s_gpu": {
                             "gpu_visibility": {
                                 "enabled": True,
@@ -979,7 +1051,10 @@ def test_runtime_validation_plugins_reject_invalid_mk8s_gpu_validation_override(
 
     with pytest.raises(
         ValueError,
-        match="deploy\\.targets\\[0\\]\\.validations\\.mk8s_gpu\\.gpu_visibility\\.max_nodes must be > 0",
+        match=(
+            "deploy\\.targets\\[0\\]\\.deployment_testing\\.mk8s_gpu"
+            "\\.gpu_visibility\\.max_nodes must be > 0"
+        ),
     ):
         run_runtime_validation_plugins(
             payload=payload,

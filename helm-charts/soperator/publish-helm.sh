@@ -56,7 +56,7 @@ show_usage() {
   printf '%b\n' "                 Clean-worktree check is strict and includes untracked files."
   printf '%b\n' "                 Fails if tag ${TAG_PREFIX}-vX.Y.Z[-prerelease] already exists locally or on origin."
   printf '%b\n' "  ${S_YELLOW}--publish${S_RESET}  Create and push tag ${TAG_PREFIX}-vX.Y.Z[-prerelease]."
-  printf '%b\n' "                 Fails if ${CHART_FILE} does not already declare the release version."
+  printf '%b\n' "                 Fails if ${CHART_FILE} does not already declare the release version; run --prep first."
   printf '%b\n' "                 Tag push triggers .github/workflows/helm-chart-publish.yml."
   printf '\n'
 
@@ -443,6 +443,7 @@ ensure_chart_version_matches_tag() {
 
   if [[ "${chart_version}" != "${expected_version}" ]]; then
     log_error "${CHART_FILE} version ${chart_version} does not match release ${expected_version}."
+    log_note "Run --prep ${expected_version} and merge that ${CHART_FILE} change before publishing."
     exit 1
   fi
 }
@@ -478,6 +479,9 @@ prep_release() {
   local do_push="$2"
   local branch="$3"
   local version="${tag##*-v}"
+  local charts_path="${CHART_DIR}/charts"
+  local charts_staged=""
+  local staged_paths=("${CHANGELOG_FILE}" "${CHART_FILE}")
 
   ensure_clean_worktree
   ensure_named_branch "${branch}"
@@ -492,10 +496,21 @@ prep_release() {
   validate_chart
 
   git add "${CHANGELOG_FILE}" "${CHART_FILE}"
-  if git diff --cached --quiet -- "${CHANGELOG_FILE}" "${CHART_FILE}"; then
+  if [[ -f "${CHART_DIR}/Chart.lock" ]]; then
+    git add "${CHART_DIR}/Chart.lock"
+    staged_paths+=("${CHART_DIR}/Chart.lock")
+  fi
+  if [[ -d "${charts_path}" ]]; then
+    git add -A "${charts_path}"
+    charts_staged="$(git diff --cached --name-only -- "${charts_path}")"
+    if [[ -n "${charts_staged}" ]]; then
+      staged_paths+=("${charts_path}")
+    fi
+  fi
+  if git diff --cached --quiet -- "${staged_paths[@]}"; then
     log_note "No chart release prep changes to commit."
   else
-    git commit -m "Prepare chart release ${tag}" -- "${CHANGELOG_FILE}" "${CHART_FILE}"
+    git commit -m "Prepare chart release ${tag}" -- "${staged_paths[@]}"
     log_success "Committed chart release prep for ${tag}."
   fi
 

@@ -46,6 +46,7 @@ from rich.progress import (
 )
 
 from . import __version__, native_logs, runtime_introspection
+from .capacity_dashboard import CapacityResourceAdvice, capacity_vm_slots_text
 from .component_defaults import (
     default_target_paths,
     literal_default_input_leaf_names,
@@ -233,11 +234,14 @@ from .mk8s_gpu import (
     ensure_mk8s_gpu_app_rows,
     has_mk8s_gpu_health_checker_app,
     materialize_mk8s_gpu_app_values,
+    mk8s_acceptance_benchmark_validation_specs,
+    mk8s_acceptance_smoke_validation_specs,
+    mk8s_cluster_smoke_validation_specs,
     mk8s_gpu_dependency_issues,
     mk8s_gpu_disabled_target_validations,
     mk8s_gpu_validation_specs,
     mk8s_gpu_validation_warnings,
-    normalize_mk8s_gpu_project_validation_settings,
+    normalize_mk8s_gpu_project_deployment_testing_settings,
     prune_inactive_mk8s_gpu_app_rows,
     resolve_mk8s_gpu_app_selection,
     run_mk8s_gpu_validations,
@@ -435,7 +439,10 @@ from .soperator_onboarding import (
 )
 from .soperator_validation import (
     SOPERATOR_CLUSTER_VALIDATION_KIND,
+    normalize_soperator_project_deployment_testing_settings,
     run_soperator_cluster_validations,
+    soperator_acceptance_benchmark_specs,
+    soperator_acceptance_smoke_specs,
     soperator_cluster_validation_specs,
 )
 from .ssh_jumphost import (
@@ -1510,13 +1517,47 @@ _SOPERATOR_SERVICE_ROLE_NODE_COUNT_FIELDS = (
     "login_node_count",
     "accounting_node_count",
 )
+_SOPERATOR_WORKER_SHAPE_ROLES = ("worker_cpu", "worker_gpu")
 _SOPERATOR_NODE_GROUP_AUTOSCALING_ROLES = (
     "system",
     "controller",
     "login",
     "accounting",
-    "worker",
 )
+_SOPERATOR_WORKER_SHAPE_TOTAL_NODE_FIELDS = {
+    "worker_cpu": "worker_cpu_total_nodes",
+    "worker_gpu": "worker_gpu_total_nodes",
+}
+_SOPERATOR_WORKER_SHAPE_NODES_PER_GROUP_FIELDS = {
+    "worker_cpu": "worker_cpu_nodes_per_group",
+    "worker_gpu": "worker_gpu_nodes_per_group",
+}
+_SOPERATOR_LEGACY_WORKER_INPUT_FIELDS = (
+    "worker_total_nodes",
+    "worker_nodes_per_group",
+    "worker_autoscaling",
+    "worker_cpu_autoscaling",
+    "worker_gpu_autoscaling",
+)
+_SOPERATOR_WORKER_EPHEMERAL_INPUT = "soperator.worker_ephemeral_nodes"
+_SOPERATOR_WORKER_NODE_GROUPS_INPUT = "soperator.worker_node_groups"
+_SOPERATOR_WORKER_NODE_GROUP_CONTROL_PROMPT_FIELDS = (
+    (("autoscaling", "enabled"), "bool"),
+    (("autoscaling", "min_node_count"), "number"),
+    (("autoscaling", "max_node_count"), "number"),
+)
+_SOPERATOR_WORKER_BULK_SCOPE_LABELS = {
+    "all_cpu_worker_shards": "all CPU worker shards",
+    "all_gpu_worker_shards": "all GPU worker shards",
+    "all_worker_shards": "all worker shards",
+}
+_SOPERATOR_WORKER_BULK_PROMPT_FIELD_LABELS = {
+    "apply_to_all": "apply_to_all",
+    "autoscaling.enabled": "autoscaling_enabled",
+}
+_SOPERATOR_WORKER_BULK_PROMPT_FIELDS_BY_LABEL = {
+    label: field for field, label in _SOPERATOR_WORKER_BULK_PROMPT_FIELD_LABELS.items()
+}
 _SOPERATOR_ONBOARDING_STORAGE_MODES = (
     ONBOARDING_STORAGE_MODE_KEEP_EXISTING,
     ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS,
@@ -1670,7 +1711,7 @@ app = typer.Typer(
         "discover uses a deployment-scope directory; grafana exports dashboard JSON from a "
         "Grafana API or local JSON file and only edits component_sources.yaml with --attach; "
         "validate, validate-dashboards, quota-check, quota-request, render, deploy, "
-        "soperator, upgrade, and bootstrap-ci use config.yaml; "
+        "acceptance-test, soperator, upgrade, and bootstrap-ci use config.yaml; "
         "ext-soperator onboard registers existing Nebius MK8s targets in config.yaml; "
         "destroy uses config.yaml to tear down all rendered project resources from sibling generated/; "
         "email also uses config.yaml and resolves sibling generated/ automatically; "
@@ -1707,7 +1748,15 @@ component_app = typer.Typer(
         "existing config.yaml. Use --config CONFIG_YAML after create for day-2 "
         "add/remove/list changes; config.yaml is not a positional component "
         "selector."
-    )
+    ),
+    epilog=(
+        "Examples: "
+        "nebius-cxcli component list --config ./deployments/tenant/project/config.yaml; "
+        "nebius-cxcli component add apps:soperator --config "
+        "./deployments/tenant/project/config.yaml; "
+        "nebius-cxcli component remove apps:soperator@target-mk8s-prod "
+        "--config ./deployments/tenant/project/config.yaml --no-interactive."
+    ),
 )
 terraform_app = typer.Typer(
     help="Run infra-only Terraform operations against generated/ or generated/infra."
@@ -1753,6 +1802,27 @@ soperator_app = typer.Typer(
         "ext-soperator onboard/migrate for adoption or migration-owned work."
     ),
 )
+acceptance_test_app = typer.Typer(
+    help=(
+        "Run explicit heavy/on-demand post-deploy acceptance checks and future benchmark suites. "
+        "Deploy keeps only fast required smoke checks; use this group for exhaustive "
+        "all-node validation. Commands write JSON reports only and do not change config. "
+        "Each target writes one canonical report per acceptance "
+        "command, so same-target K8s and Soperator suites cannot be combined under "
+        "the current report contract."
+    ),
+    epilog=(
+        "Examples: Soperator all-node smoke JSON report: nebius-cxcli "
+        "acceptance-test smoke <config.yaml> --target sop-cluster1 --soperator; "
+        "plain MK8s all-node CUDA JSON report: nebius-cxcli acceptance-test smoke "
+        "<config.yaml> --target mk8s-prod --k8s; Soperator Slurm NCCL benchmark "
+        "JSON report with run-only overrides: nebius-cxcli acceptance-test benchmark "
+        "<config.yaml> --target sop-cluster1 --soperator --max-nodes 2 --timeout 20m; "
+        "force K8s NCCL on a Soperator-owned GPU target during maintenance: "
+        "nebius-cxcli acceptance-test benchmark <config.yaml> --target sop-cluster1 "
+        "--suite k8s-nccl --max-nodes 2 --average-bus-bandwidth-threshold-gbps 300."
+    ),
+)
 upgrade_app = typer.Typer(
     help=(
         "Run day-2 lifecycle upgrades from config.yaml. Supports MK8s node-template "
@@ -1767,6 +1837,7 @@ app.add_typer(terraform_app, name="terraform")
 app.add_typer(flux_app, name="flux")
 app.add_typer(ext_soperator_app, name="ext-soperator")
 app.add_typer(soperator_app, name="soperator")
+app.add_typer(acceptance_test_app, name="acceptance-test")
 app.add_typer(upgrade_app, name="upgrade")
 
 
@@ -4774,7 +4845,7 @@ def _verify_soperator_static_upgrade_ready(
         if rollout.returncode != 0:
             detail = (rollout.stderr or rollout.stdout or "").strip()
             raise RuntimeError(
-                "Soperator manager rollout did not become ready after static "
+                "Soperator manager deployment did not become ready after static "
                 f"chart apply: {detail or rollout.returncode}"
             )
 
@@ -9171,6 +9242,8 @@ def _internal_component_selector_message(*, scope: ComponentScope, component_id:
             config_guidance = (
                 f" Configure it through {config_ref} in config.yaml"
                 if config_ref
+                else " Configure it through `nebius-cxcli acceptance-test benchmark`"
+                if normalized == "nccl-test"
                 else " Configure it through its catalog-declared runtime flow"
             )
             return (
@@ -11942,8 +12015,9 @@ def _apply_soperator_onboarding_to_payload(
         selected_apps=selected_apps,
         app_entries=app_entries,
     )
+    normalize_soperator_project_deployment_testing_settings(payload)
     before_gpu_labels = set(_enabled_app_instance_labels(payload))
-    normalize_mk8s_gpu_project_validation_settings(payload)
+    normalize_mk8s_gpu_project_deployment_testing_settings(payload)
     gpu_app_selection = resolve_mk8s_gpu_app_selection(
         payload,
         selected_app_ids=_enabled_ids_from_runtime_payload(payload=payload, entries=app_entries),
@@ -11955,7 +12029,8 @@ def _apply_soperator_onboarding_to_payload(
             + "\n  - ".join(gpu_app_selection.issues)
         )
     if ensure_mk8s_gpu_app_rows(payload, app_entries=app_entries):
-        normalize_mk8s_gpu_project_validation_settings(payload)
+        normalize_mk8s_gpu_project_deployment_testing_settings(payload)
+        normalize_soperator_project_deployment_testing_settings(payload)
     gpu_dependency_labels = _new_enabled_app_instance_labels(
         payload,
         before_labels=before_gpu_labels,
@@ -12143,6 +12218,107 @@ def _infer_soperator_component_add_install_mode(
         if not requested_target and onboarding_soperator_targets:
             return _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER
     return None
+
+
+def _soperator_component_add_managed_target_refs(
+    *,
+    payload: Mapping[str, Any],
+    add_targets: Sequence[_ComponentAddTarget],
+) -> tuple[str, ...]:
+    cluster_refs = list(enabled_cluster_target_refs(payload))
+    infra_node = payload.get("infra")
+    infra_rows = infra_node.get("components") if isinstance(infra_node, Mapping) else None
+    if isinstance(infra_rows, list):
+        for row in infra_rows:
+            if not isinstance(row, Mapping) or not bool(row.get("enabled", False)):
+                continue
+            if component_type_id(row) != "mk8s":
+                continue
+            target_ref = component_instance_id(row)
+            if target_ref and target_ref not in cluster_refs:
+                cluster_refs.append(target_ref)
+    existing_soperator_targets = set(_soperator_app_target_refs(payload))
+    refs: list[str] = []
+    for target in add_targets:
+        if target.scope != "apps" or target.component_id != _SOPERATOR_APP_ID:
+            continue
+        requested_target = normalize_component_token(target.requested_instance_id)
+        if requested_target:
+            candidate_refs = (requested_target,)
+        elif len(cluster_refs) == 1:
+            candidate_refs = (cluster_refs[0],)
+        else:
+            candidate_refs = ()
+        for target_ref in candidate_refs:
+            if target_ref in existing_soperator_targets or target_ref in refs:
+                continue
+            refs.append(target_ref)
+    return tuple(refs)
+
+
+def _raise_if_soperator_component_add_production_layout_invalid(
+    *,
+    payload: Mapping[str, Any],
+    add_targets: Sequence[_ComponentAddTarget],
+    profile_name: str | None,
+) -> None:
+    target_refs = _soperator_component_add_managed_target_refs(
+        payload=payload,
+        add_targets=add_targets,
+    )
+    if not target_refs:
+        return
+    profile = _soperator_profile_by_name(profile_name)
+    infra_node = payload.get("infra")
+    infra_rows = infra_node.get("components") if isinstance(infra_node, Mapping) else None
+    if not isinstance(infra_rows, list):
+        return
+    target_ref_set = set(target_refs)
+    for row in infra_rows:
+        if not isinstance(row, Mapping) or not bool(row.get("enabled", False)):
+            continue
+        if component_type_id(row) != "mk8s" or component_instance_id(row) not in target_ref_set:
+            continue
+        inputs = row.get("inputs")
+        if not isinstance(inputs, Mapping):
+            continue
+        _raise_if_soperator_production_missing_service_node_groups(
+            inputs=inputs,
+            profile=profile,
+            placements={},
+        )
+
+
+def _raise_if_raw_soperator_component_add_layout_invalid(
+    *,
+    config_path: Path,
+    component_ids: Sequence[str] | None,
+) -> None:
+    raw_tokens = _split_multi_value_tokens(component_ids)
+    if not raw_tokens:
+        return
+    payload = _load_config_payload(config_path.resolve())
+    if not isinstance(payload, Mapping):
+        return
+    add_targets = _resolve_component_add_targets(
+        tokens=raw_tokens,
+        infra_entries=_with_infra_provider_groups(component_entries("infra")),
+        app_entries=component_entries("apps"),
+    )
+    requested_apps = {target.component_id for target in add_targets if target.scope == "apps"}
+    if _SOPERATOR_APP_ID not in requested_apps:
+        return
+    install_mode = _infer_soperator_component_add_install_mode(
+        payload=payload,
+        add_targets=add_targets,
+    )
+    if install_mode == _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER:
+        return
+    _raise_if_soperator_component_add_production_layout_invalid(
+        payload=payload,
+        add_targets=add_targets,
+        profile_name=None,
+    )
 
 
 def _retarget_added_soperator_onboarding_dependency_rows(
@@ -12643,6 +12819,21 @@ def _soperator_nodesets_profiles() -> tuple[str, Mapping[str, Mapping[str, Any]]
     return default, profiles
 
 
+def _soperator_profile_by_name(profile_name: str | None) -> Mapping[str, Any]:
+    default_profile, profiles = _soperator_nodesets_profiles()
+    selected_profile = _non_empty_text(profile_name) or default_profile
+    if not selected_profile:
+        return {}
+    profile = profiles.get(selected_profile)
+    if not isinstance(profile, Mapping):
+        available = ", ".join(sorted(str(name) for name in profiles)) or "(none)"
+        raise ValueError(
+            f"Soperator profile references unknown nodesets profile '{selected_profile}'. "
+            f"Available profiles: {available}"
+        )
+    return profile
+
+
 def _soperator_profile_by_target(payload: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
     default_profile, profiles = _soperator_nodesets_profiles()
     apps_node = payload.get("apps")
@@ -12878,12 +13069,319 @@ def _required_nonnegative_int(value: Any, *, field: str) -> int:
     return parsed
 
 
+def _required_positive_int(value: Any, *, field: str) -> int:
+    if isinstance(value, bool) or value is None:
+        raise ValueError(f"{field} must be a positive integer")
+    if isinstance(value, int):
+        if value > 0:
+            return value
+        raise ValueError(f"{field} must be a positive integer")
+    if isinstance(value, float):
+        if value.is_integer() and value > 0:
+            return int(value)
+        raise ValueError(f"{field} must be a positive integer")
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be a positive integer") from exc
+    if parsed <= 0:
+        raise ValueError(f"{field} must be a positive integer")
+    return parsed
+
+
 def _config_bool(value: Any, *, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
     if value is None:
         return default
     return _non_empty_text(value).lower() in {"1", "true", "yes", "on"}
+
+
+def _soperator_worker_ephemeral_input(inputs: Mapping[str, Any]) -> Mapping[str, Any]:
+    raw_value = _mapping_path_value(inputs, _SOPERATOR_WORKER_EPHEMERAL_INPUT)
+    return raw_value if isinstance(raw_value, Mapping) else {}
+
+
+def _soperator_worker_ephemeral_suspend_time_seconds(inputs: Mapping[str, Any]) -> int:
+    raw_value = _soperator_worker_ephemeral_input(inputs)
+    if raw_value.get("suspend_time_seconds") is None:
+        return 300
+    return _required_nonnegative_int(
+        raw_value.get("suspend_time_seconds"),
+        field=f"{_SOPERATOR_WORKER_EPHEMERAL_INPUT}.suspend_time_seconds",
+    )
+
+
+def _soperator_worker_node_groups_input(inputs: Mapping[str, Any]) -> Mapping[str, Any]:
+    raw_value = _mapping_path_value(inputs, _SOPERATOR_WORKER_NODE_GROUPS_INPUT)
+    if raw_value is None:
+        return {}
+    if not isinstance(raw_value, Mapping):
+        raise ValueError(f"{_SOPERATOR_WORKER_NODE_GROUPS_INPUT} must be a mapping")
+    return raw_value
+
+
+def _soperator_worker_node_groups_mutable(inputs: dict[str, Any]) -> dict[str, Any]:
+    soperator_inputs = inputs.setdefault("soperator", {})
+    if not isinstance(soperator_inputs, dict):
+        soperator_inputs = {}
+        inputs["soperator"] = soperator_inputs
+    worker_node_groups = soperator_inputs.get("worker_node_groups")
+    if worker_node_groups is None:
+        worker_node_groups = {}
+        soperator_inputs["worker_node_groups"] = worker_node_groups
+    if not isinstance(worker_node_groups, dict):
+        raise ValueError(f"{_SOPERATOR_WORKER_NODE_GROUPS_INPUT} must be a mapping")
+    return worker_node_groups
+
+
+def _soperator_worker_node_group_control(
+    inputs: Mapping[str, Any],
+    group_key: str,
+) -> Mapping[str, Any]:
+    raw_groups = _soperator_worker_node_groups_input(inputs)
+    raw_control = raw_groups.get(group_key)
+    return raw_control if isinstance(raw_control, Mapping) else {}
+
+
+def _soperator_worker_node_group_ephemeral_enabled(
+    inputs: Mapping[str, Any],
+    group_key: str,
+) -> bool:
+    raw_control = _soperator_worker_node_group_control(inputs, group_key)
+    raw_ephemeral = raw_control.get("ephemeral_nodes")
+    if not isinstance(raw_ephemeral, Mapping):
+        return False
+    return _config_bool(raw_ephemeral.get("enabled"), default=False)
+
+
+def _soperator_any_worker_node_group_ephemeral_enabled(inputs: Mapping[str, Any]) -> bool:
+    raw_groups = _soperator_worker_node_groups_input(inputs)
+    return any(
+        _soperator_worker_node_group_ephemeral_enabled(inputs, str(group_key))
+        for group_key in raw_groups
+    )
+
+
+def _soperator_worker_node_group_control_prompt(
+    full_path_label: str,
+) -> tuple[str, str, str] | None:
+    match = re.search(
+        r"\.inputs\.soperator\.worker_node_groups\.([^.]+)"
+        r"\.(autoscaling|ephemeral_nodes)\.(enabled|min_node_count|max_node_count)$",
+        full_path_label,
+    )
+    if match is None:
+        return None
+    group_key, section, field = match.groups()
+    if group_key in _SOPERATOR_WORKER_BULK_SCOPE_LABELS:
+        return None
+    if section == "ephemeral_nodes" and field != "enabled":
+        return None
+    return group_key, section, field
+
+
+def _soperator_worker_bulk_control_prompt(
+    full_path_label: str,
+) -> tuple[str, str] | None:
+    scope_tokens = "|".join(re.escape(token) for token in _SOPERATOR_WORKER_BULK_SCOPE_LABELS)
+    field_tokens = "|".join(
+        re.escape(token) for token in _SOPERATOR_WORKER_BULK_PROMPT_FIELDS_BY_LABEL
+    )
+    match = re.search(
+        rf"\.inputs\.soperator\.worker_node_groups\.({scope_tokens})_({field_tokens})$",
+        full_path_label,
+    )
+    if match is None:
+        return None
+    scope_token, field_label = match.groups()
+    return scope_token, _SOPERATOR_WORKER_BULK_PROMPT_FIELDS_BY_LABEL[field_label]
+
+
+def _maybe_print_soperator_worker_bulk_prompt_comment(full_path_label: str) -> None:
+    bulk_prompt = _soperator_worker_bulk_control_prompt(full_path_label)
+    if bulk_prompt is None:
+        return
+    scope_token, field = bulk_prompt
+    scope_label = _SOPERATOR_WORKER_BULK_SCOPE_LABELS.get(scope_token, "worker shards")
+    if field == "apply_to_all":
+        console.print(
+            "[dim]Bulk worker shard choice: true applies one autoscaling/ephemeral "
+            f"choice to {scope_label}; false asks each shard separately.[/dim]"
+        )
+        return
+    if field == "autoscaling.enabled":
+        console.print(
+            "[dim]Bulk worker autoscaling: true enables autoscaling and Soperator "
+            f"ephemeral nodes for {scope_label}; false disables both.[/dim]"
+        )
+
+
+def _soperator_worker_node_groups_for_prompt(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+) -> Mapping[str, Any]:
+    component_prefix = _dynamic_component_prefix(entry=entry, full_path_label=full_path_label)
+    if not component_prefix:
+        return {}
+    raw_groups = _read_payload_field(
+        payload,
+        f"{component_prefix}.inputs.soperator.worker_node_groups",
+    )
+    return raw_groups if isinstance(raw_groups, Mapping) else {}
+
+
+def _soperator_worker_node_group_autoscaling_enabled_for_prompt(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+    group_key: str,
+) -> bool:
+    raw_groups = _soperator_worker_node_groups_for_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label=full_path_label,
+    )
+    raw_group = raw_groups.get(group_key)
+    if not isinstance(raw_group, Mapping):
+        return False
+    raw_autoscaling = raw_group.get("autoscaling")
+    if not isinstance(raw_autoscaling, Mapping):
+        return False
+    return _config_bool(raw_autoscaling.get("enabled"), default=False)
+
+
+def _soperator_any_worker_node_group_ephemeral_enabled_for_prompt(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+) -> bool:
+    raw_groups = _soperator_worker_node_groups_for_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label=full_path_label,
+    )
+    for raw_group in raw_groups.values():
+        if not isinstance(raw_group, Mapping):
+            continue
+        raw_autoscaling = raw_group.get("autoscaling")
+        if not isinstance(raw_autoscaling, Mapping) or not _config_bool(
+            raw_autoscaling.get("enabled"),
+            default=False,
+        ):
+            continue
+        raw_ephemeral = raw_group.get("ephemeral_nodes")
+        if isinstance(raw_ephemeral, Mapping) and _config_bool(
+            raw_ephemeral.get("enabled"),
+            default=False,
+        ):
+            return True
+    return False
+
+
+def _clear_soperator_worker_node_group_autoscaling_bounds(
+    payload: dict[str, Any],
+    group_prefix: str,
+) -> None:
+    for bound_field in ("min_node_count", "max_node_count"):
+        path = _parse_payload_path_label(f"{group_prefix}.autoscaling.{bound_field}")
+        if path is not None and _payload_path_exists(payload, path):
+            _delete_payload_value(payload, path)
+
+
+def _sync_soperator_worker_node_group_controls_after_prompt(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+    value: object,
+) -> None:
+    worker_control_prompt = _soperator_worker_node_group_control_prompt(full_path_label)
+    if worker_control_prompt is None:
+        return
+    group_key, section, field = worker_control_prompt
+    if field != "enabled":
+        return
+    component_prefix = _dynamic_component_prefix(entry=entry, full_path_label=full_path_label)
+    if not component_prefix:
+        return
+    enabled = _config_bool(value, default=False)
+    group_prefix = f"{component_prefix}.inputs.soperator.worker_node_groups.{group_key}"
+    if section == "autoscaling":
+        ephemeral_enabled_path = _parse_payload_path_label(
+            f"{group_prefix}.ephemeral_nodes.enabled"
+        )
+        if ephemeral_enabled_path is None:
+            return
+        if enabled:
+            _set_payload_value_creating_containers(payload, ephemeral_enabled_path, True)
+            return
+        _clear_soperator_worker_node_group_autoscaling_bounds(payload, group_prefix)
+        _set_payload_value_creating_containers(payload, ephemeral_enabled_path, False)
+        return
+    if section != "ephemeral_nodes":
+        return
+    autoscaling_enabled_path = _parse_payload_path_label(f"{group_prefix}.autoscaling.enabled")
+    if autoscaling_enabled_path is None:
+        return
+    if not enabled:
+        _set_payload_value_creating_containers(payload, autoscaling_enabled_path, False)
+        _clear_soperator_worker_node_group_autoscaling_bounds(payload, group_prefix)
+        return
+    _set_payload_value_creating_containers(payload, autoscaling_enabled_path, True)
+
+
+def _soperator_worker_node_group_autoscaling(
+    *,
+    inputs: Mapping[str, Any],
+    group_key: str,
+    shard_size: int,
+) -> dict[str, int] | None:
+    raw_control = _soperator_worker_node_group_control(inputs, group_key)
+    raw_autoscaling = raw_control.get("autoscaling")
+    field_prefix = f"{_SOPERATOR_WORKER_NODE_GROUPS_INPUT}.{group_key}.autoscaling"
+    if not isinstance(raw_autoscaling, Mapping):
+        return None
+    if not _config_bool(raw_autoscaling.get("enabled"), default=False):
+        return None
+    min_node_count = (
+        0
+        if raw_autoscaling.get("min_node_count") is None
+        else _required_nonnegative_int(
+            raw_autoscaling.get("min_node_count"),
+            field=f"{field_prefix}.min_node_count",
+        )
+    )
+    max_node_count = (
+        shard_size
+        if raw_autoscaling.get("max_node_count") is None
+        else _required_nonnegative_int(
+            raw_autoscaling.get("max_node_count"),
+            field=f"{field_prefix}.max_node_count",
+        )
+    )
+    if max_node_count < min_node_count:
+        raise ValueError(
+            f"{field_prefix}.max_node_count must be greater than or equal to "
+            f"{field_prefix}.min_node_count"
+        )
+    if max_node_count > shard_size:
+        raise ValueError(
+            f"{field_prefix}.max_node_count must be less than or equal to "
+            f"the shard capacity {shard_size}"
+        )
+    return {
+        "min_node_count": min_node_count,
+        "max_node_count": max_node_count,
+    }
+
+
+def _soperator_worker_control_key_matches_prefix(key: str, key_prefix: str) -> bool:
+    return key == key_prefix or bool(re.fullmatch(rf"{re.escape(key_prefix)}-[0-9]+", key))
 
 
 def _required_profile_positive_int(value: Any, *, field: str) -> int:
@@ -12933,6 +13431,11 @@ def _soperator_profile_managed_node_group_keys(profile: Mapping[str, Any]) -> se
         if key_prefix:
             managed.add(key_prefix)
     return managed
+
+
+def _soperator_profile_static_node_group_keys(profile: Mapping[str, Any]) -> set[str]:
+    mk8s_profile = _profile_mapping(profile, "mk8s")
+    return {str(key) for key in _profile_mapping(mk8s_profile, "node_groups")}
 
 
 def _soperator_node_group_key_matches_managed(key: str, managed_keys: set[str]) -> bool:
@@ -13034,6 +13537,43 @@ def _soperator_prune_stale_profile_gpu_clusters(
         inputs.pop("gpu_clusters", None)
 
 
+def _soperator_selected_gpu_defaults_are_ethernet_only(inputs: Mapping[str, Any]) -> bool:
+    defaults = inputs.get("node_group_defaults")
+    if not isinstance(defaults, Mapping):
+        return False
+    gpu_defaults = defaults.get("gpu")
+    if not isinstance(gpu_defaults, Mapping):
+        return False
+    preset = _non_empty_text(gpu_defaults.get("preset")).lower()
+    return preset.startswith("1gpu-")
+
+
+def _soperator_prune_profile_gpu_cluster_path_for_selected_shape(
+    *,
+    inputs: dict[str, Any],
+    profile: Mapping[str, Any],
+) -> None:
+    if not _soperator_selected_gpu_defaults_are_ethernet_only(inputs):
+        return
+    managed_keys = _soperator_profile_managed_gpu_cluster_keys(profile)
+    if not managed_keys:
+        return
+    gpu_clusters = inputs.get("gpu_clusters")
+    if isinstance(gpu_clusters, dict):
+        for raw_key in list(gpu_clusters):
+            if str(raw_key) in managed_keys:
+                gpu_clusters.pop(raw_key, None)
+        if not gpu_clusters:
+            inputs.pop("gpu_clusters", None)
+    node_groups = inputs.get("node_groups")
+    if isinstance(node_groups, dict):
+        for group in node_groups.values():
+            if not isinstance(group, dict):
+                continue
+            if _non_empty_text(group.get("gpu_cluster_key")) in managed_keys:
+                group.pop("gpu_cluster_key", None)
+
+
 def _soperator_has_external_node_groups(
     *,
     inputs: Mapping[str, Any],
@@ -13056,6 +13596,179 @@ def _soperator_has_external_node_groups(
     return False
 
 
+def _soperator_placements_cover_existing_profile_groups(
+    *,
+    inputs: Mapping[str, Any],
+    profile: Mapping[str, Any],
+    placements: Mapping[str, list[str]],
+) -> bool:
+    node_groups = inputs.get("node_groups")
+    if not isinstance(node_groups, Mapping) or not node_groups or not placements:
+        return False
+    present_keys = {str(key) for key in node_groups}
+    required_placements = [
+        str(placement).strip()
+        for placement in _soperator_profile_placements(profile)
+        if str(placement).strip()
+    ]
+    if not required_placements:
+        return False
+    for placement in required_placements:
+        group_keys = placements.get(placement, [])
+        if not group_keys:
+            return False
+        if any(str(group_key) not in present_keys for group_key in group_keys):
+            return False
+    return True
+
+
+def _raise_if_soperator_production_missing_service_node_groups(
+    *,
+    inputs: Mapping[str, Any],
+    profile: Mapping[str, Any],
+    placements: Mapping[str, list[str]],
+) -> None:
+    node_groups = inputs.get("node_groups")
+    if not isinstance(node_groups, Mapping) or not node_groups:
+        return
+    required_keys = _soperator_profile_static_node_group_keys(profile)
+    if not required_keys:
+        return
+    present_keys = {str(key) for key in node_groups}
+    missing_keys = sorted(required_keys - present_keys)
+    if not missing_keys:
+        return
+    if _soperator_placements_cover_existing_profile_groups(
+        inputs=inputs,
+        profile=profile,
+        placements=placements,
+    ):
+        return
+    raise ValueError(
+        "apps:soperator production-cluster cannot be added to the selected managed MK8s "
+        "target because infra.components[].inputs.node_groups is missing required "
+        f"Soperator service-role node groups: {', '.join(missing_keys)}. "
+        f"Existing node groups: {', '.join(sorted(present_keys))}. "
+        "Use a fresh Soperator production bundle, add the missing service-role node "
+        "groups before adding Soperator, or onboard the existing cluster with explicit "
+        "placements."
+    )
+
+
+def _raise_if_soperator_production_service_layout_invalid(payload: Mapping[str, Any]) -> None:
+    soperator_targets = _soperator_app_target_refs(payload)
+    if not soperator_targets:
+        return
+
+    profile_by_target = _soperator_profile_by_target(payload)
+    install_mode_by_target = _soperator_install_mode_by_target(payload)
+    placements_by_target: dict[str, dict[str, list[str]]] = {}
+    apps_node = payload.get("apps")
+    app_rows = apps_node.get("charts") if isinstance(apps_node, Mapping) else None
+    if isinstance(app_rows, list):
+        for row in app_rows:
+            if not isinstance(row, Mapping) or not bool(row.get("enabled", False)):
+                continue
+            if component_type_id(row) != _SOPERATOR_APP_ID:
+                continue
+            target_ref = app_chart_target_ref(row) or component_instance_id(row)
+            if target_ref:
+                placements_by_target[target_ref] = _soperator_row_placements(row)
+
+    infra_node = payload.get("infra")
+    infra_rows = infra_node.get("components") if isinstance(infra_node, Mapping) else None
+    if not isinstance(infra_rows, list):
+        return
+    for row in infra_rows:
+        if not isinstance(row, Mapping) or not bool(row.get("enabled", False)):
+            continue
+        if component_type_id(row) != "mk8s":
+            continue
+        target_ref = component_instance_id(row)
+        if target_ref not in soperator_targets:
+            continue
+        install_mode = install_mode_by_target.get(target_ref, _default_soperator_install_mode())
+        if install_mode == _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER:
+            continue
+        inputs = row.get("inputs")
+        if not isinstance(inputs, Mapping):
+            continue
+        _raise_if_soperator_production_missing_service_node_groups(
+            inputs=inputs,
+            profile=profile_by_target.get(target_ref, {}),
+            placements=placements_by_target.get(target_ref, {}),
+        )
+
+
+def _mapping_path_value_with_presence(
+    node: Mapping[str, Any],
+    dotted_path: str,
+) -> tuple[bool, Any]:
+    current: Any = node
+    for raw_segment in dotted_path.split("."):
+        segment = raw_segment.strip()
+        if not segment or not isinstance(current, Mapping):
+            return False, None
+        candidates = (segment, segment.replace("-", "_"), segment.replace("_", "-"))
+        found = False
+        for candidate in candidates:
+            if candidate in current:
+                current = current[candidate]
+                found = True
+                break
+        if not found:
+            return False, None
+    return True, current
+
+
+def _soperator_worker_shape_for_profile_worker(raw_worker: Mapping[str, Any]) -> str:
+    return "worker_cpu" if raw_worker.get("gpu", True) is False else "worker_gpu"
+
+
+def _soperator_profile_worker_shapes(profile: Mapping[str, Any]) -> set[str]:
+    mk8s_profile = _profile_mapping(profile, "mk8s")
+    shapes: set[str] = set()
+    for raw_worker in _profile_list(mk8s_profile, "worker_nodesets"):
+        if isinstance(raw_worker, Mapping):
+            shapes.add(_soperator_worker_shape_for_profile_worker(raw_worker))
+    return shapes
+
+
+def _soperator_worker_template_gpu_flags(profile: Mapping[str, Any]) -> dict[str, bool]:
+    mk8s_profile = _profile_mapping(profile, "mk8s")
+    flags: dict[str, bool] = {}
+    for raw_worker in _profile_list(mk8s_profile, "worker_nodesets"):
+        if not isinstance(raw_worker, Mapping):
+            continue
+        gpu = bool(raw_worker.get("gpu", True))
+        for field_name in ("name", "nodeset_name", "node_group_prefix"):
+            template_name = normalize_component_token(raw_worker.get(field_name))
+            if template_name:
+                flags[template_name] = gpu
+    return flags
+
+
+def _raise_if_legacy_soperator_worker_inputs(inputs: Mapping[str, Any]) -> None:
+    soperator_inputs = inputs.get("soperator")
+    if not isinstance(soperator_inputs, Mapping):
+        return
+    legacy_fields = [
+        field for field in _SOPERATOR_LEGACY_WORKER_INPUT_FIELDS if field in soperator_inputs
+    ]
+    worker_ephemeral_nodes = soperator_inputs.get("worker_ephemeral_nodes")
+    if isinstance(worker_ephemeral_nodes, Mapping) and "enabled" in worker_ephemeral_nodes:
+        legacy_fields.append("worker_ephemeral_nodes.enabled")
+    if legacy_fields:
+        joined = ", ".join(f"inputs.soperator.{field}" for field in legacy_fields)
+        verb = "is" if len(legacy_fields) == 1 else "are"
+        raise ValueError(
+            f"{joined} {verb} no longer supported. Use worker_cpu_total_nodes, "
+            "worker_cpu_nodes_per_group, worker_gpu_total_nodes, worker_gpu_nodes_per_group, "
+            "worker_node_groups.<worker>.autoscaling, and "
+            "worker_node_groups.<worker>.ephemeral_nodes instead."
+        )
+
+
 def _soperator_worker_profile_total_nodes(
     *,
     inputs: Mapping[str, Any],
@@ -13067,18 +13780,25 @@ def _soperator_worker_profile_total_nodes(
     node_groups_input = _non_empty_text(raw_worker.get("node_groups_input"))
     nodes_per_group_input = _non_empty_text(raw_worker.get("nodes_per_group_input"))
     if total_nodes_input:
-        return _positive_int(
-            _mapping_path_value(inputs, total_nodes_input),
-            default=default_total_nodes,
-        )
+        present, value = _mapping_path_value_with_presence(inputs, total_nodes_input)
+        if not present:
+            return default_total_nodes
+        return _required_positive_int(value, field=total_nodes_input)
     if node_groups_input or nodes_per_group_input:
-        requested_groups = _positive_int(
-            _mapping_path_value(inputs, node_groups_input),
-            default=1,
+        groups_present, raw_groups = _mapping_path_value_with_presence(inputs, node_groups_input)
+        requested_groups = (
+            _required_positive_int(raw_groups, field=node_groups_input)
+            if groups_present
+            else 1
         )
-        requested_nodes_per_group = _positive_int(
-            _mapping_path_value(inputs, nodes_per_group_input),
-            default=default_nodes_per_group,
+        nodes_present, raw_nodes_per_group = _mapping_path_value_with_presence(
+            inputs,
+            nodes_per_group_input,
+        )
+        requested_nodes_per_group = (
+            _required_positive_int(raw_nodes_per_group, field=nodes_per_group_input)
+            if nodes_present
+            else default_nodes_per_group
         )
         return requested_groups * requested_nodes_per_group
     return default_total_nodes
@@ -13092,11 +13812,24 @@ def _soperator_worker_profile_nodes_per_group(
     max_nodes_per_group: int,
 ) -> int:
     nodes_per_group_input = _non_empty_text(raw_worker.get("nodes_per_group_input"))
-    requested_nodes_per_group = _positive_int(
-        _mapping_path_value(inputs, nodes_per_group_input),
-        default=default_nodes_per_group,
+    if not nodes_per_group_input:
+        return min(default_nodes_per_group, max_nodes_per_group)
+    present, value = _mapping_path_value_with_presence(inputs, nodes_per_group_input)
+    requested_nodes_per_group = (
+        _required_positive_int(value, field=nodes_per_group_input)
+        if present
+        else default_nodes_per_group
     )
-    return min(requested_nodes_per_group, max_nodes_per_group)
+    if requested_nodes_per_group > max_nodes_per_group:
+        nodeset_name = _non_empty_text(raw_worker.get("nodeset_name")) or _non_empty_text(
+            raw_worker.get("name")
+        )
+        suffix = f" for worker_nodesets[{nodeset_name}]" if nodeset_name else ""
+        raise ValueError(
+            f"{nodes_per_group_input} must be less than or equal to "
+            f"{max_nodes_per_group}{suffix}"
+        )
+    return requested_nodes_per_group
 
 
 def _soperator_node_group_shape_defaults(
@@ -13151,6 +13884,16 @@ def _materialize_soperator_node_group_shape(
                 group["gpu_stack_preset"] = defaults["gpu_stack_preset"]
             else:
                 group.setdefault("gpu_stack_preset", defaults["gpu_stack_preset"])
+        default_reservation = defaults.get("reservation")
+        if isinstance(default_reservation, Mapping):
+            reservation_policy = _non_empty_text(default_reservation.get("policy")).upper()
+            if reservation_policy:
+                if prefer_shape_defaults or not isinstance(group.get("reservation"), Mapping):
+                    group["reservation"] = {"policy": reservation_policy}
+                else:
+                    reservation = group.setdefault("reservation", {})
+                    if isinstance(reservation, dict):
+                        reservation.setdefault("policy", reservation_policy)
 
 
 def _materialize_soperator_node_group_labels(group: dict[str, Any], *, group_key: str) -> None:
@@ -13383,6 +14126,60 @@ def _soperator_placements_match_generated_profile(
         if inferred and placements == inferred:
             return True
     return False
+
+
+def _soperator_profile_template_placement_refs(
+    profile: Mapping[str, Any],
+    *,
+    placement_name: str,
+) -> set[str]:
+    refs: set[str] = set()
+    raw_config = _soperator_profile_placements(profile).get(placement_name)
+    if isinstance(raw_config, Mapping):
+        explicit_node_group = _non_empty_text(raw_config.get("node_group"))
+        if explicit_node_group:
+            refs.add(explicit_node_group)
+        refs.update(_soperator_role_nodeset_template_names(raw_config))
+    if placement_name:
+        refs.add(placement_name)
+    mk8s_profile = _profile_mapping(profile, "mk8s")
+    if placement_name in _profile_mapping(mk8s_profile, "node_groups"):
+        refs.add(placement_name)
+    for raw_worker in _profile_list(mk8s_profile, "worker_nodesets"):
+        if not isinstance(raw_worker, Mapping):
+            continue
+        for field_name in ("name", "nodeset_name", "node_group_prefix"):
+            ref = _non_empty_text(raw_worker.get(field_name))
+            if ref:
+                refs.add(ref)
+    return refs
+
+
+def _soperator_placements_are_stale_profile_templates(
+    *,
+    placements: Mapping[str, list[str]],
+    profile: Mapping[str, Any],
+    inferred_placements: Mapping[str, list[str]],
+) -> bool:
+    if not placements or not inferred_placements:
+        return False
+    profile_placements = _soperator_profile_placements(profile)
+    stale = False
+    for placement_name, refs in placements.items():
+        if placement_name not in profile_placements:
+            return False
+        inferred_refs = set(inferred_placements.get(placement_name, []))
+        if not inferred_refs:
+            return False
+        template_refs = _soperator_profile_template_placement_refs(
+            profile,
+            placement_name=placement_name,
+        )
+        if not refs or not set(refs) <= (template_refs | inferred_refs):
+            return False
+        if list(refs) != list(inferred_placements.get(placement_name, [])):
+            stale = True
+    return stale
 
 
 def _soperator_role_filesystem_keys(raw_role_config: Mapping[str, Any]) -> list[str]:
@@ -14032,6 +14829,55 @@ def _soperator_cpu_node_config_static(cpu_millicores: int | None) -> str:
     )
 
 
+def _soperator_node_config_static_cpu_count(value: Any) -> int | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+
+    def _field(name: str, default: int | None = None) -> int | None:
+        match = re.search(rf"(?:^|\s){re.escape(name)}=([0-9]+)(?:\s|$)", text)
+        if match is None:
+            return default
+        with suppress(ValueError):
+            return int(match.group(1))
+        return default
+
+    explicit_cpus = _field("CPUs")
+    if explicit_cpus is not None:
+        return explicit_cpus
+    cores_per_socket = _field("CoresPerSocket")
+    if cores_per_socket is None:
+        return None
+    return (
+        (_field("Boards", 1) or 1)
+        * (_field("SocketsPerBoard", 1) or 1)
+        * cores_per_socket
+        * (_field("ThreadsPerCore", 1) or 1)
+    )
+
+
+def _soperator_fit_gpu_node_config_to_group(
+    nodeset: dict[str, Any],
+    *,
+    group_cpu_millicores: int | None,
+    slurmd_cpu_millicores: int | None,
+    gpu_count: int | None,
+) -> None:
+    if group_cpu_millicores is None or group_cpu_millicores <= 0 or gpu_count is None:
+        return
+    node_config = nodeset.setdefault("nodeConfig", {})
+    if not isinstance(node_config, dict):
+        return
+    static_cpu_count = _soperator_node_config_static_cpu_count(node_config.get("static"))
+    group_cpu_count = max(1, math.ceil(group_cpu_millicores / 1000))
+    if static_cpu_count is not None and static_cpu_count <= group_cpu_count:
+        return
+    effective_cpu_millicores = slurmd_cpu_millicores or group_cpu_millicores
+    node_config["static"] = (
+        f"{_soperator_cpu_node_config_static(effective_cpu_millicores)} Gres=gpu:{gpu_count}"
+    )
+
+
 def _soperator_resource_memory_gib(value: Any) -> int | None:
     text = str(value or "").strip()
     match = re.fullmatch(r"([0-9]+)(?:Gi|G|GB|gb)?", text)
@@ -14077,15 +14923,20 @@ def _soperator_fit_nodeset_resources_to_group(
                 node_config["static"] = _soperator_cpu_node_config_static(cpu_millicores)
         return
 
-    if cpu_millicores is not None and current_cpu is not None and current_cpu > cpu_millicores:
-        slurmd_resources["cpu"] = _soperator_format_cpu_millicores(
-            max(1000, int(cpu_millicores * 0.75))
-        )
+    if cpu_millicores is not None and (
+        not gpu_enabled or (current_cpu is not None and current_cpu > cpu_millicores)
+    ):
+        target_cpu_millicores = max(1000, int(cpu_millicores * 0.75))
+        slurmd_resources["cpu"] = _soperator_format_cpu_millicores(target_cpu_millicores)
+        current_cpu = _soperator_parse_cpu_millicores(slurmd_resources.get("cpu"))
 
     memory_mib = resources.get("memory_mib")
     current_memory = _soperator_parse_memory_mib(slurmd_resources.get("memory"))
-    if memory_mib is not None and current_memory is not None and current_memory > memory_mib:
-        slurmd_resources["memory"] = _soperator_format_memory_mib(max(1024, int(memory_mib * 0.75)))
+    if memory_mib is not None and (
+        not gpu_enabled or (current_memory is not None and current_memory > memory_mib)
+    ):
+        target_memory_mib = max(1024, int(memory_mib * 0.75))
+        slurmd_resources["memory"] = _soperator_format_memory_mib(target_memory_mib)
 
     # Keep the legacy whole-node fallback for managed profile presets that do
     # not expose allocatable data.
@@ -14098,6 +14949,7 @@ def _soperator_fit_nodeset_resources_to_group(
             and legacy_current_cpu > vcpu_count
         ):
             slurmd_resources["cpu"] = str(max(1, vcpu_count // 2))
+            current_cpu = _soperator_parse_cpu_millicores(slurmd_resources.get("cpu"))
     if "memory_mib" not in resources:
         memory_gib = resources.get("memory")
         legacy_current_memory = _soperator_resource_memory_gib(slurmd_resources.get("memory"))
@@ -14107,6 +14959,18 @@ def _soperator_fit_nodeset_resources_to_group(
             and legacy_current_memory > memory_gib
         ):
             slurmd_resources["memory"] = f"{max(1, memory_gib // 4)}Gi"
+
+    if gpu_enabled:
+        _soperator_fit_gpu_node_config_to_group(
+            nodeset,
+            group_cpu_millicores=cpu_millicores,
+            slurmd_cpu_millicores=current_cpu,
+            gpu_count=gpu_count,
+        )
+    else:
+        node_config = nodeset.setdefault("nodeConfig", {})
+        if isinstance(node_config, dict):
+            node_config["static"] = _soperator_cpu_node_config_static(current_cpu or cpu_millicores)
 
 
 def _soperator_template_nodesets_by_name(values: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
@@ -14233,6 +15097,11 @@ def _soperator_merge_nodeset_with_generated(
         merged.pop("nodeSelector", None)
     if preserve_existing_node_config:
         _soperator_strip_nodeset_image_overrides(merged)
+    for nodeset_field in ("ephemeralNodes", "initialNumberEphemeralNodes"):
+        if nodeset_field in generated:
+            merged[nodeset_field] = copy.deepcopy(generated[nodeset_field])
+        else:
+            merged.pop(nodeset_field, None)
 
     generated_tolerations = generated.get("tolerations")
     if isinstance(generated_tolerations, list):
@@ -14448,10 +15317,18 @@ def _materialize_soperator_mapping_chart_values(
         )
 
     template_nodesets = _soperator_nodeset_templates(profile=profile, values=values)
+    worker_template_gpu_flags = _soperator_worker_template_gpu_flags(profile)
     generated_nodesets: list[dict[str, Any]] = []
     nodeset_ref_replacements: dict[str, list[str]] = {}
     storage_groups: dict[str, list[str]] = {}
     preserve_onboarded_worker_nodesets = preserve_existing_worker_nodesets
+
+    def _initial_ephemeral_nodes(node_group: Any) -> int:
+        max_nodes = int(node_group.autoscaling_max_node_count or 0)
+        initial_nodes = int(node_group.autoscaling_min_node_count or 0)
+        if max_nodes > 0 and bool(getattr(node_group, "gpu", False)):
+            initial_nodes = max(1, initial_nodes)
+        return min(initial_nodes, max_nodes)
 
     def _group_keys_for_template(
         *,
@@ -14470,7 +15347,22 @@ def _materialize_soperator_mapping_chart_values(
             if normalize_component_token(group_key) == normalized_template
             or normalize_component_token(group_key).startswith(f"{normalized_template}-")
         ]
-        return matched or normalized_groups
+        if matched:
+            return matched
+        template_gpu = worker_template_gpu_flags.get(normalized_template)
+        if template_gpu is None:
+            return normalized_groups
+        groups_by_key = {group.key: group for group in iter_mk8s_node_groups(inputs)}
+        known_group_keys = [
+            group_key for group_key in normalized_groups if group_key in groups_by_key
+        ]
+        if not known_group_keys:
+            return normalized_groups
+        return [
+            group_key
+            for group_key in known_group_keys
+            if (group := groups_by_key.get(group_key)) is not None and group.gpu == template_gpu
+        ]
 
     def _generate_nodesets_from_template(
         *,
@@ -14485,11 +15377,17 @@ def _materialize_soperator_mapping_chart_values(
         replacement_names: list[str] = []
         for group_key in group_keys:
             nodeset = copy.deepcopy(to_plain_data(template))
-            nodeset_name = (
-                template_name
-                if len(group_keys) == 1
-                else normalize_component_token(f"{template_name}-{group_key}")
-            )
+            normalized_template_name = normalize_component_token(template_name)
+            normalized_group_key = normalize_component_token(group_key)
+            if len(group_keys) == 1:
+                nodeset_name = template_name
+            elif (
+                normalized_group_key == normalized_template_name
+                or normalized_group_key.startswith(f"{normalized_template_name}-")
+            ):
+                nodeset_name = normalized_group_key
+            else:
+                nodeset_name = normalize_component_token(f"{template_name}-{group_key}")
             nodeset["name"] = nodeset_name
             node_group = next(
                 (
@@ -14508,6 +15406,17 @@ def _materialize_soperator_mapping_chart_values(
                     if node_group.node_count is not None
                     else node_group.autoscaling_max_node_count
                 )
+                if (
+                    install_mode == _SOPERATOR_INSTALL_MODE_PRODUCTION
+                    and template_name.startswith("worker")
+                    and _soperator_worker_node_group_ephemeral_enabled(inputs, group_key)
+                    and node_group.autoscaling_max_node_count is not None
+                ):
+                    nodeset["ephemeralNodes"] = True
+                    nodeset["initialNumberEphemeralNodes"] = _initial_ephemeral_nodes(node_group)
+                else:
+                    nodeset.pop("ephemeralNodes", None)
+                    nodeset.pop("initialNumberEphemeralNodes", None)
             selector_expression = _soperator_node_group_selector_expression(inputs, group_key)
             if (
                 selector_expression.get("operator") == "In"
@@ -14775,6 +15684,7 @@ def _materialize_soperator_worker_node_groups(
     node_groups: dict[str, Any],
     worker_profiles: list[Any],
 ) -> None:
+    active_worker_control_keys: set[str] = set()
     for raw_worker in worker_profiles:
         if not isinstance(raw_worker, Mapping):
             continue
@@ -14798,17 +15708,7 @@ def _materialize_soperator_worker_node_groups(
             default_total_nodes=default_total_nodes,
             default_nodes_per_group=default_nodes_per_group,
         )
-        if total_nodes <= 0:
-            total_nodes = default_total_nodes
-        autoscaling = _soperator_profile_autoscaling_input(
-            inputs=inputs,
-            raw_group=raw_worker,
-            default_min_node_count=min(default_total_nodes, total_nodes),
-            default_max_node_count=total_nodes,
-        )
-        desired_total_nodes = autoscaling["max_node_count"] if autoscaling else total_nodes
-        if autoscaling is None and desired_total_nodes <= 0:
-            desired_total_nodes = default_total_nodes
+        desired_total_nodes = total_nodes
 
         max_nodes_per_group = _required_profile_positive_int(
             raw_worker.get("max_nodes_per_group"),
@@ -14822,20 +15722,69 @@ def _materialize_soperator_worker_node_groups(
         )
         shard_count = max(1, (desired_total_nodes + nodes_per_group - 1) // nodes_per_group)
         desired_counts: dict[str, int] = {}
-        desired_autoscaling: dict[str, dict[str, int]] = {}
-        remaining_min_nodes = autoscaling["min_node_count"] if autoscaling else 0
         for index in range(shard_count):
             remaining = desired_total_nodes - (index * nodes_per_group)
             shard_size = min(nodes_per_group, remaining)
             group_key = key_prefix if shard_count == 1 else f"{key_prefix}-{index}"
             desired_counts[group_key] = shard_size
+        active_worker_control_keys.update(desired_counts)
+        worker_node_groups = _soperator_worker_node_groups_mutable(inputs)
+        desired_key_set = set(desired_counts)
+        for raw_key in list(worker_node_groups):
+            group_key = str(raw_key)
+            if (
+                _soperator_worker_control_key_matches_prefix(group_key, key_prefix)
+                and group_key not in desired_key_set
+            ):
+                worker_node_groups.pop(raw_key, None)
+        for group_key in desired_counts:
+            control = worker_node_groups.setdefault(group_key, {})
+            if not isinstance(control, dict):
+                raise ValueError(
+                    f"{_SOPERATOR_WORKER_NODE_GROUPS_INPUT}.{group_key} must be a mapping"
+                )
+            autoscaling_control = control.setdefault("autoscaling", {})
+            if not isinstance(autoscaling_control, dict):
+                raise ValueError(
+                    f"{_SOPERATOR_WORKER_NODE_GROUPS_INPUT}.{group_key}.autoscaling "
+                    "must be a mapping"
+                )
+            autoscaling_control.setdefault("enabled", False)
+            ephemeral_control = control.setdefault("ephemeral_nodes", {})
+            if not isinstance(ephemeral_control, dict):
+                raise ValueError(
+                    f"{_SOPERATOR_WORKER_NODE_GROUPS_INPUT}.{group_key}.ephemeral_nodes "
+                    "must be a mapping"
+                )
+            ephemeral_control.setdefault("enabled", False)
+
+        desired_autoscaling: dict[str, dict[str, int]] = {}
+        for group_key, shard_size in desired_counts.items():
+            autoscaling = _soperator_worker_node_group_autoscaling(
+                inputs=inputs,
+                group_key=group_key,
+                shard_size=shard_size,
+            )
             if autoscaling:
-                shard_min = min(shard_size, max(0, remaining_min_nodes))
-                remaining_min_nodes -= shard_min
                 desired_autoscaling[group_key] = {
-                    "min_node_count": shard_min,
-                    "max_node_count": shard_size,
+                    "min_node_count": autoscaling["min_node_count"],
+                    "max_node_count": autoscaling["max_node_count"],
                 }
+            if _soperator_worker_node_group_ephemeral_enabled(inputs, group_key):
+                if autoscaling is None:
+                    raise ValueError(
+                        f"{_SOPERATOR_WORKER_NODE_GROUPS_INPUT}.{group_key}"
+                        ".ephemeral_nodes.enabled requires "
+                        f"{_SOPERATOR_WORKER_NODE_GROUPS_INPUT}.{group_key}"
+                        ".autoscaling.enabled=true"
+                    )
+                if autoscaling["max_node_count"] < 1:
+                    raise ValueError(
+                        f"{_SOPERATOR_WORKER_NODE_GROUPS_INPUT}.{group_key}"
+                        ".ephemeral_nodes.enabled requires "
+                        f"{_SOPERATOR_WORKER_NODE_GROUPS_INPUT}.{group_key}"
+                        ".autoscaling.max_node_count to be at least 1"
+                    )
 
         base_group = raw_worker.get("node_group")
         base_group = copy.deepcopy(base_group) if isinstance(base_group, Mapping) else {}
@@ -14922,6 +15871,11 @@ def _materialize_soperator_worker_node_groups(
                     inputs=inputs,
                     prefer_shape_defaults=True,
                 )
+    worker_node_groups = _soperator_worker_node_groups_mutable(inputs)
+    for raw_key in list(worker_node_groups):
+        group_key = str(raw_key)
+        if group_key not in active_worker_control_keys:
+            worker_node_groups.pop(raw_key, None)
 
 
 def _materialize_soperator_mk8s_profile(
@@ -14932,10 +15886,12 @@ def _materialize_soperator_mk8s_profile(
     placements: Mapping[str, list[str]],
     install_mode: str,
     replace_profile_managed_groups: bool = False,
+    placements_configured: bool = True,
 ) -> None:
     mk8s_profile = _profile_mapping(profile, "mk8s")
     defaults = _profile_mapping(mk8s_profile, "inputs")
     _merge_missing_mapping(inputs, defaults)
+    _raise_if_legacy_soperator_worker_inputs(inputs)
 
     node_groups = inputs.setdefault("node_groups", {})
     explicit_placements = dict(placements)
@@ -14943,10 +15899,19 @@ def _materialize_soperator_mk8s_profile(
     if not isinstance(node_groups, dict):
         return
     if not existing_mode:
+        _raise_if_soperator_production_missing_service_node_groups(
+            inputs=inputs,
+            profile=profile,
+            placements=explicit_placements if placements_configured else {},
+        )
         _soperator_prune_stale_profile_node_groups(inputs=inputs, profile=profile)
         _soperator_prune_stale_profile_gpu_clusters(inputs=inputs, profile=profile)
+        _soperator_prune_profile_gpu_cluster_path_for_selected_shape(
+            inputs=inputs,
+            profile=profile,
+        )
     if existing_mode or (
-        not replace_profile_managed_groups
+        (placements_configured or not replace_profile_managed_groups)
         and explicit_placements
         and _soperator_has_external_node_groups(
             inputs=inputs,
@@ -14962,7 +15927,7 @@ def _materialize_soperator_mk8s_profile(
         return
 
     gpu_clusters = _profile_mapping(mk8s_profile, "gpu_clusters")
-    if gpu_clusters:
+    if gpu_clusters and not _soperator_selected_gpu_defaults_are_ethernet_only(inputs):
         target_gpu_clusters = inputs.setdefault("gpu_clusters", {})
         if isinstance(target_gpu_clusters, dict):
             _merge_missing_mapping(target_gpu_clusters, gpu_clusters)
@@ -14990,6 +15955,11 @@ def _materialize_soperator_mk8s_profile(
         node_groups=node_groups,
         worker_profiles=_profile_list(mk8s_profile, "worker_nodesets"),
     )
+    if not existing_mode:
+        _soperator_prune_profile_gpu_cluster_path_for_selected_shape(
+            inputs=inputs,
+            profile=profile,
+        )
 
 
 def _materialize_soperator_sfs_profile(
@@ -15210,6 +16180,28 @@ def _materialize_soperator_dcgm_exporter_values(
         dcgm_exporter.setdefault("validateToolkit", False)
 
 
+def _materialize_soperator_worker_ephemeral_values(
+    *,
+    values: dict[str, Any],
+    inputs: Mapping[str, Any],
+    install_mode: str,
+) -> None:
+    if install_mode != _SOPERATOR_INSTALL_MODE_PRODUCTION:
+        return
+    slurm_config = values.get("slurmConfig")
+    if not _soperator_any_worker_node_group_ephemeral_enabled(inputs):
+        if isinstance(slurm_config, dict):
+            slurm_config.pop("suspendTime", None)
+            if not slurm_config:
+                values.pop("slurmConfig", None)
+        return
+    suspend_time_seconds = _soperator_worker_ephemeral_suspend_time_seconds(inputs)
+    if not isinstance(slurm_config, dict):
+        slurm_config = {}
+        values["slurmConfig"] = slurm_config
+    slurm_config["suspendTime"] = suspend_time_seconds
+
+
 def _materialize_soperator_onboarding_storage_mode(
     *,
     values: dict[str, Any],
@@ -15293,6 +16285,7 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
     soperator_values_by_target: dict[str, dict[str, Any]] = {}
     soperator_placements_by_target: dict[str, dict[str, list[str]]] = {}
     generated_placements_by_target: dict[str, bool] = {}
+    configured_placements_by_target: dict[str, bool] = {}
     for row in apps_rows:
         if not isinstance(row, dict) or not bool(row.get("enabled", False)):
             continue
@@ -15311,6 +16304,7 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
             soperator_values_by_target[target_ref] = values
             placements = _soperator_row_placements(row)
             soperator_placements_by_target[target_ref] = placements
+            configured_placements_by_target[target_ref] = bool(placements)
             generated_placements = _soperator_placements_match_generated_profile(
                 row=row,
                 inputs=mk8s_inputs_by_target.get(target_ref, {}),
@@ -15351,6 +16345,7 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
                     target_ref,
                     False,
                 ),
+                placements_configured=configured_placements_by_target.get(target_ref, False),
             )
         elif component_id == "sfs":
             sfs_instance_id = component_instance_id(row)
@@ -15384,10 +16379,23 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
                 inputs=mk8s_inputs_by_target.get(target_ref, {}),
                 profile=profile_by_target.get(target_ref, {}),
             )
+            replace_generated_placements = generated_placements_by_target.get(
+                target_ref,
+                False,
+            )
+            current_placements = _soperator_row_placements(row)
+            if not replace_generated_placements:
+                replace_generated_placements = _soperator_placements_are_stale_profile_templates(
+                    placements=current_placements,
+                    profile=profile_by_target.get(target_ref, {}),
+                    inferred_placements=inferred_placements,
+                )
+            if replace_generated_placements:
+                generated_placements_by_target[target_ref] = True
             _soperator_set_app_placements(
                 row,
                 inferred_placements,
-                replace=generated_placements_by_target.get(target_ref, False),
+                replace=replace_generated_placements,
             )
             placements = _soperator_row_placements(row)
             soperator_placements_by_target[target_ref] = placements
@@ -15462,6 +16470,11 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
                 placements=placements,
                 install_mode=install_mode,
                 preserve_existing_worker_nodesets=preserve_adopted_worker_nodesets,
+            )
+            _materialize_soperator_worker_ephemeral_values(
+                values=values,
+                inputs=mk8s_inputs_by_target.get(target_ref, {}),
+                install_mode=install_mode,
             )
             _materialize_soperator_guided_sssd_values(values)
             _soperator_extend_nodeconfigurator_tolerations_from_nodesets(values)
@@ -15538,6 +16551,8 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
                                 ]
         if row != before:
             changed = True
+    if _prune_sfs_single_filesystem_inputs_for_mapped_filesystems(payload):
+        changed = True
     return changed
 
 
@@ -16929,6 +17944,7 @@ _PROVIDER_ARG_PATH_KEYS = frozenset(
         "fallback_project_id_path",
         "gpu_cluster_required_path",
         "network_id_path",
+        "reservation_policy_path",
     }
 )
 
@@ -18100,10 +19116,20 @@ def _provider_allowed_values_for_field(
             payload=payload,
             field_path=full_path_label,
         ):
-            value = str(item.value).strip()
-            if value:
-                allowed.add(value)
+            allowed.update(_provider_choice_allowed_values(item))
     return allowed, providers
+
+
+def _provider_choice_allowed_values(choice: OptionChoice) -> set[str]:
+    values: set[str] = set()
+    value = str(choice.value).strip()
+    if value:
+        values.add(value)
+    if bool(choice.metadata.get("mk8s_gpu_capacity_choice")):
+        preset = _non_empty_text(choice.metadata.get("preset"))
+        if preset:
+            values.add(preset)
+    return values
 
 
 def _provider_prompt_dependencies_ready(
@@ -18112,12 +19138,26 @@ def _provider_prompt_dependencies_ready(
     entry: ComponentEntry,
     full_path_label: str,
 ) -> bool:
-    for _provider, resolved_args in _provider_source_specs_for_field(
+    for provider, resolved_args in _provider_source_specs_for_field(
         entry=entry,
         full_path_label=full_path_label,
     ):
-        for key in ("platform_path", "preset_path", "network_id_path"):
+        dependency_keys = [
+            "platform_path",
+            "preset_path",
+            "network_id_path",
+            "kubernetes_version_path",
+        ]
+        inferred_k8s_version_path = ""
+        if provider == "mk8s_compatible_platforms" and ".inputs.node_group_defaults." in (
+            full_path_label
+        ):
+            component_prefix = full_path_label.split(".inputs.", maxsplit=1)[0]
+            inferred_k8s_version_path = f"{component_prefix}.inputs.cluster.k8s_version"
+        for key in dependency_keys:
             dependency_path = _non_empty_text(resolved_args.get(key))
+            if not dependency_path and key == "kubernetes_version_path":
+                dependency_path = inferred_k8s_version_path
             if dependency_path and not _non_empty_text(
                 _read_payload_field(payload, dependency_path)
             ):
@@ -18523,7 +19563,7 @@ def _prompt_path_sort_key(
     *,
     required_leaf_names: set[str],
     required_prompt_labels: set[str] | None = None,
-) -> tuple[int, int, int, str]:
+) -> tuple[int, int, str, int, int, str]:
     leaf_order_hints = {
         "install_mode": 0,
         "profile": 1,
@@ -18560,8 +19600,12 @@ def _prompt_path_sort_key(
         "controller_node_count": 39,
         "login_node_count": 40,
         "accounting_node_count": 41,
-        "worker_total_nodes": 42,
-        "worker_nodes_per_group": 43,
+        "worker_cpu_total_nodes": 42,
+        "worker_cpu_nodes_per_group": 43,
+        "worker_gpu_total_nodes": 44,
+        "worker_gpu_nodes_per_group": 45,
+        "worker_ephemeral_nodes": 46,
+        "suspend_time_seconds": 47,
     }
     full_label = _format_payload_path(path)
     nested_order_hints = {
@@ -18571,16 +19615,19 @@ def _prompt_path_sort_key(
         "deploy.targets[].observability.kubernetes.metrics.enabled": 202,
         "deploy.targets[].observability.kubernetes.metrics.collect_k8s_cluster_metrics": 203,
         "deploy.targets[].observability.kubernetes.traces.enabled": 204,
-        "deploy.targets[].validations.mk8s_gpu.operator_readiness.enabled": 220,
-        "deploy.targets[].validations.mk8s_gpu.gpu_visibility.enabled": 221,
-        "deploy.targets[].validations.mk8s_gpu.gpu_visibility.max_nodes": 222,
-        "deploy.targets[].validations.mk8s_gpu.nccl.enabled": 223,
-        "deploy.targets[].validations.mk8s_gpu.nccl.max_nodes": 224,
-        "deploy.targets[].validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps": 225,
-        "deploy.targets[].validations.mk8s_gpu.health_checker.enabled": 226,
+        "deploy.targets[].deployment_testing.mk8s_gpu.operator_readiness.enabled": 220,
+        "deploy.targets[].deployment_testing.mk8s_gpu.gpu_visibility.enabled": 221,
+        "deploy.targets[].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes": 222,
+        "deploy.targets[].deployment_testing.mk8s_gpu.health_checker.enabled": 223,
         "deploy.targets[].secrets.mysterybox.enabled": 240,
         "deploy.targets[].secrets.mysterybox.allow_all_namespaces": 241,
         "deploy.targets[].secrets.mysterybox.sync_namespaces": 242,
+        "infra.components[].inputs.type": 90,
+        "infra.components[].inputs.node_group_defaults.cpu.platform": 21,
+        "infra.components[].inputs.node_group_defaults.cpu.preset": 22,
+        "infra.components[].inputs.node_group_defaults.gpu.platform": 23,
+        "infra.components[].inputs.node_group_defaults.gpu.reservation.policy": 24,
+        "infra.components[].inputs.node_group_defaults.gpu.preset": 25,
         "infra.components[].inputs.soperator.system_autoscaling.enabled": 38,
         "infra.components[].inputs.soperator.system_autoscaling.min_node_count": 39,
         "infra.components[].inputs.soperator.system_autoscaling.max_node_count": 40,
@@ -18597,11 +19644,12 @@ def _prompt_path_sort_key(
         "infra.components[].inputs.soperator.accounting_autoscaling.min_node_count": 51,
         "infra.components[].inputs.soperator.accounting_autoscaling.max_node_count": 52,
         "infra.components[].inputs.soperator.accounting_node_count": 53,
-        "infra.components[].inputs.soperator.worker_autoscaling.enabled": 54,
-        "infra.components[].inputs.soperator.worker_autoscaling.min_node_count": 55,
-        "infra.components[].inputs.soperator.worker_autoscaling.max_node_count": 56,
-        "infra.components[].inputs.soperator.worker_total_nodes": 57,
-        "infra.components[].inputs.soperator.worker_nodes_per_group": 58,
+        "infra.components[].inputs.soperator.worker_cpu_total_nodes": 54,
+        "infra.components[].inputs.soperator.worker_cpu_nodes_per_group": 55,
+        "infra.components[].inputs.soperator.worker_gpu_total_nodes": 56,
+        "infra.components[].inputs.soperator.worker_gpu_nodes_per_group": 57,
+        "infra.components[].inputs.soperator.worker_node_groups": 58,
+        "infra.components[].inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds": 62,
     }
     leaf = path[-1] if path else ""
     leaf_name = _normalize_leaf_name(str(leaf)) if isinstance(leaf, str) else ""
@@ -18617,6 +19665,8 @@ def _prompt_path_sort_key(
         or (leaf_name and leaf_name in required_leaf_names)
         else 1
     )
+    if re.search(r"\.inputs\.cluster\.k8s_version$", full_label):
+        required_rank = 0
     if re.search(r"\.inputs\.cluster\.public_endpoint$", full_label):
         required_rank = 0
     if normalized_full_label.startswith("deploy.targets[]."):
@@ -18629,11 +19679,62 @@ def _prompt_path_sort_key(
         and leaf_name not in {"boot_disk_encryption_enabled", "data_disk_encryption_enabled"}
         else 1
     )
-    leaf_rank = next(
-        (rank for suffix, rank in nested_order_hints.items() if normalized_full_label == suffix),
-        leaf_order_hints.get(leaf_name, 100),
+    worker_control_match = re.search(
+        r"^infra\.components\[\]\.inputs\.soperator\.worker_node_groups\.([^.]+)"
+        r"\.(autoscaling|ephemeral_nodes)\.(enabled|min_node_count|max_node_count)$",
+        normalized_full_label,
     )
-    return required_rank, leaf_rank, toggle_rank, full_label
+    worker_bulk_match = re.search(
+        r"^infra\.components\[\]\.inputs\.soperator\.worker_node_groups\.([^.]+)"
+        r"_(apply_to_all|autoscaling_enabled)$",
+        normalized_full_label,
+    )
+    if (
+        worker_bulk_match is not None
+        and worker_bulk_match.group(1) in _SOPERATOR_WORKER_BULK_SCOPE_LABELS
+    ):
+        scope_key, field_label = worker_bulk_match.groups()
+        scope_order = {
+            "all_cpu_worker_shards": 0,
+            "all_gpu_worker_shards": 1,
+            "all_worker_shards": 2,
+        }
+        field_order = {"apply_to_all": 0, "autoscaling_enabled": 1}
+        return (
+            required_rank,
+            58,
+            f"bulk-{scope_order.get(scope_key, 99):08d}",
+            field_order.get(field_label, 99),
+            toggle_rank,
+            full_label,
+        )
+    if worker_control_match is not None:
+        group_key, section, field = worker_control_match.groups()
+        group_sort_key = re.sub(
+            r"\d+",
+            lambda match: f"{int(match.group(0)):08d}",
+            group_key,
+        )
+        worker_control_order = {
+            ("autoscaling", "enabled"): 0,
+            ("autoscaling", "min_node_count"): 1,
+            ("autoscaling", "max_node_count"): 2,
+            ("ephemeral_nodes", "enabled"): 99,
+        }
+        return (
+            required_rank,
+            58,
+            group_sort_key,
+            worker_control_order.get((section, field), 100),
+            toggle_rank,
+            full_label,
+        )
+    else:
+        leaf_rank = next(
+            (rank for suffix, rank in nested_order_hints.items() if normalized_full_label == suffix),
+            leaf_order_hints.get(leaf_name, 100),
+        )
+    return required_rank, leaf_rank, "", 0, toggle_rank, full_label
 
 
 def _maybe_clear_gpu_cluster_fabric_after_shape_change(
@@ -18742,6 +19843,95 @@ def _maybe_clear_gpu_cluster_fabric_after_shape_change(
     )
 
 
+def _choice_by_value(
+    choices: Sequence[OptionChoice] | None,
+    value: object,
+) -> OptionChoice | None:
+    selected = str(value).strip()
+    if not selected:
+        return None
+    for choice in choices or ():
+        if choice.value == selected:
+            return choice
+    return None
+
+
+def _mk8s_gpu_capacity_choice_preset(choice: OptionChoice | None) -> str:
+    if choice is None or not bool(choice.metadata.get("mk8s_gpu_capacity_choice")):
+        return ""
+    return _non_empty_text(choice.metadata.get("preset"))
+
+
+def _mk8s_gpu_capacity_choice_fabric(choice: OptionChoice | None) -> str:
+    if choice is None or not bool(choice.metadata.get("mk8s_gpu_capacity_choice")):
+        return ""
+    return _non_empty_text(choice.metadata.get("fabric"))
+
+
+def _mk8s_gpu_cluster_labels_for_preset_prompt(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+) -> tuple[str, str]:
+    if entry.scope != "infra" or entry.id != "mk8s":
+        return "", ""
+    if not full_path_label.endswith(".node_group_defaults.gpu.preset"):
+        return "", ""
+    component_prefix = _dynamic_component_prefix(entry=entry, full_path_label=full_path_label)
+    if not component_prefix:
+        return "", ""
+    target_ref = _component_instance_id_for_prompt_field(
+        payload=payload,
+        entry=entry,
+        full_path_label=full_path_label,
+    )
+    profile = _soperator_profile_by_target(payload).get(target_ref, {})
+    managed_gpu_cluster_keys = (
+        sorted(_soperator_profile_managed_gpu_cluster_keys(profile))
+        if isinstance(profile, Mapping)
+        else []
+    )
+    gpu_cluster_key = managed_gpu_cluster_keys[0] if len(managed_gpu_cluster_keys) == 1 else ""
+    if not gpu_cluster_key and isinstance(profile, Mapping):
+        gpu_cluster_key = _non_empty_text(_profile_mapping(profile, "mk8s").get("gpu_cluster_key"))
+    if not gpu_cluster_key:
+        gpu_cluster_key = "workers"
+    cluster_label = f"{component_prefix}.inputs.gpu_clusters.{gpu_cluster_key}"
+    return cluster_label, f"{cluster_label}.infiniband_fabric"
+
+
+def _materialize_mk8s_gpu_capacity_choice(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+    choice: OptionChoice | None,
+    emit_selection: bool = False,
+) -> object:
+    preset = _mk8s_gpu_capacity_choice_preset(choice)
+    if not preset:
+        return choice.value if choice is not None else None
+
+    fabric = _mk8s_gpu_capacity_choice_fabric(choice)
+    cluster_label, fabric_label = _mk8s_gpu_cluster_labels_for_preset_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label=full_path_label,
+    )
+    if fabric and fabric_label:
+        fabric_path = _parse_payload_path_label(fabric_label)
+        if fabric_path is not None:
+            _set_payload_value_creating_containers(payload, fabric_path, fabric)
+            if emit_selection:
+                _print_wizard_selected_field(fabric_label, fabric)
+    elif cluster_label:
+        cluster_path = _parse_payload_path_label(cluster_label)
+        if cluster_path is not None and _payload_path_exists(payload, cluster_path):
+            _delete_payload_value(payload, cluster_path)
+    return preset
+
+
 def _is_compute_boot_disk_type_field(full_path_label: str) -> bool:
     return full_path_label.endswith(
         (
@@ -18755,13 +19945,13 @@ def _is_compute_boot_disk_type_field(full_path_label: str) -> bool:
     )
 
 
-def _is_mk8s_gpu_validation_field(full_path_label: str) -> bool:
+def _is_mk8s_gpu_deployment_testing_field(full_path_label: str) -> bool:
     return bool(
         re.match(
-            r"^deploy\.targets\[[0-9]+\]\.validations\.mk8s_gpu\.",
+            r"^deploy\.targets\[[0-9]+\]\.deployment_testing\.mk8s_gpu\.",
             full_path_label,
         )
-        or full_path_label.startswith("deploy.targets[].validations.mk8s_gpu.")
+        or full_path_label.startswith("deploy.targets[].deployment_testing.mk8s_gpu.")
     )
 
 
@@ -18811,11 +20001,121 @@ def _gpu_preset_field_context(
     return component_prefix, platform_label, preset_label, preset_name
 
 
+def _gpu_capacity_reservation_policy(
+    *,
+    payload: dict[str, Any],
+    full_path_label: str,
+    component_prefix: str,
+) -> str:
+    policy_label = ""
+    if full_path_label.endswith(".node_group_defaults.gpu.preset"):
+        policy_label = f"{component_prefix}.inputs.node_group_defaults.gpu.reservation.policy"
+    elif ".inputs.node_groups." in full_path_label and full_path_label.endswith(".preset"):
+        policy_label = f"{full_path_label[: -len('.preset')]}.reservation.policy"
+    policy = _non_empty_text(_read_payload_field(payload, policy_label)).upper()
+    return policy if policy in {"AUTO", "FORBID", "STRICT"} else "AUTO"
+
+
+def _live_gpu_capacity_rows(
+    rows: Iterable[CapacityResourceAdvice],
+    *,
+    reservation_policy: str,
+) -> tuple[CapacityResourceAdvice, ...]:
+    policy = reservation_policy.upper()
+    if policy == "STRICT":
+        return tuple(item for item in rows if item.reserved.available > 0)
+    if policy == "FORBID":
+        return tuple(item for item in rows if item.on_demand.available > 0)
+    return tuple(
+        item for item in rows if item.on_demand.available > 0 or item.reserved.available > 0
+    )
+
+
+def _format_live_gpu_capacity_row(
+    item: CapacityResourceAdvice,
+    *,
+    reservation_policy: str,
+) -> str:
+    preset = item.preset or "(unknown preset)"
+    fabric = item.fabric or "(no fabric)"
+    policy = reservation_policy.upper()
+    parts: list[str] = []
+    if policy != "STRICT":
+        parts.append(
+            f"regular-vm {capacity_vm_slots_text(item.on_demand.available, item.gpu_count)}"
+        )
+    if policy != "FORBID":
+        parts.append(f"reserved {capacity_vm_slots_text(item.reserved.available, item.gpu_count)}")
+    return f"  - {preset} on {fabric}: {'; '.join(parts)}"
+
+
+def _maybe_print_live_gpu_capacity_summary(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+    provider_lookup: ProviderOptionLookup | None,
+    emitted_guidance: set[str],
+) -> None:
+    if provider_lookup is None:
+        return
+    context = _gpu_preset_field_context(
+        payload=payload,
+        entry=entry,
+        full_path_label=full_path_label,
+    )
+    if context is None:
+        return
+    component_prefix, platform_label, _preset_label, _preset_name = context
+    tenant_id = _non_empty_text(_read_payload_field(payload, "client_info.nebius.tenant_id"))
+    region_id = _non_empty_text(_read_payload_field(payload, "client_info.nebius.region_id"))
+    platform_name = _non_empty_text(_read_payload_field(payload, platform_label))
+    if not tenant_id or not region_id or not platform_name:
+        return
+    reservation_policy = _gpu_capacity_reservation_policy(
+        payload=payload,
+        full_path_label=full_path_label,
+        component_prefix=component_prefix,
+    )
+    guidance_key = f"gpu_capacity:{platform_label}:{platform_name}:{region_id}:{reservation_policy}"
+    if guidance_key in emitted_guidance:
+        return
+    compute_platform_capacity_advice = getattr(
+        provider_lookup,
+        "compute_platform_capacity_advice",
+        None,
+    )
+    if not callable(compute_platform_capacity_advice):
+        return
+    rows = _live_gpu_capacity_rows(
+        compute_platform_capacity_advice(
+            tenant_id=tenant_id,
+            region_id=region_id,
+            platform_name=platform_name,
+        ),
+        reservation_policy=reservation_policy,
+    )
+    if not rows:
+        return
+    console.print(
+        f"[dim]Live GPU capacity for {escape(platform_name)} in {escape(region_id)} "
+        "(Capacity Dashboard VM slots):[/dim]"
+    )
+    for row in rows:
+        row_text = _format_live_gpu_capacity_row(
+            row,
+            reservation_policy=reservation_policy,
+        )
+        console.print(f"[dim]{escape(row_text)}[/dim]")
+    emitted_guidance.add(guidance_key)
+
+
 def _maybe_print_gpu_preset_prompt_guidance(
     *,
     payload: dict[str, Any],
     entry: ComponentEntry,
     full_path_label: str,
+    provider_lookup: ProviderOptionLookup | None = None,
     emitted_guidance: set[str],
 ) -> None:
     if (
@@ -18823,6 +20123,17 @@ def _maybe_print_gpu_preset_prompt_guidance(
         is None
     ):
         return
+    if "mk8s_gpu_capacity_choices" not in _provider_sources_for_field(
+        entry=entry,
+        full_path_label=full_path_label,
+    ):
+        _maybe_print_live_gpu_capacity_summary(
+            payload=payload,
+            entry=entry,
+            full_path_label=full_path_label,
+            provider_lookup=provider_lookup,
+            emitted_guidance=emitted_guidance,
+        )
     if "gpu_preset_interconnect" in emitted_guidance:
         return
     console.print(
@@ -18894,6 +20205,14 @@ def _maybe_print_selected_gpu_preset_guidance(
         return
 
     if allow_gpu_clustering is True:
+        if entry.id == "mk8s":
+            console.print(
+                "[dim]Selected GPU shape supports InfiniBand / GPUDirect-RDMA. "
+                "When the selected capacity row includes a fabric, cxcli writes that "
+                "fabric to the MK8s GPU cluster config automatically.[/dim]"
+            )
+            emitted_guidance.add(guidance_key)
+            return
         console.print(
             "[dim]Selected GPU shape supports InfiniBand / GPUDirect-RDMA. "
             "Choose a fabric next when live capacity is available.[/dim]"
@@ -18989,24 +20308,24 @@ def _maybe_print_compute_boot_disk_prompt_guidance(
     emitted_guidance.add("compute_boot_disk")
 
 
-def _maybe_print_mk8s_gpu_validation_prompt_guidance(
+def _maybe_print_mk8s_gpu_deployment_testing_prompt_guidance(
     *,
     full_path_label: str,
     emitted_guidance: set[str],
 ) -> None:
-    if not _is_mk8s_gpu_validation_field(full_path_label):
+    if not _is_mk8s_gpu_deployment_testing_field(full_path_label):
         return
-    if "mk8s_gpu_validation" in emitted_guidance:
+    if "mk8s_gpu_deployment_testing" in emitted_guidance:
         return
     console.print(
-        "[dim]MK8s GPU validation guidance: operator readiness checks the operator "
-        "control-plane state plus allocatable GPUs on Ready nodes. GPU visibility "
-        "runs a CUDA sample pod on selected GPU nodes. NCCL auto-selects "
-        "Socket/TCPIP or RDMA transport from the configured GPU shape; the "
-        "bandwidth threshold is only enforced on RDMA runs. Health checker "
-        "only auto-enables a compatible app when the catalog exposes one.[/dim]"
+        "[dim]MK8s GPU deployment-testing guidance: operator readiness checks "
+        "the operator control-plane state plus allocatable GPUs on Ready nodes. "
+        "GPU visibility runs a bounded CUDA sample pod on selected GPU nodes. "
+        "NCCL and exhaustive all-node workloads belong to acceptance-test "
+        "commands, not deploy-time config. Health checker only auto-enables a "
+        "compatible app when the catalog exposes one.[/dim]"
     )
-    emitted_guidance.add("mk8s_gpu_validation")
+    emitted_guidance.add("mk8s_gpu_deployment_testing")
 
 
 def _maybe_print_observability_prompt_guidance(
@@ -19118,9 +20437,12 @@ def _maybe_print_soperator_mk8s_sizing_prompt_guidance(
         return
     console.print(
         "[dim]Soperator production sizing: system, controller, login, and "
-        "accounting counts size the CPU service role node groups. "
-        "worker_total_nodes sizes Slurm worker capacity, and "
-        "worker_nodes_per_group controls generated worker group sharding.[/dim]"
+        "accounting counts size the CPU service role node groups. Worker sizing "
+        "is shape-specific: worker_cpu_* sizes CPU worker hosts, worker_gpu_* "
+        "sizes GPU worker hosts, GPU count per host comes from the preset, and "
+        "*_nodes_per_group controls generated worker group sharding up to the "
+        "selected profile's per-group limit; worker_node_groups controls each "
+        "shard's autoscaling and ephemeral NodeSet state.[/dim]"
     )
     emitted_guidance.add("soperator_mk8s_sizing")
 
@@ -20044,8 +21366,16 @@ def _soperator_count_role_from_prompt(full_path_label: str) -> str:
     for role in ("system", "controller", "login", "accounting"):
         if full_path_label.endswith(f".inputs.soperator.{role}_node_count"):
             return role
-    if full_path_label.endswith(".inputs.soperator.worker_total_nodes"):
-        return "worker"
+    for role, input_field in _SOPERATOR_WORKER_SHAPE_TOTAL_NODE_FIELDS.items():
+        if full_path_label.endswith(f".inputs.soperator.{input_field}"):
+            return role
+    return ""
+
+
+def _soperator_nodes_per_group_role_from_prompt(full_path_label: str) -> str:
+    for role, input_field in _SOPERATOR_WORKER_SHAPE_NODES_PER_GROUP_FIELDS.items():
+        if full_path_label.endswith(f".inputs.soperator.{input_field}"):
+            return role
     return ""
 
 
@@ -20069,6 +21399,28 @@ def _soperator_autoscaling_enabled_for_prompt(
     return _config_bool(enabled, default=False)
 
 
+def _soperator_worker_shape_active_for_prompt(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+    role: str,
+) -> bool:
+    if role not in _SOPERATOR_WORKER_SHAPE_ROLES:
+        return True
+    target_ref = _component_instance_id_for_prompt_field(
+        payload=payload,
+        entry=entry,
+        full_path_label=full_path_label,
+    )
+    if not target_ref:
+        return False
+    profile = _soperator_profile_by_target(payload).get(target_ref, {})
+    if not isinstance(profile, Mapping):
+        return False
+    return role in _soperator_profile_worker_shapes(profile)
+
+
 def _skip_soperator_managed_mk8s_prompt(
     *,
     payload: dict[str, Any],
@@ -20082,18 +21434,34 @@ def _skip_soperator_managed_mk8s_prompt(
         entry=entry,
         full_path_label=full_path_label,
     )
-    soperator_count_field_suffixes = tuple(
+    soperator_fixed_count_field_suffixes = tuple(
         f".inputs.soperator.{field}"
         for field in (
             *_SOPERATOR_SERVICE_ROLE_NODE_COUNT_FIELDS,
-            "worker_total_nodes",
-            "worker_nodes_per_group",
+            *_SOPERATOR_WORKER_SHAPE_TOTAL_NODE_FIELDS.values(),
         )
+    )
+    soperator_nodes_per_group_field_suffixes = tuple(
+        f".inputs.soperator.{field}"
+        for field in _SOPERATOR_WORKER_SHAPE_NODES_PER_GROUP_FIELDS.values()
+    )
+    soperator_legacy_worker_field_suffixes = tuple(
+        f".inputs.soperator.{field}" for field in _SOPERATOR_LEGACY_WORKER_INPUT_FIELDS
+    )
+    soperator_legacy_worker_field_prefixes = tuple(
+        f".inputs.soperator.{field}." for field in _SOPERATOR_LEGACY_WORKER_INPUT_FIELDS
     )
     autoscaling_prompt = _soperator_autoscaling_role_from_prompt(full_path_label)
     if autoscaling_prompt is not None:
         role, field = autoscaling_prompt
         if not has_soperator_target or install_mode != _SOPERATOR_INSTALL_MODE_PRODUCTION:
+            return True
+        if not _soperator_worker_shape_active_for_prompt(
+            payload=payload,
+            entry=entry,
+            full_path_label=full_path_label,
+            role=role,
+        ):
             return True
         return field != "enabled" and not _soperator_autoscaling_enabled_for_prompt(
             payload=payload,
@@ -20101,11 +21469,65 @@ def _skip_soperator_managed_mk8s_prompt(
             full_path_label=full_path_label,
             role=role,
         )
-    if full_path_label.endswith(soperator_count_field_suffixes):
+    worker_control_prompt = _soperator_worker_node_group_control_prompt(full_path_label)
+    if worker_control_prompt is not None:
+        group_key, section, field = worker_control_prompt
+        if not has_soperator_target or install_mode != _SOPERATOR_INSTALL_MODE_PRODUCTION:
+            return True
+        raw_groups = _soperator_worker_node_groups_for_prompt(
+            payload=payload,
+            entry=entry,
+            full_path_label=full_path_label,
+        )
+        if not isinstance(raw_groups.get(group_key), Mapping):
+            return True
+        autoscaling_enabled = _soperator_worker_node_group_autoscaling_enabled_for_prompt(
+            payload=payload,
+            entry=entry,
+            full_path_label=full_path_label,
+            group_key=group_key,
+        )
+        if section == "autoscaling":
+            return field != "enabled" and not autoscaling_enabled
+        return True
+    if ".inputs.soperator.worker_ephemeral_nodes." in full_path_label:
+        if not has_soperator_target or install_mode != _SOPERATOR_INSTALL_MODE_PRODUCTION:
+            return True
+        if not full_path_label.endswith(
+            ".inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds"
+        ):
+            return True
+        return not _soperator_any_worker_node_group_ephemeral_enabled_for_prompt(
+            payload=payload,
+            entry=entry,
+            full_path_label=full_path_label,
+        )
+    if full_path_label.endswith(soperator_legacy_worker_field_suffixes) or any(
+        prefix in full_path_label for prefix in soperator_legacy_worker_field_prefixes
+    ):
+        return True
+    if full_path_label.endswith(soperator_fixed_count_field_suffixes):
         if not has_soperator_target or install_mode != _SOPERATOR_INSTALL_MODE_PRODUCTION:
             return True
         role = _soperator_count_role_from_prompt(full_path_label)
+        if not _soperator_worker_shape_active_for_prompt(
+            payload=payload,
+            entry=entry,
+            full_path_label=full_path_label,
+            role=role,
+        ):
+            return True
         return bool(role) and _soperator_autoscaling_enabled_for_prompt(
+            payload=payload,
+            entry=entry,
+            full_path_label=full_path_label,
+            role=role,
+        )
+    if full_path_label.endswith(soperator_nodes_per_group_field_suffixes):
+        if not has_soperator_target or install_mode != _SOPERATOR_INSTALL_MODE_PRODUCTION:
+            return True
+        role = _soperator_nodes_per_group_role_from_prompt(full_path_label)
+        return not _soperator_worker_shape_active_for_prompt(
             payload=payload,
             entry=entry,
             full_path_label=full_path_label,
@@ -20152,6 +21574,26 @@ def _prune_mk8s_node_group_defaults_without_soperator(
     infra_entries: tuple[ComponentEntry, ...],
 ) -> None:
     prune_inactive_mk8s_node_group_defaults(payload, infra_entries=infra_entries)
+
+
+def _prune_sfs_single_filesystem_inputs_for_mapped_filesystems(
+    payload: dict[str, Any],
+) -> bool:
+    changed = False
+    for row in _scope_rows(payload, scope="infra"):
+        if not isinstance(row, dict) or component_type_id(row) != "sfs":
+            continue
+        inputs = row.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        filesystems = inputs.get("filesystems")
+        if not (isinstance(filesystems, Mapping) and bool(filesystems)):
+            continue
+        for key in ("name", "size_gib", "mount_tag"):
+            if key in inputs:
+                del inputs[key]
+                changed = True
+    return changed
 
 
 def _skip_sfs_single_filesystem_prompt(
@@ -20202,15 +21644,15 @@ def _skip_sfs_multi_filesystem_prompt(
     return not (isinstance(filesystems, Mapping) and bool(filesystems))
 
 
-def _mk8s_gpu_validation_prompt_section(full_path_label: str) -> str:
+def _mk8s_gpu_deployment_testing_prompt_section(full_path_label: str) -> str:
     match = re.match(
-        r"^deploy\.targets\[[0-9]+\]\.validations\.mk8s_gpu\.([^.]+)\.",
+        r"^deploy\.targets\[[0-9]+\]\.deployment_testing\.mk8s_gpu\.([^.]+)\.",
         full_path_label,
     )
     return match.group(1) if match else ""
 
 
-def _mk8s_gpu_validation_prompt_target_ref(
+def _mk8s_gpu_deployment_testing_prompt_target_ref(
     payload: Mapping[str, Any],
     full_path_label: str,
 ) -> str:
@@ -20230,7 +21672,7 @@ def _mk8s_gpu_validation_prompt_target_ref(
     return normalize_component_token(row.get(INSTANCE_ID_FIELD))
 
 
-def _mk8s_gpu_validation_section_enabled(
+def _mk8s_gpu_deployment_testing_section_enabled(
     payload: dict[str, Any],
     *,
     full_path_label: str,
@@ -20259,13 +21701,14 @@ def _dynamic_required_prompt(
     if (
         entry.scope == "infra"
         and entry.id == "mk8s"
-        and full_path_label.endswith((".gpu_visibility.max_nodes", ".nccl.max_nodes"))
+        and full_path_label.endswith(".gpu_visibility.max_nodes")
     ):
-        section = _mk8s_gpu_validation_prompt_section(full_path_label)
+        section = _mk8s_gpu_deployment_testing_prompt_section(full_path_label)
         return bool(
             section
-            and _mk8s_gpu_validation_section_enabled(
+            and _mk8s_gpu_deployment_testing_section_enabled_for_prompt(
                 payload,
+                entry=entry,
                 full_path_label=full_path_label,
                 section=section,
             )
@@ -20305,7 +21748,7 @@ def _maybe_materialize_vm_preemptible_recovery_policy(
     _print_wizard_selected_field(recovery_policy_label, "FAIL")
 
 
-def _skip_mk8s_gpu_validation_prompt(
+def _skip_mk8s_gpu_deployment_testing_prompt(
     *,
     payload: dict[str, Any],
     entry: ComponentEntry,
@@ -20314,34 +21757,46 @@ def _skip_mk8s_gpu_validation_prompt(
     if (
         entry.scope != "infra"
         or entry.id != "mk8s"
-        or not _is_mk8s_gpu_validation_field(full_path_label)
+        or not _is_mk8s_gpu_deployment_testing_field(full_path_label)
     ):
         return False
     if not _payload_has_enabled_mk8s_gpu(payload):
         return True
-    section = _mk8s_gpu_validation_prompt_section(full_path_label)
-    target_ref = _mk8s_gpu_validation_prompt_target_ref(payload, full_path_label)
+    section = _mk8s_gpu_deployment_testing_prompt_section(full_path_label)
+    target_ref = _mk8s_gpu_deployment_testing_prompt_target_ref(payload, full_path_label)
     disabled_sections = set(mk8s_gpu_disabled_target_validations(payload).get(target_ref, ()))
     if section and section in disabled_sections:
         return True
     if (
-        section in {"gpu_visibility", "nccl"}
+        section == "gpu_visibility"
         and not full_path_label.endswith(f".{section}.enabled")
-        and not _mk8s_gpu_validation_section_enabled(
+        and not _mk8s_gpu_deployment_testing_section_enabled_for_prompt(
             payload,
+            entry=entry,
             full_path_label=full_path_label,
             section=section,
         )
     ):
         return True
-    if (
-        full_path_label.endswith(".validations.mk8s_gpu.health_checker.enabled")
-        and not has_mk8s_gpu_health_checker_app()
-    ):
-        return True
     return full_path_label.endswith(
-        ".validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps"
-    ) and not _payload_has_enabled_mk8s_gpu_cluster(payload)
+        ".deployment_testing.mk8s_gpu.health_checker.enabled"
+    ) and not has_mk8s_gpu_health_checker_app()
+
+
+def _mk8s_gpu_deployment_testing_section_enabled_for_prompt(
+    payload: dict[str, Any],
+    *,
+    entry: ComponentEntry,
+    full_path_label: str,
+    section: str,
+) -> bool:
+    prefix = full_path_label.split(f".{section}.", maxsplit=1)[0]
+    enabled_path = f"{prefix}.{section}.enabled"
+    enabled = _read_payload_field(payload, enabled_path)
+    if enabled is not None:
+        return enabled is not False
+    _ = entry
+    return True
 
 
 def _maybe_refresh_compute_boot_disk_defaults_after_shape_change(
@@ -20457,6 +21912,19 @@ def _prune_redundant_app_chart_default_values(
         component_path = _dynamic_app_chart_path(payload, chart_id, instance_id=instance_id)
         if component_path is None:
             continue
+        values_path = component_path + ("values",)
+        if not _payload_path_exists(payload, values_path):
+            continue
+        explicit_values = _get_payload_value(payload, values_path)
+        if not isinstance(explicit_values, Mapping):
+            continue
+        explicit_value_paths = {
+            path
+            for path in _collect_scalar_leaf_paths(explicit_values)
+            if not any(isinstance(segment, int) for segment in path)
+        }
+        if not explicit_value_paths:
+            continue
         chart_defaults = _app_chart_default_values(
             payload=payload,
             entry=entry,
@@ -20464,15 +21932,12 @@ def _prune_redundant_app_chart_default_values(
         )
         if not chart_defaults:
             continue
-        values_path = component_path + ("values",)
-        if not _payload_path_exists(payload, values_path):
-            continue
         for relative_path in _collect_scalar_leaf_paths(chart_defaults):
             if any(isinstance(segment, int) for segment in relative_path):
                 continue
-            full_path = values_path + relative_path
-            if not _payload_path_exists(payload, full_path):
+            if relative_path not in explicit_value_paths:
                 continue
+            full_path = values_path + relative_path
             explicit_value = _get_payload_value(payload, full_path)
             default_value = _get_payload_value(chart_defaults, relative_path)
             if explicit_value == default_value:
@@ -21714,7 +23179,7 @@ def _prompt_scalar_override(
                 raw = str(
                     typer.prompt(
                         prompt_text,
-                        default="" if skip_unsets else current,
+                        default="" if skip_unsets else str(current),
                     )
                 ).strip()
             except (KeyboardInterrupt, EOFError, typer.Abort):
@@ -21850,6 +23315,7 @@ def _run_component_field_wizard(
             payload,
             infra_entries=infra_entries,
         )
+        _prune_sfs_single_filesystem_inputs_for_mapped_filesystems(payload)
         return yaml.safe_dump(payload, sort_keys=False)
 
     def _selected_infra_component_ids() -> set[str]:
@@ -22123,8 +23589,8 @@ def _run_component_field_wizard(
             return "deploy target", f"{target_ref} / MysteryBox ESO sync"
         if remainder.startswith("observability."):
             return "deploy target", f"{target_ref} / observability"
-        if remainder.startswith("validations.mk8s_gpu."):
-            return "deploy target", f"{target_ref} / MK8s GPU validation"
+        if remainder.startswith("deployment_testing.mk8s_gpu."):
+            return "deploy target", f"{target_ref} / MK8s GPU deployment testing"
         return "deploy target", target_ref
 
     def _wizard_prompt_context(
@@ -22243,18 +23709,50 @@ def _run_component_field_wizard(
                 return choice
         return None
 
-    def _choice_reserved_vm_count(choice: OptionChoice | None) -> int:
-        if choice is None:
-            return 0
-        metadata_count = choice.metadata.get("reserved_vms")
-        if isinstance(metadata_count, int | float):
-            return int(metadata_count)
-        if isinstance(metadata_count, str) and metadata_count.strip().isdigit():
-            return int(metadata_count.strip())
-        match = re.search(r"reserved VMs=(\d+)", choice.label)
-        if not match:
-            return 0
-        return int(match.group(1))
+    def _recommended_choice(choices: Sequence[OptionChoice] | None) -> OptionChoice | None:
+        for choice in choices or ():
+            if choice.recommended:
+                return choice
+        return choices[0] if choices else None
+
+    def _materialize_node_group_gpu_cluster_fabric(
+        *,
+        inputs: dict[str, Any],
+        component_path_label: str,
+        group_key: str,
+        group: dict[str, Any],
+        platform_label: str,
+        preset_label: str,
+        reservation_policy: str,
+    ) -> OptionChoice | None:
+        if provider_lookup is None:
+            return None
+        fabric_label = f"{component_path_label}.inputs.gpu_clusters.{group_key}.infiniband_fabric"
+        fabric_choices = provider_lookup.resolve(
+            provider="mk8s_infiniband_fabrics",
+            args={
+                "platform_path": platform_label,
+                "preset_path": preset_label,
+                "reservation_policy": reservation_policy,
+            },
+            payload=payload,
+            field_path=fabric_label,
+        )
+        selected = _recommended_choice(fabric_choices)
+        if selected is None:
+            last_error = provider_lookup.last_error()
+            if last_error:
+                console.print(
+                    f"{warning_markup('GPU cluster fabric auto-selection skipped')}: "
+                    f"{escape(last_error)}"
+                )
+            return None
+        gpu_clusters = inputs.setdefault("gpu_clusters", {})
+        if not isinstance(gpu_clusters, dict):
+            return None
+        gpu_clusters[group_key] = {"infiniband_fabric": selected.value}
+        group["gpu_cluster_key"] = group_key
+        return selected
 
     def _run_plain_mk8s_node_group_loop(
         *,
@@ -22287,6 +23785,7 @@ def _run_component_field_wizard(
             type_hint: str | None = None,
             required: bool = False,
             unset_on_skip: bool = False,
+            print_selected: bool = True,
         ) -> tuple[object, str]:
             _print_wizard_component_selection_context(
                 current_label=context_label,
@@ -22304,7 +23803,8 @@ def _run_component_field_wizard(
                 return current, "quit"
             if _wizard_backtrack_requested(updated):
                 return current, "back"
-            _print_wizard_selected_field(path_label, updated)
+            if print_selected:
+                _print_wizard_selected_field(path_label, updated)
             return updated, "ok"
 
         def _prompt_required_text(path_label: str, current: str) -> tuple[str, str]:
@@ -22594,10 +24094,41 @@ def _run_component_field_wizard(
                 continue
             group["platform"] = str(platform).strip()
 
+            reservation_policy = "FORBID"
+            if gpu:
+                reservation_policy_value, status = _prompt_loop_value(
+                    f"{group_prefix}.reservation.policy",
+                    "AUTO",
+                    choices=[
+                        OptionChoice(
+                            value="AUTO",
+                            label="AUTO  (try selected reservations, then suitable capacity)",
+                        ),
+                        OptionChoice(value="FORBID", label="FORBID  (do not use reservations)"),
+                        OptionChoice(
+                            value="STRICT",
+                            label="STRICT  (use only selected/suitable reservations)",
+                        ),
+                    ],
+                    required=True,
+                )
+                if status == "quit":
+                    return None, True
+                if status == "back":
+                    _restart_group_creation(group_key)
+                    continue
+                reservation_policy = str(reservation_policy_value).strip().upper()
+                if reservation_policy not in {"AUTO", "FORBID", "STRICT"}:
+                    reservation_policy = "AUTO"
+                group["reservation"] = {"policy": reservation_policy}
+
             preset_label = f"{group_prefix}.preset"
+            preset_args = {"platform_path": platform_label}
+            if gpu:
+                preset_args["reservation_policy"] = reservation_policy
             preset_choices = _mk8s_provider_choices(
-                provider="compute_platform_presets",
-                args={"platform_path": platform_label},
+                provider="mk8s_gpu_capacity_choices" if gpu else "compute_platform_presets",
+                args=preset_args,
                 field_path=preset_label,
                 required=True,
             )
@@ -22605,23 +24136,48 @@ def _run_component_field_wizard(
                 payload=payload,
                 entry=entry,
                 full_path_label=preset_label,
+                provider_lookup=provider_lookup,
                 emitted_guidance=emitted_guidance,
             )
-            preset, status = _prompt_loop_value(
-                preset_label,
-                None,
-                choices=preset_choices,
-                required=True,
-            )
-            if status == "quit":
-                return None, True
-            if status == "back":
-                _restart_group_creation(group_key)
+            restart_current_group = False
+            selected_preset_choice: OptionChoice | None = None
+            while True:
+                preset, status = _prompt_loop_value(
+                    preset_label,
+                    None,
+                    choices=preset_choices,
+                    required=True,
+                    print_selected=not gpu,
+                )
+                if status == "quit":
+                    return None, True
+                if status == "back":
+                    _restart_group_creation(group_key)
+                    restart_current_group = True
+                    break
+                selected_preset_choice = _choice_by_value(preset_choices, preset)
+                if not gpu or not preset_choices or selected_preset_choice is not None:
+                    break
+                console.print(
+                    f"{error_markup('Invalid value')} for "
+                    f"'{preset_label}'. Select one of the live GPU capacity rows."
+                )
+            if restart_current_group:
                 continue
-            group["preset"] = str(preset).strip()
-            selected_capacity_has_reservations = (
-                _choice_reserved_vm_count(_choice_by_value(preset_choices, group["preset"])) > 0
-            )
+            selected_preset = _mk8s_gpu_capacity_choice_preset(selected_preset_choice)
+            group["preset"] = selected_preset or str(preset).strip()
+            if gpu:
+                _print_wizard_selected_field(preset_label, group["preset"])
+                selected_fabric = _mk8s_gpu_capacity_choice_fabric(selected_preset_choice)
+                if selected_fabric:
+                    gpu_clusters = inputs.setdefault("gpu_clusters", {})
+                    if isinstance(gpu_clusters, dict):
+                        gpu_clusters[group_key] = {"infiniband_fabric": selected_fabric}
+                        group["gpu_cluster_key"] = group_key
+                        _print_wizard_selected_field(
+                            f"{component_path_label}.inputs.gpu_clusters.{group_key}.infiniband_fabric",
+                            selected_fabric,
+                        )
             _maybe_print_selected_gpu_preset_guidance(
                 payload=payload,
                 entry=entry,
@@ -22692,87 +24248,20 @@ def _run_component_field_wizard(
                             preset_name=group["preset"],
                         )
                     )
-                if allow_gpu_cluster is True:
-                    enable_gpu_cluster, status = _prompt_loop_value(
-                        f"{group_prefix}.gpu_cluster.enabled",
-                        True,
-                        type_hint="bool",
+                if allow_gpu_cluster is True and not _non_empty_text(group.get("gpu_cluster_key")):
+                    _materialize_node_group_gpu_cluster_fabric(
+                        inputs=inputs,
+                        component_path_label=component_path_label,
+                        group_key=group_key,
+                        group=group,
+                        platform_label=platform_label,
+                        preset_label=preset_label,
+                        reservation_policy=reservation_policy,
                     )
-                    if status == "quit":
-                        return None, True
-                    if status == "back":
-                        _restart_group_creation(group_key)
-                        continue
-                    if bool(enable_gpu_cluster):
-                        fabric_label = (
-                            f"{component_path_label}.inputs.gpu_clusters.{group_key}"
-                            ".infiniband_fabric"
-                        )
-                        fabric_choices = _mk8s_provider_choices(
-                            provider="mk8s_infiniband_fabrics",
-                            args={
-                                "platform_path": platform_label,
-                                "preset_path": preset_label,
-                            },
-                            field_path=fabric_label,
-                            required=True,
-                        )
-                        fabric, status = _prompt_loop_value(
-                            fabric_label,
-                            None,
-                            choices=fabric_choices,
-                            required=True,
-                        )
-                        if status == "quit":
-                            return None, True
-                        if status == "back":
-                            _restart_group_creation(group_key)
-                            continue
-                        selected_fabric_choice = _choice_by_value(fabric_choices, fabric)
-                        if selected_fabric_choice is not None:
-                            selected_capacity_has_reservations = (
-                                _choice_reserved_vm_count(selected_fabric_choice) > 0
-                            )
-                        gpu_clusters = inputs.setdefault("gpu_clusters", {})
-                        if isinstance(gpu_clusters, dict):
-                            gpu_clusters[group_key] = {"infiniband_fabric": str(fabric).strip()}
-                            group["gpu_cluster_key"] = group_key
 
-                reservation_default = "AUTO" if selected_capacity_has_reservations else "FORBID"
-                if selected_capacity_has_reservations:
-                    guidance_key = f"{group_prefix}.reservation.policy.reserved-default"
-                    if guidance_key not in emitted_guidance:
-                        console.print(
-                            "[dim]Reservation guidance: the selected GPU shape/fabric has "
-                            "live reserved capacity, so cxcli defaults reservation.policy "
-                            "to AUTO. Choose FORBID only when you intentionally want "
-                            "on-demand capacity.[/dim]"
-                        )
-                        emitted_guidance.add(guidance_key)
-                reservation_policy, status = _prompt_loop_value(
-                    f"{group_prefix}.reservation.policy",
-                    reservation_default,
-                    choices=[
-                        OptionChoice(value="FORBID", label="FORBID  (do not use reservations)"),
-                        OptionChoice(
-                            value="AUTO",
-                            label="AUTO  (try selected reservations, then suitable capacity)",
-                        ),
-                        OptionChoice(
-                            value="STRICT",
-                            label="STRICT  (use only selected/suitable reservations)",
-                        ),
-                    ],
-                    required=True,
-                )
-                if status == "quit":
-                    return None, True
-                if status == "back":
-                    _restart_group_creation(group_key)
-                    continue
-                reservation_policy = str(reservation_policy).strip().upper()
                 if reservation_policy != "FORBID":
-                    reservation: dict[str, Any] = {"policy": reservation_policy}
+                    reservation: dict[str, Any] = dict(group.get("reservation", {}))
+                    reservation["policy"] = reservation_policy
                     reservation_choices = _mk8s_provider_choices(
                         provider="capacity_block_groups",
                         args={
@@ -24368,6 +25857,260 @@ def _run_component_field_wizard(
                     seen_prompt_labels.add(label)
                     prompt_paths.append(full_path)
 
+        def _soperator_worker_node_group_shard_size(group_key: str) -> int:
+            if component_path is None:
+                return 1
+            component_path_label = _format_payload_path(component_path)
+            raw_group = _read_payload_field(
+                payload,
+                f"{component_path_label}.inputs.node_groups.{group_key}",
+            )
+            if not isinstance(raw_group, Mapping):
+                return 1
+            node_count = _positive_int(raw_group.get("node_count"), default=0)
+            if node_count > 0:
+                return node_count
+            raw_autoscaling = raw_group.get("autoscaling")
+            if isinstance(raw_autoscaling, Mapping):
+                max_node_count = _positive_int(raw_autoscaling.get("max_node_count"), default=0)
+                if max_node_count > 0:
+                    return max_node_count
+            return 1
+
+        soperator_worker_bulk_scope_keys: dict[str, tuple[str, ...]] = {}
+        soperator_worker_bulk_apply_enabled: dict[str, bool] = {}
+        soperator_worker_bulk_autoscaling_enabled: dict[str, bool] = {}
+        soperator_worker_bulk_applied_keys: set[str] = set()
+
+        def _soperator_worker_group_kind(group_key: str) -> str:
+            if component_path is None:
+                return ""
+            component_path_label = _format_payload_path(component_path)
+            raw_group = _read_payload_field(
+                payload,
+                f"{component_path_label}.inputs.node_groups.{group_key}",
+            )
+            if not isinstance(raw_group, Mapping):
+                return ""
+            return "gpu" if _config_bool(raw_group.get("gpu"), default=False) else "cpu"
+
+        def _soperator_worker_bulk_scope_token(group_keys: Sequence[str]) -> str:
+            kinds: set[str] = set()
+            for group_key in group_keys:
+                kind = _soperator_worker_group_kind(group_key)
+                if kind:
+                    kinds.add(kind)
+            if kinds == {"cpu"}:
+                return "all_cpu_worker_shards"
+            if kinds == {"gpu"}:
+                return "all_gpu_worker_shards"
+            if kinds == {"cpu", "gpu"}:
+                return "all_worker_shards"
+            return "all_worker_shards"
+
+        def _soperator_worker_bulk_prompt_label(scope_token: str, field: str) -> str:
+            if component_path is None:
+                return ""
+            component_path_label = _format_payload_path(component_path)
+            field_label = _SOPERATOR_WORKER_BULK_PROMPT_FIELD_LABELS[field]
+            return (
+                f"{component_path_label}.inputs.soperator.worker_node_groups."
+                f"{scope_token}_{field_label}"
+            )
+
+        def _soperator_worker_group_bulk_covered(group_key: str) -> bool:
+            return group_key in soperator_worker_bulk_applied_keys
+
+        def _set_soperator_worker_node_group_autoscaling_enabled(
+            group_key: str,
+            enabled: bool,
+        ) -> None:
+            if component_path is None:
+                return
+            component_path_label = _format_payload_path(component_path)
+            group_prefix = (
+                f"{component_path_label}.inputs.soperator.worker_node_groups.{group_key}"
+            )
+            enabled_path = _parse_payload_path_label(f"{group_prefix}.autoscaling.enabled")
+            ephemeral_path = _parse_payload_path_label(f"{group_prefix}.ephemeral_nodes.enabled")
+            if enabled_path is None or ephemeral_path is None:
+                return
+            _set_payload_value_creating_containers(payload, enabled_path, enabled)
+            if enabled:
+                min_path = _parse_payload_path_label(f"{group_prefix}.autoscaling.min_node_count")
+                max_path = _parse_payload_path_label(f"{group_prefix}.autoscaling.max_node_count")
+                if min_path is not None:
+                    _set_payload_value_creating_containers(payload, min_path, 0)
+                if max_path is not None:
+                    _set_payload_value_creating_containers(
+                        payload,
+                        max_path,
+                        _soperator_worker_node_group_shard_size(group_key),
+                    )
+                _set_payload_value_creating_containers(payload, ephemeral_path, True)
+                return
+            _clear_soperator_worker_node_group_autoscaling_bounds(payload, group_prefix)
+            _set_payload_value_creating_containers(payload, ephemeral_path, False)
+
+        def _apply_soperator_worker_bulk_choice(
+            *,
+            group_keys: Sequence[str],
+            enabled: bool,
+        ) -> None:
+            for group_key in group_keys:
+                _set_soperator_worker_node_group_autoscaling_enabled(group_key, enabled)
+            soperator_worker_bulk_applied_keys.update(group_keys)
+
+        def _clear_soperator_worker_bulk_coverage(group_keys: Sequence[str]) -> None:
+            for group_key in group_keys:
+                soperator_worker_bulk_applied_keys.discard(group_key)
+
+        def _soperator_worker_bulk_prompt_current(full_path_label: str, fallback: object) -> object:
+            bulk_prompt = _soperator_worker_bulk_control_prompt(full_path_label)
+            if bulk_prompt is None:
+                return fallback
+            scope_token, field = bulk_prompt
+            if field == "apply_to_all":
+                return soperator_worker_bulk_apply_enabled.get(scope_token, True)
+            if field == "autoscaling.enabled":
+                return soperator_worker_bulk_autoscaling_enabled.get(scope_token, False)
+            return fallback
+
+        def _skip_soperator_worker_bulk_prompt(full_path_label: str) -> bool:
+            bulk_prompt = _soperator_worker_bulk_control_prompt(full_path_label)
+            if bulk_prompt is None:
+                return False
+            scope_token, field = bulk_prompt
+            group_keys = soperator_worker_bulk_scope_keys.get(scope_token, ())
+            if len(group_keys) <= 1:
+                return True
+            return field == "autoscaling.enabled" and not soperator_worker_bulk_apply_enabled.get(
+                scope_token,
+                True,
+            )
+
+        def _handle_soperator_worker_bulk_prompt(
+            *,
+            full_path_label: str,
+            updated: object,
+        ) -> bool:
+            bulk_prompt = _soperator_worker_bulk_control_prompt(full_path_label)
+            if bulk_prompt is None:
+                return False
+            scope_token, field = bulk_prompt
+            group_keys = soperator_worker_bulk_scope_keys.get(scope_token, ())
+            if field == "apply_to_all":
+                applies = _config_bool(updated, default=True)
+                soperator_worker_bulk_apply_enabled[scope_token] = applies
+                if not applies:
+                    _clear_soperator_worker_bulk_coverage(group_keys)
+                return True
+            if field == "autoscaling.enabled":
+                enabled = _config_bool(updated, default=False)
+                soperator_worker_bulk_autoscaling_enabled[scope_token] = enabled
+                if not soperator_worker_bulk_apply_enabled.get(scope_token, True):
+                    _clear_soperator_worker_bulk_coverage(group_keys)
+                    return True
+                _apply_soperator_worker_bulk_choice(
+                    group_keys=group_keys,
+                    enabled=enabled,
+                )
+                return True
+            return False
+
+        def _append_soperator_managed_worker_control_prompt_paths() -> None:
+            if entry.scope != "infra" or entry.id != "mk8s" or component_path is None:
+                return
+            component_path_label = _format_payload_path(component_path)
+            context_label = f"{component_path_label}.inputs.soperator.worker_node_groups"
+            has_soperator_target, install_mode = _mk8s_soperator_prompt_context(
+                payload=payload,
+                entry=entry,
+                full_path_label=context_label,
+            )
+            if not has_soperator_target or install_mode != _SOPERATOR_INSTALL_MODE_PRODUCTION:
+                return
+            try:
+                _materialize_soperator_component_defaults(payload)
+            except ValueError:
+                return
+            raw_groups = _read_payload_field(
+                payload,
+                f"{component_path_label}.inputs.soperator.worker_node_groups",
+            )
+            if not isinstance(raw_groups, Mapping):
+                return
+            ordered_group_keys = [
+                str(key)
+                for key in sorted(
+                    raw_groups,
+                    key=lambda raw_key: re.sub(
+                        r"\d+",
+                        lambda match: f"{int(match.group(0)):08d}",
+                        str(raw_key),
+                    ),
+                )
+            ]
+            if len(ordered_group_keys) > 1:
+                scope_token = _soperator_worker_bulk_scope_token(ordered_group_keys)
+                soperator_worker_bulk_scope_keys[scope_token] = tuple(ordered_group_keys)
+                for field in ("apply_to_all", "autoscaling.enabled"):
+                    label = _soperator_worker_bulk_prompt_label(scope_token, field)
+                    full_path = _parse_payload_path_label(label)
+                    if full_path is None or full_path in bound_prompt_paths:
+                        continue
+                    virtual_prompt_defaults[full_path] = field == "apply_to_all"
+                    if full_path in prompt_paths or label in seen_prompt_labels:
+                        continue
+                    seen_prompt_labels.add(label)
+                    prompt_paths.append(full_path)
+                    field_type_hints[label] = "bool"
+            for raw_group_key in ordered_group_keys:
+                raw_group = raw_groups.get(raw_group_key)
+                if not isinstance(raw_group, Mapping):
+                    continue
+                shard_size = _soperator_worker_node_group_shard_size(raw_group_key)
+                for relative_path, type_hint in _SOPERATOR_WORKER_NODE_GROUP_CONTROL_PROMPT_FIELDS:
+                    full_path = (
+                        component_path
+                        + ("inputs", "soperator", "worker_node_groups", raw_group_key)
+                        + tuple(relative_path)
+                    )
+                    if full_path in bound_prompt_paths:
+                        continue
+                    if not _payload_path_exists(payload, full_path):
+                        if relative_path == ("autoscaling", "min_node_count"):
+                            virtual_prompt_defaults[full_path] = 0
+                        elif relative_path == ("autoscaling", "max_node_count"):
+                            virtual_prompt_defaults[full_path] = shard_size
+                    if full_path in prompt_paths:
+                        continue
+                    label = _format_payload_path(full_path)
+                    if label in seen_prompt_labels:
+                        continue
+                    if not _provider_prompt_dependencies_ready(
+                        payload=payload,
+                        entry=entry,
+                        full_path_label=label,
+                    ):
+                        continue
+                    seen_prompt_labels.add(label)
+                    prompt_paths.append(full_path)
+                    field_type_hints[label] = type_hint
+
+        base_module_dependency_expander = module_dependency_expander
+
+        def _expand_prompt_dependencies() -> None:
+            if base_module_dependency_expander is not None:
+                base_module_dependency_expander()
+            _append_soperator_managed_worker_control_prompt_paths()
+
+        if base_module_dependency_expander is not None or (
+            entry.scope == "infra" and entry.id == "mk8s" and component_path is not None
+        ):
+            module_dependency_expander = _expand_prompt_dependencies
+            module_dependency_expander()
+
         prompt_paths.sort(
             key=lambda path: _prompt_path_sort_key(
                 path,
@@ -24455,7 +26198,7 @@ def _run_component_field_wizard(
                     and not module_field_is_enabled(_normalize_leaf_name(str(full_path[-1])))
                 ):
                     continue
-                if _skip_mk8s_gpu_validation_prompt(
+                if _skip_mk8s_gpu_deployment_testing_prompt(
                     payload=payload,
                     entry=entry,
                     full_path_label=full_path_label,
@@ -24537,6 +26280,16 @@ def _run_component_field_wizard(
                     full_path_label=full_path_label,
                 ):
                     continue
+                if _skip_soperator_worker_bulk_prompt(full_path_label):
+                    continue
+                worker_control_prompt = _soperator_worker_node_group_control_prompt(
+                    full_path_label
+                )
+                if (
+                    worker_control_prompt is not None
+                    and _soperator_worker_group_bulk_covered(worker_control_prompt[0])
+                ):
+                    continue
                 if _skip_soperator_managed_mk8s_prompt(
                     payload=payload,
                     entry=entry,
@@ -24600,6 +26353,7 @@ def _run_component_field_wizard(
                                 full_path,
                                 copy.deepcopy(provider_default),
                             )
+                current = _soperator_worker_bulk_prompt_current(full_path_label, current)
                 previous_component_inputs: dict[str, Any] | None = None
                 if (
                     entry.scope == "infra"
@@ -24720,9 +26474,10 @@ def _run_component_field_wizard(
                     payload=payload,
                     entry=entry,
                     full_path_label=full_path_label,
+                    provider_lookup=provider_lookup,
                     emitted_guidance=emitted_prompt_guidance,
                 )
-                _maybe_print_mk8s_gpu_validation_prompt_guidance(
+                _maybe_print_mk8s_gpu_deployment_testing_prompt_guidance(
                     full_path_label=full_path_label,
                     emitted_guidance=emitted_prompt_guidance,
                 )
@@ -24761,6 +26516,10 @@ def _run_component_field_wizard(
                     current_label=context_label,
                     current_scope=context_scope,
                 )
+                _maybe_print_soperator_worker_bulk_prompt_comment(full_path_label)
+                is_soperator_worker_bulk_prompt = (
+                    _soperator_worker_bulk_control_prompt(full_path_label) is not None
+                )
                 write_default_to_config = (
                     full_path in virtual_prompt_defaults
                     and _wizard_field_write_default_to_config(
@@ -24778,6 +26537,7 @@ def _run_component_field_wizard(
                         not prompt_required
                         and not path_existed_before_prompt
                         and not write_default_to_config
+                        and not is_soperator_worker_bulk_prompt
                     ),
                 )
                 if should_stop:
@@ -24824,6 +26584,7 @@ def _run_component_field_wizard(
                         current_label=context_label,
                         current_scope=context_scope,
                     )
+                    _maybe_print_soperator_worker_bulk_prompt_comment(full_path_label)
                     updated, should_stop = _prompt_scalar_override(
                         full_path_label,
                         updated,
@@ -24834,6 +26595,7 @@ def _run_component_field_wizard(
                             not prompt_required
                             and not path_existed_before_prompt
                             and not write_default_to_config
+                            and not is_soperator_worker_bulk_prompt
                         ),
                     )
                     if should_stop:
@@ -24850,8 +26612,37 @@ def _run_component_field_wizard(
                         break
                 if backtracked:
                     continue
+                selected_choice = _choice_by_value(field_choices, updated)
+                if selected_choice is not None:
+                    materialized = _materialize_mk8s_gpu_capacity_choice(
+                        payload=payload,
+                        entry=entry,
+                        full_path_label=full_path_label,
+                        choice=selected_choice,
+                        emit_selection=True,
+                    )
+                    if materialized is not None:
+                        updated = materialized
                 if not prompt_history or prompt_history[-1] != full_path:
                     prompt_history.append(full_path)
+                if _handle_soperator_worker_bulk_prompt(
+                    full_path_label=full_path_label,
+                    updated=updated,
+                ):
+                    _print_wizard_selected_field(full_path_label, updated)
+                    if module_dependency_expander is not None:
+                        before_expand = len(prompt_paths)
+                        module_dependency_expander()
+                        if len(prompt_paths) > before_expand:
+                            prompt_paths[prompt_index:] = sorted(
+                                prompt_paths[prompt_index:],
+                                key=lambda path: _prompt_path_sort_key(
+                                    path,
+                                    required_leaf_names=required_leaf_names,
+                                    required_prompt_labels=required_prompt_labels,
+                                ),
+                            )
+                    continue
                 if full_path in virtual_prompt_defaults:
                     default_value = virtual_prompt_defaults[full_path]
                     if updated is None:
@@ -24872,6 +26663,12 @@ def _run_component_field_wizard(
                     _set_payload_value_creating_containers(payload, full_path, updated)
                 else:
                     _set_payload_value(payload, full_path, updated)
+                _sync_soperator_worker_node_group_controls_after_prompt(
+                    payload=payload,
+                    entry=entry,
+                    full_path_label=full_path_label,
+                    value=updated,
+                )
                 _print_wizard_selected_field(full_path_label, updated)
                 _maybe_refresh_compute_boot_disk_defaults_after_shape_change(
                     payload=payload,
@@ -25638,14 +27435,14 @@ def _provider_allowed_values(
     field_path: str,
 ) -> set[str]:
     return {
-        str(choice.value).strip()
+        value
         for choice in provider_lookup.resolve(
             provider=provider,
             args=args,
             payload=payload,
             field_path=field_path,
         )
-        if str(choice.value).strip()
+        for value in _provider_choice_allowed_values(choice)
     }
 
 
@@ -26217,36 +28014,36 @@ def _validate_component_sources_registry(
                 f"mk8s gpu app role '{role_name}' is declared more than once: {', '.join(sorted(app_ids))}"
             )
     if mk8s_gpu_settings is not None and "mk8s" in active_entry_ids:
-        gpu_visibility_settings = mk8s_gpu_settings.validations.gpu_visibility
+        gpu_visibility_settings = mk8s_gpu_settings.deployment_testing.gpu_visibility
         if gpu_visibility_settings.enabled_by_default and (
             not gpu_visibility_settings.namespace
             or not gpu_visibility_settings.image
             or not gpu_visibility_settings.timeout
         ):
             issues.append(
-                "components.infra.mk8s.cli.gpu.validations.gpu_visibility must set namespace, image, and timeout when enabled_by_default=true"
+                "components.infra.mk8s.cli.gpu.deployment_testing.gpu_visibility must set namespace, image, and timeout when enabled_by_default=true"
             )
-        nccl_settings = mk8s_gpu_settings.validations.nccl
-        if nccl_settings.enabled_by_default and (
+        nccl_settings = mk8s_gpu_settings.benchmarks.nccl
+        if (
             not nccl_settings.chart_component_id
             or not nccl_settings.timeout
             or not nccl_settings.training_operator_manifest
             or not nccl_settings.training_operator_namespace
         ):
             issues.append(
-                "components.infra.mk8s.cli.gpu.validations.nccl must set chart_component_id, timeout, and training operator settings when enabled_by_default=true"
+                "components.infra.mk8s.cli.gpu.benchmarks.nccl must set chart_component_id, timeout, and training operator settings"
             )
         nccl_chart_id = _non_empty_text(nccl_settings.chart_component_id).lower()
         if nccl_chart_id:
             nccl_chart = declared_app_sources.get(nccl_chart_id)
             if nccl_chart is None:
                 issues.append(
-                    "components.infra.mk8s.cli.gpu.validations.nccl.chart_component_id "
+                    "components.infra.mk8s.cli.gpu.benchmarks.nccl.chart_component_id "
                     f"references unknown apps component '{nccl_chart_id}'"
                 )
             elif getattr(getattr(nccl_chart, "usage", None), "lifecycle", "") != "transient":
                 issues.append(
-                    "components.infra.mk8s.cli.gpu.validations.nccl.chart_component_id "
+                    "components.infra.mk8s.cli.gpu.benchmarks.nccl.chart_component_id "
                     f"references apps component '{nccl_chart_id}', which must declare "
                     "usage.lifecycle=transient"
                 )
@@ -26697,7 +28494,13 @@ def _materialize_singleton_provider_defaults(
             target_path = _parse_payload_path_label(full_path_label)
             if target_path is None:
                 continue
-            _set_payload_value_creating_containers(payload, target_path, choices[0].value)
+            selected_value = _materialize_mk8s_gpu_capacity_choice(
+                payload=payload,
+                entry=entry,
+                full_path_label=full_path_label,
+                choice=choices[0],
+            )
+            _set_payload_value_creating_containers(payload, target_path, selected_value)
 
 
 def _field_option_name(field_name: str) -> str:
@@ -27702,6 +29505,26 @@ def _validate_strict_config(
         _enabled_custom_module_input_schema_issues(payload=payload, infra_entries=infra_entries)
     )
     issues.extend(_placeholder_value_issues(payload))
+    try:
+        from .runtime_component_validation import validate_component_runtime_rules
+
+        def _strict_runtime_get_path(
+            node: Mapping[str, Any],
+            path: str,
+            default: Any = None,
+        ) -> Any:
+            resolved = read_path_with_catalog(node, path)
+            return default if resolved is None else resolved
+
+        validate_component_runtime_rules(
+            payload,
+            get_path=_strict_runtime_get_path,
+            as_text=lambda value: "" if value is None else str(value).strip(),
+            id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
+            env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
+        )
+    except ValueError as exc:
+        issues.append(str(exc))
     if issues:
         raise RuntimeError("Strict validation failed:\n  - " + "\n  - ".join(issues))
 
@@ -30380,28 +32203,153 @@ def _filter_validations_for_target_refs(
     return selected
 
 
+_MK8S_CLUSTER_SMOKE_VALIDATION_KINDS = {"mk8s_cluster_smoke"}
 _MK8S_GPU_VALIDATION_KINDS = {
     "mk8s_gpu_operator_readiness",
     "mk8s_gpu_visibility",
-    "mk8s_nccl",
 }
 _OBSERVABILITY_VALIDATION_KINDS = {OBSERVABILITY_INGESTION_VALIDATION_KIND}
 _MYSTERYBOX_ESO_VALIDATION_KINDS = {MYSTERYBOX_ESO_CONNECTIVITY_VALIDATION_KIND}
 _DEPLOY_VALIDATION_KINDS = (
-    _MK8S_GPU_VALIDATION_KINDS
+    _MK8S_CLUSTER_SMOKE_VALIDATION_KINDS
+    | _MK8S_GPU_VALIDATION_KINDS
     | _OBSERVABILITY_VALIDATION_KINDS
     | _MYSTERYBOX_ESO_VALIDATION_KINDS
     | {SOPERATOR_CLUSTER_VALIDATION_KIND}
+)
+_NON_DEPLOY_VALIDATION_KINDS: set[str] = set()
+_PRE_SOPERATOR_MK8S_VALIDATION_KINDS = (
+    _MK8S_CLUSTER_SMOKE_VALIDATION_KINDS | _MK8S_GPU_VALIDATION_KINDS
 )
 
 
 def _deploy_validation_specs(config: Any) -> list[dict[str, Any]]:
     return [
+        *mk8s_cluster_smoke_validation_specs(config),
         *mk8s_gpu_validation_specs(config),
         *soperator_cluster_validation_specs(config),
         *observability_validation_specs(config),
         *mysterybox_eso_validation_specs(config),
     ]
+
+
+def _deploy_validation_kind(item: Mapping[str, Any]) -> str:
+    return str(item.get("kind", "") or "").strip()
+
+
+def _unsupported_manifest_deploy_validation_kinds(
+    validations: Sequence[Mapping[str, Any]],
+) -> tuple[str, ...]:
+    unsupported = {
+        _deploy_validation_kind(item)
+        for item in validations
+        if _deploy_validation_kind(item)
+        and _deploy_validation_kind(item) not in _DEPLOY_VALIDATION_KINDS
+        and _deploy_validation_kind(item) not in _NON_DEPLOY_VALIDATION_KINDS
+    }
+    return tuple(sorted(unsupported))
+
+
+def _raise_if_manifest_has_unsupported_deploy_validation_kinds(
+    validations: Sequence[Mapping[str, Any]],
+    *,
+    config_path: Path,
+) -> None:
+    unsupported = _unsupported_manifest_deploy_validation_kinds(validations)
+    if not unsupported:
+        return
+    raise RuntimeError(
+        "Generated manifest contains unsupported deploy validation kind(s): "
+        + ", ".join(unsupported)
+        + f". Rerender with `nebius-cxcli render {config_path}`."
+    )
+
+
+def _deploy_validation_runner_group(kind: str) -> str:
+    if kind in _PRE_SOPERATOR_MK8S_VALIDATION_KINDS:
+        return "mk8s_gpu"
+    if kind in _OBSERVABILITY_VALIDATION_KINDS:
+        return "observability"
+    if kind in _MYSTERYBOX_ESO_VALIDATION_KINDS:
+        return "mysterybox_eso"
+    if kind == SOPERATOR_CLUSTER_VALIDATION_KIND:
+        return "soperator"
+    return ""
+
+
+def _ordered_post_soperator_validations(
+    config: Any,
+    *,
+    target_ref: str,
+    validations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not _target_has_scale_from_zero_gpu_worker(config, target_ref=target_ref):
+        return validations
+    soperator_validations = [
+        item
+        for item in validations
+        if _deploy_validation_kind(item) == SOPERATOR_CLUSTER_VALIDATION_KIND
+    ]
+    gpu_validations = [
+        item
+        for item in validations
+        if _deploy_validation_kind(item) in _PRE_SOPERATOR_MK8S_VALIDATION_KINDS
+    ]
+    if not soperator_validations or not gpu_validations:
+        return validations
+
+    ordered: list[dict[str, Any]] = []
+    inserted_soperator = False
+    for item in validations:
+        kind = _deploy_validation_kind(item)
+        if kind == SOPERATOR_CLUSTER_VALIDATION_KIND:
+            continue
+        if kind in _PRE_SOPERATOR_MK8S_VALIDATION_KINDS and not inserted_soperator:
+            ordered.extend(soperator_validations)
+            inserted_soperator = True
+        ordered.append(item)
+    if not inserted_soperator:
+        ordered.extend(soperator_validations)
+    return ordered
+
+
+def _run_deploy_validation_batch(
+    group: str,
+    validations: list[dict[str, Any]],
+    *,
+    reports_dir: Path,
+    extra_env: dict[str, str] | None,
+    emit: Callable[[str], None] | None,
+) -> list[Path]:
+    if group == "mk8s_gpu":
+        return run_mk8s_gpu_validations(
+            validations,
+            reports_dir=reports_dir,
+            extra_env=extra_env,
+            emit=emit,
+        )
+    if group == "observability":
+        return run_observability_validations(
+            validations,
+            reports_dir=reports_dir,
+            extra_env=extra_env,
+            emit=emit,
+        )
+    if group == "mysterybox_eso":
+        return run_mysterybox_eso_validations(
+            validations,
+            reports_dir=reports_dir,
+            extra_env=extra_env,
+            emit=emit,
+        )
+    if group == "soperator":
+        return run_soperator_cluster_validations(
+            validations,
+            reports_dir=reports_dir,
+            extra_env=extra_env,
+            emit=emit,
+        )
+    return []
 
 
 def _run_deploy_validations(
@@ -30425,57 +32373,28 @@ def _run_deploy_validations(
             + f". Rerender with `nebius-cxcli render {reports_dir.parent.parent / 'config.yaml'}`."
         )
     written: list[Path] = []
-    gpu_validations = [
-        item
-        for item in validations
-        if str(item.get("kind", "") or "").strip() in _MK8S_GPU_VALIDATION_KINDS
-    ]
-    observability_validations = [
-        item
-        for item in validations
-        if str(item.get("kind", "") or "").strip() in _OBSERVABILITY_VALIDATION_KINDS
-    ]
-    mysterybox_eso_validations = [
-        item
-        for item in validations
-        if str(item.get("kind", "") or "").strip() in _MYSTERYBOX_ESO_VALIDATION_KINDS
-    ]
-    soperator_validations = [
-        item
-        for item in validations
-        if str(item.get("kind", "") or "").strip() == SOPERATOR_CLUSTER_VALIDATION_KIND
-    ]
-    if gpu_validations:
-        written.extend(
-            run_mk8s_gpu_validations(
-                gpu_validations,
-                reports_dir=reports_dir,
-                extra_env=extra_env,
-                emit=emit,
+    current_group = ""
+    current_batch: list[dict[str, Any]] = []
+    for item in validations:
+        group = _deploy_validation_runner_group(_deploy_validation_kind(item))
+        if current_batch and group != current_group:
+            written.extend(
+                _run_deploy_validation_batch(
+                    current_group,
+                    current_batch,
+                    reports_dir=reports_dir,
+                    extra_env=extra_env,
+                    emit=emit,
+                )
             )
-        )
-    if observability_validations:
+            current_batch = []
+        current_group = group
+        current_batch.append(item)
+    if current_batch:
         written.extend(
-            run_observability_validations(
-                observability_validations,
-                reports_dir=reports_dir,
-                extra_env=extra_env,
-                emit=emit,
-            )
-        )
-    if mysterybox_eso_validations:
-        written.extend(
-            run_mysterybox_eso_validations(
-                mysterybox_eso_validations,
-                reports_dir=reports_dir,
-                extra_env=extra_env,
-                emit=emit,
-            )
-        )
-    if soperator_validations:
-        written.extend(
-            run_soperator_cluster_validations(
-                soperator_validations,
+            _run_deploy_validation_batch(
+                current_group,
+                current_batch,
                 reports_dir=reports_dir,
                 extra_env=extra_env,
                 emit=emit,
@@ -30512,12 +32431,424 @@ def _run_target_deploy_validations(
         )
 
 
+_ACCEPTANCE_SOPERATOR_SUITES = {"soperator", "soperator-slurm", "slurm"}
+_ACCEPTANCE_K8S_SUITES = {"k8s", "k8s-cuda", "cuda"}
+_ACCEPTANCE_ALL_SUITES = _ACCEPTANCE_SOPERATOR_SUITES | _ACCEPTANCE_K8S_SUITES
+
+
+def _normalized_acceptance_suites(raw_suites: Sequence[str] | None) -> set[str]:
+    suites: set[str] = set()
+    invalid: list[str] = []
+    for raw in raw_suites or ():
+        for item in str(raw or "").split(","):
+            suite = normalize_component_token(item)
+            if not suite:
+                continue
+            if suite not in _ACCEPTANCE_ALL_SUITES:
+                invalid.append(item)
+                continue
+            suites.add(suite)
+    if invalid:
+        supported = ", ".join(sorted(_ACCEPTANCE_ALL_SUITES))
+        raise ValueError(
+            "Unsupported --suite value(s): "
+            + ", ".join(invalid)
+            + f". Supported values: {supported}"
+        )
+    return suites
+
+
+def _acceptance_target_refs(targets: Sequence[Mapping[str, Any]]) -> set[str]:
+    return {
+        str(target.get("target_ref") or "").strip()
+        for target in targets
+        if str(target.get("target_ref") or "").strip()
+    }
+
+
+def _filter_acceptance_specs_for_targets(
+    specs: Sequence[Mapping[str, Any]],
+    *,
+    target_refs: set[str],
+) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    for spec in specs:
+        target_ref = str(spec.get("target_ref") or "").strip()
+        if target_ref and target_ref not in target_refs:
+            continue
+        selected.append(dict(spec))
+    return selected
+
+
+def _require_acceptance_target_selection(
+    *,
+    requested_target_ref: str | None,
+    all_targets: bool,
+) -> None:
+    if requested_target_ref or all_targets:
+        return
+    raise ValueError("Select one target with --target or use --all-targets.")
+
+
+def _raise_on_duplicate_acceptance_reports(specs: Sequence[Mapping[str, Any]]) -> None:
+    by_report: dict[str, list[str]] = {}
+    for spec in specs:
+        report_file = str(spec.get("report_file") or "").strip()
+        if not report_file:
+            continue
+        by_report.setdefault(report_file, []).append(str(spec.get("name") or "acceptance test"))
+    duplicates = {path: names for path, names in by_report.items() if len(names) > 1}
+    if duplicates:
+        details = "; ".join(f"{path}: {', '.join(names)}" for path, names in duplicates.items())
+        raise RuntimeError(
+            "Acceptance suites would write the same canonical report file. Select one "
+            "suite family per target for each command. Conflicts: "
+            f"{details}"
+        )
+
+
+def _run_acceptance_smoke_command(
+    *,
+    config_path: Path,
+    requested_target_ref: str | None,
+    all_targets: bool,
+    include_k8s: bool,
+    include_soperator: bool,
+    suites: Sequence[str] | None,
+    batch_size: int,
+    concurrency: int,
+    continue_on_failure: bool,
+) -> list[Path]:
+    config, paths, manifest = _load_deploy_context_readonly(config_path)
+    if _manifest_missing_deploy_validations(manifest):
+        raise RuntimeError(
+            "Generated manifest is missing deploy.validations metadata. "
+            f"Rerender with `nebius-cxcli render {paths.config_path}` before acceptance-test."
+        )
+    _require_acceptance_target_selection(
+        requested_target_ref=requested_target_ref,
+        all_targets=all_targets,
+    )
+    selected_targets = _resolve_deploy_run_targets(
+        manifest,
+        requested_target_ref=requested_target_ref,
+        all_targets=all_targets,
+    )
+    if not selected_targets:
+        raise RuntimeError("No built-in cluster targets are available for acceptance-test.")
+
+    target_refs = _acceptance_target_refs(selected_targets)
+    suite_tokens = _normalized_acceptance_suites(suites)
+    explicit_k8s_suite = bool(suite_tokens & _ACCEPTANCE_K8S_SUITES)
+    explicit_soperator_suite = bool(suite_tokens & _ACCEPTANCE_SOPERATOR_SUITES)
+    suite_filter_active = bool(include_k8s or include_soperator or suite_tokens)
+    run_k8s = include_k8s or explicit_k8s_suite or not suite_filter_active
+    run_soperator = include_soperator or explicit_soperator_suite or not suite_filter_active
+
+    specs: list[dict[str, Any]] = []
+    if run_soperator:
+        specs.extend(
+            _filter_acceptance_specs_for_targets(
+                soperator_acceptance_smoke_specs(
+                    config,
+                    batch_size=batch_size,
+                    concurrency=concurrency,
+                    continue_on_failure=continue_on_failure,
+                ),
+                target_refs=target_refs,
+            )
+        )
+    if run_k8s:
+        specs.extend(
+            _filter_acceptance_specs_for_targets(
+                mk8s_acceptance_smoke_validation_specs(
+                    config,
+                    include_soperator_targets=explicit_k8s_suite,
+                ),
+                target_refs=target_refs,
+            )
+        )
+    if not specs:
+        raise RuntimeError(
+            "No acceptance smoke suites matched the selected target(s). Use --k8s, "
+            "--soperator, or --suite to select an available suite."
+        )
+    _raise_on_duplicate_acceptance_reports(specs)
+
+    paths.reports_dir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    validation_error: Exception | None = None
+    set_current_context = len(selected_targets) == 1 and not all_targets
+    for target in selected_targets:
+        target_ref = str(target.get("target_ref") or "").strip()
+        target_specs = _filter_acceptance_specs_for_targets(specs, target_refs={target_ref})
+        if not target_specs:
+            continue
+        if len(selected_targets) > 1:
+            console.print(f"[bold]Target {target_ref}[/bold]")
+        with ExitStack() as stack:
+            kube_env = _prepare_cluster_handoff_kube_env(
+                config,
+                paths,
+                stack=stack,
+                target=target,
+                persist_local_kubeconfig=True,
+                set_current_context=set_current_context,
+            )
+            with console.status(
+                f"[cyan]Running acceptance smoke tests for {target_ref}...[/cyan]",
+                spinner="dots",
+            ) as status:
+                last_validation_phase = ""
+
+                def _emit_validation_phase(message: str) -> None:
+                    nonlocal last_validation_phase
+                    status.update(message)
+                    if not _console_is_terminal() and message != last_validation_phase:
+                        console.print(message)
+                    last_validation_phase = message
+
+                for group, group_specs in (
+                    (
+                        "soperator",
+                        [
+                            item
+                            for item in target_specs
+                            if str(item.get("kind") or "") == SOPERATOR_CLUSTER_VALIDATION_KIND
+                        ],
+                    ),
+                    (
+                        "mk8s_gpu",
+                        [
+                            item
+                            for item in target_specs
+                            if str(item.get("kind") or "") == "mk8s_cuda_smoke"
+                        ],
+                    ),
+                ):
+                    if not group_specs:
+                        continue
+                    try:
+                        if group == "soperator":
+                            written.extend(
+                                run_soperator_cluster_validations(
+                                    group_specs,
+                                    reports_dir=paths.reports_dir,
+                                    extra_env=kube_env,
+                                    emit=_emit_validation_phase,
+                                )
+                            )
+                        else:
+                            written.extend(
+                                run_mk8s_gpu_validations(
+                                    group_specs,
+                                    reports_dir=paths.reports_dir,
+                                    extra_env=kube_env,
+                                    emit=_emit_validation_phase,
+                                )
+                            )
+                    except Exception as exc:
+                        validation_error = exc
+                        if not continue_on_failure:
+                            break
+                if validation_error is not None and not continue_on_failure:
+                    break
+        if validation_error is not None and not continue_on_failure:
+            break
+    if validation_error is not None:
+        raise validation_error
+    return written
+
+
+_ACCEPTANCE_BENCHMARK_SOPERATOR_SUITES = {
+    "soperator-nccl",
+    "slurm-nccl",
+}
+_ACCEPTANCE_BENCHMARK_K8S_SUITES = {"k8s-nccl"}
+_ACCEPTANCE_BENCHMARK_ALL_SUITES = (
+    _ACCEPTANCE_BENCHMARK_SOPERATOR_SUITES | _ACCEPTANCE_BENCHMARK_K8S_SUITES
+)
+
+
+def _normalized_acceptance_benchmark_suites(raw_suites: Sequence[str] | None) -> set[str]:
+    suites: set[str] = set()
+    invalid: list[str] = []
+    for raw in raw_suites or ():
+        for item in str(raw or "").split(","):
+            suite = normalize_component_token(item)
+            if not suite:
+                continue
+            if suite not in _ACCEPTANCE_BENCHMARK_ALL_SUITES:
+                invalid.append(item)
+                continue
+            suites.add(suite)
+    if invalid:
+        supported = ", ".join(sorted(_ACCEPTANCE_BENCHMARK_ALL_SUITES))
+        raise ValueError(
+            "Unsupported --suite value(s): "
+            + ", ".join(invalid)
+            + f". Supported values: {supported}"
+        )
+    return suites
+
+
+def _run_acceptance_benchmark_command(
+    *,
+    config_path: Path,
+    requested_target_ref: str | None,
+    all_targets: bool,
+    include_k8s: bool,
+    include_soperator: bool,
+    suites: Sequence[str] | None,
+    continue_on_failure: bool,
+    max_nodes: int | None,
+    timeout: str | None,
+    average_bus_bandwidth_threshold_gbps: float | None,
+) -> list[Path]:
+    config, paths, manifest = _load_deploy_context_readonly(config_path)
+    if _manifest_missing_deploy_validations(manifest):
+        raise RuntimeError(
+            "Generated manifest is missing deploy.validations metadata. "
+            f"Rerender with `nebius-cxcli render {paths.config_path}` before acceptance-test."
+        )
+    _require_acceptance_target_selection(
+        requested_target_ref=requested_target_ref,
+        all_targets=all_targets,
+    )
+    selected_targets = _resolve_deploy_run_targets(
+        manifest,
+        requested_target_ref=requested_target_ref,
+        all_targets=all_targets,
+    )
+    if not selected_targets:
+        raise RuntimeError("No built-in cluster targets are available for acceptance-test.")
+
+    target_refs = _acceptance_target_refs(selected_targets)
+    suite_tokens = _normalized_acceptance_benchmark_suites(suites)
+    explicit_k8s_suite = bool(suite_tokens & _ACCEPTANCE_BENCHMARK_K8S_SUITES)
+    explicit_soperator_suite = bool(suite_tokens & _ACCEPTANCE_BENCHMARK_SOPERATOR_SUITES)
+    suite_filter_active = bool(include_k8s or include_soperator or suite_tokens)
+    run_k8s = include_k8s or explicit_k8s_suite or not suite_filter_active
+    run_soperator = include_soperator or explicit_soperator_suite or not suite_filter_active
+
+    specs: list[dict[str, Any]] = []
+    if run_soperator:
+        specs.extend(
+            _filter_acceptance_specs_for_targets(
+                soperator_acceptance_benchmark_specs(config),
+                target_refs=target_refs,
+            )
+        )
+    if run_k8s:
+        specs.extend(
+            _filter_acceptance_specs_for_targets(
+                mk8s_acceptance_benchmark_validation_specs(
+                    config,
+                    include_soperator_targets=explicit_k8s_suite,
+                    max_nodes=max_nodes,
+                    timeout=timeout,
+                    average_bus_bandwidth_threshold_gbps=average_bus_bandwidth_threshold_gbps,
+                ),
+                target_refs=target_refs,
+            )
+        )
+    if not specs:
+        raise RuntimeError(
+            "No acceptance benchmark suites matched the selected target(s). Use --k8s, "
+            "--soperator, or --suite to select an available suite."
+        )
+    _raise_on_duplicate_acceptance_reports(specs)
+
+    paths.reports_dir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    validation_error: Exception | None = None
+    set_current_context = len(selected_targets) == 1 and not all_targets
+    for target in selected_targets:
+        target_ref = str(target.get("target_ref") or "").strip()
+        target_specs = _filter_acceptance_specs_for_targets(specs, target_refs={target_ref})
+        if not target_specs:
+            continue
+        if len(selected_targets) > 1:
+            console.print(f"[bold]Target {target_ref}[/bold]")
+        with ExitStack() as stack:
+            kube_env = _prepare_cluster_handoff_kube_env(
+                config,
+                paths,
+                stack=stack,
+                target=target,
+                persist_local_kubeconfig=True,
+                set_current_context=set_current_context,
+            )
+            with console.status(
+                f"[cyan]Running acceptance benchmarks for {target_ref}...[/cyan]",
+                spinner="dots",
+            ) as status:
+                last_validation_phase = ""
+
+                def _emit_validation_phase(message: str) -> None:
+                    nonlocal last_validation_phase
+                    status.update(message)
+                    if not _console_is_terminal() and message != last_validation_phase:
+                        console.print(message)
+                    last_validation_phase = message
+
+                for group, group_specs in (
+                    (
+                        "soperator",
+                        [
+                            item
+                            for item in target_specs
+                            if str(item.get("kind") or "") == SOPERATOR_CLUSTER_VALIDATION_KIND
+                        ],
+                    ),
+                    (
+                        "mk8s_gpu",
+                        [
+                            item
+                            for item in target_specs
+                            if str(item.get("kind") or "") == "mk8s_nccl"
+                        ],
+                    ),
+                ):
+                    if not group_specs:
+                        continue
+                    try:
+                        if group == "soperator":
+                            written.extend(
+                                run_soperator_cluster_validations(
+                                    group_specs,
+                                    reports_dir=paths.reports_dir,
+                                    extra_env=kube_env,
+                                    emit=_emit_validation_phase,
+                                )
+                            )
+                        else:
+                            written.extend(
+                                run_mk8s_gpu_validations(
+                                    group_specs,
+                                    reports_dir=paths.reports_dir,
+                                    extra_env=kube_env,
+                                    emit=_emit_validation_phase,
+                                )
+                            )
+                    except Exception as exc:
+                        validation_error = exc
+                        if not continue_on_failure:
+                            break
+                if validation_error is not None and not continue_on_failure:
+                    break
+        if validation_error is not None and not continue_on_failure:
+            break
+    if validation_error is not None:
+        raise validation_error
+    return written
+
+
 _DEPLOY_VALIDATION_SKIP_KIND_MAP = {
     "operator-readiness": "mk8s_gpu_operator_readiness",
     "operator_readiness": "mk8s_gpu_operator_readiness",
     "gpu-visibility": "mk8s_gpu_visibility",
     "gpu_visibility": "mk8s_gpu_visibility",
-    "nccl": "mk8s_nccl",
     "observability-ingestion": OBSERVABILITY_INGESTION_VALIDATION_KIND,
     "observability_ingestion": OBSERVABILITY_INGESTION_VALIDATION_KIND,
 }
@@ -30546,7 +32877,7 @@ def _resolve_deploy_validation_skip_kinds(skip_validation: tuple[str, ...]) -> s
         resolved.add(kind)
     if invalid:
         supported = ", ".join(
-            sorted({key for key in _DEPLOY_VALIDATION_SKIP_KIND_MAP if "-" in key})
+            key for key in _DEPLOY_VALIDATION_SKIP_KIND_MAP if "-" in key
         )
         raise ValueError(
             "Unsupported --skip-validation value(s): "
@@ -30562,14 +32893,19 @@ def _filter_deploy_validations(
     skip_validations: bool,
     skip_kinds: set[str],
 ) -> list[dict[str, Any]]:
-    if skip_validations:
-        return [item for item in validations if bool(item.get("required"))]
-    if not skip_kinds:
-        return validations
-    return [
+    deploy_candidate_validations = [
         item
         for item in validations
-        if bool(item.get("required")) or str(item.get("kind", "")).strip() not in skip_kinds
+        if _deploy_validation_kind(item) not in _NON_DEPLOY_VALIDATION_KINDS
+    ]
+    if skip_validations:
+        return [item for item in deploy_candidate_validations if bool(item.get("required"))]
+    if not skip_kinds:
+        return deploy_candidate_validations
+    return [
+        item
+        for item in deploy_candidate_validations
+        if bool(item.get("required")) or _deploy_validation_kind(item) not in skip_kinds
     ]
 
 
@@ -30773,11 +33109,79 @@ def _pre_soperator_gpu_validations(
         return []
     if not _enabled_soperator_release_refs_for_target(config, target_ref=target_ref):
         return []
+    if _target_has_scale_from_zero_gpu_worker(config, target_ref=target_ref):
+        return []
     return [
         item
         for item in validations
-        if str(item.get("kind", "") or "").strip() in _MK8S_GPU_VALIDATION_KINDS
+        if str(item.get("kind", "") or "").strip() in _PRE_SOPERATOR_MK8S_VALIDATION_KINDS
     ]
+
+
+def _pre_app_cluster_smoke_validations(
+    validations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        item
+        for item in validations
+        if str(item.get("kind", "") or "").strip() in _MK8S_CLUSTER_SMOKE_VALIDATION_KINDS
+        and not bool(item.get("expect_gpu_nodes"))
+    ]
+
+
+def _node_group_label_value(raw_group: Mapping[str, Any], key: str) -> str:
+    for labels_field in ("labels", "node_labels"):
+        labels = raw_group.get(labels_field)
+        if isinstance(labels, Mapping):
+            value = _non_empty_text(labels.get(key))
+            if value:
+                return value
+    return ""
+
+
+def _node_group_is_soperator_worker(raw_key: object, raw_group: Mapping[str, Any]) -> bool:
+    role_candidates = (
+        raw_key,
+        raw_group.get("nodeset_name"),
+        raw_group.get("placement_name"),
+        _node_group_label_value(raw_group, "slurm.nebius.ai/nodeset"),
+        _node_group_label_value(raw_group, "slurm.nebius.ai/nodeset-name"),
+    )
+    if any(
+        normalize_component_token(candidate).startswith("worker") for candidate in role_candidates
+    ):
+        return True
+    workload = normalize_component_token(
+        raw_group.get("workload") or _node_group_label_value(raw_group, "slurm.nebius.ai/workload")
+    )
+    return workload == "worker"
+
+
+def _node_group_autoscaling_starts_from_zero(raw_group: Mapping[str, Any]) -> bool:
+    autoscaling = _state_mapping(raw_group.get("autoscaling"))
+    if not autoscaling or _config_bool(autoscaling.get("enabled"), default=True) is False:
+        return False
+    min_node_count = _state_positive_int(autoscaling.get("min_node_count"))
+    max_node_count = _state_positive_int(autoscaling.get("max_node_count"))
+    return min_node_count == 0 and max_node_count is not None and max_node_count > 0
+
+
+def _target_has_scale_from_zero_gpu_worker(config: Any, *, target_ref: str) -> bool:
+    normalized_target_ref = normalize_component_token(target_ref)
+    for row in _enabled_mk8s_rows_from_config(config):
+        if normalize_component_token(component_instance_id(row)) != normalized_target_ref:
+            continue
+        inputs = _state_mapping(row.get("inputs"))
+        for raw_group_key, raw_group in _state_mapping(inputs.get("node_groups")).items():
+            if not isinstance(raw_group, Mapping) or raw_group.get("enabled") is False:
+                continue
+            if not bool(raw_group.get("gpu", False)):
+                continue
+            if not _node_group_is_soperator_worker(raw_group_key, raw_group):
+                continue
+            if _node_group_autoscaling_starts_from_zero(raw_group):
+                return True
+    return False
 
 
 def _enabled_cluster_handoffs(config: Any) -> list[dict[str, str]]:
@@ -33210,6 +35614,161 @@ def _retire_deploy_owned_soperator_source_state(
             console.print(line)
 
 
+def _deploy_kubectl_json(
+    args: Sequence[str],
+    *,
+    extra_env: Mapping[str, str] | None,
+    timeout: int = 60,
+) -> Mapping[str, Any] | None:
+    completed = subprocess.run(
+        ["kubectl", *args],
+        env=_post_flux_subprocess_env(extra_env or {}),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    if completed.returncode != 0:
+        return None
+    try:
+        payload = json.loads(completed.stdout or "{}")
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, Mapping) else None
+
+
+def _deploy_wait_for_kubectl_json(
+    args: Sequence[str],
+    *,
+    extra_env: Mapping[str, str] | None,
+    timeout: int = 60,
+    attempts: int = 12,
+    retry_delay_seconds: float = 5.0,
+) -> Mapping[str, Any] | None:
+    total_attempts = max(int(attempts), 1)
+    for attempt in range(1, total_attempts + 1):
+        payload = _deploy_kubectl_json(args, extra_env=extra_env, timeout=timeout)
+        if payload is not None:
+            return payload
+        if attempt < total_attempts:
+            time.sleep(max(retry_delay_seconds, 0.0))
+    return None
+
+
+def _deploy_soperator_cluster_available(payload: Mapping[str, Any]) -> bool:
+    for item in payload.get("items", []) or []:
+        if not isinstance(item, Mapping):
+            continue
+        status = item.get("status")
+        if not isinstance(status, Mapping):
+            continue
+        phase = str(status.get("phase", "") or "").strip().lower()
+        if phase == "available":
+            return True
+        for condition in status.get("conditions", []) or []:
+            if not isinstance(condition, Mapping):
+                continue
+            condition_type = str(condition.get("type", "") or "").strip().lower()
+            condition_status = str(condition.get("status", "") or "").strip().lower()
+            if condition_type == "available" and condition_status == "true":
+                return True
+    return False
+
+
+def _deploy_nodeset_is_gpu_worker(item: Mapping[str, Any]) -> bool:
+    metadata = item.get("metadata")
+    name = str(metadata.get("name", "") if isinstance(metadata, Mapping) else "").strip()
+    if not normalize_component_token(name).startswith("worker"):
+        return False
+    spec = item.get("spec")
+    if not isinstance(spec, Mapping):
+        return False
+    gpu = spec.get("gpu")
+    if isinstance(gpu, Mapping) and bool(gpu.get("enabled", False)):
+        return True
+    slurmd = spec.get("slurmd")
+    resources = slurmd.get("resources") if isinstance(slurmd, Mapping) else None
+    if not isinstance(resources, Mapping):
+        return False
+    return resources.get("gpu") not in (None, "", 0, "0") or resources.get("nvidia.com/gpu") not in (
+        None,
+        "",
+        0,
+        "0",
+    )
+
+
+def _ensure_soperator_gpu_ephemeral_bootstrap_power_state(
+    config: Any,
+    *,
+    target_ref: str,
+    extra_env: Mapping[str, str] | None,
+) -> None:
+    if not _target_has_scale_from_zero_gpu_worker(config, target_ref=target_ref):
+        return
+    if not shutil.which("kubectl"):
+        return
+    for release_ref in _enabled_soperator_release_refs_for_target(config, target_ref=target_ref):
+        namespace = release_ref.namespace
+        clusters = _deploy_kubectl_json(
+            ["-n", namespace, "get", "slurmclusters", "-o", "json"],
+            extra_env=extra_env,
+        )
+        if not clusters or _deploy_soperator_cluster_available(clusters):
+            continue
+        nodesets = _deploy_kubectl_json(
+            ["-n", namespace, "get", "nodesets", "-o", "json"],
+            extra_env=extra_env,
+        )
+        if not nodesets:
+            continue
+        for item in nodesets.get("items", []) or []:
+            if not isinstance(item, Mapping) or not _deploy_nodeset_is_gpu_worker(item):
+                continue
+            spec = item.get("spec")
+            metadata = item.get("metadata")
+            if not isinstance(spec, Mapping) or not isinstance(metadata, Mapping):
+                continue
+            if not bool(spec.get("ephemeralNodes", False)):
+                continue
+            initial_count = _state_positive_int(spec.get("initialNumberEphemeralNodes")) or 0
+            if initial_count <= 0:
+                continue
+            name = str(metadata.get("name", "") or "").strip()
+            if not name:
+                continue
+            power_state = _deploy_wait_for_kubectl_json(
+                ["-n", namespace, "get", "nodesetpowerstate", name, "-o", "json"],
+                extra_env=extra_env,
+            )
+            if power_state is None:
+                continue
+            power_spec = power_state.get("spec") if isinstance(power_state, Mapping) else None
+            active_nodes = power_spec.get("activeNodes") if isinstance(power_spec, Mapping) else None
+            if isinstance(active_nodes, list) and active_nodes:
+                continue
+            desired_nodes = list(range(initial_count))
+            patch_payload = json.dumps({"spec": {"activeNodes": desired_nodes}})
+            _run_post_flux_kubectl(
+                [
+                    "kubectl",
+                    "-n",
+                    namespace,
+                    "patch",
+                    "nodesetpowerstate",
+                    name,
+                    "--type=merge",
+                    "-p",
+                    patch_payload,
+                ],
+                env=extra_env or {},
+                timeout=60,
+            )
+            console.print(
+                "Soperator bootstrap: activated initial GPU worker ordinal(s) "
+                f"{desired_nodes} for NodeSet {name}."
+            )
+
+
 def _deploy_generated_artifacts(
     config: Any,
     paths: ProjectPaths,
@@ -33228,8 +35787,17 @@ def _deploy_generated_artifacts(
             f"Rerender with `nebius-cxcli render {paths.config_path}` before deploy."
         )
     declared_validations = _manifest_deploy_validations(manifest)
-    deploy_validations = _filter_deploy_validations(
+    _raise_if_manifest_has_unsupported_deploy_validation_kinds(
         declared_validations,
+        config_path=paths.config_path,
+    )
+    deploy_declared_validations = _filter_deploy_validations(
+        declared_validations,
+        skip_validations=False,
+        skip_kinds=set(),
+    )
+    deploy_validations = _filter_deploy_validations(
+        deploy_declared_validations,
         skip_validations=skip_validations,
         skip_kinds=skip_validation_kinds,
     )
@@ -33252,10 +35820,10 @@ def _deploy_generated_artifacts(
     status_watchers = _manifest_status_watchers(manifest) or _enabled_status_watcher_specs(config)
     has_enabled_app_charts = _active_chart_count(config) > 0
     manifest_targets = _manifest_deploy_targets(manifest)
-    report_validations = [dict(item) for item in declared_validations]
+    report_validations = [dict(item) for item in deploy_declared_validations]
     if manifest_targets and selected_targets and len(selected_targets) < len(manifest_targets):
         report_validations = _filter_validations_for_target_refs(
-            declared_validations,
+            deploy_declared_validations,
             target_refs={str(target["target_ref"]) for target in selected_targets},
         )
     clear_deploy_validation_artifacts(
@@ -33300,7 +35868,7 @@ def _deploy_generated_artifacts(
     else:
         console.print("No cxcli-managed Terraform infra is enabled; skipping Terraform apply.")
     write_inventory(config, paths, validations=report_validations)
-    if skip_validations and declared_validations:
+    if skip_validations and deploy_declared_validations:
         if deploy_validations:
             console.print(
                 "Skipping optional deploy-time validations for this run "
@@ -33335,14 +35903,28 @@ def _deploy_generated_artifacts(
                 deploy_validations,
                 target_ref=target_ref,
             )
+            pre_app_validations = (
+                _pre_app_cluster_smoke_validations(target_validations)
+                if target_has_apps
+                else []
+            )
             pre_soperator_validations = _pre_soperator_gpu_validations(
                 config,
                 target=target,
-                validations=target_validations,
+                validations=[
+                    item for item in target_validations if item not in pre_app_validations
+                ],
             )
             post_soperator_validations = [
-                item for item in target_validations if item not in pre_soperator_validations
+                item
+                for item in target_validations
+                if item not in pre_app_validations and item not in pre_soperator_validations
             ]
+            post_soperator_validations = _ordered_post_soperator_validations(
+                config,
+                target_ref=target_ref,
+                validations=post_soperator_validations,
+            )
             needs_cluster_ready = target_has_apps or bool(target_validations)
             if len(selected_targets) > 1:
                 console.print(f"[bold]Target {target_ref}[/bold]")
@@ -33389,6 +35971,17 @@ def _deploy_generated_artifacts(
                     _report_cluster_nodes_status(
                         extra_env=kube_env, emit=lambda message: console.print(message)
                     )
+                if target_has_apps and pre_app_validations:
+                    try:
+                        _run_target_deploy_validations(
+                            pre_app_validations,
+                            target_ref=target_ref,
+                            reports_dir=paths.reports_dir,
+                            extra_env=kube_env,
+                        )
+                    except Exception as exc:
+                        validation_error = exc
+                        break
                 if target_has_apps:
                     if pre_soperator_validations:
                         console.print(
@@ -33421,6 +36014,11 @@ def _deploy_generated_artifacts(
                     _retire_deploy_owned_soperator_source_state(
                         config,
                         selected_targets=selected_targets,
+                        target_ref=target_ref,
+                        extra_env=kube_env,
+                    )
+                    _ensure_soperator_gpu_ephemeral_bootstrap_power_state(
+                        config,
                         target_ref=target_ref,
                         extra_env=kube_env,
                     )
@@ -33659,6 +36257,7 @@ def _deploy_footer_line_is_command(line: str) -> bool:
 def _deploy_footer_path_lines(paths: ProjectPaths, summary: DeployRunSummary) -> list[str]:
     return [
         f"  Generated bundle: {paths.generated_dir}",
+        f"  Validation detail reports: {paths.reports_dir}",
         f"  Deploy report: {paths.reports_dir / DEPLOY_REPORT_FILENAME}",
     ]
 
@@ -34791,6 +37390,11 @@ class SoperatorOnboardConfigTarget:
 class DeploymentsGitignoreResult:
     path: Path | None
     wrote: bool
+    repo_root: Path | None = None
+
+    @property
+    def inside_git_repo(self) -> bool:
+        return self.repo_root is not None
 
 
 _DEPLOYMENTS_GITIGNORE_BEGIN = "# >>> nebius-cxcli managed ignores >>>"
@@ -34830,8 +37434,12 @@ def _gitignore_has_managed_deployments_block(path: Path) -> bool:
     return _DEPLOYMENTS_GITIGNORE_BEGIN in content and _DEPLOYMENTS_GITIGNORE_END in content
 
 
-def _parent_managed_deployments_gitignore(deployments_root: Path) -> Path | None:
-    repo_root = _try_git_root(deployments_root)
+def _parent_managed_deployments_gitignore(
+    deployments_root: Path,
+    *,
+    repo_root: Path | None = None,
+) -> Path | None:
+    repo_root = repo_root or _try_git_root(deployments_root)
     if repo_root is None:
         return None
 
@@ -34849,8 +37457,15 @@ def _parent_managed_deployments_gitignore(deployments_root: Path) -> Path | None
     return None
 
 
-def _assert_not_nested_deployments_root(deployments_root: Path) -> None:
-    parent_gitignore = _parent_managed_deployments_gitignore(deployments_root)
+def _assert_not_nested_deployments_root(
+    deployments_root: Path,
+    *,
+    repo_root: Path | None = None,
+) -> None:
+    parent_gitignore = _parent_managed_deployments_gitignore(
+        deployments_root,
+        repo_root=repo_root,
+    )
     if parent_gitignore is None:
         return
     parent_root = parent_gitignore.parent
@@ -34865,10 +37480,11 @@ def _ensure_deployments_gitignore(
     *,
     deployments_root: Path,
 ) -> DeploymentsGitignoreResult:
-    if _try_git_root(deployments_root) is None:
+    repo_root = _try_git_root(deployments_root)
+    if repo_root is None:
         return DeploymentsGitignoreResult(path=None, wrote=False)
 
-    _assert_not_nested_deployments_root(deployments_root)
+    _assert_not_nested_deployments_root(deployments_root, repo_root=repo_root)
     gitignore_path = deployments_root / ".gitignore"
     block = _render_deployments_gitignore_block()
     existing = gitignore_path.read_text(encoding="utf-8") if gitignore_path.exists() else ""
@@ -34887,8 +37503,16 @@ def _ensure_deployments_gitignore(
 
     if updated != existing:
         gitignore_path.write_text(updated, encoding="utf-8")
-        return DeploymentsGitignoreResult(path=gitignore_path, wrote=True)
-    return DeploymentsGitignoreResult(path=gitignore_path, wrote=False)
+        return DeploymentsGitignoreResult(
+            path=gitignore_path,
+            wrote=True,
+            repo_root=repo_root,
+        )
+    return DeploymentsGitignoreResult(
+        path=gitignore_path,
+        wrote=False,
+        repo_root=repo_root,
+    )
 
 
 def _ensure_wireguard_output_gitignore(output_dir: Path, paths: ProjectPaths) -> Path | None:
@@ -36153,7 +38777,7 @@ def create_command(
             console.print(
                 "[dim]Soperator worker profile controls whether the fresh "
                 "production bundle uses CPU-only, GPU-only, or mixed worker "
-                "NodeSets before MK8s fields and validations are prompted.[/dim]"
+                "NodeSets before MK8s fields and deployment-testing prompts.[/dim]"
             )
             try:
                 soperator_profile = _prompt_soperator_profile()
@@ -36616,10 +39240,11 @@ def create_command(
             console.print(f"[yellow]NOTE:[/yellow] {_private_cluster_handoff_note()}")
         console.print(f"Ensured generated skeleton: {result.config_path.parent / 'generated'}")
         _print_create_next_steps(result.config_path)
-        console.print(
-            f"{warning_markup('Security warning:')} keep this customer repository private "
-            "because the deployments root contains sensitive operational metadata."
-        )
+        if gitignore_result.inside_git_repo:
+            console.print(
+                f"{warning_markup('Security warning:')} keep this customer repository private "
+                "because the deployments root contains sensitive operational metadata."
+            )
     except typer.Exit:
         raise
     except (KeyboardInterrupt, EOFError, typer.Abort):
@@ -36635,8 +39260,7 @@ def create_command(
     epilog=(
         "Examples: "
         "nebius-cxcli component list --config ./deployments/tenant/project/config.yaml "
-        "(shows enabled mk8s/sfs/soperator instances and their target_ref bindings); "
-        "from the project folder: nebius-cxcli component list (auto-resolves ./config.yaml)."
+        "(shows enabled mk8s/sfs/soperator instances and their target_ref bindings)."
     ),
 )
 def component_list_command(
@@ -36924,6 +39548,10 @@ def component_add_command(
     """
     try:
         config_path = _require_component_config_option(config_path)
+        _raise_if_raw_soperator_component_add_layout_invalid(
+            config_path=config_path,
+            component_ids=component_ids,
+        )
         _config, _paths = _load_context(config_path)
         payload = _load_config_payload(config_path.resolve())
         if validate_sources:
@@ -37082,13 +39710,19 @@ def component_add_command(
                 console.print(
                     "[dim]Soperator worker profile controls whether the production "
                     "bundle uses CPU-only, GPU-only, or mixed worker NodeSets before "
-                    "MK8s fields and validations are prompted.[/dim]"
+                    "MK8s fields and deployment-testing prompts.[/dim]"
                 )
                 try:
                     soperator_profile = _prompt_soperator_profile()
                 except _WizardQuitRequested:
                     console.print("No component changes applied.")
                     return
+            if soperator_install_mode == _SOPERATOR_INSTALL_MODE_PRODUCTION:
+                _raise_if_soperator_component_add_production_layout_invalid(
+                    payload=payload,
+                    add_targets=add_targets,
+                    profile_name=soperator_profile,
+                )
         selected_infra_raw, skipped_onboarding_infra = _prune_soperator_onboarding_infra_selection(
             selected_infra=selected_infra_raw,
             selected_apps=selected_apps_raw,
@@ -37360,6 +39994,7 @@ def component_add_command(
                 for row in added_app_rows
             ]
             added_apps_labels = list(dict.fromkeys(added_apps_selectors))
+        _raise_if_soperator_production_service_layout_invalid(next_payload)
         _ensure_provider_scope_validated()
         _seed_infra_project_scope_defaults(
             payload=next_payload,
@@ -38284,13 +40919,14 @@ _SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES = (
     "migration status; target remediation phases report MK8s health, storage "
     "phases report SFS/PVC progress and continuity, while compute and cutover "
     "phases report MK8s, Slurm, and Soperator health.",
-    "Validation contract: validation-and-rollback-hold runs the target-scoped "
-    "deploy.targets[].validations.mk8s_gpu.* checks from config.yaml, including "
-    "operator readiness, GPU Visibility, and NCCL when enabled; it also runs "
-    "the required Soperator/Slurm smoke validation, including SlurmCluster "
-    "availability, Slurm CLI access, a one-task srun job, and a Slurm NCCL "
-    "benchmark using two idle GPU Slurm nodes when available or the only idle "
-    "multi-GPU Slurm node otherwise. Validation JSON "
+    "Validation contract: validation-and-rollback-hold runs the required MK8s "
+    "node inventory smoke plus target-scoped deploy.targets[].deployment_testing.* "
+    "deploy-time checks from config.yaml, including operator readiness and "
+    "GPU visibility when those checks are enabled; NCCL/performance checks are "
+    "reserved for acceptance-test benchmark. It also runs the required "
+    "Soperator deployment snapshot, including soperator-manager Deployment, "
+    "jail storage object, Pending Soperator pod/event, SlurmCluster, and "
+    "NodeSet visibility checks. Validation JSON "
     "details are written under generated/reports/, ext-soperator-migrate-report.md includes "
     "the Soperator/Slurm and MK8s GPU validation rollups, and deploy-report.md "
     "is refreshed as a secondary deploy-compatible MK8s GPU summary.",
@@ -39046,10 +41682,11 @@ def _refresh_soperator_onboarding_after_completed_migration(
         "Soperator migration status with phase ids, labels, overall health, "
         "and component summaries while approved phases run, validates Soperator "
         "reconciliation, runs configured "
-        "deploy.targets[].validations.mk8s_gpu.* checks, runs the required "
-        "Soperator/Slurm smoke validation with a one-task srun job and a "
-        "Slurm NCCL benchmark using two idle GPU Slurm nodes when available "
-        "or the only idle multi-GPU Slurm node otherwise, writes "
+        "deploy-time deploy.targets[].deployment_testing.* checks, runs the required "
+        "Soperator deployment snapshot with soperator-manager Deployment, "
+        "jail storage object, Pending Soperator pod/event, SlurmCluster, and NodeSet "
+        "visibility checks, leaves Slurm jobs and NCCL/performance work for explicit "
+        "acceptance-test benchmark runs, writes "
         "ext-soperator-migrate-report.md with the MK8s GPU and Soperator/Slurm validation "
         "rollups, refreshes deploy-report.md as a secondary deploy-compatible "
         "MK8s GPU summary, and "
@@ -39272,10 +41909,13 @@ def soperator_migrate_command(
     epilog=(
         "Examples: "
         "nebius-cxcli component remove apps:soperator --config ./deployments/tenant/project/config.yaml "
+        "--no-interactive "
         "(removes a Soperator app; cascades target_ref cleanup on MK8s deploy.targets[]); "
         "nebius-cxcli component remove 'apps:soperator@target-mk8s-prod' "
+        "--config ./deployments/tenant/project/config.yaml --no-interactive "
         "(removes only the binding for a specific MK8s target_ref, keeps other Soperator instances); "
-        "nebius-cxcli component remove infra:mk8s --no-interactive "
+        "nebius-cxcli component remove infra:mk8s "
+        "--config ./deployments/tenant/project/config.yaml --no-interactive "
         "(non-interactive; removes the MK8s row and any apps bound to its target_ref)."
     ),
 )
@@ -42049,6 +44689,254 @@ def mk8s_token_command(
         _exit_with_error(exc)
 
 
+@acceptance_test_app.command(
+    "smoke",
+    short_help="Run explicit heavy/on-demand all-node acceptance smoke tests.",
+    help=(
+        "Run explicit heavy/on-demand all-node acceptance smoke tests. "
+        "Writes JSON reports only under generated/reports/ and does not change "
+        "config.yaml, Terraform state, generated deploy reports, or persisted "
+        "suite selections."
+    ),
+    epilog=(
+        "Examples: Soperator all-node Slurm smoke JSON report: nebius-cxcli "
+        "acceptance-test smoke <config.yaml> --target sop-cluster1 --soperator; "
+        "plain MK8s all-node CUDA JSON report: nebius-cxcli acceptance-test smoke "
+        "<config.yaml> --target mk8s-prod --k8s; Soperator fail-fast batches: "
+        "nebius-cxcli acceptance-test smoke <config.yaml> --target sop-cluster1 "
+        "--suite soperator-slurm --batch-size 128 --concurrency 8 --fail-fast; "
+        "every target, suite defaults: nebius-cxcli acceptance-test smoke "
+        "<config.yaml> --all-targets."
+    ),
+)
+def acceptance_test_smoke_command(
+    config_path: Annotated[
+        Path,
+        typer.Argument(metavar="CONFIG_YAML", help=_CONFIG_YAML_ARGUMENT_HELP),
+    ],
+    target_ref: Annotated[
+        str | None,
+        typer.Option(
+            "--target",
+            help=(
+                f"Run acceptance smoke tests for one {_MK8S_TARGET_ID_HELP}. "
+                "Required unless --all-targets is set."
+            ),
+        ),
+    ] = None,
+    all_targets: Annotated[
+        bool,
+        typer.Option(
+            "--all-targets",
+            help=(
+                "Run acceptance smoke tests for every built-in cluster target. "
+                "Required unless --target is set."
+            ),
+        ),
+    ] = False,
+    k8s: Annotated[
+        bool,
+        typer.Option(
+            "--k8s",
+            help=(
+                "Run Kubernetes acceptance smoke suites for plain MK8s GPU targets. "
+                "Soperator-owned GPU targets are skipped unless --suite k8s-cuda is used."
+            ),
+        ),
+    ] = False,
+    soperator: Annotated[
+        bool,
+        typer.Option("--soperator", help="Run Soperator/Slurm acceptance smoke suites."),
+    ] = False,
+    suite: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--suite",
+            help=(
+                "Acceptance suite to run; repeatable or comma-separated. Supported values: "
+                "soperator-slurm, k8s-cuda. Same-target K8s and Soperator suite families "
+                "cannot be combined in one command because they share the canonical "
+                "acceptance smoke report."
+            ),
+        ),
+    ] = None,
+    batch_size: Annotated[
+        int,
+        typer.Option(
+            "--batch-size",
+            min=1,
+            help="Maximum Slurm nodes per acceptance smoke batch.",
+        ),
+    ] = 128,
+    concurrency: Annotated[
+        int,
+        typer.Option(
+            "--concurrency",
+            min=1,
+            help="Maximum concurrent Slurm acceptance smoke batches.",
+        ),
+    ] = 8,
+    continue_on_failure: Annotated[
+        bool,
+        typer.Option(
+            "--continue-on-failure/--fail-fast",
+            help="Continue collecting per-node acceptance evidence after a batch fails.",
+        ),
+    ] = True,
+) -> None:
+    try:
+        written = _run_acceptance_smoke_command(
+            config_path=config_path,
+            requested_target_ref=target_ref,
+            all_targets=all_targets,
+            include_k8s=k8s,
+            include_soperator=soperator,
+            suites=suite,
+            batch_size=batch_size,
+            concurrency=concurrency,
+            continue_on_failure=continue_on_failure,
+        )
+        for path in written:
+            console.print(f"Acceptance smoke report: {path}")
+    except typer.Exit:
+        raise
+    except Exception as exc:  # pragma: no cover - CLI surface
+        _exit_with_error(exc)
+
+
+@acceptance_test_app.command(
+    "benchmark",
+    short_help="Run explicit heavy/on-demand NCCL benchmark suites.",
+    help=(
+        "Run explicit heavy/on-demand NCCL benchmark suites. Writes JSON reports "
+        "only under generated/reports/ and does not change config.yaml, Terraform "
+        "state, generated deploy reports, or persisted suite selections. "
+        "K8s NCCL uses the pinned transient nccl-test chart for the run."
+    ),
+    epilog=(
+        "Examples: Soperator Slurm NCCL benchmark: nebius-cxcli acceptance-test "
+        "benchmark <config.yaml> --target sop-cluster1 --soperator; plain MK8s "
+        "NCCL benchmark with run-only overrides: nebius-cxcli acceptance-test "
+        "benchmark <config.yaml> --target mk8s-prod --k8s --max-nodes 4 "
+        "--timeout 20m --average-bus-bandwidth-threshold-gbps 300; force the "
+        "K8s NCCL suite on a Soperator-owned GPU target during maintenance: "
+        "nebius-cxcli acceptance-test benchmark <config.yaml> --target sop-cluster1 "
+        "--suite k8s-nccl --max-nodes 2; every target, suite defaults: "
+        "nebius-cxcli acceptance-test benchmark <config.yaml> --all-targets."
+    ),
+)
+def acceptance_test_benchmark_command(
+    config_path: Annotated[
+        Path,
+        typer.Argument(metavar="CONFIG_YAML", help=_CONFIG_YAML_ARGUMENT_HELP),
+    ],
+    target_ref: Annotated[
+        str | None,
+        typer.Option(
+            "--target",
+            help=(
+                f"Run acceptance benchmarks for one {_MK8S_TARGET_ID_HELP}. "
+                "Required unless --all-targets is set."
+            ),
+        ),
+    ] = None,
+    all_targets: Annotated[
+        bool,
+        typer.Option(
+            "--all-targets",
+            help=(
+                "Run acceptance benchmarks for every built-in cluster target. "
+                "Required unless --target is set."
+            ),
+        ),
+    ] = False,
+    k8s: Annotated[
+        bool,
+        typer.Option(
+            "--k8s",
+            help=(
+                "Run Kubernetes NCCL benchmark suites for plain MK8s GPU targets. "
+                "Soperator-owned GPU targets are skipped unless --suite k8s-nccl is used."
+            ),
+        ),
+    ] = False,
+    soperator: Annotated[
+        bool,
+        typer.Option("--soperator", help="Run Soperator/Slurm NCCL benchmark suites."),
+    ] = False,
+    suite: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--suite",
+            help=(
+                "Benchmark suite to run; repeatable or comma-separated. Supported values: "
+                "k8s-nccl, soperator-nccl, slurm-nccl. Same-target K8s and Soperator "
+                "suite families cannot be combined in one command because they share "
+                "the canonical acceptance benchmark report."
+            ),
+        ),
+    ] = None,
+    continue_on_failure: Annotated[
+        bool,
+        typer.Option(
+            "--continue-on-failure/--fail-fast",
+            help="Continue collecting benchmark reports after a selected benchmark fails.",
+        ),
+    ] = True,
+    max_nodes: Annotated[
+        int | None,
+        typer.Option(
+            "--max-nodes",
+            min=1,
+            help=(
+                "Maximum GPU nodes to include for benchmark suites that support node caps. "
+                "Overrides the catalog default for this run only."
+            ),
+        ),
+    ] = None,
+    timeout: Annotated[
+        str | None,
+        typer.Option(
+            "--timeout",
+            help=(
+                "Benchmark timeout as a duration such as 20m. Overrides the catalog default "
+                "for this run only."
+            ),
+        ),
+    ] = None,
+    average_bus_bandwidth_threshold_gbps: Annotated[
+        float | None,
+        typer.Option(
+            "--average-bus-bandwidth-threshold-gbps",
+            min=0.0,
+            help=(
+                "Required average NCCL bus bandwidth in Gbps for RDMA benchmark runs. "
+                "Overrides the catalog default for this run only."
+            ),
+        ),
+    ] = None,
+) -> None:
+    try:
+        written = _run_acceptance_benchmark_command(
+            config_path=config_path,
+            requested_target_ref=target_ref,
+            all_targets=all_targets,
+            include_k8s=k8s,
+            include_soperator=soperator,
+            suites=suite,
+            continue_on_failure=continue_on_failure,
+            max_nodes=max_nodes,
+            timeout=timeout,
+            average_bus_bandwidth_threshold_gbps=average_bus_bandwidth_threshold_gbps,
+        )
+        for path in written:
+            console.print(f"Acceptance benchmark report: {path}")
+    except typer.Exit:
+        raise
+    except Exception as exc:  # pragma: no cover - CLI surface
+        _exit_with_error(exc)
+
+
 @app.command(
     "deploy",
     short_help="Use CONFIG_YAML to deploy locally from the sibling rendered bundle.",
@@ -42059,7 +44947,8 @@ def mk8s_token_command(
         "nebius-cxcli deploy ./deployments/tenant/project/config.yaml --target mk8s-prod "
         "(restricts the run to a single deploy.targets[] row by id); "
         "nebius-cxcli deploy ./deployments/tenant/project/config.yaml --skip-validation operator-readiness "
-        "(skips a single MK8s GPU validation kind; repeatable; --skip-validations skips all); "
+        "(skips a single optional MK8s GPU deployment-testing check; repeatable; "
+        "--skip-validations skips optional deployment-testing checks only); "
         "nebius-cxcli deploy ./deployments/tenant/project/config.yaml --no-auto-auth-bootstrap "
         "(fails on missing service-account credentials instead of refreshing them). "
         "For external Soperator onboarding targets with migration-owned actions, deploy "
@@ -42090,8 +44979,8 @@ def deploy_command(
         typer.Option(
             "--skip-validations",
             help=(
-                "Skip optional deploy-time validations from config.yaml/generated manifest "
-                "for this run only. Required platform validations still run."
+                "Skip optional deployment-testing checks from config.yaml/generated manifest "
+                "for this run only. Required platform checks still run."
             ),
         ),
     ] = False,
@@ -42100,8 +44989,8 @@ def deploy_command(
         typer.Option(
             "--skip-validation",
             help=(
-                "Skip one optional deploy-time validation for this run only. "
-                "Repeatable. Supported values: operator-readiness, gpu-visibility, nccl, "
+                "Skip one optional deployment-testing check for this run only. "
+                "Repeatable. Supported values: operator-readiness, gpu-visibility, "
                 "observability-ingestion."
             ),
         ),
@@ -42176,7 +45065,7 @@ def deploy_command(
     you want a one-run override for optional checks without changing the
     persisted project config. Required platform validations, including native
     ESO MysteryBox connectivity when that sync path is configured, still run.
-    Deploy-time validations include configured MK8s GPU checks, required
+    Deploy-time validations include configured MK8s GPU deployment-testing checks, required
     Soperator/Slurm smoke checks for enabled Soperator targets, the generated
     Observability Agent ingestion guardrail for observability-enabled MK8s
     targets, and required ESO MysteryBox connectivity checks for native

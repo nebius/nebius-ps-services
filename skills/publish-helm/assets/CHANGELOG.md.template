@@ -13,7 +13,8 @@ All notable changes to this chart are tracked here. This changelog follows
   `./publish-helm.sh --publish X.Y.Z` on clean synced `__MAIN_BRANCH__`.
 - The prep step updates both this chart-local changelog and `Chart.yaml`.
 - The publish step only creates and pushes tag `__PROJECT_TAG_PREFIX__-vX.Y.Z`;
-  the GitHub Actions workflow then packages and publishes the chart to OCI.
+  it fails fast if `Chart.yaml` does not already match the tag version. The
+  GitHub Actions workflow then packages and publishes the chart to OCI.
 - Release section format:
   `## [__PROJECT_TAG_PREFIX__-vX.Y.Z] - YYYY-MM-DD`
 

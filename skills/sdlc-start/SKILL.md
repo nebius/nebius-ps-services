@@ -139,7 +139,9 @@ selecting the next feature, and choosing exactly one next skill.
   validate it with its local tests, then intentionally sync it to `$CODEX_HOME/hooks`
   with `install-skills.sh --install-all-hooks`, or with
   `install-skills.sh --install-hooks sdlc-start/assets/hooks` for an SDLC-only
-  hook sync.
+  hook sync. Add `--register-hooks` only when the operator explicitly wants the
+  installer to merge the SDLC `PreToolUse` and `Stop` registrations into
+  `$CODEX_HOME/hooks.json`.
 
 ## Learning Loop
 
