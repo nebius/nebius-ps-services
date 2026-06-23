@@ -6,6 +6,9 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Updated the bundled Soperator portable chart pin to `4.0.2-ps.2`, matching
+  the current parent chart package release while keeping local-source
+  resolution tied to `helm-charts/soperator/Chart.yaml`.
 - Changed `component add apps:soperator` so production-cluster adds fail fast on
   existing managed MK8s targets whose non-empty `inputs.node_groups` do not
   include the required Soperator service-role groups (`system`, `controller`,
