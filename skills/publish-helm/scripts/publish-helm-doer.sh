@@ -379,6 +379,7 @@ ensure_chart_version_matches() {
   actual="$(read_chart_version "${chart_file}")"
   if [[ "${actual}" != "${expected}" ]]; then
     log_error "${chart_file} version ${actual} does not match release ${expected}."
+    log_note "Run --mode prep for ${expected} and merge that Chart.yaml change before publishing."
     exit 1
   fi
 }
@@ -393,6 +394,8 @@ prep_release() {
   local branch="$7"
   local main_branch="$8"
   local chart_file="${chart_dir}/Chart.yaml"
+  local charts_path="${chart_dir}/charts"
+  local charts_staged=""
   local staged_paths=("${changelog}" "${chart_file}")
   ensure_clean_worktree
   ensure_named_branch "${branch}"
@@ -407,9 +410,12 @@ prep_release() {
     git add "${chart_dir}/Chart.lock"
     staged_paths+=("${chart_dir}/Chart.lock")
   fi
-  if [[ -d "${chart_dir}/charts" ]]; then
-    git add -A "${chart_dir}/charts"
-    staged_paths+=("${chart_dir}/charts")
+  if [[ -d "${charts_path}" ]]; then
+    git add -A "${charts_path}"
+    charts_staged="$(git diff --cached --name-only -- "${charts_path}")"
+    if [[ -n "${charts_staged}" ]]; then
+      staged_paths+=("${charts_path}")
+    fi
   fi
   if git diff --cached --quiet -- "${staged_paths[@]}"; then
     log_note "No chart release changes to commit."

@@ -59,7 +59,9 @@ basename or chart version tag; Helm infers those from chart metadata.
    Verify the merged changelog and `Chart.yaml` contain the release version.
 7. Run `publish` from clean synced default branch:
    `scripts/publish-helm-doer.sh --mode publish ...`
-   The helper creates and pushes only the annotated tag.
+   The helper creates and pushes only the annotated tag. If `Chart.yaml` still
+   has a different version, stop and run `prep`; do not tag a release expecting
+   the workflow to rewrite chart metadata.
 8. If waiting is enabled, find the tag-triggered workflow with `gh run list`,
    wait with `gh run watch --exit-status`, and inspect the terminal run.
 9. Verify the published chart with
@@ -84,6 +86,9 @@ The project-local helper script is optional after this refactor. The skill-owned
 - Do not print, request, or persist secret values.
 - Do not include chart basename or version in `--oci-repository`.
 - Do not commit release prep directly on the default branch.
+- Treat `Chart.yaml` version changes as release-prep changes that must be
+  merged before tagging; the publish/tag phase is intentionally read-only for
+  chart metadata.
 - Do not force-push, use admin merge, bypass branch protection, or ignore
   required checks/reviews.
 - Stop when GitHub approvals, environment approvals, registry credentials, or

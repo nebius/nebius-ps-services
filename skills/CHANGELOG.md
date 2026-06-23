@@ -138,6 +138,11 @@ All notable changes to the reusable Codex skills are tracked here.
   in the release-prep commit when `helm dependency update` creates them.
 - Aligned the Helm setup helper template with the canonical doer so generated
   project-local helpers build or update chart dependencies before linting.
+- Clarified `publish-helm` chart-version ownership so `Chart.yaml` updates are
+  release-prep changes that must be merged before the publish/tag phase, with
+  publish helpers now pointing mismatched versions back to prep.
+- Fixed Helm release prep to avoid passing ignored generated chart archive
+  directories to `git commit` when no dependency archives are staged.
 - Added image publish workflow tag ancestry validation and removed shallow
   history from release publish ancestry checks.
 - Aligned `merge-pr` with GitHub merge-queue behavior by using the no-strategy
