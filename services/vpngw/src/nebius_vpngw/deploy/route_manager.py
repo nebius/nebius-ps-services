@@ -313,7 +313,7 @@ class RouteManager:
         return sanitized_cidrs, raw_status_set != sanitized_set
 
     @staticmethod
-    def _ssh_base_command(local_cfg: dict) -> list[str]:
+    def _ssh_base_command(local_cfg: dict, *, connect_timeout: int = 10) -> list[str]:
         import os
 
         gateway_group = local_cfg.get("gateway_group", {}) or {}
@@ -325,7 +325,7 @@ class RouteManager:
             "-o",
             "StrictHostKeyChecking=no",
             "-o",
-            "ConnectTimeout=10",
+            f"ConnectTimeout={connect_timeout}",
         ]
         if ssh_key:
             cmd.extend(["-i", str(Path(str(ssh_key)).expanduser())])
@@ -347,12 +347,13 @@ class RouteManager:
         remote_cmd: str,
         *,
         timeout: int = 15,
+        ssh_connect_timeout: int = 10,
         stdin_text: str | None = None,
     ):
         import subprocess
 
         return subprocess.run(
-            self._ssh_base_command(local_cfg)
+            self._ssh_base_command(local_cfg, connect_timeout=ssh_connect_timeout)
             + [self._ssh_target(local_cfg, external_ip), remote_cmd],
             input=stdin_text,
             capture_output=True,
@@ -2318,18 +2319,10 @@ class RouteManager:
                 continue
 
             try:
-                result = subprocess.run(
-                    [
-                        "ssh",
-                        "-o",
-                        "StrictHostKeyChecking=no",
-                        "-o",
-                        "ConnectTimeout=10",
-                        f"ubuntu@{external_ip}",
-                        "sudo vtysh -c 'show bgp ipv4 unicast json'",
-                    ],
-                    capture_output=True,
-                    text=True,
+                result = self._run_ssh(
+                    local_cfg,
+                    external_ip,
+                    "sudo vtysh -c 'show bgp ipv4 unicast json'",
                     timeout=15,
                 )
 
@@ -2451,6 +2444,7 @@ class RouteManager:
 
                 if routing_mode == "bgp":
                     self._list_bgp_routes(
+                        local_cfg,
                         hostname,
                         external_ip,
                         conn_name,
@@ -2461,11 +2455,17 @@ class RouteManager:
                     )
                 else:  # static mode
                     self._list_static_routes(
-                        hostname, external_ip, conn_name, remote_prefixes, console
+                        local_cfg,
+                        hostname,
+                        external_ip,
+                        conn_name,
+                        remote_prefixes,
+                        console,
                     )
 
     def _list_bgp_routes(
         self,
+        local_cfg: dict,
         hostname: str,
         external_ip: str,
         conn_name: str,
@@ -2489,18 +2489,10 @@ class RouteManager:
 
         # Query BGP routes via SSH
         try:
-            result = subprocess.run(
-                [
-                    "ssh",
-                    "-o",
-                    "StrictHostKeyChecking=no",
-                    "-o",
-                    "ConnectTimeout=10",
-                    f"ubuntu@{external_ip}",
-                    "sudo vtysh -c 'show bgp ipv4 unicast json'",
-                ],
-                capture_output=True,
-                text=True,
+            result = self._run_ssh(
+                local_cfg,
+                external_ip,
+                "sudo vtysh -c 'show bgp ipv4 unicast json'",
                 timeout=15,
             )
 
@@ -2528,19 +2520,12 @@ class RouteManager:
             # Query interface for each unique next-hop
             for nh_ip in unique_nexthops:
                 try:
-                    route_result = subprocess.run(
-                        [
-                            "ssh",
-                            "-o",
-                            "StrictHostKeyChecking=no",
-                            "-o",
-                            "ConnectTimeout=5",
-                            f"ubuntu@{external_ip}",
-                            f"ip route get {nh_ip}",
-                        ],
-                        capture_output=True,
-                        text=True,
+                    route_result = self._run_ssh(
+                        local_cfg,
+                        external_ip,
+                        f"ip route get {nh_ip}",
                         timeout=5,
+                        ssh_connect_timeout=5,
                     )
                     if route_result.returncode == 0:
                         # Parse output like: "169.254.5.153 dev xfrm1 src 169.254.5.154 uid 1000"
@@ -2642,6 +2627,7 @@ class RouteManager:
 
     def _list_static_routes(
         self,
+        local_cfg: dict,
         hostname: str,
         external_ip: str,
         conn_name: str,
@@ -2659,18 +2645,10 @@ class RouteManager:
 
         # Query kernel routing table via SSH
         try:
-            result = subprocess.run(
-                [
-                    "ssh",
-                    "-o",
-                    "StrictHostKeyChecking=no",
-                    "-o",
-                    "ConnectTimeout=10",
-                    f"ubuntu@{external_ip}",
-                    "ip route show",
-                ],
-                capture_output=True,
-                text=True,
+            result = self._run_ssh(
+                local_cfg,
+                external_ip,
+                "ip route show",
                 timeout=15,
             )
 

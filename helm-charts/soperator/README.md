@@ -547,9 +547,9 @@ Release flow:
 5. The `soperator-chart-vX.Y.Z-ps.N` tag triggers
    `.github/workflows/helm-chart-publish.yml`.
 
-If `[Unreleased]` is empty, the scheduled upstream sync workflow and
-`publish-helm.sh --prep` seed a fallback chart-bump note before release prep
-moves the section into the dated release entry.
+If `[Unreleased]` is empty, `publish-helm.sh --prep` seeds a fallback
+chart-bump note before release prep moves the section into the dated release
+entry.
 
 The shared publish workflow reads `.github/helm-chart-publish.json` to map the
 `soperator-chart` tag prefix to this chart. It seeds a temporary Helm repository
@@ -697,13 +697,21 @@ If this fork needs a temporary hotfix image, update the lock in the same PR so
 the intentional divergence is visible and reviewed.
 
 The repository CI runs the same verifier on chart changes. A daily scheduled
-workflow creates or updates an upstream-sync feature branch and PR when GitHub
-has a newer public Soperator SemVer release; local runs update the current
-feature branch and leave staging, commit, and PR creation to the user.
-The scheduled sync compares release versions before writing files and fails
-early when the lock release is newer than every non-draft, non-prerelease
-SemVer GitHub release, which helps catch lock typos without mutating chart
-files.
+`soperator-upstream-verifier` workflow runs a read-only latest-release check and
+reports through GitHub Actions warnings and the workflow step summary when
+GitHub has a newer public Soperator SemVer release. When a newer release is
+available, the workflow generates a disposable runner-only `--latest --sync
+--report` preview so the summary shows the expected changed files and diff stat,
+then intentionally marks the scheduled run failed so the Actions run is the
+GitHub-native notification marker. It does not create a branch, stage, commit,
+push, open a PR, configure email, or post to Slack. The operator remains
+responsible for creating a feature branch, running the sync locally, reviewing
+and testing the diff, committing, and opening the PR. Manual dispatch runs
+produce the same preview without using a failed run as the notification marker.
+The scheduled verifier compares release versions before previewing files and
+fails early when the lock release is newer than every non-draft,
+non-prerelease SemVer GitHub release, which helps catch lock typos without
+mutating chart files.
 
 ## Local Kubernetes Learning Profile
 

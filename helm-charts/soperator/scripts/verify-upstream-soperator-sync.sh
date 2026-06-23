@@ -55,6 +55,7 @@ show_usage() {
   printf '%b\n' "  ${S_YELLOW}--check-latest${S_RESET}      Compare the lock release with the highest GitHub SemVer release without writing"
   printf '%b\n' "  ${S_YELLOW}--sync${S_RESET}              Apply full upstream sync and validate it without staging changes"
   printf '%b\n' "  ${S_YELLOW}--latest${S_RESET}            With --sync, use the highest GitHub SemVer release and update the lock"
+  printf '%b\n' "  ${S_YELLOW}--ci-preview-no-branch${S_RESET}  With --sync, preview in disposable CI checkout without creating a local branch"
   printf '%b\n' "  ${S_YELLOW}--scope SCOPE${S_RESET}       Limit read-only checks to scripts, crds, images, or all (default: all)"
   printf '%b\n' "  ${S_YELLOW}--report${S_RESET}            Print detailed per-item status; with --sync, print a readable changed-file summary"
   printf '%b\n' "  ${S_YELLOW}-h, --help${S_RESET}          Show help"
@@ -80,6 +81,7 @@ show_usage() {
   printf '%b\n' "${S_BOLD}Write-mode notes:${S_RESET}"
   printf '%b\n' "  ${S_DIM}--sync requires a clean working tree and always uses the full upstream release contract.${S_RESET}"
   printf '%b\n' "  ${S_DIM}When run from main, master, the default branch, or detached HEAD, it creates sync-soperator-<release>.${S_RESET}"
+  printf '%b\n' "  ${S_DIM}--ci-preview-no-branch is only for disposable CI previews and keeps the current checkout branch unchanged.${S_RESET}"
   printf '%b\n' "  ${S_DIM}Local --sync does not stage, commit, install tools, push, open a PR, or merge.${S_RESET}"
 }
 
@@ -1041,6 +1043,7 @@ main() {
   local check_latest=0
   local sync_latest=0
   local sync=0
+  local ci_preview_no_branch=0
   local report=0
   local scope="all"
   local chart_dir
@@ -1069,6 +1072,10 @@ main() {
         ;;
       --latest)
         sync_latest=1
+        shift
+        ;;
+      --ci-preview-no-branch)
+        ci_preview_no_branch=1
         shift
         ;;
       --scope)
@@ -1128,6 +1135,11 @@ main() {
 
   if [[ "${sync}" -eq 1 && "${scope}" != "all" ]]; then
     log_error "--sync must use --scope all under the single-release sync contract. Use --scope only for read-only verification."
+    exit 1
+  fi
+
+  if [[ "${ci_preview_no_branch}" -eq 1 && "${sync}" -ne 1 ]]; then
+    log_error "--ci-preview-no-branch can only be used with --sync in disposable CI previews."
     exit 1
   fi
 
@@ -1207,7 +1219,7 @@ main() {
     tag="${release}"
   fi
 
-  if [[ "${sync}" -eq 1 ]]; then
+  if [[ "${sync}" -eq 1 && "${ci_preview_no_branch}" -ne 1 ]]; then
     ensure_sync_branch "${root}" "${release}"
   fi
 

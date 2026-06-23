@@ -14,6 +14,10 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Fixed route command SSH handling so `add-routes-local` BGP route discovery and
+  `list-routes-remote` gateway queries honor configured SSH user and private key
+  settings.
+
 ## [nebius-vpngw-v0.5.8] - 2026-04-15
 
 - Fixed explicit `gateway_group.external_ips` reuse for pre-created public IP allocations:

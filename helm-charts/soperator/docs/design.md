@@ -2913,9 +2913,9 @@ Release prep and publish are intentionally local and explicit:
    `.github/helm-chart-publish.json`, packages the chart, pushes it to Nebius
    OCI, verifies anonymous pull, and writes a publish manifest artifact.
 
-If `[Unreleased]` is empty, the scheduled upstream sync workflow and
-`publish-helm.sh --prep` seed a fallback chart-bump note before release prep
-moves the section into the dated release entry.
+If `[Unreleased]` is empty, `publish-helm.sh --prep` seeds a fallback
+chart-bump note before release prep moves the section into the dated release
+entry.
 
 Only the push path uses Nebius authentication. The post-publish pull check uses
 a fresh unauthenticated Helm registry config because published chart pulls are
@@ -2950,8 +2950,8 @@ The lock records:
   ConfigMaps, and storage classes.
 - the local-owned paths that script sync must not overwrite and image sync must
   explicitly target.
-- a daily CI sync path that opens a feature-branch PR when the public upstream
-  release advances.
+- a daily CI verifier path that reports public upstream release advances without
+  opening a branch or PR.
 
 Versioning uses two fields on purpose:
 
@@ -3059,15 +3059,23 @@ Missing-tool errors include macOS and Linux install hints, but the script does
 not install packages automatically. Local runs do not stage, commit, push, or
 create the PR.
 
-The scheduled GitHub workflow runs the same sync with `--latest`, stages and
-commits the validated result, pushes it to `automation/soperator-upstream-sync`,
-and creates or updates a PR for human approval.
+The scheduled `soperator-upstream-verifier` GitHub workflow runs a read-only
+latest-release check and reports new public upstream Soperator SemVer releases
+through GitHub Actions warnings and the workflow step summary. When a newer
+release exists, it runs `--latest --sync --report` only in the disposable runner
+checkout to show the expected changed files and diff stat, then intentionally
+marks the scheduled run failed so the Actions run is the GitHub-native
+notification marker. It does not create a branch, stage, commit, push, open a
+PR, configure email, or post to Slack. The operator creates a feature branch,
+runs the sync locally, tests, commits, and opens the PR manually. Manual
+dispatch runs produce the same preview without using a failed run as the
+notification marker.
 `scripts/verify-upstream-soperator-sync.sh --check-latest`
 remains a read-only local or CI check and is not required before sync.
-Before a scheduled `--latest` sync writes files, the script compares the lock
-release with the highest non-draft, non-prerelease SemVer release published in
-GitHub releases. If the lock is newer than every such release, the workflow
-fails with a clear typo/stale-metadata message instead of mutating chart files.
+Before the scheduled preview, the script compares the lock release with the
+highest non-draft, non-prerelease SemVer release published in GitHub releases.
+If the lock is newer than every such release, the workflow fails with a clear
+typo/stale-metadata message instead of mutating chart files.
 
 ## Reference Sources
 

@@ -139,3 +139,23 @@ def test_check_latest_continues_after_prerelease_only_page(tmp_path: Path) -> No
     assert "Pinned Soperator release '4.0.2' is the highest GitHub SemVer release." in (
         result.stdout
     )
+
+
+def test_ci_preview_no_branch_requires_sync() -> None:
+    env = os.environ.copy()
+    env["NO_COLOR"] = "1"
+    result = subprocess.run(
+        [str(SCRIPT), "--ci-preview-no-branch"],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert (
+        "--ci-preview-no-branch can only be used with --sync in disposable CI previews."
+        in result.stderr
+    )

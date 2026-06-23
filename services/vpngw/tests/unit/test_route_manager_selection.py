@@ -471,6 +471,8 @@ def test_get_bgp_learned_routes_queries_only_connection_owner_vm(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     route_manager = RouteManager(project_id="project-test")
+    monkeypatch.delenv("VPNGW_SSH_USER", raising=False)
+    monkeypatch.delenv("VPNGW_SSH_KEY", raising=False)
     local_cfg = {
         "gateway_group": {"vm_spec": {}},
     }
@@ -490,7 +492,7 @@ def test_get_bgp_learned_routes_queries_only_connection_owner_vm(
     }
     calls: list[str] = []
 
-    def fake_run(cmd, capture_output, text, timeout):
+    def fake_run(cmd, capture_output, text, timeout, input=None):
         calls.append(cmd[5].removeprefix("ubuntu@"))
         return SimpleNamespace(
             returncode=0,
@@ -517,6 +519,129 @@ def test_get_bgp_learned_routes_queries_only_connection_owner_vm(
     assert prefixes == ["10.20.0.0/16"]
 
 
+def test_get_bgp_learned_routes_honors_custom_ssh_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    route_manager = RouteManager(project_id="project-test")
+    ssh_key = tmp_path / "vpngw-key"
+    monkeypatch.setenv("VPNGW_SSH_USER", "env-user")
+    monkeypatch.setenv("VPNGW_SSH_KEY", "/tmp/env-key")
+    local_cfg = {
+        "gateway_group": {
+            "vm_spec": {
+                "ssh_username": "operator",
+                "ssh_private_key_path": str(ssh_key),
+            }
+        },
+    }
+    conn = {
+        "name": "gcp-site-b",
+        "routing_mode": "bgp",
+        "tunnels": [
+            {
+                "gateway_instance_index": 1,
+                "ha_role": "active",
+                "inner_remote_ip": "169.254.20.2",
+            },
+        ],
+    }
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, capture_output, text, timeout, input=None):
+        calls.append(cmd)
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "routes": {
+                        "10.20.0.0/16": [
+                            {"nexthops": [{"ip": "169.254.20.2"}]},
+                        ],
+                    }
+                }
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    prefixes = route_manager._get_bgp_learned_routes(_three_vm_plan(), conn, local_cfg)
+
+    assert prefixes == ["10.20.0.0/16"]
+    assert calls == [
+        [
+            "ssh",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "ConnectTimeout=10",
+            "-i",
+            str(ssh_key),
+            "operator@203.0.113.20",
+            "sudo vtysh -c 'show bgp ipv4 unicast json'",
+        ]
+    ]
+
+
+def test_get_bgp_learned_routes_honors_env_ssh_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    route_manager = RouteManager(project_id="project-test")
+    monkeypatch.setenv("VPNGW_SSH_USER", "env-user")
+    monkeypatch.setenv("VPNGW_SSH_KEY", "/tmp/env-key")
+    local_cfg = {
+        "gateway_group": {"vm_spec": {}},
+    }
+    conn = {
+        "name": "gcp-site-b",
+        "routing_mode": "bgp",
+        "tunnels": [
+            {
+                "gateway_instance_index": 1,
+                "ha_role": "active",
+                "inner_remote_ip": "169.254.20.2",
+            },
+        ],
+    }
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, capture_output, text, timeout, input=None):
+        calls.append(cmd)
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "routes": {
+                        "10.20.0.0/16": [
+                            {"nexthops": [{"ip": "169.254.20.2"}]},
+                        ],
+                    }
+                }
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    prefixes = route_manager._get_bgp_learned_routes(_three_vm_plan(), conn, local_cfg)
+
+    assert prefixes == ["10.20.0.0/16"]
+    assert calls == [
+        [
+            "ssh",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "ConnectTimeout=10",
+            "-i",
+            "/tmp/env-key",
+            "env-user@203.0.113.20",
+            "sudo vtysh -c 'show bgp ipv4 unicast json'",
+        ]
+    ]
+
+
 def test_get_bgp_learned_routes_filters_to_connection_peer_ips(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -541,7 +666,7 @@ def test_get_bgp_learned_routes_filters_to_connection_peer_ips(
         ],
     }
 
-    def fake_run(cmd, capture_output, text, timeout):
+    def fake_run(cmd, capture_output, text, timeout, input=None):
         return SimpleNamespace(
             returncode=0,
             stdout=json.dumps(
@@ -597,7 +722,7 @@ def test_get_bgp_learned_routes_reports_connection_scoped_count(
         ],
     }
 
-    def fake_run(cmd, capture_output, text, timeout):
+    def fake_run(cmd, capture_output, text, timeout, input=None):
         return SimpleNamespace(
             returncode=0,
             stdout=json.dumps(
@@ -672,7 +797,7 @@ def test_list_remote_routes_processes_only_connections_owned_by_current_vm(
     calls: list[tuple[str, int]] = []
 
     def fake_list_bgp_routes(
-        hostname, external_ip, conn_name, conn, instance_index, whitelist, console
+        local_cfg, hostname, external_ip, conn_name, conn, instance_index, whitelist, console
     ):
         calls.append((conn_name, instance_index))
 
@@ -727,7 +852,7 @@ def test_list_remote_routes_connection_filter_targets_selected_connection_only(
     calls: list[tuple[str, int]] = []
 
     def fake_list_bgp_routes(
-        hostname, external_ip, conn_name, conn, instance_index, whitelist, console
+        local_cfg, hostname, external_ip, conn_name, conn, instance_index, whitelist, console
     ):
         calls.append((conn_name, instance_index))
 
@@ -740,6 +865,150 @@ def test_list_remote_routes_connection_filter_targets_selected_connection_only(
     )
 
     assert calls == [("gcp-site-b", 1)]
+
+
+def test_list_bgp_routes_honors_custom_ssh_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    route_manager = RouteManager(project_id="project-test")
+    ssh_key = tmp_path / "vpngw-key"
+    local_cfg = {
+        "gateway_group": {
+            "vm_spec": {
+                "ssh_username": "operator",
+                "ssh_private_key_path": str(ssh_key),
+            }
+        },
+    }
+    conn = {
+        "name": "gcp-site-b",
+        "routing_mode": "bgp",
+        "tunnels": [
+            {
+                "gateway_instance_index": 1,
+                "ha_role": "active",
+                "inner_remote_ip": "169.254.20.2",
+            },
+        ],
+    }
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, capture_output, text, timeout, input=None):
+        calls.append(cmd)
+        remote_cmd = cmd[-1]
+        if remote_cmd == "sudo vtysh -c 'show bgp ipv4 unicast json'":
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "routes": {
+                            "10.20.0.0/16": [
+                                {
+                                    "nexthops": [{"ip": "169.254.20.2"}],
+                                    "path": "65001",
+                                }
+                            ],
+                        }
+                    }
+                ),
+                stderr="",
+            )
+        if remote_cmd == "ip route get 169.254.20.2":
+            return SimpleNamespace(
+                returncode=0,
+                stdout="169.254.20.2 dev xfrm1 src 169.254.20.1 uid 1000\n",
+                stderr="",
+            )
+        raise AssertionError(f"Unexpected command: {remote_cmd}")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    route_manager._list_bgp_routes(
+        local_cfg,
+        "nebius-vpn-gw-1",
+        "203.0.113.20",
+        "gcp-site-b",
+        conn,
+        1,
+        [],
+        SimpleNamespace(print=lambda table: None),
+    )
+
+    assert calls == [
+        [
+            "ssh",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "ConnectTimeout=10",
+            "-i",
+            str(ssh_key),
+            "operator@203.0.113.20",
+            "sudo vtysh -c 'show bgp ipv4 unicast json'",
+        ],
+        [
+            "ssh",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "ConnectTimeout=5",
+            "-i",
+            str(ssh_key),
+            "operator@203.0.113.20",
+            "ip route get 169.254.20.2",
+        ],
+    ]
+
+
+def test_list_static_routes_honors_custom_ssh_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    route_manager = RouteManager(project_id="project-test")
+    ssh_key = tmp_path / "vpngw-key"
+    local_cfg = {
+        "gateway_group": {
+            "vm_spec": {
+                "ssh_username": "operator",
+                "ssh_private_key_path": str(ssh_key),
+            }
+        },
+    }
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, capture_output, text, timeout, input=None):
+        calls.append(cmd)
+        return SimpleNamespace(
+            returncode=0,
+            stdout="10.50.0.0/16 dev xfrm0\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    route_manager._list_static_routes(
+        local_cfg,
+        "nebius-vpn-gw-1",
+        "203.0.113.20",
+        "static-site",
+        ["10.50.0.0/16"],
+        SimpleNamespace(print=lambda table: None),
+    )
+
+    assert calls == [
+        [
+            "ssh",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "ConnectTimeout=10",
+            "-i",
+            str(ssh_key),
+            "operator@203.0.113.20",
+            "ip route show",
+        ]
+    ]
 
 
 def test_find_connection_for_peer_respects_gateway_instance_scope() -> None:

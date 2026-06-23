@@ -140,6 +140,9 @@ This is useful for planned maintenance, peer changes, or operational testing.
 
 For advanced setup, continue with [Configuration](#configuration), [Commands](#commands), and [Routing Modes](#routing-modes).
 
+> **Note:** Route synchronization would need to be implemented by the Nebius VPC control plane. However, because the VPN gateway operates outside of the control plane, automatic route propagation to VPC routing tables is not supported by design.
+> Therefore, whenever a new route is added, the customer must manually update the VPC routing table using the `nebius-vpngw add-routes-local` command.
+
 ## Security Notice
 
 **Configuration files contain sensitive secrets (PSKs, service account keys).**
@@ -425,7 +428,7 @@ connections:
 - The route you want must be advertised by the peer
 - `remote_prefixes` only allowlists advertised routes
 - It does not carve a smaller route out of a larger one
-- Routes are installed automatically by BGP, not manually
+- Routes are learned dynamically by BGP on the gateway VM; VPC route-table entries still require `nebius-vpngw add-routes-local`
 - Example: Peer advertises 300 networks → you don't need to list all 300 in YAML
 
 ```yaml
