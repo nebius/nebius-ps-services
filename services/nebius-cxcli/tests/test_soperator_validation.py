@@ -1431,7 +1431,7 @@ def test_soperator_acceptance_benchmark_fails_without_gpu_partition(
         del input_text, timeout_seconds, check
         command = tuple(str(item) for item in args)
         commands.append(command)
-        if "helmreleases.helm.toolkit.fluxcd.io" in command:
+        if command[:4] == ("kubectl", "get", "helmreleases.helm.toolkit.fluxcd.io", "-A"):
             return SoperatorValidationCommandResult(command, 0, '{"items":[]}\n', "")
         if "pods" in command and "-o" in command:
             return SoperatorValidationCommandResult(
