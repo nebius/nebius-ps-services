@@ -2,7 +2,7 @@ apiVersion: v2
 name: soperator-checks
 description: Soperator checks controller for ActiveCheck resources.
 type: application
-version: 4.0.2-ps.1
-appVersion: "4.0.2"
+version: 4.1.0-ps.1
+appVersion: "4.1.0"
 annotations:
-  soperator.nebius.com/upstream-release: "4.0.2"
+  soperator.nebius.com/upstream-release: "4.1.0"

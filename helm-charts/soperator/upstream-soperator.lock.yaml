@@ -1,7 +1,7 @@
 repository: "https://github.com/nebius/soperator"
-release: "4.0.2"
-tag: "4.0.2"
-commit: "7f1c4e817cab67e7b5d563bc11db2bff8c661189"
+release: "4.1.0"
+tag: "4.1.0"
+commit: "0f1d97e8257bf2d3d66a7dcb7de1e943d8441d91"
 imports:
   scripts:
     - name: slurm-cluster slurm_scripts
@@ -360,7 +360,7 @@ imports:
     - name: SlurmCluster templates
       scope: logic
       upstream_path: helm/slurm-cluster/templates
-      sha256: bb3ded7be3410bfb7a91df67f817d5ab441fd2e4fb020b419a9d34ef7baeff02
+      sha256: 992bbe321aa57ea3e0001bbc6a35d88463ad1ee9cbf57abee6e8f5f4ba8cb47f
     - name: Slurm storage templates
       scope: logic
       upstream_path: helm/slurm-cluster-storage/templates
@@ -376,7 +376,7 @@ imports:
     - name: ActiveChecks templates
       scope: logic
       upstream_path: helm/soperator-activechecks/templates
-      sha256: 12c063a99f22eb9a4fa3fb4f157e558bd031bf1b8b0170e9d3d4ac2d2110a0aa
+      sha256: fc46d466038fbe873da99d253cf33df685a30a1c767b15124990b0635fcdebc4
     - name: SoperatorChecks templates
       scope: logic
       upstream_path: helm/soperatorchecks/templates
@@ -388,7 +388,7 @@ imports:
     - name: Soperator DCGM exporter templates
       scope: logic
       upstream_path: helm/soperator-dcgm-exporter/templates
-      sha256: fa32562160efe9ee2aa60243e24c23caec6b0900f6eb546fdbbe7b4aafa1711a
+      sha256: 459127ddb328397573a7684fb9182c03e1aaabad54aa4fb72492d623bc1a7794
     - name: notifier templates
       scope: logic
       upstream_path: helm/soperator-notifier/templates
@@ -396,15 +396,15 @@ imports:
     - name: custom ConfigMaps chart
       scope: logic
       upstream_path: helm/soperator-custom-configmaps
-      sha256: 9dbdfe53acbc4bfbe1bb87b4ae22aecab3d4fb537cd250b75ecd233e66127315
+      sha256: a8dfb562e068f77e6b84d39f6e2ba82831d9ba08c6f4f7a78705af2aeaf3e3cb
     - name: monitoring dashboards chart
       scope: logic
       upstream_path: helm/soperator-monitoring-dashboards
-      sha256: 2d5d78c0f31a8c4cd38b529c943863dc00dceb4d783c122f110e953ab52e93f3
+      sha256: aad8a089ad08c0bdd1cb0cab8da583a7fbbb9b3146a196ccaa5e403128103c40
     - name: storageclasses chart
       scope: logic
       upstream_path: helm/storageclasses
-      sha256: 6cbf13caaf099788718f7b9882f37000bb0bdb72a9cb42a4f45dcef683532eeb
+      sha256: 6f3f1e7de9081fa217d63b07ffce11ce531f1e36682c2fbf30776cde0f7f29a2
 local_owned_paths:
   - helm-charts/soperator/.helmignore
   - helm-charts/soperator/CHANGELOG.md
