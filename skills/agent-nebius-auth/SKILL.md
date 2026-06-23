@@ -10,7 +10,7 @@ Nebius authentication.
 
 Do not use this Skill as the runtime token mechanism. Runtime token handling
 belongs to the installed Codex `PreToolUse` hook in
-`hooks/pre_tool_use_nebius_auth.py`.
+`assets/hooks/pre_tool_use_nebius_auth.py`.
 
 ## Inputs
 
@@ -55,7 +55,7 @@ If the skill and hook payload are installed separately with the root installer,
 register the runtime hook with:
 
 ```bash
-./install-skills.sh --install-hooks agent-nebius-auth/hooks --register-hooks
+./install-skills.sh --install-hooks agent-nebius-auth/assets/hooks --register-hooks
 ```
 
 Use either this installer-managed `hooks.json` registration or the setup
@@ -68,7 +68,7 @@ registrations can make the Nebius auth hook run more than once.
 Use `scripts/agent-nebius-auth.sh` as the single setup entry point. It is
 idempotent and owns bootstrap, verification, repair, and its inline
 `config.toml` hook registration mode. The root `install-skills.sh
---install-hooks agent-nebius-auth/hooks --register-hooks` path is a separate
+--install-hooks agent-nebius-auth/assets/hooks --register-hooks` path is a separate
 payload/`hooks.json` registration mode for operators who already installed the
 skill and do not want the setup script to manage inline hook config.
 
@@ -164,7 +164,7 @@ When using this skill, capture durable, reusable, public-safe learnings back
 into this skill's local source materials before completion when the current task
 contract allows source edits. Update the narrowest appropriate surface:
 `SKILL.md` for runtime rules, `scripts/` for deterministic setup logic, and
-`hooks/` for runtime hook behavior.
+`assets/hooks/` for runtime hook behavior.
 
 If the current task is explicitly read-only/report-only, or source writes are
 outside this skill's task contract, do not edit skill sources; report that it

@@ -451,7 +451,7 @@ toml_literal_safe() {
 install_hook() {
   local codex_home="${CODEX_HOME:-$HOME/.codex}"
   local config_file="${codex_home}/config.toml"
-  local hook_file="${SKILL_DIR}/hooks/pre_tool_use_nebius_auth.py"
+  local hook_file="${SKILL_DIR}/assets/hooks/pre_tool_use_nebius_auth.py"
   local begin_marker="# agent-nebius-auth managed block begin"
   local end_marker="# agent-nebius-auth managed block end"
   local begin_count=""

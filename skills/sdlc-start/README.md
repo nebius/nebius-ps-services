@@ -67,6 +67,11 @@ To intentionally sync the source bundle into a local Codex runtime:
 The all-hooks form syncs every reviewed hook-only bundle under the source skills
 folder. The single-source form copies only SDLC hook files into
 `${CODEX_HOME:-$HOME/.codex}/hooks`. Add `--register-hooks` when the installer
-should merge the SDLC `PreToolUse` and `Stop` entries into `hooks.json`.
-Registration does not trust hooks. Restart Codex and review the PreToolUse and
-Stop entries in `/hooks` after syncing.
+should merge the SDLC `PreToolUse` and `Stop` entries into `hooks.json`. Add
+`--replace-hooks-json` only when intentionally replacing `hooks.json` with a
+clean file built from the selected source manifests. Registration is
+idempotent, does not trust hooks, refuses duplicate Python hook files within
+the same hook event, and reports extra installed hook files or `hooks.json`
+entries for manual review instead of removing them by default.
+Restart Codex and review the PreToolUse and Stop entries in `/hooks` after
+syncing.

@@ -13,7 +13,12 @@ import unittest
 
 sys.dont_write_bytecode = True
 
-HOOK = Path(__file__).resolve().parent.parent / "hooks" / "pre_tool_use_nebius_auth.py"
+HOOK = (
+    Path(__file__).resolve().parent.parent
+    / "assets"
+    / "hooks"
+    / "pre_tool_use_nebius_auth.py"
+)
 PROJECT = "project-test"
 PROJECT_ENV = "_".join(["CODEX", "NEBIUS", "PROJECT", "ID"])
 

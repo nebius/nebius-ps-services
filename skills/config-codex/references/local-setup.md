@@ -121,9 +121,17 @@ SDLC `PreToolUse` and `Stop` hooks. Do not replace `hooks.json` just to match
 the template byte-for-byte.
 
 The root `install-skills.sh --register-hooks` path follows the same semantic
-merge model for hook bundles: it validates `hooks.json`, preserves existing
-entries, and appends only missing source entries. It still does not trust hooks
-or patch `config.toml`.
+merge model for hook bundles by default: it validates `hooks.json`, preserves
+existing entries, and appends only missing source entries. It also refuses
+duplicate Python hook files within the same hook event so stale variants cannot
+silently run alongside current registrations. It still does not trust hooks or
+patch `config.toml`. Add `--replace-hooks-json` only when the operator
+intentionally wants to back up and replace `hooks.json` with a clean file built
+from the selected source manifests. Hook install modes are idempotent and
+report extra installed hook files or `hooks.json` entries that are not present
+in the selected source manifests; those reports are advisory and do not delete
+files or edit existing registrations unless `--replace-hooks-json` is
+explicitly set.
 
 If `$CODEX_HOME/AGENTS.md` is missing, create it from
 `assets/AGENTS.md.template`. If it exists, do not replace it. Append or update a

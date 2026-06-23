@@ -103,6 +103,16 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Added an explicit `install-skills.sh --replace-hooks-json` opt-in for hook
+  registration cleanup so normal `--register-hooks` preserves hand-written
+  entries while the intentional clean-reset mode backs up and replaces
+  `$CODEX_HOME/hooks.json` from the selected source manifest or manifests.
+- Added a hook-registration guardrail that refuses multiple registrations for
+  the same hook event and Python hook filename, preventing stale entries such
+  as duplicate `Stop` hooks for `stop_sdlc_continue.py` from being merged.
+- Standardized the `agent-nebius-auth` hook payload under
+  `agent-nebius-auth/assets/hooks/` so `--install-all-hooks` discovers and
+  registers it with the other reviewed hook bundles.
 - Relaxed the Agentic SDLC PreToolUse write-target policy so file targets are
   no longer blocked by path, including outside-repo files, credential
   directories, Codex runtime files, global `AGENTS.md`, locked SDLC plans, and
@@ -208,6 +218,10 @@ All notable changes to the reusable Codex skills are tracked here.
   `--register-hooks` option that semantically merges source `hooks.json` or
   `hooks.json.template` registrations into `$CODEX_HOME/hooks.json`, preserving
   existing hook entries and backing up the file before changes.
+- Added an idempotent, report-only hook drift summary to `install-skills.sh`
+  that lists extra installed hook files and `hooks.json` registrations not
+  present in the selected source manifests, with manual cleanup guidance
+  instead of automatic deletion.
 - Aligned `config-codex` idempotency checks with the current local setup model:
   exact global `AGENTS.md` parity when requested, required global hook
   registrations as a `hooks.json` subset, and required public-safe MCP servers

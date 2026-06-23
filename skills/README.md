@@ -457,8 +457,8 @@ be removed with `--remove-skill` when they are not same-source managed.
 ```bash
 ./install-skills.sh [source] [destination_dir]
 ./install-skills.sh --remove-skill <skill_name> [destination_dir]
-./install-skills.sh --install-hooks <source_hook_dir> [--register-hooks]
-./install-skills.sh --install-all-hooks [--register-hooks]
+./install-skills.sh --install-hooks <source_hook_dir> [--register-hooks] [--replace-hooks-json]
+./install-skills.sh --install-all-hooks [--register-hooks] [--replace-hooks-json]
 ./install-skills.sh --help
 ```
 
@@ -475,7 +475,13 @@ The `--install-all-hooks` option is also explicit, but discovers every reviewed
 hook-only `*/assets/hooks` directory under this source skills folder and syncs
 those payload files in one pass. It does not scan mixed `assets/` directories.
 With `--register-hooks`, it also merges each discovered bundle's registration
-manifest while preserving existing hook entries.
+manifest while preserving existing hook entries. Add `--replace-hooks-json`
+only when you intentionally want to back up and replace `hooks.json` with a
+clean file built from the selected source manifests. Hook install modes are
+idempotent: unchanged files are not recopied, registration appends only missing
+source entries by default, refuses duplicate Python hook files within the same
+hook event, and any extra installed hook files or hook registrations are
+reported for review instead of removed automatically.
 
 ### Supported Sources
 
@@ -529,6 +535,9 @@ manifest while preserving existing hook entries.
 # Copy and register every reviewed hook-only bundle
 ./install-skills.sh --install-all-hooks --register-hooks
 
+# Copy all reviewed hook bundles and replace hooks.json with only those entries
+./install-skills.sh --install-all-hooks --register-hooks --replace-hooks-json
+
 # Copy hooks into a non-default Codex home
 CODEX_HOME=~/custom-codex ./install-skills.sh --install-all-hooks --register-hooks
 ```
@@ -577,6 +586,19 @@ CODEX_HOME=~/custom-codex ./install-skills.sh --install-all-hooks --register-hoo
   for `hooks.json` or `hooks.json.template` in the hook directory or its parent,
   validates the source and destination JSON, backs up an existing
   `${CODEX_HOME:-$HOME/.codex}/hooks.json` before changing it, preserves
-  existing entries, and appends only missing source entries.
+  existing entries, and appends only missing source entries. It refuses to
+  create or preserve multiple registrations for the same hook event and Python
+  hook filename, such as two `Stop` entries pointing at
+  `stop_sdlc_continue.py`.
+- `--replace-hooks-json` can be combined with `--register-hooks` to replace
+  `${CODEX_HOME:-$HOME/.codex}/hooks.json` with a clean file built from the
+  selected source manifest or manifests. This removes hand-written and stale
+  registrations that are not in the selected source. Use
+  `--install-all-hooks --register-hooks --replace-hooks-json` for a clean file
+  containing every reviewed hook bundle under this source folder.
+- Hook install modes report extra files under
+  `${CODEX_HOME:-$HOME/.codex}/hooks` and extra `hooks.json` registrations that
+  are not present in the selected source manifests. These reports are advisory:
+  review the entries and remove obsolete files or JSON entries manually.
 - Hook registration does not trust hooks. Restart Codex and review/trust new or
   changed hook entries in `/hooks`.
