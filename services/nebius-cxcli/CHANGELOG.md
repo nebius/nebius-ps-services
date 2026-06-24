@@ -62,7 +62,7 @@ All notable changes to this project are tracked here. This changelog follows
   ambiguous `--k8s` and `--soperator` acceptance-test selectors; operators now
   select runtime behavior through `--suite`: `k8s-cuda` or `slurm` for smoke,
   and `k8s-nccl` or `slurm-nccl` for benchmark.
-- Updated the bundled Soperator portable chart pin to `4.0.2-ps.2`, matching
+- Updated the bundled Soperator portable chart pin to `4.0.2-ps.3`, matching
   the current parent chart package release while keeping local-source
   resolution tied to `helm-charts/soperator/Chart.yaml`.
 - Changed `component add apps:soperator` so production-cluster adds fail fast on
