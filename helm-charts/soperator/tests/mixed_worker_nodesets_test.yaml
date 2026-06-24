@@ -66,6 +66,12 @@ tests:
           value:
             slurm.nebius.ai/nodeset-name: worker-cpu
         documentIndex: 0
+      - notExists:
+          path: spec.customInitContainers
+        documentIndex: 0
+      - notExists:
+          path: spec.slurmd.volumes.customVolumeMounts[2]
+        documentIndex: 0
       - equal:
           path: metadata.name
           value: worker-gpu
@@ -82,6 +88,33 @@ tests:
           path: spec.nodeSelector
           value:
             slurm.nebius.ai/nodeset-name: worker-gpu
+        documentIndex: 1
+      - equal:
+          path: spec.slurmd.volumes.customVolumeMounts[2]
+          value:
+            name: nvidia-driver-root
+            mountPath: /run/nvidia/driver
+            readOnly: false
+            volumeSource:
+              hostPath:
+                path: /
+                type: ""
+        documentIndex: 1
+      - equal:
+          path: spec.customInitContainers[0].name
+          value: cxcli-gpu-driver-jail
+        documentIndex: 1
+      - equal:
+          path: spec.customInitContainers[0].image
+          value: cr.eu-north1.nebius.cloud/soperator/worker_slurmd:4.0.2-slurm25.11.3
+        documentIndex: 1
+      - equal:
+          path: spec.customInitContainers[0].volumeMounts
+          value:
+            - name: jail
+              mountPath: /mnt/jail
+            - name: nvidia-driver-root
+              mountPath: /run/nvidia/driver
         documentIndex: 1
 
   - it: renders generated mixed shard NodeSet refs in SlurmCluster partitions
@@ -109,8 +142,50 @@ tests:
               priorityTier: 10
       nodesets:
         - name: worker-cpu-0
+          slurmd:
+            resources:
+              cpu: "4"
+              memory: 16Gi
+            volumes:
+              spool:
+                emptyDir: {}
+              jail:
+                emptyDir: {}
+          munge:
+            resources:
+              cpu: 100m
+              memory: 128Mi
         - name: worker-cpu-1
+          slurmd:
+            resources:
+              cpu: "4"
+              memory: 16Gi
+            volumes:
+              spool:
+                emptyDir: {}
+              jail:
+                emptyDir: {}
+          munge:
+            resources:
+              cpu: 100m
+              memory: 128Mi
         - name: worker-gpu-0
+          gpu:
+            enabled: true
+          slurmd:
+            resources:
+              cpu: "64"
+              memory: 512Gi
+              gpu: 8
+            volumes:
+              spool:
+                emptyDir: {}
+              jail:
+                emptyDir: {}
+          munge:
+            resources:
+              cpu: 100m
+              memory: 128Mi
     asserts:
       - equal:
           path: spec.partitionConfiguration.partitions[0].nodeSetRefs

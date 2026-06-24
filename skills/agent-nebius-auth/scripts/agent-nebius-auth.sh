@@ -7,12 +7,14 @@ INSTALL_HOOK="false"
 REPAIR="false"
 DRY_RUN="false"
 ENDPOINT="api.nebius.cloud"
+AGENT_PROFILE_PREFIX="codex-agent-"
 
 TENANT_ID=""
 PROJECT_ID=""
 PROJECT_NAME=""
 COMMAND=""
 LOCK_DIRS=()
+PROFILE_RESTORE_TARGET=""
 
 die() {
   printf 'ERROR: %s\n' "$*" >&2
@@ -72,6 +74,11 @@ cleanup_locks() {
   done
 }
 
+cleanup() {
+  restore_pending_active_profile
+  cleanup_locks
+}
+
 acquire_lock() {
   local lock_dir="$1"
   local attempt=0
@@ -125,20 +132,64 @@ ensure_nebius_dir() {
   run chmod 700 "$HOME/.nebius"
 }
 
+active_profile() {
+  nebius profile active 2>/dev/null | awk 'NF { print; exit }'
+}
+
+current_profile() {
+  nebius profile current 2>/dev/null | awk 'NF { print; exit }'
+}
+
+profile_is_agent() {
+  local profile="$1"
+  [[ "$profile" == "${AGENT_PROFILE_PREFIX}"* ]]
+}
+
+current_human_profile() {
+  local profile=""
+
+  profile="$(current_profile || true)"
+  [[ -n "$profile" ]] || return 1
+  profile_is_agent "$profile" && return 1
+  printf '%s\n' "$profile"
+}
+
+profile_restore_target() {
+  local profile=""
+
+  profile="$(active_profile || true)"
+  if [[ -n "$profile" ]]; then
+    printf '%s\n' "$profile"
+    return 0
+  fi
+
+  current_human_profile || true
+}
+
 human_session_available() {
+  local profile=""
+
   if is_dry_run; then
     return 1
   fi
-  nebius iam get-access-token >/dev/null 2>&1
+
+  profile="$(current_human_profile || true)"
+  [[ -n "$profile" ]] || return 1
+  nebius iam get-access-token --profile "$profile" >/dev/null 2>&1
 }
 
 ensure_human_session() {
+  local profile=""
+
   if is_dry_run; then
     log "Would verify the current human/default Nebius session."
     return 0
   fi
-  nebius iam get-access-token >/dev/null \
-    || die "Current Nebius human/default session is not valid. Re-authenticate, then rerun."
+
+  profile="$(current_human_profile || true)"
+  [[ -n "$profile" ]] || die "Current Nebius active profile is missing or is an agent service-account profile. Activate a human/admin profile, then rerun."
+  nebius iam get-access-token --profile "$profile" >/dev/null \
+    || die "Current Nebius human/default session '$profile' is not valid. Re-authenticate, then rerun."
 }
 
 get_or_create_service_account() {
@@ -219,7 +270,7 @@ access_permit_exists() {
           else [] end;
         any(rows[]; ((.spec.resource_id // .resource_id // "") == $resource)
           and ((.spec.role // .role // "") == $role))
-      ' >/dev/null
+      ' >/dev/null 2>/dev/null
 }
 
 ensure_access_permit() {
@@ -270,7 +321,7 @@ membership_exists() {
           elif (.items? | type) == "array" then .items
           else [] end;
         any(rows[]; (.spec.member_id // .member_id // .metadata.id // .id // "") == $member)
-      ' >/dev/null
+      ' >/dev/null 2>/dev/null
 }
 
 ensure_group_membership() {
@@ -385,7 +436,7 @@ profile_exists() {
             [to_entries[] | {name: .key} + (if (.value | type) == "object" then .value else {} end)]
           else [] end;
         any(rows[]; (.name // .metadata.name // .profile // .id // "") == $profile)
-      ' >/dev/null
+      ' >/dev/null 2>/dev/null
 }
 
 profile_can_mint_token() {
@@ -393,6 +444,49 @@ profile_can_mint_token() {
     return 1
   fi
   nebius iam get-access-token --profile "$PROFILE" >/dev/null 2>&1
+}
+
+restore_active_profile() {
+  local previous_profile="$1"
+  local current_profile=""
+
+  [[ -n "$previous_profile" ]] || return 0
+  current_profile="$(active_profile || true)"
+  [[ "$current_profile" == "$previous_profile" ]] && return 0
+
+  log "Restoring active Nebius profile: $previous_profile"
+  nebius profile activate "$previous_profile" >/dev/null
+}
+
+restore_pending_active_profile() {
+  local profile="$PROFILE_RESTORE_TARGET"
+
+  [[ -n "$profile" ]] || return 0
+  PROFILE_RESTORE_TARGET=""
+  restore_active_profile "$profile" || true
+}
+
+run_preserving_active_profile() {
+  local restore_target=""
+  local status=0
+  local restore_status=0
+
+  if is_dry_run; then
+    run "$@"
+    return 0
+  fi
+
+  restore_target="$(profile_restore_target || true)"
+  PROFILE_RESTORE_TARGET="$restore_target"
+  set +e
+  "$@"
+  status=$?
+  set -e
+
+  PROFILE_RESTORE_TARGET=""
+  restore_active_profile "$restore_target" || restore_status=$?
+  [[ "$restore_status" -eq 0 ]] || return "$restore_status"
+  return "$status"
 }
 
 ensure_profile() {
@@ -410,14 +504,14 @@ ensure_profile() {
 
   if profile_exists; then
     log "Updating profile: $PROFILE"
-    nebius profile update "$PROFILE" \
+    run_preserving_active_profile nebius profile update "$PROFILE" \
       --endpoint "$ENDPOINT" \
       --tenant-id "$TENANT_ID" \
       --parent-id "$PROJECT_ID" \
       --service-account-file "$CREDENTIAL_FILE" >/dev/null
   else
     log "Creating profile: $PROFILE"
-    nebius profile create "$PROFILE" \
+    run_preserving_active_profile nebius profile create "$PROFILE" \
       --endpoint "$ENDPOINT" \
       --tenant-id "$TENANT_ID" \
       --parent-id "$PROJECT_ID" \
@@ -616,9 +710,10 @@ parse_args() {
 main() {
   local project_slug=""
   local auth_lock_dir=""
+  local profile_lock_dir=""
 
-  trap cleanup_locks EXIT
-  trap 'cleanup_locks; exit 130' INT TERM
+  trap cleanup EXIT
+  trap 'cleanup; exit 130' INT TERM
   parse_args "$@"
   validate_inputs
 
@@ -638,8 +733,10 @@ main() {
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   SKILL_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
   auth_lock_dir="$HOME/.nebius/agent-nebius-auth.${PROJECT_ID}.lock"
+  profile_lock_dir="$HOME/.nebius/agent-nebius-auth.profile.lock"
 
   ensure_nebius_dir
+  acquire_lock "$profile_lock_dir"
   acquire_lock "$auth_lock_dir"
 
   if [[ -f "$CREDENTIAL_FILE" ]]; then

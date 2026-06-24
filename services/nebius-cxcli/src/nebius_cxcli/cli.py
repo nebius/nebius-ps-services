@@ -391,6 +391,7 @@ from .soperator_child_charts import (
     materialize_soperator_child_chart_values,
     soperator_child_chart_warnings,
 )
+from .soperator_gpu_driver_jail import ensure_soperator_gpu_driver_jail_values
 from .soperator_migration import (
     SOPERATOR_WORKER_ROLLOUT_DEFAULT_WAVE_PERCENT,
     SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE,
@@ -1806,18 +1807,20 @@ acceptance_test_app = typer.Typer(
     help=(
         "Run explicit heavy/on-demand post-deploy acceptance checks and future benchmark suites. "
         "Deploy keeps only fast required smoke checks; use this group for exhaustive "
-        "all-node validation. Commands write JSON reports only and do not change config. "
+        "all-node validation. Commands write JSON reports only, print color-coded "
+        "concise result lines with elapsed time, and do not change config. "
         "Each target writes one canonical report per acceptance "
-        "command, so same-target K8s and Soperator suites cannot be combined under "
+        "command, so same-target K8s and Slurm/Soperator suites cannot be combined under "
         "the current report contract."
     ),
     epilog=(
-        "Examples: Soperator all-node smoke JSON report: nebius-cxcli "
+        "Examples: Slurm all-node smoke JSON report: nebius-cxcli "
         "acceptance-test smoke <config.yaml> --target sop-cluster1 --soperator; "
         "plain MK8s all-node CUDA JSON report: nebius-cxcli acceptance-test smoke "
-        "<config.yaml> --target mk8s-prod --k8s; Soperator Slurm NCCL benchmark "
-        "JSON report with run-only overrides: nebius-cxcli acceptance-test benchmark "
-        "<config.yaml> --target sop-cluster1 --soperator --max-nodes 2 --timeout 20m; "
+        "<config.yaml> --target mk8s-prod --k8s; default K8s NCCL benchmark on "
+        "all targets: nebius-cxcli acceptance-test benchmark <config.yaml>; "
+        "Slurm NCCL benchmark JSON report: nebius-cxcli acceptance-test benchmark "
+        "<config.yaml> --target sop-cluster1 --suite slurm-nccl; "
         "force K8s NCCL on a Soperator-owned GPU target during maintenance: "
         "nebius-cxcli acceptance-test benchmark <config.yaml> --target sop-cluster1 "
         "--suite k8s-nccl --max-nodes 2 --average-bus-bandwidth-threshold-gbps 300."
@@ -16476,6 +16479,10 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
                 inputs=mk8s_inputs_by_target.get(target_ref, {}),
                 install_mode=install_mode,
             )
+            ensure_soperator_gpu_driver_jail_values(
+                values,
+                context=f"Soperator target {target_ref}",
+            )
             _materialize_soperator_guided_sssd_values(values)
             _soperator_extend_nodeconfigurator_tolerations_from_nodesets(values)
             _remove_internal_activechecks_partition(values)
@@ -28026,12 +28033,11 @@ def _validate_component_sources_registry(
         nccl_settings = mk8s_gpu_settings.benchmarks.nccl
         if (
             not nccl_settings.chart_component_id
-            or not nccl_settings.timeout
             or not nccl_settings.training_operator_manifest
             or not nccl_settings.training_operator_namespace
         ):
             issues.append(
-                "components.infra.mk8s.cli.gpu.benchmarks.nccl must set chart_component_id, timeout, and training operator settings"
+                "components.infra.mk8s.cli.gpu.benchmarks.nccl must set chart_component_id and training operator settings"
             )
         nccl_chart_id = _non_empty_text(nccl_settings.chart_component_id).lower()
         if nccl_chart_id:
@@ -32431,8 +32437,8 @@ def _run_target_deploy_validations(
         )
 
 
-_ACCEPTANCE_SOPERATOR_SUITES = {"soperator", "soperator-slurm", "slurm"}
-_ACCEPTANCE_K8S_SUITES = {"k8s", "k8s-cuda", "cuda"}
+_ACCEPTANCE_SOPERATOR_SUITES = {"slurm"}
+_ACCEPTANCE_K8S_SUITES = {"k8s-cuda"}
 _ACCEPTANCE_ALL_SUITES = _ACCEPTANCE_SOPERATOR_SUITES | _ACCEPTANCE_K8S_SUITES
 
 
@@ -32507,6 +32513,59 @@ def _raise_on_duplicate_acceptance_reports(specs: Sequence[Mapping[str, Any]]) -
         )
 
 
+def _acceptance_report_paths_for_specs(
+    specs: Sequence[Mapping[str, Any]],
+    *,
+    reports_dir: Path,
+) -> list[Path]:
+    paths: list[Path] = []
+    seen: set[Path] = set()
+    for spec in specs:
+        report_file = _non_empty_text(spec.get("report_file"))
+        if not report_file:
+            continue
+        path = reports_dir / report_file
+        if path in seen or not path.exists():
+            continue
+        seen.add(path)
+        paths.append(path)
+    return paths
+
+
+def _append_acceptance_report_paths(
+    written: list[Path],
+    paths: Sequence[Path],
+) -> None:
+    seen = set(written)
+    for path in paths:
+        if path in seen:
+            continue
+        written.append(path)
+        seen.add(path)
+
+
+class _AcceptanceTestRunError(RuntimeError):
+    def __init__(self, message: str, *, reports: Sequence[Path]) -> None:
+        super().__init__(message)
+        self.reports = tuple(reports)
+
+
+def _acceptance_target_with_report_context(
+    target: Mapping[str, Any],
+    report_target_contexts: Mapping[str, Mapping[str, str]],
+) -> dict[str, Any]:
+    resolved = dict(target)
+    target_ref = str(resolved.get("target_ref") or resolved.get("instance_id") or "").strip()
+    report_context = report_target_contexts.get(target_ref, {})
+    cluster_id = _non_empty_text(report_context.get("cluster_id"))
+    kube_context = _non_empty_text(report_context.get("kube_context"))
+    if cluster_id and not _non_empty_text(resolved.get("cluster_id")):
+        resolved["cluster_id"] = cluster_id
+    if kube_context and not _non_empty_text(resolved.get("kube_context")):
+        resolved["kube_context"] = kube_context
+    return resolved
+
+
 def _run_acceptance_smoke_command(
     *,
     config_path: Path,
@@ -32579,6 +32638,7 @@ def _run_acceptance_smoke_command(
     written: list[Path] = []
     validation_error: Exception | None = None
     set_current_context = len(selected_targets) == 1 and not all_targets
+    report_target_contexts = _deploy_report_target_contexts(paths)
     for target in selected_targets:
         target_ref = str(target.get("target_ref") or "").strip()
         target_specs = _filter_acceptance_specs_for_targets(specs, target_refs={target_ref})
@@ -32586,17 +32646,20 @@ def _run_acceptance_smoke_command(
             continue
         if len(selected_targets) > 1:
             console.print(f"[bold]Target {target_ref}[/bold]")
+        target_started_at = time.monotonic()
+        target_written_start = len(written)
         with ExitStack() as stack:
             kube_env = _prepare_cluster_handoff_kube_env(
                 config,
                 paths,
                 stack=stack,
-                target=target,
+                target=_acceptance_target_with_report_context(target, report_target_contexts),
                 persist_local_kubeconfig=True,
                 set_current_context=set_current_context,
+                allow_terraform_output=False,
             )
             with console.status(
-                f"[cyan]Running acceptance smoke tests for {target_ref}...[/cyan]",
+                f"[bold cyan]Running acceptance smoke tests for {target_ref}...[/]",
                 spinner="dots",
             ) as status:
                 last_validation_phase = ""
@@ -32649,25 +32712,38 @@ def _run_acceptance_smoke_command(
                             )
                     except Exception as exc:
                         validation_error = exc
+                        _append_acceptance_report_paths(
+                            written,
+                            _acceptance_report_paths_for_specs(
+                                group_specs,
+                                reports_dir=paths.reports_dir,
+                            ),
+                        )
                         if not continue_on_failure:
                             break
-                if validation_error is not None and not continue_on_failure:
-                    break
+        _record_acceptance_reports_elapsed(
+            written[target_written_start:],
+            elapsed_seconds=time.monotonic() - target_started_at,
+        )
         if validation_error is not None and not continue_on_failure:
             break
     if validation_error is not None:
+        if written:
+            raise _AcceptanceTestRunError(str(validation_error), reports=written) from validation_error
         raise validation_error
     return written
 
 
-_ACCEPTANCE_BENCHMARK_SOPERATOR_SUITES = {
-    "soperator-nccl",
-    "slurm-nccl",
-}
+_ACCEPTANCE_BENCHMARK_SOPERATOR_SUITES = {"slurm-nccl"}
 _ACCEPTANCE_BENCHMARK_K8S_SUITES = {"k8s-nccl"}
 _ACCEPTANCE_BENCHMARK_ALL_SUITES = (
     _ACCEPTANCE_BENCHMARK_SOPERATOR_SUITES | _ACCEPTANCE_BENCHMARK_K8S_SUITES
 )
+_ACCEPTANCE_BENCHMARK_SUITE_ALIASES = {"soperator-nccl": "slurm-nccl"}
+
+
+def _acceptance_benchmark_supported_suite_help() -> str:
+    return "k8s-nccl, slurm-nccl (alias: soperator-nccl)"
 
 
 def _normalized_acceptance_benchmark_suites(raw_suites: Sequence[str] | None) -> set[str]:
@@ -32678,16 +32754,16 @@ def _normalized_acceptance_benchmark_suites(raw_suites: Sequence[str] | None) ->
             suite = normalize_component_token(item)
             if not suite:
                 continue
+            suite = _ACCEPTANCE_BENCHMARK_SUITE_ALIASES.get(suite, suite)
             if suite not in _ACCEPTANCE_BENCHMARK_ALL_SUITES:
                 invalid.append(item)
                 continue
             suites.add(suite)
     if invalid:
-        supported = ", ".join(sorted(_ACCEPTANCE_BENCHMARK_ALL_SUITES))
         raise ValueError(
             "Unsupported --suite value(s): "
             + ", ".join(invalid)
-            + f". Supported values: {supported}"
+            + f". Supported values: {_acceptance_benchmark_supported_suite_help()}"
         )
     return suites
 
@@ -32711,31 +32787,45 @@ def _run_acceptance_benchmark_command(
             "Generated manifest is missing deploy.validations metadata. "
             f"Rerender with `nebius-cxcli render {paths.config_path}` before acceptance-test."
         )
-    _require_acceptance_target_selection(
-        requested_target_ref=requested_target_ref,
-        all_targets=all_targets,
-    )
+    effective_all_targets = all_targets or requested_target_ref is None
     selected_targets = _resolve_deploy_run_targets(
         manifest,
         requested_target_ref=requested_target_ref,
-        all_targets=all_targets,
+        all_targets=effective_all_targets,
     )
     if not selected_targets:
         raise RuntimeError("No built-in cluster targets are available for acceptance-test.")
 
     target_refs = _acceptance_target_refs(selected_targets)
-    suite_tokens = _normalized_acceptance_benchmark_suites(suites)
-    explicit_k8s_suite = bool(suite_tokens & _ACCEPTANCE_BENCHMARK_K8S_SUITES)
-    explicit_soperator_suite = bool(suite_tokens & _ACCEPTANCE_BENCHMARK_SOPERATOR_SUITES)
-    suite_filter_active = bool(include_k8s or include_soperator or suite_tokens)
-    run_k8s = include_k8s or explicit_k8s_suite or not suite_filter_active
-    run_soperator = include_soperator or explicit_soperator_suite or not suite_filter_active
+    requested_suite_tokens = _normalized_acceptance_benchmark_suites(suites)
+    suite_tokens = set(requested_suite_tokens)
+    if not suite_tokens:
+        if include_k8s and include_soperator:
+            suite_tokens = _ACCEPTANCE_BENCHMARK_K8S_SUITES | _ACCEPTANCE_BENCHMARK_SOPERATOR_SUITES
+        elif include_soperator:
+            suite_tokens = set(_ACCEPTANCE_BENCHMARK_SOPERATOR_SUITES)
+        else:
+            suite_tokens = set(_ACCEPTANCE_BENCHMARK_K8S_SUITES)
+    run_k8s = bool(suite_tokens & _ACCEPTANCE_BENCHMARK_K8S_SUITES)
+    run_soperator = bool(suite_tokens & _ACCEPTANCE_BENCHMARK_SOPERATOR_SUITES)
+    include_soperator_k8s_targets = bool(
+        run_k8s
+        and (
+            requested_suite_tokens & _ACCEPTANCE_BENCHMARK_K8S_SUITES
+            or (not requested_suite_tokens and not include_soperator)
+        )
+    )
 
     specs: list[dict[str, Any]] = []
     if run_soperator:
         specs.extend(
             _filter_acceptance_specs_for_targets(
-                soperator_acceptance_benchmark_specs(config),
+                soperator_acceptance_benchmark_specs(
+                    config,
+                    max_nodes=max_nodes,
+                    timeout=timeout,
+                    average_bus_bandwidth_threshold_gbps=average_bus_bandwidth_threshold_gbps,
+                ),
                 target_refs=target_refs,
             )
         )
@@ -32744,7 +32834,7 @@ def _run_acceptance_benchmark_command(
             _filter_acceptance_specs_for_targets(
                 mk8s_acceptance_benchmark_validation_specs(
                     config,
-                    include_soperator_targets=explicit_k8s_suite,
+                    include_soperator_targets=include_soperator_k8s_targets,
                     max_nodes=max_nodes,
                     timeout=timeout,
                     average_bus_bandwidth_threshold_gbps=average_bus_bandwidth_threshold_gbps,
@@ -32762,7 +32852,8 @@ def _run_acceptance_benchmark_command(
     paths.reports_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
     validation_error: Exception | None = None
-    set_current_context = len(selected_targets) == 1 and not all_targets
+    set_current_context = len(selected_targets) == 1 and not effective_all_targets
+    report_target_contexts = _deploy_report_target_contexts(paths)
     for target in selected_targets:
         target_ref = str(target.get("target_ref") or "").strip()
         target_specs = _filter_acceptance_specs_for_targets(specs, target_refs={target_ref})
@@ -32770,17 +32861,20 @@ def _run_acceptance_benchmark_command(
             continue
         if len(selected_targets) > 1:
             console.print(f"[bold]Target {target_ref}[/bold]")
+        target_started_at = time.monotonic()
+        target_written_start = len(written)
         with ExitStack() as stack:
             kube_env = _prepare_cluster_handoff_kube_env(
                 config,
                 paths,
                 stack=stack,
-                target=target,
+                target=_acceptance_target_with_report_context(target, report_target_contexts),
                 persist_local_kubeconfig=True,
                 set_current_context=set_current_context,
+                allow_terraform_output=False,
             )
             with console.status(
-                f"[cyan]Running acceptance benchmarks for {target_ref}...[/cyan]",
+                f"[bold cyan]Running acceptance benchmarks for {target_ref}...[/]",
                 spinner="dots",
             ) as status:
                 last_validation_phase = ""
@@ -32833,15 +32927,230 @@ def _run_acceptance_benchmark_command(
                             )
                     except Exception as exc:
                         validation_error = exc
+                        _append_acceptance_report_paths(
+                            written,
+                            _acceptance_report_paths_for_specs(
+                                group_specs,
+                                reports_dir=paths.reports_dir,
+                            ),
+                        )
                         if not continue_on_failure:
                             break
-                if validation_error is not None and not continue_on_failure:
-                    break
+        _record_acceptance_reports_elapsed(
+            written[target_written_start:],
+            elapsed_seconds=time.monotonic() - target_started_at,
+        )
         if validation_error is not None and not continue_on_failure:
             break
     if validation_error is not None:
+        if written:
+            raise _AcceptanceTestRunError(str(validation_error), reports=written) from validation_error
         raise validation_error
     return written
+
+
+_ACCEPTANCE_PRIMARY_CHECK_NAMES_BY_SCOPE = {
+    "slurm-nccl": ("Slurm NCCL benchmark",),
+}
+
+
+def _read_acceptance_report(path: Path) -> Mapping[str, Any] | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if isinstance(data, Mapping):
+        return data
+    return None
+
+
+def _acceptance_primary_result_node(report: Mapping[str, Any]) -> Mapping[str, Any]:
+    scope = _non_empty_text(report.get("scope"))
+    primary_names = _ACCEPTANCE_PRIMARY_CHECK_NAMES_BY_SCOPE.get(scope, ())
+    checks = report.get("checks")
+    if not primary_names or not isinstance(checks, list):
+        return report
+    for check in checks:
+        if not isinstance(check, Mapping):
+            continue
+        if _non_empty_text(check.get("name")) in primary_names:
+            return check
+    return report
+
+
+def _acceptance_result_status(result_node: Mapping[str, Any]) -> str:
+    status = _non_empty_text(result_node.get("status")).lower()
+    if status in {"skipped", "skip"}:
+        return "SKIPPED"
+    if status in {"passed", "pass", "success", "succeeded"}:
+        return "PASSED"
+    if status in {"failed", "fail", "failure", "error"}:
+        return "FAILED"
+    if result_node.get("skipped") is True:
+        return "SKIPPED"
+    passed = result_node.get("passed")
+    if isinstance(passed, bool):
+        return "PASSED" if passed else "FAILED"
+    return "UNKNOWN"
+
+
+def _acceptance_terminal_detail(detail: str, *nodes: Mapping[str, Any]) -> str:
+    detail = " ".join(detail.split())
+    for node in nodes:
+        comment = " ".join(_non_empty_text(node.get("bandwidth_threshold_comment")).split())
+        if comment and detail.endswith(comment):
+            detail = detail[: -len(comment)].rstrip()
+    return detail
+
+
+def _acceptance_result_detail(result_node: Mapping[str, Any], report: Mapping[str, Any]) -> str:
+    for key in ("skip_reason", "summary", "result_summary", "error"):
+        detail = _non_empty_text(result_node.get(key))
+        if detail:
+            break
+    else:
+        detail = ""
+    if not detail and result_node is not report:
+        for key in ("summary", "result_summary", "error"):
+            detail = _non_empty_text(report.get(key))
+            if detail:
+                break
+    detail = _acceptance_terminal_detail(detail, result_node, report)
+    if len(detail) > 240:
+        detail = detail[:237].rstrip() + "..."
+    return detail
+
+
+def _acceptance_report_elapsed_seconds(report: Mapping[str, Any]) -> float | None:
+    value = report.get("elapsed_seconds")
+    if isinstance(value, bool) or value in (None, ""):
+        return None
+    try:
+        parsed = float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _acceptance_report_elapsed_time(report: Mapping[str, Any]) -> str:
+    value = _non_empty_text(report.get("elapsed_time"))
+    if re.fullmatch(r"\d{2,}:\d{2}:\d{2}", value):
+        return value
+    return _acceptance_elapsed_text(_acceptance_report_elapsed_seconds(report))
+
+
+def _acceptance_report_result_fields(path: Path) -> tuple[str, str, str, str, str]:
+    report = _read_acceptance_report(path)
+    if report is None:
+        return "UNKNOWN", "", path.name, "report JSON could not be read", ""
+    result_node = _acceptance_primary_result_node(report)
+    status = _acceptance_result_status(result_node)
+    scope = _non_empty_text(report.get("scope"))
+    target_ref = _non_empty_text(report.get("target_ref") or report.get("target"))
+    detail = _acceptance_result_detail(result_node, report)
+    elapsed_time = _acceptance_report_elapsed_time(report)
+    return status, scope, target_ref, detail, elapsed_time
+
+
+def _acceptance_result_status_style(status: str) -> str:
+    if status == "PASSED":
+        return "black on green"
+    if status == "FAILED":
+        return "bold white on red"
+    if status == "SKIPPED":
+        return "black on yellow"
+    return "black on cyan"
+
+
+def _acceptance_output_markup(text: str, style: str | None = None) -> str:
+    escaped = escape(text)
+    if not style:
+        return escaped
+    return f"[{style}]{escaped}[/]"
+
+
+def _acceptance_elapsed_text(elapsed_seconds: float | None) -> str:
+    if elapsed_seconds is None:
+        return ""
+    total_seconds = max(0, int(round(float(elapsed_seconds))))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+def _acceptance_report_result_markup(
+    kind: str,
+    path: Path,
+    *,
+    elapsed_seconds: float | None = None,
+) -> str:
+    status, scope, target_ref, detail, elapsed_text = _acceptance_report_result_fields(path)
+    if elapsed_seconds is not None:
+        elapsed_text = _acceptance_elapsed_text(elapsed_seconds)
+    status_style = _acceptance_result_status_style(status)
+    parts = [
+        _acceptance_output_markup(f"Acceptance {kind} result:"),
+        _acceptance_output_markup(status, status_style),
+    ]
+    if scope:
+        parts.append(_acceptance_output_markup(scope, "bold cyan"))
+    if target_ref:
+        parts.append(_acceptance_output_markup(f"({target_ref})", "bold magenta"))
+    line = " ".join(parts)
+    if detail:
+        line += f": {_acceptance_output_markup(detail)}"
+    if elapsed_text:
+        elapsed_markup = _acceptance_output_markup(f"(elapsed {elapsed_text})")
+        line += f" {elapsed_markup}" if detail else f": {elapsed_markup}"
+    return line
+
+
+def _acceptance_report_path_markup(kind: str, path: Path) -> str:
+    return (
+        f"{_acceptance_output_markup(f'Acceptance {kind} report:')} "
+        f"{_acceptance_output_markup(str(path), 'bold cyan')}"
+    )
+
+
+def _print_acceptance_report_outputs(
+    kind: str,
+    paths: Sequence[Path],
+    *,
+    elapsed_seconds: float | None = None,
+) -> None:
+    for path in paths:
+        console.print(_acceptance_report_path_markup(kind, path))
+        console.print(
+            _acceptance_report_result_markup(
+                kind,
+                path,
+                elapsed_seconds=elapsed_seconds,
+            )
+        )
+
+
+def _record_acceptance_report_elapsed(path: Path, *, elapsed_seconds: float) -> None:
+    report = _read_acceptance_report(path)
+    if report is None:
+        return
+    payload = dict(report)
+    normalized_elapsed_seconds = round(max(0.0, float(elapsed_seconds)), 3)
+    payload["elapsed_seconds"] = normalized_elapsed_seconds
+    payload["elapsed_time"] = _acceptance_elapsed_text(normalized_elapsed_seconds)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def _record_acceptance_reports_elapsed(
+    paths: Sequence[Path],
+    *,
+    elapsed_seconds: float,
+) -> None:
+    seen: set[Path] = set()
+    for path in paths:
+        if path in seen:
+            continue
+        seen.add(path)
+        _record_acceptance_report_elapsed(path, elapsed_seconds=elapsed_seconds)
 
 
 _DEPLOY_VALIDATION_SKIP_KIND_MAP = {
@@ -33777,6 +34086,7 @@ def _prepare_cluster_handoff_kube_env(
     target: Mapping[str, str] | None = None,
     persist_local_kubeconfig: bool = True,
     set_current_context: bool = True,
+    allow_terraform_output: bool = True,
 ) -> dict[str, str] | None:
     resolved_target = target
     if resolved_target is None:
@@ -33791,26 +34101,29 @@ def _prepare_cluster_handoff_kube_env(
     if not resolved_target:
         return None
 
-    if str(resolved_target.get(DEPLOY_TARGET_KIND_FIELD, "")).strip() == EXTERNAL_MK8S_TARGET_KIND:
-        target_ref = str(
-            resolved_target.get("target_ref") or resolved_target.get("instance_id") or ""
+    target_ref = str(
+        resolved_target.get("target_ref") or resolved_target.get("instance_id") or ""
+    ).strip()
+    access = str(resolved_target.get("access") or "external").strip() or "external"
+    kube_context = _non_empty_text(resolved_target.get("kube_context"))
+    cluster_id = _non_empty_text(resolved_target.get("cluster_id"))
+    if kube_context:
+        env = _kubeconfig_target_env(
+            target_ref,
+            stack=stack,
+            preferred_context=kube_context,
+            preferred_cluster_id=cluster_id,
         )
-        kube_context = _non_empty_text(resolved_target.get("kube_context"))
-        cluster_id = _non_empty_text(resolved_target.get("cluster_id"))
-        if kube_context:
-            env = _kubeconfig_target_env(
-                target_ref,
-                stack=stack,
-                preferred_context=kube_context,
-                preferred_cluster_id=cluster_id,
-            )
-            if not env:
-                raise RuntimeError(
-                    f"External MK8s target '{target_ref}' references kube_context "
-                    f"'{kube_context}', but that context was not found in the local kubeconfig."
-                )
-            env[CLUSTER_HANDOFF_ACCESS_ENV] = str(resolved_target.get("access") or "external")
+        if env:
+            env[CLUSTER_HANDOFF_ACCESS_ENV] = access
             return env
+
+    if str(resolved_target.get(DEPLOY_TARGET_KIND_FIELD, "")).strip() == EXTERNAL_MK8S_TARGET_KIND:
+        if kube_context:
+            raise RuntimeError(
+                f"External MK8s target '{target_ref}' references kube_context "
+                f"'{kube_context}', but that context was not found in the local kubeconfig."
+            )
         if not cluster_id:
             raise RuntimeError(
                 f"External MK8s target '{target_ref}' requires kube_context or cluster_id."
@@ -33836,12 +34149,28 @@ def _prepare_cluster_handoff_kube_env(
             )
         return {
             "KUBECONFIG": str(kubeconfig_path),
-            CLUSTER_HANDOFF_ACCESS_ENV: str(resolved_target.get("access") or "external"),
+            CLUSTER_HANDOFF_ACCESS_ENV: access,
             GRAFANA_TARGET_CLUSTER_ID_ENV: cluster_id,
             GRAFANA_TARGET_KUBE_CONTEXT_ENV: spec.context_name,
         }
 
-    cluster_id = _non_empty_text(resolved_target.get("cluster_id"))
+    if not cluster_id and not allow_terraform_output:
+        env = _kubeconfig_target_env(target_ref, stack=stack)
+        if env:
+            env[CLUSTER_HANDOFF_ACCESS_ENV] = access
+            return env
+    if not cluster_id and not allow_terraform_output:
+        config_arg = _config_cli_arg(paths.config_path)
+        generated_arg = shlex.quote(str(paths.generated_dir))
+        target_hint = target_ref or str(resolved_target.get("component_id") or "unknown")
+        raise RuntimeError(
+            f"Cluster target '{target_hint}' does not have a resolved cluster_id or a "
+            "matching local kube context, and this command does not read Terraform state. "
+            f"Run `nebius-cxcli deploy {config_arg}` or "
+            f"`nebius-cxcli flux apply {generated_arg} --target {target_hint}` first so "
+            "`generated/reports/deploy-report.md` and the local kubeconfig contain the "
+            "target handoff, or register the target as external-mk8s with kube_context."
+        )
     if not cluster_id:
         cluster_id = terraform_output_raw(
             paths.infra_dir,
@@ -33861,9 +34190,9 @@ def _prepare_cluster_handoff_kube_env(
     spec = _mk8s_cluster_handoff_spec(
         config,
         cluster_id=cluster_id,
-        access=str(resolved_target["access"]),
+        access=access,
     )
-    if str(resolved_target["access"]) == "internal":
+    if access == "internal":
         console.print(f"[yellow]NOTE:[/yellow] {_private_cluster_handoff_note()}")
     kube_root = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="nebius-cxcli-kube-")))
     kubeconfig_path = kube_root / "config"
@@ -33875,7 +34204,7 @@ def _prepare_cluster_handoff_kube_env(
         )
     return {
         "KUBECONFIG": str(kubeconfig_path),
-        CLUSTER_HANDOFF_ACCESS_ENV: str(resolved_target["access"]),
+        CLUSTER_HANDOFF_ACCESS_ENV: access,
         GRAFANA_TARGET_CLUSTER_ID_ENV: cluster_id,
         GRAFANA_TARGET_KUBE_CONTEXT_ENV: spec.context_name,
     }
@@ -44696,15 +45025,18 @@ def mk8s_token_command(
         "Run explicit heavy/on-demand all-node acceptance smoke tests. "
         "Writes JSON reports only under generated/reports/ and does not change "
         "config.yaml, Terraform state, generated deploy reports, or persisted "
-        "suite selections."
+        "suite selections. Target handoff comes from deploy-report/local kubeconfig "
+        "context; this command does not initialize the Terraform backend. "
+        "After each report, terminal output prints a color-coded concise "
+        "PASSED/FAILED/SKIPPED result line with elapsed time in hh:mm:ss."
     ),
     epilog=(
-        "Examples: Soperator all-node Slurm smoke JSON report: nebius-cxcli "
+        "Examples: Slurm all-node smoke JSON report: nebius-cxcli "
         "acceptance-test smoke <config.yaml> --target sop-cluster1 --soperator; "
         "plain MK8s all-node CUDA JSON report: nebius-cxcli acceptance-test smoke "
-        "<config.yaml> --target mk8s-prod --k8s; Soperator fail-fast batches: "
+        "<config.yaml> --target mk8s-prod --k8s; Slurm fail-fast batches: "
         "nebius-cxcli acceptance-test smoke <config.yaml> --target sop-cluster1 "
-        "--suite soperator-slurm --batch-size 128 --concurrency 8 --fail-fast; "
+        "--suite slurm --batch-size 128 --concurrency 8 --fail-fast; "
         "every target, suite defaults: nebius-cxcli acceptance-test smoke "
         "<config.yaml> --all-targets."
     ),
@@ -44754,7 +45086,7 @@ def acceptance_test_smoke_command(
             "--suite",
             help=(
                 "Acceptance suite to run; repeatable or comma-separated. Supported values: "
-                "soperator-slurm, k8s-cuda. Same-target K8s and Soperator suite families "
+                "slurm, k8s-cuda. Same-target K8s and Slurm suite families "
                 "cannot be combined in one command because they share the canonical "
                 "acceptance smoke report."
             ),
@@ -44796,33 +45128,45 @@ def acceptance_test_smoke_command(
             concurrency=concurrency,
             continue_on_failure=continue_on_failure,
         )
-        for path in written:
-            console.print(f"Acceptance smoke report: {path}")
+        _print_acceptance_report_outputs("smoke", written)
     except typer.Exit:
         raise
+    except _AcceptanceTestRunError as exc:
+        _print_acceptance_report_outputs("smoke", exc.reports)
+        _exit_with_error(exc)
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 
 
 @acceptance_test_app.command(
     "benchmark",
-    short_help="Run explicit heavy/on-demand NCCL benchmark suites.",
+    short_help="Run explicit heavy/on-demand benchmark suites.",
     help=(
-        "Run explicit heavy/on-demand NCCL benchmark suites. Writes JSON reports "
+        "Run explicit heavy/on-demand benchmark suites selected by --suite. Writes JSON reports "
         "only under generated/reports/ and does not change config.yaml, Terraform "
         "state, generated deploy reports, or persisted suite selections. "
-        "K8s NCCL uses the pinned transient nccl-test chart for the run."
+        "Target handoff comes from deploy-report/local kubeconfig context; this command "
+        "does not initialize the Terraform backend. "
+        "After each report, terminal output prints a color-coded concise "
+        "PASSED/FAILED/SKIPPED result line with elapsed time in hh:mm:ss. "
+        "The default suite is k8s-nccl across all targets. K8s NCCL uses the pinned "
+        "transient nccl-test chart for the run; slurm-nccl and soperator-nccl are aliases "
+        "for the Slurm NCCL suite."
     ),
     epilog=(
-        "Examples: Soperator Slurm NCCL benchmark: nebius-cxcli acceptance-test "
-        "benchmark <config.yaml> --target sop-cluster1 --soperator; plain MK8s "
-        "NCCL benchmark with run-only overrides: nebius-cxcli acceptance-test "
-        "benchmark <config.yaml> --target mk8s-prod --k8s --max-nodes 4 "
+        "Examples: default K8s NCCL benchmark on all targets: nebius-cxcli "
+        "acceptance-test benchmark <config.yaml>; Slurm NCCL benchmark: "
+        "nebius-cxcli acceptance-test benchmark <config.yaml> --target sop-cluster1 "
+        "--suite slurm-nccl; soperator-nccl is the same Slurm NCCL suite alias. "
+        "Plain MK8s NCCL benchmark with run-only overrides: nebius-cxcli acceptance-test "
+        "benchmark <config.yaml> --target mk8s-prod --suite k8s-nccl --max-nodes 4 "
         "--timeout 20m --average-bus-bandwidth-threshold-gbps 300; force the "
         "K8s NCCL suite on a Soperator-owned GPU target during maintenance: "
         "nebius-cxcli acceptance-test benchmark <config.yaml> --target sop-cluster1 "
-        "--suite k8s-nccl --max-nodes 2; every target, suite defaults: "
-        "nebius-cxcli acceptance-test benchmark <config.yaml> --all-targets."
+        "--suite k8s-nccl --max-nodes 2; two-node Slurm NCCL learning run on "
+        "one-GPU Ethernet workers: nebius-cxcli acceptance-test benchmark "
+        "<config.yaml> --target sop-cluster1 --suite slurm-nccl --max-nodes 2 "
+        "--timeout 5m --average-bus-bandwidth-threshold-gbps 300."
     ),
 )
 def acceptance_test_benchmark_command(
@@ -44836,7 +45180,7 @@ def acceptance_test_benchmark_command(
             "--target",
             help=(
                 f"Run acceptance benchmarks for one {_MK8S_TARGET_ID_HELP}. "
-                "Required unless --all-targets is set."
+                "Omit --target to run the default all-target benchmark selection."
             ),
         ),
     ] = None,
@@ -44846,7 +45190,7 @@ def acceptance_test_benchmark_command(
             "--all-targets",
             help=(
                 "Run acceptance benchmarks for every built-in cluster target. "
-                "Required unless --target is set."
+                "This is the default when --target is omitted."
             ),
         ),
     ] = False,
@@ -44855,14 +45199,15 @@ def acceptance_test_benchmark_command(
         typer.Option(
             "--k8s",
             help=(
-                "Run Kubernetes NCCL benchmark suites for plain MK8s GPU targets. "
-                "Soperator-owned GPU targets are skipped unless --suite k8s-nccl is used."
+                "Run Kubernetes benchmark suites for MK8s GPU targets. "
+                "This is the default benchmark family when --suite and --soperator are omitted. "
+                "Use --suite slurm-nccl or --soperator for Slurm benchmarks."
             ),
         ),
     ] = False,
     soperator: Annotated[
         bool,
-        typer.Option("--soperator", help="Run Soperator/Slurm NCCL benchmark suites."),
+        typer.Option("--soperator", help="Run Slurm benchmark suites for Soperator targets."),
     ] = False,
     suite: Annotated[
         list[str] | None,
@@ -44870,7 +45215,7 @@ def acceptance_test_benchmark_command(
             "--suite",
             help=(
                 "Benchmark suite to run; repeatable or comma-separated. Supported values: "
-                "k8s-nccl, soperator-nccl, slurm-nccl. Same-target K8s and Soperator "
+                "k8s-nccl, slurm-nccl (alias: soperator-nccl). Same-target K8s and Slurm "
                 "suite families cannot be combined in one command because they share "
                 "the canonical acceptance benchmark report."
             ),
@@ -44890,7 +45235,7 @@ def acceptance_test_benchmark_command(
             min=1,
             help=(
                 "Maximum GPU nodes to include for benchmark suites that support node caps. "
-                "Overrides the catalog default for this run only."
+                "Default: all schedulable GPU nodes."
             ),
         ),
     ] = None,
@@ -44899,8 +45244,8 @@ def acceptance_test_benchmark_command(
         typer.Option(
             "--timeout",
             help=(
-                "Benchmark timeout as a duration such as 20m. Overrides the catalog default "
-                "for this run only."
+                "Benchmark timeout as a duration such as 20m. Default: no timeout; the run "
+                "continues until completion or user cancellation."
             ),
         ),
     ] = None,
@@ -44911,10 +45256,11 @@ def acceptance_test_benchmark_command(
             min=0.0,
             help=(
                 "Required average NCCL bus bandwidth in Gbps for RDMA benchmark runs. "
-                "Overrides the catalog default for this run only."
+                "Default: 300. On 1-GPU runs, below-threshold bandwidth is reported "
+                "as a comment when NCCL completes and reports average bandwidth."
             ),
         ),
-    ] = None,
+    ] = 300.0,
 ) -> None:
     try:
         written = _run_acceptance_benchmark_command(
@@ -44929,10 +45275,12 @@ def acceptance_test_benchmark_command(
             timeout=timeout,
             average_bus_bandwidth_threshold_gbps=average_bus_bandwidth_threshold_gbps,
         )
-        for path in written:
-            console.print(f"Acceptance benchmark report: {path}")
+        _print_acceptance_report_outputs("benchmark", written)
     except typer.Exit:
         raise
+    except _AcceptanceTestRunError as exc:
+        _print_acceptance_report_outputs("benchmark", exc.reports)
+        _exit_with_error(exc)
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 

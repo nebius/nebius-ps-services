@@ -66,6 +66,7 @@ The short version:
   - [Slurm Scripts Inventory](#slurm-scripts-inventory)
   - [Memory Defaults](#memory-defaults)
   - [GPU Driver Capabilities](#gpu-driver-capabilities)
+  - [GPU Driver Jail](#gpu-driver-jail)
   - [AppArmor And User Namespaces](#apparmor-and-user-namespaces)
 - [Helm Dependencies](#helm-dependencies)
   - [OpenKruise](#openkruise)
@@ -2606,6 +2607,33 @@ The default cxcli profile uses `compute,graphics,utility,video`. Keep this as a
 NodeSet-level value because different worker shapes can have different
 container requirements. For example, a pure training partition may use a
 narrower set, while rendering or visualization workers may need `graphics`.
+
+### GPU Driver Jail
+
+`gpuDriverJail.enabled` defaults to `true` and applies only to GPU NodeSets.
+For each GPU worker NodeSet, the chart injects:
+
+- `nvidia-driver-root`: hostPath `/` mounted at `/run/nvidia/driver`, with
+  `readOnly: false` because upstream helper paths may chroot through this root.
+- `cxcli-gpu-driver-jail`: an init guard using the same `slurmd` image as the
+  worker.
+
+The init guard mounts the shared jail at `/mnt/jail` and the host driver root
+at `/run/nvidia/driver`. It fails fast if host `nvidia-smi` is missing or the
+host driver libraries are unavailable, removes stale zero-byte `libcuda` and
+`libnvidia-ml` artifacts from the shared jail, refreshes `libcuda.so.1` and
+`libnvidia-ml.so.1` from the host driver root, runs jail `ldconfig`, and writes
+a `cxcli_gpu_driver_jail_prep` marker. It does not run GPU inventory from the
+init container because Kubernetes does not inject GPU devices until a
+GPU-requesting container starts; GPU visibility remains validated from the
+worker container or Slurm job root. This keeps the durable fix in the local
+chart instead of editing upstream-owned `slurm_scripts/` files or image-owned
+`complement_jail.sh`.
+
+The chart fails render for GPU NodeSets that define a custom mount named
+`nvidia-driver-root`, a custom mount at `/run/nvidia/driver`, or a custom init
+container named `cxcli-gpu-driver-jail`. CPU NodeSets do not receive this
+mount or init guard.
 
 ### AppArmor And User Namespaces
 

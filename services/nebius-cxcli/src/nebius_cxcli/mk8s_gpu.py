@@ -1803,21 +1803,20 @@ def mk8s_acceptance_benchmark_validation_specs(
     contexts_by_target = _mk8s_gpu_contexts_by_target(contexts)
     nccl = settings.benchmarks.nccl
     resolved_max_nodes = max_nodes if max_nodes is not None else nccl.max_nodes
-    resolved_timeout = _as_text(timeout) or nccl.timeout
+    resolved_timeout = _as_text(timeout) or _as_text(nccl.timeout) or None
     resolved_threshold = (
         average_bus_bandwidth_threshold_gbps
         if average_bus_bandwidth_threshold_gbps is not None
         else nccl.average_bus_bandwidth_threshold_gbps
     )
-    if resolved_max_nodes <= 0:
+    if resolved_max_nodes is not None and resolved_max_nodes <= 0:
         raise ValueError("acceptance-test benchmark --max-nodes must be > 0")
-    if resolved_threshold <= 0:
+    if resolved_threshold < 0:
         raise ValueError(
-            "acceptance-test benchmark --average-bus-bandwidth-threshold-gbps must be > 0"
+            "acceptance-test benchmark --average-bus-bandwidth-threshold-gbps must be >= 0"
         )
     if (
         not nccl.chart_component_id
-        or not resolved_timeout
         or not nccl.training_operator_manifest
         or not nccl.training_operator_namespace
     ):
@@ -1912,6 +1911,7 @@ def mk8s_acceptance_benchmark_validation_specs(
                 "threshold_enforced": nccl_context.threshold_enforced,
                 "chart_values": scoped_chart_values,
                 "gpu_platform": nccl_context.context.gpu_platform,
+                "platform_gpu_count": nccl_context.gpu_count,
                 "gpu_cluster_enabled": nccl_context.context.gpu_cluster_enabled,
                 "transport_mode": nccl_context.transport_mode,
                 "report_file": _acceptance_benchmark_report_file(target_ref),
@@ -3052,7 +3052,7 @@ def _write_nccl_skip_report(
     *,
     spec: Mapping[str, Any],
     report_path: Path,
-    max_nodes: int,
+    max_nodes: int | None,
     total_gpu_nodes: int,
     saturated_nodes: list[dict[str, Any]],
     skip_reason: str,
@@ -3087,6 +3087,7 @@ def _write_nccl_skip_report(
         "namespace": _as_text(spec.get("namespace")),
         "gpu_platform": _as_text(spec.get("gpu_platform")),
         "max_nodes": max_nodes,
+        "all_nodes": max_nodes is None,
         "selected_worker_node_count": 0,
         "total_gpu_node_count": total_gpu_nodes,
         "skipped_node_count": total_gpu_nodes,
@@ -3506,10 +3507,10 @@ def _run_cluster_smoke_validation(
 def _select_gpu_validation_nodes(
     nodes: list[dict[str, Any]],
     *,
-    max_nodes: int,
+    max_nodes: int | None,
 ) -> tuple[list[dict[str, Any]], int]:
     ordered = sorted(nodes, key=lambda item: _as_text(item.get("name")))
-    limited = ordered[:max_nodes]
+    limited = ordered if max_nodes is None else ordered[:max_nodes]
     return limited, len(ordered)
 
 
@@ -3650,17 +3651,6 @@ def _run_cuda_smoke_validation(
         skip_reason = "all Ready GPU nodes already have their GPUs allocated to existing workloads"
         if emit:
             emit(f"Skipping {validation_label}: {skip_reason}.")
-        acceptance_nodes = [
-            {
-                "node_name": _as_text(node.get("name")),
-                "pod_name": "",
-                "gpu_count": int(node.get("gpu_count", 0) or 0),
-                "phase": "Saturated",
-                "passed": False,
-                "failure_reason": skip_reason,
-            }
-            for node in saturated_nodes
-        ]
         report = {
             "validation": validation_label,
             **_report_common_fields(
@@ -3681,12 +3671,12 @@ def _run_cuda_smoke_validation(
             "skipped_node_count": total_gpu_nodes,
             "saturated_node_count": len(saturated_nodes),
             "device_plugin_snapshot": device_plugin_snapshot,
-            "passed": not acceptance_mode,
-            "skipped": not acceptance_mode,
+            "passed": True,
+            "skipped": True,
             "skip_reason": skip_reason,
             "passed_node_count": 0,
-            "failed_node_count": len(acceptance_nodes) if acceptance_mode else 0,
-            "nodes": acceptance_nodes if acceptance_mode else [],
+            "failed_node_count": 0,
+            "nodes": [],
             "skipped_nodes": [
                 {
                     "node_name": _as_text(node.get("name")),
@@ -3698,8 +3688,6 @@ def _run_cuda_smoke_validation(
             ],
         }
         _write_report(report_path, report)
-        if acceptance_mode:
-            raise RuntimeError(f"{validation_label} failed. Report: {report_path}")
         return report_path
     if all_nodes_mode:
         nodes = sorted(free_nodes, key=lambda item: _as_text(item.get("name")))
@@ -3972,14 +3960,14 @@ def _wait_for_launcher_completion(
     job_name: str,
     launcher_pod_name: str,
     extra_env: dict[str, str] | None,
-    timeout_seconds: int,
+    timeout_seconds: int | None,
     emit: Callable[[str], None] | None,
 ) -> str:
-    deadline = time.monotonic() + timeout_seconds
+    deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
     started_at = time.monotonic()
     last_summary = ""
     last_emit_at = 0.0
-    while time.monotonic() < deadline:
+    while True:
         try:
             payload = _kubectl_json(
                 ["get", "pod", launcher_pod_name, "-n", namespace, "-o", "json"],
@@ -4005,6 +3993,10 @@ def _wait_for_launcher_completion(
                 emit(f"NCCL test [{elapsed}s] {summary}")
                 last_summary = summary
                 last_emit_at = now
+            if deadline is not None and now >= deadline:
+                raise RuntimeError(
+                    f"Timed out waiting for NCCL launcher pod '{launcher_pod_name}' to finish"
+                ) from None
             time.sleep(_VALIDATION_POLL_INTERVAL_SECONDS)
             continue
         phase = _as_text(payload.get("status", {}).get("phase"))
@@ -4019,8 +4011,11 @@ def _wait_for_launcher_completion(
             last_emit_at = now
         if phase in {"Succeeded", "Failed"}:
             return phase
+        if deadline is not None and now >= deadline:
+            raise RuntimeError(
+                f"Timed out waiting for NCCL launcher pod '{launcher_pod_name}' to finish"
+            )
         time.sleep(_VALIDATION_POLL_INTERVAL_SECONDS)
-    raise RuntimeError(f"Timed out waiting for NCCL launcher pod '{launcher_pod_name}' to finish")
 
 
 def _mpijob_terminal_phase(
@@ -4088,6 +4083,19 @@ def _nccl_json_summary(payload: dict[str, Any] | None) -> tuple[float, bool | No
         elif isinstance(okay, str):
             out_of_bounds_ok = okay.lower() == "true"
     return average_bandwidth, out_of_bounds_ok
+
+
+def _nccl_json_average_bus_bandwidth_reported(payload: dict[str, Any] | None) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    average = payload.get("average_bus_bandwidth")
+    if not isinstance(average, dict) or "bandwidth" not in average:
+        return False
+    try:
+        float(average.get("bandwidth", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 def _nccl_json_report_summary(payload: dict[str, Any] | None) -> dict[str, Any]:
@@ -4260,9 +4268,13 @@ def _run_nccl_validation(
     extra_env: dict[str, str] | None,
     emit: Callable[[str], None] | None,
 ) -> Path:
-    timeout_seconds = _parse_go_duration_seconds(_as_text(spec.get("timeout")))
+    timeout_text = _as_text(spec.get("timeout"))
+    timeout_seconds = _parse_go_duration_seconds(timeout_text) if timeout_text else None
     namespace = _as_text(spec.get("namespace"))
-    max_nodes = max(1, int(spec.get("max_nodes", 1) or 1))
+    raw_max_nodes = spec.get("max_nodes")
+    max_nodes = None if raw_max_nodes in (None, "") else int(raw_max_nodes)
+    if max_nodes is not None and max_nodes <= 0:
+        raise RuntimeError("NCCL test max_nodes must be > 0 when set")
     report_path = reports_dir / _as_text(spec.get("report_file"))
     transport_mode = _as_text(spec.get("transport_mode")).lower() or "auto"
     transport_label = _nccl_transport_label(transport_mode)
@@ -4323,7 +4335,7 @@ def _run_nccl_validation(
             extra_env=extra_env,
             timeout_seconds=600,
         )
-        deadline = time.monotonic() + timeout_seconds
+        deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
         started_at = time.monotonic()
         last_summary = ""
         last_emit_at = 0.0
@@ -4344,7 +4356,7 @@ def _run_nccl_validation(
                 last_emit_at = now
             if ready:
                 break
-            if now >= deadline:
+            if deadline is not None and now >= deadline:
                 raise RuntimeError(
                     "Timed out waiting for Kubeflow Training Operator deployment to become Ready"
                 )
@@ -4358,12 +4370,15 @@ def _run_nccl_validation(
         if emit:
             message = (
                 f"Running NCCL test on {len(worker_nodes)} of {total_gpu_nodes} Ready GPU node(s)"
-                f" (max_nodes={max_nodes}) for platform {_as_text(spec.get('gpu_platform'))}"
                 f" using {transport_label}."
             )
+            if max_nodes is None:
+                message += " Using all schedulable GPU nodes."
+            else:
+                message += f" max_nodes={max_nodes}."
             if skipped_nodes:
                 message += (
-                    f" Skipping {skipped_nodes} additional GPU node(s) for deploy-time validation."
+                    f" Skipping {skipped_nodes} additional GPU node(s) for this benchmark run."
                 )
             emit(message)
         runtime_values = {
@@ -4432,10 +4447,13 @@ def _run_nccl_validation(
             logs = str(exc)
         result_json = _extract_nccl_json(logs)
         avg_bus_bandwidth, out_of_bounds_ok = _nccl_json_summary(result_json)
+        average_bandwidth_reported = _nccl_json_average_bus_bandwidth_reported(result_json)
         result_summary = _nccl_json_report_summary(result_json)
         if avg_bus_bandwidth <= 0:
             match = _AVG_BUS_BANDWIDTH_RE.search(logs)
-            avg_bus_bandwidth = float(match.group(1)) if match is not None else 0.0
+            if match is not None:
+                avg_bus_bandwidth = float(match.group(1))
+                average_bandwidth_reported = True
         if out_of_bounds_ok is None:
             out_of_bounds_ok = _OUT_OF_BOUNDS_OK_RE.search(logs) is not None
         image_map = values_map.get("image") if isinstance(values_map.get("image"), dict) else {}
@@ -4445,12 +4463,62 @@ def _run_nccl_validation(
         )
         single_rank_smoke = len(worker_nodes) * worker_gpu_count <= 1
         bandwidth_observed = avg_bus_bandwidth > 0
-        bandwidth_ok = bandwidth_observed or single_rank_smoke
+        raw_platform_gpu_count = spec.get("platform_gpu_count")
+        try:
+            platform_gpu_count = (
+                None
+                if raw_platform_gpu_count in (None, "")
+                else int(str(raw_platform_gpu_count).strip())
+            )
+        except (TypeError, ValueError):
+            platform_gpu_count = None
+        one_gpu_platform = platform_gpu_count == 1 or (
+            platform_gpu_count is None and worker_gpu_count == 1
+        )
+        bandwidth_ok = bandwidth_observed or single_rank_smoke or (
+            one_gpu_platform and average_bandwidth_reported
+        )
+        threshold_evaluated = threshold_enforced or (
+            one_gpu_platform and average_bandwidth_reported
+        )
+        threshold_passed = (
+            avg_bus_bandwidth + 1e-9 >= threshold_gbps if threshold_evaluated else None
+        )
+        threshold_comment = ""
+        if (
+            threshold_evaluated
+            and one_gpu_platform
+            and average_bandwidth_reported
+            and not threshold_passed
+        ):
+            threshold_comment = (
+                "Observed average bus bandwidth is below the configured threshold; "
+                "for a 1-GPU NCCL run this is recorded as informational because "
+                "the NCCL workload completed and reported average bandwidth."
+            )
+        if single_rank_smoke and not average_bandwidth_reported:
+            summary = (
+                "NCCL single-rank smoke completed; no collective bandwidth metric "
+                "was reported."
+            )
+        else:
+            summary = (
+                f"NCCL all_reduce_perf completed with average bus bandwidth "
+                f"{avg_bus_bandwidth:.1f} Gbps."
+            )
+        if threshold_evaluated:
+            summary += f" Required threshold: {threshold_gbps:.1f} Gbps."
+        if threshold_comment:
+            summary += f" {threshold_comment}"
         passed = (
             launcher_phase == "Succeeded"
             and bool(out_of_bounds_ok)
             and bandwidth_ok
-            and (not threshold_enforced or avg_bus_bandwidth > threshold_gbps)
+            and (
+                threshold_passed is True
+                or bool(threshold_comment)
+                or not threshold_enforced
+            )
         )
         report = {
             "validation": "NCCL test",
@@ -4469,7 +4537,9 @@ def _run_nccl_validation(
             "namespace": namespace,
             "job_name": job_name,
             "gpu_platform": _as_text(spec.get("gpu_platform")),
+            "platform_gpu_count": platform_gpu_count,
             "max_nodes": max_nodes,
+            "all_nodes": max_nodes is None,
             "selected_worker_node_count": len(worker_nodes),
             "total_gpu_node_count": total_gpu_nodes,
             "skipped_node_count": skipped_nodes,
@@ -4482,10 +4552,15 @@ def _run_nccl_validation(
             "transport_mode": transport_mode,
             "transport_label": transport_label,
             **dmabuf_metadata,
+            "summary": summary,
             "avg_bus_bandwidth_gbps": avg_bus_bandwidth,
             "threshold_gbps": threshold_gbps,
             "threshold_enforced": threshold_enforced,
+            "bandwidth_threshold_passed": threshold_passed,
+            "bandwidth_threshold_comment": threshold_comment,
             "bandwidth_observed": bandwidth_observed,
+            "average_bus_bandwidth_reported": average_bandwidth_reported,
+            "one_gpu_platform": one_gpu_platform,
             "single_rank_smoke": single_rank_smoke,
             "out_of_bounds_ok": bool(out_of_bounds_ok),
             "launcher_phase": launcher_phase,

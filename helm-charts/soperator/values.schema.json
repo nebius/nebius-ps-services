@@ -23,6 +23,13 @@
         "skipPopulateJail"
       ]
     },
+    "gpuDriverJail": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" }
+      }
+    },
     "customSlurmConfig": {
       "type": "string",
       "not": {

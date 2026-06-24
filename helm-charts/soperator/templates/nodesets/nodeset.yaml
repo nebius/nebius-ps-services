@@ -4,6 +4,12 @@
 {{- with .gpu }}
 {{- $gpuEnabled = (.enabled | default false) }}
 {{- end }}
+{{- $gpuDriverJail := $.Values.gpuDriverJail | default dict }}
+{{- $gpuDriverJailValueEnabled := true }}
+{{- if hasKey $gpuDriverJail "enabled" }}
+{{- $gpuDriverJailValueEnabled = (get $gpuDriverJail "enabled") }}
+{{- end }}
+{{- $gpuDriverJailEnabled := and $gpuEnabled $gpuDriverJailValueEnabled }}
 {{- $gpuCount := "" }}
 {{- with .slurmd }}
 {{- with .resources }}
@@ -166,11 +172,18 @@ spec:
       {{- fail (printf ".Values.nodesets[%s].slurmd.volumes.customVolumeMounts uses reserved name \"slurm-scripts\". The chart owns this mount; use another name for custom mounts." $ns.name) }}
       {{- else if eq (get . "name") "slurm-scripts-jail" }}
       {{- fail (printf ".Values.nodesets[%s].slurmd.volumes.customVolumeMounts uses reserved name \"slurm-scripts-jail\". The chart owns this mount; use another name for custom mounts." $ns.name) }}
+      {{- else if and $gpuDriverJailEnabled (eq (get . "name") "nvidia-driver-root") }}
+      {{- fail (printf ".Values.nodesets[%s].slurmd.volumes.customVolumeMounts uses reserved name \"nvidia-driver-root\". The chart owns this GPU driver jail mount; remove the custom mount." $ns.name) }}
+      {{- else if and $gpuDriverJailEnabled (eq (get . "mountPath") "/run/nvidia/driver") }}
+      {{- fail (printf ".Values.nodesets[%s].slurmd.volumes.customVolumeMounts uses mountPath \"/run/nvidia/driver\". The chart owns this GPU driver jail mount; use another mountPath." $ns.name) }}
       {{- end }}
       {{- end }}
       customVolumeMounts:
         {{- include "nodesets.slurmScriptMount" (list $ "slurm-scripts") | nindent 8 }}
         {{- include "nodesets.slurmScriptMount" (list $ "slurm-scripts-jail") | nindent 8 }}
+        {{- if $gpuDriverJailEnabled }}
+        {{- include "nodesets.gpuDriverJailMount" . | nindent 8 }}
+        {{- end }}
         {{- range $customVolumeMounts }}
         {{- toYaml (list .) | nindent 8 }}
         {{- end }}
@@ -315,9 +328,20 @@ spec:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 
-  {{- with (.customInitContainers | default list) }}
+  {{- $customInitContainers := (.customInitContainers | default list) }}
+  {{- range $customInitContainers }}
+  {{- if and $gpuDriverJailEnabled (eq (get . "name") "cxcli-gpu-driver-jail") }}
+  {{- fail (printf ".Values.nodesets[%s].customInitContainers uses reserved name \"cxcli-gpu-driver-jail\". The chart owns this GPU driver jail init guard; use another name." $ns.name) }}
+  {{- end }}
+  {{- end }}
+  {{- if or $gpuDriverJailEnabled $customInitContainers }}
   customInitContainers:
+    {{- if $gpuDriverJailEnabled }}
+    {{- include "nodesets.gpuDriverJailInitContainer" (list $ $ns) | nindent 4 }}
+    {{- end }}
+    {{- with $customInitContainers }}
     {{- toYaml . | nindent 4 }}
+    {{- end }}
   {{- end }}
 {{- end }}
 {{- end }}

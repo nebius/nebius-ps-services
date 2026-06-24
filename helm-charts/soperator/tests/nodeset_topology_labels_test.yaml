@@ -6,7 +6,19 @@ tests:
     set:
       nodesets:
         - name: worker-gb300
-          slurmd: {}
+          slurmd:
+            resources:
+              cpu: "8"
+              memory: 64Gi
+            volumes:
+              spool:
+                emptyDir: {}
+              jail:
+                emptyDir: {}
+          munge:
+            resources:
+              cpu: 100m
+              memory: 128Mi
           topologyLabels:
             - rack-a
             - su-1
@@ -28,7 +40,19 @@ tests:
     set:
       nodesets:
         - name: worker-rack-only
-          slurmd: {}
+          slurmd:
+            resources:
+              cpu: "8"
+              memory: 64Gi
+            volumes:
+              spool:
+                emptyDir: {}
+              jail:
+                emptyDir: {}
+          munge:
+            resources:
+              cpu: 100m
+              memory: 128Mi
           topologyLabels:
             - rack-b
           nodeConfig:
@@ -43,7 +67,19 @@ tests:
     set:
       nodesets:
         - name: worker
-          slurmd: {}
+          slurmd:
+            resources:
+              cpu: "8"
+              memory: 64Gi
+            volumes:
+              spool:
+                emptyDir: {}
+              jail:
+                emptyDir: {}
+          munge:
+            resources:
+              cpu: 100m
+              memory: 128Mi
           topologyLabels: []
           nodeConfig:
             features:
@@ -60,7 +96,19 @@ tests:
     set:
       nodesets:
         - name: worker
-          slurmd: {}
+          slurmd:
+            resources:
+              cpu: "8"
+              memory: 64Gi
+            volumes:
+              spool:
+                emptyDir: {}
+              jail:
+                emptyDir: {}
+          munge:
+            resources:
+              cpu: 100m
+              memory: 128Mi
           nodeConfig:
             static: Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1
             dynamic: InstanceId={{ .PodName }}

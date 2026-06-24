@@ -4907,6 +4907,7 @@ def test_execute_auto_selects_console_worker_node_group_names_from_live_inventor
             "volumeSource": {"emptyDir": {}},
         }
     ]
+    assert helm_values["gpuDriverJail"] == {"enabled": True}
     assert "image" not in worker_gpu["slurmd"]
     assert "image" not in worker_gpu["munge"]
     assert {
@@ -6620,6 +6621,7 @@ def test_execute_migrates_compute_when_slurm_resources_exist(tmp_path: Path) -> 
     assert all("--force-conflicts" in call[0] for call in crd_applies)
     helm_values = json.loads(helm_upgrade[1])
     assert helm_values["nameOverride"] == "helm-soperator"
+    assert helm_values["gpuDriverJail"] == {"enabled": True}
     assert helm_values["customSlurmConfig"] == "PluginDir=/usr/lib/x86_64-linux-gnu/slurm"
     assert helm_values["plugStackConfig"]["pyxis"] == {
         "importerPath": "",

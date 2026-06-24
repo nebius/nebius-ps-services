@@ -1,0 +1,90 @@
+suite: GPU driver jail NodeSet contract
+templates:
+  - templates/nodesets/nodeset.yaml
+tests:
+  - it: fails when a GPU NodeSet uses the reserved nvidia-driver-root mount name
+    set:
+      nodesets:
+        - name: worker-gpu
+          gpu:
+            enabled: true
+          slurmd:
+            resources:
+              cpu: "16"
+              memory: 128Gi
+              gpu: 1
+            volumes:
+              spool:
+                emptyDir: {}
+              jail:
+                emptyDir: {}
+              customVolumeMounts:
+                - name: nvidia-driver-root
+                  mountPath: /custom/driver
+                  volumeSource:
+                    hostPath:
+                      path: /
+          munge:
+            resources:
+              cpu: 100m
+              memory: 128Mi
+    asserts:
+      - failedTemplate:
+          errorMessage: ".Values.nodesets[worker-gpu].slurmd.volumes.customVolumeMounts uses reserved name \"nvidia-driver-root\". The chart owns this GPU driver jail mount; remove the custom mount."
+
+  - it: fails when a GPU NodeSet uses the reserved /run/nvidia/driver mount path
+    set:
+      nodesets:
+        - name: worker-gpu
+          gpu:
+            enabled: true
+          slurmd:
+            resources:
+              cpu: "16"
+              memory: 128Gi
+              gpu: 1
+            volumes:
+              spool:
+                emptyDir: {}
+              jail:
+                emptyDir: {}
+              customVolumeMounts:
+                - name: site-driver
+                  mountPath: /run/nvidia/driver
+                  volumeSource:
+                    hostPath:
+                      path: /
+          munge:
+            resources:
+              cpu: 100m
+              memory: 128Mi
+    asserts:
+      - failedTemplate:
+          errorMessage: ".Values.nodesets[worker-gpu].slurmd.volumes.customVolumeMounts uses mountPath \"/run/nvidia/driver\". The chart owns this GPU driver jail mount; use another mountPath."
+
+  - it: fails when a GPU NodeSet uses the reserved init-guard name
+    set:
+      nodesets:
+        - name: worker-gpu
+          gpu:
+            enabled: true
+          slurmd:
+            resources:
+              cpu: "16"
+              memory: 128Gi
+              gpu: 1
+            volumes:
+              spool:
+                emptyDir: {}
+              jail:
+                emptyDir: {}
+          customInitContainers:
+            - name: cxcli-gpu-driver-jail
+              image: alpine
+          munge:
+            resources:
+              cpu: 100m
+              memory: 128Mi
+    asserts:
+      - failedTemplate:
+          errorMessage: ".Values.nodesets[worker-gpu].customInitContainers uses reserved name \"cxcli-gpu-driver-jail\". The chart owns this GPU driver jail init guard; use another name."

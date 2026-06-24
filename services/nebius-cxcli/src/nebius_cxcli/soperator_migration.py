@@ -61,6 +61,10 @@ from .quota_checks import (
     format_quota_report_lines,
 )
 from .runtime_config import to_plain_data
+from .soperator_gpu_driver_jail import (
+    ensure_soperator_gpu_driver_jail_values,
+    normalize_soperator_gpu_driver_jail_mounts,
+)
 from .soperator_onboarding import (
     ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
     ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK,
@@ -6181,6 +6185,10 @@ def _patch_target_values_for_compute(
             values["partitionConfiguration"] = partition_config
     else:
         _patch_legacy_worker_nodeset_fallback(values, worker_count=worker_count)
+    ensure_soperator_gpu_driver_jail_values(
+        values,
+        context=f"Soperator migration target {target_ref}",
+    )
     return values
 
 
@@ -6656,6 +6664,10 @@ def _normalize_source_worker_nodeset_value(
         topology=topology,
     )
     _strip_reserved_nodeset_custom_volume_mounts(nodeset)
+    normalize_soperator_gpu_driver_jail_mounts(
+        nodeset,
+        context=f"source Soperator NodeSet {nodeset.get('name') or 'worker'}",
+    )
     _default_worker_security_proc_mount(nodeset)
     munge = nodeset.get("munge")
     if isinstance(munge, dict):

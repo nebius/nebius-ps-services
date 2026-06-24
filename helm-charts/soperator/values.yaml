@@ -1458,6 +1458,16 @@ priorityClasses:
     value: 10000000
     globalDefault: false
     preemptionPolicy: PreemptLowerPriority
+
+# GPU workers on Nebius-image host drivers need the real host driver root at
+# /run/nvidia/driver so Soperator tools and the shared Slurm jail can resolve
+# libcuda.so.1, libnvidia-ml.so.1, and the host nvidia-smi binary
+# consistently. When this is enabled, GPU NodeSets receive the chart-owned
+# nvidia-driver-root hostPath mount plus an init guard that rejects stale or
+# corrupt shared-jail driver library state before slurmd starts.
+gpuDriverJail:
+  enabled: true
+
 nodesets:
   # Each NodeSet should represent one homogeneous worker shape. Use separate
   # NodeSets for CPU workers, GPU workers, or different GPU models.

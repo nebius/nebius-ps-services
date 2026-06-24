@@ -203,7 +203,7 @@ class Mk8sNcclSettings:
     training_operator_manifest: str = ""
     training_operator_namespace: str = ""
     average_bus_bandwidth_threshold_gbps: float = 0.0
-    max_nodes: int = 8
+    max_nodes: int | None = None
     rdma_mpi_extra_args: tuple[str, ...] = ()
 
 
@@ -1628,13 +1628,15 @@ def _parse_mk8s_nccl_settings(
         ) from exc
     if threshold < 0:
         raise ValueError(f"{field_label}.average_bus_bandwidth_threshold_gbps must be >= 0")
-    max_nodes_raw = raw.get("max_nodes", Mk8sNcclSettings().max_nodes)
-    try:
-        max_nodes = int(max_nodes_raw)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{field_label}.max_nodes must be an integer >= 1") from exc
-    if max_nodes < 1:
-        raise ValueError(f"{field_label}.max_nodes must be >= 1")
+    max_nodes: int | None = None
+    if "max_nodes" in raw and raw.get("max_nodes") is not None:
+        max_nodes_raw = raw.get("max_nodes")
+        try:
+            max_nodes = int(max_nodes_raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{field_label}.max_nodes must be an integer >= 1") from exc
+        if max_nodes < 1:
+            raise ValueError(f"{field_label}.max_nodes must be >= 1")
     if "rdma_mpi_extra_args" not in raw or raw.get("rdma_mpi_extra_args") is None:
         rdma_mpi_extra_args: tuple[str, ...] = ()
         rdma_mpi_extra_args_raw = None

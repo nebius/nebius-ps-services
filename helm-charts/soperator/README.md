@@ -50,6 +50,9 @@ storage, Helm dependency, and cxcli wiring design.
 - Pinned OpenKruise dependency for Soperator-managed StatefulSets.
 - Optional MariaDB Operator dependency for Slurm accounting.
 - CPU-only, GPU-only, and mixed CPU+GPU Slurm worker layouts.
+- GPU worker NodeSets get a chart-owned host driver root mount and init guard
+  through `gpuDriverJail.enabled=true`, so Slurm jobs use real host
+  `libcuda.so.1` / `libnvidia-ml.so.1` from the shared jail.
 - Slurm partitions and node features through chart values.
 - Production worker profiles follow a one-to-one worker contract: one Slurm
   worker pod equals one Kubernetes worker VM. The chart achieves this through
@@ -252,6 +255,19 @@ Common direct Helm settings:
   split. Those `inputs.soperator.*` helpers are cxcli inputs, not Helm values;
   the chart expects the rendered `nodesets[]` contract and fails fast if helper
   inputs or the old `nodeGroupMapping` value are passed directly to Helm.
+- `gpuDriverJail.enabled`: defaults to `true` and applies only to GPU
+  NodeSets. The chart injects a `nvidia-driver-root` hostPath mount from host
+  `/` to `/run/nvidia/driver`, plus a `cxcli-gpu-driver-jail` init guard that
+  uses the same `slurmd` image. The guard removes stale zero-byte driver
+  artifacts from the shared jail, refreshes `libcuda.so.1` and
+  `libnvidia-ml.so.1` from the host driver root, runs `ldconfig`, and fails the
+  worker pod if the host driver root or driver libraries are unusable. The
+  guard checks that host `nvidia-smi` exists but does not execute GPU inventory
+  from the init container; GPU device visibility is validated later from the
+  GPU-requesting worker container or Slurm job root. GPU NodeSets that define a
+  custom mount named `nvidia-driver-root`, a mount at `/run/nvidia/driver`, or
+  a custom init container named `cxcli-gpu-driver-jail` fail fast at render.
+  CPU NodeSets are untouched.
 - `partitionConfiguration`: Slurm partitions and their NodeSet mappings.
   Each partition supports a typed `policy` block (`priorityTier`,
   `preemptMode`, `default`, `hidden`, `state`, `maxTime`, `defaultTime`,
