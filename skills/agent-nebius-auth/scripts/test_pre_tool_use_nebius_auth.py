@@ -85,6 +85,9 @@ class PreToolUseNebiusAuthTest(unittest.TestCase):
     def evaluate_command(self, command: str) -> dict[str, object]:
         return self.hook.evaluate(self.payload(command))
 
+    def clear_project_env(self) -> None:
+        os.environ.pop(PROJECT_ENV, None)
+
     def updated_command(self, command: str) -> str:
         result = self.evaluate_command(command)
         return result["hookSpecificOutput"]["updatedInput"]["command"]
@@ -172,6 +175,32 @@ class PreToolUseNebiusAuthTest(unittest.TestCase):
 
     def test_missing_credential_denies_sensitive_command(self) -> None:
         self.credential_file.unlink()
+
+        result = self.evaluate_command(f"curl https://{service_host()}/")
+
+        self.assertEqual(
+            result["hookSpecificOutput"]["permissionDecision"],
+            "deny",
+        )
+
+    def test_default_project_file_selects_profile_with_multiple_credentials(self) -> None:
+        self.clear_project_env()
+        other = self.credential_dir / "codex-agent-authkey.project-other.json"
+        other.write_text("{}", encoding="utf-8")
+        (self.credential_dir / "codex-agent-default-project-id").write_text(
+            f"{PROJECT}\n",
+            encoding="utf-8",
+        )
+
+        command = self.updated_command(f"curl https://{service_host()}/")
+
+        self.assertIn(sensitive_command(), command)
+        self.assertIn(f"export NEBIUS_PROJECT_ID={PROJECT}", command)
+
+    def test_multiple_credentials_without_default_project_denies(self) -> None:
+        self.clear_project_env()
+        other = self.credential_dir / "codex-agent-authkey.project-other.json"
+        other.write_text("{}", encoding="utf-8")
 
         result = self.evaluate_command(f"curl https://{service_host()}/")
 

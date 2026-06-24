@@ -109,6 +109,20 @@ All notable changes to the reusable Codex skills are tracked here.
   treated as human/admin IAM repair sessions, and fake Nebius CLI regressions
   cover profile drift on rerun, effective `NEBIUS_PROFILE` selection,
   interrupted profile creation, and concurrent setup.
+- Changed `agent-nebius-auth` so the setup script no longer writes an inline
+  Codex hook block to `$CODEX_HOME/config.toml`. The old `--install-hook` flag
+  now fails fast and points operators to the canonical
+  `install-skills.sh --install-hooks agent-nebius-auth/assets/hooks
+  --register-hooks` path for payload sync and `hooks.json` registration, while
+  setup records the selected project under `~/.nebius` for the generic hook to
+  read locally.
+- Added an installer-side `agent-nebius-auth` migration cleanup: registering
+  the hook now removes the old marked inline `config.toml` block, backs up the
+  file, and migrates the legacy project selector to
+  `~/.nebius/codex-agent-default-project-id` without printing the project ID.
+- Added a skill-local `agent-nebius-auth/README.md` with the setup-only
+  workflow, installer-managed hook registration, runtime hook behavior,
+  idempotency checks, and validation commands.
 - Clarified `publish-helm` required release inputs so callers must provide an
   explicit tag and publish destination or be asked for them, documented the
   OCI repository base versus provider registry-ID workflow split, and made
