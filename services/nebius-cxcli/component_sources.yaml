@@ -212,7 +212,7 @@ components:
         portable:
           repo: oci://cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/charts/soperator
           chart: soperator
-          version: 4.0.2-ps.2
+          version: 4.0.2-ps.3
         local:
           path: ../../helm-charts/soperator
       ui:

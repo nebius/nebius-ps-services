@@ -4,6 +4,8 @@ All notable changes to this chart are tracked here.
 
 ## [Unreleased]
 
+## [soperator-chart-v4.0.2-ps.3] - 2026-06-24
+
 - Added the chart-owned `gpuDriverJail` contract for GPU NodeSets. The chart
   now injects the host driver root mount at `/run/nvidia/driver`, runs a
   `cxcli-gpu-driver-jail` init guard with the `slurmd` image to refresh real
