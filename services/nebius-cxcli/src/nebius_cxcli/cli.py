@@ -33094,7 +33094,7 @@ def _print_acceptance_report_outputs(
     elapsed_seconds: float | None = None,
 ) -> None:
     for path in paths:
-        console.print(_acceptance_report_path_markup(kind, path))
+        console.print(_acceptance_report_path_markup(kind, path), soft_wrap=True)
         console.print(
             _acceptance_report_result_markup(
                 kind,
