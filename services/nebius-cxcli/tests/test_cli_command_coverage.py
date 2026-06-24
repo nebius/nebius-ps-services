@@ -636,6 +636,110 @@ def test_managed_mk8s_handoff_uses_resolved_cluster_id_without_terraform_output(
     assert env[cli.GRAFANA_TARGET_CLUSTER_ID_ENV] == "mk8scluster-123"
 
 
+def test_managed_mk8s_handoff_uses_preferred_kube_context_without_terraform_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = SimpleNamespace(
+        client_info=SimpleNamespace(
+            client_name="client-a",
+            nebius=SimpleNamespace(project_id="project-456"),
+        )
+    )
+    paths = _fake_paths(tmp_path)
+    context_name = "nebius-mk8s-mk8scluster-123-external"
+    kubeconfig = tmp_path / "config"
+    kubeconfig.write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "v1",
+                "kind": "Config",
+                "contexts": [
+                    {
+                        "name": context_name,
+                        "context": {"cluster": "cluster", "user": "user"},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KUBECONFIG", str(kubeconfig))
+    monkeypatch.setattr(
+        cli,
+        "terraform_output_raw",
+        lambda *_args, **_kwargs: pytest.fail("acceptance handoff must not read Terraform output"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_mk8s_cluster_handoff_spec",
+        lambda *_args, **_kwargs: pytest.fail("existing kube context should be reused"),
+    )
+
+    with ExitStack() as stack:
+        env = cli._prepare_cluster_handoff_kube_env(
+            config,
+            paths,
+            stack=stack,
+            target={
+                "component_id": "mk8s",
+                "target_ref": "mk8s",
+                "access": "external",
+                "cluster_id_output_name": "mk8s_cluster_id",
+                "cluster_id": "mk8scluster-123",
+                "kube_context": context_name,
+            },
+            persist_local_kubeconfig=False,
+            set_current_context=False,
+            allow_terraform_output=False,
+        )
+        assert Path(env["KUBECONFIG"]).read_text(encoding="utf-8")
+
+    assert env is not None
+    assert env[cli.CLUSTER_HANDOFF_ACCESS_ENV] == "external"
+    assert env[cli.GRAFANA_TARGET_CLUSTER_ID_ENV] == "mk8scluster-123"
+    assert env[cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV] == context_name
+
+
+def test_managed_mk8s_handoff_rejects_missing_context_when_terraform_output_disabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = SimpleNamespace(
+        client_info=SimpleNamespace(
+            client_name="client-a",
+            nebius=SimpleNamespace(project_id="project-456"),
+        )
+    )
+    paths = _fake_paths(tmp_path)
+    monkeypatch.setenv("KUBECONFIG", str(tmp_path / "missing-kubeconfig"))
+    monkeypatch.setattr(
+        cli,
+        "terraform_output_raw",
+        lambda *_args, **_kwargs: pytest.fail("Terraform output fallback must be disabled"),
+    )
+
+    with pytest.raises(RuntimeError) as exc_info, ExitStack() as stack:
+        cli._prepare_cluster_handoff_kube_env(
+            config,
+            paths,
+            stack=stack,
+            target={
+                "component_id": "mk8s",
+                "target_ref": "mk8s",
+                "access": "external",
+                "cluster_id_output_name": "mk8s_cluster_id",
+            },
+            persist_local_kubeconfig=False,
+            set_current_context=False,
+            allow_terraform_output=False,
+        )
+
+    message = str(exc_info.value)
+    assert "does not read Terraform state" in message
+    assert "generated/reports/deploy-report.md" in message
+
+
 def test_upgrade_node_template_config_only_guided_dry_run_prompts_required_values(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -7601,9 +7705,8 @@ def test_acceptance_test_smoke_command_passes_options(
             str(fake_paths.config_path),
             "--target",
             "mk8s",
-            "--soperator",
             "--suite",
-            "soperator-slurm",
+            "slurm",
             "--batch-size",
             "64",
             "--concurrency",
@@ -7618,13 +7721,184 @@ def test_acceptance_test_smoke_command_passes_options(
         "config_path": fake_paths.config_path,
         "requested_target_ref": "mk8s",
         "all_targets": False,
-        "include_k8s": False,
-        "include_soperator": True,
-        "suites": ["soperator-slurm"],
+        "suites": ["slurm"],
         "batch_size": 64,
         "concurrency": 4,
         "continue_on_failure": False,
     }
+
+
+def test_acceptance_test_smoke_command_prints_passed_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    report_path = fake_paths.reports_dir / "acceptance-smoke-report-sop-cluster1.json"
+
+    def _fake_run_acceptance_smoke_command(**_kwargs: Any) -> list[Path]:
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(
+            json.dumps(
+                {
+                    "passed": True,
+                    "scope": "all-node-slurm-smoke",
+                    "target_ref": "sop-cluster1",
+                    "summary": "8/8 Soperator/Slurm checks passed.",
+                    "elapsed_seconds": 83.2,
+                    "elapsed_time": "00:01:23",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return [report_path]
+
+    monkeypatch.setattr(
+        cli,
+        "_run_acceptance_smoke_command",
+        _fake_run_acceptance_smoke_command,
+    )
+
+    result = runner.invoke(
+        cli.app,
+        ["acceptance-test", "smoke", str(fake_paths.config_path), "--all-targets"],
+    )
+
+    assert result.exit_code == 0, result.output
+    output = _plain_output(result.output)
+    output_flat = " ".join(output.split())
+    assert "Acceptance smoke report:" in output
+    assert report_path.name in output
+    assert (
+        "Acceptance smoke result: PASSED all-node-slurm-smoke (sop-cluster1): "
+        "8/8 Soperator/Slurm checks passed. (elapsed 00:01:23)"
+    ) in output_flat
+
+
+def test_acceptance_test_result_markup_colors_status_and_detail(tmp_path: Path) -> None:
+    passed_path = tmp_path / "passed.json"
+    failed_path = tmp_path / "failed.json"
+    skipped_path = tmp_path / "skipped.json"
+
+    passed_path.write_text(
+        json.dumps(
+            {
+                "passed": True,
+                "scope": "k8s-nccl",
+                "target_ref": "mk8s",
+                "summary": "All [good].",
+                "elapsed_seconds": 1.0,
+                "elapsed_time": "00:01:23",
+            }
+        ),
+        encoding="utf-8",
+    )
+    failed_path.write_text(
+        json.dumps(
+            {
+                "passed": False,
+                "scope": "k8s-nccl",
+                "target_ref": "mk8s",
+                "error": "Bandwidth below threshold.",
+            }
+        ),
+        encoding="utf-8",
+    )
+    skipped_path.write_text(
+        json.dumps(
+            {
+                "passed": True,
+                "skipped": True,
+                "scope": "slurm-nccl",
+                "target_ref": "sop-cluster1",
+                "skip_reason": "No idle GPU nodes.",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    passed = cli._acceptance_report_result_markup("benchmark", passed_path)
+    failed = cli._acceptance_report_result_markup("benchmark", failed_path)
+    skipped = cli._acceptance_report_result_markup("benchmark", skipped_path)
+    unknown = cli._acceptance_report_result_markup("benchmark", tmp_path / "missing.json")
+    report_path = cli._acceptance_report_path_markup("benchmark", passed_path)
+
+    assert "[black on green]PASSED[/]" in passed
+    assert "[bold cyan]k8s-nccl[/]" in passed
+    assert "[bold magenta](mk8s)[/]" in passed
+    assert "All \\[good]." in passed
+    assert "[bold]All \\[good].[/]" not in passed
+    assert "(elapsed 00:01:23)" in passed
+    assert "[bold](elapsed 00:01:23)[/]" not in passed
+    assert "[bold white on red]FAILED[/]" in failed
+    assert "Bandwidth below threshold." in failed
+    assert "[bold]Bandwidth below threshold.[/]" not in failed
+    assert "[black on yellow]SKIPPED[/]" in skipped
+    assert "No idle GPU nodes." in skipped
+    assert "[bold]No idle GPU nodes.[/]" not in skipped
+    assert "[black on cyan]UNKNOWN[/]" in unknown
+    assert "Acceptance benchmark report:" in report_path
+    assert "[bold]Acceptance benchmark report:[/]" not in report_path
+    assert f"[bold cyan]{passed_path}[/]" in report_path
+
+
+def test_acceptance_test_result_omits_bandwidth_comment_from_terminal_detail(
+    tmp_path: Path,
+) -> None:
+    comment = (
+        "Observed average bus bandwidth is below the configured threshold; "
+        "for a 1-GPU Slurm NCCL run this is recorded as informational because "
+        "the NCCL workload completed and reported average bandwidth."
+    )
+    summary = (
+        "multi-node NCCL all_reduce_perf benchmark completed on partition gpu with "
+        "4 rank(s) across 4 node(s) (1 GPU(s) per node); average bus bandwidth "
+        f"1.9 Gbps across 2G message size. Required threshold: 300.0 Gbps. {comment}"
+    )
+    reports = {
+        "slurm-nccl.json": {
+            "passed": True,
+            "status": "passed",
+            "scope": "slurm-nccl",
+            "target_ref": "mk8s",
+            "summary": "10/10 Soperator/Slurm checks passed.",
+            "elapsed_seconds": 248.0,
+            "elapsed_time": "00:04:08",
+            "checks": [
+                {
+                    "name": "Slurm NCCL benchmark",
+                    "status": "passed",
+                    "passed": True,
+                    "summary": summary,
+                    "bandwidth_threshold_comment": comment,
+                }
+            ],
+        },
+        "k8s-nccl.json": {
+            "passed": True,
+            "status": "passed",
+            "scope": "k8s-nccl",
+            "target_ref": "mk8s",
+            "summary": summary.replace("partition gpu with ", ""),
+            "elapsed_seconds": 248.0,
+            "elapsed_time": "00:04:08",
+            "bandwidth_threshold_comment": comment,
+        },
+    }
+
+    for filename, payload in reports.items():
+        report_path = tmp_path / filename
+        report_path.write_text(
+            json.dumps(payload),
+            encoding="utf-8",
+        )
+
+        markup = cli._acceptance_report_result_markup("benchmark", report_path)
+
+        assert "Required threshold: 300.0 Gbps." in markup
+        assert "Observed average bus bandwidth" not in markup
+        assert "(elapsed 00:04:08)" in markup
+        assert "[bold](elapsed 00:04:08)[/]" not in markup
+        assert json.loads(report_path.read_text(encoding="utf-8")) == payload
 
 
 def test_acceptance_test_smoke_runner_uses_readonly_context_and_kube_handoff(
@@ -7662,10 +7936,31 @@ def test_acceptance_test_smoke_runner_uses_readonly_context_and_kube_handoff(
         "_load_deploy_context_readonly",
         lambda _path: (config, fake_paths, manifest),
     )
+    monotonic_values = iter([100.0, 183.2])
+    monkeypatch.setattr(cli.time, "monotonic", lambda: next(monotonic_values))
+    handoff_calls: list[tuple[Mapping[str, Any], bool]] = []
+
+    def _fake_prepare_cluster_handoff_kube_env(
+        *_args: object,
+        target: Mapping[str, Any],
+        allow_terraform_output: bool,
+        **_kwargs: object,
+    ) -> dict[str, str]:
+        handoff_calls.append((target, allow_terraform_output))
+        return {"KUBECONFIG": "/tmp/kubeconfig"}
+
+    monkeypatch.setattr(
+        cli, "_prepare_cluster_handoff_kube_env", _fake_prepare_cluster_handoff_kube_env
+    )
     monkeypatch.setattr(
         cli,
-        "_prepare_cluster_handoff_kube_env",
-        lambda *_args, **_kwargs: {"KUBECONFIG": "/tmp/kubeconfig"},
+        "_deploy_report_target_contexts",
+        lambda _paths: {
+            "mk8s": {
+                "cluster_id": "mk8scluster-123",
+                "kube_context": "nebius-mk8s-mk8scluster-123-external",
+            }
+        },
     )
     monkeypatch.setattr(
         cli,
@@ -7689,7 +7984,12 @@ def test_acceptance_test_smoke_runner_uses_readonly_context_and_kube_handoff(
         emit=None,
     ) -> list[Path]:
         calls.append(("soperator", validations, reports_dir, extra_env))
-        return [reports_dir / "acceptance-smoke-report-mk8s.json"]
+        report_path = reports_dir / "acceptance-smoke-report-mk8s.json"
+        report_path.write_text(
+            json.dumps({"passed": True, "scope": "all-node-slurm-smoke", "target_ref": "mk8s"}),
+            encoding="utf-8",
+        )
+        return [report_path]
 
     monkeypatch.setattr(
         cli,
@@ -7701,9 +8001,7 @@ def test_acceptance_test_smoke_runner_uses_readonly_context_and_kube_handoff(
         config_path=fake_paths.config_path,
         requested_target_ref="mk8s",
         all_targets=False,
-        include_k8s=False,
-        include_soperator=True,
-        suites=None,
+        suites=["slurm"],
         batch_size=128,
         concurrency=8,
         continue_on_failure=True,
@@ -7718,6 +8016,19 @@ def test_acceptance_test_smoke_runner_uses_readonly_context_and_kube_handoff(
             {"KUBECONFIG": "/tmp/kubeconfig"},
         )
     ]
+    assert handoff_calls == [
+        (
+            {
+                **_mk8s_target(fake_paths),
+                "cluster_id": "mk8scluster-123",
+                "kube_context": "nebius-mk8s-mk8scluster-123-external",
+            },
+            False,
+        )
+    ]
+    report = json.loads(written[0].read_text(encoding="utf-8"))
+    assert report["elapsed_seconds"] == pytest.approx(83.2)
+    assert report["elapsed_time"] == "00:01:23"
 
 
 def test_acceptance_test_rejects_same_target_duplicate_canonical_reports() -> None:
@@ -7736,7 +8047,7 @@ def test_acceptance_test_rejects_same_target_duplicate_canonical_reports() -> No
         )
 
 
-def test_acceptance_test_requires_explicit_target_selection(
+def test_acceptance_test_smoke_runner_defaults_to_all_targets(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -7744,42 +8055,90 @@ def test_acceptance_test_requires_explicit_target_selection(
     config = _config_with_enabled_mk8s()
     manifest = {
         "deploy": {
-            "targets": [_mk8s_target(fake_paths)],
+            "targets": [
+                _mk8s_target(fake_paths, target_ref="cluster-a"),
+                _mk8s_target(fake_paths, target_ref="cluster-b"),
+            ],
             "validations": [],
         }
     }
+    smoke_specs = [
+        {
+            "kind": "mk8s_cuda_smoke",
+            "target_ref": "cluster-a",
+            "name": "K8s CUDA acceptance smoke (cluster-a)",
+            "report_file": "acceptance-smoke-report-cluster-a.json",
+        },
+        {
+            "kind": "mk8s_cuda_smoke",
+            "target_ref": "cluster-b",
+            "name": "K8s CUDA acceptance smoke (cluster-b)",
+            "report_file": "acceptance-smoke-report-cluster-b.json",
+        },
+    ]
+    handoff_calls: list[bool] = []
+    smoke_kwargs: dict[str, Any] = {}
+
     monkeypatch.setattr(
         cli,
         "_load_deploy_context_readonly",
         lambda _path: (config, fake_paths, manifest),
     )
+    monkeypatch.setattr(cli, "_deploy_report_target_contexts", lambda _paths: {})
+    monkeypatch.setattr(cli, "soperator_acceptance_smoke_specs", lambda *_args, **_kwargs: [])
 
-    with pytest.raises(ValueError, match="Select one target with --target"):
-        cli._run_acceptance_smoke_command(
-            config_path=fake_paths.config_path,
-            requested_target_ref=None,
-            all_targets=False,
-            include_k8s=True,
-            include_soperator=False,
-            suites=None,
-            batch_size=128,
-            concurrency=8,
-            continue_on_failure=True,
-        )
+    def _fake_mk8s_acceptance_smoke_validation_specs(*_args: Any, **kwargs: Any):
+        smoke_kwargs.update(kwargs)
+        return smoke_specs
 
-    with pytest.raises(ValueError, match="Select one target with --target"):
-        cli._run_acceptance_benchmark_command(
-            config_path=fake_paths.config_path,
-            requested_target_ref=None,
-            all_targets=False,
-            include_k8s=True,
-            include_soperator=False,
-            suites=None,
-            continue_on_failure=True,
-            max_nodes=None,
-            timeout=None,
-            average_bus_bandwidth_threshold_gbps=None,
-        )
+    monkeypatch.setattr(
+        cli,
+        "mk8s_acceptance_smoke_validation_specs",
+        _fake_mk8s_acceptance_smoke_validation_specs,
+    )
+    monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
+
+    @contextmanager
+    def _fake_status(_message: str, **_kwargs: object):
+        yield SimpleNamespace(update=lambda *_args, **_kwargs: None)
+
+    monkeypatch.setattr(cli.console, "status", _fake_status)
+
+    def _fake_prepare_cluster_handoff_kube_env(
+        *_args: object,
+        set_current_context: bool,
+        **_kwargs: object,
+    ) -> dict[str, str]:
+        handoff_calls.append(set_current_context)
+        return {"KUBECONFIG": "/tmp/kubeconfig"}
+
+    monkeypatch.setattr(
+        cli, "_prepare_cluster_handoff_kube_env", _fake_prepare_cluster_handoff_kube_env
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_mk8s_gpu_validations",
+        lambda validations, *, reports_dir, **_kwargs: [
+            reports_dir / f"acceptance-smoke-report-{validations[0]['target_ref']}.json"
+        ],
+    )
+
+    written = cli._run_acceptance_smoke_command(
+        config_path=fake_paths.config_path,
+        requested_target_ref=None,
+        all_targets=False,
+        suites=None,
+        batch_size=128,
+        concurrency=8,
+        continue_on_failure=True,
+    )
+
+    assert written == [
+        fake_paths.reports_dir / "acceptance-smoke-report-cluster-a.json",
+        fake_paths.reports_dir / "acceptance-smoke-report-cluster-b.json",
+    ]
+    assert smoke_kwargs == {"include_soperator_targets": False}
+    assert handoff_calls == [False, False]
 
 
 def test_acceptance_test_help_shows_safe_examples() -> None:
@@ -7798,32 +8157,76 @@ def test_acceptance_test_help_shows_safe_examples() -> None:
     benchmark_help = " ".join(_plain_output(benchmark_result.output).split())
     deploy_help = " ".join(_plain_output(deploy_result.output).split())
 
-    assert "same-target K8s and Soperator suites cannot be combined" in group_help
-    assert "Commands write JSON reports only and do not change config" in group_help
-    assert "nebius-cxcli acceptance-test smoke <config.yaml> --target sop-cluster1 --soperator" in group_help
-    assert "Soperator all-node smoke JSON report:" in group_help
-    assert "plain MK8s all-node CUDA JSON report:" in group_help
+    assert "same-target K8s and Slurm suites cannot be combined" in group_help
+    assert (
+        "Commands write JSON reports only, print color-coded concise result lines with elapsed time"
+        in group_help
+    )
+    assert "suite-driven smoke validation and explicit benchmarks" in group_help
+    assert "and do not change config" in group_help
+    assert (
+        "nebius-cxcli acceptance-test smoke <config.yaml> --target sop-cluster1 --suite slurm"
+        in group_help
+    )
+    assert "Slurm all-node smoke JSON report:" in group_help
+    assert "K8s CUDA smoke JSON report:" in group_help
+    assert "default smoke on all targets:" in group_help
+    assert "default K8s NCCL benchmark on all targets:" in group_help
+    assert "nebius-cxcli acceptance-test benchmark <config.yaml>" in group_help
+    assert "Slurm NCCL benchmark JSON report:" in group_help
     assert "force K8s NCCL on a Soperator-owned GPU target during maintenance" in group_help
     assert "JSON reports only under generated/reports/" in smoke_help
     assert "does not change config.yaml" in smoke_help
-    assert "Soperator all-node Slurm smoke JSON report:" in smoke_help
-    assert "plain MK8s all-node CUDA JSON report:" in smoke_help
+    assert "Target handoff comes from deploy-report/local kubeconfig context" in smoke_help
+    assert "does not initialize the Terraform backend" in smoke_help
+    assert "prints a color-coded concise PASSED/FAILED/SKIPPED result line" in smoke_help
+    assert "with elapsed time in hh:mm:ss" in smoke_help
+    assert "Slurm all-node smoke JSON report:" in smoke_help
+    assert "K8s CUDA smoke JSON report:" in smoke_help
+    assert "--suite slurm --batch-size 128 --concurrency 8 --fail-fast" in smoke_help
     assert "--batch-size 128 --concurrency 8 --fail-fast" in smoke_help
-    assert "Required unless --all-targets is set." in smoke_help
-    assert "Required unless --target is set." in smoke_help
+    assert "Run acceptance smoke tests for one generated cluster target." in smoke_help
+    assert "Omit --target to run every generated target." in smoke_help
+    assert "This is the default when --target is omitted." in smoke_help
+    assert "Supported values: k8s-cuda, slurm" in smoke_help
+    assert "Omit --suite to run target defaults: k8s-cuda on plain MK8s GPU targets" in (
+        smoke_help
+    )
+    assert "slurm on Soperator targets" in smoke_help
     assert "JSON reports only under generated/reports/" in benchmark_help
     assert "does not change config.yaml" in benchmark_help
+    assert "Target handoff comes from deploy-report/local kubeconfig context" in benchmark_help
+    assert "does not initialize the Terraform backend" in benchmark_help
+    assert "prints a color-coded concise PASSED/FAILED/SKIPPED result line" in benchmark_help
+    assert "with elapsed time in hh:mm:ss" in benchmark_help
+    assert "Run explicit post-deploy benchmark suites" in benchmark_help
+    assert "Use --suite to select the benchmark runtime path" in benchmark_help
+    assert "defaults to k8s-nccl across all targets" in benchmark_help
     assert "K8s NCCL uses the pinned transient nccl-test chart" in benchmark_help
-    assert "Soperator Slurm NCCL benchmark:" in benchmark_help
-    assert "plain MK8s NCCL benchmark with run-only overrides:" in benchmark_help
+    assert "slurm-nccl runs the Slurm NCCL suite" in benchmark_help
+    assert "Run acceptance benchmarks for one generated cluster target." in benchmark_help
+    assert "Omit --suite for the default k8s-nccl suite." in benchmark_help
+    assert "Slurm NCCL benchmark:" in benchmark_help
+    assert "Plain MK8s NCCL benchmark with run-only overrides:" in benchmark_help
     assert "plain MK8s K8s NCCL benchmark:" not in benchmark_help
+    assert "Default: all schedulable GPU nodes." in benchmark_help
+    assert "Default: no timeout; the run continues until completion or user cancellation." in (
+        benchmark_help
+    )
+    assert "Default: 300. On 1-GPU runs, below-threshold bandwidth" in benchmark_help
+    assert "reported as a comment when NCCL completes" in benchmark_help
     assert (
         "nebius-cxcli acceptance-test benchmark <config.yaml> --target mk8s-prod "
-        "--k8s --max-nodes 4 --timeout 20m --average-bus-bandwidth-threshold-gbps 300"
+        "--suite k8s-nccl --max-nodes 4 --timeout 20m --average-bus-bandwidth-threshold-gbps 300"
     ) in benchmark_help
     assert (
         "nebius-cxcli acceptance-test benchmark <config.yaml> --target sop-cluster1 "
         "--suite k8s-nccl --max-nodes 2"
+    ) in benchmark_help
+    assert (
+        "nebius-cxcli acceptance-test benchmark <config.yaml> --target sop-cluster1 "
+        "--suite slurm-nccl --max-nodes 2 --timeout 5m "
+        "--average-bus-bandwidth-threshold-gbps 300"
     ) in benchmark_help
     stale_help_terms = (
         "deploy.targets[].validations",
@@ -7833,6 +8236,14 @@ def test_acceptance_test_help_shows_safe_examples() -> None:
         "nccl.max_nodes",
         "deploy-time NCCL",
         "generic deploy-time NCCL",
+        "future benchmark suites",
+        "exhaustive all-node validation",
+        "plain MK8s all-node CUDA JSON report",
+        "soperator-slurm",
+        "Soperator-owned GPU targets are skipped unless --suite k8s-nccl",
+        "--k8s",
+        "--soperator",
+        "soperator-nccl",
         "upgrade-report.md",
     )
     for help_text in (group_help, smoke_help, benchmark_help, deploy_help):
@@ -7865,7 +8276,6 @@ def test_acceptance_test_benchmark_command_passes_options(
             str(fake_paths.config_path),
             "--target",
             "mk8s",
-            "--k8s",
             "--suite",
             "k8s-nccl",
             "--max-nodes",
@@ -7884,14 +8294,422 @@ def test_acceptance_test_benchmark_command_passes_options(
         "config_path": fake_paths.config_path,
         "requested_target_ref": "mk8s",
         "all_targets": False,
-        "include_k8s": True,
-        "include_soperator": False,
         "suites": ["k8s-nccl"],
         "continue_on_failure": False,
         "max_nodes": 16,
         "timeout": "30m",
         "average_bus_bandwidth_threshold_gbps": 450.5,
     }
+
+
+def test_acceptance_test_benchmark_command_prints_skipped_k8s_nccl_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    report_path = fake_paths.reports_dir / "acceptance-benchmark-report-sop-cluster1.json"
+
+    def _fake_run_acceptance_benchmark_command(**_kwargs: Any) -> list[Path]:
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(
+            json.dumps(
+                {
+                    "passed": True,
+                    "skipped": True,
+                    "scope": "k8s-nccl",
+                    "target_ref": "sop-cluster1",
+                    "skip_reason": (
+                        "all Ready GPU nodes already have their GPUs allocated to "
+                        "existing workloads"
+                    ),
+                    "elapsed_seconds": 83.2,
+                    "elapsed_time": "00:01:23",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return [report_path]
+
+    monkeypatch.setattr(
+        cli,
+        "_run_acceptance_benchmark_command",
+        _fake_run_acceptance_benchmark_command,
+    )
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "acceptance-test",
+            "benchmark",
+            str(fake_paths.config_path),
+            "--target",
+            "sop-cluster1",
+            "--suite",
+            "k8s-nccl",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    output = _plain_output(result.output)
+    output_flat = " ".join(output.split())
+    assert "Acceptance benchmark report:" in output
+    assert report_path.name in output
+    assert (
+        "Acceptance benchmark result: SKIPPED k8s-nccl (sop-cluster1): "
+        "all Ready GPU nodes already have their GPUs allocated to existing workloads "
+        "(elapsed 00:01:23)"
+    ) in output_flat
+
+
+def test_acceptance_test_benchmark_command_prints_skipped_slurm_nccl_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    report_path = fake_paths.reports_dir / "acceptance-benchmark-report-sop-cluster1.json"
+
+    def _fake_run_acceptance_benchmark_command(**_kwargs: Any) -> list[Path]:
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(
+            json.dumps(
+                {
+                    "passed": True,
+                    "status": "passed",
+                    "scope": "slurm-nccl",
+                    "target_ref": "sop-cluster1",
+                    "summary": "7/8 Soperator/Slurm checks passed. 1 skipped.",
+                    "elapsed_seconds": 83.2,
+                    "elapsed_time": "00:01:23",
+                    "checks": [
+                        {
+                            "name": "Soperator manager Deployment",
+                            "status": "passed",
+                            "passed": True,
+                            "summary": "Ready.",
+                        },
+                        {
+                            "name": "Slurm NCCL benchmark",
+                            "status": "skipped",
+                            "skipped": True,
+                            "summary": (
+                                "Skipped: fewer than two idle GPU nodes are available for "
+                                "a multi-node NCCL benchmark."
+                            ),
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return [report_path]
+
+    monkeypatch.setattr(
+        cli,
+        "_run_acceptance_benchmark_command",
+        _fake_run_acceptance_benchmark_command,
+    )
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "acceptance-test",
+            "benchmark",
+            str(fake_paths.config_path),
+            "--target",
+            "sop-cluster1",
+            "--suite",
+            "slurm-nccl",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    output = _plain_output(result.output)
+    output_flat = " ".join(output.split())
+    assert "Acceptance benchmark report:" in output
+    assert report_path.name in output
+    assert (
+        "Acceptance benchmark result: SKIPPED slurm-nccl (sop-cluster1): "
+        "Skipped: fewer than two idle GPU nodes are available for a multi-node NCCL benchmark. "
+        "(elapsed 00:01:23)"
+    ) in output_flat
+
+
+def test_acceptance_test_benchmark_command_prints_failed_result_before_exit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    report_path = fake_paths.reports_dir / "acceptance-benchmark-report-mk8s.json"
+
+    def _fake_run_acceptance_benchmark_command(**_kwargs: Any) -> list[Path]:
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(
+            json.dumps(
+                {
+                    "passed": False,
+                    "scope": "k8s-nccl",
+                    "target_ref": "mk8s",
+                    "error": "NCCL average bus bandwidth 250.0 Gbps is below threshold 300.0.",
+                    "elapsed_seconds": 83.2,
+                    "elapsed_time": "00:01:23",
+                }
+            ),
+            encoding="utf-8",
+        )
+        raise cli._AcceptanceTestRunError("NCCL benchmark failed.", reports=[report_path])
+
+    monkeypatch.setattr(
+        cli,
+        "_run_acceptance_benchmark_command",
+        _fake_run_acceptance_benchmark_command,
+    )
+
+    result = runner.invoke(
+        cli.app,
+        ["acceptance-test", "benchmark", str(fake_paths.config_path), "--target", "mk8s"],
+    )
+
+    assert result.exit_code == 1, result.output
+    output = _plain_output(result.output)
+    output_flat = " ".join(output.split())
+    assert "Acceptance benchmark report:" in output
+    assert report_path.name in output
+    assert (
+        "Acceptance benchmark result: FAILED k8s-nccl (mk8s): "
+        "NCCL average bus bandwidth 250.0 Gbps is below threshold 300.0. "
+        "(elapsed 00:01:23)"
+    ) in output_flat
+    assert "ERROR: NCCL benchmark failed." in output_flat
+
+
+def test_acceptance_test_benchmark_command_passes_new_defaults(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    captured: dict[str, Any] = {}
+
+    def _fake_run_acceptance_benchmark_command(**kwargs: Any) -> list[Path]:
+        captured.update(kwargs)
+        return [fake_paths.reports_dir / "acceptance-benchmark-report-mk8s.json"]
+
+    monkeypatch.setattr(
+        cli,
+        "_run_acceptance_benchmark_command",
+        _fake_run_acceptance_benchmark_command,
+    )
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "acceptance-test",
+            "benchmark",
+            str(fake_paths.config_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "config_path": fake_paths.config_path,
+        "requested_target_ref": None,
+        "all_targets": False,
+        "suites": None,
+        "continue_on_failure": True,
+        "max_nodes": None,
+        "timeout": None,
+        "average_bus_bandwidth_threshold_gbps": 300.0,
+    }
+
+
+def test_acceptance_test_benchmark_rejects_unsupported_suite() -> None:
+    with pytest.raises(ValueError) as exc_info:
+        cli._normalized_acceptance_benchmark_suites(["nccl", "soperator-nccl"])
+
+    message = str(exc_info.value)
+    assert "Unsupported --suite value(s): nccl, soperator-nccl" in message
+    assert "Supported values: k8s-nccl, slurm-nccl" in message
+
+
+def test_acceptance_test_smoke_suite_names_are_canonical() -> None:
+    assert cli._normalized_acceptance_suites(["slurm", "k8s-cuda"]) == {
+        "slurm",
+        "k8s-cuda",
+    }
+
+    with pytest.raises(ValueError, match="Supported values: k8s-cuda, slurm"):
+        cli._normalized_acceptance_suites(["soperator-slurm", "cuda", "k8s"])
+
+
+def test_acceptance_test_benchmark_runner_defaults_to_all_targets_k8s_nccl(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    config = _config_with_enabled_mk8s()
+    manifest = {
+        "deploy": {
+            "targets": [
+                _mk8s_target(fake_paths, target_ref="cluster-a"),
+                _mk8s_target(fake_paths, target_ref="cluster-b"),
+            ],
+            "validations": [],
+        }
+    }
+    benchmark_specs = [
+        {
+            "kind": "mk8s_nccl",
+            "target_ref": "cluster-a",
+            "name": "K8s NCCL benchmark (cluster-a)",
+            "report_file": "acceptance-benchmark-report-cluster-a.json",
+        },
+        {
+            "kind": "mk8s_nccl",
+            "target_ref": "cluster-b",
+            "name": "K8s NCCL benchmark (cluster-b)",
+            "report_file": "acceptance-benchmark-report-cluster-b.json",
+        },
+    ]
+    handoff_calls: list[bool] = []
+    benchmark_kwargs: dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        cli,
+        "_load_deploy_context_readonly",
+        lambda _path: (config, fake_paths, manifest),
+    )
+    monkeypatch.setattr(cli, "_deploy_report_target_contexts", lambda _paths: {})
+    monkeypatch.setattr(
+        cli,
+        "soperator_acceptance_benchmark_specs",
+        lambda *_args, **_kwargs: pytest.fail(
+            "bare benchmark defaults to k8s-nccl, not slurm-nccl"
+        ),
+    )
+
+    def _fake_mk8s_acceptance_benchmark_validation_specs(*_args: Any, **kwargs: Any):
+        benchmark_kwargs.update(kwargs)
+        return benchmark_specs
+
+    monkeypatch.setattr(
+        cli,
+        "mk8s_acceptance_benchmark_validation_specs",
+        _fake_mk8s_acceptance_benchmark_validation_specs,
+    )
+    monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
+
+    @contextmanager
+    def _fake_status(_message: str, **_kwargs: object):
+        yield SimpleNamespace(update=lambda *_args, **_kwargs: None)
+
+    monkeypatch.setattr(cli.console, "status", _fake_status)
+
+    def _fake_prepare_cluster_handoff_kube_env(
+        *_args: object,
+        set_current_context: bool,
+        **_kwargs: object,
+    ) -> dict[str, str]:
+        handoff_calls.append(set_current_context)
+        return {"KUBECONFIG": "/tmp/kubeconfig"}
+
+    monkeypatch.setattr(
+        cli, "_prepare_cluster_handoff_kube_env", _fake_prepare_cluster_handoff_kube_env
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_mk8s_gpu_validations",
+        lambda validations, *, reports_dir, **_kwargs: [
+            reports_dir / f"acceptance-benchmark-report-{validations[0]['target_ref']}.json"
+        ],
+    )
+
+    written = cli._run_acceptance_benchmark_command(
+        config_path=fake_paths.config_path,
+        requested_target_ref=None,
+        all_targets=False,
+        suites=None,
+        continue_on_failure=True,
+        max_nodes=None,
+        timeout=None,
+        average_bus_bandwidth_threshold_gbps=300.0,
+    )
+
+    assert written == [
+        fake_paths.reports_dir / "acceptance-benchmark-report-cluster-a.json",
+        fake_paths.reports_dir / "acceptance-benchmark-report-cluster-b.json",
+    ]
+    assert benchmark_kwargs == {
+        "include_soperator_targets": True,
+        "max_nodes": None,
+        "timeout": None,
+        "average_bus_bandwidth_threshold_gbps": 300.0,
+    }
+    assert handoff_calls == [False, False]
+
+
+def test_acceptance_test_benchmark_runner_rejects_same_target_k8s_and_slurm_reports(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    config = _config_with_enabled_mk8s()
+    manifest = {
+        "deploy": {
+            "targets": [_mk8s_target(fake_paths, target_ref="sop-cluster1")],
+            "validations": [],
+        }
+    }
+    report_file = "acceptance-benchmark-report-sop-cluster1.json"
+    soperator_spec = {
+        "kind": cli.SOPERATOR_CLUSTER_VALIDATION_KIND,
+        "target_ref": "sop-cluster1",
+        "name": "Soperator NCCL benchmark (sop-cluster1)",
+        "report_file": report_file,
+    }
+    k8s_spec = {
+        "kind": "mk8s_nccl",
+        "target_ref": "sop-cluster1",
+        "name": "K8s NCCL benchmark (sop-cluster1)",
+        "report_file": report_file,
+    }
+
+    monkeypatch.setattr(
+        cli,
+        "_load_deploy_context_readonly",
+        lambda _path: (config, fake_paths, manifest),
+    )
+    monkeypatch.setattr(
+        cli,
+        "soperator_acceptance_benchmark_specs",
+        lambda *_args, **_kwargs: [soperator_spec],
+    )
+    monkeypatch.setattr(
+        cli,
+        "mk8s_acceptance_benchmark_validation_specs",
+        lambda *_args, **_kwargs: [k8s_spec],
+    )
+    monkeypatch.setattr(
+        cli,
+        "_prepare_cluster_handoff_kube_env",
+        lambda *_args, **_kwargs: pytest.fail("duplicate reports must fail before handoff"),
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        cli._run_acceptance_benchmark_command(
+            config_path=fake_paths.config_path,
+            requested_target_ref="sop-cluster1",
+            all_targets=False,
+            suites=["k8s-nccl", "slurm-nccl"],
+            continue_on_failure=True,
+            max_nodes=None,
+            timeout=None,
+            average_bus_bandwidth_threshold_gbps=300.0,
+        )
+
+    message = str(exc_info.value)
+    assert "same canonical report file" in message
+    assert report_file in message
+    assert "Soperator NCCL benchmark (sop-cluster1)" in message
+    assert "K8s NCCL benchmark (sop-cluster1)" in message
 
 
 def test_acceptance_test_benchmark_runner_uses_readonly_context_and_kube_handoff(
@@ -7919,12 +8737,14 @@ def test_acceptance_test_benchmark_runner_uses_readonly_context_and_kube_handoff
         "_load_deploy_context_readonly",
         lambda _path: (config, fake_paths, manifest),
     )
+    monotonic_values = iter([10.0, 3733.4])
+    monkeypatch.setattr(cli.time, "monotonic", lambda: next(monotonic_values))
     monkeypatch.setattr(
         cli,
         "_prepare_cluster_handoff_kube_env",
         lambda *_args, **_kwargs: {"KUBECONFIG": "/tmp/kubeconfig"},
     )
-    monkeypatch.setattr(cli, "soperator_acceptance_benchmark_specs", lambda *_args: [])
+    monkeypatch.setattr(cli, "soperator_acceptance_benchmark_specs", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(
         cli,
         "mk8s_acceptance_benchmark_validation_specs",
@@ -7946,7 +8766,12 @@ def test_acceptance_test_benchmark_runner_uses_readonly_context_and_kube_handoff
         emit=None,
     ) -> list[Path]:
         calls.append(("mk8s_gpu", validations, reports_dir, extra_env))
-        return [reports_dir / "acceptance-benchmark-report-mk8s.json"]
+        report_path = reports_dir / "acceptance-benchmark-report-mk8s.json"
+        report_path.write_text(
+            json.dumps({"passed": True, "scope": "k8s-nccl", "target_ref": "mk8s"}),
+            encoding="utf-8",
+        )
+        return [report_path]
 
     monkeypatch.setattr(cli, "run_mk8s_gpu_validations", _fake_run_mk8s_gpu_validations)
 
@@ -7954,8 +8779,6 @@ def test_acceptance_test_benchmark_runner_uses_readonly_context_and_kube_handoff
         config_path=fake_paths.config_path,
         requested_target_ref="mk8s",
         all_targets=False,
-        include_k8s=True,
-        include_soperator=False,
         suites=None,
         continue_on_failure=True,
         max_nodes=None,
@@ -7972,6 +8795,241 @@ def test_acceptance_test_benchmark_runner_uses_readonly_context_and_kube_handoff
             {"KUBECONFIG": "/tmp/kubeconfig"},
         )
     ]
+    report = json.loads(written[0].read_text(encoding="utf-8"))
+    assert report["elapsed_seconds"] == pytest.approx(3723.4)
+    assert report["elapsed_time"] == "01:02:03"
+
+
+def test_acceptance_test_benchmark_runner_passes_slurm_nccl_overrides(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    config = _config_with_enabled_mk8s()
+    manifest = {
+        "deploy": {
+            "targets": [_mk8s_target(fake_paths, target_ref="sop-cluster1")],
+            "validations": [],
+        }
+    }
+    soperator_spec = {
+        "kind": cli.SOPERATOR_CLUSTER_VALIDATION_KIND,
+        "target_ref": "sop-cluster1",
+        "name": "Soperator NCCL benchmark (sop-cluster1)",
+        "report_file": "acceptance-benchmark-report-sop-cluster1.json",
+    }
+    spec_kwargs: dict[str, Any] = {}
+    validation_calls: list[list[dict[str, Any]]] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_load_deploy_context_readonly",
+        lambda _path: (config, fake_paths, manifest),
+    )
+    monkeypatch.setattr(cli, "_deploy_report_target_contexts", lambda _paths: {})
+    monkeypatch.setattr(
+        cli,
+        "_prepare_cluster_handoff_kube_env",
+        lambda *_args, **_kwargs: {"KUBECONFIG": "/tmp/kubeconfig"},
+    )
+    monkeypatch.setattr(
+        cli,
+        "mk8s_acceptance_benchmark_validation_specs",
+        lambda *_args, **_kwargs: [],
+    )
+
+    def _fake_soperator_acceptance_benchmark_specs(*_args: Any, **kwargs: Any):
+        spec_kwargs.update(kwargs)
+        return [soperator_spec]
+
+    monkeypatch.setattr(
+        cli,
+        "soperator_acceptance_benchmark_specs",
+        _fake_soperator_acceptance_benchmark_specs,
+    )
+    monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
+
+    @contextmanager
+    def _fake_status(_message: str, **_kwargs: object):
+        yield SimpleNamespace(update=lambda *_args, **_kwargs: None)
+
+    monkeypatch.setattr(cli.console, "status", _fake_status)
+
+    def _fake_run_soperator_cluster_validations(
+        validations: list[dict[str, Any]],
+        *,
+        reports_dir: Path,
+        **_kwargs: Any,
+    ) -> list[Path]:
+        validation_calls.append(validations)
+        return [reports_dir / "acceptance-benchmark-report-sop-cluster1.json"]
+
+    monkeypatch.setattr(
+        cli,
+        "run_soperator_cluster_validations",
+        _fake_run_soperator_cluster_validations,
+    )
+
+    written = cli._run_acceptance_benchmark_command(
+        config_path=fake_paths.config_path,
+        requested_target_ref="sop-cluster1",
+        all_targets=False,
+        suites=["slurm-nccl"],
+        continue_on_failure=True,
+        max_nodes=4,
+        timeout="20m",
+        average_bus_bandwidth_threshold_gbps=300.0,
+    )
+
+    assert written == [fake_paths.reports_dir / "acceptance-benchmark-report-sop-cluster1.json"]
+    assert spec_kwargs == {
+        "max_nodes": 4,
+        "timeout": "20m",
+        "average_bus_bandwidth_threshold_gbps": 300.0,
+    }
+    assert validation_calls == [[soperator_spec]]
+
+
+def test_acceptance_test_benchmark_all_targets_uses_report_context_without_terraform(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    config = _config_with_enabled_mk8s()
+    manifest = {
+        "deploy": {
+            "targets": [
+                _mk8s_target(fake_paths, target_ref="cluster-a"),
+                _mk8s_target(fake_paths, target_ref="cluster-b"),
+            ],
+            "validations": [],
+        }
+    }
+    benchmark_specs = [
+        {
+            "kind": "mk8s_nccl",
+            "target_ref": "cluster-a",
+            "name": "K8s NCCL benchmark (cluster-a)",
+            "report_file": "acceptance-benchmark-report-cluster-a.json",
+        },
+        {
+            "kind": "mk8s_nccl",
+            "target_ref": "cluster-b",
+            "name": "K8s NCCL benchmark (cluster-b)",
+            "report_file": "acceptance-benchmark-report-cluster-b.json",
+        },
+    ]
+    handoff_calls: list[tuple[Mapping[str, Any], bool, bool]] = []
+    validation_envs: list[dict[str, str] | None] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_load_deploy_context_readonly",
+        lambda _path: (config, fake_paths, manifest),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_deploy_report_target_contexts",
+        lambda _paths: {
+            "cluster-a": {
+                "cluster_id": "mk8scluster-111",
+                "kube_context": "nebius-cluster-a-mk8scluster-111-external",
+            },
+            "cluster-b": {
+                "cluster_id": "mk8scluster-222",
+                "kube_context": "nebius-cluster-b-mk8scluster-222-external",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        cli,
+        "terraform_output_raw",
+        lambda *_args, **_kwargs: pytest.fail(
+            "acceptance benchmark must not read Terraform output"
+        ),
+    )
+    monkeypatch.setattr(cli, "soperator_acceptance_benchmark_specs", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        cli,
+        "mk8s_acceptance_benchmark_validation_specs",
+        lambda *_args, **_kwargs: benchmark_specs,
+    )
+    monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
+
+    @contextmanager
+    def _fake_status(_message: str, **_kwargs: object):
+        yield SimpleNamespace(update=lambda *_args, **_kwargs: None)
+
+    monkeypatch.setattr(cli.console, "status", _fake_status)
+
+    def _fake_prepare_cluster_handoff_kube_env(
+        _config: object,
+        _paths: ProjectPaths,
+        *,
+        stack: ExitStack,
+        target: Mapping[str, Any],
+        persist_local_kubeconfig: bool,
+        set_current_context: bool,
+        allow_terraform_output: bool,
+    ) -> dict[str, str]:
+        stack.callback(lambda: None)
+        assert persist_local_kubeconfig is True
+        handoff_calls.append((target, set_current_context, allow_terraform_output))
+        return {"TARGET_REF": str(target["target_ref"])}
+
+    monkeypatch.setattr(
+        cli, "_prepare_cluster_handoff_kube_env", _fake_prepare_cluster_handoff_kube_env
+    )
+
+    def _fake_run_mk8s_gpu_validations(
+        validations: list[dict[str, Any]],
+        *,
+        reports_dir: Path,
+        extra_env: dict[str, str] | None,
+        emit=None,
+    ) -> list[Path]:
+        validation_envs.append(extra_env)
+        target_ref = validations[0]["target_ref"]
+        return [reports_dir / f"acceptance-benchmark-report-{target_ref}.json"]
+
+    monkeypatch.setattr(cli, "run_mk8s_gpu_validations", _fake_run_mk8s_gpu_validations)
+
+    written = cli._run_acceptance_benchmark_command(
+        config_path=fake_paths.config_path,
+        requested_target_ref=None,
+        all_targets=True,
+        suites=None,
+        continue_on_failure=True,
+        max_nodes=None,
+        timeout=None,
+        average_bus_bandwidth_threshold_gbps=None,
+    )
+
+    assert written == [
+        fake_paths.reports_dir / "acceptance-benchmark-report-cluster-a.json",
+        fake_paths.reports_dir / "acceptance-benchmark-report-cluster-b.json",
+    ]
+    assert handoff_calls == [
+        (
+            {
+                **_mk8s_target(fake_paths, target_ref="cluster-a"),
+                "cluster_id": "mk8scluster-111",
+                "kube_context": "nebius-cluster-a-mk8scluster-111-external",
+            },
+            False,
+            False,
+        ),
+        (
+            {
+                **_mk8s_target(fake_paths, target_ref="cluster-b"),
+                "cluster_id": "mk8scluster-222",
+                "kube_context": "nebius-cluster-b-mk8scluster-222-external",
+            },
+            False,
+            False,
+        ),
+    ]
+    assert validation_envs == [{"TARGET_REF": "cluster-a"}, {"TARGET_REF": "cluster-b"}]
 
 
 def test_deploy_footer_groups_target_validations_and_keeps_paths_concise(
@@ -8388,7 +9446,9 @@ def test_deploy_generated_artifacts_rejects_unknown_validation_kind_before_work(
     }
     calls: list[str] = []
 
-    monkeypatch.setattr(cli, "_run_deploy_preflight", lambda *_args, **_kwargs: calls.append("preflight"))
+    monkeypatch.setattr(
+        cli, "_run_deploy_preflight", lambda *_args, **_kwargs: calls.append("preflight")
+    )
 
     with pytest.raises(RuntimeError) as exc_info:
         cli._deploy_generated_artifacts(
@@ -18178,8 +19238,9 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "creates or reuses aligned SFS filesystems" in normalized_soperator_migrate_help
     assert "Soperator deployment snapshot" in normalized_soperator_migrate_help
     assert "SlurmCluster, and NodeSet visibility checks" in normalized_soperator_migrate_help
-    assert "leaves Slurm jobs and NCCL/performance work for explicit acceptance-test benchmark runs" in (
-        normalized_soperator_migrate_help
+    assert (
+        "leaves Slurm jobs and NCCL/performance work for explicit acceptance-test benchmark runs"
+        in (normalized_soperator_migrate_help)
     )
     assert "ext-soperator-migrate-report.md" in normalized_soperator_migrate_help
     assert "shows an interactive progress spinner and phase-aware Soperator migration status" in (
@@ -20325,6 +21386,7 @@ def test_soperator_selection_seeds_required_infra_and_defaults() -> None:
     soperator_row = payload["apps"]["charts"][0]
     soperator_values = soperator_row["values"]
     assert soperator_values["clusterName"] == "cluster1"
+    assert soperator_values["gpuDriverJail"] == {"enabled": True}
     assert soperator_values["mariadb-operator"]["installOperator"] is True
     assert soperator_values["populateJail"]["k8sNodeFilterName"] == "system"
     assert soperator_values["slurmNodes"]["accounting"]["enabled"] is True

@@ -72,15 +72,24 @@ idempotent and owns bootstrap, verification, repair, and its inline
 payload/`hooks.json` registration mode for operators who already installed the
 skill and do not want the setup script to manage inline hook config.
 
+The script serializes setup with both a project-specific lock and a global
+Nebius profile lock because `nebius profile create/update/activate` changes
+global CLI profile state. During profile create/update it restores the previous
+active profile, including on interrupted runs when possible. If no profile was
+active but an explicit human/admin profile was selected through `NEBIUS_PROFILE`
+or equivalent CLI profile resolution, it restores that effective human profile.
+
 When the credential file exists, the script:
 
 1. Repairs file permissions to `0600`.
 2. Creates or updates the `codex-agent-<project_id>` CLI profile.
-3. Verifies that the profile can mint a service-account token.
-4. Verifies basic project access through the service-account profile.
-5. If a human/admin Nebius session is available, verifies and repairs IAM
+3. Preserves the previous active or effective human/admin Nebius CLI profile if
+   profile creation or update temporarily switches the active profile.
+4. Verifies that the profile can mint a service-account token.
+5. Verifies basic project access through the service-account profile.
+6. If a human/admin Nebius session is available, verifies and repairs IAM
    drift for the service account, group, access permit, and membership.
-6. If token minting fails, replaces the credential file only when `--repair`
+7. If token minting fails, replaces the credential file only when `--repair`
    is set and the current human/admin session can regenerate it.
 
 When the credential file does not exist, the script:
@@ -92,12 +101,20 @@ When the credential file does not exist, the script:
 5. Ensures the service account is a member of the group.
 6. Generates `~/.nebius/codex-agent-authkey.<project_id>.json`.
 7. Creates the `codex-agent-<project_id>` CLI profile.
-8. Verifies service-account token minting and basic project access.
-9. Installs or updates the `PreToolUse` hook when `--install-hook` is set.
+8. Restores the previous active or effective human/admin Nebius CLI profile if
+   profile creation changed it.
+9. Verifies service-account token minting and basic project access.
+10. Installs or updates the `PreToolUse` hook when `--install-hook` is set.
 
 If the credential file exists but is broken, the script must not delete or
 overwrite it unless `--repair` is set and the human/admin Nebius session is
 valid. Without that session, report the drift and stop.
+
+An active `codex-agent-*` profile is not a valid human/admin session for IAM
+repair. Treat that state as service-account-only unless the effective Nebius
+CLI profile comes from an explicit human/admin selector such as
+`NEBIUS_PROFILE`; verify existing agent access when possible, but do not
+attempt tenant or project IAM repair through the agent profile.
 
 ## Hook Behavior
 
@@ -147,6 +164,10 @@ CLI help for:
 - `PreToolUse` `updatedInput.command` behavior
 - `nebius iam auth-public-key generate`
 - `nebius profile create`
+- `nebius profile update`
+- `nebius profile active`
+- `nebius profile activate`
+- `nebius profile current`
 - `nebius iam service-account get-by-name`
 - `nebius iam group get-by-name`
 - `nebius iam access-permit create`
@@ -156,6 +177,7 @@ Run local regression checks after hook changes:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/test_pre_tool_use_nebius_auth.py
+PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/test_agent_nebius_auth_setup.py
 ```
 
 ## Learning Loop

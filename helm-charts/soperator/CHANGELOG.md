@@ -4,6 +4,16 @@ All notable changes to this chart are tracked here.
 
 ## [Unreleased]
 
+- Added the chart-owned `gpuDriverJail` contract for GPU NodeSets. The chart
+  now injects the host driver root mount at `/run/nvidia/driver`, runs a
+  `cxcli-gpu-driver-jail` init guard with the `slurmd` image to refresh real
+  `libcuda.so.1` / `libnvidia-ml.so.1` into the shared jail, and fails fast on
+  conflicting GPU worker mounts or init-container names while leaving CPU
+  NodeSets unchanged.
+- Made the `cxcli-gpu-driver-jail` init guard avoid GPU inventory before the
+  GPU-requesting worker container starts. The guard still requires the host
+  driver root, `nvidia-smi` binary, and real driver libraries, but GPU
+  visibility is validated later from the worker container or Slurm job root.
 - Replaced the scheduled Soperator upstream auto-sync PR automation with a
   read-only `soperator-upstream-verifier` workflow. The daily/manual check now
   reports newer upstream releases through GitHub Actions warnings and step

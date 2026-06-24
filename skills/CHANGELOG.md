@@ -103,6 +103,12 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Hardened `agent-nebius-auth` setup idempotency so Nebius profile
+  create/update restores the previously active human/admin CLI profile, setup
+  serializes global profile mutations, agent service-account profiles are not
+  treated as human/admin IAM repair sessions, and fake Nebius CLI regressions
+  cover profile drift on rerun, effective `NEBIUS_PROFILE` selection,
+  interrupted profile creation, and concurrent setup.
 - Clarified `publish-helm` required release inputs so callers must provide an
   explicit tag and publish destination or be asked for them, documented the
   OCI repository base versus provider registry-ID workflow split, and made

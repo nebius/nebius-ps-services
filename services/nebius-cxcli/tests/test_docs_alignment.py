@@ -134,6 +134,8 @@ def test_readme_mk8s_gpu_workload_validation_defaults_include_soperator() -> Non
     design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
     readme_flat = _squash(readme)
     design_flat = _squash(design)
+    acceptance = _section(readme, "## Acceptance Testing", "## Soperator Commands")
+    acceptance_flat = _squash(acceptance)
 
     assert (
         "GPU visibility is enabled by default for GPU-backed MK8s deploys, including Soperator production targets"
@@ -150,9 +152,99 @@ def test_readme_mk8s_gpu_workload_validation_defaults_include_soperator() -> Non
         "NCCL settings are command-only benchmark settings for explicit `nebius-cxcli acceptance-test benchmark` runs"
         in readme
     )
+    assert "See [Acceptance Testing](#acceptance-testing)" in readme
+    assert "### Smoke Tests" in acceptance
+    assert "### Benchmark Tests" in acceptance
+    assert "### NCCL Suite Selection" in acceptance
+    assert "acceptance-test smoke" in acceptance
+    assert "acceptance-test benchmark" in acceptance
+    assert "--suite k8s-cuda" in acceptance
+    assert "--suite slurm" in acceptance
+    assert "--suite k8s-nccl" in acceptance
+    assert "--suite slurm-nccl" in acceptance
+    assert "schedules CUDA validation pods across every currently" in acceptance
+    assert "scheduler-free Ready GPU node" in acceptance
+    assert "bounded CUDA validation pods" not in acceptance
+    assert "A bare smoke command defaults to every generated target" in acceptance
+    assert "`--suite soperator-nccl`" not in acceptance
+    assert "temporary `MPIJob`" in acceptance
+    assert "Soperator login pod" in acceptance
+    assert "Slurm allocation" in acceptance
+    assert "do not read Terraform state or initialize the Terraform backend" in acceptance
+    assert "Common benchmark commands:" in acceptance
+    assert "nebius-cxcli acceptance-test benchmark <config.yaml> --all-targets" in acceptance
+    assert (
+        "nebius-cxcli acceptance-test benchmark <config.yaml> --target mk8s-prod "
+        "--suite k8s-nccl --max-nodes 4 --timeout 20m "
+        "--average-bus-bandwidth-threshold-gbps 300"
+    ) in acceptance
+    assert (
+        "nebius-cxcli acceptance-test benchmark <config.yaml> --target sop-cluster1 "
+        "--suite slurm-nccl"
+    ) in acceptance
+    assert (
+        "nebius-cxcli acceptance-test benchmark <config.yaml> --target sop-cluster1 "
+        "--suite slurm-nccl --max-nodes 2 --timeout 5m "
+        "--average-bus-bandwidth-threshold-gbps 300"
+    ) in acceptance
+    assert "A bare benchmark command defaults to:" in acceptance_flat
+    assert "every generated target, equivalent to `--all-targets`" in acceptance
+    assert "all schedulable GPU nodes, equivalent to omitting `--max-nodes`" in acceptance
+    assert "no cxcli benchmark timeout" in acceptance
+    assert "`acceptance-smoke-report-<target>.json`" in acceptance
+    assert "`acceptance-benchmark-report-<target>.json`" in acceptance
+    assert "one concise result line with `PASSED`, `FAILED`, or `SKIPPED`" in acceptance_flat
+    assert (
+        "the suite scope, target, and the most relevant summary or skip reason"
+        in acceptance_flat
+    )
+    assert "elapsed time in `hh:mm:ss`" in acceptance_flat
+    assert "`elapsed_seconds`" in acceptance
+    assert "`elapsed_time`" in acceptance
+    assert "green for `PASSED`, red for `FAILED`, yellow for `SKIPPED`" in acceptance_flat
+    assert "default-color labels, summaries, skip reasons, and elapsed times stay unbolded" in (
+        acceptance_flat
+    )
+    assert (
+        "`k8s-nccl` and `slurm-nccl` both run NCCL `all_reduce_perf`"
+        in acceptance
+    )
+    assert "Socket/TCPIP transport for Ethernet-only shapes" in acceptance
+    assert "RDMA transport for GPU-cluster / InfiniBand shapes" in acceptance
+    assert "below-threshold average bandwidth is recorded as a comment" in acceptance
+    assert "runs `/usr/bin/all_reduce_perf_mpi`" in acceptance
+    assert (
+        "multiple idle one-GPU nodes run a multi-node NCCL benchmark capped at a 2G "
+        "message size"
+    ) in acceptance
+    assert "one total GPU runs a launch/smoke check" in acceptance
+    assert "Slurm-level NCCL evidence for a Soperator target" in acceptance_flat
+    assert "soperator-nccl" not in acceptance
+    assert "Smoke tests answer whether" in acceptance_flat
+    assert "Benchmark tests answer whether" in acceptance_flat
     assert "On Ethernet-only and 1-GPU shapes" in readme
     assert "Soperator ActiveChecks remain opt-in benchmark/diagnostic workloads" in readme
     assert "NCCL is a separate acceptance benchmark, not deploy smoke" in design
+    assert "Slurm NCCL prefers 8-GPU Slurm nodes when available" in design
+    assert (
+        "multiple idle one-GPU Slurm nodes run a multi-node NCCL benchmark capped at "
+        "a 2G message size"
+    ) in design
+    assert (
+        "below-threshold bandwidth is recorded as an informational report comment"
+        in design
+    )
+    assert (
+        "Acceptance-test terminal output prints a concise `PASSED`, `FAILED`, or `SKIPPED` result line"
+        in design
+    )
+    assert "elapsed duration as `elapsed_seconds` and `elapsed_time`" in design
+    assert "formatted `elapsed_time` value in `hh:mm:ss`" in design
+    assert (
+        "color-capable terminals render `PASSED` green, `FAILED` red, `SKIPPED` yellow"
+        in design
+    )
+    assert "default-color labels, summaries, skip reasons, and elapsed times stay unbolded" in design
     assert "Render materializes `nebius.com/node-group` on each MK8s node group" in design
     assert "grouped node details" in design
     assert "minimum expected Ready GPU node counts" in design
@@ -166,18 +258,21 @@ def test_readme_mk8s_gpu_workload_validation_defaults_include_soperator() -> Non
     assert "leave that generic NCCL path off" not in readme
     assert "Soperator targets suppress this generic workload prompt" not in readme
     assert "Soperator targets suppress the generic deploy-time NCCL workload" not in readme
-    assert "generic MK8s NCCL validation remains the default deploy-time workload check" not in readme
+    assert (
+        "generic MK8s NCCL validation remains the default deploy-time workload check" not in readme
+    )
     assert "internal to the deploy-time validation runner" not in readme
     assert "records NCCL as skipped in the JSON report and `deploy-report.md`" not in readme
     assert "internal to the deploy-time validation runner" not in design
     assert (
-        "run the benchmark explicitly with `nebius-cxcli acceptance-test benchmark`"
-        in readme_flat
+        "run the benchmark explicitly with `nebius-cxcli acceptance-test benchmark`" in readme_flat
     )
+    assert "they do not read Terraform state or initialize the Terraform backend" in readme_flat
     assert (
-        "It is selected explicitly through `nebius-cxcli acceptance-test benchmark`"
-        in design_flat
+        "It is selected through `nebius-cxcli acceptance-test benchmark --suite ...`" in design_flat
     )
+    assert "a bare run defaults to the `k8s-nccl` suite across all generated targets" in design_flat
+    assert "they do not read Terraform state or initialize the Terraform backend" in design_flat
 
 
 def test_readme_features_include_concise_grafana_command_summary() -> None:
@@ -222,6 +317,16 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
     assert "- `quota-request <config.yaml>`" in supporting
     assert "See [Upgrade](#upgrade)" in supporting
     assert "drain-timeout defaults" in supporting
+    assert "- `acceptance-test smoke <config.yaml>`" in supporting
+    assert "Runs explicit post-deploy acceptance smoke suites" in supporting
+    assert "Defaults to every generated target when `--target` is omitted" in supporting
+    assert "Use `--suite slurm` for Slurm all-node smoke" in supporting
+    assert "Runs explicit post-deploy benchmark suites" in supporting
+    assert "Use `--suite slurm-nccl` for the Slurm NCCL benchmark" in supporting
+    assert (
+        "--max-nodes 4 --timeout 20m --average-bus-bandwidth-threshold-gbps 300"
+        in supporting
+    )
 
     common_flags = supporting.split("Common command flags:", maxsplit=1)[1]
     common_flags_flat = _squash(common_flags)
@@ -241,6 +346,16 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
     assert (
         "- `deploy`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, "
         "`--skip-validations`, `--skip-validation`, `--target`, `--all-targets`"
+    ) in common_flags
+    assert (
+        "- `acceptance-test smoke`: `--target`, `--all-targets`, `--suite`,\n"
+        "  `--batch-size`, `--concurrency`,\n"
+        "  `--continue-on-failure/--fail-fast`"
+    ) in common_flags
+    assert (
+        "- `acceptance-test benchmark`: `--target`, `--all-targets`, `--suite`,\n"
+        "  `--continue-on-failure/--fail-fast`,\n"
+        "  `--max-nodes`, `--timeout`, `--average-bus-bandwidth-threshold-gbps`"
     ) in common_flags
     assert (
         "- `upgrade node-template`: `--to-version`, `--to-os`, "
@@ -305,8 +420,23 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
         "| Existing Soperator cluster or Soperator upgrade | "
         "[Soperator Commands](#soperator-commands) |"
     ) in toc
+    assert (
+        "| Post-deploy smoke or benchmark validation | "
+        "[Acceptance Testing](#acceptance-testing) |"
+    ) in toc
     assert ("| Command flags and generated-bundle operations | [Commands](#commands) |") in toc
+    assert "- [Recommended Workflow](#recommended-workflow)" in toc
+    assert "- [Acceptance Testing](#acceptance-testing)" in toc
+    assert "  - [Smoke Tests](#smoke-tests)" in toc
+    assert "  - [Benchmark Tests](#benchmark-tests)" in toc
+    assert "  - [NCCL Suite Selection](#nccl-suite-selection)" in toc
     assert "- [Soperator Commands](#soperator-commands)" in toc
+    assert toc.index("- [Recommended Workflow](#recommended-workflow)") < toc.index(
+        "- [Acceptance Testing](#acceptance-testing)"
+    )
+    assert toc.index("- [Acceptance Testing](#acceptance-testing)") < toc.index(
+        "- [Soperator Commands](#soperator-commands)"
+    )
     assert "  - [Soperator Command Map](#soperator-command-map)" in toc
     assert "  - [CXCLI Managed Soperator Clusters](#cxcli-managed-soperator-clusters)" in toc
     assert (
@@ -1224,8 +1354,8 @@ def test_docs_define_component_selector_contract() -> None:
     assert "runs Kubernetes data-copy Jobs when old and target PVC pairs exist" in readme_flat
     assert "required Soperator deployment snapshot" in readme_flat
     assert "SlurmCluster, and NodeSet resources" in readme_flat
-    assert "`nebius-cxcli acceptance-test smoke ... --soperator`" in readme_flat
-    assert "`nebius-cxcli acceptance-test benchmark ... --soperator`" in readme_flat
+    assert "`nebius-cxcli acceptance-test smoke ... --suite slurm`" in readme_flat
+    assert "`nebius-cxcli acceptance-test benchmark ... --suite slurm-nccl`" in readme_flat
     assert "`deploy-gpu-stack-readiness-report-<target>.json`" in readme_flat
     assert "`deploy-gpu-visibility-report-<target>.json`" in readme_flat
     assert "`acceptance-smoke-report-<target>.json`" in readme_flat
@@ -1237,19 +1367,18 @@ def test_docs_define_component_selector_contract() -> None:
         "NCCL/performance validation is reserved for explicit `acceptance-test "
         "benchmark` runs" in readme_flat
     )
-    assert "Acceptance commands require either `--target <target>` or `--all-targets`" in (
-        readme_flat
-    )
+    assert "Both `acceptance-test smoke` and `acceptance-test benchmark` default to all generated targets" in readme_flat
+    assert "They resolve target handoff from `generated/reports/deploy-report.md`" in readme_flat
     assert "nebius-cxcli-soperator-cluster-validation/v2" in readme_flat
     assert "command `stdout`/`stderr` as arrays of lines" in readme_flat
     assert (
-        "acceptance hostname and GPU allocation sub-checks write structured "
-        "`partition_hostnames` and `gpu_allocations` arrays with all-node evidence"
+        "acceptance hostname, GPU driver-jail, and GPU allocation sub-checks write structured "
+        "`partition_hostnames`, `gpu_driver_jail`, and `gpu_allocations` arrays with all-node evidence"
         in design_flat
     )
     assert "including the evidence source for each GPU allocation node" in design_flat
     assert "through NVIDIA proc-driver plus `/dev/nvidia*` device evidence" in readme_flat
-    assert "Explicit `acceptance-test smoke --soperator` runs the Slurm CLI" in readme_flat
+    assert "Explicit `acceptance-test smoke --suite slurm` runs the Slurm CLI" in readme_flat
     assert "Slurm nodes reported as `inval` remain unhealthy there" in readme_flat
     assert "same catalog-owned post-render patches that Flux would apply" in readme_flat
     assert "`generated/reports/ext-soperator-migrate-report.md`" in readme
@@ -1427,10 +1556,9 @@ def test_docs_define_component_selector_contract() -> None:
     assert "required Soperator deployment snapshot" in design_flat
     assert "does not start Slurm jobs" in design_flat
     assert "target `SlurmCluster`, and worker `NodeSet` resources" in design_flat
-    assert "`acceptance-test smoke --soperator`" in design_flat
-    assert "Acceptance commands require either `--target <target>` or `--all-targets`" in (
-        design_flat
-    )
+    assert "`acceptance-test smoke --suite slurm`" in design_flat
+    assert "Both `acceptance-test smoke` and `acceptance-test benchmark` default to all generated targets" in design_flat
+    assert "They resolve target handoff from `generated/reports/deploy-report.md`" in design_flat
     assert "`acceptance-test benchmark`" in design_flat
     assert "`deploy-smoke-report-<target>.json`" in design_flat
     assert "`deploy-gpu-stack-readiness-report-<target>.json`" in design_flat
@@ -1440,11 +1568,11 @@ def test_docs_define_component_selector_contract() -> None:
     assert "nebius-cxcli-soperator-cluster-validation/v2" in design_flat
     assert "command `stdout`/`stderr` are arrays of lines" in design_flat
     assert (
-        "structured `partition_hostnames` and `gpu_allocations` arrays with "
-        "all-node evidence" in design_flat
+        "structured `partition_hostnames`, `gpu_driver_jail`, and `gpu_allocations` "
+        "arrays with all-node evidence" in design_flat
     )
     assert "including the evidence source for each GPU allocation node" in design_flat
-    assert "Explicit `acceptance-test smoke --soperator` runs the Slurm CLI" in readme_flat
+    assert "Explicit `acceptance-test smoke --suite slurm` runs the Slurm CLI" in readme_flat
     assert "Slurm nodes reported as `inval` remain unhealthy there" in readme_flat
     assert "same catalog-owned post-render patches that Flux would apply" in design_flat
     assert "`generated/reports/ext-soperator-migrate-report.md`" in design

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -11,10 +12,71 @@ from nebius_cxcli import soperator_validation
 from nebius_cxcli.soperator_validation import (
     SOPERATOR_CLUSTER_VALIDATION_KIND,
     SoperatorValidationCommandResult,
+    _gpu_driver_jail_script,
     _nccl_script,
     run_soperator_cluster_validations,
+    soperator_acceptance_benchmark_specs,
+    soperator_acceptance_smoke_specs,
     soperator_cluster_validation_specs,
 )
+
+
+def _gpu_driver_jail_result(
+    command: tuple[str, ...],
+    script: str,
+    *,
+    returncode: int = 0,
+    stderr: str = "",
+) -> SoperatorValidationCommandResult:
+    match = re.search(r"--nodelist=([^ \n']+)", script)
+    hosts = (match.group(1).split(",") if match else ["worker-gpu-0"])
+    stdout = "".join(
+        (
+            "cxcli-soperator-gpu-driver-jail-ok "
+            f"host={host} "
+            "libcuda.so.1=/usr/lib/x86_64-linux-gnu/libcuda.so.1 "
+            "libnvidia-ml.so.1=/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1\n"
+        )
+        for host in hosts
+        if host
+    )
+    return SoperatorValidationCommandResult(command, returncode, stdout, stderr)
+
+
+def _standard_gpu_nodeset_payload() -> dict[str, object]:
+    return {
+        "items": [
+            {
+                "metadata": {"name": "worker-gpu"},
+                "spec": {
+                    "gpu": {"enabled": True},
+                    "slurmd": {
+                        "resources": {"gpu": 8},
+                        "volumes": {
+                            "customVolumeMounts": [
+                                {
+                                    "name": "nvidia-driver-root",
+                                    "mountPath": "/run/nvidia/driver",
+                                    "readOnly": False,
+                                    "volumeSource": {
+                                        "hostPath": {
+                                            "path": "/",
+                                        }
+                                    },
+                                }
+                            ]
+                        },
+                    },
+                    "customInitContainers": [
+                        {
+                            "name": "cxcli-gpu-driver-jail",
+                        }
+                    ],
+                },
+                "status": {"phase": "Ready"},
+            }
+        ]
+    }
 
 
 def _standard_soperator_snapshot_result(
@@ -48,16 +110,7 @@ def _standard_soperator_snapshot_result(
         return SoperatorValidationCommandResult(
             command,
             0,
-            json.dumps(
-                {
-                    "items": [
-                        {
-                            "metadata": {"name": "worker-gpu"},
-                            "status": {"phase": "Ready"},
-                        }
-                    ]
-                }
-            ),
+            json.dumps(_standard_gpu_nodeset_payload()),
             "",
         )
     if resource == "pvc" and name == "jail-pvc":
@@ -97,6 +150,149 @@ def _standard_or_ok(command: tuple[str, ...]) -> SoperatorValidationCommandResul
     if standard is not None:
         return standard
     return SoperatorValidationCommandResult(command, 0, "ok\n", "")
+
+
+def test_soperator_validation_fails_missing_gpu_driver_jail_nodeset_contract() -> None:
+    checks: list[dict[str, object]] = []
+
+    def _runner(
+        args,
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorValidationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        return SoperatorValidationCommandResult(
+            command,
+            0,
+            json.dumps(
+                {
+                    "items": [
+                        {
+                            "metadata": {"name": "worker-gpu"},
+                            "spec": {
+                                "gpu": {"enabled": True},
+                                "slurmd": {"resources": {"gpu": 1}},
+                                "customInitContainers": [],
+                            },
+                        }
+                    ]
+                }
+            ),
+            "",
+        )
+
+    soperator_validation._check_gpu_driver_jail_nodeset_contract(
+        _runner,
+        {"namespace": "soperator"},
+        checks,
+    )
+
+    assert checks == [
+        {
+            "name": "GPU driver jail NodeSet contract",
+            "status": "failed",
+            "passed": False,
+            "summary": (
+                "GPU worker NodeSet(s) are missing the chart-owned "
+                "nvidia-driver-root mount or cxcli-gpu-driver-jail init guard: "
+                "worker-gpu."
+            ),
+            "command": "kubectl -n soperator get nodesets -o json",
+            "gpu_driver_jail_nodesets": [
+                {
+                    "name": "worker-gpu",
+                    "driver_root_mount": False,
+                    "driver_jail_init": False,
+                }
+            ],
+        }
+    ]
+
+
+def test_soperator_validation_reports_zero_byte_gpu_driver_jail_library() -> None:
+    checks: list[dict[str, object]] = []
+
+    def _runner(
+        args,
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorValidationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        if command[:5] == ("kubectl", "-n", "soperator", "get", "pods"):
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {
+                                    "name": "login-0",
+                                    "labels": {"app.kubernetes.io/component": "login"},
+                                },
+                                "status": {"phase": "Running"},
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:6] == ("kubectl", "-n", "soperator", "exec", "login-0", "--"):
+            if command[6:10] == ("sinfo", "-N", "-h", "-o") and command[10] == "%P|%N|%G":
+                return SoperatorValidationCommandResult(command, 0, "gpu|worker-gpu-0|gpu:1\n", "")
+            if command[6:9] == ("sinfo", "-h", "-p") and command[10:12] == (
+                "-o",
+                "%t",
+            ):
+                return SoperatorValidationCommandResult(command, 0, "idle\n", "")
+            if command[6:8] == ("bash", "-lc"):
+                return SoperatorValidationCommandResult(
+                    command,
+                    42,
+                    (
+                        "cxcli-soperator-gpu-driver-jail-empty "
+                        "host=worker-gpu-0 lib=libcuda.so.1 "
+                        "path=/usr/lib/x86_64-linux-gnu/libcuda.so.1\n"
+                    ),
+                    "",
+                )
+        return _standard_or_ok(command)
+
+    assert (
+        soperator_validation._check_slurm_gpu_driver_jail(
+            _runner,
+            {"namespace": "soperator", "mode": "acceptance"},
+            checks,
+            check_name="Slurm GPU driver jail acceptance",
+        )
+        is False
+    )
+
+    assert checks[0]["status"] == "failed"
+    assert checks[0]["summary"] == (
+        "GPU driver jail checks passed on 0/1 Slurm GPU node(s); failed=1, "
+        "not_run=0; affected partition(s): gpu. First failure: "
+        "cxcli-soperator-gpu-driver-jail-empty host=worker-gpu-0 lib=libcuda.so.1 "
+        "path=/usr/lib/x86_64-linux-gnu/libcuda.so.1."
+    )
+    assert checks[0]["failure_details"] == [
+        "cxcli-soperator-gpu-driver-jail-empty host=worker-gpu-0 "
+        "lib=libcuda.so.1 path=/usr/lib/x86_64-linux-gnu/libcuda.so.1"
+    ]
+
+
+def test_gpu_driver_jail_script_checks_each_driver_library_independently() -> None:
+    script = _gpu_driver_jail_script(partition="gpu", nodes=1, nodelist=("worker-gpu-0",))
+
+    assert 'cuda_lib="$(check_lib libcuda.so.1)" || exit 42' in script
+    assert 'nvml_lib="$(check_lib libnvidia-ml.so.1)" || exit 42' in script
+    assert 'libs="$(check_lib libcuda.so.1)$(check_lib libnvidia-ml.so.1)"' not in script
 
 
 def test_soperator_cluster_validation_specs_for_enabled_soperator_target() -> None:
@@ -146,6 +342,111 @@ def test_soperator_cluster_validation_specs_for_enabled_soperator_target() -> No
             "mode": "deploy",
         }
     ]
+
+
+def test_soperator_acceptance_benchmark_specs_carry_run_only_overrides() -> None:
+    payload = {
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "training",
+                    "enabled": True,
+                    "values": {"clusterName": "slurm-training"},
+                }
+            ]
+        },
+        "deploy": {"targets": [{"instance_id": "training", "kube_context": "training-context"}]},
+    }
+
+    specs = soperator_acceptance_benchmark_specs(
+        payload,
+        max_nodes=4,
+        timeout="20m",
+        average_bus_bandwidth_threshold_gbps=300.0,
+    )
+
+    assert specs == [
+        {
+            "kind": SOPERATOR_CLUSTER_VALIDATION_KIND,
+            "name": "Soperator NCCL benchmark (training)",
+            "target_ref": "training",
+            "namespace": "soperator",
+            "cluster_name": "slurm-training",
+            "target_version": "",
+            "jail_storage": {
+                "pvc_name": "jail-pvc",
+                "pv_name": "jail-pv",
+                "mount_daemonset_name": "jail-mount",
+                "local_path": "/mnt/jail",
+            },
+            "kube_context": "training-context",
+            "report_file": "acceptance-benchmark-report-training.json",
+            "inventory_report_file": "cluster-inventory-report-training.json",
+            "readiness_timeout_seconds": 1200,
+            "readiness_poll_seconds": 15.0,
+            "required": True,
+            "mode": "benchmark",
+            "include_nccl_benchmark": True,
+            "max_nodes": 4,
+            "timeout": "20m",
+            "average_bus_bandwidth_threshold_gbps": 300.0,
+        }
+    ]
+
+    zero_threshold_specs = soperator_acceptance_benchmark_specs(
+        payload,
+        average_bus_bandwidth_threshold_gbps=0.0,
+    )
+    assert zero_threshold_specs[0]["average_bus_bandwidth_threshold_gbps"] == 0.0
+
+
+def test_soperator_acceptance_smoke_specs_use_acceptance_report_filename() -> None:
+    payload = {
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "training",
+                    "enabled": True,
+                    "values": {"clusterName": "slurm-training"},
+                }
+            ]
+        },
+        "deploy": {"targets": [{"instance_id": "training", "kube_context": "training-context"}]},
+    }
+
+    specs = soperator_acceptance_smoke_specs(
+        payload,
+        batch_size=64,
+        concurrency=4,
+        continue_on_failure=False,
+    )
+
+    assert specs[0]["name"] == "Soperator acceptance smoke test (training)"
+    assert specs[0]["target_ref"] == "training"
+    assert specs[0]["mode"] == "acceptance"
+    assert specs[0]["report_file"] == "acceptance-smoke-report-training.json"
+    assert specs[0]["inventory_report_file"] == "cluster-inventory-report-training.json"
+    assert specs[0]["batch_size"] == 64
+    assert specs[0]["concurrency"] == 4
+    assert specs[0]["continue_on_failure"] is False
+
+
+def test_nccl_script_honors_node_cap_and_optional_timeout() -> None:
+    capped = _nccl_script(partition="gpu", max_nodes=4, timeout_seconds=20 * 60)
+    uncapped = _nccl_script(partition="gpu")
+
+    assert "requested_max_nodes=4" in capped
+    assert "--time=00:20:00 --immediate=60" in capped
+    assert "requested_max_nodes=0" in uncapped
+    assert "--time=00:30:00" not in uncapped
+    assert "--cpus-per-task=\"$cpus_per_task\" --immediate=60" in uncapped
+    assert "if (( gpus_per_node == 1 )); then" in capped
+    assert "nccl_max_bytes=2G" in capped
+    assert "nccl_max_bytes=8G" in capped
+    assert "max_bytes=${CXCLI_NCCL_MAX_BYTES}" in capped
+    assert '/usr/bin/all_reduce_perf_mpi -b 512M -e "$CXCLI_NCCL_MAX_BYTES" -f 2 -g 1' in capped
 
 
 def test_soperator_cluster_validation_specs_use_custom_jail_storage_names() -> None:
@@ -289,13 +590,14 @@ def test_run_soperator_cluster_validation_writes_smoke_report(tmp_path: Path) ->
     assert report["test_purpose"] == "deployment-testing"
     assert report["scope"] == "soperator-deployment-snapshot"
     assert report["passed"] is True
-    assert report["summary"] == "5/5 Soperator/Slurm checks passed."
+    assert report["summary"] == "6/6 Soperator/Slurm checks passed."
     assert [check["name"] for check in report["checks"]] == [
         "Soperator manager deployment",
         "Soperator storage snapshot",
         "Soperator pod scheduling snapshot",
         "SlurmCluster visibility",
         "NodeSet visibility",
+        "GPU driver jail NodeSet contract",
     ]
     assert not any("slurmnodes" in " ".join(command) for command in commands)
     assert not any("cxcli-soperator-smoke" in " ".join(command) for command in commands)
@@ -321,7 +623,7 @@ def test_soperator_acceptance_rejects_deploy_report_filename(tmp_path: Path) -> 
         timeout_seconds: int = 300,
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
-        del input_text, timeout_seconds, check
+        del input_text, check
         command = tuple(str(item) for item in args)
         commands.append(command)
         return _standard_or_ok(command)
@@ -376,7 +678,7 @@ def test_run_soperator_cluster_validation_reports_slurmcluster_phase_without_wai
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
         nonlocal slurmcluster_gets
-        del input_text, timeout_seconds, check
+        del input_text, check
         command = tuple(str(item) for item in args)
         if command[:5] == ("kubectl", "-n", "soperator", "get", "pods"):
             return SoperatorValidationCommandResult(
@@ -465,7 +767,7 @@ def test_soperator_cluster_validation_fails_on_active_old_source_flux(
         timeout_seconds: int = 300,
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
-        del input_text, timeout_seconds, check
+        del input_text, check
         command = tuple(str(item) for item in args)
         if command[:4] == ("kubectl", "get", "helmreleases.helm.toolkit.fluxcd.io", "-A"):
             return SoperatorValidationCommandResult(
@@ -669,8 +971,29 @@ def test_soperator_cluster_validation_reports_pending_soperator_pods(
     assert "unschedulable" in skipped[0]["summary"]
 
 
+@pytest.mark.parametrize(
+    ("mode", "report_file", "expected_test_purpose", "expected_scope"),
+    [
+        (
+            "deploy",
+            "deploy-smoke-report-training.json",
+            "deployment-testing",
+            "soperator-deployment-snapshot",
+        ),
+        (
+            "acceptance",
+            "acceptance-smoke-report-training.json",
+            "acceptance-smoke",
+            "all-node-slurm-smoke",
+        ),
+    ],
+)
 def test_soperator_cluster_validation_waits_for_jail_mount_pending_pods(
     tmp_path: Path,
+    mode: str,
+    report_file: str,
+    expected_test_purpose: str,
+    expected_scope: str,
 ) -> None:
     spec = {
         "kind": SOPERATOR_CLUSTER_VALIDATION_KIND,
@@ -678,10 +1001,10 @@ def test_soperator_cluster_validation_waits_for_jail_mount_pending_pods(
         "target_ref": "training",
         "namespace": "soperator",
         "cluster_name": "training",
-        "report_file": "acceptance-smoke-report-training.json",
+        "report_file": report_file,
         "readiness_timeout_seconds": 2,
         "readiness_poll_seconds": 0,
-        "mode": "acceptance",
+        "mode": mode,
     }
     pod_gets = 0
     daemonset_gets = 0
@@ -831,7 +1154,11 @@ def test_soperator_cluster_validation_waits_for_jail_mount_pending_pods(
         command_runner=_runner,
     )
 
+    assert written == [tmp_path / report_file]
     report = json.loads(written[0].read_text(encoding="utf-8"))
+    assert report["mode"] == mode
+    assert report["test_purpose"] == expected_test_purpose
+    assert report["scope"] == expected_scope
     assert report["passed"] is True
     assert pod_gets >= 2
     assert daemonset_gets >= 2
@@ -1114,9 +1441,13 @@ def test_soperator_cluster_validation_runs_slurm_gpu_and_nccl_benchmark(
         "kube_context": "training-context",
         "report_file": "acceptance-smoke-report-training.json",
         "include_nccl_benchmark": True,
+        "max_nodes": 4,
+        "timeout": "20m",
+        "average_bus_bandwidth_threshold_gbps": 580.2,
         "mode": "acceptance",
     }
     smoke_scripts: list[str] = []
+    nccl_timeouts: list[int | None] = []
 
     def _runner(
         args,
@@ -1125,7 +1456,7 @@ def test_soperator_cluster_validation_runs_slurm_gpu_and_nccl_benchmark(
         timeout_seconds: int = 300,
         check: bool = True,
     ) -> SoperatorValidationCommandResult:
-        del input_text, timeout_seconds, check
+        del input_text, check
         command = tuple(str(item) for item in args)
         if command[:7] == (
             "kubectl",
@@ -1232,6 +1563,8 @@ def test_soperator_cluster_validation_runs_slurm_gpu_and_nccl_benchmark(
                         f"partition={partition} nodes=1\n",
                         "",
                     )
+                if "cxcli-soperator-gpu-driver-jail" in script:
+                    return _gpu_driver_jail_result(command, script)
                 if "cxcli-soperator-gpu-allocation" in script:
                     return SoperatorValidationCommandResult(
                         command,
@@ -1247,6 +1580,7 @@ def test_soperator_cluster_validation_runs_slurm_gpu_and_nccl_benchmark(
                         "",
                     )
                 if "cxcli-soperator-nccl" in script:
+                    nccl_timeouts.append(timeout_seconds)
                     return SoperatorValidationCommandResult(
                         command,
                         0,
@@ -1282,13 +1616,24 @@ def test_soperator_cluster_validation_runs_slurm_gpu_and_nccl_benchmark(
 
     report = json.loads(written[0].read_text(encoding="utf-8"))
     assert report["passed"] is True
-    assert report["summary"] == "11/11 Soperator/Slurm checks passed."
-    assert [check["name"] for check in report["checks"]][-4:] == [
+    assert report["summary"] == "14/14 Soperator/Slurm checks passed."
+    assert [check["name"] for check in report["checks"]][-6:] == [
         "Slurm srun smoke job",
         "Slurm all-node hostname acceptance",
+        "Slurm GPU driver jail acceptance",
         "Slurm all-node GPU allocation acceptance",
+        "Slurm GPU driver jail benchmark preflight",
         "Slurm NCCL benchmark",
     ]
+    contract_check = next(
+        check
+        for check in report["checks"]
+        if check["name"] == "GPU driver jail NodeSet contract"
+    )
+    assert contract_check["summary"] == (
+        "GPU worker NodeSets include the chart-owned host driver root mount "
+        "and GPU driver jail init guard."
+    )
     partition_check = next(
         check
         for check in report["checks"]
@@ -1329,7 +1674,36 @@ def test_soperator_cluster_validation_runs_slurm_gpu_and_nccl_benchmark(
             "nodes": [{"node_name": "worker-gpu-0", "status": "passed", "reported": True}],
         },
     ]
-    gpu_check = report["checks"][-2]
+    driver_jail_check = next(
+        check
+        for check in report["checks"]
+        if check["name"] == "Slurm GPU driver jail acceptance"
+    )
+    assert driver_jail_check["summary"] == (
+        "GPU driver jail checks passed on 1/1 Slurm GPU node(s); libcuda.so.1, "
+        "libnvidia-ml.so.1, and nvidia-smi were visible from the Slurm job root."
+    )
+    assert driver_jail_check["gpu_driver_jail"] == [
+        {
+            "partition": "gpu",
+            "expected_node_count": 1,
+            "tested_node_count": 1,
+            "passed_node_count": 1,
+            "failed_node_count": 0,
+            "not_run_node_count": 0,
+            "batch_size": 128,
+            "batch_count": 1,
+            "status": "passed",
+            "nodes": [
+                {"node_name": "worker-gpu-0", "status": "passed", "reported": True}
+            ],
+        }
+    ]
+    gpu_check = next(
+        check
+        for check in report["checks"]
+        if check["name"] == "Slurm all-node GPU allocation acceptance"
+    )
     assert gpu_check["summary"] == (
         "one-GPU Slurm acceptance allocations passed on 1/1 GPU node(s) across 1 partition(s)."
     )
@@ -1374,9 +1748,10 @@ def test_soperator_cluster_validation_runs_slurm_gpu_and_nccl_benchmark(
     )
     nccl_check = report["checks"][-1]
     assert nccl_check["summary"] == (
-        "two-node NCCL all_reduce_perf benchmark completed on partition gpu "
+        "multi-node NCCL all_reduce_perf benchmark completed on partition gpu "
         "with 16 rank(s) across 2 node(s) (8 GPU(s) per node); "
-        "average bus bandwidth 580.2 Gbps across 2G, 4G, 8G message sizes."
+        "average bus bandwidth 580.2 Gbps across 2G, 4G, 8G message sizes. "
+        "Required threshold: 580.2 Gbps."
     )
     assert nccl_check["avg_large_message_bus_bandwidth_gbps"] == pytest.approx(580.2)
     assert nccl_check["large_message_bus_bandwidth_gbps"] == {
@@ -1384,6 +1759,11 @@ def test_soperator_cluster_validation_runs_slurm_gpu_and_nccl_benchmark(
         "4G": 640.3,
         "8G": 780.2,
     }
+    assert nccl_check["average_bus_bandwidth_threshold_gbps"] == 580.2
+    assert nccl_check["bandwidth_threshold_passed"] is True
+    assert nccl_check["max_nodes"] == 4
+    assert nccl_check["all_nodes"] is False
+    assert nccl_check["timeout"] == "20m"
     assert nccl_check["multi_node_benchmark"] is True
     assert nccl_check["single_node_multi_gpu_benchmark"] is False
     assert nccl_check["benchmark_mode"] == "multi-node"
@@ -1394,6 +1774,9 @@ def test_soperator_cluster_validation_runs_slurm_gpu_and_nccl_benchmark(
     assert any("--partition=gpu" in script for script in smoke_scripts)
     assert any("mpirun --allow-run-as-root" in script for script in smoke_scripts)
     assert any("salloc --job-name=cxcli-soperator-nccl" in script for script in smoke_scripts)
+    assert any("requested_max_nodes=4" in script for script in smoke_scripts)
+    assert any("--time=00:20:00 --immediate=60" in script for script in smoke_scripts)
+    assert nccl_timeouts == [1200]
     assert any(
         '--nodes="$target_nodes" --ntasks="$target_nodes" --ntasks-per-node=1' in script
         for script in smoke_scripts
@@ -1544,6 +1927,7 @@ def test_soperator_cluster_validation_prefers_8_gpu_partition_for_slurm_nccl(
         "kube_context": "training-context",
         "report_file": "acceptance-benchmark-report-training.json",
         "include_nccl_benchmark": True,
+        "average_bus_bandwidth_threshold_gbps": 300.0,
         "mode": "benchmark",
     }
     nccl_scripts: list[str] = []
@@ -1658,6 +2042,8 @@ def test_soperator_cluster_validation_prefers_8_gpu_partition_for_slurm_nccl(
                         f"partition={partition} nodes=1\n",
                         "",
                     )
+                if "cxcli-soperator-gpu-driver-jail" in script:
+                    return _gpu_driver_jail_result(command, script)
                 if "cxcli-soperator-gpu-allocation" in script:
                     return SoperatorValidationCommandResult(
                         command,
@@ -1723,6 +2109,7 @@ def test_soperator_cluster_validation_runs_slurm_nccl_benchmark_on_one_8_gpu_nod
         "kube_context": "training-context",
         "report_file": "acceptance-benchmark-report-training.json",
         "include_nccl_benchmark": True,
+        "average_bus_bandwidth_threshold_gbps": 300.0,
         "mode": "benchmark",
     }
 
@@ -1802,6 +2189,13 @@ def test_soperator_cluster_validation_runs_slurm_nccl_benchmark_on_one_8_gpu_nod
                 return SoperatorValidationCommandResult(command, 0, "gpu*|1\n", "")
             if command[8:11] == ("sinfo", "-h", "-o") and command[11] == "%P|%D|%G":
                 return SoperatorValidationCommandResult(command, 0, "gpu*|1|gpu:8\n", "")
+            if command[8:12] == ("sinfo", "-N", "-h", "-o") and command[12] == "%P|%N|%G":
+                return SoperatorValidationCommandResult(
+                    command,
+                    0,
+                    "gpu|worker-gpu-0|gpu:8\n",
+                    "",
+                )
             if command[8:11] == ("sinfo", "-h", "-p") and command[12:14] == (
                 "-o",
                 "%t",
@@ -1819,6 +2213,8 @@ def test_soperator_cluster_validation_runs_slurm_nccl_benchmark_on_one_8_gpu_nod
                         "partition=gpu nodes=1\n",
                         "",
                     )
+                if "cxcli-soperator-gpu-driver-jail" in script:
+                    return _gpu_driver_jail_result(command, script)
                 if "cxcli-soperator-gpu-allocation" in script:
                     return SoperatorValidationCommandResult(
                         command,
@@ -1862,14 +2258,14 @@ def test_soperator_cluster_validation_runs_slurm_nccl_benchmark_on_one_8_gpu_nod
 
     report = json.loads(written[0].read_text(encoding="utf-8"))
     assert report["passed"] is True
-    assert report["summary"] == "8/8 Soperator/Slurm checks passed."
+    assert report["summary"] == "10/10 Soperator/Slurm checks passed."
     nccl_check = report["checks"][-1]
     assert nccl_check["name"] == "Slurm NCCL benchmark"
     assert nccl_check["status"] == "passed"
     assert nccl_check["summary"] == (
         "single-node multi-GPU NCCL all_reduce_perf benchmark completed on partition gpu "
         "with 8 rank(s) on 1 node (8 GPU(s) on the node); average bus bandwidth "
-        "566.9 Gbps across 2G, 4G, 8G message sizes."
+        "566.9 Gbps across 2G, 4G, 8G message sizes. Required threshold: 300.0 Gbps."
     )
     assert nccl_check["avg_large_message_bus_bandwidth_gbps"] == pytest.approx(566.866, abs=0.01)
     assert nccl_check["large_message_bus_bandwidth_gbps"] == {
@@ -1877,6 +2273,10 @@ def test_soperator_cluster_validation_runs_slurm_nccl_benchmark_on_one_8_gpu_nod
         "4G": 590.4,
         "8G": 610.1,
     }
+    assert nccl_check["average_bus_bandwidth_threshold_gbps"] == 300.0
+    assert nccl_check["bandwidth_threshold_passed"] is True
+    assert nccl_check["bandwidth_threshold_comment"] == ""
+    assert nccl_check["one_gpu_platform"] is False
     assert nccl_check["multi_node_benchmark"] is False
     assert nccl_check["single_node_multi_gpu_benchmark"] is True
     assert nccl_check["benchmark_mode"] == "single-node-multi-gpu"
@@ -1884,6 +2284,368 @@ def test_soperator_cluster_validation_runs_slurm_nccl_benchmark_on_one_8_gpu_nod
     assert nccl_check["nodes"] == 1
     assert nccl_check["gpus_per_node"] == 8
     assert nccl_check["ranks"] == 8
+
+
+def test_soperator_cluster_validation_fails_multi_gpu_slurm_nccl_below_threshold(
+    tmp_path: Path,
+) -> None:
+    spec = {
+        "kind": SOPERATOR_CLUSTER_VALIDATION_KIND,
+        "name": "Soperator cluster smoke test (training)",
+        "target_ref": "training",
+        "namespace": "soperator",
+        "cluster_name": "training",
+        "kube_context": "training-context",
+        "report_file": "acceptance-benchmark-report-training.json",
+        "include_nccl_benchmark": True,
+        "average_bus_bandwidth_threshold_gbps": 300.0,
+        "mode": "benchmark",
+    }
+
+    def _runner(
+        args,
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorValidationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        if command[:7] == (
+            "kubectl",
+            "--context",
+            "training-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+        ):
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {
+                                    "name": "login-0",
+                                    "labels": {"app.kubernetes.io/component": "login"},
+                                },
+                                "status": {"phase": "Running"},
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:8] == (
+            "kubectl",
+            "--context",
+            "training-context",
+            "-n",
+            "soperator",
+            "get",
+            "slurmclusters",
+            "-o",
+        ):
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {"metadata": {"name": "training"}, "status": {"phase": "Available"}}
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:8] == (
+            "kubectl",
+            "--context",
+            "training-context",
+            "-n",
+            "soperator",
+            "exec",
+            "login-0",
+            "--",
+        ):
+            if command[8:11] == ("sinfo", "-h", "-o") and command[11] == "%t":
+                return SoperatorValidationCommandResult(command, 0, "idle\n", "")
+            if command[8:11] == ("sinfo", "-h", "-o") and command[11] == "%P|%t|%G":
+                return SoperatorValidationCommandResult(command, 0, "gpu*|idle|gpu:8\n", "")
+            if command[8:11] == ("sinfo", "-h", "-o") and command[11] == "%P|%D":
+                return SoperatorValidationCommandResult(command, 0, "gpu*|1\n", "")
+            if command[8:11] == ("sinfo", "-h", "-o") and command[11] == "%P|%D|%G":
+                return SoperatorValidationCommandResult(command, 0, "gpu*|1|gpu:8\n", "")
+            if command[8:12] == ("sinfo", "-N", "-h", "-o") and command[12] == "%P|%N|%G":
+                return SoperatorValidationCommandResult(
+                    command,
+                    0,
+                    "gpu|worker-gpu-0|gpu:8\n",
+                    "",
+                )
+            if command[8:11] == ("sinfo", "-h", "-p") and command[12:14] == (
+                "-o",
+                "%t",
+            ):
+                return SoperatorValidationCommandResult(command, 0, "idle\n", "")
+            if command[8:10] == ("squeue", "-h"):
+                return SoperatorValidationCommandResult(command, 0, "", "")
+            if command[8:10] == ("bash", "-lc"):
+                script = command[10]
+                if "cxcli-soperator-partition-hostnames" in script:
+                    return SoperatorValidationCommandResult(
+                        command,
+                        0,
+                        "worker-gpu-0\ncxcli-soperator-partition-hostnames-ok "
+                        "partition=gpu nodes=1\n",
+                        "",
+                    )
+                if "cxcli-soperator-gpu-driver-jail" in script:
+                    return _gpu_driver_jail_result(command, script)
+                if "cxcli-soperator-gpu-allocation" in script:
+                    return SoperatorValidationCommandResult(
+                        command,
+                        0,
+                        "GPU 0: NVIDIA H100\ncxcli-soperator-gpu-allocation-ok host=worker-gpu-0\n",
+                        "",
+                    )
+                if "cxcli-soperator-nccl" in script:
+                    return SoperatorValidationCommandResult(
+                        command,
+                        0,
+                        "\n".join(
+                            [
+                                "cxcli-soperator-nccl-ok mode=single-node-multi-gpu "
+                                "partition=gpu nodes=1 gpus_per_node=8 ranks=8",
+                                "# nThread 1 nGpus 1 minBytes 536870912 maxBytes 8589934592",
+                                "2147483648 536870912 float sum -1 12345 80.0 100.1 0 "
+                                "12346 79.9 100.0 0",
+                                "4294967296 1073741824 float sum -1 12345 90.0 120.4 0 "
+                                "12346 89.8 120.0 0",
+                                "8589934592 2147483648 float sum -1 12345 100.0 140.1 0 "
+                                "12346 99.8 140.0 0",
+                            ]
+                        )
+                        + "\n",
+                        "",
+                    )
+                return SoperatorValidationCommandResult(
+                    command,
+                    0,
+                    "cxcli-soperator-srun-ok\nworker-gpu-0\n",
+                    "",
+                )
+        return _standard_or_ok(command)
+
+    with pytest.raises(RuntimeError, match="Slurm NCCL benchmark"):
+        run_soperator_cluster_validations(
+            [spec],
+            reports_dir=tmp_path,
+            command_runner=_runner,
+        )
+
+    report = json.loads(
+        (tmp_path / "acceptance-benchmark-report-training.json").read_text(encoding="utf-8")
+    )
+    assert report["passed"] is False
+    nccl_check = report["checks"][-1]
+    assert nccl_check["name"] == "Slurm NCCL benchmark"
+    assert nccl_check["status"] == "failed"
+    assert nccl_check["summary"] == (
+        "single-node multi-GPU NCCL all_reduce_perf benchmark completed on partition gpu "
+        "with 8 rank(s) on 1 node (8 GPU(s) on the node); average bus bandwidth "
+        "120.2 Gbps across 2G, 4G, 8G message sizes. Required threshold: 300.0 Gbps. "
+        "Observed bandwidth is below the required threshold."
+    )
+    assert nccl_check["avg_large_message_bus_bandwidth_gbps"] == pytest.approx(120.2, abs=0.01)
+    assert nccl_check["large_message_bus_bandwidth_gbps"] == {
+        "2G": 100.1,
+        "4G": 120.4,
+        "8G": 140.1,
+    }
+    assert nccl_check["average_bus_bandwidth_threshold_gbps"] == 300.0
+    assert nccl_check["bandwidth_threshold_passed"] is False
+    assert nccl_check["bandwidth_threshold_comment"] == ""
+    assert nccl_check["one_gpu_platform"] is False
+    assert nccl_check["single_node_multi_gpu_benchmark"] is True
+    assert nccl_check["gpus_per_node"] == 8
+    assert nccl_check["ranks"] == 8
+
+
+def test_soperator_cluster_validation_fails_reported_multi_gpu_slurm_nccl_below_threshold(
+    tmp_path: Path,
+) -> None:
+    spec = {
+        "kind": SOPERATOR_CLUSTER_VALIDATION_KIND,
+        "name": "Soperator cluster smoke test (training)",
+        "target_ref": "training",
+        "namespace": "soperator",
+        "cluster_name": "training",
+        "kube_context": "training-context",
+        "report_file": "acceptance-benchmark-report-training.json",
+        "include_nccl_benchmark": True,
+        "average_bus_bandwidth_threshold_gbps": 300.0,
+        "mode": "benchmark",
+    }
+
+    def _runner(
+        args,
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorValidationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        if command[:7] == (
+            "kubectl",
+            "--context",
+            "training-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+        ):
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {
+                                    "name": "login-0",
+                                    "labels": {"app.kubernetes.io/component": "login"},
+                                },
+                                "status": {"phase": "Running"},
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:8] == (
+            "kubectl",
+            "--context",
+            "training-context",
+            "-n",
+            "soperator",
+            "get",
+            "slurmclusters",
+            "-o",
+        ):
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {"metadata": {"name": "training"}, "status": {"phase": "Available"}}
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:8] == (
+            "kubectl",
+            "--context",
+            "training-context",
+            "-n",
+            "soperator",
+            "exec",
+            "login-0",
+            "--",
+        ):
+            if command[8:11] == ("sinfo", "-h", "-o") and command[11] == "%t":
+                return SoperatorValidationCommandResult(command, 0, "idle\n", "")
+            if command[8:11] == ("sinfo", "-h", "-o") and command[11] == "%P|%t|%G":
+                return SoperatorValidationCommandResult(command, 0, "gpu*|idle|gpu:8\n", "")
+            if command[8:11] == ("sinfo", "-h", "-o") and command[11] == "%P|%D":
+                return SoperatorValidationCommandResult(command, 0, "gpu*|2\n", "")
+            if command[8:11] == ("sinfo", "-h", "-o") and command[11] == "%P|%D|%G":
+                return SoperatorValidationCommandResult(command, 0, "gpu*|2|gpu:8\n", "")
+            if command[8:12] == ("sinfo", "-N", "-h", "-o") and command[12] == "%P|%N|%G":
+                return SoperatorValidationCommandResult(
+                    command,
+                    0,
+                    "gpu|worker-gpu-0|gpu:8\ngpu|worker-gpu-1|gpu:8\n",
+                    "",
+                )
+            if command[8:11] == ("sinfo", "-h", "-p") and command[12:14] == (
+                "-o",
+                "%t",
+            ):
+                return SoperatorValidationCommandResult(command, 0, "idle\n", "")
+            if command[8:10] == ("squeue", "-h"):
+                return SoperatorValidationCommandResult(command, 0, "", "")
+            if command[8:10] == ("bash", "-lc"):
+                script = command[10]
+                if "cxcli-soperator-partition-hostnames" in script:
+                    return SoperatorValidationCommandResult(
+                        command,
+                        0,
+                        "worker-gpu-0\ncxcli-soperator-partition-hostnames-ok "
+                        "partition=gpu nodes=1\n",
+                        "",
+                    )
+                if "cxcli-soperator-gpu-driver-jail" in script:
+                    return _gpu_driver_jail_result(command, script)
+                if "cxcli-soperator-gpu-allocation" in script:
+                    return SoperatorValidationCommandResult(
+                        command,
+                        0,
+                        "GPU 0: NVIDIA H100\ncxcli-soperator-gpu-allocation-ok host=worker-gpu-0\n",
+                        "",
+                    )
+                if "cxcli-soperator-nccl" in script:
+                    return SoperatorValidationCommandResult(
+                        command,
+                        0,
+                        "\n".join(
+                            [
+                                "cxcli-soperator-nccl-ok mode=multi-node partition=gpu "
+                                "nodes=2 gpus_per_node=1 ranks=2 reported_gpus_per_node=8 "
+                                "max_bytes=2G",
+                                "# nThread 1 nGpus 1 minBytes 536870912 maxBytes 2147483648",
+                                "2147483648 536870912 float sum -1 12345 70.0 120.1 0 "
+                                "12346 69.8 119.9 0",
+                            ]
+                        )
+                        + "\n",
+                        "",
+                    )
+                return SoperatorValidationCommandResult(
+                    command,
+                    0,
+                    "cxcli-soperator-srun-ok\nworker-gpu-0\n",
+                    "",
+                )
+        return _standard_or_ok(command)
+
+    with pytest.raises(RuntimeError, match="Slurm NCCL benchmark"):
+        run_soperator_cluster_validations(
+            [spec],
+            reports_dir=tmp_path,
+            command_runner=_runner,
+        )
+
+    report = json.loads(
+        (tmp_path / "acceptance-benchmark-report-training.json").read_text(encoding="utf-8")
+    )
+    assert report["passed"] is False
+    nccl_check = report["checks"][-1]
+    assert nccl_check["name"] == "Slurm NCCL benchmark"
+    assert nccl_check["status"] == "failed"
+    assert nccl_check["avg_large_message_bus_bandwidth_gbps"] == pytest.approx(120.1)
+    assert nccl_check["average_bus_bandwidth_threshold_gbps"] == 300.0
+    assert nccl_check["bandwidth_threshold_passed"] is False
+    assert nccl_check["bandwidth_threshold_comment"] == ""
+    assert nccl_check["one_gpu_platform"] is False
+    assert nccl_check["gpus_per_node"] == 1
+    assert nccl_check["reported_gpus_per_node"] == 8
+    assert nccl_check["ranks"] == 2
 
 
 def test_nccl_script_uses_single_idle_8_gpu_node_when_partition_has_one_gpu_nodes(
@@ -1947,7 +2709,7 @@ def test_nccl_script_uses_single_idle_8_gpu_node_when_partition_has_one_gpu_node
     assert "runs only on 8-GPU Slurm nodes" not in result.stdout
 
 
-def test_soperator_cluster_validation_skips_slurm_nccl_when_allocatable_gpu_floor_is_low(
+def test_soperator_cluster_validation_fails_slurm_nccl_when_no_gpu_allocation_succeeds(
     tmp_path: Path,
 ) -> None:
     spec = {
@@ -1959,6 +2721,7 @@ def test_soperator_cluster_validation_skips_slurm_nccl_when_allocatable_gpu_floo
         "kube_context": "training-context",
         "report_file": "acceptance-benchmark-report-training.json",
         "include_nccl_benchmark": True,
+        "average_bus_bandwidth_threshold_gbps": 300.0,
         "mode": "benchmark",
     }
 
@@ -2064,6 +2827,8 @@ def test_soperator_cluster_validation_skips_slurm_nccl_when_allocatable_gpu_floo
                         "cxcli-soperator-partition-hostnames-ok partition=gpu nodes=1\n",
                         "",
                     )
+                if "cxcli-soperator-gpu-driver-jail" in script:
+                    return _gpu_driver_jail_result(command, script)
                 if "cxcli-soperator-gpu-allocation" in script:
                     return SoperatorValidationCommandResult(
                         command,
@@ -2074,13 +2839,9 @@ def test_soperator_cluster_validation_skips_slurm_nccl_when_allocatable_gpu_floo
                 if "cxcli-soperator-nccl" in script:
                     return SoperatorValidationCommandResult(
                         command,
-                        0,
-                        (
-                            "cxcli-soperator-nccl-skipped: full Slurm NCCL benchmark "
-                            "requires at least 8 allocatable GPUs per selected Slurm node "
-                            "on partition gpu; reported 8 GPU(s), allocatable 4.\n"
-                        ),
+                        1,
                         "",
+                        "cxcli-soperator-nccl-allocation-failed: could not allocate any GPU count.\n",
                     )
                 return SoperatorValidationCommandResult(
                     command,
@@ -2090,24 +2851,28 @@ def test_soperator_cluster_validation_skips_slurm_nccl_when_allocatable_gpu_floo
                 )
         return _standard_or_ok(command)
 
-    written = run_soperator_cluster_validations(
-        [spec],
-        reports_dir=tmp_path,
-        command_runner=_runner,
-    )
+    with pytest.raises(RuntimeError, match="Slurm NCCL benchmark"):
+        run_soperator_cluster_validations(
+            [spec],
+            reports_dir=tmp_path,
+            command_runner=_runner,
+        )
 
-    report = json.loads(written[0].read_text(encoding="utf-8"))
+    report = json.loads(
+        (tmp_path / "acceptance-benchmark-report-training.json").read_text(encoding="utf-8")
+    )
     nccl_check = report["checks"][-1]
-    assert report["passed"] is True
+    assert report["passed"] is False
     assert nccl_check["name"] == "Slurm NCCL benchmark"
-    assert nccl_check["status"] == "skipped"
+    assert nccl_check["status"] == "failed"
     assert nccl_check["summary"] == (
-        "Skipped: full Slurm NCCL benchmark requires at least 8 allocatable GPUs "
-        "per selected Slurm node on partition gpu; reported 8 GPU(s), allocatable 4."
+        "Slurm NCCL benchmark could not allocate GPUs on partition gpu: "
+        "could not allocate any GPU count."
     )
+    assert nccl_check["failure_reason"] == "slurm_gpu_allocation_failed"
 
 
-def test_soperator_cluster_validation_skips_slurm_nccl_benchmark_on_one_total_gpu(
+def test_soperator_cluster_validation_reports_slurm_nccl_cuda_driver_runtime_mismatch(
     tmp_path: Path,
 ) -> None:
     spec = {
@@ -2191,6 +2956,148 @@ def test_soperator_cluster_validation_skips_slurm_nccl_benchmark_on_one_total_gp
             "--",
         ):
             if command[8:11] == ("sinfo", "-h", "-o") and command[11] == "%t":
+                return SoperatorValidationCommandResult(command, 0, "idle\nidle\n", "")
+            if command[8:11] == ("sinfo", "-h", "-o") and command[11] == "%P|%t|%G":
+                return SoperatorValidationCommandResult(command, 0, "gpu*|idle|gpu:1\n", "")
+            if command[8:10] == ("squeue", "-h"):
+                return SoperatorValidationCommandResult(command, 0, "", "")
+            if command[8:10] == ("bash", "-lc"):
+                script = command[10]
+                if "cxcli-soperator-nccl" in script:
+                    return SoperatorValidationCommandResult(
+                        command,
+                        1,
+                        (
+                            "cxcli-soperator-nccl-ok mode=multi-node partition=gpu "
+                            "nodes=5 gpus_per_node=1 ranks=5 reported_gpus_per_node=1\n"
+                            "cxcli-soperator-nccl-hostfile\n"
+                            "worker-0 slots=1\nworker-1 slots=1\n"
+                        ),
+                        (
+                            "Test CUDA failure util.cu:555 'CUDA driver version is "
+                            "insufficient for CUDA runtime version'\n"
+                            "mpirun detected that one or more processes exited with "
+                            "non-zero status\n"
+                        ),
+                    )
+                return SoperatorValidationCommandResult(
+                    command,
+                    0,
+                    "cxcli-soperator-srun-ok\nworker-gpu-0\n",
+                    "",
+                )
+        return _standard_or_ok(command)
+
+    with pytest.raises(RuntimeError, match="Slurm NCCL benchmark"):
+        run_soperator_cluster_validations(
+            [spec],
+            reports_dir=tmp_path,
+            command_runner=_runner,
+        )
+
+    report = json.loads(
+        (tmp_path / "acceptance-benchmark-report-training.json").read_text(encoding="utf-8")
+    )
+    nccl_check = report["checks"][-1]
+    assert report["passed"] is False
+    assert nccl_check["name"] == "Slurm NCCL benchmark"
+    assert nccl_check["status"] == "failed"
+    assert nccl_check["summary"] == (
+        "NCCL all_reduce_perf failed on partition gpu: CUDA driver version is "
+        "insufficient for the CUDA runtime used by /usr/bin/all_reduce_perf_mpi."
+    )
+    assert nccl_check["failure_reason"] == "cuda_driver_runtime_mismatch"
+    assert nccl_check["benchmark_mode"] == "multi-node"
+    assert nccl_check["nodes"] == 5
+    assert nccl_check["gpus_per_node"] == 1
+    assert nccl_check["ranks"] == 5
+
+
+def test_soperator_cluster_validation_runs_slurm_nccl_smoke_on_one_total_gpu(
+    tmp_path: Path,
+) -> None:
+    spec = {
+        "kind": SOPERATOR_CLUSTER_VALIDATION_KIND,
+        "name": "Soperator cluster smoke test (training)",
+        "target_ref": "training",
+        "namespace": "soperator",
+        "cluster_name": "training",
+        "kube_context": "training-context",
+        "report_file": "acceptance-benchmark-report-training.json",
+        "include_nccl_benchmark": True,
+        "average_bus_bandwidth_threshold_gbps": 300.0,
+        "mode": "benchmark",
+    }
+
+    def _runner(
+        args,
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorValidationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        if command[:7] == (
+            "kubectl",
+            "--context",
+            "training-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+        ):
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {
+                                    "name": "login-0",
+                                    "labels": {"app.kubernetes.io/component": "login"},
+                                },
+                                "status": {"phase": "Running"},
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:8] == (
+            "kubectl",
+            "--context",
+            "training-context",
+            "-n",
+            "soperator",
+            "get",
+            "slurmclusters",
+            "-o",
+        ):
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {"metadata": {"name": "training"}, "status": {"phase": "Available"}}
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:8] == (
+            "kubectl",
+            "--context",
+            "training-context",
+            "-n",
+            "soperator",
+            "exec",
+            "login-0",
+            "--",
+        ):
+            if command[8:11] == ("sinfo", "-h", "-o") and command[11] == "%t":
                 return SoperatorValidationCommandResult(command, 0, "idle\n", "")
             if command[8:11] == ("sinfo", "-h", "-o") and command[11] == "%P|%t|%G":
                 return SoperatorValidationCommandResult(command, 0, "gpu*|idle|gpu:1\n", "")
@@ -2198,6 +3105,13 @@ def test_soperator_cluster_validation_skips_slurm_nccl_benchmark_on_one_total_gp
                 return SoperatorValidationCommandResult(command, 0, "gpu*|1\n", "")
             if command[8:11] == ("sinfo", "-h", "-o") and command[11] == "%P|%D|%G":
                 return SoperatorValidationCommandResult(command, 0, "gpu*|1|gpu:1\n", "")
+            if command[8:12] == ("sinfo", "-N", "-h", "-o") and command[12] == "%P|%N|%G":
+                return SoperatorValidationCommandResult(
+                    command,
+                    0,
+                    "gpu|worker-gpu-0|gpu:1\n",
+                    "",
+                )
             if command[8:11] == ("sinfo", "-h", "-p") and command[12:14] == (
                 "-o",
                 "%t",
@@ -2215,6 +3129,8 @@ def test_soperator_cluster_validation_skips_slurm_nccl_benchmark_on_one_total_gp
                         "partition=gpu nodes=1\n",
                         "",
                     )
+                if "cxcli-soperator-gpu-driver-jail" in script:
+                    return _gpu_driver_jail_result(command, script)
                 if "cxcli-soperator-gpu-allocation" in script:
                     return SoperatorValidationCommandResult(
                         command,
@@ -2226,11 +3142,18 @@ def test_soperator_cluster_validation_skips_slurm_nccl_benchmark_on_one_total_gp
                     return SoperatorValidationCommandResult(
                         command,
                         0,
-                        (
-                            "cxcli-soperator-nccl-skipped: full Slurm NCCL benchmark "
-                            "runs only on 8-GPU Slurm nodes; selected partition gpu reported "
-                            "1 GPU(s) per node.\n"
-                        ),
+                        "\n".join(
+                            [
+                                "cxcli-soperator-nccl-ok mode=single-node-single-gpu "
+                                "partition=gpu nodes=1 gpus_per_node=1 ranks=1 "
+                                "reported_gpus_per_node=1 max_bytes=2G",
+                                "# nThread 1 nGpus 1 minBytes 536870912 maxBytes 2147483648",
+                                "2147483648 536870912 float sum -1 1410.26 1522.8 0.00 0 "
+                                "0.09 2e+07 0.00 0",
+                                "# Avg bus bandwidth    : 0",
+                            ]
+                        )
+                        + "\n",
                         "",
                     )
                 return SoperatorValidationCommandResult(
@@ -2249,18 +3172,25 @@ def test_soperator_cluster_validation_skips_slurm_nccl_benchmark_on_one_total_gp
 
     report = json.loads(written[0].read_text(encoding="utf-8"))
     assert report["passed"] is True
-    assert report["summary"] == "7/8 Soperator/Slurm checks passed. 1 skipped."
+    assert report["summary"] == "10/10 Soperator/Slurm checks passed."
     nccl_check = report["checks"][-1]
     assert nccl_check["name"] == "Slurm NCCL benchmark"
-    assert nccl_check["status"] == "skipped"
-    assert nccl_check["skipped"] is True
+    assert nccl_check["status"] == "passed"
     assert nccl_check["summary"] == (
-        "Skipped: full Slurm NCCL benchmark runs only on 8-GPU Slurm nodes; selected "
-        "partition gpu reported 1 GPU(s) per node."
+        "single-rank Slurm NCCL all_reduce_perf smoke completed on partition gpu with "
+        "1 GPU on 1 node; no collective bandwidth metric is reported for a one-rank run."
     )
+    assert nccl_check["single_rank_smoke"] is True
+    assert nccl_check["avg_large_message_bus_bandwidth_gbps"] is None
+    assert nccl_check["large_message_bus_bandwidth_gbps"] == {}
+    assert nccl_check["average_bus_bandwidth_threshold_gbps"] == 300.0
+    assert nccl_check["bandwidth_threshold_passed"] is None
+    assert nccl_check["benchmark_mode"] == "single-node-single-gpu"
+    assert nccl_check["max_message_size"] == "2G"
+    assert nccl_check["ranks"] == 1
 
 
-def test_soperator_cluster_validation_skips_slurm_nccl_benchmark_on_two_one_gpu_nodes(
+def test_soperator_cluster_validation_runs_slurm_nccl_benchmark_on_two_one_gpu_nodes(
     tmp_path: Path,
 ) -> None:
     spec = {
@@ -2272,6 +3202,7 @@ def test_soperator_cluster_validation_skips_slurm_nccl_benchmark_on_two_one_gpu_
         "kube_context": "training-context",
         "report_file": "acceptance-benchmark-report-training.json",
         "include_nccl_benchmark": True,
+        "average_bus_bandwidth_threshold_gbps": 300.0,
         "mode": "benchmark",
     }
 
@@ -2368,6 +3299,8 @@ def test_soperator_cluster_validation_skips_slurm_nccl_benchmark_on_two_one_gpu_
                         "cxcli-soperator-partition-hostnames-ok partition=gpu nodes=1\n",
                         "",
                     )
+                if "cxcli-soperator-gpu-driver-jail" in script:
+                    return _gpu_driver_jail_result(command, script)
                 if "cxcli-soperator-gpu-allocation" in script:
                     return SoperatorValidationCommandResult(
                         command,
@@ -2379,11 +3312,17 @@ def test_soperator_cluster_validation_skips_slurm_nccl_benchmark_on_two_one_gpu_
                     return SoperatorValidationCommandResult(
                         command,
                         0,
-                        (
-                            "cxcli-soperator-nccl-skipped: full Slurm NCCL benchmark "
-                            "runs only on 8-GPU Slurm nodes; selected partition gpu reported "
-                            "1 GPU(s) per node.\n"
-                        ),
+                        "\n".join(
+                            [
+                                "cxcli-soperator-nccl-ok mode=multi-node partition=gpu "
+                                "nodes=2 gpus_per_node=1 ranks=2 reported_gpus_per_node=1 "
+                                "max_bytes=2G",
+                                "# nThread 1 nGpus 1 minBytes 536870912 maxBytes 2147483648",
+                                "2147483648 536870912 float sum -1 12345 70.0 120.1 0 "
+                                "12346 69.8 119.9 0",
+                            ]
+                        )
+                        + "\n",
                         "",
                     )
                 return SoperatorValidationCommandResult(
@@ -2404,11 +3343,26 @@ def test_soperator_cluster_validation_skips_slurm_nccl_benchmark_on_two_one_gpu_
     nccl_check = report["checks"][-1]
     assert report["passed"] is True
     assert nccl_check["name"] == "Slurm NCCL benchmark"
-    assert nccl_check["status"] == "skipped"
+    assert nccl_check["status"] == "passed"
     assert nccl_check["summary"] == (
-        "Skipped: full Slurm NCCL benchmark runs only on 8-GPU Slurm nodes; selected "
-        "partition gpu reported 1 GPU(s) per node."
+        "multi-node NCCL all_reduce_perf benchmark completed on partition gpu with "
+        "2 rank(s) across 2 node(s) (1 GPU(s) per node); average bus bandwidth "
+        "120.1 Gbps across 2G message size. Required threshold: 300.0 Gbps. "
+        "Observed average bus bandwidth is below the configured threshold; for a "
+        "1-GPU Slurm NCCL run this is recorded as informational because the NCCL "
+        "workload completed and reported average bandwidth."
     )
+    assert nccl_check["avg_large_message_bus_bandwidth_gbps"] == pytest.approx(120.1)
+    assert nccl_check["large_message_bus_bandwidth_gbps"] == {"2G": 120.1}
+    assert nccl_check["average_bus_bandwidth_threshold_gbps"] == 300.0
+    assert nccl_check["bandwidth_threshold_passed"] is False
+    assert "1-GPU Slurm NCCL run" in nccl_check["bandwidth_threshold_comment"]
+    assert nccl_check["one_gpu_platform"] is True
+    assert nccl_check["max_message_size"] == "2G"
+    assert nccl_check["multi_node_benchmark"] is True
+    assert nccl_check["single_rank_smoke"] is False
+    assert nccl_check["gpus_per_node"] == 1
+    assert nccl_check["ranks"] == 2
 
 
 def test_soperator_cluster_validation_skips_busy_slurm_gpu_allocation(
@@ -2527,6 +3481,8 @@ def test_soperator_cluster_validation_skips_busy_slurm_gpu_allocation(
                         "cxcli-soperator-partition-hostnames-ok partition=gpu nodes=1\n",
                         "",
                     )
+                if "cxcli-soperator-gpu-driver-jail" in script:
+                    return _gpu_driver_jail_result(command, script)
                 if "cxcli-soperator-gpu-allocation" in script:
                     return SoperatorValidationCommandResult(
                         command,
@@ -2810,7 +3766,16 @@ def test_soperator_cluster_validation_allows_cloud_node_resume_for_smoke(
     assert "--partition=cpu" in smoke_scripts[0]
     assert "--immediate=600" in smoke_scripts[0]
     assert smoke_timeouts == [900]
-    assert "partition cpu" in report["checks"][-1]["summary"]
+    smoke_check = next(
+        check for check in report["checks"] if check["name"] == "Slurm srun smoke job"
+    )
+    assert "partition cpu" in smoke_check["summary"]
+    driver_jail_check = next(
+        check
+        for check in report["checks"]
+        if check["name"] == "Slurm GPU driver jail acceptance"
+    )
+    assert driver_jail_check["status"] == "skipped"
 
 
 def test_soperator_cluster_validation_marks_inval_nodes_unhealthy(tmp_path: Path) -> None:

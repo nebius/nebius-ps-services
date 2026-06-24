@@ -6,6 +6,62 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Added Soperator GPU driver-jail guardrails for Nebius-image GPU workers.
+  cxcli now materializes the chart-owned `gpuDriverJail` contract for managed
+  and migrated GPU NodeSets, fails fast on conflicting external mounts, and
+  validates both the static NodeSet mount/init contract and Slurm job-root
+  visibility of non-empty `libcuda.so.1`, `libnvidia-ml.so.1`, and
+  `nvidia-smi` in acceptance smoke and Slurm NCCL benchmark reports.
+- Fixed Soperator deploy smoke to wait through bounded first-run storage and
+  pod startup before evaluating the Pending-pod snapshot. It still does not wait
+  for full Slurm availability or run Slurm jobs during deploy.
+- Fixed K8s CUDA acceptance smoke so a Soperator-owned target with every Ready
+  GPU already allocated reports `SKIPPED` with the allocation reason instead of
+  writing a failed result.
+- Changed `acceptance-test benchmark` NCCL threshold handling for 1-GPU K8s and
+  Slurm runs. When NCCL completes and reports average bus bandwidth, a
+  below-threshold result is recorded in the JSON report as a comment instead of
+  failing the benchmark.
+- Shortened `acceptance-test benchmark` terminal result lines for informational
+  1-GPU NCCL below-threshold runs by keeping the threshold value visible while
+  leaving the longer bandwidth-threshold comment in the JSON report only.
+- Added concise terminal result lines for `acceptance-test smoke` and
+  `acceptance-test benchmark` reports, including `PASSED`, `FAILED`, or
+  `SKIPPED`, suite scope, target, and the most relevant report summary or skip
+  reason. Result statuses are colorized on color-capable terminals: green for
+  `PASSED`, red for `FAILED`, yellow for `SKIPPED`, and cyan for unknown report
+  parsing status. Report paths, suite names, and targets use bold accent colors,
+  while default-color labels, summaries, skip reasons, and elapsed times stay
+  unbolded for readability. Acceptance reports
+  now record `elapsed_seconds` and `elapsed_time`, and terminal result lines
+  print elapsed time in `hh:mm:ss`. Failed acceptance runs now still print any
+  report they wrote before exiting nonzero.
+- Fixed Slurm NCCL acceptance benchmark eligibility so Soperator clusters with
+  idle one-GPU Slurm worker nodes run `all_reduce_perf_mpi` instead of being
+  skipped by the previous hardcoded 8-GPU-per-node floor. The benchmark still
+  prefers 8-GPU Slurm nodes when available, but multiple one-GPU nodes now run
+  as a multi-node NCCL benchmark capped at a 2G message size, and one total GPU
+  runs as a launch/smoke check without a collective-bandwidth threshold. README
+  and `acceptance-test benchmark --help` now show a two-node Slurm NCCL learning
+  command with `--average-bus-bandwidth-threshold-gbps 300` for Ethernet-only
+  one-GPU workers.
+- Fixed `acceptance-test smoke` and `acceptance-test benchmark` so their
+  target handoff stays ad-hoc and no longer falls back to Terraform output or
+  backend initialization. Acceptance runs now use deploy-report/local
+  kubeconfig handoff metadata when available and fail fast with deploy/flux
+  remediation when the target context is missing.
+- Changed `acceptance-test benchmark` to be suite-driven instead of NCCL-only
+  in its command contract. A bare benchmark run now defaults to `k8s-nccl`
+  across all generated targets, all schedulable GPU nodes, no cxcli timeout,
+  and a 300 Gbps RDMA bandwidth threshold. `slurm-nccl` is the canonical Slurm
+  NCCL suite. Slurm NCCL now honors the same run-only `--max-nodes`, `--timeout`, and
+  `--average-bus-bandwidth-threshold-gbps` benchmark flags, and smoke suite
+  help now uses canonical `slurm` and `k8s-cuda` suite names.
+- Changed `acceptance-test smoke` to default to all generated targets when
+  `--target` is omitted, matching benchmark target selection. Removed the
+  ambiguous `--k8s` and `--soperator` acceptance-test selectors; operators now
+  select runtime behavior through `--suite`: `k8s-cuda` or `slurm` for smoke,
+  and `k8s-nccl` or `slurm-nccl` for benchmark.
 - Updated the bundled Soperator portable chart pin to `4.0.2-ps.2`, matching
   the current parent chart package release while keeping local-source
   resolution tied to `helm-charts/soperator/Chart.yaml`.
@@ -72,13 +128,13 @@ All notable changes to this project are tracked here. This changelog follows
   so copied reports remain self-describing. Required Soperator deploy smoke is
   now a fast Kubernetes deployment snapshot that checks the
   `soperator-manager` Deployment, jail storage objects, Pending Soperator
-  pods/events, target `SlurmCluster`, and `NodeSet` resources; it no longer
-  waits for rollout/storage convergence or starts Slurm jobs. Exhaustive
+  pods/events, target `SlurmCluster`, and `NodeSet` resources; it waits only
+  through bounded first-run storage/pod startup and does not wait for full
+  Slurm availability or start Slurm jobs. Exhaustive
   all-node Slurm smoke moves to
-  `acceptance-test smoke --soperator`, and K8s/Slurm NCCL performance work
-  moves to explicit `acceptance-test benchmark` runs. These
-  commands require either `--target <target>` or `--all-targets` so exhaustive
-  checks do not fan out across every generated target by omission. The
+  `acceptance-test smoke --suite slurm`, and K8s/Slurm NCCL performance work
+  moves to explicit `acceptance-test benchmark` runs. Smoke and benchmark both
+  default to all generated targets when `--target` is omitted. The
   Soperator validation JSON detail report schema remains
   `nebius-cxcli-soperator-cluster-validation/v2`; it stores command output as
   line arrays and keeps structured per-partition `partition_hostnames` and
@@ -93,7 +149,12 @@ All notable changes to this project are tracked here. This changelog follows
 - Clarified `acceptance-test --help`, `acceptance-test smoke --help`, and
   `acceptance-test benchmark --help` so the examples show JSON-only reports,
   run-only benchmark overrides, and explicit suite selection for K8s NCCL on
-  Soperator-owned GPU targets during maintenance.
+  Soperator-owned GPU targets during maintenance, and aligned README command
+  examples/flag inventory with the no-Terraform-backend acceptance-test
+  handoff contract.
+- Added a README `Acceptance Testing` section that explains post-deploy smoke
+  versus benchmark runs, target handoff, report outputs, and the runtime
+  difference between `k8s-nccl` and `slurm-nccl`.
 - Fixed deploy-time GPU visibility validation so fresh `gpu-validation`
   namespaces no longer race Kubernetes creation of the implicit `default`
   ServiceAccount. cxcli now applies the namespace before the sampled CUDA pods,
@@ -655,7 +716,7 @@ All notable changes to this project are tracked here. This changelog follows
   healthy clusters report `gpu-stack: verified` instead of implying that every
   GPU target needs active remediation.
 - Improved Soperator testing split: deploy-time Soperator testing now stays on
-  fast Kubernetes resource snapshots, while `acceptance-test smoke --soperator`
+  fast Kubernetes resource snapshots, while `acceptance-test smoke --suite slurm`
   owns Slurm CLI, `srun`, all-node hostname, and all-node GPU allocation checks.
   Slurm node status still treats `inval` as unhealthy in the explicit
   acceptance smoke path, Slurm GPU allocation reports include the per-node

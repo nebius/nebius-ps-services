@@ -167,10 +167,10 @@ components:
               # on the RDMA path so Ethernet-only runs stay informative instead
               # of failing against an InfiniBand expectation.
               # Keep the dedicated namespace, but delete the transient MPIJob
-              # and transient Training Operator install after each run.
+              # and transient Training Operator install after each run. Omitted
+              # timeout means no cxcli benchmark deadline; omitted max_nodes
+              # means all schedulable GPU nodes.
               chart_component_id: nccl-test
-              timeout: 20m
-              max_nodes: 8
               # MPIJob v1 still lives on the Training Operator v1.x line.
               # Keep the transient prerequisite pinned instead of following a
               # floating latest manifest.

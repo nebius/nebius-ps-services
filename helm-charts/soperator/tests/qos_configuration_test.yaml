@@ -84,7 +84,13 @@ tests:
     asserts:
       - matchRegex:
           path: data["reconcile.sh"]
-          pattern: "apply_qos 'high' 'Priority=1000' 'MaxJobs=200' 'MaxWall=02:00:00' 'Flags=DenyOnLimit' 'Preempt=normal,low'"
+          pattern: "apply_qos 'high' 'Priority=1000' 'MaxJobs=200' 'MaxWall=02:00:00' 'Flags=DenyOnLimit'"
+        documentSelector:
+          path: kind
+          value: ConfigMap
+      - matchRegex:
+          path: data["reconcile.sh"]
+          pattern: "apply_qos 'high' 'Preempt=normal,low'"
         documentSelector:
           path: kind
           value: ConfigMap
