@@ -31,6 +31,7 @@ from nebius_cxcli.mk8s_gpu import (
     _run_operator_readiness_validation,
     ensure_mk8s_gpu_app_rows,
     mk8s_acceptance_benchmark_validation_specs,
+    mk8s_acceptance_smoke_validation_specs,
     mk8s_cluster_smoke_validation_specs,
     mk8s_gpu_dependency_issues,
     mk8s_gpu_flux_release_dependencies,
@@ -320,6 +321,7 @@ def test_mk8s_gpu_cluster_adds_network_operator_and_nccl_benchmark() -> None:
     )
     validations = mk8s_gpu_validation_specs(payload)
     benchmark_validations = mk8s_acceptance_benchmark_validation_specs(payload)
+    acceptance_smoke_validations = mk8s_acceptance_smoke_validation_specs(payload)
     dependencies = mk8s_gpu_flux_release_dependencies(
         payload,
         release_entry_ids=set(selection.selected_app_ids),
@@ -338,11 +340,17 @@ def test_mk8s_gpu_cluster_adds_network_operator_and_nccl_benchmark() -> None:
         "mk8s_gpu_visibility",
     ]
     assert [item["kind"] for item in benchmark_validations] == ["mk8s_nccl"]
+    assert [item["kind"] for item in acceptance_smoke_validations] == ["mk8s_cuda_smoke"]
     nccl_spec = benchmark_validations[0]
+    cuda_smoke_spec = acceptance_smoke_validations[0]
     gpu_visibility_spec = next(
         item for item in validations if item["kind"] == "mk8s_gpu_visibility"
     )
     assert nccl_spec["chart_component_id"] == "nccl-test"
+    assert nccl_spec["target_ref"] == "mk8s"
+    assert nccl_spec["report_file"] == "acceptance-benchmark-report-mk8s.json"
+    assert cuda_smoke_spec["target_ref"] == "mk8s"
+    assert cuda_smoke_spec["report_file"] == "acceptance-smoke-report-mk8s.json"
     assert nccl_spec["chart_name_or_ref"].endswith("/helm-charts/nccl-test")
     assert nccl_spec["chart_repo"] == ""
     assert gpu_visibility_spec["max_nodes"] == 3

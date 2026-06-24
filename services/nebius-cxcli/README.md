@@ -754,7 +754,7 @@ Bundled MK8s GPU app policy:
 - GPU visibility is enabled by default for GPU-backed MK8s deploys, including Soperator production targets, but it remains intentionally bounded and workload-based instead of stopping at a node `allocatable` check: by default it runs the CUDA sample on at most 3 Ready GPU nodes, reports live pod phase progress, bulk-cleans the validation pods afterward, and saves the underlying device-plugin allocatable snapshot in the report for comparison. If existing workloads such as Slurm workers already reserve every GPU on every Ready GPU node, cxcli records the GPU visibility probe as skipped instead of failing on an expected scheduler admission rejection.
 - NCCL settings are command-only benchmark settings for explicit `nebius-cxcli acceptance-test benchmark` runs; they are not persisted under `config.yaml` and are not part of deploy smoke. The K8s NCCL workload manifest comes from the first-party transient `helm-charts/nccl-test` chart: `source.local.path` points at the checked-in chart for developer/local use, and `source.portable` is pinned to `oci://cr.<region>.nebius.cloud/<registry-short-id>/charts/nccl-test --version 0.2.8`. The shared image/tag plus benchmark policy defaults are sourced directly from the chart's own `values.yaml` and `component_cli_settings.yaml` at `components.infra.mk8s.cli.gpu.benchmarks.nccl`; local/unit-test default hydration falls back to the checked-in chart values when `helm` is unavailable. `nebius-cxcli` auto-selects NCCL transport from the resolved MK8s shape: Ethernet-only shapes run Socket/TCPIP mode, while GPU-cluster / InfiniBand shapes switch to the RDMA path. On that RDMA path, cxcli appends `NCCL_DMABUF_ENABLE=1` as an MPI environment export. See [Acceptance Testing](#acceptance-testing) for smoke-vs-benchmark guidance, suite selection, and copy-paste benchmark commands.
 
-- For cxcli-managed Soperator targets with fixed or nonzero-minimum GPU workers, the first `deploy` stages local app reconciliation: it applies the platform/GPU operator Flux resources, runs the required MK8s inventory plus bounded GPU visibility checks while the GPUs are still scheduler-free, then applies the full Soperator bundle and runs the required fast Soperator deployment snapshot. If a managed Soperator GPU worker group autoscaling range starts from zero (`min_node_count: 0`, `max_node_count > 0`), cxcli applies the full Soperator bundle, requests the Soperator power-state bootstrap for ephemeral GPU workers, runs the required Soperator deployment snapshot, and then runs the MK8s inventory/readiness/GPU visibility checks against any resumed GPU nodes. For external/adopted Soperator targets, or reruns where Soperator worker pods already reserve every Kubernetes GPU, the Kubernetes GPU visibility probe can still be skipped because there are no scheduler-free GPUs. Deploy writes `cluster-inventory-report-<target>.json` for inventory, `deploy-gpu-stack-readiness-report-<target>.json` and `deploy-gpu-visibility-report-<target>.json` for MK8s GPU deployment testing, and `deploy-smoke-report-<target>.json` for Soperator deployment testing. It does not run exhaustive all-node Slurm checks, Slurm `srun` jobs, or NCCL/performance benchmarks. Operators run `nebius-cxcli acceptance-test smoke <config.yaml> --target <target> --soperator` later for exhaustive all-node Slurm hostname/GPU smoke in `acceptance-smoke-report-<target>.json`, and run `nebius-cxcli acceptance-test benchmark ...` explicitly for K8s or Slurm NCCL/performance work in `acceptance-benchmark-report-<target>.json`. `acceptance-test smoke` requires either `--target <target>` or `--all-targets`; `acceptance-test benchmark` defaults to all generated targets when `--target` is omitted. They resolve target handoff from `generated/reports/deploy-report.md`, an explicit or unambiguous local kubeconfig context, or a known cluster ID; they do not read Terraform state or initialize the Terraform backend. If that handoff is missing, run `deploy` or `flux apply` for the target first. The JSON detail reports include `test_purpose`, `mode`, `scope`, `kind`, and `target_ref` so copied report files remain self-describing. The required Soperator deploy report is a Kubernetes snapshot after bounded first-run storage/pod startup: it checks the `soperator-manager` Deployment, jail storage objects, Pending Soperator pods/events, the target SlurmCluster, and NodeSet resources without waiting for full Slurm availability. The cluster inventory report remains read-only and includes Slurm partitions and nodes when the login pod and `sinfo` are already queryable, so large clusters stay inventory-oriented while deploy stays fast.
+- For cxcli-managed Soperator targets with fixed or nonzero-minimum GPU workers, the first `deploy` stages local app reconciliation: it applies the platform/GPU operator Flux resources, runs the required MK8s inventory plus bounded GPU visibility checks while the GPUs are still scheduler-free, then applies the full Soperator bundle and runs the required fast Soperator deployment snapshot. If a managed Soperator GPU worker group autoscaling range starts from zero (`min_node_count: 0`, `max_node_count > 0`), cxcli applies the full Soperator bundle, requests the Soperator power-state bootstrap for ephemeral GPU workers, runs the required Soperator deployment snapshot, and then runs the MK8s inventory/readiness/GPU visibility checks against any resumed GPU nodes. For external/adopted Soperator targets, or reruns where Soperator worker pods already reserve every Kubernetes GPU, the Kubernetes GPU visibility probe can still be skipped because there are no scheduler-free GPUs. Deploy writes `cluster-inventory-report-<target>.json` for inventory, `deploy-gpu-stack-readiness-report-<target>.json` and `deploy-gpu-visibility-report-<target>.json` for MK8s GPU deployment testing, and `deploy-smoke-report-<target>.json` for Soperator deployment testing. It does not run exhaustive all-node Slurm checks, Slurm `srun` jobs, or NCCL/performance benchmarks. Operators run `nebius-cxcli acceptance-test smoke <config.yaml> --target <target> --suite slurm` later for exhaustive all-node Slurm hostname/GPU smoke in `acceptance-smoke-report-<target>.json`, and run `nebius-cxcli acceptance-test benchmark ...` explicitly for K8s or Slurm NCCL/performance work in `acceptance-benchmark-report-<target>.json`. Both `acceptance-test smoke` and `acceptance-test benchmark` default to all generated targets when `--target` is omitted. They resolve target handoff from `generated/reports/deploy-report.md`, an explicit or unambiguous local kubeconfig context, or a known cluster ID; they do not read Terraform state or initialize the Terraform backend. If that handoff is missing, run `deploy` or `flux apply` for the target first. The JSON detail reports include `test_purpose`, `mode`, `scope`, `kind`, and `target_ref` so copied report files remain self-describing. The required Soperator deploy report is a Kubernetes snapshot after bounded first-run storage/pod startup: it checks the `soperator-manager` Deployment, jail storage objects, Pending Soperator pods/events, the target SlurmCluster, and NodeSet resources without waiting for full Slurm availability. The cluster inventory report remains read-only and includes Slurm partitions and nodes when the login pod and `sinfo` are already queryable, so large clusters stay inventory-oriented while deploy stays fast.
 
 What `wizard` is doing:
 
@@ -1566,7 +1566,7 @@ Wizard field behavior:
   Pending pods/events, SlurmCluster, and NodeSets,
   then writes `deploy-smoke-report-<target>.json`. Exhaustive all-node Slurm
   hostname/GPU smoke moves to
-  `nebius-cxcli acceptance-test smoke ... --soperator` and writes
+  `nebius-cxcli acceptance-test smoke ... --suite slurm` and writes
   `acceptance-smoke-report-<target>.json`. Soperator JSON detail reports use
   the `nebius-cxcli-soperator-cluster-validation/v2` schema and keep command
   `stdout`/`stderr` as arrays of lines. Acceptance GPU allocation node entries
@@ -2062,7 +2062,7 @@ Local `deploy`/`flux bootstrap` behavior when apps + the bundled `mk8s` componen
   Kubernetes GPUs, raw Kubernetes GPU visibility detail reports and the human
   `deploy-report.md` both keep the scheduler skip visible as a GPU visibility
   result; Slurm allocation evidence is reported by explicit
-  `acceptance-test smoke --soperator` runs instead.
+  `acceptance-test smoke --suite slurm` runs instead.
 - Generated bundles are expected to carry manifest `deploy.validations` metadata from `render`. If that metadata is missing or malformed, `deploy` now fails fast and requires a rerender instead of recomputing validation specs from the runtime config.
 - During deploy-time validations, `deploy` keeps one continuous spinner alive across validation boundaries and live in-cluster progress updates, so the command does not go visually idle between operator readiness, GPU visibility, Observability Agent, or ESO MysteryBox phases.
 - Once the built-in MK8s handoff is ready, the local Flux phase now keeps one continuous spinner alive and updates its message through cluster reachability, Flux API discovery, rendered manifest apply, and the final rendered-resource readiness wait so the command does not go visually idle between phases.
@@ -2135,10 +2135,10 @@ workload family. They do not attempt to measure cluster performance.
   runs a Kubernetes CUDA workload smoke on MK8s GPU targets. It uses the
   handed-off kubeconfig, schedules CUDA validation pods across every currently
   scheduler-free Ready GPU node, and proves that Kubernetes can admit a GPU
-  workload and that the GPU stack exposes usable devices to pods. `--k8s`
-  selects this family for plain MK8s GPU targets; explicit `--suite k8s-cuda`
-  can be used when an operator intentionally wants the Kubernetes smoke on a
-  Soperator-owned GPU target.
+  workload and that the GPU stack exposes usable devices to pods. The suite
+  name selects the Kubernetes runtime path directly; explicit
+  `--suite k8s-cuda` can also be used when an operator intentionally wants the
+  Kubernetes smoke on a Soperator-owned GPU target.
 - `nebius-cxcli acceptance-test smoke <config.yaml> --suite slurm`
   runs the Soperator/Slurm smoke suite. It reaches the Soperator login pod,
   inspects Slurm partitions and queue state, then runs Slurm jobs for hostname
@@ -2151,8 +2151,8 @@ workload family. They do not attempt to measure cluster performance.
   `--continue-on-failure/--fail-fast` to control exhaustive all-node Slurm
   collection.
 
-Smoke requires an explicit target selector: pass either `--target <target-id>`
-for one target or `--all-targets` for every generated target.
+A bare smoke command defaults to every generated target, equivalent to
+`--all-targets`. Operators can narrow the run with `--target <target-id>`.
 
 ### Benchmark Tests
 
@@ -2195,10 +2195,6 @@ different schedulers and runtime paths.
 | --- | --- | --- | --- |
 | `k8s-nccl` | Kubernetes, Kubeflow Training Operator, and the transient `nccl-test` Helm chart | Creates a temporary `MPIJob` in the validation namespace, selects Ready GPU nodes through Kubernetes, renders chart values for the resolved target shape, and runs NCCL in worker pods. cxcli selects Socket/TCPIP transport for Ethernet-only shapes and RDMA transport for GPU-cluster / InfiniBand shapes. For 1-GPU shapes, below-threshold average bandwidth is recorded as a comment when NCCL completes and reports the average. | You want Kubernetes-level NCCL evidence for an MK8s GPU target, including GPU Operator, Network Operator/RDMA, pod scheduling, and MPIJob behavior. |
 | `slurm-nccl` | Soperator login pod, Slurm partitions, Slurm allocation, and `mpirun` inside the Slurm environment | Selects an eligible Slurm GPU partition, chooses idle GPU nodes, runs a GPU driver-jail preflight for non-empty `libcuda.so.1`, `libnvidia-ml.so.1`, and `nvidia-smi` from the Slurm job root, optionally caps nodes with `--max-nodes`, allocates through Slurm, and runs `/usr/bin/all_reduce_perf_mpi`. It prefers 8-GPU Slurm nodes when available, but it also runs valid one-GPU Slurm nodes: multiple idle one-GPU nodes run a multi-node NCCL benchmark capped at a 2G message size, while one total GPU runs a launch/smoke check with no collective bandwidth threshold. For 1-GPU Slurm runs that do report average bandwidth, below-threshold bandwidth is recorded as a comment instead of failing the benchmark. | You want Slurm-level NCCL evidence for a Soperator target and need to validate the scheduler path users will run training jobs through. |
-
-`--suite soperator-nccl` is an alias for `slurm-nccl`; both names run the same
-Slurm NCCL suite. Prefer `slurm-nccl` in examples because it names the scheduler
-path directly.
 
 ## Soperator Commands
 
@@ -2889,7 +2885,7 @@ required Soperator deployment snapshot after bounded first-run storage/pod
 startup: `soperator-manager` Deployment availability, jail storage object
 visibility, Pending Soperator pod/event diagnostics, target `SlurmCluster`
 visibility, and worker `NodeSet` visibility using the public Soperator CRDs.
-Explicit `acceptance-test smoke --soperator` runs the Slurm CLI and all-node
+Explicit `acceptance-test smoke --suite slurm` runs the Slurm CLI and all-node
 Slurm smoke checks later; Slurm nodes reported as `inval` remain unhealthy
 there. The
 migration run writes `generated/reports/ext-soperator-migrate-report.md` with migration
@@ -4263,14 +4259,14 @@ nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
   - Validates an existing rendered bundle from `generated/`, one of its subdirectories, or a file under that tree, including generated-bundle readiness and live quota/capacity.
   - Example: `nebius-cxcli validate-generated ~/deployments/tenant-name-example/project-name-example/generated`
 - `acceptance-test smoke <config.yaml>`
-  - Runs explicit heavy/on-demand post-deploy acceptance smoke suites and writes JSON reports only under `generated/reports/`.
-  - Requires either `--target <target-id>` or `--all-targets`.
+  - Runs explicit post-deploy acceptance smoke suites and writes JSON reports only under `generated/reports/`.
+  - Defaults to every generated target when `--target` is omitted.
   - Use `--suite slurm` for Slurm all-node smoke and `--suite k8s-cuda` for Kubernetes CUDA smoke on MK8s GPU targets.
   - Example: `nebius-cxcli acceptance-test smoke ~/deployments/tenant-name-example/project-name-example/config.yaml --target sop-cluster1 --suite slurm --batch-size 128 --concurrency 8 --fail-fast`
 - `acceptance-test benchmark <config.yaml>`
-  - Runs explicit heavy/on-demand benchmark suites and writes JSON reports only under `generated/reports/`.
+  - Runs explicit post-deploy benchmark suites and writes JSON reports only under `generated/reports/`.
   - Defaults to `--suite k8s-nccl` across all generated targets when `--target` is omitted.
-  - Use `--suite slurm-nccl` for the Slurm NCCL benchmark; `--suite soperator-nccl` is the same suite alias.
+  - Use `--suite slurm-nccl` for the Slurm NCCL benchmark.
   - Benchmark node count, timeout, and RDMA bandwidth threshold are run-only flags, not `config.yaml` settings.
   - Example: `nebius-cxcli acceptance-test benchmark ~/deployments/tenant-name-example/project-name-example/config.yaml --target mk8s-prod --suite k8s-nccl --max-nodes 4 --timeout 20m --average-bus-bandwidth-threshold-gbps 300`
 - `terraform plan <generated-path>`
@@ -4327,11 +4323,11 @@ Common command flags:
 - `validate-generated`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--portable`
 - `render`: `--force`
 - `deploy`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--skip-validations`, `--skip-validation`, `--target`, `--all-targets`
-- `acceptance-test smoke`: `--target`, `--all-targets`, `--k8s`,
-  `--soperator`, `--suite`, `--batch-size`, `--concurrency`,
+- `acceptance-test smoke`: `--target`, `--all-targets`, `--suite`,
+  `--batch-size`, `--concurrency`,
   `--continue-on-failure/--fail-fast`
-- `acceptance-test benchmark`: `--target`, `--all-targets`, `--k8s`,
-  `--soperator`, `--suite`, `--continue-on-failure/--fail-fast`,
+- `acceptance-test benchmark`: `--target`, `--all-targets`, `--suite`,
+  `--continue-on-failure/--fail-fast`,
   `--max-nodes`, `--timeout`, `--average-bus-bandwidth-threshold-gbps`
 - `upgrade node-template`: `--to-version`, `--to-os`, `--to-gpu-stack-preset`, `--node-group`, `--dry-run`, `--strategy`, `--strategy-max-surge-count`, `--drain-timeout`, `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--skip-validations`, `--skip-validation`, `--interactive/--no-interactive`
 - `upgrade node-group`: `--node-group`, `--to-platform`, `--to-preset`, `--to-os`, `--to-gpu-stack-preset`, `--to-fabric`, `--dry-run/--execute`, `--approve/--no-approve`

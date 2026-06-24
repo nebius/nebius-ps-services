@@ -54,10 +54,14 @@ All notable changes to this project are tracked here. This changelog follows
   in its command contract. A bare benchmark run now defaults to `k8s-nccl`
   across all generated targets, all schedulable GPU nodes, no cxcli timeout,
   and a 300 Gbps RDMA bandwidth threshold. `slurm-nccl` is the canonical Slurm
-  NCCL suite, with `soperator-nccl` kept as an explicit alias. Slurm NCCL now
-  honors the same run-only `--max-nodes`, `--timeout`, and
+  NCCL suite. Slurm NCCL now honors the same run-only `--max-nodes`, `--timeout`, and
   `--average-bus-bandwidth-threshold-gbps` benchmark flags, and smoke suite
   help now uses canonical `slurm` and `k8s-cuda` suite names.
+- Changed `acceptance-test smoke` to default to all generated targets when
+  `--target` is omitted, matching benchmark target selection. Removed the
+  ambiguous `--k8s` and `--soperator` acceptance-test selectors; operators now
+  select runtime behavior through `--suite`: `k8s-cuda` or `slurm` for smoke,
+  and `k8s-nccl` or `slurm-nccl` for benchmark.
 - Updated the bundled Soperator portable chart pin to `4.0.2-ps.2`, matching
   the current parent chart package release while keeping local-source
   resolution tied to `helm-charts/soperator/Chart.yaml`.
@@ -128,10 +132,9 @@ All notable changes to this project are tracked here. This changelog follows
   through bounded first-run storage/pod startup and does not wait for full
   Slurm availability or start Slurm jobs. Exhaustive
   all-node Slurm smoke moves to
-  `acceptance-test smoke --soperator`, and K8s/Slurm NCCL performance work
-  moves to explicit `acceptance-test benchmark` runs. `acceptance-test smoke`
-  requires either `--target <target>` or `--all-targets`; benchmark defaults to
-  all generated targets when `--target` is omitted. The
+  `acceptance-test smoke --suite slurm`, and K8s/Slurm NCCL performance work
+  moves to explicit `acceptance-test benchmark` runs. Smoke and benchmark both
+  default to all generated targets when `--target` is omitted. The
   Soperator validation JSON detail report schema remains
   `nebius-cxcli-soperator-cluster-validation/v2`; it stores command output as
   line arrays and keeps structured per-partition `partition_hostnames` and
@@ -151,7 +154,7 @@ All notable changes to this project are tracked here. This changelog follows
   handoff contract.
 - Added a README `Acceptance Testing` section that explains post-deploy smoke
   versus benchmark runs, target handoff, report outputs, and the runtime
-  difference between `k8s-nccl`, `slurm-nccl`, and the `soperator-nccl` alias.
+  difference between `k8s-nccl` and `slurm-nccl`.
 - Fixed deploy-time GPU visibility validation so fresh `gpu-validation`
   namespaces no longer race Kubernetes creation of the implicit `default`
   ServiceAccount. cxcli now applies the namespace before the sampled CUDA pods,
@@ -713,7 +716,7 @@ All notable changes to this project are tracked here. This changelog follows
   healthy clusters report `gpu-stack: verified` instead of implying that every
   GPU target needs active remediation.
 - Improved Soperator testing split: deploy-time Soperator testing now stays on
-  fast Kubernetes resource snapshots, while `acceptance-test smoke --soperator`
+  fast Kubernetes resource snapshots, while `acceptance-test smoke --suite slurm`
   owns Slurm CLI, `srun`, all-node hostname, and all-node GPU allocation checks.
   Slurm node status still treats `inval` as unhealthy in the explicit
   acceptance smoke path, Slurm GPU allocation reports include the per-node

@@ -7705,7 +7705,6 @@ def test_acceptance_test_smoke_command_passes_options(
             str(fake_paths.config_path),
             "--target",
             "mk8s",
-            "--soperator",
             "--suite",
             "slurm",
             "--batch-size",
@@ -7722,8 +7721,6 @@ def test_acceptance_test_smoke_command_passes_options(
         "config_path": fake_paths.config_path,
         "requested_target_ref": "mk8s",
         "all_targets": False,
-        "include_k8s": False,
-        "include_soperator": True,
         "suites": ["slurm"],
         "batch_size": 64,
         "concurrency": 4,
@@ -7989,7 +7986,7 @@ def test_acceptance_test_smoke_runner_uses_readonly_context_and_kube_handoff(
         calls.append(("soperator", validations, reports_dir, extra_env))
         report_path = reports_dir / "acceptance-smoke-report-mk8s.json"
         report_path.write_text(
-            json.dumps({"passed": True, "scope": "slurm", "target_ref": "mk8s"}),
+            json.dumps({"passed": True, "scope": "all-node-slurm-smoke", "target_ref": "mk8s"}),
             encoding="utf-8",
         )
         return [report_path]
@@ -8004,9 +8001,7 @@ def test_acceptance_test_smoke_runner_uses_readonly_context_and_kube_handoff(
         config_path=fake_paths.config_path,
         requested_target_ref="mk8s",
         all_targets=False,
-        include_k8s=False,
-        include_soperator=True,
-        suites=None,
+        suites=["slurm"],
         batch_size=128,
         concurrency=8,
         continue_on_failure=True,
@@ -8052,7 +8047,7 @@ def test_acceptance_test_rejects_same_target_duplicate_canonical_reports() -> No
         )
 
 
-def test_acceptance_test_smoke_requires_explicit_target_selection(
+def test_acceptance_test_smoke_runner_defaults_to_all_targets(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -8060,28 +8055,90 @@ def test_acceptance_test_smoke_requires_explicit_target_selection(
     config = _config_with_enabled_mk8s()
     manifest = {
         "deploy": {
-            "targets": [_mk8s_target(fake_paths)],
+            "targets": [
+                _mk8s_target(fake_paths, target_ref="cluster-a"),
+                _mk8s_target(fake_paths, target_ref="cluster-b"),
+            ],
             "validations": [],
         }
     }
+    smoke_specs = [
+        {
+            "kind": "mk8s_cuda_smoke",
+            "target_ref": "cluster-a",
+            "name": "K8s CUDA acceptance smoke (cluster-a)",
+            "report_file": "acceptance-smoke-report-cluster-a.json",
+        },
+        {
+            "kind": "mk8s_cuda_smoke",
+            "target_ref": "cluster-b",
+            "name": "K8s CUDA acceptance smoke (cluster-b)",
+            "report_file": "acceptance-smoke-report-cluster-b.json",
+        },
+    ]
+    handoff_calls: list[bool] = []
+    smoke_kwargs: dict[str, Any] = {}
+
     monkeypatch.setattr(
         cli,
         "_load_deploy_context_readonly",
         lambda _path: (config, fake_paths, manifest),
     )
+    monkeypatch.setattr(cli, "_deploy_report_target_contexts", lambda _paths: {})
+    monkeypatch.setattr(cli, "soperator_acceptance_smoke_specs", lambda *_args, **_kwargs: [])
 
-    with pytest.raises(ValueError, match="Select one target with --target"):
-        cli._run_acceptance_smoke_command(
-            config_path=fake_paths.config_path,
-            requested_target_ref=None,
-            all_targets=False,
-            include_k8s=True,
-            include_soperator=False,
-            suites=None,
-            batch_size=128,
-            concurrency=8,
-            continue_on_failure=True,
-        )
+    def _fake_mk8s_acceptance_smoke_validation_specs(*_args: Any, **kwargs: Any):
+        smoke_kwargs.update(kwargs)
+        return smoke_specs
+
+    monkeypatch.setattr(
+        cli,
+        "mk8s_acceptance_smoke_validation_specs",
+        _fake_mk8s_acceptance_smoke_validation_specs,
+    )
+    monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
+
+    @contextmanager
+    def _fake_status(_message: str, **_kwargs: object):
+        yield SimpleNamespace(update=lambda *_args, **_kwargs: None)
+
+    monkeypatch.setattr(cli.console, "status", _fake_status)
+
+    def _fake_prepare_cluster_handoff_kube_env(
+        *_args: object,
+        set_current_context: bool,
+        **_kwargs: object,
+    ) -> dict[str, str]:
+        handoff_calls.append(set_current_context)
+        return {"KUBECONFIG": "/tmp/kubeconfig"}
+
+    monkeypatch.setattr(
+        cli, "_prepare_cluster_handoff_kube_env", _fake_prepare_cluster_handoff_kube_env
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_mk8s_gpu_validations",
+        lambda validations, *, reports_dir, **_kwargs: [
+            reports_dir / f"acceptance-smoke-report-{validations[0]['target_ref']}.json"
+        ],
+    )
+
+    written = cli._run_acceptance_smoke_command(
+        config_path=fake_paths.config_path,
+        requested_target_ref=None,
+        all_targets=False,
+        suites=None,
+        batch_size=128,
+        concurrency=8,
+        continue_on_failure=True,
+    )
+
+    assert written == [
+        fake_paths.reports_dir / "acceptance-smoke-report-cluster-a.json",
+        fake_paths.reports_dir / "acceptance-smoke-report-cluster-b.json",
+    ]
+    assert smoke_kwargs == {"include_soperator_targets": False}
+    assert handoff_calls == [False, False]
 
 
 def test_acceptance_test_help_shows_safe_examples() -> None:
@@ -8100,18 +8157,20 @@ def test_acceptance_test_help_shows_safe_examples() -> None:
     benchmark_help = " ".join(_plain_output(benchmark_result.output).split())
     deploy_help = " ".join(_plain_output(deploy_result.output).split())
 
-    assert "same-target K8s and Slurm/Soperator suites cannot be combined" in group_help
+    assert "same-target K8s and Slurm suites cannot be combined" in group_help
     assert (
         "Commands write JSON reports only, print color-coded concise result lines with elapsed time"
         in group_help
     )
+    assert "suite-driven smoke validation and explicit benchmarks" in group_help
     assert "and do not change config" in group_help
     assert (
-        "nebius-cxcli acceptance-test smoke <config.yaml> --target sop-cluster1 --soperator"
+        "nebius-cxcli acceptance-test smoke <config.yaml> --target sop-cluster1 --suite slurm"
         in group_help
     )
     assert "Slurm all-node smoke JSON report:" in group_help
-    assert "plain MK8s all-node CUDA JSON report:" in group_help
+    assert "K8s CUDA smoke JSON report:" in group_help
+    assert "default smoke on all targets:" in group_help
     assert "default K8s NCCL benchmark on all targets:" in group_help
     assert "nebius-cxcli acceptance-test benchmark <config.yaml>" in group_help
     assert "Slurm NCCL benchmark JSON report:" in group_help
@@ -8123,23 +8182,31 @@ def test_acceptance_test_help_shows_safe_examples() -> None:
     assert "prints a color-coded concise PASSED/FAILED/SKIPPED result line" in smoke_help
     assert "with elapsed time in hh:mm:ss" in smoke_help
     assert "Slurm all-node smoke JSON report:" in smoke_help
-    assert "plain MK8s all-node CUDA JSON report:" in smoke_help
+    assert "K8s CUDA smoke JSON report:" in smoke_help
     assert "--suite slurm --batch-size 128 --concurrency 8 --fail-fast" in smoke_help
     assert "--batch-size 128 --concurrency 8 --fail-fast" in smoke_help
-    assert "Required unless --all-targets is set." in smoke_help
-    assert "Required unless --target is set." in smoke_help
+    assert "Run acceptance smoke tests for one generated cluster target." in smoke_help
+    assert "Omit --target to run every generated target." in smoke_help
+    assert "This is the default when --target is omitted." in smoke_help
+    assert "Supported values: k8s-cuda, slurm" in smoke_help
+    assert "Omit --suite to run target defaults: k8s-cuda on plain MK8s GPU targets" in (
+        smoke_help
+    )
+    assert "slurm on Soperator targets" in smoke_help
     assert "JSON reports only under generated/reports/" in benchmark_help
     assert "does not change config.yaml" in benchmark_help
     assert "Target handoff comes from deploy-report/local kubeconfig context" in benchmark_help
     assert "does not initialize the Terraform backend" in benchmark_help
     assert "prints a color-coded concise PASSED/FAILED/SKIPPED result line" in benchmark_help
     assert "with elapsed time in hh:mm:ss" in benchmark_help
-    assert "Run explicit heavy/on-demand benchmark suites selected by --suite" in benchmark_help
-    assert "The default suite is k8s-nccl across all targets" in benchmark_help
+    assert "Run explicit post-deploy benchmark suites" in benchmark_help
+    assert "Use --suite to select the benchmark runtime path" in benchmark_help
+    assert "defaults to k8s-nccl across all targets" in benchmark_help
     assert "K8s NCCL uses the pinned transient nccl-test chart" in benchmark_help
-    assert "slurm-nccl and soperator-nccl are aliases" in benchmark_help
+    assert "slurm-nccl runs the Slurm NCCL suite" in benchmark_help
+    assert "Run acceptance benchmarks for one generated cluster target." in benchmark_help
+    assert "Omit --suite for the default k8s-nccl suite." in benchmark_help
     assert "Slurm NCCL benchmark:" in benchmark_help
-    assert "soperator-nccl is the same Slurm NCCL suite alias" in benchmark_help
     assert "Plain MK8s NCCL benchmark with run-only overrides:" in benchmark_help
     assert "plain MK8s K8s NCCL benchmark:" not in benchmark_help
     assert "Default: all schedulable GPU nodes." in benchmark_help
@@ -8169,8 +8236,14 @@ def test_acceptance_test_help_shows_safe_examples() -> None:
         "nccl.max_nodes",
         "deploy-time NCCL",
         "generic deploy-time NCCL",
+        "future benchmark suites",
+        "exhaustive all-node validation",
+        "plain MK8s all-node CUDA JSON report",
         "soperator-slurm",
         "Soperator-owned GPU targets are skipped unless --suite k8s-nccl",
+        "--k8s",
+        "--soperator",
+        "soperator-nccl",
         "upgrade-report.md",
     )
     for help_text in (group_help, smoke_help, benchmark_help, deploy_help):
@@ -8203,7 +8276,6 @@ def test_acceptance_test_benchmark_command_passes_options(
             str(fake_paths.config_path),
             "--target",
             "mk8s",
-            "--k8s",
             "--suite",
             "k8s-nccl",
             "--max-nodes",
@@ -8222,8 +8294,6 @@ def test_acceptance_test_benchmark_command_passes_options(
         "config_path": fake_paths.config_path,
         "requested_target_ref": "mk8s",
         "all_targets": False,
-        "include_k8s": True,
-        "include_soperator": False,
         "suites": ["k8s-nccl"],
         "continue_on_failure": False,
         "max_nodes": 16,
@@ -8443,8 +8513,6 @@ def test_acceptance_test_benchmark_command_passes_new_defaults(
         "config_path": fake_paths.config_path,
         "requested_target_ref": None,
         "all_targets": False,
-        "include_k8s": False,
-        "include_soperator": False,
         "suites": None,
         "continue_on_failure": True,
         "max_nodes": None,
@@ -8453,17 +8521,13 @@ def test_acceptance_test_benchmark_command_passes_new_defaults(
     }
 
 
-def test_acceptance_test_benchmark_suite_aliases_are_canonicalized() -> None:
-    assert cli._normalized_acceptance_benchmark_suites(["soperator-nccl"]) == {"slurm-nccl"}
-
-
-def test_acceptance_test_benchmark_rejects_unsupported_suite_with_alias_help() -> None:
+def test_acceptance_test_benchmark_rejects_unsupported_suite() -> None:
     with pytest.raises(ValueError) as exc_info:
-        cli._normalized_acceptance_benchmark_suites(["nccl", "soperator-slurm"])
+        cli._normalized_acceptance_benchmark_suites(["nccl", "soperator-nccl"])
 
     message = str(exc_info.value)
-    assert "Unsupported --suite value(s): nccl, soperator-slurm" in message
-    assert "Supported values: k8s-nccl, slurm-nccl (alias: soperator-nccl)" in message
+    assert "Unsupported --suite value(s): nccl, soperator-nccl" in message
+    assert "Supported values: k8s-nccl, slurm-nccl" in message
 
 
 def test_acceptance_test_smoke_suite_names_are_canonical() -> None:
@@ -8562,8 +8626,6 @@ def test_acceptance_test_benchmark_runner_defaults_to_all_targets_k8s_nccl(
         config_path=fake_paths.config_path,
         requested_target_ref=None,
         all_targets=False,
-        include_k8s=False,
-        include_soperator=False,
         suites=None,
         continue_on_failure=True,
         max_nodes=None,
@@ -8636,8 +8698,6 @@ def test_acceptance_test_benchmark_runner_rejects_same_target_k8s_and_slurm_repo
             config_path=fake_paths.config_path,
             requested_target_ref="sop-cluster1",
             all_targets=False,
-            include_k8s=False,
-            include_soperator=False,
             suites=["k8s-nccl", "slurm-nccl"],
             continue_on_failure=True,
             max_nodes=None,
@@ -8719,8 +8779,6 @@ def test_acceptance_test_benchmark_runner_uses_readonly_context_and_kube_handoff
         config_path=fake_paths.config_path,
         requested_target_ref="mk8s",
         all_targets=False,
-        include_k8s=True,
-        include_soperator=False,
         suites=None,
         continue_on_failure=True,
         max_nodes=None,
@@ -8816,8 +8874,6 @@ def test_acceptance_test_benchmark_runner_passes_slurm_nccl_overrides(
         config_path=fake_paths.config_path,
         requested_target_ref="sop-cluster1",
         all_targets=False,
-        include_k8s=False,
-        include_soperator=False,
         suites=["slurm-nccl"],
         continue_on_failure=True,
         max_nodes=4,
@@ -8942,8 +8998,6 @@ def test_acceptance_test_benchmark_all_targets_uses_report_context_without_terra
         config_path=fake_paths.config_path,
         requested_target_ref=None,
         all_targets=True,
-        include_k8s=True,
-        include_soperator=False,
         suites=None,
         continue_on_failure=True,
         max_nodes=None,

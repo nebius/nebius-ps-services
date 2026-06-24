@@ -16,6 +16,7 @@ from nebius_cxcli.soperator_validation import (
     _nccl_script,
     run_soperator_cluster_validations,
     soperator_acceptance_benchmark_specs,
+    soperator_acceptance_smoke_specs,
     soperator_cluster_validation_specs,
 )
 
@@ -398,6 +399,38 @@ def test_soperator_acceptance_benchmark_specs_carry_run_only_overrides() -> None
         average_bus_bandwidth_threshold_gbps=0.0,
     )
     assert zero_threshold_specs[0]["average_bus_bandwidth_threshold_gbps"] == 0.0
+
+
+def test_soperator_acceptance_smoke_specs_use_acceptance_report_filename() -> None:
+    payload = {
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "training",
+                    "enabled": True,
+                    "values": {"clusterName": "slurm-training"},
+                }
+            ]
+        },
+        "deploy": {"targets": [{"instance_id": "training", "kube_context": "training-context"}]},
+    }
+
+    specs = soperator_acceptance_smoke_specs(
+        payload,
+        batch_size=64,
+        concurrency=4,
+        continue_on_failure=False,
+    )
+
+    assert specs[0]["name"] == "Soperator acceptance smoke test (training)"
+    assert specs[0]["target_ref"] == "training"
+    assert specs[0]["mode"] == "acceptance"
+    assert specs[0]["report_file"] == "acceptance-smoke-report-training.json"
+    assert specs[0]["inventory_report_file"] == "cluster-inventory-report-training.json"
+    assert specs[0]["batch_size"] == 64
+    assert specs[0]["concurrency"] == 4
+    assert specs[0]["continue_on_failure"] is False
 
 
 def test_nccl_script_honors_node_cap_and_optional_timeout() -> None:
@@ -939,16 +972,28 @@ def test_soperator_cluster_validation_reports_pending_soperator_pods(
 
 
 @pytest.mark.parametrize(
-    ("mode", "report_file"),
+    ("mode", "report_file", "expected_test_purpose", "expected_scope"),
     [
-        ("deploy", "deploy-smoke-report-training.json"),
-        ("acceptance", "acceptance-smoke-report-training.json"),
+        (
+            "deploy",
+            "deploy-smoke-report-training.json",
+            "deployment-testing",
+            "soperator-deployment-snapshot",
+        ),
+        (
+            "acceptance",
+            "acceptance-smoke-report-training.json",
+            "acceptance-smoke",
+            "all-node-slurm-smoke",
+        ),
     ],
 )
 def test_soperator_cluster_validation_waits_for_jail_mount_pending_pods(
     tmp_path: Path,
     mode: str,
     report_file: str,
+    expected_test_purpose: str,
+    expected_scope: str,
 ) -> None:
     spec = {
         "kind": SOPERATOR_CLUSTER_VALIDATION_KIND,
@@ -1112,6 +1157,8 @@ def test_soperator_cluster_validation_waits_for_jail_mount_pending_pods(
     assert written == [tmp_path / report_file]
     report = json.loads(written[0].read_text(encoding="utf-8"))
     assert report["mode"] == mode
+    assert report["test_purpose"] == expected_test_purpose
+    assert report["scope"] == expected_scope
     assert report["passed"] is True
     assert pod_gets >= 2
     assert daemonset_gets >= 2
