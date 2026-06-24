@@ -38,7 +38,7 @@ Use this guide by task:
   - [Soperator Slurm Scheduling And Command Examples](#soperator-slurm-scheduling-and-command-examples)
   - [External Soperator Onboarding](#external-soperator-onboarding)
   - [External Soperator Migration](#external-soperator-migration)
-  - [CXCLI Managed Upgrade vs External Onboard and Migrate](#cxcli-managed-upgrade-vs-external-onboard-and-migrate)
+  - [Soperator Cluster Upgrade](#soperator-cluster-upgrade)
   - [Soperator Rules and Safety Checks](#soperator-rules-and-safety-checks)
 - [Upgrade](#upgrade)
   - [When To Use upgrade](#when-to-use-upgrade)
@@ -3176,10 +3176,36 @@ Phases complete only when their live prerequisites are absent or satisfied;
 otherwise cxcli writes the pending phase and reason to the checkpoint for the
 next explicit action.
 
-### CXCLI Managed Upgrade vs External Onboard and Migrate
+### Soperator Cluster Upgrade
 
-Use `soperator upgrade` when cxcli already manages the Soperator app row and
-the target is already part of the rendered bundle:
+A Soperator cluster upgrade can involve two separate layers:
+
+- the underlying MK8s cluster and node groups;
+- the Soperator Helm chart/app row.
+
+Upgrade only the layer that is changing. A full cxcli-managed Soperator cluster
+upgrade that changes both MK8s and the Soperator chart is a two-phase process:
+upgrade the Terraform-managed MK8s layer first, then upgrade the Soperator chart.
+It is not always a two-phase process for chart-only or MK8s-only changes.
+
+For cxcli-managed Soperator clusters, use `upgrade node-template` first when the
+MK8s Kubernetes minor, node OS image, or Nebius-image GPU stack must change:
+
+```bash
+nebius-cxcli upgrade node-template <config.yaml> infra:mk8s@<target> \
+  --to-version <major.minor> \
+  --to-os <os> \
+  --to-gpu-stack-preset <cuda...> \
+  --dry-run
+nebius-cxcli upgrade node-template <config.yaml> infra:mk8s@<target> \
+  --to-version <major.minor> \
+  --to-os <os> \
+  --to-gpu-stack-preset <cuda...>
+```
+
+Use `soperator upgrade` when cxcli already manages the Soperator app row and the
+target is already part of the rendered bundle. For a full two-layer upgrade, run
+it after the MK8s phase:
 
 ```bash
 nebius-cxcli soperator upgrade <config.yaml> \
@@ -3191,12 +3217,22 @@ nebius-cxcli soperator upgrade <config.yaml> \
   --to-version <chart-version>
 ```
 
-That path is a cxcli-managed chart upgrade. It validates the current generated
-bundle, runs live Soperator/Slurm smoke preflight, updates the Soperator app
-version in `config.yaml`, rerenders, validates the new bundle, applies the
-selected target Flux bundle, verifies the static Soperator chart version on
-live Kubernetes objects, reruns the required Soperator/Slurm smoke validation,
-and writes command-owned validation details plus
+`upgrade node-template` validates the live compatibility matrix, updates
+`config.yaml`, rerenders, validates, applies the staged Terraform changes, waits
+for the MK8s control plane and selected node groups, and writes
+`generated/reports/upgrade-node-template-report.md` /
+`generated/reports/upgrade-node-template-report.json`. Use `upgrade node-group`
+instead when the change is hardware platform, hardware preset, CPU/GPU kind, GPU
+cluster, or InfiniBand fabric; current `upgrade node-group --execute --approve`
+writes the approved pre-mutation checkpoint/report and then stops before live
+replacement/cutover/retirement.
+
+`soperator upgrade` is a cxcli-managed chart upgrade. It validates the current
+generated bundle, runs live Soperator/Slurm smoke preflight, updates the
+Soperator app version in `config.yaml`, rerenders, validates the new bundle,
+applies the selected target Flux bundle, verifies the static Soperator chart
+version on live Kubernetes objects, reruns the required Soperator/Slurm smoke
+validation, and writes command-owned validation details plus
 `generated/reports/soperator-upgrade-report.md` /
 `generated/reports/soperator-upgrade-report.json`.
 `upgrade helm-chart` is intentionally non-Soperator-only and fails fast for
@@ -3223,19 +3259,42 @@ The rendered Soperator output remains a static post-Flux manifest even when the
 source is OCI; this avoids the Helm release Secret size limit for the Soperator
 umbrella chart.
 
-Use `ext-soperator onboard` plus `ext-soperator migrate` when the source cluster is not
-yet under cxcli Soperator management or when onboarding found a source
-Soperator that must be upgraded while adopting or migrating layout. In that case
-the accepted migration profile can combine adoption, Soperator chart
-upgrade to the cxcli-pinned target, external MK8s control-plane and
-node-template upgrade, storage remediation, compute remediation, target GPU
-stack reconciliation when paired with migration work, and final cutover in one
-guarded workflow. That is why migration reads the source discovery report and
-accepted action plan, prints external node-template and target GPU stack
-reconciliation as their own required actions when present, and checkpoints phase
-state instead of acting like a plain Helm chart bump.
+For external Soperator clusters, start with onboarding instead of the
+Terraform-managed MK8s upgrade commands:
 
-Underlying MK8s infrastructure upgrade commands are also different:
+```bash
+nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>
+nebius-cxcli validate <config.yaml>
+nebius-cxcli render <config.yaml>
+```
+
+If onboarding records no migration-owned actions, use the normal deploy path:
+
+```bash
+nebius-cxcli deploy <config.yaml>
+```
+
+If onboarding records migration-owned actions, run migration as the guarded
+upgrade/adoption workflow:
+
+```bash
+nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --dry-run
+nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --execute --approve
+```
+
+Use `ext-soperator onboard` plus `ext-soperator migrate` when the source cluster
+is not yet under cxcli Soperator management or when onboarding found a source
+Soperator that must be upgraded while adopting or migrating layout. In that case
+the accepted migration profile can combine adoption, Soperator chart upgrade to
+the cxcli-pinned target, external MK8s control-plane and node-template upgrade,
+storage remediation, compute remediation, target GPU stack reconciliation when
+paired with migration work, and final cutover in one guarded workflow. That is
+why migration reads the source discovery report and accepted action plan, prints
+external node-template and target GPU stack reconciliation as their own required
+actions when present, and checkpoints phase state instead of acting like a plain
+Helm chart bump.
+
+Underlying MK8s upgrade ownership is different for managed and external targets:
 
 - `upgrade node-template` and `upgrade node-group` operate on Terraform-managed `infra:mk8s`
   rows.

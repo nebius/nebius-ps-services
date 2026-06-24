@@ -6,6 +6,11 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Documented the Soperator cluster upgrade split in the README. Full
+  cxcli-managed cluster upgrades run the Terraform-managed MK8s layer first and
+  the Soperator chart upgrade second only when both layers change, while
+  external clusters use `ext-soperator onboard` and guarded `ext-soperator
+  migrate` for onboarding-selected MK8s/Soperator migration work.
 - Added Soperator GPU driver-jail guardrails for Nebius-image GPU workers.
   cxcli now materializes the chart-owned `gpuDriverJail` contract for managed
   and migrated GPU NodeSets, fails fast on conflicting external mounts, and

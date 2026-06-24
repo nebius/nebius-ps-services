@@ -445,10 +445,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     )
     assert "  - [External Soperator Onboarding](#external-soperator-onboarding)" in toc
     assert "  - [External Soperator Migration](#external-soperator-migration)" in toc
-    assert (
-        "  - [CXCLI Managed Upgrade vs External Onboard and Migrate](#cxcli-managed-upgrade-vs-external-onboard-and-migrate)"
-        in toc
-    )
+    assert "  - [Soperator Cluster Upgrade](#soperator-cluster-upgrade)" in toc
     assert "  - [Soperator Rules and Safety Checks](#soperator-rules-and-safety-checks)" in toc
     assert "- [Upgrade](#upgrade)" in toc
     assert "  - [When To Use upgrade](#when-to-use-upgrade)" in toc
@@ -473,7 +470,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "### Soperator Slurm Scheduling And Command Examples" in soperator
     assert "### External Soperator Onboarding" in soperator
     assert "### External Soperator Migration" in soperator
-    assert "### CXCLI Managed Upgrade vs External Onboard and Migrate" in soperator
+    assert "### Soperator Cluster Upgrade" in soperator
     assert "### Soperator Rules and Safety Checks" in soperator
     assert "`nebius-cxcli soperator` is for Soperator app rows that cxcli already manages" in (
         soperator_flat
@@ -552,7 +549,20 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "does not silently disable arbitrary live external ActiveChecks" in (soperator_flat)
     assert (
         "Use `ext-soperator onboard` plus `ext-soperator migrate` when the source cluster is not"
-        in (soperator)
+        in soperator_flat
+    )
+    assert "A full cxcli-managed Soperator cluster upgrade that changes both MK8s" in (
+        soperator_flat
+    )
+    assert "It is not always a two-phase process for chart-only or MK8s-only changes" in (
+        soperator_flat
+    )
+    assert (
+        "For external Soperator clusters, start with onboarding instead of the Terraform-managed MK8s upgrade commands"
+        in soperator_flat
+    )
+    assert "`upgrade node-group --execute --approve` writes the approved pre-mutation checkpoint" in (
+        soperator_flat
     )
     assert "Onboarded external MK8s clusters are not Terraform-managed" in soperator
     assert "best-effort high availability" in soperator_flat
@@ -710,6 +720,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "Improved external Soperator migration completion handoff" in unreleased_flat
     assert "live post-migration discovery refresh" in unreleased_flat
     assert "pending or still-migration-owned plans blocked from normal deploy" in unreleased_flat
+    assert "Documented the Soperator cluster upgrade split" in unreleased_flat
     assert "Reorganized the README navigation" in unreleased_flat
     assert "move Soperator Slurm scheduling guidance under `Soperator Commands`" in (
         unreleased_flat
