@@ -2259,46 +2259,12 @@ def _resolved_app_post_render_patches(
 def _ensure_mk8s_gpu_rule_compatibility(
     *,
     contexts: tuple[Mk8sGpuClusterContext, ...],
-    policies: Mapping[str, Mk8sGpuAppPolicy],
 ) -> None:
     stack_sources = {item.gpu_stack_source for item in contexts}
     if len(stack_sources) != 1:
         raise RuntimeError(
             "GPU-enabled MK8s config mixes Nebius-image and operator-managed GPU stack sources; split them into separate deployments"
         )
-    if any(
-        (
-            rule.defaults
-            or rule.defaults_from
-            or rule.post_render_patches
-            or rule.post_render_patches_from
-        )
-        and (rule.match_platforms or rule.match_presets)
-        for policy in policies.values()
-        for rule in policy.rules
-    ):
-        platforms = {item.gpu_platform for item in contexts}
-        presets = {item.gpu_preset for item in contexts}
-        if len(platforms) > 1 or len(presets) > 1:
-            raise RuntimeError(
-                "Platform- or preset-specific MK8s app rules with defaults or post-render patches require a single GPU platform/preset per deployment"
-            )
-    if any(
-        (
-            rule.defaults
-            or rule.defaults_from
-            or rule.post_render_patches
-            or rule.post_render_patches_from
-        )
-        and rule.gpu_cluster_enabled is not None
-        for policy in policies.values()
-        for rule in policy.rules
-    ):
-        cluster_states = {item.gpu_cluster_enabled for item in contexts}
-        if len(cluster_states) > 1:
-            raise RuntimeError(
-                "GPU-cluster-specific MK8s app rules with defaults or post-render patches require all GPU-enabled MK8s components in a deployment to agree on whether GPU clustering is enabled"
-            )
 
 
 def _post_render_patch_target_dict(patch: FluxPostRenderPatch) -> dict[str, str]:
@@ -2333,7 +2299,7 @@ def mk8s_gpu_flux_release_post_render_patches(
             continue
         for context in contexts:
             scoped_contexts = (context,)
-            _ensure_mk8s_gpu_rule_compatibility(contexts=scoped_contexts, policies=policies)
+            _ensure_mk8s_gpu_rule_compatibility(contexts=scoped_contexts)
             patches = _resolved_app_post_render_patches(app_id=app_id, contexts=scoped_contexts)
             if not patches:
                 continue
@@ -2372,7 +2338,7 @@ def materialize_mk8s_gpu_app_values(payload_or_config: Any) -> bool:
         if not scoped_contexts:
             continue
         before = copy.deepcopy(chart)
-        _ensure_mk8s_gpu_rule_compatibility(contexts=scoped_contexts, policies=policies)
+        _ensure_mk8s_gpu_rule_compatibility(contexts=scoped_contexts)
         resolved_defaults = _resolved_app_value_defaults(
             app_id=chart_id,
             contexts=scoped_contexts,

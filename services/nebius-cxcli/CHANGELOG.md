@@ -6,6 +6,11 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Fixed `ext-soperator onboard` for external MK8s clusters with heterogeneous
+  GPU worker groups. Target-scoped GPU app value materialization now accepts
+  mixed GPU presets and RDMA/non-RDMA groups when the resolved chart defaults do
+  not conflict, so onboarding no longer fails with the single GPU
+  platform/preset error before writing `config.yaml`.
 - Improved CLI `--help` example readability. Example sections now render each
   command behind a visible accent-colored `|` separator so wrapped help output
   makes the beginning of every example easier to scan, and trailing explanatory

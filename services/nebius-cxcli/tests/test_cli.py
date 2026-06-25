@@ -7566,7 +7566,7 @@ def test_soperator_onboard_noninteractive_cluster_id_generates_kube_access(
     assert "kube_context" not in target
 
 
-def test_soperator_onboard_gpu_cluster_inventory_adds_network_operator(
+def test_soperator_onboard_heterogeneous_gpu_inventory_adds_network_operator(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -7598,7 +7598,16 @@ def test_soperator_onboard_gpu_cluster_inventory_adds_network_operator(
                         "topology.nebius.com/gpu-cluster-id": "gpu-cluster-a",
                         "topology.nebius.com/tier-1": "leaf-a",
                     },
-                }
+                },
+                "gpu-h100-eth": {
+                    "gpu": True,
+                    "node_count": 1,
+                    "allocatable": {"nvidia.com/gpu": "1"},
+                    "labels": {
+                        "nebius.com/driverful": "true",
+                        "nebius.com/resource-preset": "1gpu-16vcpu-200gb",
+                    },
+                },
             },
             "helm_releases": [
                 {
@@ -7652,6 +7661,16 @@ def test_soperator_onboard_gpu_cluster_inventory_adds_network_operator(
     assert mk8s_gpu_deployment_testing["operator_readiness"]["enabled"] is True
     assert mk8s_gpu_deployment_testing["gpu_visibility"]["enabled"] is True
     assert "nccl" not in mk8s_gpu_deployment_testing
+    gpu_operator = next(
+        row for row in payload["apps"]["charts"] if row["id"] == "nvidia-gpu-operator"
+    )
+    network_operator = next(
+        row for row in payload["apps"]["charts"] if row["id"] == "nvidia-network-operator"
+    )
+    assert gpu_operator["values"]["driver"]["enabled"] is False
+    assert gpu_operator["values"]["nfd"]["enabled"] is False
+    assert network_operator["values"]["operator"]["ofedDriver"]["deploy"] is False
+    assert network_operator["values"]["nfd"]["enabled"] is True
 
 
 def test_soperator_onboard_rejects_managed_mk8s_target_ref(
