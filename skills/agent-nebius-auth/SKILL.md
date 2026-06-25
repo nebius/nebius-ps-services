@@ -24,6 +24,7 @@ Defaults:
 
 - service account: `codex-agent-sa`
 - credential file: `~/.nebius/codex-agent-authkey.<project_id>.json`
+- default project selector: `~/.nebius/codex-agent-default-project-id`
 - CLI profile: `codex-agent-<project_id>`
 - group: `codex-agent-<project-name-slug>`
 - role: `editor`
@@ -31,16 +32,15 @@ Defaults:
 
 ## Run
 
-Run the setup script only when the operator explicitly asks to bootstrap,
-repair, or install the local auth hook. If the prompt is not explicit, report
-the command instead of running it.
+Run the setup script only when the operator explicitly asks to bootstrap or
+repair the local Nebius auth state. If the prompt is not explicit, report the
+command instead of running it.
 
 ```bash
 bash scripts/agent-nebius-auth.sh ensure \
   --tenant-id <tenant_id> \
   --project-id <project_id> \
-  --project-name <project_name> \
-  --install-hook
+  --project-name <project_name>
 ```
 
 Optional flags:
@@ -48,29 +48,39 @@ Optional flags:
 - `--service-account-name <name>`: default `codex-agent-sa`
 - `--role <role>`: default `editor`
 - `--repair`: allow replacement of a broken credential file after backing it up
-- `--install-hook`: add or update the Codex `PreToolUse` hook block
 - `--dry-run`: print the planned actions without modifying IAM or local files
 
-If the skill and hook payload are installed separately with the root installer,
-register the runtime hook with:
+When the operator explicitly asks to install or refresh the runtime hook, run
+the root installer from the skills repo root:
 
 ```bash
 ./install-skills.sh --install-hooks agent-nebius-auth/assets/hooks --register-hooks
 ```
 
-Use either this installer-managed `hooks.json` registration or the setup
-script's `--install-hook` inline `config.toml` block for a given machine, not
-both. Codex runs matching hooks from all active sources, so duplicate
-registrations can make the Nebius auth hook run more than once.
+The root installer owns hook payload sync and `hooks.json` registration. The
+setup script must not edit `$CODEX_HOME/config.toml`, shell out to the
+installer, or duplicate installer merge logic; the skill workflow may run the
+installer as a separate explicit hook-install step. The old `--install-hook`
+flag fails fast with the installer command to use. Codex runs matching hooks
+from all active sources, so do not keep a stale inline `config.toml`
+registration next to the installer-managed `hooks.json` entry. When the root
+installer registers this hook, it removes the old marked inline
+`agent-nebius-auth` block from `$CODEX_HOME/config.toml`, backs that file up,
+and migrates the legacy project selector to
+`~/.nebius/codex-agent-default-project-id` without printing the project ID.
 
 ## Setup Behavior
 
 Use `scripts/agent-nebius-auth.sh` as the single setup entry point. It is
-idempotent and owns bootstrap, verification, repair, and its inline
-`config.toml` hook registration mode. The root `install-skills.sh
---install-hooks agent-nebius-auth/assets/hooks --register-hooks` path is a separate
-payload/`hooks.json` registration mode for operators who already installed the
-skill and do not want the setup script to manage inline hook config.
+idempotent and owns bootstrap, verification, and repair of the Nebius service
+account credential and CLI profile. It intentionally does not install or
+register Codex hooks. The root `install-skills.sh --install-hooks
+agent-nebius-auth/assets/hooks --register-hooks` path is the canonical
+payload/`hooks.json` registration mode for this hook.
+After a successful setup, the script records the selected project ID in
+`~/.nebius/codex-agent-default-project-id` so the generic installer-managed
+hook can select the correct project-specific agent profile without an inline
+`config.toml` environment assignment.
 
 The script serializes setup with both a project-specific lock and a global
 Nebius profile lock because `nebius profile create/update/activate` changes
@@ -91,6 +101,8 @@ When the credential file exists, the script:
    drift for the service account, group, access permit, and membership.
 7. If token minting fails, replaces the credential file only when `--repair`
    is set and the current human/admin session can regenerate it.
+8. Records the project ID in `~/.nebius/codex-agent-default-project-id` for the
+   installer-managed runtime hook.
 
 When the credential file does not exist, the script:
 
@@ -104,7 +116,8 @@ When the credential file does not exist, the script:
 8. Restores the previous active or effective human/admin Nebius CLI profile if
    profile creation changed it.
 9. Verifies service-account token minting and basic project access.
-10. Installs or updates the `PreToolUse` hook when `--install-hook` is set.
+10. Records the project ID in `~/.nebius/codex-agent-default-project-id` for
+    the installer-managed runtime hook.
 
 If the credential file exists but is broken, the script must not delete or
 overwrite it unless `--repair` is set and the human/admin Nebius session is
@@ -127,8 +140,9 @@ On `PreToolUse` for `Bash`, the hook:
 2. Detects Nebius-sensitive commands such as Nebius API calls,
    Nebius-related Terraform contexts, Nebius-related tests, or direct Nebius
    CLI usage.
-3. Resolves the project ID from `CODEX_NEBIUS_PROJECT_ID`, or from exactly one
-   local `~/.nebius/codex-agent-authkey.<project_id>.json` file.
+3. Resolves the project ID from `CODEX_NEBIUS_PROJECT_ID`,
+   `~/.nebius/codex-agent-default-project-id`, or exactly one local
+   `~/.nebius/codex-agent-authkey.<project_id>.json` file.
 4. Derives the profile as `codex-agent-<project_id>`.
 5. Rewrites the pending command so the shell process mints a short-lived token
    with `nebius iam get-access-token --profile "$PROFILE"` and exports
@@ -178,6 +192,7 @@ Run local regression checks after hook changes:
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/test_pre_tool_use_nebius_auth.py
 PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/test_agent_nebius_auth_setup.py
+PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/test_install_hook_migration.py
 ```
 
 ## Learning Loop

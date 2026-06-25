@@ -761,6 +761,167 @@ print_extra_destination_hooks() {
   print_extra_hook_registrations "${codex_home}" "$@"
 }
 
+has_agent_nebius_auth_hook_source() {
+  local hook_src=""
+
+  for hook_src in "$@"; do
+    if [[ -f "${hook_src}/pre_tool_use_nebius_auth.py" ]]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+legacy_agent_nebius_auth_config_hook_migration() {
+  local mode="$1"
+  local codex_home="$2"
+
+  shift 2
+  has_agent_nebius_auth_hook_source "$@" || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+
+  python3 - "${mode}" "${codex_home}" <<'PY'
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import re
+import shutil
+import stat
+import sys
+import tempfile
+from datetime import datetime, timezone
+
+
+def fail(message: str) -> None:
+    print(f"ERROR: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+mode = sys.argv[1]
+codex_home = Path(sys.argv[2]).expanduser()
+config = codex_home / "config.toml"
+begin_marker = "# agent-nebius-auth managed block begin"
+end_marker = "# agent-nebius-auth managed block end"
+selector = Path.home() / ".nebius" / "codex-agent-default-project-id"
+project_id_re = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
+
+if mode not in {"check", "migrate"}:
+    fail(f"unsupported legacy agent-nebius-auth migration mode: {mode}")
+
+if not config.exists():
+    raise SystemExit(0)
+
+lines = config.read_text(encoding="utf-8").splitlines(keepends=True)
+kept: list[str] = []
+current_block: list[str] = []
+blocks: list[str] = []
+skipping = False
+
+for line in lines:
+    stripped = line.rstrip("\n")
+    if stripped == begin_marker:
+        if skipping:
+            fail(f"{config} contains nested agent-nebius-auth managed blocks")
+        skipping = True
+        current_block = [line]
+        if kept and kept[-1].strip() == "":
+            kept.pop()
+        continue
+    if stripped == end_marker:
+        if not skipping:
+            fail(f"{config} contains an agent-nebius-auth block end without a begin")
+        current_block.append(line)
+        blocks.append("".join(current_block))
+        current_block = []
+        skipping = False
+        continue
+    if skipping:
+        current_block.append(line)
+    else:
+        kept.append(line)
+
+if skipping:
+    fail(f"{config} contains an agent-nebius-auth block begin without an end")
+
+if not blocks:
+    raise SystemExit(0)
+
+project_ids: set[str] = set()
+for block in blocks:
+    for match in re.finditer(r"\bCODEX_NEBIUS_PROJECT_ID=([A-Za-z0-9._:-]+)", block):
+        project_ids.add(match.group(1))
+
+if len(project_ids) > 1:
+    fail(
+        f"{config} contains multiple legacy agent-nebius-auth project selectors. "
+        "Set ~/.nebius/codex-agent-default-project-id manually and remove the "
+        "legacy block before rerunning."
+    )
+
+project_id = next(iter(project_ids), "")
+if project_id and not project_id_re.fullmatch(project_id):
+    fail(f"{config} contains an invalid legacy agent-nebius-auth project selector")
+
+selector_message = ""
+if project_id:
+    existing_selector = ""
+    if selector.exists():
+        existing_selector = selector.read_text(encoding="utf-8").strip()
+    if existing_selector and existing_selector != project_id:
+        fail(
+            f"{selector} already selects a different project. Choose the intended "
+            "project manually before removing the legacy agent-nebius-auth block."
+        )
+
+if mode == "check":
+    raise SystemExit(0)
+
+if project_id:
+    if not existing_selector:
+        selector.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        temp_fd, temp_name = tempfile.mkstemp(
+            prefix=f".{selector.name}.", dir=str(selector.parent)
+        )
+        with os.fdopen(temp_fd, "w", encoding="utf-8") as handle:
+            handle.write(f"{project_id}\n")
+        os.chmod(temp_name, 0o600)
+        os.replace(temp_name, selector)
+        selector_message = "Migrated legacy agent-nebius-auth project selector to ~/.nebius/codex-agent-default-project-id"
+    else:
+        selector_message = "Legacy agent-nebius-auth project selector already matched ~/.nebius/codex-agent-default-project-id"
+
+backup = config.with_name(
+    f"config.toml.bak.agent-nebius-auth.{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
+)
+shutil.copy2(config, backup)
+mode = stat.S_IMODE(config.stat().st_mode)
+fd, temp_name = tempfile.mkstemp(prefix=".config.toml.", dir=str(codex_home))
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write("".join(kept))
+    os.chmod(temp_name, mode)
+    os.replace(temp_name, config)
+finally:
+    if os.path.exists(temp_name):
+        os.unlink(temp_name)
+
+print(f"Removed legacy agent-nebius-auth inline config hook block(s): {len(blocks)} -> {config}")
+print(f"Backed up previous config.toml: {backup}")
+if selector_message:
+    print(selector_message)
+PY
+}
+
+check_legacy_agent_nebius_auth_config_hook_migration() {
+  legacy_agent_nebius_auth_config_hook_migration "check" "$@"
+}
+
+migrate_legacy_agent_nebius_auth_config_hook() {
+  legacy_agent_nebius_auth_config_hook_migration "migrate" "$@"
+}
+
 register_hooks_manifests() {
   local codex_home="$1"
   local replace_hooks_json="$2"
@@ -1103,6 +1264,7 @@ install_hooks() {
       log_note "Place the registration manifest in the hook directory or its parent directory."
       exit 1
     fi
+    check_legacy_agent_nebius_auth_config_hook_migration "${codex_home}" "${hook_src}"
   fi
 
   mkdir -p "${hook_dest}"
@@ -1134,6 +1296,7 @@ install_hooks() {
   log_note "Template suffixes were stripped for installed hook files."
   if [[ "${register_hooks}" -eq 1 ]]; then
     register_hooks_manifest "${hook_src}" "${codex_home}" "${replace_hooks_json}"
+    migrate_legacy_agent_nebius_auth_config_hook "${codex_home}" "${hook_src}"
   else
     log_note "This did not modify hooks.json. Pass --register-hooks to merge a source registration manifest."
   fi
@@ -1256,6 +1419,7 @@ install_all_hooks() {
         exit 1
       fi
     done
+    check_legacy_agent_nebius_auth_config_hook_migration "${codex_home}" "${hook_dirs[@]}"
   fi
 
   log_note "Discovered hook source directories:"
@@ -1270,6 +1434,7 @@ install_all_hooks() {
 
   if [[ "${register_hooks}" -eq 1 ]]; then
     register_hooks_manifests "${codex_home}" "${replace_hooks_json}" "${hook_dirs[@]}"
+    migrate_legacy_agent_nebius_auth_config_hook "${codex_home}" "${hook_dirs[@]}"
   else
     log_note "This did not modify hooks.json. Pass --register-hooks to merge discovered source registration manifests."
   fi

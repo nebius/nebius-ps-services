@@ -3,7 +3,6 @@ set -euo pipefail
 
 SA_NAME="codex-agent-sa"
 ROLE="editor"
-INSTALL_HOOK="false"
 REPAIR="false"
 DRY_RUN="false"
 ENDPOINT="api.nebius.cloud"
@@ -15,6 +14,7 @@ PROJECT_NAME=""
 COMMAND=""
 LOCK_DIRS=()
 PROFILE_RESTORE_TARGET=""
+DEFAULT_PROJECT_FILE=""
 
 die() {
   printf 'ERROR: %s\n' "$*" >&2
@@ -35,11 +35,13 @@ Usage:
     [--service-account-name <name>] \
     [--role <role>] \
     [--repair] \
-    [--install-hook] \
     [--dry-run]
 
 Creates or repairs local Codex Agent Nebius service-account auth. Runtime token
 injection is handled by the installed PreToolUse hook, not by this script.
+Install or refresh that hook from the skills repo root with:
+
+  ./install-skills.sh --install-hooks agent-nebius-auth/assets/hooks --register-hooks
 EOF
 }
 
@@ -130,6 +132,20 @@ safe_chmod_credential() {
 ensure_nebius_dir() {
   run mkdir -p "$HOME/.nebius"
   run chmod 700 "$HOME/.nebius"
+}
+
+write_default_project_id() {
+  local temp_file=""
+
+  if is_dry_run; then
+    log "Would set the default agent Nebius project to '$PROJECT_ID'."
+    return 0
+  fi
+
+  temp_file="${DEFAULT_PROJECT_FILE}.tmp.$$"
+  printf '%s\n' "$PROJECT_ID" >"$temp_file"
+  chmod 600 "$temp_file"
+  mv "$temp_file" "$DEFAULT_PROJECT_FILE"
 }
 
 active_profile() {
@@ -534,72 +550,6 @@ verify_project_access() {
     --format json >/dev/null 2>&1
 }
 
-shell_quote() {
-  printf '%q' "$1"
-}
-
-toml_literal_safe() {
-  [[ "$1" != *"'"* ]]
-}
-
-install_hook() {
-  local codex_home="${CODEX_HOME:-$HOME/.codex}"
-  local config_file="${codex_home}/config.toml"
-  local hook_file="${SKILL_DIR}/assets/hooks/pre_tool_use_nebius_auth.py"
-  local begin_marker="# agent-nebius-auth managed block begin"
-  local end_marker="# agent-nebius-auth managed block end"
-  local begin_count=""
-  local end_count=""
-  local temp_file=""
-  local hook_command=""
-  local lock_dir="${codex_home}/agent-nebius-auth.config.lock"
-
-  [[ -f "$hook_file" ]] || die "Hook file is missing: $hook_file"
-  need_cmd python3
-
-  hook_command="CODEX_NEBIUS_PROJECT_ID=$(shell_quote "$PROJECT_ID") python3 $(shell_quote "$hook_file")"
-  toml_literal_safe "$hook_command" || die "Hook command contains a single quote and cannot be written safely as a TOML literal."
-
-  if is_dry_run; then
-    log "Would add or update the agent-nebius-auth PreToolUse hook block in $config_file."
-    return 0
-  fi
-
-  mkdir -p "$codex_home"
-  acquire_lock "$lock_dir"
-  touch "$config_file"
-
-  begin_count="$(grep -cF "$begin_marker" "$config_file" || true)"
-  end_count="$(grep -cF "$end_marker" "$config_file" || true)"
-  [[ "$begin_count" == "$end_count" ]] || die "Existing agent-nebius-auth managed hook block is malformed in $config_file."
-
-  temp_file="$(mktemp)"
-  awk -v begin="$begin_marker" -v end="$end_marker" '
-    $0 == begin { skip = 1; next }
-    $0 == end { skip = 0; next }
-    !skip { print }
-  ' "$config_file" >"$temp_file"
-
-  cat >>"$temp_file" <<EOF
-
-$begin_marker
-[[hooks.PreToolUse]]
-matcher = "^Bash$"
-
-[[hooks.PreToolUse.hooks]]
-type = "command"
-command = '$hook_command'
-timeout = 30
-statusMessage = "Preparing Nebius auth"
-$end_marker
-EOF
-
-  mv "$temp_file" "$config_file"
-
-  log "Installed Codex PreToolUse hook block in $config_file"
-  log "Restart Codex and review/trust the hook with /hooks before relying on it."
-}
-
 ensure_existing_credential_flow() {
   local sa_id=""
 
@@ -684,8 +634,7 @@ parse_args() {
         shift 2
         ;;
       --install-hook)
-        INSTALL_HOOK="true"
-        shift
+        die "--install-hook is no longer supported. Install or refresh the runtime hook from the skills repo root with: ./install-skills.sh --install-hooks agent-nebius-auth/assets/hooks --register-hooks"
         ;;
       --repair)
         REPAIR="true"
@@ -730,8 +679,7 @@ main() {
   GROUP_NAME="codex-agent-${project_slug}"
   PROFILE="codex-agent-${PROJECT_ID}"
   CREDENTIAL_FILE="$HOME/.nebius/codex-agent-authkey.${PROJECT_ID}.json"
-  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  SKILL_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+  DEFAULT_PROJECT_FILE="$HOME/.nebius/codex-agent-default-project-id"
   auth_lock_dir="$HOME/.nebius/agent-nebius-auth.${PROJECT_ID}.lock"
   profile_lock_dir="$HOME/.nebius/agent-nebius-auth.profile.lock"
 
@@ -745,10 +693,7 @@ main() {
   else
     ensure_missing_credential_flow
   fi
-
-  if [[ "$INSTALL_HOOK" == "true" ]]; then
-    install_hook
-  fi
+  write_default_project_id
 
   log "Done."
   log "Credential file: $CREDENTIAL_FILE"

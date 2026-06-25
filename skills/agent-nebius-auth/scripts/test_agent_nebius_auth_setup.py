@@ -247,6 +247,9 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def default_project_file(self) -> Path:
+        return self.home / ".nebius" / "codex-agent-default-project-id"
+
     def setup_command(self, project: str = PROJECT) -> list[str]:
         return [
             "bash",
@@ -258,7 +261,6 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
             project,
             "--project-name",
             PROJECT_NAME,
-            "--install-hook",
         ]
 
     def run_setup(
@@ -332,17 +334,33 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
         self.assertEqual(after_second["profile_update_calls"], 0)
         self.assertEqual(after_second["agent_iam_attempts"], 0)
 
-        config = self.codex_home / "config.toml"
+        self.assertFalse((self.codex_home / "config.toml").exists())
         self.assertEqual(
-            config.read_text(encoding="utf-8").count(
-                "# agent-nebius-auth managed block begin"
-            ),
-            1,
+            self.default_project_file().read_text(encoding="utf-8").strip(),
+            PROJECT,
         )
-        self.assertIn(
-            f"CODEX_NEBIUS_PROJECT_ID={PROJECT}",
-            config.read_text(encoding="utf-8"),
+
+    def test_legacy_install_hook_flag_fails_fast(self) -> None:
+        self.write_state()
+        self.write_credential()
+
+        result = subprocess.run(
+            [
+                *self.setup_command(),
+                "--install-hook",
+            ],
+            cwd=str(SCRIPT.parent.parent),
+            env=self.env,
+            text=True,
+            capture_output=True,
+            check=False,
         )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--install-hook is no longer supported", result.stderr)
+        self.assertIn("install-skills.sh --install-hooks", result.stderr)
+        self.assertFalse((self.codex_home / "config.toml").exists())
+        self.assertFalse(self.default_project_file().exists())
 
     def test_profile_update_preserves_active_human_profile(self) -> None:
         self.write_state(

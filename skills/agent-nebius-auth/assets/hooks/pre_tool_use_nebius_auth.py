@@ -145,8 +145,19 @@ def infer_project_id_from_single_credential() -> str:
     return name[len(prefix) : -len(suffix)]
 
 
+def infer_project_id_from_default_file() -> str:
+    default_file = Path.home() / ".nebius" / "codex-agent-default-project-id"
+    try:
+        return default_file.read_text(encoding="utf-8").strip().splitlines()[0]
+    except (IndexError, OSError):
+        return ""
+
+
 def resolve_project_id() -> str:
     project_id = os.environ.get("CODEX_NEBIUS_PROJECT_ID", "").strip()
+    if project_id:
+        return project_id
+    project_id = infer_project_id_from_default_file()
     if project_id:
         return project_id
     return infer_project_id_from_single_credential()
@@ -221,11 +232,11 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
     project_id = resolve_project_id()
     if not project_id:
         return deny(
-            "Nebius auth required, but CODEX_NEBIUS_PROJECT_ID is not set and no single local agent credential file can be inferred."
+            "Nebius auth required, but no project selector is available. Set CODEX_NEBIUS_PROJECT_ID, run $agent-nebius-auth setup to write the default selector, or keep exactly one local agent credential file."
         )
     if not validate_project_id(project_id):
         return deny(
-            "Nebius auth required, but CODEX_NEBIUS_PROJECT_ID is invalid."
+            "Nebius auth required, but the resolved Nebius project selector is invalid."
         )
     if not credential_file_exists(project_id):
         return deny(
