@@ -39,6 +39,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | --- | --- | --- |
 | `align` | Implicit allowed | Project-wide alignment and review across code, wiring, tests, CI, CLI/help, config, documentation, workflows, and project skills. |
 | `align-skill` | Implicit allowed | Review, harden, validate, and improve existing or newly scaffolded Codex or Agent Skill folders after an initial scaffold or draft exists. |
+| `brainstorm` | Implicit allowed | Explore ideas in chat with source-ranked project, repo, skill, internal, and vendor context before implementation. |
 | `global-context-management` | Implicit allowed | Keep complex Codex tasks focused with durable task state, concise parent-thread context, targeted read-only subagents when authorized, focused validation, and final risk review. |
 
 ### Local Setup and Information
@@ -146,6 +147,8 @@ $align-skill Review and standardize skills/foo against the canonical skill struc
 
 $align-skill Harden this scaffolded skill folder into a safe, secure, fast Codex skill, then validate it.
 
+$brainstorm Explore this architecture idea, gather the relevant project docs, related skills, internal context, and official vendor docs, and challenge weak assumptions before we implement anything.
+
 $apply-security Scan this repository for infrastructure, CI/CD, shell, and application security issues, then produce a prioritized remediation plan with safe patch candidates.
 
 $code-info Gather read-only project info from this folder or a GitHub repo with LOC by language and component, repo size, test files, CLI commands, modules, artifacts, and coverage.
@@ -210,6 +213,18 @@ multi-skill parent folders, GitHub skill repositories, or GitHub tree URLs when
 official vendor-doc verification, canonical structure, validation evidence, fast
 authoring practices, optional stateful-workflow section profiles, and reusable
 learning capture in local skill source materials need to be aligned.
+
+### `brainstorm`
+
+`brainstorm` supports evidence-first, chat-only ideation before implementation.
+It restates the topic, builds a compact source plan, gathers context from the
+current project folder first, then sibling repo folders, related skills,
+internal Confluence/Slack/Jira sources when available, and official vendor
+docs. It separates facts from hypotheses, challenges weak assumptions, compares
+options, and stops short of editing files, creating tickets, sending messages,
+or mutating external systems. If the user pivots to execution, it should
+summarize the brainstorm and hand off to the appropriate implementation,
+alignment, SDLC, or communication skill.
 
 ### `agentic-sdlc-test`
 

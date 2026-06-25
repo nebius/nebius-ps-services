@@ -43,6 +43,10 @@ All notable changes to the reusable Codex skills are tracked here.
   Agent Skill folders, including `SKILL.md`, references, assets, scripts,
   official vendor-doc verification, safety guardrails, canonical structure, and
   validation evidence.
+- Added the `brainstorm` Codex skill for evidence-first, chat-only ideation
+  before implementation, with source priority across the current project
+  folder, sibling repo folders, related skills, internal Confluence/Slack/Jira
+  sources when available, and official vendor docs.
 - Added the `agentic-sdlc-test` Codex skill for safely verifying the Agentic
   SDLC workflow from outside the workflow with global `sdlc-*` skill discovery,
   hook configuration inspection, disposable PreToolUse and Stop hook fixture
