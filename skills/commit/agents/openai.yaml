@@ -2,3 +2,5 @@ interface:
   display_name: "Commit"
   short_description: "Create fast local whole-repo commits"
   default_prompt: "Use $commit to quickly commit all current repository changes on my current branch without pushing."
+policy:
+  allow_implicit_invocation: false

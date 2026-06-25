@@ -2,3 +2,5 @@ interface:
   display_name: "Review PR"
   short_description: "Review and safely repair any GitHub PR"
   default_prompt: "Use $review-pr to review a GitHub pull request by number, URL, or current branch against its base branch, route to the smallest relevant sibling skills for the changed surface, fix safe issues only when the PR branch is writable, resolve straightforward conflicts with the base branch when safe, and report whether it is ready to merge."
+policy:
+  allow_implicit_invocation: false

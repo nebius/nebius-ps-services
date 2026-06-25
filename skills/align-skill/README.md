@@ -88,10 +88,11 @@ stateful if it only inspects files, edits `.gitignore`, and reports the result.
 ## Files
 
 - `SKILL.md`: runtime alignment workflow for skills.
-- `agents/openai.yaml`: UI metadata.
+- `agents/openai.yaml`: UI metadata and invocation policy.
 - `references/`: canonical structure, authoring, safety, vendor, and trigger
   guidance.
 - `assets/`: report, plan, and stateful-workflow skill templates.
-- `scripts/validate-skill-structure.py`: static skill folder validator.
+- `scripts/validate-skill-structure.py`: static skill folder validator,
+  including `policy.allow_implicit_invocation` checks.
 - `scripts/test-validate-skill-structure.py`: local fixture self-test for the
   validator.

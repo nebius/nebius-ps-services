@@ -2,3 +2,5 @@ interface:
   display_name: "SDLC Create Design"
   short_description: "Generate SDLC design"
   default_prompt: "Use $sdlc-create-design to convert requirements and gathered context into implementable Agentic SDLC architecture and feature designs in `docs/design.md`."
+policy:
+  allow_implicit_invocation: false

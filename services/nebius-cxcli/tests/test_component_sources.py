@@ -381,9 +381,11 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
     ]
     assert sfs_wizard_fields["inputs.type"]["default"] == "NETWORK_SSD"
     assert sfs_wizard_fields["inputs.type"]["write_default_to_config"] is True
+    assert sfs_wizard_fields["inputs.type"]["required"] is True
     assert sfs_wizard_fields["inputs.block_size_kib"] == {
         "default": 4,
         "write_default_to_config": True,
+        "required": True,
         "type_hint": "number",
     }
     assert sfs_wizard_fields["inputs.mount_tag"] == {
@@ -392,31 +394,39 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
     assert sfs_wizard_fields["inputs.name"] == {
         "default": "sfs",
         "write_default_to_config": True,
+        "required": True,
         "type_hint": "string",
     }
     assert sfs_wizard_fields["inputs.size_gib"] == {
         "default": 1024,
         "write_default_to_config": True,
+        "required": True,
         "type_hint": "number",
     }
     assert sfs_wizard_fields["inputs.forbid_deletion"] == {
         "default": False,
         "write_default_to_config": True,
+        "required": True,
         "type_hint": "bool",
     }
     assert sfs_wizard_fields["inputs.filesystems.jail.name"] == {
+        "required": True,
         "type_hint": "string",
     }
     assert sfs_wizard_fields["inputs.filesystems.jail.size_gib"] == {
+        "required": True,
         "type_hint": "number",
     }
     assert sfs_wizard_fields["inputs.filesystems.jail.block_size_kib"] == {
+        "required": True,
         "type_hint": "number",
     }
     assert sfs_wizard_fields["inputs.filesystems.jail.mount_tag"] == {
+        "required": True,
         "type_hint": "string",
     }
     assert sfs_wizard_fields["inputs.filesystems.jail.forbid_deletion"] == {
+        "required": True,
         "type_hint": "bool",
     }
 
@@ -3104,6 +3114,7 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
     assert mk8s_wizard_fields["inputs.cluster.public_endpoint"] == {
         "default": True,
         "write_default_to_config": True,
+        "required": True,
         "type_hint": "bool",
     }
     assert mk8s_wizard_fields["inputs.node_group_defaults.cpu.platform"] == {
@@ -3128,6 +3139,7 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         "from": "mk8s_compatible_platforms",
         "args": {"platform_prefix": "gpu-"},
     }
+    assert mk8s_wizard_fields["inputs.node_group_defaults.gpu.platform"]["required"] is True
     assert mk8s_wizard_fields["inputs.node_group_defaults.gpu.preset"]["options"] == {
         "from": "mk8s_gpu_capacity_choices",
         "args": {
@@ -3136,6 +3148,7 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         },
         "auto_select_single": True,
     }
+    assert mk8s_wizard_fields["inputs.node_group_defaults.gpu.preset"]["required"] is True
     assert mk8s_wizard_fields["inputs.node_groups"]["prompt"] is False
     assert mk8s_wizard_fields["inputs.node_groups.system.node_count"] == {
         "default": 2,
@@ -3184,6 +3197,7 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         ],
         "default": "AUTO",
         "write_default_to_config": True,
+        "required": True,
         "type_hint": "string",
     }
     assert mk8s_wizard_fields["inputs.gpu_clusters.workers.infiniband_fabric"] == {
@@ -3206,6 +3220,7 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         assert mk8s_wizard_fields[f"inputs.soperator.{field}"] == {
             "default": 1,
             "write_default_to_config": True,
+            "required": True,
             "type_hint": "number",
         }
     for field in (
@@ -3215,6 +3230,7 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         assert mk8s_wizard_fields[f"inputs.soperator.{field}"] == {
             "default": 100,
             "write_default_to_config": True,
+            "required": True,
             "type_hint": "number",
         }
     for legacy_field in (
@@ -3234,43 +3250,51 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
     assert mk8s_wizard_fields["inputs.soperator.system_node_count"] == {
         "default": 3,
         "write_default_to_config": True,
+        "required": True,
         "type_hint": "number",
     }
     for field in ("controller_node_count", "login_node_count", "accounting_node_count"):
         assert mk8s_wizard_fields[f"inputs.soperator.{field}"] == {
             "default": 2,
             "write_default_to_config": True,
+            "required": True,
             "type_hint": "number",
         }
     assert mk8s_wizard_fields["inputs.soperator.system_autoscaling.enabled"] == {
         "default": True,
         "write_default_to_config": True,
+        "required": True,
         "type_hint": "bool",
     }
     assert mk8s_wizard_fields["inputs.soperator.system_autoscaling.min_node_count"] == {
         "default": 3,
         "write_default_to_config": True,
+        "required": True,
         "type_hint": "number",
     }
     assert mk8s_wizard_fields["inputs.soperator.system_autoscaling.max_node_count"] == {
         "default": 5,
         "write_default_to_config": True,
+        "required": True,
         "type_hint": "number",
     }
     for role in ("controller", "login", "accounting"):
         assert mk8s_wizard_fields[f"inputs.soperator.{role}_autoscaling.enabled"] == {
             "default": False,
             "write_default_to_config": True,
+            "required": True,
             "type_hint": "bool",
         }
         assert mk8s_wizard_fields[f"inputs.soperator.{role}_autoscaling.min_node_count"] == {
             "default": 1,
             "write_default_to_config": True,
+            "required": True,
             "type_hint": "number",
         }
         assert mk8s_wizard_fields[f"inputs.soperator.{role}_autoscaling.max_node_count"] == {
             "default": 1,
             "write_default_to_config": True,
+            "required": True,
             "type_hint": "number",
         }
     assert "inputs.gpu_enabled" not in mk8s_wizard_fields

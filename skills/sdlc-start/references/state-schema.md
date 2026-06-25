@@ -240,12 +240,12 @@ hook bundle should be refreshed. Add `--register-hooks` when the installer
 should also merge the SDLC `PreToolUse` and `Stop` registration entries into
 `$CODEX_HOME/hooks.json`.
 
-The Stop hook continuation prompt must route through `sdlc-start` and emit
-canonical `sdlc-*` skill names. It may normalize short phase values when
-reading local state, but those aliases must not appear as emitted next-skill
-names. Steering text that pauses work or controls PR creation, including
-`Pause after the current feature. Do not create a PR.`, must be treated as
-coordinator input rather than ignored.
+The Stop hook continuation prompt must route through explicit `$sdlc-start`
+invocation and emit canonical `sdlc-*` skill names. It may normalize short
+phase values when reading local state, but those aliases must not appear as
+emitted next-skill names. Steering text that pauses work or controls PR
+creation, including `Pause after the current feature. Do not create a PR.`,
+must be treated as coordinator input rather than ignored.
 
 The PreToolUse hook must continue blocking out-of-scope writes such as direct
 runtime hook edits from an unrelated project workspace. Use the explicit hook

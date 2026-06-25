@@ -2,3 +2,5 @@ interface:
   display_name: "Commit and Push"
   short_description: "Commit whole-repo branch changes and push"
   default_prompt: "Use $commit-push to commit all repository changes with repo-root git add -A and push to origin."
+policy:
+  allow_implicit_invocation: false

@@ -2,3 +2,5 @@ interface:
   display_name: "SDLC UAT Tests"
   short_description: "Run product-level UAT"
   default_prompt: "Use $sdlc-uat-tests to validate the full Agentic SDLC product, not just individual features, before PR creation."
+policy:
+  allow_implicit_invocation: false

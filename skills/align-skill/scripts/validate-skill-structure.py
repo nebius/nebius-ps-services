@@ -43,6 +43,23 @@ STATEFUL_WORKFLOW_REQUIRED_HEADINGS = (
     "## Output Contract",
 )
 SDLC_ONLY_DESCRIPTION_PREFIX = "Use only as part of the Agentic SDLC workflow;"
+EXPLICIT_ONLY_SKILL_NAMES = {
+    "agent-nebius-auth",
+    "agentic-sdlc-test",
+    "apply-security",
+    "attach-ubuntu",
+    "code-info",
+    "commit",
+    "commit-push",
+    "config-codex",
+    "create-pr",
+    "install-grafana-mcp-for-nebius",
+    "merge-pr",
+    "publish-helm",
+    "publish-image",
+    "publish-release",
+    "review-pr",
+}
 
 
 @dataclass
@@ -199,6 +216,61 @@ def validate_stateful_workflow_profile(skill_text: str, result: SkillResult) -> 
             )
 
 
+def expected_implicit_invocation(name: str) -> str:
+    if name.startswith("sdlc-") or name in EXPLICIT_ONLY_SKILL_NAMES:
+        return "false"
+    return "true"
+
+
+def validate_openai_metadata_policy(skill_dir: Path, name: str, result: SkillResult) -> None:
+    metadata_path = skill_dir / "agents" / "openai.yaml"
+    if not metadata_path.exists():
+        result.failures.append(
+            "missing agents/openai.yaml metadata with "
+            "policy.allow_implicit_invocation"
+        )
+        return
+    if not metadata_path.is_file():
+        result.failures.append("agents/openai.yaml exists but is not a file")
+        return
+
+    try:
+        lines = metadata_path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        result.failures.append(f"cannot read agents/openai.yaml: {exc}")
+        return
+
+    in_policy = False
+    value: str | None = None
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if not line.startswith((" ", "\t")):
+            in_policy = stripped.split(":", 1)[0] == "policy"
+            continue
+        if in_policy and stripped.startswith("allow_implicit_invocation:"):
+            value = stripped.split(":", 1)[1].strip().strip("\"'")
+
+    if value is None:
+        result.failures.append(
+            "agents/openai.yaml is missing policy.allow_implicit_invocation"
+        )
+        return
+    if value not in {"true", "false"}:
+        result.failures.append(
+            "policy.allow_implicit_invocation must be lowercase true or false"
+        )
+        return
+
+    expected = expected_implicit_invocation(name)
+    if value != expected:
+        result.failures.append(
+            "policy.allow_implicit_invocation must be "
+            f"{expected} for {name}"
+        )
+
+
 def validate_skill(skill_dir: Path, *, profile: str = "basic") -> SkillResult:
     result = SkillResult(path=skill_dir)
     skill_md = skill_dir / "SKILL.md"
@@ -243,6 +315,9 @@ def validate_skill(skill_dir: Path, *, profile: str = "basic") -> SkillResult:
         result.failures.append(
             "skills with the SDLC-only description prefix must use an sdlc-* name"
         )
+
+    if name:
+        validate_openai_metadata_policy(skill_dir, name, result)
 
     try:
         skill_text = skill_md.read_text(encoding="utf-8")

@@ -19711,7 +19711,7 @@ def _prompt_path_sort_key(
         }
         field_order = {"apply_to_all": 0, "autoscaling_enabled": 1}
         return (
-            required_rank,
+            1,
             58,
             f"bulk-{scope_order.get(scope_key, 99):08d}",
             field_order.get(field_label, 99),
@@ -19732,7 +19732,7 @@ def _prompt_path_sort_key(
             ("ephemeral_nodes", "enabled"): 99,
         }
         return (
-            required_rank,
+            1,
             58,
             group_sort_key,
             worker_control_order.get((section, field), 100),
@@ -26073,6 +26073,7 @@ def _run_component_field_wizard(
                     if full_path in prompt_paths or label in seen_prompt_labels:
                         continue
                     seen_prompt_labels.add(label)
+                    required_prompt_labels.add(label)
                     prompt_paths.append(full_path)
                     field_type_hints[label] = "bool"
             for raw_group_key in ordered_group_keys:
@@ -26105,6 +26106,7 @@ def _run_component_field_wizard(
                     ):
                         continue
                     seen_prompt_labels.add(label)
+                    required_prompt_labels.add(label)
                     prompt_paths.append(full_path)
                     field_type_hints[label] = type_hint
 

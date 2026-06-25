@@ -49,12 +49,10 @@ For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
   `install-grafana-mcp-for-nebius`
 - Shell, Markdown, and Python linting: `linter`
 - Nebius cloud automation, quota, and MK8s GPU workflows: `nebius`
-- Nebius cxcli component onboarding: `onboard-nebius-cxcli`
 - End-to-end OCI Helm chart publishing: `publish-helm`
 - End-to-end container image publishing: `publish-image`
 - End-to-end GitHub Release publishing: `publish-release`
 - Python project scaffolding and hardening: `python-project`
-- Manual release-script generation: `release-generator`
 - GitHub pull request review and merge-readiness repair: `review-pr`
 - Bash and shell automation engineering: `shell-scripting`
 - Terraform module and repo engineering: `terraform`
@@ -65,6 +63,14 @@ Use the exact skill name with a leading `$` in the Codex chat box, then add
 the task you want. For example, use `$align` for this project,
 `$shell-scripting` to harden a Bash script, or `$terraform` to scaffold or
 review Terraform code.
+
+Every source skill has an `agents/openai.yaml` invocation policy. The listed
+operational setup, commit, PR, merge, publish, security, code-info, container,
+Grafana MCP, and Agentic SDLC verification skills use
+`allow_implicit_invocation: false` and should be started explicitly with
+`$skill-name`. Remaining non-SDLC skills use
+`allow_implicit_invocation: true` so Codex may select them when the task
+matches their metadata.
 
 ### Prompt Examples
 
@@ -156,11 +162,11 @@ learning capture in local skill source materials need to be aligned.
 
 `agentic-sdlc-test` verifies the Agentic SDLC workflow from outside the
 workflow. It checks `docs/agentic-sdlc-design.md`, global `sdlc-*` skill
-discovery, hook configuration, disposable PreToolUse and Stop hook fixture
-behavior, idempotency, failure routing, steering, and disposable golden-path
-execution. It writes the report under `~/.codex/sdlc-verification/` and must
-not change real projects, installed skills, hooks, hook trust, or agent
-configuration.
+discovery, explicit-only SDLC invocation policy, hook configuration,
+disposable PreToolUse and Stop hook fixture behavior, idempotency, failure
+routing, steering, and disposable golden-path execution. It writes the report
+under `~/.codex/sdlc-verification/` and must not change real projects,
+installed skills, hooks, hook trust, or agent configuration.
 
 ### `agent-nebius-auth`
 
@@ -183,13 +189,18 @@ and explicit final merge.
 Strictly SDLC-only skills use the `sdlc-` prefix, with the coordinator named
 `sdlc-start`, so tool discovery does not confuse workflow phases such as
 `sdlc-commit` with ordinary Git commands or general-purpose engineering skills.
+All `sdlc-*` skills set `allow_implicit_invocation: false`; start or resume the
+workflow explicitly with `$sdlc-start`, then let the coordinator record the next
+recommended phase in local run state.
 The committed product truth is `docs/requirements.md` and `docs/design.md`;
 private run state, plans, evidence, screenshots, transcripts, and steering live
 under `~/.codex/sdlc-runs/<project-id>/<run-id>/` and must not be committed.
 Optional global PreToolUse and Stop hooks can enforce SDLC invariants from that
-local state. Sensitive Git actions use short-lived local authorization files
-under the active run's `permissions/` directory; the skills create those files
-only immediately before the guarded action.
+local state. The Stop hook routes continuation through explicit `$sdlc-start`
+invocation rather than directly into phase skills. Sensitive Git actions use
+short-lived local authorization files under the active run's `permissions/`
+directory; the skills create those files only immediately before the guarded
+action.
 The canonical source for those optional SDLC hooks is
 `sdlc-start/assets/hooks/`. Patch that source first, validate it with
 `sdlc-start/assets/hooks/tests/test_sdlc_hooks.py`, and sync reviewed hook
@@ -372,11 +383,6 @@ Python. Use it when you want syntax checks, `shellcheck`, `markdownlint`, or
 including IAM bootstrap, object storage, VPC inspection, route analysis, quota
 checks, observability, and MK8s GPU/operator decisions.
 
-### `onboard-nebius-cxcli`
-
-`onboard-nebius-cxcli` is the repo-specific onboarding skill for adding Nebius
-Terraform-backed components into `nebius-cxcli`.
-
 ### `publish-helm`
 
 `publish-helm` publishes an OCI Helm chart end to end from the current project
@@ -411,11 +417,6 @@ the GitHub Release and expected assets, and returns a publish report.
 `python-project` scaffolds and hardens Python repositories with reusable modern
 defaults such as `pyproject.toml`, setuptools-scm, `src/` layout, Ruff, pytest,
 Typer, and Pydantic.
-
-### `release-generator`
-
-`release-generator` is the manual-only fallback for projects that explicitly
-want a local `release.sh` workflow and no CI release pipeline.
 
 ### `review-pr`
 

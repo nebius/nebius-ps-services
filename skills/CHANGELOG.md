@@ -92,17 +92,27 @@ All notable changes to the reusable Codex skills are tracked here.
 - Added skill-local `README.md` files across reusable skills so each skill
   folder has human-facing architecture, workflow, core concept, and file
   responsibility documentation.
-- Added the `onboard-nebius-cxcli` Codex skill as the central onboarding guide
-  for Nebius Terraform modules that need to be wired into
-  `services/nebius-cxcli`, including catalog-first onboarding and optional
-  code-owned layers for wizard/provider, runtime validation, status polling,
-  and cluster handoff behavior.
 - Added the `publish-helm` Codex skill for OCI Helm chart publishing.
 - Added the `review-pr` Codex skill for GitHub-backed PR review and
   merge-readiness work.
 
+### Removed
+
+- Removed the `onboard-nebius-cxcli` and `release-generator` skills.
+
 ### Changed
 
+- Added explicit `agents/openai.yaml` invocation policies across all source
+  skills: operational setup, commit, PR, merge, publish, security, code-info,
+  container, Grafana MCP, `agentic-sdlc-test`, and every `sdlc-*` workflow
+  skill now disable implicit invocation, while the remaining non-SDLC skills
+  opt in to implicit matching. The Agentic SDLC Stop hook now emits explicit
+  `$sdlc-start` continuation prompts, and the skill-structure validator checks
+  invocation policy drift.
+- Updated the `config-codex` global `AGENTS.md` template to include compact Git
+  workflow defaults, explicit implicit-skill invocation policy, narrower
+  mutating skill-script permission wording, and a broader changed-surface
+  `$align` rule for code, config, and documentation changes.
 - Hardened `agent-nebius-auth` setup idempotency so Nebius profile
   create/update restores the previously active human/admin CLI profile, setup
   serializes global profile mutations, agent service-account profiles are not
@@ -452,9 +462,6 @@ All notable changes to the reusable Codex skills are tracked here.
   externally owned branches, resolve safe base-branch conflicts only when
   permissions allow, and report exact blockers when a contributor branch cannot
   be updated.
-- Renamed the Nebius cxcli onboarding skill to `onboard-nebius-cxcli`, updating
-  the skill folder, `SKILL.md` metadata, OpenAI agent metadata, sibling-skill
-  routing, repo docs, and nebius-cxcli documentation references.
 - Updated `install-skills.sh` so source-owned renamed or removed skills
   converge on reinstall and target-only skills are listed at the end with a
   short default-target `--remove-skill` hint instead of being silently ignored.

@@ -443,14 +443,14 @@ class HookTestCase(unittest.TestCase):
         self.active_run(next_skill="sdlc-validate-codes")
         result = run_hook(STOP, self.stop_payload(), self.codex_home)
         self.assertEqual(result.get("decision"), "block")
-        self.assertIn("Use skill sdlc-start", result.get("reason", ""))
+        self.assertIn("Use $sdlc-start", result.get("reason", ""))
         self.assertIn("sdlc-validate-codes", result.get("reason", ""))
 
     def test_stop_normalizes_short_next_skill_alias(self) -> None:
         self.active_run(next_skill="validate-codes")
         result = run_hook(STOP, self.stop_payload(), self.codex_home)
         self.assertEqual(result.get("decision"), "block")
-        self.assertIn("Use skill sdlc-start", result.get("reason", ""))
+        self.assertIn("Use $sdlc-start", result.get("reason", ""))
         self.assertIn("sdlc-validate-codes", result.get("reason", ""))
         self.assertNotIn("Next recommended skill: validate-codes", result.get("reason", ""))
 
@@ -459,7 +459,7 @@ class HookTestCase(unittest.TestCase):
         (run_dir / "STEERING.md").write_text("Pause after the current feature. Do not create a PR.\n", encoding="utf-8")
         result = run_hook(STOP, self.stop_payload(), self.codex_home)
         self.assertEqual(result.get("decision"), "block")
-        self.assertIn("Use skill sdlc-start", result.get("reason", ""))
+        self.assertIn("Use $sdlc-start", result.get("reason", ""))
         self.assertIn("STEERING.md", result.get("reason", ""))
         self.assertIn("pause or PR-control", result.get("reason", ""))
 

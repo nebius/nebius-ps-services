@@ -75,6 +75,12 @@ runner. `sdlc-start` is the coordinator skill. It reads the committed specs and
 private local run state, selects one current feature, and returns exactly one
 next recommended skill.
 
+All `sdlc-*` skills set `allow_implicit_invocation: false` in
+`agents/openai.yaml`. Operators and continuation prompts enter the workflow
+explicitly through `$sdlc-start`, and the coordinator records the next
+recommended phase skill in local state. This keeps workflow phases from being
+selected by ordinary prompt matching outside an active Agentic SDLC run.
+
 Every phase skill owns a narrow responsibility. For example,
 `sdlc-create-requirements` owns `docs/requirements.md`, `sdlc-create-design`
 owns `docs/design.md`, `sdlc-create-plan` owns a locked private plan, and
@@ -155,14 +161,14 @@ The bundle contains:
 Hooks are guardrails, not the workflow engine. Phase selection remains owned by
 `sdlc-start`.
 
-The Stop hook can route an active run back through `sdlc-start` with a
-continuation prompt. It stops instead of continuing when the run is complete,
-paused, blocked, waiting on human input, over the iteration or retry budget, or
-making no progress after repeated continuation attempts. It can continue to
-`sdlc-start` when local state recommends another phase, steering needs to be
-persisted, all features are committed and UAT still needs to run, or UAT failed
-with an addressable classification. It never auto-continues into
-`sdlc-merge-pr`; merge requires an explicit user request.
+The Stop hook can route an active run back through explicit `$sdlc-start`
+invocation with a continuation prompt. It stops instead of continuing when the
+run is complete, paused, blocked, waiting on human input, over the iteration or
+retry budget, or making no progress after repeated continuation attempts. It
+can continue to `$sdlc-start` when local state recommends another phase,
+steering needs to be persisted, all features are committed and UAT still needs
+to run, or UAT failed with an addressable classification. It never
+auto-continues into `sdlc-merge-pr`; merge requires an explicit user request.
 
 The PreToolUse hook does not deny filesystem targets by path. File reads,
 writes, updates, deletes, and moves may target repository files, outside-repo
@@ -384,7 +390,8 @@ python3 agentic-sdlc-test/scripts/verify_agentic_sdlc.py
 
 The preflight must verify and record:
 
-- global `sdlc-*` skill folders and `SKILL.md` front matter
+- global `sdlc-*` skill folders, `SKILL.md` front matter, and explicit-only
+  `agents/openai.yaml` invocation policy
 - duplicate SDLC skill-name detection
 - configured PreToolUse and Stop hooks
 - preservation of non-SDLC hook boundaries such as `SessionStart` and

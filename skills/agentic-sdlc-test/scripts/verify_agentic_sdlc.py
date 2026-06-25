@@ -144,6 +144,23 @@ def frontmatter(skill_md: Path) -> dict[str, str]:
     return data
 
 
+def openai_invocation_policy(metadata_path: Path) -> str | None:
+    text = read_text(metadata_path)
+    if not text:
+        return None
+    in_policy = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if not line.startswith((" ", "\t")):
+            in_policy = stripped.split(":", 1)[0] == "policy"
+            continue
+        if in_policy and stripped.startswith("allow_implicit_invocation:"):
+            return stripped.split(":", 1)[1].strip().strip("\"'")
+    return None
+
+
 def setup_context(ns: argparse.Namespace) -> Context:
     verification_root = ns.verification_root.expanduser().resolve(strict=False)
     disposable_project = verification_root / "disposable-project"
@@ -176,6 +193,8 @@ def check_design(ctx: Context) -> None:
         "Quick preflight test",
         "Full workflow test",
         "$agentic-sdlc-test",
+        "$sdlc-start",
+        "allow_implicit_invocation: false",
         "~/.codex/sdlc-verification/report.md",
         "does not deny filesystem targets by path",
         "Ordinary outbound network commands",
@@ -223,8 +242,16 @@ def check_skill_discovery(ctx: Context) -> None:
             problems.append("missing description")
         elif not description.startswith(DESCRIPTION_PREFIX):
             problems.append("description does not start with SDLC-only prefix")
+        policy = openai_invocation_policy(folder / "agents" / "openai.yaml")
+        if policy != "false":
+            problems.append(
+                "agents/openai.yaml policy.allow_implicit_invocation is not false"
+            )
         status = "PASS" if not problems else "FAIL"
-        detail = "SKILL.md name and SDLC trigger description are valid."
+        detail = (
+            "SKILL.md name, SDLC trigger description, and explicit-only "
+            "invocation policy are valid."
+        )
         if problems:
             detail = "; ".join(problems)
         ctx.add("Skill discovery results", required, status, detail)
@@ -559,7 +586,7 @@ def check_hooks_with_fixtures(ctx: Context) -> None:
     reset_stop_state(next_skill="sdlc-validate-codes")
     stop_continue = run_hook(stop_hook, stop_payload(ctx), ctx)
     prompt = str(stop_continue.get("reason") or "")
-    ctx.add("Stop continuation test results", "Continue through sdlc-start", "PASS" if stop_continue.get("decision") == "block" and "Use skill sdlc-start" in prompt else "FAIL", prompt.splitlines()[0] if prompt else json.dumps(stop_continue, sort_keys=True))
+    ctx.add("Stop continuation test results", "Continue through $sdlc-start", "PASS" if stop_continue.get("decision") == "block" and "Use $sdlc-start" in prompt else "FAIL", prompt.splitlines()[0] if prompt else json.dumps(stop_continue, sort_keys=True))
 
     reset_stop_state(
         next_skill="",

@@ -2,3 +2,5 @@ interface:
   display_name: "Code Info"
   short_description: "Read-only local or GitHub repo metrics"
   default_prompt: "Use $code-info to gather read-only, copy/paste-friendly code metrics for this local folder or GitHub repository without changing project files."
+policy:
+  allow_implicit_invocation: false

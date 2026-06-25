@@ -2,3 +2,5 @@ interface:
   display_name: "SDLC Evaluate"
   short_description: "Evaluate acceptance behavior"
   default_prompt: "Use $sdlc-evaluate to evaluate observed Agentic SDLC product behavior against real-world acceptance criteria."
+policy:
+  allow_implicit_invocation: false

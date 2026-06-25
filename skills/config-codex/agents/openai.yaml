@@ -3,4 +3,4 @@ interface:
   short_description: "Bootstrap a public-safe local Codex runtime setup"
   default_prompt: "Use $config-codex to configure my local Codex setup from public-safe templates: back up existing files, keep secrets out of config, render global AGENTS.md, config.toml, hooks, custom agents, and task-state layout, then validate and tell me how to restart and trust hooks."
 policy:
-  allow_implicit_invocation: true
+  allow_implicit_invocation: false

@@ -99,7 +99,8 @@ remotes.
    python3 agentic-sdlc-test/scripts/verify_agentic_sdlc.py
    ```
 
-   This script performs read-only discovery of global `sdlc-*` skills and hook
+   This script performs read-only discovery of global `sdlc-*` skills,
+   explicit-only `agents/openai.yaml` invocation policy, and hook
    configuration, creates a disposable verification root, runs hook fixture
    tests against disposable `CODEX_HOME` state, and writes a report. It does
    not edit installed skills or hooks.

@@ -128,7 +128,7 @@ def _max_iterations(current_state: dict[str, Any]) -> int:
 def _continuation_prompt(active, current_state: dict[str, Any], next_skill: str, reason: str) -> str:
     return "\n".join(
         [
-            f"Use skill {COORDINATOR_SKILL}.",
+            f"Use ${COORDINATOR_SKILL}.",
             "Continue the active SDLC run from local state.",
             "",
             f"Project root: {active.project_root}",

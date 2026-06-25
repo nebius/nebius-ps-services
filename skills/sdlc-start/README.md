@@ -43,13 +43,13 @@ runtime hooks:
 - `tests/test_sdlc_hooks.py`
 
 Patch these source files before touching installed runtime copies under
-`$CODEX_HOME/hooks`. The Stop hook must emit `sdlc-start` and canonical
-`sdlc-*` skill names, while still accepting short phase aliases as input. The
-PreToolUse hook does not block file targets by path; repo files, outside-repo
-files, credential directories, Codex runtime files, global `AGENTS.md`, locked
-SDLC plans, and private SDLC state are all path-allowed for operator
-flexibility. It still blocks secret-bearing payloads, dangerous shell patterns,
-and guarded Git/GitHub actions.
+`$CODEX_HOME/hooks`. The Stop hook must emit explicit `$sdlc-start`
+continuation prompts and canonical `sdlc-*` skill names, while still accepting
+short phase aliases as input. The PreToolUse hook does not block file targets
+by path; repo files, outside-repo files, credential directories, Codex runtime
+files, global `AGENTS.md`, locked SDLC plans, and private SDLC state are all
+path-allowed for operator flexibility. It still blocks secret-bearing payloads,
+dangerous shell patterns, and guarded Git/GitHub actions.
 
 Validate the source bundle from the `skills/` directory:
 

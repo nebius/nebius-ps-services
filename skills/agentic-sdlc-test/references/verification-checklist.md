@@ -50,6 +50,8 @@ Verify `docs/agentic-sdlc-design.md` includes:
 - `Quick preflight test`
 - `Full workflow test`
 - `$agentic-sdlc-test`
+- `$sdlc-start`
+- `allow_implicit_invocation: false`
 - `~/.codex/sdlc-verification/report.md`
 - path-agnostic filesystem target handling and ordinary outbound network
   command allowance, with only unsafe content or guarded action checks
@@ -66,6 +68,8 @@ Verify:
 - No duplicate SDLC skill names exist.
 - Each SDLC description starts with
   `Use only as part of the Agentic SDLC workflow;`.
+- Each required `sdlc-*` skill has `agents/openai.yaml` with
+  `policy.allow_implicit_invocation: false`.
 - No project-local `.agents/skills` directory is required by the disposable
   project.
 
@@ -78,7 +82,7 @@ Verify read-only:
 - Stop continuation hook is configured.
 - Existing non-SDLC `SessionStart` and `UserPromptSubmit` hooks are preserved.
 - `UserPromptSubmit` does not perform SDLC routing.
-- Stop continuation routes through `sdlc-start`.
+- Stop continuation routes through explicit `$sdlc-start` invocation.
 
 Do not install, trust, edit, delete, or rewrite hooks during verification.
 
@@ -131,7 +135,7 @@ Continuation cases:
 - Critical or pause/no-PR steering is present.
 - UAT failed with an addressable classification.
 
-Continuation prompts must say to use `sdlc-start`, include project root,
+Continuation prompts must say to use `$sdlc-start`, include project root,
 project ID, run ID, current feature, current phase, next recommended skill, and
 instructions to read local state first, avoid locked-plan edits, and persist
 evidence before stopping.

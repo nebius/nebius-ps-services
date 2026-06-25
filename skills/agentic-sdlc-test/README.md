@@ -2,8 +2,9 @@
 
 `agentic-sdlc-test` verifies the Agentic SDLC workflow from outside the
 workflow. It checks the design contract, global `sdlc-*` skill discovery, hook
-configuration, disposable hook behavior, idempotency expectations, failure-loop
-routing, steering, and the disposable golden-path workflow.
+metadata invocation policy, hook configuration, disposable hook behavior,
+idempotency expectations, failure-loop routing, steering, and the disposable
+golden-path workflow.
 
 ## What It Does
 
@@ -29,4 +30,4 @@ routing, steering, and the disposable golden-path workflow.
 - `SKILL.md`: runtime verification workflow and safety boundaries.
 - `references/verification-checklist.md`: detailed test plan and pass criteria.
 - `scripts/verify_agentic_sdlc.py`: deterministic safe preflight verifier.
-- `agents/openai.yaml`: UI metadata and invocation prompt.
+- `agents/openai.yaml`: UI metadata and explicit-only invocation prompt.

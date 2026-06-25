@@ -2,3 +2,5 @@ interface:
   display_name: "Shell Scripting"
   short_description: "Write robust and readable Bash scripts"
   default_prompt: "Use $shell-scripting to create or improve a Bash script with strict mode, safe parsing, and rich usage output."
+policy:
+  allow_implicit_invocation: true

@@ -1,6 +1,6 @@
 ---
 name: terraform
-description: "Use for Terraform repo/module hardening: scaffold, standardize, or improve Terraform project structure, state/backends, environment roots, module interfaces, validation/test strategy, security controls, CI checks, and Terraform best practices. Do not use for onboarding Nebius Terraform modules into nebius-cxcli; use onboard-nebius-cxcli."
+description: "Use for Terraform repo/module hardening: scaffold, standardize, or improve Terraform project structure, state/backends, environment roots, module interfaces, validation/test strategy, security controls, CI checks, and Terraform best practices. Do not use for nebius-cxcli wizard, validation, status, or component-catalog wiring unless the task is Terraform module structure."
 ---
 
 # Terraform

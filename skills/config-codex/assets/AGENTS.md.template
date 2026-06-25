@@ -9,18 +9,33 @@
 
 ## Working Defaults
 
-- Default policy for logic/API/CLI behavior changes is **no legacy compatibility layer** and **no backward-compatibility shims**.
-- When behavior changes, prefer fail-fast and a single canonical path instead of dual old/new code paths.
-- Keep legacy flags, aliases, deprecated branches, migration shims, and compatibility wrappers **only** when the user explicitly requests them.
+- Default policy for logic/API/CLI behavior changes is **no legacy
+  compatibility layer** and **no backward-compatibility shims**.
+- When behavior changes, prefer fail-fast and a single canonical path instead
+  of dual old/new code paths.
+- Keep legacy flags, aliases, deprecated branches, migration shims, and
+  compatibility wrappers **only** when the user explicitly requests them.
 - When making code changes, also update relevant design docs, `README.md`, and
   the `[Unreleased]` section of `CHANGELOG.md` when those files exist and are
   in scope.
 - Preserve unrelated user changes. Make focused edits, inspect the diff, and
   verify with the narrowest relevant checks before broadening.
 
+## Git Workflow
+
+- For any staging needed for commits, pushes, or PRs, run `git add -A` from the
+  repository root unless the user explicitly narrows scope.
+- Prefer existing branch history over commit-copy workflows. Do not use
+  `git cherry-pick` as the default way to copy work unless the user explicitly
+  requests it or a targeted branch reconstruction is clearly the requested task.
+- For PR creation, reuse the current non-default branch. If currently on the
+  default branch, create a new feature branch from the default branch before
+  opening the PR.
+
 ## Security and Publication
 
-- Do not publish or commit any of the following to public repositories or public channels:
+- Do not publish or commit any of the following to public repositories or
+  public channels:
   - API keys, tokens, certificates, or other secrets.
   - Private endpoints, internal hostnames, or non-public URLs.
   - Internal confidential materials or customer data.
@@ -29,13 +44,19 @@
     open-sourced.
 - Do not print or persist secrets in generated files, examples, logs, task
   state, memories, documentation, or final responses.
-- Codex Skills should remain public, generic, and reusable, using placeholders for any sensitive or environment-specific information.
+- Codex Skills should remain public, generic, and reusable, using placeholders
+  for any sensitive or environment-specific information.
 
 ## Skills
 
-- Skills are discovered dynamically from installed skill directories; do not maintain a static list in this file.
+- Skills are discovered dynamically from installed skill directories; do not
+  maintain a static list in this file.
 - Use skills for repeatable or on-demand workflows, and load only the matching
   skill(s). Explicit `/skill` or `$skill` requests take precedence.
+- Detect and use implicitly invokable skills when the task matches their
+  metadata. If a skill disables implicit invocation, such as with
+  `allow_implicit_invocation: false`, use it only after explicit user
+  invocation.
 - For non-trivial planning, implementation, debugging, refactoring, migration,
   architecture, review, testing, CI failure, or multi-file coding tasks, use
   `global-context-management`.
@@ -46,8 +67,8 @@
   `nebius-ps-services/skills/` first.
 - Skill scripts may run for read-only inspection or validation when they do not
   modify files, services, external systems, credentials, or persistent state.
-  Run mutating scripts only when explicitly requested with Run, Execute, or an
-  equivalent instruction.
+  Run mutating skill scripts only when the user explicitly asks to run or
+  execute that script.
 
 ## Context Management
 
@@ -67,6 +88,7 @@
   yourself instead of waiting for the user to name an exact role. Ask helpers
   for concise summaries, consolidate results, and close completed helpers when
   close controls are available.
-- After making code changes in a turn, before the final response, explicitly
-  use `$align` for the changed scope unless the user says not to. If `$align`
-  is unavailable, perform the equivalent local alignment checklist and say so.
+- After code, config, or documentation changes in a turn, before the final
+  response, explicitly use `$align` for the changed surfaces unless the user
+  says not to. If `$align` is unavailable, perform the equivalent local
+  alignment checklist and say so.

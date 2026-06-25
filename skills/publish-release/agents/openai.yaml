@@ -2,3 +2,5 @@ interface:
   display_name: "Publish Release"
   short_description: "Publish GitHub Releases end to end"
   default_prompt: "Use $publish-release --mode complete --tag X.Y.Z to prep, PR, merge, tag, wait for CI, and verify a GitHub Release."
+policy:
+  allow_implicit_invocation: false
