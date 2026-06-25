@@ -176,6 +176,70 @@ def _fake_paths(tmp_path: Path) -> ProjectPaths:
     )
 
 
+def _iter_registered_help_args(
+    typer_app: Any, prefix: tuple[str, ...] = ()
+) -> tuple[tuple[str, ...], ...]:
+    help_args: list[tuple[str, ...]] = [(*prefix, "--help")]
+    for command_info in getattr(typer_app, "registered_commands", ()):
+        if getattr(command_info, "hidden", False) is True:
+            continue
+        name = getattr(command_info, "name", None)
+        if name:
+            help_args.append((*prefix, name, "--help"))
+    for group_info in getattr(typer_app, "registered_groups", ()):
+        if getattr(group_info, "hidden", False) is True:
+            continue
+        name = getattr(group_info, "name", None)
+        nested_typer = getattr(group_info, "typer_instance", None)
+        if name and nested_typer is not None:
+            help_args.extend(_iter_registered_help_args(nested_typer, (*prefix, name)))
+    return tuple(help_args)
+
+
+_HELP_EXAMPLE_SECTION_HEADINGS = frozenset(
+    {
+        "Examples:",
+        "Example:",
+        "Quickstart:",
+        "CXCLI managed workflow:",
+        "Workflow:",
+    }
+)
+_HELP_EXAMPLE_SECTION_END_HEADINGS = frozenset(
+    {
+        "Arguments",
+        "Options",
+        "Commands",
+        "Comments:",
+    }
+)
+
+
+def _assert_example_commands_are_prefixed(help_text: str, args: tuple[str, ...]) -> None:
+    in_examples = False
+    for line in help_text.splitlines():
+        stripped = line.strip()
+        for heading in _HELP_EXAMPLE_SECTION_HEADINGS:
+            if stripped.startswith(heading):
+                if stripped != heading:
+                    pytest.fail(f"{args} has inline example text after {heading}: {stripped}")
+                in_examples = True
+                break
+        else:
+            if in_examples and stripped in _HELP_EXAMPLE_SECTION_END_HEADINGS:
+                in_examples = False
+                continue
+            if in_examples and stripped.startswith("nebius-cxcli "):
+                pytest.fail(f"{args} has an unprefixed example command line: {stripped}")
+            if (
+                in_examples
+                and stripped.startswith("| nebius-cxcli ")
+                and re.search(r"\s+\([^)]", stripped)
+            ):
+                pytest.fail(f"{args} has inline comments in an example command: {stripped}")
+            continue
+
+
 def _mk8s_gpu_fabric_payload(*, fabric: str = "fabric-4") -> dict[str, Any]:
     return {
         "client_info": {
@@ -18511,7 +18575,7 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
         "acceptance-test, soperator, upgrade, and bootstrap-ci use config.yaml"
     ) in top_help
     assert (
-        f"upgrade example: nebius-cxcli upgrade node-template {upgrade_example_config} "
+        f"upgrade example: | nebius-cxcli upgrade node-template {upgrade_example_config} "
         "infra:mk8s@mk8s --to-version 1.33 --dry-run"
     ) in top_help
     assert "nebius-cxcli upgrade --help" in top_help
@@ -18576,9 +18640,8 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert "--yes" not in upgrade_help
     assert "--disruption-policy" not in upgrade_help
     assert "allow-unavailable" not in upgrade_help
-    assert (
-        f"nebius-cxcli upgrade node-template {upgrade_example_config} (guided wizard)"
-    ) in upgrade_help
+    assert f"nebius-cxcli upgrade node-template {upgrade_example_config}" in upgrade_help
+    assert "comments: guided wizard" in upgrade_help
     assert (
         "nebius-cxcli upgrade node-template <config.yaml> infra:mk8s@<target> "
         "--to-version 1.33 --to-os ubuntu24.04 --to-gpu-stack-preset cuda13.0 "
@@ -18622,11 +18685,11 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert "--auto-auth-bootstrap" in upgrade_node_template_help
     assert "--skip-validations" in upgrade_node_template_help
     assert "--skip-validation" in upgrade_node_template_help
+    assert f"guided wizard: | nebius-cxcli upgrade node-template {upgrade_example_config}" in (
+        upgrade_node_template_help
+    )
     assert (
-        f"guided wizard: nebius-cxcli upgrade node-template {upgrade_example_config}"
-    ) in upgrade_node_template_help
-    assert (
-        "dry-run plan: nebius-cxcli upgrade node-template <config.yaml> "
+        "dry-run plan: | nebius-cxcli upgrade node-template <config.yaml> "
         "infra:mk8s@<target> --to-version 1.33 --to-os ubuntu24.04 "
         "--to-gpu-stack-preset cuda13.0 --dry-run"
     ) in upgrade_node_template_help
@@ -18657,7 +18720,7 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert "generated/reports/upgrade-node-group-report.md" in upgrade_node_group_help
     assert "generated/reports/upgrade-node-group-report.json" in upgrade_node_group_help
     assert (
-        "example: nebius-cxcli upgrade node-group <config.yaml> "
+        "example: | nebius-cxcli upgrade node-group <config.yaml> "
         "infra:mk8s@<target> --node-group worker --to-platform gpu-b200-sxm "
         "--to-preset 8gpu-160vcpu-1792gb --to-fabric fabric-6 --dry-run"
     ) in upgrade_node_group_help
@@ -18680,7 +18743,7 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert "--yes" not in upgrade_helm_help
     assert "--strategy" not in upgrade_helm_help
     assert (
-        "example: nebius-cxcli upgrade helm-chart <config.yaml> "
+        "example: | nebius-cxcli upgrade helm-chart <config.yaml> "
         "apps:<chart>@mk8s --to-version <chart-version> --dry-run"
     ) in upgrade_helm_help
     assert "use nebius-cxcli soperator upgrade for soperator chart upgrades" in (upgrade_helm_help)
@@ -18759,6 +18822,78 @@ def test_help_text_maps_commands_to_target_types() -> None:
     assert "quota-request Use CONFIG_YAML" in output
     assert "deploy Use CONFIG_YAML" in output
     assert "destroy Use CONFIG_YAML" in output
+
+
+def test_cli_help_examples_have_visual_separator_and_comments_block() -> None:
+    for width in (80, 120, 240):
+        help_with_examples: list[tuple[str, ...]] = []
+        help_with_comments: list[tuple[str, ...]] = []
+        for args in _iter_registered_help_args(cli.app):
+            result = runner.invoke(
+                cli.app,
+                list(args),
+                env={"COLUMNS": str(width)},
+                terminal_width=width,
+            )
+
+            assert result.exit_code == 0, result.output
+            help_text = _plain_output(result.output)
+            normalized_help = " ".join(help_text.split())
+            _assert_example_commands_are_prefixed(help_text, args)
+            example_prefix_indexes = [
+                normalized_help.find(prefix)
+                for prefix in _HELP_EXAMPLE_SECTION_HEADINGS
+                if prefix in normalized_help
+            ]
+            if "Comments:" in normalized_help:
+                help_with_comments.append(args)
+                assert example_prefix_indexes, (width, args)
+                comments_index = normalized_help.index("Comments:")
+                examples_index = min(example_prefix_indexes)
+                assert examples_index < comments_index, (width, args)
+                assert "| " in normalized_help[examples_index:comments_index], (width, args)
+            if "nebius-cxcli" not in normalized_help:
+                continue
+            if not example_prefix_indexes:
+                continue
+
+            help_with_examples.append(args)
+            assert re.search(
+                r"\b(?:Examples|Example|Quickstart|CXCLI managed workflow|Workflow): \| ",
+                normalized_help,
+            ), (width, args)
+            assert "Examples: nebius-cxcli" not in normalized_help, (width, args)
+            assert "Example: nebius-cxcli" not in normalized_help, (width, args)
+            assert "Quickstart: nebius-cxcli" not in normalized_help, (width, args)
+
+        assert ("ext-soperator", "migrate", "--help") in help_with_examples
+        assert ("acceptance-test", "--help") in help_with_examples
+        assert len(help_with_examples) >= 30
+        assert ("ext-soperator", "migrate", "--help") in help_with_comments
+        assert ("upgrade", "node-group", "--help") in help_with_comments
+        assert len(help_with_comments) >= 10
+
+    migrate_result = runner.invoke(
+        cli.app,
+        ["ext-soperator", "migrate", "--help"],
+        env={"COLUMNS": "240"},
+        terminal_width=240,
+    )
+    assert migrate_result.exit_code == 0, migrate_result.output
+    normalized_migrate_help = " ".join(_plain_output(migrate_result.output).split())
+    assert (
+        "Examples: | nebius-cxcli ext-soperator migrate "
+        "./deployments/tenant/project/config.yaml --target external-cluster --dry-run; "
+        "| nebius-cxcli ext-soperator migrate "
+        "./deployments/tenant/project/config.yaml --target external-cluster --execute --approve"
+    ) in normalized_migrate_help
+    assert "--execute --approve. Comments: --target is the cxcli target id" in (
+        normalized_migrate_help
+    )
+    assert "--execute --approve. --target is the cxcli target id" not in (
+        normalized_migrate_help
+    )
+    assert f"[bold {cli.COPY_PASTE_COMMAND_COLOR}]|[/]" == cli._HELP_EXAMPLE_SEPARATOR_MARKUP
 
 
 def test_command_help_usage_labels_positional_target_types() -> None:
@@ -19060,17 +19195,30 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "migrate is only for accepted onboarding plans that contain migration-owned actions" in (
         normalized_soperator_help
     )
-    assert "using its Nebius --cluster-id" in normalized_soperator_help
+    assert (
+        "nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root> "
+        "--cluster-id <mk8scluster-id>"
+    ) in normalized_soperator_help
+    assert "Comments:" in normalized_soperator_help
     assert "stores a cxcli target id in deploy.targets[].instance_id" in (normalized_soperator_help)
     assert (
-        "If the accepted onboarding report says no migration-owned work is required, run deploy <config.yaml>"
+        "If the accepted onboarding report says no migration-owned work is required, "
+        "deploy reconciles every generated target"
         in normalized_soperator_help
     )
-    assert "Use deploy --target <target-id> only to narrow one run" in (normalized_soperator_help)
+    assert "use deploy --target <target-id> only to narrow one run" in (
+        normalized_soperator_help
+    )
     assert "deploy-report.md plus deploy-time validations" in normalized_soperator_help
     assert "If migration-owned work is required, do not deploy first" in normalized_soperator_help
-    assert "ext-soperator migrate --dry-run" in normalized_soperator_help
-    assert "ext-soperator migrate --execute --approve" in normalized_soperator_help
+    assert (
+        "nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --dry-run"
+        in normalized_soperator_help
+    )
+    assert (
+        "nebius-cxcli ext-soperator migrate <config.yaml> --target <target> "
+        "--execute --approve"
+    ) in normalized_soperator_help
     assert "CXCLI managed chart-only Soperator upgrades use soperator upgrade" in (
         normalized_soperator_help
     )

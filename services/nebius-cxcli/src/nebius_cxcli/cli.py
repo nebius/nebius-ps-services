@@ -6,6 +6,7 @@ import atexit
 import base64
 import copy
 import getpass
+import inspect
 import ipaddress
 import json
 import math
@@ -455,7 +456,12 @@ from .ssh_jumphost import (
 )
 from .ssh_public_keys import discover_ssh_public_key_files, normalize_ssh_public_key_value
 from .templates import customer_workflow_yaml, default_cli_ref
-from .terminal_styles import copy_paste_command_markup, error_markup, warning_markup
+from .terminal_styles import (
+    COPY_PASTE_COMMAND_COLOR,
+    copy_paste_command_markup,
+    error_markup,
+    warning_markup,
+)
 from .terraform_backend import (
     TerraformStateLockInfo,
     backend_settings_from_config,
@@ -496,6 +502,34 @@ from .wireguard_clients import (
 )
 
 console = Console()
+_HELP_EXAMPLE_SEPARATOR_MARKUP = f"[bold {COPY_PASTE_COMMAND_COLOR}]|[/]"
+_HELP_EXAMPLE_COMMAND_DELIMITER_RE = re.compile(
+    r"(?P<terminator>[.;])\s+(?=(?:[^.;|]*?:[ \t]+)?nebius-cxcli\b)"
+    r"|\s+\|\s+(?=(?:[^.;|]*?:[ \t]+)?nebius-cxcli\b)"
+)
+_HELP_EXAMPLE_PARAGRAPH_COMMAND_RE = re.compile(
+    r"\n\n[ \t]*(?=(?:[^\n.;|]*?:[ \t]+)?nebius-cxcli\b)"
+)
+_HELP_EXAMPLE_LINE_COMMAND_RE = re.compile(r"(?m)(?<=\n)[ \t]*(?=nebius-cxcli\b)")
+_HELP_EXAMPLE_LABEL_COMMAND_RE = re.compile(
+    rf"(?P<prefix>^|\n\n(?:{re.escape(_HELP_EXAMPLE_SEPARATOR_MARKUP)} )?)"
+    r"(?P<label>(?!nebius-cxcli\b)[^\n.;|]*?:)[ \t]+(?=nebius-cxcli\b)"
+)
+_HELP_EXAMPLE_COMMENT_SPLIT_RE = re.compile(
+    r"(?<!\d)\.\s+(?=(?:--[A-Za-z][\w-]*\s+|[A-Z][A-Za-z/]))"
+)
+_HELP_EXAMPLE_COMMA_COMMENT_SPLIT_RE = re.compile(r",\s+(?=then\b)")
+_HELP_EXAMPLE_TRAILING_PAREN_COMMENT_RE = re.compile(
+    r"(?P<command>\bnebius-cxcli\b.+?)\s+"
+    r"\((?P<comment>[^()]*(?:\([^()]*\)[^()]*)*)\)"
+    r"(?P<punctuation>[.;]?)(?=$|\s+)"
+)
+_HELP_EXAMPLE_SECTION_RE = re.compile(
+    r"(?P<section_start>^|\n\n)"
+    r"(?P<prefix>Examples:|Example:|Quickstart:|CXCLI managed workflow:|Workflow:)"
+    r"(?P<body>.*)",
+    re.DOTALL,
+)
 _DEPLOY_VALIDATION_WARNING_CACHE: ContextVar[set[str] | None] = ContextVar(
     "deploy_validation_warning_cache",
     default=None,
@@ -572,6 +606,183 @@ def _print_copy_paste_command(command: str) -> None:
     normalized = str(command or "").strip()
     if normalized:
         console.print(copy_paste_command_markup(normalized), highlight=False, soft_wrap=True)
+
+
+def _style_help_example_body(body: str, *, normalize: bool) -> str:
+    normalized = " ".join(body.split()) if normalize else body.strip()
+    if not normalized:
+        return normalized
+
+    def _replace_delimiter(match: re.Match[str]) -> str:
+        terminator = match.group("terminator") or ""
+        return f"{terminator}\n\n{_HELP_EXAMPLE_SEPARATOR_MARKUP} "
+
+    normalized = _HELP_EXAMPLE_COMMAND_DELIMITER_RE.sub(_replace_delimiter, normalized)
+    normalized = _HELP_EXAMPLE_PARAGRAPH_COMMAND_RE.sub(
+        f"\n\n{_HELP_EXAMPLE_SEPARATOR_MARKUP} ",
+        normalized,
+    )
+
+    def _replace_label_command(match: re.Match[str]) -> str:
+        return (
+            f"{match.group('prefix')}{match.group('label')}"
+            f"\n\n{_HELP_EXAMPLE_SEPARATOR_MARKUP} "
+        )
+
+    normalized = _HELP_EXAMPLE_LABEL_COMMAND_RE.sub(_replace_label_command, normalized)
+    if normalize:
+        return _split_help_example_comments(f"{_HELP_EXAMPLE_SEPARATOR_MARKUP} {normalized}")
+    return _split_help_example_comments(_prefix_help_example_paragraphs(normalized))
+
+
+def _prefix_help_example_paragraphs(body: str) -> str:
+    paragraphs: list[str] = []
+    for paragraph in body.split("\n\n"):
+        stripped = paragraph.strip()
+        if not stripped:
+            continue
+        stripped = _HELP_EXAMPLE_LINE_COMMAND_RE.sub(
+            f"{_HELP_EXAMPLE_SEPARATOR_MARKUP} ",
+            stripped,
+        )
+        if stripped.startswith(_HELP_EXAMPLE_SEPARATOR_MARKUP):
+            paragraphs.append(stripped)
+        elif "nebius-cxcli" in stripped or stripped.endswith(":"):
+            paragraphs.append(f"{_HELP_EXAMPLE_SEPARATOR_MARKUP} {stripped}")
+        else:
+            paragraphs.append(stripped)
+    return "\n\n".join(paragraphs)
+
+
+def _split_help_example_comments(formatted_body: str) -> str:
+    formatted_body, comments = _extract_help_example_parenthetical_comments(formatted_body)
+    marker_index = formatted_body.rfind(_HELP_EXAMPLE_SEPARATOR_MARKUP)
+    if marker_index < 0:
+        return _append_help_example_comments(formatted_body, comments)
+    tail_start = marker_index + len(_HELP_EXAMPLE_SEPARATOR_MARKUP)
+    tail = formatted_body[tail_start:]
+    comma_match = _HELP_EXAMPLE_COMMA_COMMENT_SPLIT_RE.search(tail)
+    period_match = _HELP_EXAMPLE_COMMENT_SPLIT_RE.search(tail)
+    match = None
+    split_at_comma = False
+    if comma_match is not None and (
+        period_match is None or comma_match.start() < period_match.start()
+    ):
+        match = comma_match
+        split_at_comma = True
+    elif period_match is not None:
+        match = period_match
+    if match is None:
+        return _append_help_example_comments(formatted_body, comments)
+    trailing_comment = tail[match.end() :].strip()
+    if not trailing_comment:
+        return _append_help_example_comments(formatted_body, comments)
+    example_tail_end = match.start() if split_at_comma else match.start() + 1
+    example_tail = tail[:example_tail_end].rstrip()
+    if split_at_comma and not example_tail.endswith((".", ";")):
+        example_tail = f"{example_tail}."
+    comments.append(trailing_comment)
+    return _append_help_example_comments(f"{formatted_body[:tail_start]}{example_tail}", comments)
+
+
+def _extract_help_example_parenthetical_comments(body: str) -> tuple[str, list[str]]:
+    comments: list[str] = []
+    paragraphs: list[str] = []
+    for paragraph in body.split("\n\n"):
+        stripped = paragraph.strip()
+        if not stripped:
+            continue
+        if stripped.startswith(_HELP_EXAMPLE_SEPARATOR_MARKUP) and "nebius-cxcli" in stripped:
+            match = _HELP_EXAMPLE_TRAILING_PAREN_COMMENT_RE.search(stripped)
+            if match is not None:
+                punctuation = match.group("punctuation")
+                command = match.group("command").rstrip()
+                if punctuation:
+                    command = f"{command}{punctuation}"
+                comments.append(match.group("comment").strip())
+                remainder = stripped[match.end() :].strip()
+                stripped = (
+                    f"{_HELP_EXAMPLE_SEPARATOR_MARKUP} "
+                    f"{command.lstrip()}"
+                )
+                if remainder:
+                    stripped = f"{stripped} {remainder}"
+        paragraphs.append(stripped)
+    return "\n\n".join(paragraphs), comments
+
+
+def _append_help_example_comments(body: str, comments: Sequence[str]) -> str:
+    cleaned_comments = [comment.strip() for comment in comments if comment.strip()]
+    if not cleaned_comments:
+        return body
+    return f"{body}\n\nComments:\n\n" + "\n\n".join(cleaned_comments)
+
+
+def _style_help_example_text(text: str, *, normalize_body: bool) -> str:
+    if "nebius-cxcli" not in text or _HELP_EXAMPLE_SEPARATOR_MARKUP in text:
+        return text
+    source = " ".join(text.split()) if normalize_body else text
+    match = _HELP_EXAMPLE_SECTION_RE.search(source)
+    if match is None:
+        return text
+
+    before_section = source[: match.start()]
+    section_start = match.group("section_start")
+    prefix = match.group("prefix")
+    body = _style_help_example_body(match.group("body"), normalize=normalize_body)
+    return f"{before_section}{section_start}{prefix}\n\n{body}"
+
+
+def _style_help_example_epilog(epilog: str) -> str:
+    return _style_help_example_text(epilog, normalize_body=True)
+
+
+def _style_help_example_help(help_text: str) -> str:
+    return _style_help_example_text(help_text, normalize_body=False)
+
+
+def _style_help_example_epilogs(typer_app: typer.Typer, *, _seen: set[int] | None = None) -> None:
+    seen = _seen if _seen is not None else set()
+    if id(typer_app) in seen:
+        return
+    seen.add(id(typer_app))
+
+    for info in (
+        getattr(typer_app, "info", None),
+        getattr(typer_app, "registered_callback", None),
+    ):
+        help_text = getattr(info, "help", None)
+        if isinstance(help_text, str):
+            info.help = _style_help_example_help(help_text)
+        epilog = getattr(info, "epilog", None)
+        if isinstance(epilog, str):
+            info.epilog = _style_help_example_epilog(epilog)
+
+    for command_info in getattr(typer_app, "registered_commands", ()):
+        help_text = getattr(command_info, "help", None)
+        if isinstance(help_text, str):
+            command_info.help = _style_help_example_help(help_text)
+        else:
+            callback = getattr(command_info, "callback", None)
+            doc = inspect.getdoc(callback) if callback is not None else None
+            if doc and "nebius-cxcli" in doc:
+                styled_doc = _style_help_example_help(doc)
+                if styled_doc != doc:
+                    command_info.help = styled_doc
+        epilog = getattr(command_info, "epilog", None)
+        if isinstance(epilog, str):
+            command_info.epilog = _style_help_example_epilog(epilog)
+
+    for group_info in getattr(typer_app, "registered_groups", ()):
+        help_text = getattr(group_info, "help", None)
+        if isinstance(help_text, str):
+            group_info.help = _style_help_example_help(help_text)
+        epilog = getattr(group_info, "epilog", None)
+        if isinstance(epilog, str):
+            group_info.epilog = _style_help_example_epilog(epilog)
+        nested_typer = getattr(group_info, "typer_instance", None)
+        if isinstance(nested_typer, typer.Typer):
+            _style_help_example_epilogs(nested_typer, _seen=seen)
 
 
 def _quota_check_all_regions_command(config_path: Path) -> str:
@@ -1773,19 +1984,20 @@ ext_soperator_app = typer.Typer(
         "that contain migration-owned actions."
     ),
     epilog=(
-        "Workflow: run ext-soperator onboard for an external Nebius MK8s cluster, "
-        "using its Nebius --cluster-id, then run validate and render. Onboarding "
-        "stores a cxcli target id in deploy.targets[].instance_id; by default it is "
+        "Workflow: nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root> "
+        "--cluster-id <mk8scluster-id>; nebius-cxcli validate <config.yaml>; "
+        "nebius-cxcli render <config.yaml>; nebius-cxcli deploy <config.yaml>; "
+        "nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --dry-run; "
+        "nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --execute --approve. "
+        "Onboarding stores a cxcli target id in deploy.targets[].instance_id; by default it is "
         "derived from the live MK8s cluster name, or it can be set with --target-id. "
-        "If the accepted onboarding report says no migration-owned work is required, "
-        "run deploy <config.yaml>; this reconciles every generated target and produces "
-        "deploy-report.md plus deploy-time validations. Use deploy --target <target-id> "
-        "only to narrow one run. If migration-owned work is required, "
-        "do not deploy first; run ext-soperator migrate --dry-run, then ext-soperator migrate "
-        "--execute --approve. CXCLI managed chart-only Soperator upgrades use "
-        "soperator upgrade; external MK8s control-plane and node-template upgrades "
-        "selected by onboarding are owned by ext-soperator migrate; "
-        "Terraform-managed MK8s node-template upgrades use upgrade node-template."
+        "If the accepted onboarding report says no migration-owned work is required, deploy "
+        "reconciles every generated target and produces deploy-report.md plus deploy-time "
+        "validations; use deploy --target <target-id> only to narrow one run. If migration-owned "
+        "work is required, do not deploy first. CXCLI managed chart-only Soperator upgrades use "
+        "soperator upgrade; external MK8s control-plane and node-template upgrades selected by "
+        "onboarding are owned by ext-soperator migrate; Terraform-managed MK8s node-template "
+        "upgrades use upgrade node-template."
     ),
 )
 soperator_app = typer.Typer(
@@ -46268,6 +46480,9 @@ def email_command(
             console.print(result.message)
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
+
+
+_style_help_example_epilogs(app)
 
 
 def main() -> None:

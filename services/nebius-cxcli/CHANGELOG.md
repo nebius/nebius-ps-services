@@ -6,6 +6,10 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Improved CLI `--help` example readability. Example sections now render each
+  command behind a visible accent-colored `|` separator so wrapped help output
+  makes the beginning of every example easier to scan, and trailing explanatory
+  prose is split into a separate `Comments:` block.
 - Tightened the create/component-add wizard labels for MK8s, SFS, and
   Soperator production-cluster prompts. Active cluster shape, SFS filesystem,
   GPU default, service sizing, and worker-shard controls now render as required
