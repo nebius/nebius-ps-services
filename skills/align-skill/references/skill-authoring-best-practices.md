@@ -32,9 +32,28 @@ Source basis:
 - The front matter `name` must match the folder and stay lowercase hyphen-case.
 - The `description` is the primary trigger surface. It must say what the skill
   does and when to use it.
+- Add or repair `agents/openai.yaml` when the target repository convention
+  expects OpenAI metadata. Use the nested path `agents/openai.yaml`, not a
+  top-level `agents.openai.yaml` file.
 - Prefix skills that are strictly internal to the Agentic SDLC workflow with
   `sdlc-`; use `sdlc-start` for the coordinator. Their descriptions must start
   with `Use only as part of the Agentic SDLC workflow;`.
+- Set `policy.allow_implicit_invocation: false` for `sdlc-*` skills and other
+  skills that must be explicitly requested, such as Git commit/push/PR/merge,
+  publish/release, auth/setup, security mutation, container attachment, MCP
+  installation, or workflow-verification harnesses.
+- Set `policy.allow_implicit_invocation: true` for ordinary reusable skills
+  that Codex may safely choose from the `description`. This is OpenAI Codex's
+  default, but this repository still records it explicitly for validation.
+- Base the policy on the requirements, front matter `description`, Non-Goals,
+  Guardrails, and workflow text. When those surfaces say explicit user
+  invocation is required, encode that in `agents/openai.yaml`.
+- If a non-listed skill needs explicit-only behavior, make it machine-checkable:
+  either say so in the front matter `description` with wording such as
+  `Use only when the user explicitly asks...`, or add a short
+  `## Invocation Policy` section that says explicit invocation is required.
+  Do not rely on a one-off guardrail such as "run destructive actions only when
+  explicitly asked"; that guards one action, not the whole skill trigger.
 - Front-load user intent terms because long descriptions may be shortened in
   large skill sets.
 - Include realistic inputs and near-boundaries, such as local folder, GitHub

@@ -64,7 +64,9 @@ the task you want. For example, use `$align` for this project,
 `$shell-scripting` to harden a Bash script, or `$terraform` to scaffold or
 review Terraform code.
 
-Every source skill has an `agents/openai.yaml` invocation policy. The listed
+OpenAI Codex treats `agents/openai.yaml` as optional skill metadata for UI,
+invocation policy, and dependencies. In this repository, every source skill
+has that file so invocation policy can be reviewed and validated. The listed
 operational setup, commit, PR, merge, publish, security, code-info, container,
 Grafana MCP, and Agentic SDLC verification skills use
 `allow_implicit_invocation: false` and should be started explicitly with

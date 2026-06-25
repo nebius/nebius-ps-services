@@ -102,6 +102,11 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Hardened `align-skill` authoring guidance and validator coverage for current
+  OpenAI Codex skill metadata: `agents/openai.yaml` is documented as optional
+  upstream but required by this repository's source-skill convention, the
+  OpenAI metadata template now includes invocation policy, and validator tests
+  cover wrong metadata paths plus explicit-only policy derived from `SKILL.md`.
 - Added explicit `agents/openai.yaml` invocation policies across all source
   skills: operational setup, commit, PR, merge, publish, security, code-info,
   container, Grafana MCP, `agentic-sdlc-test`, and every `sdlc-*` workflow

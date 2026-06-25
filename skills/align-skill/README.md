@@ -12,6 +12,9 @@ validation, or validation evidence aligned.
   practices.
 - Validates optional `agents/`, `assets/`, `evals/`, `references/`, and
   `scripts/` surfaces.
+- Creates or repairs `agents/openai.yaml` metadata when the repository
+  convention requires it, including the correct
+  `policy.allow_implicit_invocation` value for the skill contract.
 - Adds or repairs the standard `## Learning Loop` rule on target skills.
 - Verifies vendor-specific claims against official documentation when needed.
 - Adds guardrails for destructive actions, secrets, live systems, and external
@@ -62,6 +65,12 @@ align-skill checks structure, safety, docs, and validation
 - Move detailed references and templates into supporting folders.
 - Use `skill-creator` for new-skill scaffolding when available, then use
   `align-skill` for authoring hardening and validation.
+- Use the exact metadata path `agents/openai.yaml`. In this repository, source
+  skills keep that file even though OpenAI Codex treats it as optional
+  metadata.
+- Set `policy.allow_implicit_invocation` to `false` for explicit-only,
+  mutating, publishing, setup, or Agentic SDLC phase skills; use `true` for
+  ordinary reusable skills that Codex may safely select from the description.
 - Do not broaden a skill until its trigger becomes hard to reason about.
 - Capture durable knowledge in reusable skill sources, not in ad hoc notes or
   final-answer-only summaries.
@@ -91,7 +100,8 @@ stateful if it only inspects files, edits `.gitignore`, and reports the result.
 - `agents/openai.yaml`: UI metadata and invocation policy.
 - `references/`: canonical structure, authoring, safety, vendor, and trigger
   guidance.
-- `assets/`: report, plan, and stateful-workflow skill templates.
+- `assets/`: report, plan, OpenAI metadata, and stateful-workflow skill
+  templates.
 - `scripts/validate-skill-structure.py`: static skill folder validator,
   including `policy.allow_implicit_invocation` checks.
 - `scripts/test-validate-skill-structure.py`: local fixture self-test for the

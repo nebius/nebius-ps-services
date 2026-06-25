@@ -11,8 +11,8 @@ Use this skill to inspect, review, align, harden, validate, and improve one or
 more Codex or Agent Skill folders. It can help refine skill-writing drafts after
 a target skill folder, scaffold, or `SKILL.md` draft exists. The target is skill
 quality: `SKILL.md`, supporting `references/`, `assets/`, `scripts/`, optional
-`agents/` metadata, optional `evals/` trigger examples, triggering behavior,
-safety/security rules, fast validation, and validation evidence.
+`agents/openai.yaml` metadata, optional `evals/` trigger examples, triggering
+behavior, safety/security rules, fast validation, and validation evidence.
 
 This skill is separate from `align`, which is for end-to-end project/codebase
 alignment.
@@ -139,13 +139,17 @@ newly scaffolded skill folder:
 3. Start from concrete use cases and should-trigger/should-not-trigger prompts.
 4. Keep the skill focused on one repeatable job and front-load the `description`
    with user intent, accepted inputs, and boundaries from adjacent skills.
-5. Apply safe, secure, and fast skill guidance from
+5. Create or repair `agents/openai.yaml` when the target repository convention
+   expects OpenAI metadata. Use `agents/openai.yaml`, not `agents.openai.yaml`.
+   Add `interface.default_prompt` and a `policy.allow_implicit_invocation`
+   value derived from the skill requirements and `SKILL.md`.
+6. Apply safe, secure, and fast skill guidance from
    `references/skill-authoring-best-practices.md`.
-6. For stateful workflow skills, add explicit `Required Reads`, `Writes`,
+7. For stateful workflow skills, add explicit `Required Reads`, `Writes`,
    `Idempotency`, `Failure Handling`, `Must Not`, and `Completion Criteria`
    sections. Keep private execution state out of committed project files and
    keep hooks as invariant guardrails rather than workflow orchestrators.
-7. Validate locally with the narrowest relevant checks, then broaden only when
+8. Validate locally with the narrowest relevant checks, then broaden only when
    the contract or shared validator changed.
 
 ## Learning Loop Enforcement
@@ -212,9 +216,34 @@ skill-name/
 ```
 
 Only add optional folders when they serve the skill. Follow existing repository
-conventions when they are clearer or stricter than the generic structure. In
-this repository, `evals/` is an optional surface for reusable trigger or quality
-evaluation prompts.
+conventions when they are clearer or stricter than the generic structure.
+OpenAI Codex treats `agents/openai.yaml` as optional metadata, but this
+repository requires it for source-owned skills so UI metadata, default prompts,
+dependencies, and invocation policy can be validated. In this repository,
+`evals/` is an optional surface for reusable trigger or quality evaluation
+prompts.
+
+## Invocation Policy Selection
+
+When creating or hardening OpenAI metadata, derive
+`policy.allow_implicit_invocation` from the skill requirements and `SKILL.md`
+contract:
+
+- Use `true` for ordinary reusable skills that Codex may safely select when the
+  prompt matches their `description`.
+- Use `false` when the skill must be explicitly invoked by the user or
+  coordinator, such as Git commit/push/PR/merge flows, release/publish flows,
+  auth or local setup, security mutation, container attachment, external MCP
+  installation, workflow test harnesses, or any `sdlc-*` Agentic SDLC phase.
+- For `sdlc-*` skills, keep the description prefix
+  `Use only as part of the Agentic SDLC workflow;` and set
+  `allow_implicit_invocation: false`.
+- If a skill's front matter, Non-Goals, Guardrails, or workflow says it should
+  run only after an explicit request, encode that requirement in
+  `agents/openai.yaml` instead of relying on prose alone.
+
+Use `assets/openai-agent-metadata.yaml.template` as the starting point when a
+target skill is missing `agents/openai.yaml`.
 
 For stateful workflow skills, use the template in
 `assets/stateful-workflow-skill-template.md`. This profile is opt-in and should

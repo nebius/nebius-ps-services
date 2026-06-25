@@ -1,0 +1,11 @@
+interface:
+  display_name: "{{DISPLAY_NAME}}"
+  short_description: "{{SHORT_DESCRIPTION}}"
+  default_prompt: "Use ${{SKILL_NAME}} to {{DEFAULT_PROMPT_ACTION}}."
+policy:
+  allow_implicit_invocation: {{ALLOW_IMPLICIT_INVOCATION}}
+# dependencies:
+#   tools:
+#     - type: "mcp"
+#       value: "{{MCP_SERVER_NAME}}"
+#       description: "{{MCP_SERVER_DESCRIPTION}}"
