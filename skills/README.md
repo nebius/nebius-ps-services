@@ -4,10 +4,10 @@ This folder contains public, reusable Codex skills for common engineering
 workflows. Each skill lives in its own folder and is discovered by the presence
 of `SKILL.md`.
 
-This root README is the concise index and install guide. Most skill folders
-also have a local `README.md` that explains what the skill does, its
-architecture, core concepts, workflow, and important files. `SKILL.md` remains
-the runtime instruction file Codex loads when the skill is used.
+This root README is the concise catalog and install guide. Most skill folders
+also have a local `README.md` that explains architecture, core concepts,
+workflow, and important files. `SKILL.md` remains the runtime instruction file
+Codex loads when the skill is used.
 
 Every reusable skill includes a `## Learning Loop` section in `SKILL.md`. When
 durable, public-safe, evidence-backed knowledge is discovered while using a
@@ -18,44 +18,91 @@ report-only work, the agent should report why source capture was skipped.
 
 For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 
-## Included Skills
+## Table of Contents
 
-- End-to-end project alignment: `align`
-- Codex Agent Nebius service-account auth bootstrap and repair:
-  `agent-nebius-auth`
-- Agentic SDLC workflow verification: `agentic-sdlc-test`
-- Agentic SDLC workflow skills: `sdlc-create-requirements`, `sdlc-start`,
-  `sdlc-gather-context`, `sdlc-create-design`, `sdlc-create-plan`,
-  `sdlc-tdd`, `sdlc-implement-plan`, `sdlc-validate-codes`,
-  `sdlc-unit-tests`, `sdlc-evaluate`, `sdlc-classify-failure`,
-  `sdlc-gui-test`, `sdlc-tui-test`, `sdlc-align-specs`, `sdlc-commit`,
-  `sdlc-uat-tests`, `sdlc-merge-pr`, plus the reused `create-pr` and
-  `review-pr` handoff skills
-- Skill folder hardening, alignment, and validation: `align-skill`
-- Security review and safe remediation across infra, CI/CD, shell, and app
-  code: `apply-security`
-- Disposable Ubuntu project container setup: `attach-ubuntu`
-- Fast local whole-repository commits on the current branch: `commit`
-- Commit and push the current feature branch: `commit-push`
-- Branch-safe GitHub pull request creation with safe check repair: `create-pr`
-- Branch-protection-respecting GitHub pull request merging: `merge-pr`
-- Read-only copy/paste-friendly local or GitHub repo code metrics: `code-info`
-- Public-safe local Codex runtime configuration: `config-codex`
-- GitHub Actions authoring and review: `github-workflows`
-- Global context management for long Codex tasks: `global-context-management`
-- Stack-aware `.gitignore` generation and cleanup: `gitignore`
-- Helm chart hardening and validation: `helmchart`
-- Grafana MCP setup for Nebius Observability in Codex:
-  `install-grafana-mcp-for-nebius`
-- Shell, Markdown, and Python linting: `linter`
-- Nebius cloud automation, quota, and MK8s GPU workflows: `nebius`
-- End-to-end OCI Helm chart publishing: `publish-helm`
-- End-to-end container image publishing: `publish-image`
-- End-to-end GitHub Release publishing: `publish-release`
-- Python project scaffolding and hardening: `python-project`
-- GitHub pull request review and merge-readiness repair: `review-pr`
-- Bash and shell automation engineering: `shell-scripting`
-- Terraform module and repo engineering: `terraform`
+- [Skill Catalog](#skill-catalog)
+- [Using Skills in Codex Chat](#using-skills-in-codex-chat)
+- [Skill Details](#skill-details)
+- [Skills Installer](#skills-installer)
+
+## Skill Catalog
+
+The catalog below mirrors the live skill folders in this source tree. The
+`Invocation` column reflects `agents/openai.yaml`:
+
+- `Implicit allowed`: Codex may select the skill when the prompt matches.
+- `Explicit only`: invoke the skill directly with `$skill-name`.
+
+### Alignment and Authoring
+
+| Skill | Invocation | Description |
+| --- | --- | --- |
+| `align` | Implicit allowed | Project-wide alignment and review across code, wiring, tests, CI, CLI/help, config, documentation, workflows, and project skills. |
+| `align-skill` | Implicit allowed | Review, harden, validate, and improve existing or newly scaffolded Codex or Agent Skill folders after an initial scaffold or draft exists. |
+| `global-context-management` | Implicit allowed | Keep complex Codex tasks focused with durable task state, concise parent-thread context, targeted read-only subagents when authorized, focused validation, and final risk review. |
+
+### Local Setup and Information
+
+| Skill | Invocation | Description |
+| --- | --- | --- |
+| `agent-nebius-auth` | Explicit only | Bootstrap, repair, verify, or install Codex Agent Nebius service-account authentication and its token-injection hook. |
+| `agentic-sdlc-test` | Explicit only | Verify the Agentic SDLC system from outside the workflow with disposable hook fixture tests, golden-path guidance, and a safe local report. |
+| `attach-ubuntu` | Explicit only | Launch or reuse a disposable Ubuntu Docker container for the current project and best-effort open it through VS Code Dev Containers. |
+| `code-info` | Explicit only | Produce read-only, copy/paste-friendly code metrics for local folders or GitHub repositories without changing files. |
+| `config-codex` | Explicit only | Configure a public-safe local Codex home setup, including global policy, MCP config, hooks, task-state layout, custom read-only agents, and validation. |
+| `install-grafana-mcp-for-nebius` | Explicit only | Install and configure the official Grafana MCP server for Codex against Nebius-managed Grafana observability data. |
+
+### Git, Pull Requests, and Publishing
+
+| Skill | Invocation | Description |
+| --- | --- | --- |
+| `commit` | Explicit only | Create one fast local Git commit on the current branch after repo-root `git add -A` and lightweight staged validation; never pushes. |
+| `commit-push` | Explicit only | Commit all current feature-branch changes from the repo root and push the branch to `origin` without opening a pull request. |
+| `create-pr` | Explicit only | Create or reuse GitHub pull requests from local work or named branches, with branch-safe preparation, validation, and readiness reporting. |
+| `merge-pr` | Explicit only | Verify and merge a ready GitHub pull request without admin bypass after checking reviews, checks, mergeability, branch state, and head SHA. |
+| `publish-helm` | Explicit only | Publish an OCI Helm chart end to end: prepare release changes, PR/merge, tag, wait for workflow, verify the chart, and report the result. |
+| `publish-image` | Explicit only | Publish a container image end to end: prepare release changes, PR/merge, tag, wait for workflow, verify image tags/digest, and report the result. |
+| `publish-release` | Explicit only | Publish a GitHub Release end to end: prepare release changes, PR/merge, tag, wait for workflow, verify assets, and report the result. |
+| `review-pr` | Explicit only | Review a GitHub pull request by number, URL, or current branch, fix safe issues when possible, and report merge readiness or blockers. |
+
+### Project Engineering
+
+| Skill | Invocation | Description |
+| --- | --- | --- |
+| `apply-security` | Explicit only | Review or fix security issues across infrastructure, deployment, Helm, Kubernetes, Terraform, CI/CD, shell, and application code. |
+| `github-workflows` | Implicit allowed | Create, review, or standardize GitHub Actions for PR/merge CI, merge automation, reusable workflows, permissions, and release/image YAML. |
+| `gitignore` | Implicit allowed | Create or update stack-aware `.gitignore` files with sensible macOS, VS Code, and detected language/tool defaults. |
+| `helmchart` | Implicit allowed | Create, review, harden, refactor, lint, template, or standardize Helm charts and chart CI. |
+| `linter` | Implicit allowed | Lint and conservatively auto-fix shell, Markdown, and Python files with tools such as `shellcheck`, `markdownlint`, and Ruff. |
+| `nebius` | Implicit allowed | Automate Nebius SDK/cloud workflows for IAM, object storage, VPC, quota, MK8s readiness, GPU/operator decisions, and observability wiring. |
+| `python-project` | Implicit allowed | Scaffold or harden Python projects with modern packaging, `src/` layout, Ruff, pytest, Typer, Pydantic, services, APIs, and CI. |
+| `shell-scripting` | Implicit allowed | Create, refactor, or review Bash automation with strict mode, safe argument parsing, idempotency, and readable CLI output. |
+| `terraform` | Implicit allowed | Scaffold, standardize, or improve Terraform repositories and modules with state guidance, validation, security controls, examples, and CI. |
+
+### Agentic SDLC Workflow
+
+All `sdlc-*` skills are explicit-only and should run through the Agentic SDLC
+workflow, normally starting with `$sdlc-start`.
+
+| Skill | Invocation | Description |
+| --- | --- | --- |
+| `sdlc-align-specs` | Explicit only | Check SDLC requirements, design, plans, tests, implementation, and evidence for consistency. |
+| `sdlc-classify-failure` | Explicit only | Classify failed SDLC phases and route the loop to the earliest responsible phase. |
+| `sdlc-commit` | Explicit only | Create a local feature-scoped SDLC commit after validation, tests, and evaluation pass; never pushes. |
+| `sdlc-create-design` | Explicit only | Create or update `docs/design.md` from requirements and gathered context, preserving stable feature IDs. |
+| `sdlc-create-plan` | Explicit only | Create a locked private local execution plan for one ready feature before tests or implementation. |
+| `sdlc-create-requirements` | Explicit only | Create or update `docs/requirements.md` from user prompts, tickets, stories, or change requests while preserving stable requirement IDs. |
+| `sdlc-evaluate` | Explicit only | Evaluate whether the current feature solves the real-world requirement using acceptance criteria and the right harness. |
+| `sdlc-gather-context` | Explicit only | Build compact feature context packs from product, vendor, internal, codebase, and test sources. |
+| `sdlc-gui-test` | Explicit only | Control and evaluate browser UI behavior against SDLC acceptance criteria with screenshots or accessibility snapshots when available. |
+| `sdlc-implement-plan` | Explicit only | Implement production code for the current locked feature plan after `sdlc-tdd`, staying inside plan boundaries. |
+| `sdlc-merge-pr` | Explicit only | Merge a specific Agentic SDLC pull request only after explicit user request and final readiness checks. |
+| `sdlc-start` | Explicit only | Start, resume, or continue the Agentic SDLC workflow and choose the next phase from local run state. |
+| `sdlc-tdd` | Explicit only | Convert acceptance criteria and design success criteria into failing or already-green tests before implementation. |
+| `sdlc-tui-test` | Explicit only | Control and evaluate terminal, CLI wizard, or TUI flows with transcript and exit-code evidence. |
+| `sdlc-uat-tests` | Explicit only | Run product-level user acceptance testing across the whole system before PR creation. |
+| `sdlc-unit-tests` | Explicit only | Run behavior, regression, integration, component, contract, or mock-based tests for the current feature. |
+| `sdlc-validate-codes` | Explicit only | Run build, parse, lint, type, import, dependency, and configuration validation for the current feature. |
 
 ## Using Skills in Codex Chat
 
@@ -139,6 +186,10 @@ explicitly starts the request with `Run` or `Execute` (or equivalent);
 otherwise read the script or report the command that would be used.
 
 ## Skill Details
+
+The catalog above is the complete live index. This section gives extra context
+for the broader, commonly reused skills and groups the Agentic SDLC phases
+together so the workflow reads as one lifecycle.
 
 ### `align`
 

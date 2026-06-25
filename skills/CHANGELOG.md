@@ -102,6 +102,9 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Reworked the root `README.md` with a short table of contents and a complete
+  grouped skill catalog covering every live source skill, its invocation
+  policy, and a concise description.
 - Hardened `align-skill` authoring guidance and validator coverage for current
   OpenAI Codex skill metadata: `agents/openai.yaml` is documented as optional
   upstream but required by this repository's source-skill convention, the
