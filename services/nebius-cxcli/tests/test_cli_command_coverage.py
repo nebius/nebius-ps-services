@@ -7792,6 +7792,23 @@ def test_acceptance_test_smoke_command_passes_options(
     }
 
 
+def test_acceptance_test_smoke_command_requires_suite(tmp_path: Path) -> None:
+    fake_paths = _fake_paths(tmp_path)
+
+    result = runner.invoke(
+        cli.app,
+        ["acceptance-test", "smoke", str(fake_paths.config_path)],
+    )
+
+    assert result.exit_code == 1, result.output
+    output = _plain_output(result.output)
+    assert "WARNING:" in output
+    assert "acceptance-test smoke requires --suite" in output
+    assert "no default K8s suite is selected" in output
+    assert "Choose one of: k8s-cuda, slurm" in output
+    assert "nebius-cxcli acceptance-test smoke <config.yaml> --suite slurm" in output
+
+
 def test_acceptance_test_smoke_command_prints_passed_result(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -7824,7 +7841,14 @@ def test_acceptance_test_smoke_command_prints_passed_result(
 
     result = runner.invoke(
         cli.app,
-        ["acceptance-test", "smoke", str(fake_paths.config_path), "--all-targets"],
+        [
+            "acceptance-test",
+            "smoke",
+            str(fake_paths.config_path),
+            "--all-targets",
+            "--suite",
+            "slurm",
+        ],
     )
 
     assert result.exit_code == 0, result.output
@@ -8111,7 +8135,7 @@ def test_acceptance_test_rejects_same_target_duplicate_canonical_reports() -> No
         )
 
 
-def test_acceptance_test_smoke_runner_defaults_to_all_targets(
+def test_acceptance_test_smoke_runner_runs_explicit_suite_for_all_targets(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -8191,7 +8215,7 @@ def test_acceptance_test_smoke_runner_defaults_to_all_targets(
         config_path=fake_paths.config_path,
         requested_target_ref=None,
         all_targets=False,
-        suites=None,
+        suites=["k8s-cuda"],
         batch_size=128,
         concurrency=8,
         continue_on_failure=True,
@@ -8201,7 +8225,7 @@ def test_acceptance_test_smoke_runner_defaults_to_all_targets(
         fake_paths.reports_dir / "acceptance-smoke-report-cluster-a.json",
         fake_paths.reports_dir / "acceptance-smoke-report-cluster-b.json",
     ]
-    assert smoke_kwargs == {"include_soperator_targets": False}
+    assert smoke_kwargs == {"include_soperator_targets": True}
     assert handoff_calls == [False, False]
 
 
@@ -8234,9 +8258,9 @@ def test_acceptance_test_help_shows_safe_examples() -> None:
     )
     assert "Slurm all-node smoke JSON report:" in group_help
     assert "K8s CUDA smoke JSON report:" in group_help
-    assert "default smoke on all targets:" in group_help
-    assert "default K8s NCCL benchmark on all targets:" in group_help
-    assert "nebius-cxcli acceptance-test benchmark <config.yaml>" in group_help
+    assert "Slurm smoke on all targets:" in group_help
+    assert "K8s NCCL benchmark on all targets:" in group_help
+    assert "nebius-cxcli acceptance-test benchmark <config.yaml> --suite k8s-nccl" in group_help
     assert "Slurm NCCL benchmark JSON report:" in group_help
     assert "force K8s NCCL on a Soperator-owned GPU target during maintenance" in group_help
     assert "JSON reports only under generated/reports/" in smoke_help
@@ -8252,11 +8276,10 @@ def test_acceptance_test_help_shows_safe_examples() -> None:
     assert "Run acceptance smoke tests for one generated cluster target." in smoke_help
     assert "Omit --target to run every generated target." in smoke_help
     assert "This is the default when --target is omitted." in smoke_help
+    assert "Required acceptance suite to run" in smoke_help
     assert "Supported values: k8s-cuda, slurm" in smoke_help
-    assert "Omit --suite to run target defaults: k8s-cuda on plain MK8s GPU targets" in (
-        smoke_help
-    )
-    assert "slurm on Soperator targets" in smoke_help
+    assert "Omit --suite to run target defaults" not in smoke_help
+    assert "suite defaults" not in smoke_help
     assert "JSON reports only under generated/reports/" in benchmark_help
     assert "does not change config.yaml" in benchmark_help
     assert "Target handoff comes from deploy-report/local kubeconfig context" in benchmark_help
@@ -8264,12 +8287,13 @@ def test_acceptance_test_help_shows_safe_examples() -> None:
     assert "prints a color-coded concise PASSED/FAILED/SKIPPED result line" in benchmark_help
     assert "with elapsed time in hh:mm:ss" in benchmark_help
     assert "Run explicit post-deploy benchmark suites" in benchmark_help
-    assert "Use --suite to select the benchmark runtime path" in benchmark_help
-    assert "defaults to k8s-nccl across all targets" in benchmark_help
+    assert "Use --suite to select the required benchmark runtime path" in benchmark_help
+    assert "omitted --suite fails fast instead of defaulting to a K8s suite" in benchmark_help
     assert "K8s NCCL uses the pinned transient nccl-test chart" in benchmark_help
     assert "slurm-nccl runs the Slurm NCCL suite" in benchmark_help
     assert "Run acceptance benchmarks for one generated cluster target." in benchmark_help
-    assert "Omit --suite for the default k8s-nccl suite." in benchmark_help
+    assert "Required benchmark suite to run" in benchmark_help
+    assert "Omit --suite for the default k8s-nccl suite." not in benchmark_help
     assert "Slurm NCCL benchmark:" in benchmark_help
     assert "Plain MK8s NCCL benchmark with run-only overrides:" in benchmark_help
     assert "plain MK8s K8s NCCL benchmark:" not in benchmark_help
@@ -8303,6 +8327,10 @@ def test_acceptance_test_help_shows_safe_examples() -> None:
         "future benchmark suites",
         "exhaustive all-node validation",
         "plain MK8s all-node CUDA JSON report",
+        "default smoke",
+        "default K8s NCCL",
+        "defaults to k8s-nccl",
+        "suite defaults",
         "soperator-slurm",
         "Soperator-owned GPU targets are skipped unless --suite k8s-nccl",
         "--k8s",
@@ -8364,6 +8392,23 @@ def test_acceptance_test_benchmark_command_passes_options(
         "timeout": "30m",
         "average_bus_bandwidth_threshold_gbps": 450.5,
     }
+
+
+def test_acceptance_test_benchmark_command_requires_suite(tmp_path: Path) -> None:
+    fake_paths = _fake_paths(tmp_path)
+
+    result = runner.invoke(
+        cli.app,
+        ["acceptance-test", "benchmark", str(fake_paths.config_path)],
+    )
+
+    assert result.exit_code == 1, result.output
+    output = _plain_output(result.output)
+    assert "WARNING:" in output
+    assert "acceptance-test benchmark requires --suite" in output
+    assert "no default K8s suite is selected" in output
+    assert "Choose one of: k8s-nccl, slurm-nccl" in output
+    assert "nebius-cxcli acceptance-test benchmark <config.yaml> --suite slurm-nccl" in output
 
 
 def test_acceptance_test_benchmark_command_prints_skipped_k8s_nccl_result(
@@ -8530,7 +8575,15 @@ def test_acceptance_test_benchmark_command_prints_failed_result_before_exit(
 
     result = runner.invoke(
         cli.app,
-        ["acceptance-test", "benchmark", str(fake_paths.config_path), "--target", "mk8s"],
+        [
+            "acceptance-test",
+            "benchmark",
+            str(fake_paths.config_path),
+            "--target",
+            "mk8s",
+            "--suite",
+            "k8s-nccl",
+        ],
     )
 
     assert result.exit_code == 1, result.output
@@ -8546,7 +8599,7 @@ def test_acceptance_test_benchmark_command_prints_failed_result_before_exit(
     assert "ERROR: NCCL benchmark failed." in output_flat
 
 
-def test_acceptance_test_benchmark_command_passes_new_defaults(
+def test_acceptance_test_benchmark_command_passes_default_run_options_with_suite(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -8569,6 +8622,8 @@ def test_acceptance_test_benchmark_command_passes_new_defaults(
             "acceptance-test",
             "benchmark",
             str(fake_paths.config_path),
+            "--suite",
+            "k8s-nccl",
         ],
     )
 
@@ -8577,7 +8632,7 @@ def test_acceptance_test_benchmark_command_passes_new_defaults(
         "config_path": fake_paths.config_path,
         "requested_target_ref": None,
         "all_targets": False,
-        "suites": None,
+        "suites": ["k8s-nccl"],
         "continue_on_failure": True,
         "max_nodes": None,
         "timeout": None,
@@ -8594,6 +8649,53 @@ def test_acceptance_test_benchmark_rejects_unsupported_suite() -> None:
     assert "Supported values: k8s-nccl, slurm-nccl" in message
 
 
+def test_acceptance_test_runners_require_suite_before_context_load(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fail_load_context(_path: Path):
+        pytest.fail("acceptance-test runner must reject missing --suite before loading context")
+
+    monkeypatch.setattr(cli, "_load_deploy_context_readonly", _fail_load_context)
+
+    with pytest.raises(cli._AcceptanceSuiteRequiredError) as smoke_exc:
+        cli._run_acceptance_smoke_command(
+            config_path=tmp_path / "missing.yaml",
+            requested_target_ref=None,
+            all_targets=False,
+            suites=None,
+            batch_size=128,
+            concurrency=8,
+            continue_on_failure=True,
+        )
+    assert "acceptance-test smoke requires --suite" in str(smoke_exc.value)
+
+    with pytest.raises(cli._AcceptanceSuiteRequiredError) as benchmark_exc:
+        cli._run_acceptance_benchmark_command(
+            config_path=tmp_path / "missing.yaml",
+            requested_target_ref=None,
+            all_targets=False,
+            suites=[],
+            continue_on_failure=True,
+            max_nodes=None,
+            timeout=None,
+            average_bus_bandwidth_threshold_gbps=300.0,
+        )
+    assert "acceptance-test benchmark requires --suite" in str(benchmark_exc.value)
+
+    with pytest.raises(cli._AcceptanceSuiteRequiredError):
+        cli._run_acceptance_benchmark_command(
+            config_path=tmp_path / "missing.yaml",
+            requested_target_ref=None,
+            all_targets=False,
+            suites=[""],
+            continue_on_failure=True,
+            max_nodes=None,
+            timeout=None,
+            average_bus_bandwidth_threshold_gbps=300.0,
+        )
+
+
 def test_acceptance_test_smoke_suite_names_are_canonical() -> None:
     assert cli._normalized_acceptance_suites(["slurm", "k8s-cuda"]) == {
         "slurm",
@@ -8604,7 +8706,7 @@ def test_acceptance_test_smoke_suite_names_are_canonical() -> None:
         cli._normalized_acceptance_suites(["soperator-slurm", "cuda", "k8s"])
 
 
-def test_acceptance_test_benchmark_runner_defaults_to_all_targets_k8s_nccl(
+def test_acceptance_test_benchmark_runner_runs_explicit_k8s_suite_for_all_targets(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -8645,9 +8747,7 @@ def test_acceptance_test_benchmark_runner_defaults_to_all_targets_k8s_nccl(
     monkeypatch.setattr(
         cli,
         "soperator_acceptance_benchmark_specs",
-        lambda *_args, **_kwargs: pytest.fail(
-            "bare benchmark defaults to k8s-nccl, not slurm-nccl"
-        ),
+        lambda *_args, **_kwargs: pytest.fail("k8s-nccl suite must not call Slurm specs"),
     )
 
     def _fake_mk8s_acceptance_benchmark_validation_specs(*_args: Any, **kwargs: Any):
@@ -8690,7 +8790,7 @@ def test_acceptance_test_benchmark_runner_defaults_to_all_targets_k8s_nccl(
         config_path=fake_paths.config_path,
         requested_target_ref=None,
         all_targets=False,
-        suites=None,
+        suites=["k8s-nccl"],
         continue_on_failure=True,
         max_nodes=None,
         timeout=None,
@@ -8843,7 +8943,7 @@ def test_acceptance_test_benchmark_runner_uses_readonly_context_and_kube_handoff
         config_path=fake_paths.config_path,
         requested_target_ref="mk8s",
         all_targets=False,
-        suites=None,
+        suites=["k8s-nccl"],
         continue_on_failure=True,
         max_nodes=None,
         timeout=None,
@@ -9062,7 +9162,7 @@ def test_acceptance_test_benchmark_all_targets_uses_report_context_without_terra
         config_path=fake_paths.config_path,
         requested_target_ref=None,
         all_targets=True,
-        suites=None,
+        suites=["k8s-nccl"],
         continue_on_failure=True,
         max_nodes=None,
         timeout=None,

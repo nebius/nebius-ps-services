@@ -165,14 +165,16 @@ def test_readme_mk8s_gpu_workload_validation_defaults_include_soperator() -> Non
     assert "schedules CUDA validation pods across every currently" in acceptance
     assert "scheduler-free Ready GPU node" in acceptance
     assert "bounded CUDA validation pods" not in acceptance
-    assert "A bare smoke command defaults to every generated target" in acceptance
+    assert "Smoke commands require `--suite`" in acceptance
+    assert "omitted `--suite` fails fast" in acceptance
     assert "`--suite soperator-nccl`" not in acceptance
     assert "temporary `MPIJob`" in acceptance
     assert "Soperator login pod" in acceptance
     assert "Slurm allocation" in acceptance
     assert "do not read Terraform state or initialize the Terraform backend" in acceptance
     assert "Common benchmark commands:" in acceptance
-    assert "nebius-cxcli acceptance-test benchmark <config.yaml> --all-targets" in acceptance
+    assert "nebius-cxcli acceptance-test benchmark <config.yaml> --suite k8s-nccl" in acceptance
+    assert "nebius-cxcli acceptance-test benchmark <config.yaml> --suite slurm-nccl" in acceptance
     assert (
         "nebius-cxcli acceptance-test benchmark <config.yaml> --target mk8s-prod "
         "--suite k8s-nccl --max-nodes 4 --timeout 20m "
@@ -187,7 +189,8 @@ def test_readme_mk8s_gpu_workload_validation_defaults_include_soperator() -> Non
         "--suite slurm-nccl --max-nodes 2 --timeout 5m "
         "--average-bus-bandwidth-threshold-gbps 300"
     ) in acceptance
-    assert "A bare benchmark command defaults to:" in acceptance_flat
+    assert "Benchmark commands require `--suite`" in acceptance_flat
+    assert "fails fast instead of choosing a K8s suite" in acceptance_flat
     assert "every generated target, equivalent to `--all-targets`" in acceptance
     assert "all schedulable GPU nodes, equivalent to omitting `--max-nodes`" in acceptance
     assert "no cxcli benchmark timeout" in acceptance
@@ -271,7 +274,7 @@ def test_readme_mk8s_gpu_workload_validation_defaults_include_soperator() -> Non
     assert (
         "It is selected through `nebius-cxcli acceptance-test benchmark --suite ...`" in design_flat
     )
-    assert "a bare run defaults to the `k8s-nccl` suite across all generated targets" in design_flat
+    assert "omitted `--suite` fails fast instead of defaulting to the K8s NCCL suite" in design_flat
     assert "they do not read Terraform state or initialize the Terraform backend" in design_flat
 
 
@@ -319,10 +322,13 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
     assert "drain-timeout defaults" in supporting
     assert "- `acceptance-test smoke <config.yaml>`" in supporting
     assert "Runs explicit post-deploy acceptance smoke suites" in supporting
-    assert "Defaults to every generated target when `--target` is omitted" in supporting
+    assert "Requires `--suite`; omitted `--suite` fails fast instead of choosing a K8s or Slurm suite" in supporting
     assert "Use `--suite slurm` for Slurm all-node smoke" in supporting
+    assert "After a suite is selected, defaults to every generated target when `--target` is omitted" in supporting
     assert "Runs explicit post-deploy benchmark suites" in supporting
-    assert "Use `--suite slurm-nccl` for the Slurm NCCL benchmark" in supporting
+    assert "Requires `--suite`; omitted `--suite` fails fast" in supporting
+    assert "Use `--suite k8s-nccl` for the Kubernetes NCCL benchmark" in supporting
+    assert "`--suite slurm-nccl` for the Slurm NCCL benchmark" in supporting
     assert (
         "--max-nodes 4 --timeout 20m --average-bus-bandwidth-threshold-gbps 300"
         in supporting
@@ -1378,7 +1384,8 @@ def test_docs_define_component_selector_contract() -> None:
         "NCCL/performance validation is reserved for explicit `acceptance-test "
         "benchmark` runs" in readme_flat
     )
-    assert "Both `acceptance-test smoke` and `acceptance-test benchmark` default to all generated targets" in readme_flat
+    assert "Both acceptance-test smoke and benchmark commands require `--suite`" in readme_flat
+    assert "after a suite is selected, they run all generated targets when `--target` is omitted" in readme_flat
     assert "They resolve target handoff from `generated/reports/deploy-report.md`" in readme_flat
     assert "nebius-cxcli-soperator-cluster-validation/v2" in readme_flat
     assert "command `stdout`/`stderr` as arrays of lines" in readme_flat
@@ -1568,7 +1575,8 @@ def test_docs_define_component_selector_contract() -> None:
     assert "does not start Slurm jobs" in design_flat
     assert "target `SlurmCluster`, and worker `NodeSet` resources" in design_flat
     assert "`acceptance-test smoke --suite slurm`" in design_flat
-    assert "Both `acceptance-test smoke` and `acceptance-test benchmark` default to all generated targets" in design_flat
+    assert "Acceptance smoke and benchmark commands require `--suite`" in design_flat
+    assert "after a suite is selected, they run all generated targets when `--target` is omitted" in design_flat
     assert "They resolve target handoff from `generated/reports/deploy-report.md`" in design_flat
     assert "`acceptance-test benchmark`" in design_flat
     assert "`deploy-smoke-report-<target>.json`" in design_flat

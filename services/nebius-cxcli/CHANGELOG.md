@@ -10,6 +10,9 @@ All notable changes to this project are tracked here. This changelog follows
   command behind a visible accent-colored `|` separator so wrapped help output
   makes the beginning of every example easier to scan, and trailing explanatory
   prose is split into a separate `Comments:` block.
+- Changed `acceptance-test smoke` and `acceptance-test benchmark` to require an
+  explicit `--suite`. Omitted suites now fail fast with a warning instead of
+  selecting a default K8s acceptance path.
 - Tightened the create/component-add wizard labels for MK8s, SFS, and
   Soperator production-cluster prompts. Active cluster shape, SFS filesystem,
   GPU default, service sizing, and worker-shard controls now render as required
@@ -65,17 +68,19 @@ All notable changes to this project are tracked here. This changelog follows
   kubeconfig handoff metadata when available and fail fast with deploy/flux
   remediation when the target context is missing.
 - Changed `acceptance-test benchmark` to be suite-driven instead of NCCL-only
-  in its command contract. A bare benchmark run now defaults to `k8s-nccl`
-  across all generated targets, all schedulable GPU nodes, no cxcli timeout,
-  and a 300 Gbps RDMA bandwidth threshold. `slurm-nccl` is the canonical Slurm
-  NCCL suite. Slurm NCCL now honors the same run-only `--max-nodes`, `--timeout`, and
+  in its command contract. Operators must choose `--suite k8s-nccl` or
+  `--suite slurm-nccl`; after a suite is selected, omitting `--target` still
+  runs across all generated targets, omitting `--max-nodes` uses all
+  schedulable GPU nodes, omitting `--timeout` leaves no cxcli timeout, and the
+  RDMA bandwidth threshold defaults to 300 Gbps. `slurm-nccl` is the canonical
+  Slurm NCCL suite. Slurm NCCL now honors the same run-only `--max-nodes`, `--timeout`, and
   `--average-bus-bandwidth-threshold-gbps` benchmark flags, and smoke suite
   help now uses canonical `slurm` and `k8s-cuda` suite names.
-- Changed `acceptance-test smoke` to default to all generated targets when
-  `--target` is omitted, matching benchmark target selection. Removed the
-  ambiguous `--k8s` and `--soperator` acceptance-test selectors; operators now
-  select runtime behavior through `--suite`: `k8s-cuda` or `slurm` for smoke,
-  and `k8s-nccl` or `slurm-nccl` for benchmark.
+- Changed `acceptance-test smoke` to run all generated targets when `--target`
+  is omitted after a suite is selected, matching benchmark target selection.
+  Removed the ambiguous `--k8s` and `--soperator` acceptance-test selectors;
+  operators now select runtime behavior through `--suite`: `k8s-cuda` or
+  `slurm` for smoke, and `k8s-nccl` or `slurm-nccl` for benchmark.
 - Updated the bundled Soperator portable chart pin to `4.0.2-ps.3`, matching
   the current parent chart package release while keeping local-source
   resolution tied to `helm-charts/soperator/Chart.yaml`.
@@ -147,8 +152,8 @@ All notable changes to this project are tracked here. This changelog follows
   Slurm availability or start Slurm jobs. Exhaustive
   all-node Slurm smoke moves to
   `acceptance-test smoke --suite slurm`, and K8s/Slurm NCCL performance work
-  moves to explicit `acceptance-test benchmark` runs. Smoke and benchmark both
-  default to all generated targets when `--target` is omitted. The
+  moves to explicit `acceptance-test benchmark` runs. After a suite is selected,
+  smoke and benchmark both run all generated targets when `--target` is omitted. The
   Soperator validation JSON detail report schema remains
   `nebius-cxcli-soperator-cluster-validation/v2`; it stores command output as
   line arrays and keeps structured per-partition `partition_hostnames` and

@@ -2030,10 +2030,10 @@ acceptance_test_app = typer.Typer(
         "Examples: Slurm all-node smoke JSON report: nebius-cxcli "
         "acceptance-test smoke <config.yaml> --target sop-cluster1 --suite slurm; "
         "K8s CUDA smoke JSON report: nebius-cxcli acceptance-test smoke "
-        "<config.yaml> --target mk8s-prod --suite k8s-cuda; default smoke on "
-        "all targets: nebius-cxcli acceptance-test smoke <config.yaml>; "
-        "default K8s NCCL benchmark on "
-        "all targets: nebius-cxcli acceptance-test benchmark <config.yaml>; "
+        "<config.yaml> --target mk8s-prod --suite k8s-cuda; Slurm smoke on "
+        "all targets: nebius-cxcli acceptance-test smoke <config.yaml> --suite slurm; "
+        "K8s NCCL benchmark on all targets: nebius-cxcli acceptance-test benchmark "
+        "<config.yaml> --suite k8s-nccl; "
         "Slurm NCCL benchmark JSON report: nebius-cxcli acceptance-test benchmark "
         "<config.yaml> --target sop-cluster1 --suite slurm-nccl; "
         "force K8s NCCL on a Soperator-owned GPU target during maintenance: "
@@ -32659,6 +32659,10 @@ _ACCEPTANCE_K8S_SUITES = {"k8s-cuda"}
 _ACCEPTANCE_ALL_SUITES = _ACCEPTANCE_SOPERATOR_SUITES | _ACCEPTANCE_K8S_SUITES
 
 
+def _acceptance_smoke_supported_suite_help() -> str:
+    return "k8s-cuda, slurm"
+
+
 def _normalized_acceptance_suites(raw_suites: Sequence[str] | None) -> set[str]:
     suites: set[str] = set()
     invalid: list[str] = []
@@ -32672,11 +32676,10 @@ def _normalized_acceptance_suites(raw_suites: Sequence[str] | None) -> set[str]:
                 continue
             suites.add(suite)
     if invalid:
-        supported = ", ".join(sorted(_ACCEPTANCE_ALL_SUITES))
         raise ValueError(
             "Unsupported --suite value(s): "
             + ", ".join(invalid)
-            + f". Supported values: {supported}"
+            + f". Supported values: {_acceptance_smoke_supported_suite_help()}"
         )
     return suites
 
@@ -32757,6 +32760,48 @@ class _AcceptanceTestRunError(RuntimeError):
         self.reports = tuple(reports)
 
 
+class _AcceptanceSuiteRequiredError(ValueError):
+    pass
+
+
+def _acceptance_suite_required_message(
+    *,
+    command: str,
+    supported: str,
+    example_suite: str,
+) -> str:
+    return (
+        f"acceptance-test {command} requires --suite; no default K8s suite is selected. "
+        f"Choose one of: {supported}. Example: nebius-cxcli acceptance-test {command} "
+        f"<config.yaml> --suite {example_suite}"
+    )
+
+
+def _required_acceptance_suites(
+    raw_suites: Sequence[str] | None,
+    *,
+    command: str,
+    supported: str,
+    example_suite: str,
+    normalize: Callable[[Sequence[str] | None], set[str]],
+) -> set[str]:
+    suites = normalize(raw_suites)
+    if suites:
+        return suites
+    raise _AcceptanceSuiteRequiredError(
+        _acceptance_suite_required_message(
+            command=command,
+            supported=supported,
+            example_suite=example_suite,
+        )
+    )
+
+
+def _exit_with_acceptance_suite_warning(exc: _AcceptanceSuiteRequiredError) -> None:
+    console.print(f"{warning_markup('WARNING:', bold=True)} {escape(str(exc))}", soft_wrap=True)
+    raise typer.Exit(code=1) from exc
+
+
 def _acceptance_target_with_report_context(
     target: Mapping[str, Any],
     report_target_contexts: Mapping[str, Mapping[str, str]],
@@ -32783,6 +32828,13 @@ def _run_acceptance_smoke_command(
     concurrency: int,
     continue_on_failure: bool,
 ) -> list[Path]:
+    suite_tokens = _required_acceptance_suites(
+        suites,
+        command="smoke",
+        supported=_acceptance_smoke_supported_suite_help(),
+        example_suite="slurm",
+        normalize=_normalized_acceptance_suites,
+    )
     config, paths, manifest = _load_deploy_context_readonly(config_path)
     if _manifest_missing_deploy_validations(manifest):
         raise RuntimeError(
@@ -32799,11 +32851,10 @@ def _run_acceptance_smoke_command(
         raise RuntimeError("No built-in cluster targets are available for acceptance-test.")
 
     target_refs = _acceptance_target_refs(selected_targets)
-    suite_tokens = _normalized_acceptance_suites(suites)
     explicit_k8s_suite = bool(suite_tokens & _ACCEPTANCE_K8S_SUITES)
     explicit_soperator_suite = bool(suite_tokens & _ACCEPTANCE_SOPERATOR_SUITES)
-    run_k8s = explicit_k8s_suite or not suite_tokens
-    run_soperator = explicit_soperator_suite or not suite_tokens
+    run_k8s = explicit_k8s_suite
+    run_soperator = explicit_soperator_suite
 
     specs: list[dict[str, Any]] = []
     if run_soperator:
@@ -32978,6 +33029,13 @@ def _run_acceptance_benchmark_command(
     timeout: str | None,
     average_bus_bandwidth_threshold_gbps: float | None,
 ) -> list[Path]:
+    requested_suite_tokens = _required_acceptance_suites(
+        suites,
+        command="benchmark",
+        supported=_acceptance_benchmark_supported_suite_help(),
+        example_suite="slurm-nccl",
+        normalize=_normalized_acceptance_benchmark_suites,
+    )
     config, paths, manifest = _load_deploy_context_readonly(config_path)
     if _manifest_missing_deploy_validations(manifest):
         raise RuntimeError(
@@ -32994,16 +33052,10 @@ def _run_acceptance_benchmark_command(
         raise RuntimeError("No built-in cluster targets are available for acceptance-test.")
 
     target_refs = _acceptance_target_refs(selected_targets)
-    requested_suite_tokens = _normalized_acceptance_benchmark_suites(suites)
     suite_tokens = set(requested_suite_tokens)
-    if not suite_tokens:
-        suite_tokens = set(_ACCEPTANCE_BENCHMARK_K8S_SUITES)
     run_k8s = bool(suite_tokens & _ACCEPTANCE_BENCHMARK_K8S_SUITES)
     run_soperator = bool(suite_tokens & _ACCEPTANCE_BENCHMARK_SOPERATOR_SUITES)
-    include_soperator_k8s_targets = bool(
-        run_k8s
-        and (requested_suite_tokens & _ACCEPTANCE_BENCHMARK_K8S_SUITES or not requested_suite_tokens)
-    )
+    include_soperator_k8s_targets = run_k8s
 
     specs: list[dict[str, Any]] = []
     if run_soperator:
@@ -45226,8 +45278,8 @@ def mk8s_token_command(
         "<config.yaml> --target mk8s-prod --suite k8s-cuda; Slurm fail-fast batches: "
         "nebius-cxcli acceptance-test smoke <config.yaml> --target sop-cluster1 "
         "--suite slurm --batch-size 128 --concurrency 8 --fail-fast; "
-        "all generated targets with suite defaults: nebius-cxcli acceptance-test smoke "
-        "<config.yaml>."
+        "all generated targets with explicit Slurm suite: nebius-cxcli acceptance-test "
+        "smoke <config.yaml> --suite slurm."
     ),
 )
 def acceptance_test_smoke_command(
@@ -45260,9 +45312,8 @@ def acceptance_test_smoke_command(
         typer.Option(
             "--suite",
             help=(
-                "Acceptance suite to run; repeatable or comma-separated. Supported values: "
-                "k8s-cuda, slurm. Omit --suite to run target defaults: k8s-cuda "
-                "on plain MK8s GPU targets and slurm on Soperator targets. "
+                "Required acceptance suite to run; repeatable or comma-separated. "
+                "Supported values: k8s-cuda, slurm. "
                 "Same-target K8s and Slurm suite families cannot be combined in one "
                 "command because they share the canonical acceptance smoke report."
             ),
@@ -45305,6 +45356,8 @@ def acceptance_test_smoke_command(
         _print_acceptance_report_outputs("smoke", written)
     except typer.Exit:
         raise
+    except _AcceptanceSuiteRequiredError as exc:
+        _exit_with_acceptance_suite_warning(exc)
     except _AcceptanceTestRunError as exc:
         _print_acceptance_report_outputs("smoke", exc.reports)
         _exit_with_error(exc)
@@ -45317,9 +45370,9 @@ def acceptance_test_smoke_command(
     short_help="Run post-deploy benchmark suites.",
     help=(
         "Run explicit post-deploy benchmark suites. Use --suite to select the "
-        "benchmark runtime path; when --suite is omitted, the command defaults "
-        "to k8s-nccl across all targets. Writes JSON reports only under "
-        "generated/reports/ and does not change config.yaml, Terraform state, "
+        "required benchmark runtime path; omitted --suite fails fast instead of "
+        "defaulting to a K8s suite. Writes JSON reports only under generated/reports/ "
+        "and does not change config.yaml, Terraform state, "
         "generated deploy reports, or persisted suite selections. "
         "Target handoff comes from deploy-report/local kubeconfig context; this command "
         "does not initialize the Terraform backend. "
@@ -45329,10 +45382,10 @@ def acceptance_test_smoke_command(
         "slurm-nccl runs the Slurm NCCL suite."
     ),
     epilog=(
-        "Examples: default K8s NCCL benchmark on all targets: nebius-cxcli "
-        "acceptance-test benchmark <config.yaml>; Slurm NCCL benchmark: "
-        "nebius-cxcli acceptance-test benchmark <config.yaml> --target sop-cluster1 "
-        "--suite slurm-nccl. "
+        "Examples: K8s NCCL benchmark on all targets: nebius-cxcli "
+        "acceptance-test benchmark <config.yaml> --suite k8s-nccl; "
+        "Slurm NCCL benchmark: nebius-cxcli acceptance-test benchmark <config.yaml> "
+        "--target sop-cluster1 --suite slurm-nccl. "
         "Plain MK8s NCCL benchmark with run-only overrides: nebius-cxcli acceptance-test "
         "benchmark <config.yaml> --target mk8s-prod --suite k8s-nccl --max-nodes 4 "
         "--timeout 20m --average-bus-bandwidth-threshold-gbps 300; force the "
@@ -45374,8 +45427,8 @@ def acceptance_test_benchmark_command(
         typer.Option(
             "--suite",
             help=(
-                "Benchmark suite to run; repeatable or comma-separated. Supported values: "
-                "k8s-nccl, slurm-nccl. Omit --suite for the default k8s-nccl suite. "
+                "Required benchmark suite to run; repeatable or comma-separated. "
+                "Supported values: k8s-nccl, slurm-nccl. "
                 "Same-target K8s and Slurm "
                 "suite families cannot be combined in one command because they share "
                 "the canonical acceptance benchmark report."
@@ -45437,6 +45490,8 @@ def acceptance_test_benchmark_command(
         _print_acceptance_report_outputs("benchmark", written)
     except typer.Exit:
         raise
+    except _AcceptanceSuiteRequiredError as exc:
+        _exit_with_acceptance_suite_warning(exc)
     except _AcceptanceTestRunError as exc:
         _print_acceptance_report_outputs("benchmark", exc.reports)
         _exit_with_error(exc)
