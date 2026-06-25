@@ -170,6 +170,14 @@ Keep task state concise:
 ## Next action
 ```
 
+Treat `current.md` as a rolling summary, not an append-only log. Replace stale
+or superseded details with the latest validated state, keep only the objective,
+constraints, decisions, changed files, validation status, risks, and next
+action needed for continuation, and avoid raw command output, broad file lists,
+full prompts, stack traces, secrets, customer data, private URLs, or copied
+documentation. If a task-state file grows large enough that it is harder to
+scan than the current thread, summarize it before relying on it.
+
 Update task state after initial exploration, before implementation, after major
 edits, after validation, before a long pause or compaction, and before the
 final response. The file is useful only if it is read on continuation and kept

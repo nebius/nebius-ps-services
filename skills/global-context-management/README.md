@@ -104,6 +104,12 @@ and prefer short decisions over copied command output. If the file is written
 but never read on continuation, it becomes an audit trail rather than useful
 context management.
 
+Keep `current.md` as a rolling summary, not an append-only transcript. Replace
+stale or superseded details with the latest validated state, retain only the
+objective, constraints, decisions, changed files, validation status, risks, and
+next action needed for continuation, and summarize any older task-state file
+that has grown too large to scan quickly before relying on it.
+
 ### Skill
 
 The skill is the runtime process contract. During a complex task it tells Codex

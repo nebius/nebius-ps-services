@@ -339,7 +339,19 @@ def validate_path_contract_helpers(temp_dir: Path) -> None:
 def assert_doc_contracts(root: Path) -> None:
     gcm_readme = (root / "README.md").read_text(encoding="utf-8")
     gcm_skill = (root / "SKILL.md").read_text(encoding="utf-8")
-    config_readme = (root.parent / "config-codex" / "README.md").read_text(
+    state_template = (root / "assets" / "task-state-template.md").read_text(
+        encoding="utf-8"
+    )
+    session_hook = (root / "assets" / "session_start_context.py.template").read_text(
+        encoding="utf-8"
+    )
+    prompt_hook = (root / "assets" / "user_prompt_context.py.template").read_text(
+        encoding="utf-8"
+    )
+    config_root = root.parent / "config-codex"
+    config_skill = (config_root / "SKILL.md").read_text(encoding="utf-8")
+    config_readme = (config_root / "README.md").read_text(encoding="utf-8")
+    agents_template = (config_root / "assets" / "AGENTS.md.template").read_text(
         encoding="utf-8"
     )
 
@@ -357,6 +369,7 @@ def assert_doc_contracts(root: Path) -> None:
     required_skill = (
         "No legacy task-state",
         "it must allow writes under\n`$CODEX_HOME/task-state`",
+        "rolling summary, not an append-only log",
     )
     for needle in required_skill:
         if needle not in gcm_skill:
@@ -370,6 +383,8 @@ def assert_doc_contracts(root: Path) -> None:
         "continuity note",
         "should not create task-state files or directories",
         "Any local PreToolUse write guard must explicitly allow\n`$CODEX_HOME/task-state` writes",
+        "rolling summary, not an append-only transcript",
+        "summarize any older task-state file",
     )
     for needle in required_gcm:
         if needle not in gcm_readme:
@@ -381,10 +396,53 @@ def assert_doc_contracts(root: Path) -> None:
         "Direct hook unit probes against a live `$CODEX_HOME`",
         "do not create missing scaffold",
         "No manual or legacy",
+        "rolling summary, not an append-only transcript",
+        "summarize oversized historical files",
     )
     for needle in required_config:
         if needle not in config_readme:
             raise AssertionError(f"config-codex README missing: {needle}")
+
+    required_config_skill = (
+        "current.md` as a compact rolling\n   summary, not an append-only transcript",
+        "summarize oversized\n   historical task-state files before relying on them",
+    )
+    for needle in required_config_skill:
+        if needle not in config_skill:
+            raise AssertionError(f"config-codex SKILL missing: {needle}")
+
+    required_summary_template = (
+        "## Summary hygiene",
+        "compact rolling summary, not an append-only transcript",
+        "Replace stale or superseded details",
+        "raw logs, broad command output, full prompts",
+    )
+    for needle in required_summary_template:
+        if needle not in state_template:
+            raise AssertionError(f"task-state template missing: {needle}")
+
+    required_session_hook_summary = (
+        "current.md as a rolling summary, not an append-only",
+        "Replace stale task-state details instead of appending transcripts.",
+    )
+    for needle in required_session_hook_summary:
+        if needle not in session_hook:
+            raise AssertionError(f"SessionStart template missing: {needle}")
+
+    required_prompt_hook_summary = (
+        "Keep current.md summarized; replace stale details instead of appending logs.",
+    )
+    for needle in required_prompt_hook_summary:
+        if needle not in prompt_hook:
+            raise AssertionError(f"UserPromptSubmit template missing: {needle}")
+
+    required_agents_template = (
+        "Treat `current.md` as a rolling summary, not an append-only transcript",
+        "summarize any\n  oversized historical task-state file",
+    )
+    for needle in required_agents_template:
+        if needle not in agents_template:
+            raise AssertionError(f"AGENTS.md template missing: {needle}")
 
 
 def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
@@ -524,6 +582,11 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
     )
     if "Global context hint for a complex prompt." not in context:
         raise AssertionError("complex prompt did not provide global context hint")
+    if (
+        "Keep current.md summarized; replace stale details instead of appending logs."
+        not in context
+    ):
+        raise AssertionError("complex prompt missing task-state summary guidance")
     if len(context) > 900:
         raise AssertionError("non-delegated UserPromptSubmit context is too large")
     if "sdlc-start" in context:

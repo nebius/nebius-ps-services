@@ -76,6 +76,9 @@
   resume, or after compaction when prior context may matter. Update it with
   concise checkpoints, and do not create repo-local task-state files unless
   explicitly requested.
+- Treat `current.md` as a rolling summary, not an append-only transcript:
+  replace stale details with the latest validated state, and summarize any
+  oversized historical task-state file before relying on it.
 - Keep the parent thread focused on objective, constraints, decisions, current
   plan, changed files, verification status, risks, and final answer.
 - Keep raw logs, broad file listings, abandoned attempts, broad environment

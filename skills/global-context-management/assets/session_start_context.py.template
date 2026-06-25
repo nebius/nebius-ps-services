@@ -97,7 +97,8 @@ without creating a manual fallback path or repo-local state file.
 
 SessionStart only advertises this path; it does not create task-state, SDLC run
 state, or workflow state. If the file already exists, read it when prior
-decisions may matter.
+decisions may matter. Keep current.md as a rolling summary, not an append-only
+transcript.
 """
 
     context = f"""Global context is available.
@@ -105,6 +106,7 @@ decisions may matter.
 Workspace root: `{root}`
 {task_state_context}
 Keep raw logs, secrets, and broad exploration output out of durable task state.
+Replace stale task-state details instead of appending transcripts.
 Use project skills for workflow-specific instructions.
 """
 

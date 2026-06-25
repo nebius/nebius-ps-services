@@ -116,6 +116,10 @@ For existing `$CODEX_HOME/config.toml`:
    - optional hook policy template
    - custom-agent TOML templates
    - task-state template
+   The task-state template must keep `current.md` as a compact rolling
+   summary, not an append-only transcript: replace stale details with the
+   latest validated state, omit raw logs and secrets, and summarize oversized
+   historical task-state files before relying on them.
    For hook scripts, custom-agent assets, and optional policy assets, use
    replace-if-unmodified behavior:
    copy missing files, leave matching files unchanged, and stop for review when

@@ -102,6 +102,10 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Strengthened `global-context-management` and `config-codex` task-state
+  guidance so `$CODEX_HOME/task-state/<workspace>-<hash>/<session-id>/current.md`
+  is documented, templated, and hook-advertised as a compact rolling summary
+  rather than an append-only transcript.
 - Reworked the root `README.md` with a short table of contents and a complete
   grouped skill catalog covering every live source skill, its invocation
   policy, and a concise description.

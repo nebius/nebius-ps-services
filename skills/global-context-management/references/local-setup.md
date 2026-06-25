@@ -68,6 +68,9 @@ global file.
   resume, or after compaction when prior context may matter. Update it with
   concise checkpoints, and do not create repo-local task-state files unless
   explicitly requested.
+- Keep `current.md` as a rolling summary, not an append-only transcript:
+  replace stale details with the latest validated state, and summarize any
+  oversized historical task-state file before relying on it.
 - Keep the parent thread focused on objective, constraints, decisions, current
   plan, changed files, verification status, risks, and final answer.
 - Keep raw logs, broad file listings, abandoned attempts, secrets, customer
@@ -223,6 +226,9 @@ advertise or reuse the session-scoped `current.md`; the parent agent creates
 and updates that file when continuity is useful. Keep broader runtime paths
 such as `$CODEX_HOME/hooks` protected unless the user deliberately syncs hook
 sources.
+Treat existing `current.md` files as compact rolling summaries: replace stale
+details instead of appending transcripts, keep raw logs and secrets out, and
+summarize files that have grown too large to scan before relying on them.
 
 Direct hook unit probes against a live `$CODEX_HOME` with synthetic
 `session_id` values should not create task-state files or directories. They

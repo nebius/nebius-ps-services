@@ -370,6 +370,8 @@ Expected evidence:
   `$CODEX_HOME/task-state/<workspace>-<hash>/<session-id>/current.md`.
 - Complex-task guidance tells Codex to read current task state when prior
   context may matter, then keep checkpoint updates concise.
+  `current.md` should remain a rolling summary, not an append-only transcript;
+  stale or oversized historical details should be summarized before use.
   If the optional policy is enabled, it should also mention the discovered
   configured read-only agents by name.
 - Sandbox configuration and any installed PreToolUse write guard allow

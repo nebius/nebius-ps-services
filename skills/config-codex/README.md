@@ -150,6 +150,7 @@ Here is the task-state path.
 Do not create task state automatically.
 Read existing task state when prior context may matter.
 Keep raw logs and broad exploration output out of task state.
+Keep current.md as a rolling summary, not an append-only transcript.
 Use skills for workflow-specific instructions.
 ```
 
@@ -159,6 +160,11 @@ continuity is useful. The config template allows sandbox writes under
 `$CODEX_HOME/task-state`; any installed PreToolUse guard should allow that
 same path while continuing to protect unrelated runtime files such as
 `$CODEX_HOME/hooks`.
+The task-state file is a compact continuation record: replace stale or
+superseded details with the latest validated state, keep only the objective,
+constraints, decisions, changed files, validation status, risks, and next
+action needed for continuation, and summarize oversized historical files
+before relying on them.
 If a user deliberately opts in by creating
 `$CODEX_HOME/hooks/global_context_policy.json`, the `UserPromptSubmit` hook can
 also discover configured read-only agents from `$CODEX_HOME/config.toml` and
