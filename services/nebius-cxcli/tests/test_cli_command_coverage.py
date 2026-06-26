@@ -6076,7 +6076,7 @@ def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.Mon
 
 @pytest.mark.parametrize(
     "actions",
-    (["approve-soperator-migration"], ["upgrade-soperator"]),
+    (["approve-external-soperator-upgrade"], ["upgrade-soperator"]),
 )
 def test_render_command_points_migration_required_soperator_to_migrate(
     tmp_path: Path,
@@ -6147,13 +6147,13 @@ def test_render_command_points_migration_required_soperator_to_migrate(
     config_arg = str(fake_paths.config_path.resolve())
     lines = plain_output.splitlines()
     assert (
-        f"nebius-cxcli ext-soperator migrate {config_arg} --target external-cluster --dry-run"
+        f"nebius-cxcli ext-soperator upgrade {config_arg} --target external-cluster --dry-run"
     ) in lines
     assert (
-        f"nebius-cxcli ext-soperator migrate {config_arg} "
+        f"nebius-cxcli ext-soperator upgrade {config_arg} "
         "--target external-cluster --execute --approve"
     ) in lines
-    assert "Do not run `nebius-cxcli deploy` before `ext-soperator migrate`" in (normalized_output)
+    assert "Do not run `nebius-cxcli deploy` before `ext-soperator upgrade`" in (normalized_output)
     assert f"nebius-cxcli deploy {config_arg}" not in lines
 
 
@@ -6228,7 +6228,7 @@ def test_render_command_points_gpu_reconciliation_only_soperator_to_deploy(
         normalized_output
     )
     assert "Install/adopt-only Soperator targets: external-cluster" in normalized_output
-    assert "ext-soperator migrate" not in normalized_output
+    assert "ext-soperator upgrade" not in normalized_output
 
 
 def test_internal_render_command_suppresses_deploy_hint_context(
@@ -7719,8 +7719,8 @@ def test_render_command_force_allows_noninteractive_overwrite(
     deploy_report = fake_paths.reports_dir / "deploy-report.md"
     deploy_detail_report = fake_paths.reports_dir / "deploy-gpu-visibility-report-mk8s.json"
     onboard_report = fake_paths.reports_dir / "soperator-discovery" / "external-cluster"
-    migrate_report = fake_paths.reports_dir / "ext-soperator-migrate-report.md"
-    migrate_detail_report = fake_paths.reports_dir / "deploy-smoke-report-external.json"
+    ext_upgrade_report = fake_paths.reports_dir / "ext-soperator-upgrade-report.md"
+    ext_upgrade_detail_report = fake_paths.reports_dir / "deploy-smoke-report-external.json"
     node_template_report = fake_paths.reports_dir / "upgrade-node-template-report.md"
     node_template_report_json = fake_paths.reports_dir / "upgrade-node-template-report.json"
     node_group_report = fake_paths.reports_dir / "upgrade-node-group-report.md"
@@ -7735,11 +7735,11 @@ def test_render_command_force_allows_noninteractive_overwrite(
     deploy_detail_report.write_text('{"status": "passed"}\n', encoding="utf-8")
     onboard_report.mkdir(parents=True)
     (onboard_report / "manifest.json").write_text('{"schema": "discovery"}\n', encoding="utf-8")
-    migrate_report.write_text(
-        "# Soperator Migration Report\n\n- `deploy-smoke-report-external.json`: `PASS` - ok\n",
+    ext_upgrade_report.write_text(
+        "# External Soperator Upgrade Report\n\n- `deploy-smoke-report-external.json`: `PASS` - ok\n",
         encoding="utf-8",
     )
-    migrate_detail_report.write_text('{"passed": true}\n', encoding="utf-8")
+    ext_upgrade_detail_report.write_text('{"passed": true}\n', encoding="utf-8")
     node_template_report.write_text("# MK8s Node Template Upgrade Report\n", encoding="utf-8")
     node_template_report_json.write_text('{"status": "passed"}\n', encoding="utf-8")
     node_group_report.write_text("# MK8s Node-Group Upgrade Report\n", encoding="utf-8")
@@ -7774,8 +7774,10 @@ def test_render_command_force_allows_noninteractive_overwrite(
     assert (onboard_report / "manifest.json").read_text(encoding="utf-8") == (
         '{"schema": "discovery"}\n'
     )
-    assert migrate_report.read_text(encoding="utf-8").startswith("# Soperator Migration Report")
-    assert migrate_detail_report.read_text(encoding="utf-8") == '{"passed": true}\n'
+    assert ext_upgrade_report.read_text(encoding="utf-8").startswith(
+        "# External Soperator Upgrade Report"
+    )
+    assert ext_upgrade_detail_report.read_text(encoding="utf-8") == '{"passed": true}\n'
     assert node_template_report.read_text(encoding="utf-8").startswith(
         "# MK8s Node Template Upgrade Report"
     )
@@ -15764,7 +15766,7 @@ def test_soperator_deploy_owned_route_styles_copy_paste_commands(
         cli._exit_with_soperator_deploy_owned_route(
             cli._SoperatorDeployOwnedRoute(
                 (
-                    "Soperator target has no migration-owned onboarding actions.",
+                    "Soperator target has no external-upgrade-owned onboarding actions.",
                     "Run these commands to reconcile deploy-owned work:",
                     f"nebius-cxcli validate {config_arg}",
                     f"nebius-cxcli render {config_arg}",
@@ -19174,32 +19176,53 @@ def test_cli_help_examples_have_visual_separator_and_comments_block() -> None:
             assert "Example: nebius-cxcli" not in normalized_help, (width, args)
             assert "Quickstart: nebius-cxcli" not in normalized_help, (width, args)
 
-        assert ("ext-soperator", "migrate", "--help") in help_with_examples
+        assert ("ext-soperator", "upgrade", "--help") in help_with_examples
         assert ("acceptance-test", "--help") in help_with_examples
         assert len(help_with_examples) >= 30
-        assert ("ext-soperator", "migrate", "--help") in help_with_comments
+        assert ("ext-soperator", "upgrade", "--help") in help_with_comments
         assert ("upgrade", "node-group", "--help") in help_with_comments
         assert len(help_with_comments) >= 10
 
-    migrate_result = runner.invoke(
+    ext_soperator_onboard_result = runner.invoke(
         cli.app,
-        ["ext-soperator", "migrate", "--help"],
+        ["ext-soperator", "onboard", "--help"],
         env={"COLUMNS": "240"},
         terminal_width=240,
     )
-    assert migrate_result.exit_code == 0, migrate_result.output
-    normalized_migrate_help = " ".join(_plain_output(migrate_result.output).split())
+    assert ext_soperator_onboard_result.exit_code == 0, ext_soperator_onboard_result.output
+    ext_soperator_onboard_help = _plain_output(ext_soperator_onboard_result.output)
+    ext_soperator_onboard_examples = ext_soperator_onboard_help.split("Examples:", maxsplit=1)[
+        1
+    ].split("Comments:", maxsplit=1)[0]
+    assert "--no-interactive; | nebius-cxcli validate <config.yaml>" in " ".join(
+        ext_soperator_onboard_examples.split()
+    )
+    assert "--cluster-id selects" not in ext_soperator_onboard_examples
+    assert "The command updates" not in ext_soperator_onboard_examples
+    assert "generated/reports/soperator-discovery" not in ext_soperator_onboard_examples
+    assert "next run" not in ext_soperator_onboard_examples.lower()
+
+    ext_soperator_upgrade_result = runner.invoke(
+        cli.app,
+        ["ext-soperator", "upgrade", "--help"],
+        env={"COLUMNS": "240"},
+        terminal_width=240,
+    )
+    assert ext_soperator_upgrade_result.exit_code == 0, ext_soperator_upgrade_result.output
+    normalized_ext_soperator_upgrade_help = " ".join(
+        _plain_output(ext_soperator_upgrade_result.output).split()
+    )
     assert (
-        "Examples: | nebius-cxcli ext-soperator migrate "
+        "Examples: | nebius-cxcli ext-soperator upgrade "
         "./deployments/tenant/project/config.yaml --target external-cluster --dry-run; "
-        "| nebius-cxcli ext-soperator migrate "
+        "| nebius-cxcli ext-soperator upgrade "
         "./deployments/tenant/project/config.yaml --target external-cluster --execute --approve"
-    ) in normalized_migrate_help
+    ) in normalized_ext_soperator_upgrade_help
     assert "--execute --approve. Comments: --target is the cxcli target id" in (
-        normalized_migrate_help
+        normalized_ext_soperator_upgrade_help
     )
     assert "--execute --approve. --target is the cxcli target id" not in (
-        normalized_migrate_help
+        normalized_ext_soperator_upgrade_help
     )
     assert f"[bold {cli.COPY_PASTE_COMMAND_COLOR}]|[/]" == cli._HELP_EXAMPLE_SEPARATOR_MARKUP
 
@@ -19288,9 +19311,9 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         env={"COLUMNS": "240"},
         terminal_width=240,
     )
-    soperator_migrate_result = runner.invoke(
+    ext_soperator_upgrade_result = runner.invoke(
         cli.app,
-        ["ext-soperator", "migrate", "--help"],
+        ["ext-soperator", "upgrade", "--help"],
         env={"COLUMNS": "240"},
         terminal_width=240,
     )
@@ -19326,7 +19349,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert ext_soperator_discover_result.exit_code == 0, ext_soperator_discover_result.output
     assert ext_soperator_restore_result.exit_code == 0, ext_soperator_restore_result.output
     assert soperator_onboard_result.exit_code == 0, soperator_onboard_result.output
-    assert soperator_migrate_result.exit_code == 0, soperator_migrate_result.output
+    assert ext_soperator_upgrade_result.exit_code == 0, ext_soperator_upgrade_result.output
     assert email_result.exit_code == 0, email_result.output
 
     create_help = _plain_output(create_result.output)
@@ -19357,7 +19380,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     ext_soperator_discover_help = _plain_output(ext_soperator_discover_result.output)
     ext_soperator_restore_help = _plain_output(ext_soperator_restore_result.output)
     soperator_onboard_help = _plain_output(soperator_onboard_result.output)
-    soperator_migrate_help = _plain_output(soperator_migrate_result.output)
+    ext_soperator_upgrade_help = _plain_output(ext_soperator_upgrade_result.output)
     email_help = _plain_output(email_result.output)
     normalized_email_help = " ".join(email_help.split())
     normalized_component_list_help = " ".join(component_list_help.split())
@@ -19375,7 +19398,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     normalized_ext_soperator_backup_help = " ".join(ext_soperator_backup_help.split())
     normalized_ext_soperator_discover_help = " ".join(ext_soperator_discover_help.split())
     normalized_ext_soperator_restore_help = " ".join(ext_soperator_restore_help.split())
-    normalized_soperator_migrate_help = " ".join(soperator_migrate_help.split())
+    normalized_ext_soperator_upgrade_help = " ".join(ext_soperator_upgrade_help.split())
     normalized_wireguard_help = " ".join(wireguard_help.split())
     normalized_ssh_jumphost_help = " ".join(ssh_jumphost_help.split())
 
@@ -19545,7 +19568,9 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "Soperator-aware MK8s node-template plus chart upgrades" in (
         normalized_managed_soperator_help
     )
-    assert "CXCLI managed workflow" in normalized_managed_soperator_help
+    assert "Examples: | nebius-cxcli soperator upgrade <config.yaml>" in (
+        normalized_managed_soperator_help
+    )
     assert "soperator upgrade <config.yaml>" in normalized_managed_soperator_help
     assert "backup" in managed_soperator_help
     assert "discover" in managed_soperator_help
@@ -19598,7 +19623,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--execute" in normalized_ext_soperator_restore_help
     assert "--approve" in normalized_ext_soperator_restore_help
     assert "--restore-accounting-db" in normalized_ext_soperator_restore_help
-    assert "migrate is only for accepted onboarding plans that contain migration-owned actions" in (
+    assert "upgrade is only for accepted onboarding plans that contain external-upgrade-owned actions" in (
         normalized_soperator_help
     )
     assert (
@@ -19608,7 +19633,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "Comments:" in normalized_soperator_help
     assert "stores a cxcli target id in deploy.targets[].instance_id" in (normalized_soperator_help)
     assert (
-        "If the accepted onboarding report says no migration-owned work is required, "
+        "If the accepted onboarding report says no external-upgrade-owned work is required, "
         "deploy reconciles every generated target"
         in normalized_soperator_help
     )
@@ -19616,13 +19641,13 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         normalized_soperator_help
     )
     assert "deploy-report.md plus deploy-time validations" in normalized_soperator_help
-    assert "If migration-owned work is required, do not deploy first" in normalized_soperator_help
+    assert "If external-upgrade-owned work is required, do not deploy first" in normalized_soperator_help
     assert (
-        "nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --dry-run"
+        "nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run"
         in normalized_soperator_help
     )
     assert (
-        "nebius-cxcli ext-soperator migrate <config.yaml> --target <target> "
+        "nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> "
         "--execute --approve"
     ) in normalized_soperator_help
     assert "CXCLI managed chart-only Soperator upgrades use soperator upgrade" in (
@@ -19632,7 +19657,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         normalized_soperator_help
     )
     assert "onboard [OPTIONS] CONFIG_OR_DEPLOYMENTS_ROOT" in soperator_onboard_help
-    assert "migrate [OPTIONS] CONFIG_YAML" in soperator_migrate_help
+    assert "upgrade [OPTIONS] CONFIG_YAML" in ext_soperator_upgrade_help
     assert "Register/adopt an existing Nebius MK8s target for Soperator" in (
         normalized_soperator_onboard_help
     )
@@ -19705,7 +19730,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--target-id is only the optional cxcli logical target id" in (
         normalized_soperator_onboard_help
     )
-    assert "For install/adopt-only targets with no migration-owned actions" in (
+    assert "For install/adopt-only targets with no external-upgrade-owned actions" in (
         normalized_soperator_onboard_help
     )
     assert "run nebius-cxcli deploy <config.yaml> to reconcile the generated desired state" in (
@@ -19714,110 +19739,80 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "use deploy --target <target-id> only to narrow a run" in (
         normalized_soperator_onboard_help
     )
-    assert "For migration-required targets, do not deploy first" in (
+    assert "For external-upgrade-required targets, do not deploy first" in (
         normalized_soperator_onboard_help
     )
     assert (
-        "nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --dry-run"
+        "nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run"
         in normalized_soperator_onboard_help
     )
     assert (
-        "nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --execute --approve"
+        "nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --execute --approve"
         in normalized_soperator_onboard_help
     )
-    assert "Plan or execute accepted external Soperator migration actions" in (
-        normalized_soperator_migrate_help
+    assert "approve-soperator-migration" not in normalized_soperator_onboard_help
+    assert "approve-soperator-migration" not in normalized_ext_soperator_upgrade_help
+    assert "Plan or execute an accepted external Soperator upgrade" in (
+        normalized_ext_soperator_upgrade_help
     )
-    assert "--target" in normalized_soperator_migrate_help
-    assert "--dry-run --execute" in normalized_soperator_migrate_help
-    assert "--approve --no-approve" in normalized_soperator_migrate_help
-    assert "--worker-node-groups" not in normalized_soperator_migrate_help
+    assert "migrate" not in normalized_ext_soperator_upgrade_help.lower()
+    assert "--target" in normalized_ext_soperator_upgrade_help
+    assert "--backup-dir" in normalized_ext_soperator_upgrade_help
+    assert "--job-policy" in normalized_ext_soperator_upgrade_help
+    assert "--cancel-job" in normalized_ext_soperator_upgrade_help
+    assert "--job-wait-timeout" in normalized_ext_soperator_upgrade_help
+    assert "--job-refresh-interval" in normalized_ext_soperator_upgrade_help
+    assert "--dry-run --execute" in normalized_ext_soperator_upgrade_help
+    assert "--approve --no-approve" in normalized_ext_soperator_upgrade_help
+    assert "--interactive --no-interactive" in normalized_ext_soperator_upgrade_help
+    assert "--worker-node-groups" not in normalized_ext_soperator_upgrade_help
     assert "cxcli target id of the onboarded external MK8s target" in (
-        normalized_soperator_migrate_help
+        normalized_ext_soperator_upgrade_help
     )
-    assert "Not the Nebius cluster_id or display name" in normalized_soperator_migrate_help
-    assert "Use --dry-run for the read-only plan" in normalized_soperator_migrate_help
-    assert "Use --execute only after accepting that plan" in normalized_soperator_migrate_help
-    assert "Confirm approval for the accepted migration plan" in (normalized_soperator_migrate_help)
-    assert "auto-detects source worker node groups" in normalized_soperator_migrate_help
+    assert "Not the Nebius cluster_id or display name" in normalized_ext_soperator_upgrade_help
+    assert "Use --dry-run for discovery refresh and the read-only plan" in (
+        normalized_ext_soperator_upgrade_help
+    )
     assert (
-        "nebius-cxcli ext-soperator migrate ./deployments/tenant/project/config.yaml "
+        "Use --execute only after accepting that plan" in normalized_ext_soperator_upgrade_help
+    )
+    assert "Confirm approval for the accepted external upgrade plan" in (
+        normalized_ext_soperator_upgrade_help
+    )
+    assert "Slurm job policy: interactive, wait, cancel-selected, cancel-all, or fail" in (
+        normalized_ext_soperator_upgrade_help
+    )
+    assert "Maximum wait for Slurm jobs" in normalized_ext_soperator_upgrade_help
+    assert (
+        "nebius-cxcli ext-soperator upgrade ./deployments/tenant/project/config.yaml "
         "--target external-cluster --execute --approve"
-    ) in normalized_soperator_migrate_help
-    assert "soperator-discovery/<target>/manifest.json" in normalized_soperator_migrate_help
-    assert "validates the accepted onboarding analysis" in normalized_soperator_migrate_help
-    assert "If the accepted onboarding report has no migration-owned actions" in (
-        normalized_soperator_migrate_help
+    ) in normalized_ext_soperator_upgrade_help
+    assert "The target must already be onboarded and accepted through ext-soperator onboard" in (
+        normalized_ext_soperator_upgrade_help
     )
-    assert "run render and deploy <config.yaml> instead" in (normalized_soperator_migrate_help)
-    assert "deploy writes deploy-report.md and runs deploy-time validations" in (
-        normalized_soperator_migrate_help
-    )
+    assert "Dry-run refreshes discovery and prints the plan" in normalized_ext_soperator_upgrade_help
     assert (
-        "advances supported external MK8s control-plane/node-template, target GPU stack, "
-        "storage, copy, compute, cutover, validation"
-    ) in normalized_soperator_migrate_help
-    assert "net-new aligned SFS, net-new service-role node-group quota" in (
-        normalized_soperator_migrate_help
+        "--execute --approve refreshes discovery, creates a restore-capable backup"
+    ) in normalized_ext_soperator_upgrade_help
+    assert "checkpointed external MK8s control-plane/node-template rollout" in (
+        normalized_ext_soperator_upgrade_help
     )
-    assert "--worker-rollout-strategy" in normalized_soperator_migrate_help
-    assert "--worker-wave-groups" in normalized_soperator_migrate_help
-    assert "--worker-wave-percent" in normalized_soperator_migrate_help
-    assert "--max-parallel-worker-groups" in normalized_soperator_migrate_help
-    assert "--strategy-max-surge-count" in normalized_soperator_migrate_help
-    assert "--strategy-max-unavailable-count" in normalized_soperator_migrate_help
-    assert "--strategy-drain-timeout" in normalized_soperator_migrate_help
-    assert "--max-global-unavailable-worker-nodes" not in normalized_soperator_migrate_help
-    assert "--max-global-unavailable-worker-percent" not in normalized_soperator_migrate_help
-    assert "safe-surge worker wave spare capacity" in normalized_soperator_migrate_help
-    assert "selected worker nodes to start Ready and schedulable" in (
-        normalized_soperator_migrate_help
+    assert "Soperator Helm cutover, validation, and reports" in (
+        normalized_ext_soperator_upgrade_help
     )
-    assert (
-        "service-role source node groups one group at a time with zero-surge node-group updates"
-        in (normalized_soperator_migrate_help)
+    assert "--worker-rollout-strategy" in normalized_ext_soperator_upgrade_help
+    assert "--worker-wave-groups" in normalized_ext_soperator_upgrade_help
+    assert "--worker-wave-percent" in normalized_ext_soperator_upgrade_help
+    assert "--max-parallel-worker-groups" in normalized_ext_soperator_upgrade_help
+    assert "--strategy-max-surge-count" in normalized_ext_soperator_upgrade_help
+    assert "--strategy-max-unavailable-count" in normalized_ext_soperator_upgrade_help
+    assert "--strategy-drain-timeout" in normalized_ext_soperator_upgrade_help
+    assert "--max-global-unavailable-worker-nodes" not in normalized_ext_soperator_upgrade_help
+    assert "--max-global-unavailable-worker-percent" not in normalized_ext_soperator_upgrade_help
+    assert "zero-surge is the default and requires no spare worker quota" in (
+        normalized_ext_soperator_upgrade_help
     )
-    assert "attaches them to discovered Nebius node groups" in normalized_soperator_migrate_help
-    assert "max_surge=0, max_unavailable=1, drain_timeout=30m" in (
-        normalized_soperator_migrate_help
-    )
-    assert "updates worker groups with zero-surge by default" in normalized_soperator_migrate_help
-    assert "configured safe-surge rollout" in normalized_soperator_migrate_help
-    assert "max_surge=1, max_unavailable=0, drain_timeout=30m" in (
-        normalized_soperator_migrate_help
-    )
-    assert "applies target GPU stack app rows" in normalized_soperator_migrate_help
-    assert "creates or reuses aligned SFS filesystems" in normalized_soperator_migrate_help
-    assert "Soperator deployment snapshot" in normalized_soperator_migrate_help
-    assert "SlurmCluster, and NodeSet visibility checks" in normalized_soperator_migrate_help
-    assert (
-        "leaves Slurm jobs and NCCL/performance work for explicit acceptance-test benchmark runs"
-        in (normalized_soperator_migrate_help)
-    )
-    assert "ext-soperator-migrate-report.md" in normalized_soperator_migrate_help
-    assert "shows an interactive progress spinner and phase-aware Soperator migration status" in (
-        normalized_soperator_migrate_help
-    )
-    assert "with phase ids, labels, overall health, and component summaries" in (
-        normalized_soperator_migrate_help
-    )
-    assert "rechecks completed selected remediation/upgrade/cutover actions" in (
-        normalized_soperator_migrate_help
-    )
-    assert "retries them if they drift" in normalized_soperator_migrate_help
-    assert "repeats the final MK8s readiness check" in normalized_soperator_migrate_help
-    assert "verifies the target Helm release workloads" in normalized_soperator_migrate_help
-    assert "suspends old source-family Flux Kustomization desired state" in (
-        normalized_soperator_migrate_help
-    )
-    assert "deletes suspended old source-family Flux HelmRelease records" in (
-        normalized_soperator_migrate_help
-    )
-    assert "retires stale profile-derived source-family Helm release records" in (
-        normalized_soperator_migrate_help
-    )
-    assert "preserving shared/storage resources" in normalized_soperator_migrate_help
-    assert "checkpoints pending gates" in normalized_soperator_migrate_help
+    assert "safe-surge uses temporary surge capacity" in normalized_ext_soperator_upgrade_help
     assert "remove [OPTIONS] [COMPONENT_SELECTOR]..." in component_remove_help
     assert "--config CONFIG_YAML" in normalized_component_remove_help
     assert (
@@ -20011,6 +20006,16 @@ def test_external_soperator_command_group_exposes_backup_restore() -> None:
     assert "backup" in output
     assert "discover" in output
     assert "restore" in output
+    assert "upgrade" in output
+    assert "migrate" not in output
+
+
+def test_retired_external_soperator_migrate_command_is_not_registered() -> None:
+    result = runner.invoke(cli.app, ["ext-soperator", "migrate", "--help"])
+
+    assert result.exit_code != 0, result.output
+    output = _plain_output(result.output)
+    assert "No such command" in output
     assert "migrate" in output
 
 

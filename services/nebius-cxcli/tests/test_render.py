@@ -3854,7 +3854,7 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     deploy_report = paths.reports_dir / "deploy-report.md"
     deploy_detail_report = paths.reports_dir / "deploy-gpu-visibility-report-mk8s.json"
     onboard_report = paths.reports_dir / "soperator-discovery" / "external-cluster"
-    migrate_report = paths.reports_dir / "ext-soperator-migrate-report.md"
+    migrate_report = paths.reports_dir / "ext-soperator-upgrade-report.md"
     migration_detail_report = paths.reports_dir / "deploy-smoke-report-external.json"
     unreferenced_migration_like_report = paths.reports_dir / "deploy-smoke-report-old.json"
     node_template_report = paths.reports_dir / "upgrade-node-template-report.md"
@@ -3884,7 +3884,7 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     onboard_report.mkdir(parents=True)
     (onboard_report / "manifest.json").write_text('{"schema": "discovery"}\n', encoding="utf-8")
     migrate_report.write_text(
-        "# Soperator Migration Report\n\n- `deploy-smoke-report-external.json`: `PASS` - ok\n",
+        "# External Soperator Upgrade Report\n\n- `deploy-smoke-report-external.json`: `PASS` - ok\n",
         encoding="utf-8",
     )
     migration_detail_report.write_text('{"passed": true}\n', encoding="utf-8")
@@ -3907,7 +3907,7 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     assert (onboard_report / "manifest.json").read_text(encoding="utf-8") == (
         '{"schema": "discovery"}\n'
     )
-    assert migrate_report.read_text(encoding="utf-8").startswith("# Soperator Migration Report")
+    assert migrate_report.read_text(encoding="utf-8").startswith("# External Soperator Upgrade Report")
     assert migration_detail_report.read_text(encoding="utf-8") == '{"passed": true}\n'
     assert not unreferenced_migration_like_report.exists()
     assert node_template_report.read_text(encoding="utf-8").startswith(

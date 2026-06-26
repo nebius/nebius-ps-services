@@ -256,8 +256,9 @@ def _payload(*, include_placements: bool = False) -> dict[str, Any]:
                         "actions": [
                             "adopt-soperator",
                             "reconcile-target-gpu-stack",
+                            "upgrade-external-node-template",
                             "upgrade-soperator",
-                            "approve-soperator-migration",
+                            "approve-external-soperator-upgrade",
                             "create-aligned-sfs",
                             "plan-soperator-data-migration",
                             "plan-soperator-compute-migration",
@@ -277,6 +278,14 @@ def _payload(*, include_placements: bool = False) -> dict[str, Any]:
         target_ref="external-cluster",
     )
     return payload
+
+
+def _backup_metadata(label: str = "original-pre-upgrade") -> dict[str, Any]:
+    return {
+        "path": f"backups/{label}.tar.gz",
+        "sha256": f"{label}-sha256",
+        "manifest_sha256": f"{label}-manifest-sha256",
+    }
 
 
 def _add_external_gpu_cluster_inventory(payload: dict[str, Any]) -> None:
@@ -1629,7 +1638,7 @@ def test_write_migrate_report_uses_default_text_file_mode_for_new_file(tmp_path:
 
 def test_write_migrate_report_preserves_existing_file_mode(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
-    report_path = tmp_path / "generated" / "reports" / "ext-soperator-migrate-report.md"
+    report_path = tmp_path / "generated" / "reports" / "ext-soperator-upgrade-report.md"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text("# Existing Migration Report\n", encoding="utf-8")
     report_path.chmod(0o640)
@@ -1645,7 +1654,7 @@ def test_write_migrate_report_preserves_existing_file_when_replace_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    report_path = tmp_path / "generated" / "reports" / "ext-soperator-migrate-report.md"
+    report_path = tmp_path / "generated" / "reports" / "ext-soperator-upgrade-report.md"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text("# Existing Migration Report\n", encoding="utf-8")
     before = report_path.read_text(encoding="utf-8")
@@ -1659,7 +1668,7 @@ def test_write_migrate_report_preserves_existing_file_when_replace_fails(
         _write_minimal_migrate_report(config_path)
 
     assert report_path.read_text(encoding="utf-8") == before
-    assert not list(report_path.parent.glob(".ext-soperator-migrate-report.md.*.tmp"))
+    assert not list(report_path.parent.glob(".ext-soperator-upgrade-report.md.*.tmp"))
 
 
 def test_execute_quota_preflight_blocks_before_mutation(
@@ -1679,7 +1688,7 @@ def test_execute_quota_preflight_blocks_before_mutation(
                 QuotaCheck(
                     component_id="soperator-migration",
                     instance_id="external-cluster",
-                    component_label="Soperator migration target external-cluster",
+                    component_label="External Soperator upgrade target external-cluster",
                     quota_name="compute.filesystem.count",
                     region="eu-north1",
                     required=3,
@@ -1825,7 +1834,7 @@ def test_execute_worker_safe_surge_quota_shortage_blocks_before_mutation(
     recorded_inputs: list[dict[str, Any]] = []
 
     def _estimate_worker_safe_surge(**kwargs: object):
-        if kwargs.get("context") != "soperator migration worker safe-surge quota preflight":
+        if kwargs.get("context") != "external soperator upgrade worker safe-surge quota preflight":
             return (), ()
         inputs = kwargs.get("inputs")
         assert isinstance(inputs, dict)
@@ -2199,6 +2208,7 @@ def test_execute_records_approval_and_runs_checkpointed_mutators(tmp_path: Path)
         target_ref="external-cluster",
         payload=_payload(),
         source_report=source_report,
+        backup_metadata=_backup_metadata(),
         snapshot_collector=lambda *, kube_context: _snapshot(),
         approved=True,
         command_runner=runner,
@@ -2221,7 +2231,7 @@ def test_execute_records_approval_and_runs_checkpointed_mutators(tmp_path: Path)
     assert result.pending_phase == "none"
     assert "Auto-selected source worker node groups: gpu-pool" in "\n".join(result.lines)
     assert "target-gpu-stack-remediation: Applied target GPU stack chart" in "\n".join(result.lines)
-    assert "post-migration-helm-check: Verified target Soperator Helm chart readiness" in "\n".join(
+    assert "post-upgrade-helm-check: Verified target Soperator Helm chart readiness" in "\n".join(
         result.lines
     )
     assert "Data sync skipped: no old Soperator storage was detected" in "\n".join(result.lines)
@@ -2273,13 +2283,64 @@ def test_execute_records_approval_and_runs_checkpointed_mutators(tmp_path: Path)
     ]
     assert mutating_commands == []
     assert "live state already satisfies completed action" in "\n".join(resumed.lines)
-    assert "post-migration-helm-check: Verified target Soperator Helm chart readiness" in "\n".join(
+    assert "post-upgrade-helm-check: Verified target Soperator Helm chart readiness" in "\n".join(
         resumed.lines
     )
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert checkpoint["completed_phases"] == list(result.completed_phases)
     assert checkpoint["pending_phase"] == "none"
     assert checkpoint["worker_node_groups"] == ["gpu-pool"]
+
+
+def test_execute_preserves_original_backup_metadata_after_mutating_resume(
+    tmp_path: Path,
+) -> None:
+    source_report = _source_report()
+    config_path = tmp_path / "config.yaml"
+    original_backup = {
+        "path": "backups/original-pre-upgrade.tar.gz",
+        "sha256": "original-sha256",
+        "manifest_sha256": "original-manifest-sha256",
+    }
+    replacement_backup = {
+        "path": "backups/partial-state.tar.gz",
+        "sha256": "partial-sha256",
+        "manifest_sha256": "partial-manifest-sha256",
+    }
+    execute_soperator_migration(
+        config_path=config_path,
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=source_report,
+        backup_metadata=original_backup,
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        approved=True,
+        command_runner=_FakeCommandRunner(),
+        worker_rollout_strategy="safe-surge",
+    )
+
+    result = execute_soperator_migration(
+        config_path=config_path,
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=source_report,
+        backup_metadata=replacement_backup,
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        command_runner=_FakeCommandRunner(),
+        worker_rollout_strategy="safe-surge",
+    )
+
+    assert result.pending_phase == "none"
+    checkpoint_path = soperator_migration_checkpoint_path(config_path, "external-cluster")
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["backup"] == original_backup
+    assert any(event["event"] == "backup-metadata-preserved" for event in checkpoint["events"])
+    upgrade_json_report = json.loads(
+        (tmp_path / "generated" / "reports" / "ext-soperator-upgrade-report.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert upgrade_json_report["backup"] == original_backup
 
 
 def test_execute_clears_stale_pending_phase_after_successful_resume(
@@ -2327,6 +2388,7 @@ def test_execute_clears_stale_pending_phase_after_successful_resume(
         target_ref="external-cluster",
         payload=_payload(),
         source_report=source_report,
+        backup_metadata=_backup_metadata("validation-pending"),
         snapshot_collector=lambda *, kube_context: _snapshot(),
         approved=True,
         command_runner=runner,
@@ -2493,8 +2555,8 @@ def test_execute_retires_stale_source_soperator_helm_releases_after_target_ready
 
     output = "\n".join(result.lines)
     assert result.pending_phase == "none"
-    assert "post-migration-mk8s-check: External MK8s" in output
-    assert "post-migration-helm-check: Verified target Soperator Helm chart readiness" in output
+    assert "post-upgrade-mk8s-check: External MK8s" in output
+    assert "post-upgrade-helm-check: Verified target Soperator Helm chart readiness" in output
     assert "Retired stale source Soperator Helm release records" in output
     assert "soperator-system/soperator-controller" in output
     assert "soperator/slurm-cluster-storage" in output
@@ -2878,6 +2940,7 @@ def test_execute_retries_completed_gpu_stack_action_when_live_release_is_missing
         target_ref="external-cluster",
         payload=_payload(),
         source_report=source_report,
+        backup_metadata=_backup_metadata("gpu-stack-retry"),
         snapshot_collector=lambda *, kube_context: _snapshot(),
         approved=True,
         command_runner=runner,
@@ -3281,7 +3344,7 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
     result_text = "\n".join(result.lines)
     assert "validation-and-rollback-hold: Starting validation 1/2" in result_text
     assert (
-        "validation-and-rollback-hold: Migrate report will include the MK8s GPU validation rollup."
+        "validation-and-rollback-hold: External Soperator upgrade report will include the MK8s GPU validation rollup."
     ) in result_text
     assert (
         "validation-and-rollback-hold: Deploy-compatible validation report refreshed:"
@@ -3290,9 +3353,12 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
     reports_dir = tmp_path / "generated" / "reports"
     assert not (reports_dir / "acceptance-benchmark-report-external-cluster.json").exists()
     assert "## Validations" in (reports_dir / "deploy-report.md").read_text(encoding="utf-8")
-    migrate_report = (reports_dir / "ext-soperator-migrate-report.md").read_text(encoding="utf-8")
-    assert "## Migration Steps" in migrate_report
-    assert "- Migration performed: `yes`" in migrate_report
+    migrate_report = (reports_dir / "ext-soperator-upgrade-report.md").read_text(encoding="utf-8")
+    upgrade_json_report = json.loads(
+        (reports_dir / "ext-soperator-upgrade-report.json").read_text(encoding="utf-8")
+    )
+    assert "## Upgrade Steps" in migrate_report
+    assert "- Upgrade performed: `yes`" in migrate_report
     assert "Soperator and Slurm smoke" in migrate_report
     assert "### MK8s GPU" in migrate_report
     assert "deploy-smoke-report-external-cluster.json" in migrate_report
@@ -3318,9 +3384,23 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
     assert validation_state["soperator_cluster_validation_count"] == 1
     assert len(validation_state["mk8s_gpu_validation_reports"]) == 2
     assert len(validation_state["soperator_cluster_validation_reports"]) == 1
-    assert checkpoint["migrate_report"].endswith(
-        "generated/reports/ext-soperator-migrate-report.md"
+    assert checkpoint["upgrade_report"].endswith(
+        "generated/reports/ext-soperator-upgrade-report.md"
     )
+    assert checkpoint["upgrade_report_json"].endswith(
+        "generated/reports/ext-soperator-upgrade-report.json"
+    )
+    assert upgrade_json_report["schema"] == "nebius-cxcli-ext-soperator-upgrade-report/v1"
+    assert upgrade_json_report["target_ref"] == "external-cluster"
+    assert upgrade_json_report["upgrade_performed"] is True
+    assert upgrade_json_report["pending_phase"] == "none"
+    assert upgrade_json_report["checkpoint_path"].endswith(
+        ".nebius-cxcli/ext-soperator-upgrades/external-cluster/checkpoint.json"
+    )
+    assert upgrade_json_report["backup"] == {}
+    assert "validation-and-rollback-hold" in {
+        phase["id"] for phase in upgrade_json_report["phases"]
+    }
 
 
 def test_external_node_template_quiesces_one_node_service_roles(
@@ -3630,7 +3710,7 @@ def test_execute_upgrades_external_node_template_with_safe_surge_strategy(
     assert phase["node_groups"]["gpu-pool"]["strategy_restored"] is True
     assert phase["worker_waves"] == [["gpu-pool"]]
     assert any(
-        line.startswith("post-migration-mk8s-check: External MK8s node-template verified")
+        line.startswith("post-upgrade-mk8s-check: External MK8s node-template verified")
         for line in result.lines
     )
 
@@ -3903,6 +3983,7 @@ def test_execute_external_node_template_reconciles_accepted_timeout_when_ready(
         target_ref="external-cluster",
         payload=_payload(),
         source_report=_source_report(),
+        backup_metadata=_backup_metadata("waiting-rollout"),
         snapshot_collector=lambda *, kube_context: _snapshot(),
         approved=True,
         command_runner=runner,
@@ -3918,7 +3999,7 @@ def test_execute_external_node_template_reconciles_accepted_timeout_when_ready(
     ]
     assert len(node_template_updates) == 1
     assert any(
-        line.startswith("post-migration-mk8s-check: External MK8s node-template verified")
+        line.startswith("post-upgrade-mk8s-check: External MK8s node-template verified")
         for line in result.lines
     )
 
@@ -3934,6 +4015,7 @@ def test_execute_external_node_template_resume_waiting_rollout_without_duplicate
         target_ref="external-cluster",
         payload=_payload(),
         source_report=_source_report(),
+        backup_metadata=_backup_metadata("waiting-rollout"),
         snapshot_collector=lambda *, kube_context: _snapshot(),
         approved=True,
         command_runner=runner,
@@ -4030,6 +4112,7 @@ def test_execute_external_node_template_resumes_failed_timeout_from_live_state(
             target_ref="external-cluster",
             payload=_payload(),
             source_report=_source_report(),
+            backup_metadata=_backup_metadata("failed-timeout"),
             snapshot_collector=lambda *, kube_context: _snapshot(),
             approved=True,
             command_runner=runner,
@@ -4184,6 +4267,7 @@ def test_execute_rejects_changed_worker_rollout_settings_after_checkpoint(
         target_ref="external-cluster",
         payload=_payload(),
         source_report=_source_report(),
+        backup_metadata=_backup_metadata("rollout-settings"),
         snapshot_collector=lambda *, kube_context: _snapshot(),
         approved=True,
         command_runner=_FakeCommandRunner(),
@@ -4391,17 +4475,18 @@ def test_execute_external_node_template_blocks_nonempty_slurm_queue_before_mutat
     snapshot = _snapshot_with_compute_source()
     runner = _FakeCommandRunner(slurm_queue_output="RUNNING\nPENDING\n")
 
-    with pytest.raises(RuntimeError, match="Slurm queue is not empty"):
-        execute_soperator_migration(
-            config_path=tmp_path / "config.yaml",
-            target_ref="external-cluster",
-            payload=_payload(include_placements=True),
-            source_report=_source_report(snapshot),
-            snapshot_collector=lambda *, kube_context: snapshot,
-            approved=True,
-            command_runner=runner,
-        )
+    result = execute_soperator_migration(
+        config_path=tmp_path / "config.yaml",
+        target_ref="external-cluster",
+        payload=_payload(include_placements=True),
+        source_report=_source_report(snapshot),
+        snapshot_collector=lambda *, kube_context: snapshot,
+        approved=True,
+        command_runner=runner,
+    )
 
+    assert result.pending_phase == "external-node-template-upgrade"
+    assert "Running Slurm jobs exist on affected nodes" in result.pending_reason
     assert not any(
         call[0][:4] == ("nebius", "mk8s", "node-group", "update") and "--version" in call[0]
         for call in runner.calls
@@ -4578,6 +4663,7 @@ def test_execute_rechecks_live_control_plane_before_skipping_completed_hop(
                 "created_at": "2026-06-07T00:00:00Z",
                 "completed_phases": ["discovery-and-plan", "customer-approval"],
                 "customer_approved_at": "2026-06-07T00:00:00Z",
+                "backup": _backup_metadata("control-plane-hop"),
                 "events": [],
                 "phase_state": {
                     "external-node-template-upgrade": {
@@ -6857,11 +6943,21 @@ def test_execute_recovers_partial_cutover_without_login_pod(tmp_path: Path) -> N
         {"id": "rolling-compute-migration", "status": "planned"},
     ]
     runner = _FakeCommandRunner(live_pods=[])
+    payload = _payload(include_placements=True)
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]
+    assert isinstance(onboarding, dict)
+    onboarding["actions"] = [
+        "adopt-soperator",
+        "upgrade-soperator",
+        "approve-external-soperator-upgrade",
+        "plan-soperator-compute-migration",
+    ]
 
     result = execute_soperator_migration(
         config_path=tmp_path / "config.yaml",
         target_ref="external-cluster",
-        payload=_payload(include_placements=True),
+        payload=payload,
         source_report=source_report,
         snapshot_collector=lambda *, kube_context: snapshot,
         approved=True,
@@ -7207,6 +7303,7 @@ def test_execute_reconciles_completed_compute_cutover_cleanup(tmp_path: Path) ->
         target_ref="external-cluster",
         payload=_payload(include_placements=True),
         source_report=source_report,
+        backup_metadata=_backup_metadata("compute-cutover-cleanup"),
         snapshot_collector=lambda *, kube_context: snapshot,
         approved=True,
         command_runner=_FakeCommandRunner(),
@@ -7434,6 +7531,7 @@ def test_execute_allows_target_version_after_mutating_checkpoint_progress(tmp_pa
             target_ref="external-cluster",
             payload=_payload(include_placements=True),
             source_report=source_report,
+            backup_metadata=_backup_metadata("target-version-resume"),
             snapshot_collector=lambda *, kube_context: snapshot,
             approved=True,
             command_runner=_FakeCommandRunner(helm_errors=["helm boom"]),
@@ -7686,7 +7784,7 @@ def test_execute_rejects_stale_checkpoint(tmp_path: Path) -> None:
     checkpoint_path.write_text(
         json.dumps(
             {
-                "schema": "nebius-cxcli-soperator-migration-execution/v1",
+                "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
                 "target_ref": "external-cluster",
                 "source_report_fingerprint": "old",
             }
@@ -7702,6 +7800,63 @@ def test_execute_rejects_stale_checkpoint(tmp_path: Path) -> None:
             source_report=_source_report(),
             snapshot_collector=lambda *, kube_context: _snapshot(),
         )
+
+
+def test_execute_rejects_retired_migration_checkpoint_path(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    checkpoint_path = migration.legacy_soperator_migration_checkpoint_path(
+        config_path,
+        "external-cluster",
+    )
+    checkpoint_path.parent.mkdir(parents=True)
+    checkpoint_path.write_text('{"schema": "retired"}\n', encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="Retired external Soperator checkpoint found"):
+        execute_soperator_migration(
+            config_path=config_path,
+            target_ref="external-cluster",
+            payload=_payload(),
+            source_report=_source_report(),
+            snapshot_collector=lambda *, kube_context: _snapshot(),
+        )
+
+
+def test_external_upgrade_resume_backup_metadata_rejects_mutating_checkpoint_without_backup(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    checkpoint_path = soperator_migration_checkpoint_path(config_path, "external-cluster")
+    checkpoint_path.parent.mkdir(parents=True)
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+                "target_ref": "external-cluster",
+                "completed_phases": ["target-gpu-stack-remediation"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="no restore-capable backup metadata"):
+        migration.external_soperator_upgrade_resume_backup_metadata(
+            config_path,
+            "external-cluster",
+        )
+
+
+def test_external_upgrade_runtime_messages_do_not_use_retired_public_migrate_wording() -> None:
+    source = Path(migration.__file__).read_text(encoding="utf-8")
+    forbidden = (
+        "before executing migration",
+        "after migration",
+        "migration complete",
+        "restart the migration",
+        "rerunning migration",
+        "Soperator external migration",
+    )
+
+    assert [phrase for phrase in forbidden if phrase in source] == []
 
 
 def test_checkpoint_allows_same_plan_report_refresh_after_mutation_started() -> None:

@@ -10,7 +10,7 @@ from nebius_cxcli.runtime_validation import validate_runtime_payload
 from nebius_cxcli.soperator_discovery import load_soperator_discovery_bundle
 from nebius_cxcli.soperator_onboarding import (
     ONBOARDING_ACTION_ADOPT_SOPERATOR,
-    ONBOARDING_ACTION_APPROVE_MIGRATION,
+    ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
     ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
     ONBOARDING_ACTION_INSTALL_SOPERATOR,
     ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
@@ -760,7 +760,9 @@ def test_soperator_onboarding_modes_make_compute_only_plan_consistent() -> None:
     )
     assert "storage" not in approval_phase.title.lower()
     approval_action = next(
-        action for action in adjusted.actions if action.id == ONBOARDING_ACTION_APPROVE_MIGRATION
+        action
+        for action in adjusted.actions
+        if action.id == ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE
     )
     assert "storage" not in approval_action.title.lower()
 
@@ -984,7 +986,7 @@ def test_soperator_onboarding_report_from_config_respects_selected_modes() -> No
     approval_action = next(
         action
         for action in report["actions"]
-        if action["id"] == ONBOARDING_ACTION_APPROVE_MIGRATION
+        if action["id"] == ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE
     )
     assert "storage" not in approval_action["title"].lower()
 
@@ -1387,7 +1389,7 @@ def test_soperator_onboarding_source_version_allows_noncanonical_release() -> No
     assert report.remediation
     assert report.migration_plan
     assert ONBOARDING_ACTION_UPGRADE_SOPERATOR in {action.id for action in report.actions}
-    assert ONBOARDING_ACTION_APPROVE_MIGRATION in {action.id for action in report.actions}
+    assert ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE in {action.id for action in report.actions}
     assert ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION in {action.id for action in report.actions}
     assert any(
         finding.layer == "soperator" and finding.status == "source-version-selected"

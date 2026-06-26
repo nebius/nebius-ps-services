@@ -40,7 +40,7 @@ ONBOARDING_STATE_ANALYSIS_INCOMPLETE = "analysis-incomplete"
 ONBOARDING_ACTION_INSTALL_SOPERATOR = "install-soperator"
 ONBOARDING_ACTION_ADOPT_SOPERATOR = "adopt-soperator"
 ONBOARDING_ACTION_UPGRADE_SOPERATOR = "upgrade-soperator"
-ONBOARDING_ACTION_APPROVE_MIGRATION = "approve-soperator-migration"
+ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE = "approve-external-soperator-upgrade"
 ONBOARDING_ACTION_CONFIGURE_STORAGE = "configure-soperator-storage"
 ONBOARDING_ACTION_CREATE_ALIGNED_SFS = "create-aligned-sfs"
 ONBOARDING_ACTION_PLAN_DATA_MIGRATION = "plan-soperator-data-migration"
@@ -53,7 +53,7 @@ ONBOARDING_ACTION_IDS = frozenset(
         ONBOARDING_ACTION_INSTALL_SOPERATOR,
         ONBOARDING_ACTION_ADOPT_SOPERATOR,
         ONBOARDING_ACTION_UPGRADE_SOPERATOR,
-        ONBOARDING_ACTION_APPROVE_MIGRATION,
+        ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
         ONBOARDING_ACTION_CONFIGURE_STORAGE,
         ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
         ONBOARDING_ACTION_PLAN_DATA_MIGRATION,
@@ -63,10 +63,10 @@ ONBOARDING_ACTION_IDS = frozenset(
         ONBOARDING_ACTION_ENABLE_TOPOLOGY,
     }
 )
-ONBOARDING_MIGRATION_ACTION_IDS = frozenset(
+ONBOARDING_EXTERNAL_UPGRADE_ACTION_IDS = frozenset(
     {
         ONBOARDING_ACTION_UPGRADE_SOPERATOR,
-        ONBOARDING_ACTION_APPROVE_MIGRATION,
+        ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
         ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
         ONBOARDING_ACTION_PLAN_DATA_MIGRATION,
         ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
@@ -972,7 +972,7 @@ def _migration_approval_phase_title(
     return "Customer approval of Soperator remediation plan"
 
 
-def _migration_approval_action_title(
+def _external_upgrade_approval_action_title(
     *,
     include_data_migration: bool,
     include_compute_migration: bool,
@@ -1203,10 +1203,10 @@ def soperator_onboarding_report_for_modes(
             continue
         if action.id == ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION and not include_compute_migration:
             continue
-        if action.id == ONBOARDING_ACTION_APPROVE_MIGRATION:
+        if action.id == ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE:
             action = replace(
                 action,
-                title=_migration_approval_action_title(
+                title=_external_upgrade_approval_action_title(
                     include_data_migration=include_data_migration,
                     include_compute_migration=include_compute_migration,
                     include_soperator_upgrade=include_soperator_upgrade,
@@ -1357,17 +1357,17 @@ def _configured_soperator_action(
             selected=True,
             reason="Upgrades are allowed when live version is older and profiled.",
         ),
-        ONBOARDING_ACTION_APPROVE_MIGRATION: SoperatorOnboardingAction(
-            id=ONBOARDING_ACTION_APPROVE_MIGRATION,
-            title=_migration_approval_action_title(
+        ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE: SoperatorOnboardingAction(
+            id=ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
+            title=_external_upgrade_approval_action_title(
                 include_data_migration=include_data_migration,
                 include_compute_migration=include_compute_migration,
                 include_soperator_upgrade=include_soperator_upgrade,
             ),
-            layer="migration",
+            layer="external-upgrade",
             selected=True,
             disruptive=True,
-            reason="Migration changes require customer approval before execution.",
+            reason="External upgrade changes require customer approval before execution.",
         ),
         ONBOARDING_ACTION_CONFIGURE_STORAGE: SoperatorOnboardingAction(
             id=ONBOARDING_ACTION_CONFIGURE_STORAGE,
@@ -1426,7 +1426,7 @@ def _configured_soperator_action(
             reason=(
                 "External Soperator targets are not Terraform-owned, so cxcli must align "
                 "Kubernetes version, node OS image, and Nebius GPU driver preset through "
-                "direct Nebius updates during migration."
+                "direct Nebius updates during the external upgrade."
             ),
         ),
         ONBOARDING_ACTION_ENABLE_TOPOLOGY: SoperatorOnboardingAction(
@@ -1467,7 +1467,7 @@ def _migration_plan_for_action_ids(
     action_ids: Sequence[str],
 ) -> tuple[SoperatorMigrationPhase, ...]:
     selected_ids = set(action_ids)
-    if not selected_ids & ONBOARDING_MIGRATION_ACTION_IDS:
+    if not selected_ids & ONBOARDING_EXTERNAL_UPGRADE_ACTION_IDS:
         return ()
     return _default_soperator_migration_plan(
         include_target_gpu_reconciliation=ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK
@@ -2663,12 +2663,12 @@ def analyze_soperator_onboarding_snapshot(
                 )
                 actions.append(
                     SoperatorOnboardingAction(
-                        id=ONBOARDING_ACTION_APPROVE_MIGRATION,
+                        id=ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
                         title="Approve Soperator role, storage, and SlurmCluster remediation",
-                        layer="migration",
+                        layer="external-upgrade",
                         selected=True,
                         disruptive=True,
-                        reason="Migration changes require customer approval before execution.",
+                        reason="External upgrade changes require customer approval before execution.",
                     )
                 )
                 if external_node_template_required:
@@ -2682,14 +2682,14 @@ def analyze_soperator_onboarding_snapshot(
                             severity="required",
                             message=(
                                 "External MK8s control plane and node templates will be "
-                                "upgraded during migration through direct Nebius updates "
+                                "upgraded during the external upgrade through direct Nebius updates "
                                 "because the target is not Terraform-owned by cxcli."
                                 if provider_inventory_available
                                 else (
                                     "External MK8s control plane and node-template provider "
                                     "inventory was not available during onboarding; cxcli will "
                                     "verify and align the external node templates during "
-                                    "migration before it manages Soperator."
+                                    "the external upgrade before it manages Soperator."
                                 )
                             ),
                             action_id=ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
@@ -2708,7 +2708,7 @@ def analyze_soperator_onboarding_snapshot(
                             reason=(
                                 "External Soperator targets are not Terraform-owned, so cxcli "
                                 "must align Kubernetes version, node OS image, and Nebius GPU "
-                                "driver preset through direct Nebius updates during migration."
+                                "driver preset through direct Nebius updates during the external upgrade."
                             ),
                         )
                     )

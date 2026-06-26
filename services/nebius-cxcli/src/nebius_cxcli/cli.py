@@ -410,12 +410,14 @@ from .soperator_migration import (
     _source_worker_nodeset_values,
     _source_worker_partition_configuration,
     execute_soperator_migration,
+    external_soperator_upgrade_resume_backup_metadata,
+    legacy_soperator_migration_checkpoint_path,
     resolve_external_node_template_rollout,
 )
 from .soperator_onboarding import (
     ONBOARDING_ACCEPTABLE_STATES,
     ONBOARDING_ACTION_ADOPT_SOPERATOR,
-    ONBOARDING_ACTION_APPROVE_MIGRATION,
+    ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
     ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
     ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
     ONBOARDING_ACTION_PLAN_DATA_MIGRATION,
@@ -1993,29 +1995,31 @@ ext_soperator_app = typer.Typer(
         "discover writes a support-safe read-only Soperator discovery bundle; "
         "onboard registers/adopts one cluster into config.yaml without "
         "Terraform-owning it. backup/restore move restore-capable Soperator "
-        "state between clusters. migrate is only for accepted onboarding plans "
-        "that contain migration-owned actions."
+        "state between clusters. upgrade is only for accepted onboarding plans "
+        "that contain external-upgrade-owned actions."
     ),
     epilog=(
         "Workflow: nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root> "
         "--cluster-id <mk8scluster-id>; nebius-cxcli validate <config.yaml>; "
-        "nebius-cxcli render <config.yaml>; nebius-cxcli deploy <config.yaml>; "
-        "nebius-cxcli ext-soperator discover <config.yaml> --target <target>; "
-        "nebius-cxcli ext-soperator backup <config.yaml> --target <target>; "
-        "nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --dry-run; "
-        "nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --execute --approve. "
+        "nebius-cxcli render <config.yaml>; "
+        "nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run; "
+        "nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --execute --approve. "
         "Restore to a new empty compatible cluster with "
         "nebius-cxcli ext-soperator restore <backup.tar.gz> --kube-context <new-context> "
         "--execute --approve. "
         "Onboarding stores a cxcli target id in deploy.targets[].instance_id; by default it is "
         "derived from the live MK8s cluster name, or it can be set with --target-id. "
-        "If the accepted onboarding report says no migration-owned work is required, deploy "
+        "After render, install/adopt-only targets use deploy instead of external upgrade. "
+        "If the accepted onboarding report says no external-upgrade-owned work is required, deploy "
         "reconciles every generated target and produces deploy-report.md plus deploy-time "
-        "validations; use deploy --target <target-id> only to narrow one run. If migration-owned "
+        "validations; use deploy --target <target-id> only to narrow one run. If external-upgrade-owned "
         "work is required, do not deploy first. CXCLI managed chart-only Soperator upgrades use "
         "soperator upgrade; external MK8s control-plane and node-template upgrades selected by "
-        "onboarding are owned by ext-soperator migrate; Terraform-managed MK8s node-template "
-        "upgrades use upgrade node-template."
+        "onboarding are owned by ext-soperator upgrade; Terraform-managed MK8s node-template "
+        "upgrades use upgrade node-template. Use the separate discover command only when you "
+        "need a support-safe discovery bundle, and the separate backup command only when you "
+        "need an operator-requested archive outside the upgrade run; upgrade --execute --approve "
+        "refreshes discovery and creates its restore-capable backup before mutation."
     ),
 )
 soperator_app = typer.Typer(
@@ -2027,16 +2031,18 @@ soperator_app = typer.Typer(
         "validation."
     ),
     epilog=(
-        "CXCLI managed workflow: nebius-cxcli soperator upgrade <config.yaml> "
-        "--target <target> --to-chart-version <chart-version> --to-k8s-version 1.33 "
-        "--dry-run, then rerun without --dry-run to create a restore-capable backup, "
-        "run requested MK8s node-template changes, apply chart changes, verify the "
-        "static Soperator chart version, and run required Soperator/Slurm validation. "
+        "Examples: nebius-cxcli soperator upgrade <config.yaml> "
+        "--target <target> --to-k8s-version 1.33 --to-chart-version <chart-version> "
+        "--dry-run; nebius-cxcli soperator upgrade <config.yaml> --target <target> "
+        "--to-k8s-version 1.33 --to-chart-version <chart-version>; "
         "nebius-cxcli soperator backup <config.yaml> --target <target>; "
         "nebius-cxcli soperator discover <config.yaml> --target <target>; "
         "nebius-cxcli soperator restore <backup.tar.gz> --execute --approve. "
-        "Existing external Soperator clusters still use ext-soperator onboard/migrate "
-        "for adoption or migration-owned work."
+        "The run without --dry-run creates a restore-capable backup, runs requested "
+        "MK8s node-template changes, applies chart changes, verifies the static "
+        "Soperator chart version, and runs required Soperator/Slurm validation. "
+        "Existing external Soperator clusters still use ext-soperator onboard/upgrade "
+        "for adoption or external-upgrade-owned work."
     ),
 )
 acceptance_test_app = typer.Typer(
@@ -8441,6 +8447,130 @@ def _soperator_backup_command_args(
     return tuple(args)
 
 
+def _external_soperator_upgrade_command_args(
+    *,
+    config_path: Path,
+    target_ref: str,
+    backup_dir: Path | None,
+    job_policy: str,
+    cancel_job: Sequence[str],
+    job_wait_timeout: str,
+    job_refresh_interval: str,
+    worker_rollout_strategy: str | None,
+    worker_wave_groups: int | None,
+    worker_wave_percent: int | None,
+    max_parallel_worker_groups: int | None,
+    strategy_max_surge_count: int | None,
+    strategy_max_unavailable_count: int | None,
+    strategy_drain_timeout: str | None,
+    dry_run: bool,
+    approve: bool,
+    interactive: bool,
+) -> tuple[str, ...]:
+    args = ["nebius-cxcli", "ext-soperator", "upgrade", str(config_path), "--target", target_ref]
+    if backup_dir is not None:
+        args.extend(["--backup-dir", str(backup_dir)])
+    args.extend(["--job-policy", job_policy])
+    for job_id in cancel_job:
+        args.extend(["--cancel-job", str(job_id)])
+    args.extend(["--job-wait-timeout", job_wait_timeout])
+    args.extend(["--job-refresh-interval", job_refresh_interval])
+    if _non_empty_text(worker_rollout_strategy):
+        args.extend(["--worker-rollout-strategy", str(worker_rollout_strategy)])
+    if worker_wave_groups is not None:
+        args.extend(["--worker-wave-groups", str(worker_wave_groups)])
+    if worker_wave_percent is not None:
+        args.extend(["--worker-wave-percent", str(worker_wave_percent)])
+    if max_parallel_worker_groups is not None:
+        args.extend(["--max-parallel-worker-groups", str(max_parallel_worker_groups)])
+    if strategy_max_surge_count is not None:
+        args.extend(["--strategy-max-surge-count", str(strategy_max_surge_count)])
+    if strategy_max_unavailable_count is not None:
+        args.extend(["--strategy-max-unavailable-count", str(strategy_max_unavailable_count)])
+    if _non_empty_text(strategy_drain_timeout):
+        args.extend(["--strategy-drain-timeout", str(strategy_drain_timeout)])
+    args.append("--interactive" if interactive else "--no-interactive")
+    args.append("--dry-run" if dry_run else "--execute")
+    args.append("--approve" if approve else "--no-approve")
+    return tuple(args)
+
+
+def _external_soperator_upgrade_target_k8s_version(
+    payload: Mapping[str, Any],
+    *,
+    target_ref: str,
+) -> str | None:
+    target = soperator_onboarding_target(payload, target_ref=target_ref)
+    onboarding = target.get("soperator_onboarding") if isinstance(target, Mapping) else {}
+    if not isinstance(onboarding, Mapping):
+        return None
+    configured = onboarding.get("node_template_upgrade")
+    if not isinstance(configured, Mapping):
+        return None
+    return (
+        _non_empty_text(configured.get("target_k8s_version"))
+        or _non_empty_text(configured.get("k8s_version"))
+        or _non_empty_text(configured.get("version"))
+    )
+
+
+def _create_external_soperator_upgrade_backup(
+    *,
+    config_path: Path,
+    source_payload: dict[str, Any],
+    target_ref: str,
+    backup_dir: Path | None,
+    kube_context: str | None,
+    command: Sequence[str],
+) -> dict[str, Any]:
+    target, plan = _soperator_backup_plan_from_payload(
+        source_payload=source_payload,
+        target_ref=target_ref,
+        namespace=None,
+        release_name=None,
+        interactive=False,
+    )
+    generated_config, manifest = _load_soperator_backup_generated_context(
+        config_path=config_path,
+        source_payload=source_payload,
+    )
+    checkpoint_id = _soperator_upgrade_sha256_text(
+        f"external-upgrade:{target_ref}:{plan.current_version}:{datetime.now(UTC).isoformat()}"
+    )[:16]
+    backup = _create_restore_capable_soperator_upgrade_backup(
+        config_path=config_path,
+        backup_dir=backup_dir,
+        source_payload=source_payload,
+        generated_config=generated_config,
+        manifest=manifest,
+        target=target,
+        plan=plan,
+        checkpoint_id=checkpoint_id,
+        target_k8s_version=_external_soperator_upgrade_target_k8s_version(
+            source_payload,
+            target_ref=target_ref,
+        ),
+        command=command,
+        archive_prefix="ext-soperator-upgrade",
+        source_kind="external-upgrade",
+        kube_context=kube_context,
+    )
+    console.print(f"External Soperator upgrade backup archive: {backup.path}", soft_wrap=True)
+    console.print(f"Archive SHA256: {backup.sha256}", soft_wrap=True)
+    console.print("Sensitive material included: raw Kubernetes Secrets and accounting DB dump.")
+    return {
+        "required": True,
+        "path": str(backup.path),
+        "size_bytes": backup.size_bytes,
+        "sha256": backup.sha256,
+        "manifest_sha256": backup.manifest_sha256,
+        "included_categories": list(backup.included_categories),
+        "raw_secret_material": backup.secret_material_included,
+        "accounting_db_dump": backup.accounting_db_included,
+        "report_redacted": True,
+    }
+
+
 def _load_soperator_backup_generated_context(
     *,
     config_path: Path,
@@ -9292,9 +9422,13 @@ def soperator_restore_command(
     "upgrade",
     short_help="Upgrade a cxcli-managed Soperator cluster end to end.",
     epilog=(
-        "Example: nebius-cxcli soperator upgrade <config.yaml> --target mk8s "
-        "--to-chart-version <chart-version> --to-k8s-version 1.33 --dry-run. "
-        "Standalone MK8s node-template upgrades still use upgrade node-template."
+        "Examples: nebius-cxcli soperator upgrade <config.yaml> --target mk8s "
+        "--to-k8s-version 1.33 --to-chart-version <chart-version> --dry-run. "
+        "nebius-cxcli soperator upgrade <config.yaml> --target mk8s "
+        "--to-k8s-version 1.33 --to-chart-version <chart-version>. "
+        "The run without --dry-run creates the restore-capable backup and applies "
+        "the requested Soperator-aware upgrade. Standalone MK8s node-template "
+        "upgrades still use upgrade node-template."
     ),
 )
 def soperator_upgrade_command(
@@ -11319,12 +11453,12 @@ def _soperator_migration_reason_labels(onboarding: Mapping[str, Any]) -> tuple[s
     if flags["compute_migration_required"]:
         reasons.append("Soperator compute layout migration")
     if flags["target_gpu_reconciliation_required"] and flags["migration_required"]:
-        reasons.append("target GPU/RDMA stack remediation selected with migration work")
+        reasons.append("target GPU/RDMA stack remediation selected with external upgrade work")
     return tuple(reasons)
 
 
 def _soperator_migration_reason_text(onboarding: Mapping[str, Any]) -> str:
-    return "; ".join(_soperator_migration_reason_labels(onboarding)) or "migration-owned action"
+    return "; ".join(_soperator_migration_reason_labels(onboarding)) or "external-upgrade-owned action"
 
 
 def _soperator_storage_compute_route_note(onboarding: Mapping[str, Any]) -> str:
@@ -11343,19 +11477,19 @@ def _soperator_storage_compute_route_note(onboarding: Mapping[str, Any]) -> str:
         and compute_mode == ONBOARDING_COMPUTE_MODE_KEEP_EXISTING
     ):
         return (
-            "Existing storage and compute layout were accepted; migrate will not create "
+            "Existing storage and compute layout were accepted; upgrade will not create "
             "aligned SFS filesystems or replacement compute node groups unless those "
             "actions are present."
         )
     if storage_mode == ONBOARDING_STORAGE_MODE_KEEP_EXISTING:
         return (
-            "Existing storage was accepted; migrate will not create aligned SFS "
-            "filesystems unless a storage migration action is present."
+            "Existing storage was accepted; upgrade will not create aligned SFS "
+            "filesystems unless a storage remediation action is present."
         )
     if compute_mode == ONBOARDING_COMPUTE_MODE_KEEP_EXISTING:
         return (
-            "Existing compute layout was accepted; migrate will not create replacement "
-            "compute node groups unless a compute migration action is present."
+            "Existing compute layout was accepted; upgrade will not create replacement "
+            "compute node groups unless a compute replacement action is present."
         )
     return ""
 
@@ -11367,14 +11501,14 @@ def _soperator_route_guidance_lines(
 ) -> tuple[str, ...]:
     if migration_required:
         lines = [
-            "Route: render -> ext-soperator migrate, not render -> deploy.",
+            "Route: render -> ext-soperator upgrade, not render -> deploy.",
             "Reason: accepted onboarding actions require "
             + _soperator_migration_reason_text(onboarding)
             + ".",
             (
                 "deploy only reconciles the rendered Terraform/Flux desired state; "
-                "migrate performs the required ad hoc Nebius API and guarded "
-                "Soperator migration phases."
+                "upgrade performs the required ad hoc Nebius API and guarded "
+                "external Soperator upgrade phases."
             ),
         ]
         mode_note = _soperator_storage_compute_route_note(onboarding)
@@ -11389,13 +11523,13 @@ def _soperator_route_guidance_lines(
             "Route: render -> deploy.",
             (
                 "Reason: only target GPU/RDMA reconciliation is selected; without a "
-                "Soperator upgrade, external node-template upgrade, storage migration, "
-                "or compute migration, deploy can apply that rendered desired state."
+                "Soperator upgrade, external node-template upgrade, storage remediation, "
+                "or compute replacement, deploy can apply that rendered desired state."
             ),
         )
     return (
         "Route: render -> deploy.",
-        "Reason: no migration-owned Soperator onboarding actions are selected.",
+        "Reason: no external-upgrade-owned Soperator onboarding actions are selected.",
     )
 
 
@@ -11426,39 +11560,39 @@ def _print_render_deploy_hint(config_path: Path) -> None:
                 migration_required=True,
             ):
                 console.print(line, soft_wrap=True)
-            console.print("Next step: dry-run the Soperator migration:")
+            console.print("Next step: dry-run the external Soperator upgrade:")
             _print_copy_paste_command(
-                f"nebius-cxcli ext-soperator migrate {config_arg} --target {target_arg} --dry-run"
+                f"nebius-cxcli ext-soperator upgrade {config_arg} --target {target_arg} --dry-run"
             )
             console.print("After accepting the dry-run plan, execute it:")
             _print_copy_paste_command(
-                "nebius-cxcli ext-soperator migrate "
+                "nebius-cxcli ext-soperator upgrade "
                 f"{config_arg} --target {target_arg} --execute --approve"
             )
         else:
-            console.print("Route: render -> ext-soperator migrate, not render -> deploy.")
+            console.print("Route: render -> ext-soperator upgrade, not render -> deploy.")
             for target_ref, onboarding in migration_targets:
                 console.print(
                     f"Soperator target {target_ref}: "
                     + _soperator_migration_reason_text(onboarding),
                     soft_wrap=True,
                 )
-            console.print("Next step: dry-run each migration-required Soperator target:")
+            console.print("Next step: dry-run each external-upgrade-required Soperator target:")
             for target_ref, _onboarding in migration_targets:
                 target_arg = shlex.quote(target_ref)
                 _print_copy_paste_command(
-                    "nebius-cxcli ext-soperator migrate "
+                    "nebius-cxcli ext-soperator upgrade "
                     f"{config_arg} --target {target_arg} --dry-run"
                 )
             console.print("After accepting each dry-run plan, execute that target:")
             for target_ref, _onboarding in migration_targets:
                 target_arg = shlex.quote(target_ref)
                 _print_copy_paste_command(
-                    "nebius-cxcli ext-soperator migrate "
+                    "nebius-cxcli ext-soperator upgrade "
                     f"{config_arg} --target {target_arg} --execute --approve"
                 )
         console.print(
-            "Do not run `nebius-cxcli deploy` before `ext-soperator migrate` for migration-required Soperator targets.",
+            "Do not run `nebius-cxcli deploy` before `ext-soperator upgrade` for external-upgrade-required Soperator targets.",
             soft_wrap=True,
         )
         return
@@ -11548,11 +11682,11 @@ def _print_soperator_onboard_next_steps(
         commands.extend(
             [
                 (
-                    f"nebius-cxcli ext-soperator migrate {config_arg} --target {target_arg} --dry-run",
+                    f"nebius-cxcli ext-soperator upgrade {config_arg} --target {target_arg} --dry-run",
                     "",
                 ),
                 (
-                    "nebius-cxcli ext-soperator migrate "
+                    "nebius-cxcli ext-soperator upgrade "
                     f"{config_arg} --target {target_arg} --execute --approve",
                     "After the dry run is accepted:",
                 ),
@@ -11566,8 +11700,8 @@ def _print_soperator_onboard_next_steps(
         _print_copy_paste_command(command)
     if migration_required:
         console.print(
-            "Do not run `nebius-cxcli deploy` before `ext-soperator migrate` for this target; "
-            "deploy applies the rendered Soperator resources, while migrate must verify "
+            "Do not run `nebius-cxcli deploy` before `ext-soperator upgrade` for this target; "
+            "deploy applies the rendered Soperator resources, while upgrade must verify "
             "the live source release first.",
             soft_wrap=True,
         )
@@ -13521,7 +13655,7 @@ def _validate_soperator_source_version(value: object) -> str:
         suffix = f" Known profile versions include: {preview}." if preview else ""
         raise ValueError(
             f"Soperator source version '{value}' does not match an exact committed "
-            "migration-profile row or known major-generation profile."
+            "upgrade compatibility profile row or known major-generation profile."
             f"{suffix}"
         )
     return normalized
@@ -13562,18 +13696,20 @@ def _prompt_soperator_onboarding_source_version(report: Any) -> str:
             f"[dim]Detected Soperator version {source_version}, but cxcli also found "
             "a Soperator-like Helm release with noncanonical identity. Confirm the "
             "source Soperator version so cxcli can match an exact committed "
-            "migration-profile row or known major-generation profile before managing "
-            "the release.[/dim]"
+            "upgrade compatibility profile row or known major-generation profile "
+            "before managing the release.[/dim]"
         )
     else:
         console.print(
             "[dim]Soperator CRDs were detected, but cxcli could not detect a compatible "
             "Helm release version. Select the source Soperator version so cxcli can match "
-            "an exact committed migration-profile row or known major-generation "
+            "an exact committed upgrade compatibility profile row or known major-generation "
             "profile.[/dim]"
         )
     field = "deploy.targets[].soperator_onboarding.source_version"
-    with _soperator_onboarding_status("Loading Soperator migration profile versions..."):
+    with _soperator_onboarding_status(
+        "Loading Soperator upgrade compatibility profile versions..."
+    ):
         choices = _soperator_source_version_choices()
     choices.append(
         OptionChoice(
@@ -13703,14 +13839,14 @@ def _print_soperator_onboarding_report_summary(report: Any) -> None:
     if source_version:
         console.print(f"[dim]Detected Soperator version: {source_version}[/dim]")
     if migration_profile_id:
-        console.print(f"[dim]Migration profile: {migration_profile_id}[/dim]")
+        console.print(f"[dim]Upgrade profile: {migration_profile_id}[/dim]")
     for finding in report.findings:
         print_info_finding = finding.layer == "gpu-stack" and finding.status == "verified"
         if finding.severity in {"required", "recommended"} or print_info_finding:
             console.print(f"[dim]- {finding.layer}: {finding.status} - {finding.message}[/dim]")
     if getattr(report, "migration_plan", ()):
         console.print(
-            "[dim]Migration phases: "
+            "[dim]External upgrade phases: "
             + ", ".join(phase.id for phase in report.migration_plan)
             + "[/dim]"
         )
@@ -13878,7 +14014,7 @@ def _prompt_soperator_onboarding_rollout_manifest(
     current = resolve_external_node_template_rollout(onboarding)
     console.print(
         "[dim]Configure external worker node-template rollout for preserved worker "
-        "groups during migration.[/dim]"
+        "groups during the external upgrade.[/dim]"
     )
 
     def _strategy_defaults(strategy_value: str) -> tuple[int, int]:
@@ -15196,7 +15332,7 @@ def _prompt_soperator_onboarding_target_row(
                 access="external",
             )
     chart_version, app_version = _soperator_catalog_pinned_versions()
-    with _soperator_onboarding_status("Building migration profile diff..."):
+    with _soperator_onboarding_status("Building Soperator upgrade profile diff..."):
         report = analyze_soperator_onboarding_snapshot(
             snapshot,
             target_ref=target_ref,
@@ -15402,7 +15538,7 @@ def _soperator_onboarding_target_row_from_options(
         or "mk8s"
     )
     chart_version, app_version = _soperator_catalog_pinned_versions()
-    with _soperator_onboarding_status("Building migration profile diff..."):
+    with _soperator_onboarding_status("Building Soperator upgrade profile diff..."):
         report = analyze_soperator_onboarding_snapshot(
             snapshot,
             target_ref=normalized_target,
@@ -39335,13 +39471,13 @@ def _raise_if_deploy_would_bypass_soperator_migration(
     target_list = ", ".join(target_ref for target_ref, _onboarding in blockers)
     lines = [
         (
-            "Deploy is blocked for migration-required external Soperator onboarding "
+            "Deploy is blocked for external-upgrade-required Soperator onboarding "
             f"target(s): {target_list}."
         ),
         (
             "Run `nebius-cxcli render` first if config.yaml changed, then use "
-            "`ext-soperator migrate`; deploy only applies the rendered Terraform/Flux "
-            "desired state and cannot perform the required ad hoc Nebius API migration "
+            "`ext-soperator upgrade`; deploy only applies the rendered Terraform/Flux "
+            "desired state and cannot perform the required ad hoc Nebius API upgrade "
             "phases."
         ),
     ]
@@ -39352,20 +39488,20 @@ def _raise_if_deploy_would_bypass_soperator_migration(
                 f"- {target_ref}: " + _soperator_migration_reason_text(onboarding),
                 "Dry-run command:",
                 (
-                    "nebius-cxcli ext-soperator migrate "
+                    "nebius-cxcli ext-soperator upgrade "
                     f"{config_arg} --target {target_arg} --dry-run"
                 ),
                 "Execute after the dry run is accepted:",
                 (
-                    "nebius-cxcli ext-soperator migrate "
+                    "nebius-cxcli ext-soperator upgrade "
                     f"{config_arg} --target {target_arg} --execute --approve"
                 ),
             ]
         )
     lines.append(
-        "Use migrate for reruns/resume while these actions remain selected. A "
-        "fully completed `ext-soperator migrate --execute` refreshes config.yaml "
-        "from live post-migration discovery when possible; if refresh was skipped, "
+        "Use upgrade for reruns/resume while these actions remain selected. A "
+        "fully completed `ext-soperator upgrade --execute` refreshes config.yaml "
+        "from live post-upgrade discovery when possible; if refresh was skipped, "
         "rerun `ext-soperator onboard`, rerun render, then deploy only for normal "
         "rendered reconciliation if needed."
     )
@@ -44687,7 +44823,8 @@ def ext_soperator_discover_command(
         "--tenant-id TENANT --project-id PROJECT --region-id eu-north1 "
         "--cluster-id mk8scluster-... --target-id external-cluster "
         "--storage-mode keep-existing-storage --compute-mode keep-existing-compute "
-        "--no-interactive. "
+        "--no-interactive; "
+        "nebius-cxcli validate <config.yaml>; nebius-cxcli render <config.yaml>. "
         "--cluster-id selects the Nebius MK8s cluster to adopt. --target-id is only "
         "the optional cxcli logical target id saved as deploy.targets[].instance_id; "
         "when omitted, cxcli derives it from the live cluster name. "
@@ -44695,15 +44832,13 @@ def ext_soperator_discover_command(
         f"generated/reports/{SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME}/<target>/manifest.json; "
         "reruns refresh read-only source discovery and Nebius provider node-template "
         "inventory by node group before deciding whether external node-template "
-        "migration is still needed; "
-        "next run: nebius-cxcli validate <config.yaml>; nebius-cxcli render "
-        "<config.yaml>. For install/adopt-only targets with no migration-owned actions, "
+        "upgrade is still needed. For install/adopt-only targets with no external-upgrade-owned actions, "
         "run nebius-cxcli deploy <config.yaml> to reconcile the generated desired "
         "state and produce deploy-report.md; use deploy --target <target-id> only "
-        "to narrow a run. For migration-required targets, "
-        "do not deploy first; run nebius-cxcli ext-soperator migrate <config.yaml> "
+        "to narrow a run. For external-upgrade-required targets, "
+        "do not deploy first; run nebius-cxcli ext-soperator upgrade <config.yaml> "
         "--target <target> --dry-run, "
-        "then nebius-cxcli ext-soperator migrate <config.yaml> --target <target> "
+        "then nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> "
         "--execute --approve."
     ),
 )
@@ -44804,7 +44939,7 @@ def soperator_onboard_command(
             help=(
                 "Storage decision for an existing Soperator: keep-existing-storage "
                 "preserves live PVC/PV sizes and selectors; create-aligned-sfs "
-                "plans aligned SFS when the accepted profile requires storage migration."
+                "plans aligned SFS when the accepted profile requires storage remediation."
             ),
         ),
     ] = None,
@@ -44815,7 +44950,7 @@ def soperator_onboard_command(
             help=(
                 "Compute decision for an existing Soperator: keep-existing-compute "
                 "reuses discovered node groups; create-aligned-node-groups plans "
-                "cxcli-aligned service/worker node groups when migration requires it."
+                "cxcli-aligned service/worker node groups when upgrade requires it."
             ),
         ),
     ] = None,
@@ -44826,7 +44961,7 @@ def soperator_onboard_command(
             help=(
                 "Existing Soperator source version used only when discovery cannot infer "
                 "a compatible Helm release version from the live cluster; must match an "
-                "exact migration profile or known major-generation profile."
+                "exact upgrade compatibility profile or known major-generation profile."
             ),
         ),
     ] = None,
@@ -45084,7 +45219,7 @@ def soperator_onboard_command(
 
 _SOPERATOR_MIGRATION_ACTIONS = frozenset(
     {
-        ONBOARDING_ACTION_APPROVE_MIGRATION,
+        ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
         ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
         ONBOARDING_ACTION_PLAN_DATA_MIGRATION,
         ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
@@ -45096,7 +45231,7 @@ _SOPERATOR_EXTERNAL_NODE_TEMPLATE_PHASE_ID = "external-node-template-upgrade"
 _SOPERATOR_TARGET_GPU_STACK_PHASE_ID = "target-gpu-stack-remediation"
 _SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES = (
     "Live executor contract: --execute rechecks the pre-mutation source "
-    "release and discovery fingerprint, checks net-new migration quota before "
+    "release and discovery fingerprint, checks net-new external upgrade quota before "
     "approved mutations, then runs checkpointed external MK8s control-plane "
     "upgrade, node-template upgrade, target GPU stack, SFS, copy, compute, "
     "cutover, validation, and retirement phases in order.",
@@ -45118,8 +45253,8 @@ _SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES = (
     "the active wave; cxcli checks the required spare quota and GPU capacity "
     "and requires selected worker nodes to start Ready and schedulable before "
     "mutation.",
-    "Status contract: approved --execute prints phase-aware Soperator "
-    "migration status; target remediation phases report MK8s health, storage "
+    "Status contract: approved --execute prints phase-aware external Soperator "
+    "upgrade status; target remediation phases report MK8s health, storage "
     "phases report SFS/PVC progress and continuity, while compute and cutover "
     "phases report MK8s, Slurm, and Soperator health.",
     "Validation contract: validation-and-rollback-hold runs the required MK8s "
@@ -45130,13 +45265,13 @@ _SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES = (
     "Soperator deployment snapshot, including soperator-manager Deployment, "
     "jail storage object, Pending Soperator pod/event, SlurmCluster, and "
     "NodeSet visibility checks. Validation JSON "
-    "details are written under generated/reports/, ext-soperator-migrate-report.md includes "
+    "details are written under generated/reports/, ext-soperator-upgrade-report.md includes "
     "the Soperator/Slurm and MK8s GPU validation rollups, and deploy-report.md "
     "is refreshed as a secondary deploy-compatible MK8s GPU summary.",
     "Failure handling contract: mutating phases watch Nebius, Kubernetes, "
     "Soperator, and Slurm signals; complete only when prerequisites are absent "
     "or satisfied; and checkpoint pending gates before approval or retirement.",
-    "Resume contract: timeout-guarded checkpoints let interrupted migrations "
+    "Resume contract: timeout-guarded checkpoints let interrupted external upgrades "
     "resume without rerunning completed data-copy or retirement phases, while "
     "--execute still rechecks completed selected remediation/upgrade/cutover "
     "actions against live state and retries them if they drift.",
@@ -45149,7 +45284,7 @@ _SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES = (
     "stale source-family releases remain afterward.",
 )
 _SOPERATOR_MIGRATION_PLAN_TOPIC_STYLES = {
-    "Soperator migration target": "bold cyan",
+    "External Soperator upgrade target": "bold cyan",
     "Config": "cyan",
     "Source discovery bundle": "cyan",
     "Onboarding state": "bold blue",
@@ -45157,9 +45292,9 @@ _SOPERATOR_MIGRATION_PLAN_TOPIC_STYLES = {
     "Target version": "blue",
     "Storage mode": "bold magenta",
     "Compute mode": "bold magenta",
-    "Migration required": "bold yellow",
-    "Storage migration required": "yellow",
-    "Compute migration required": "yellow",
+    "External upgrade required": "bold yellow",
+    "Storage upgrade work required": "yellow",
+    "Compute upgrade work required": "yellow",
     "Soperator upgrade required": "yellow",
     "External node-template upgrade required": "yellow",
     "Target GPU stack reconciliation required": "yellow",
@@ -45170,7 +45305,7 @@ _SOPERATOR_MIGRATION_PLAN_TOPIC_STYLES = {
     "Worker drain timeout": "yellow",
     "Service-role rollout": "cyan",
     "Planned worker waves": "cyan",
-    "Migration phases": "bold magenta",
+    "Upgrade phases": "bold magenta",
     "Live executor contract": "bold blue",
     "External node-template contract": "bold blue",
     "Worker node-template quota contract": "bold blue",
@@ -45183,9 +45318,9 @@ _SOPERATOR_MIGRATION_PLAN_TOPIC_STYLES = {
 }
 _SOPERATOR_MIGRATION_REQUIRED_TOPICS = frozenset(
     {
-        "Migration required",
-        "Storage migration required",
-        "Compute migration required",
+        "External upgrade required",
+        "Storage upgrade work required",
+        "Compute upgrade work required",
         "Soperator upgrade required",
         "External node-template upgrade required",
         "Target GPU stack reconciliation required",
@@ -45257,7 +45392,7 @@ def _style_soperator_migration_plan_line(line: str) -> str:
 def _style_soperator_migration_status_message(message: str) -> str:
     styled = escape(message)
     replacements = (
-        ("Soperator migration status", "[bold cyan]Soperator migration status[/bold cyan]"),
+        ("External Soperator upgrade status", "[bold cyan]External Soperator upgrade status[/bold cyan]"),
         ("MK8s Node Groups", "[bold white]MK8s Node Groups[/bold white]"),
         ("Slurm Workers", "[bold white]Slurm Workers[/bold white]"),
         ("Node groups:", "[bold cyan]Node groups:[/bold cyan]"),
@@ -45292,8 +45427,8 @@ def _style_soperator_migration_status_message(message: str) -> str:
 @contextmanager
 def _soperator_migration_status_emitter() -> Iterator[Callable[[str], None]]:
     initial_message = (
-        "[cyan]Preparing Soperator migration execute: verifying live source, "
-        "checkpoint, quota, and migration plan...[/cyan]"
+        "[cyan]Preparing external Soperator upgrade execute: verifying live source, "
+        "checkpoint, quota, and upgrade plan...[/cyan]"
     )
     if getattr(console, "is_terminal", False) and hasattr(console, "status"):
         with console.status(initial_message, spinner="dots") as status:
@@ -45349,7 +45484,7 @@ def _load_soperator_source_discovery_report(
             f"Soperator source discovery bundle not found: {report_path}. Rerun "
             "`nebius-cxcli ext-soperator discover <config.yaml> --target "
             f"{target_ref}` or `nebius-cxcli ext-soperator onboard` for this target "
-            "before planning migration."
+            "before planning the external upgrade."
         )
     try:
         payload = load_soperator_discovery_bundle(report_path)
@@ -45366,7 +45501,7 @@ def _load_soperator_source_discovery_report(
         raise RuntimeError(
             f"Soperator source discovery bundle belongs to target '{report_target_ref or '<missing>'}', "
             f"not '{target_ref}'. Rerun `nebius-cxcli ext-soperator onboard` for the selected "
-            "target so migration uses matching source-cluster evidence."
+            "target so the external upgrade uses matching source-cluster evidence."
         )
     report = payload.get("report")
     if not isinstance(report, Mapping):
@@ -45402,6 +45537,29 @@ def _soperator_migration_action_flags(onboarding: Mapping[str, Any]) -> dict[str
     }
 
 
+def _soperator_upgrade_phase_allowed_by_actions(
+    phase_id: str,
+    flags: Mapping[str, bool],
+) -> bool:
+    if phase_id in {"discovery-and-plan", "customer-approval"}:
+        return True
+    if phase_id == _SOPERATOR_EXTERNAL_NODE_TEMPLATE_PHASE_ID:
+        return bool(flags["external_node_template_upgrade_required"])
+    if phase_id == _SOPERATOR_TARGET_GPU_STACK_PHASE_ID:
+        return bool(flags["target_gpu_reconciliation_required"])
+    if phase_id in {"create-aligned-sfs", "online-bulk-data-sync"}:
+        return bool(flags["storage_migration_required"])
+    if phase_id == "rolling-compute-migration":
+        return bool(flags["compute_migration_required"] or flags["soperator_upgrade_required"])
+    if phase_id in {
+        "final-control-plane-cutover",
+        "validation-and-rollback-hold",
+        "retire-old-resources",
+    }:
+        return bool(flags["migration_required"])
+    return True
+
+
 def _require_soperator_migration_actions(
     *,
     config_path: Path,
@@ -45426,10 +45584,10 @@ def _require_soperator_migration_actions(
     )
     raise _SoperatorDeployOwnedRoute(
         (
-            f"Soperator target '{target_ref}' has no migration-owned onboarding actions.",
-            "`ext-soperator migrate` is only for accepted onboarding plans that contain "
-            "storage migration, compute migration, Soperator upgrade, or external "
-            "MK8s node-template upgrade actions.",
+            f"Soperator target '{target_ref}' has no external-upgrade-owned onboarding actions.",
+            "`ext-soperator upgrade` is only for accepted onboarding plans that contain "
+            "storage remediation, compute replacement, Soperator Helm upgrade, or "
+            "external MK8s node-template upgrade actions.",
             selected_detail,
             "",
             "Run these commands to reconcile deploy-owned work:",
@@ -45454,6 +45612,14 @@ def _soperator_migration_output_phases(
         if isinstance(phases, list)
         else []
     )
+    output_phases = [
+        phase
+        for phase in output_phases
+        if _soperator_upgrade_phase_allowed_by_actions(
+            str(phase.get("id", "") or "").strip(),
+            flags,
+        )
+    ]
     if (
         not output_phases
         and flags["migration_required"]
@@ -45464,12 +45630,12 @@ def _soperator_migration_output_phases(
         output_phases = [
             {
                 "id": "discovery-and-plan",
-                "title": "Discovery and migration plan generation",
+                "title": "Discovery and external upgrade plan generation",
                 "status": "complete",
             },
             {
                 "id": "customer-approval",
-                "title": "Customer approval of migration-owned remediation",
+                "title": "Customer approval of external-upgrade-owned remediation",
                 "status": "planned",
                 "requires_customer_approval": True,
             },
@@ -45579,7 +45745,7 @@ def _format_soperator_migration_plan_lines(
     )
     report_path = source_soperator_discovery_report_path(config_path.parent, target_ref)
     lines = [
-        f"Soperator migration target: {target_ref}",
+        f"External Soperator upgrade target: {target_ref}",
         f"Config: {config_path}",
         f"Source discovery bundle: {report_path}",
         f"Onboarding state: {str(onboarding.get('state', '') or report.get('state', '') or 'unknown')}",
@@ -45589,9 +45755,11 @@ def _format_soperator_migration_plan_lines(
         + str(onboarding.get("storage_mode", "") or _SOPERATOR_ONBOARDING_DEFAULT_STORAGE_MODE),
         "Compute mode: "
         + str(onboarding.get("compute_mode", "") or _SOPERATOR_ONBOARDING_DEFAULT_COMPUTE_MODE),
-        "Migration required: " + ("yes" if flags["migration_required"] else "no"),
-        "Storage migration required: " + ("yes" if flags["storage_migration_required"] else "no"),
-        "Compute migration required: " + ("yes" if flags["compute_migration_required"] else "no"),
+        "External upgrade required: " + ("yes" if flags["migration_required"] else "no"),
+        "Storage upgrade work required: "
+        + ("yes" if flags["storage_migration_required"] else "no"),
+        "Compute upgrade work required: "
+        + ("yes" if flags["compute_migration_required"] else "no"),
         "Soperator upgrade required: " + ("yes" if flags["soperator_upgrade_required"] else "no"),
         "External node-template upgrade required: "
         + ("yes" if flags["external_node_template_upgrade_required"] else "no"),
@@ -45616,7 +45784,7 @@ def _format_soperator_migration_plan_lines(
             )
         )
     if phases:
-        lines.append("Migration phases:")
+        lines.append("Upgrade phases:")
         for raw_phase in phases:
             if not isinstance(raw_phase, Mapping):
                 continue
@@ -45633,8 +45801,8 @@ def _format_soperator_migration_plan_lines(
             lines.append(detail)
     else:
         lines.append(
-            "Migration phases: none in the source discovery bundle; use render/deploy for install or "
-            "adopt-only reconciliation."
+            "Upgrade phases: none in the source discovery bundle; use render/deploy for install "
+            "or adopt-only reconciliation."
         )
     lines.extend(_SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES)
     mode = "dry-run; no cluster changes were made" if dry_run else "execute"
@@ -45750,7 +45918,7 @@ def _refresh_soperator_onboarding_after_completed_migration(
     execution_target = soperator_onboarding_target(execution_payload, target_ref=target_ref)
     if not isinstance(source_target, Mapping):
         return (
-            "Post-migration config refresh skipped: source config no longer contains "
+            "Post-upgrade config refresh skipped: source config no longer contains "
             f"Soperator target '{target_ref}'. Rerun `ext-soperator onboard` before "
             "render/deploy reconciliation.",
         )
@@ -45771,7 +45939,7 @@ def _refresh_soperator_onboarding_after_completed_migration(
         else:
             if not collection_context:
                 return (
-                    "Post-migration config refresh skipped: no kube_context or cluster_id is "
+                    "Post-upgrade config refresh skipped: no kube_context or cluster_id is "
                     f"available for Soperator target '{target_ref}'. Rerun "
                     "`ext-soperator onboard` before render/deploy reconciliation.",
                 )
@@ -45781,7 +45949,7 @@ def _refresh_soperator_onboarding_after_completed_migration(
                 snapshot = _merge_provider_mk8s_template_snapshot(snapshot, provider_snapshot)
     except Exception as exc:
         return (
-            "Post-migration config refresh skipped: live rediscovery failed: "
+            "Post-upgrade config refresh skipped: live rediscovery failed: "
             f"{exc}. Rerun `ext-soperator onboard` before render/deploy reconciliation.",
         )
 
@@ -45798,7 +45966,7 @@ def _refresh_soperator_onboarding_after_completed_migration(
     onboarding = target_row.get("soperator_onboarding")
     if not isinstance(onboarding, Mapping):
         return (
-            "Post-migration config refresh skipped: live rediscovery did not produce "
+            "Post-upgrade config refresh skipped: live rediscovery did not produce "
             "Soperator onboarding details. Rerun `ext-soperator onboard` before "
             "render/deploy reconciliation.",
         )
@@ -45809,9 +45977,9 @@ def _refresh_soperator_onboarding_after_completed_migration(
             if str(action or "").strip()
         )
         return (
-            "Post-migration config refresh skipped: live rediscovery still reports "
-            f"migration-owned action(s): {actions or 'unknown'}. Keep using "
-            "`ext-soperator migrate` for resume/rerun or rerun `ext-soperator onboard` "
+            "Post-upgrade config refresh skipped: live rediscovery still reports "
+            f"external-upgrade-owned action(s): {actions or 'unknown'}. Keep using "
+            "`ext-soperator upgrade` for resume/rerun or rerun `ext-soperator onboard` "
             "after verifying the live cluster.",
         )
 
@@ -45841,70 +46009,34 @@ def _refresh_soperator_onboarding_after_completed_migration(
     )
     lines = [
         (
-            "Post-migration config refresh: "
+            "Post-upgrade config refresh: "
             + ("updated" if wrote_config else "already up to date")
             + f" {config_path} from live discovery; future reconciliation should use "
-            "render -> deploy unless onboarding is rerun and selects new migration work."
+            "render -> deploy unless onboarding is rerun and selects new external upgrade work."
         )
     ]
     if source_report_path is not None:
-        lines.append(f"Post-migration Soperator discovery bundle: {source_report_path.parent}")
+        lines.append(f"Post-upgrade Soperator discovery bundle: {source_report_path.parent}")
     return tuple(lines)
 
 
 @ext_soperator_app.command(
-    "migrate",
-    short_help="Plan or execute accepted external Soperator migration actions.",
+    "upgrade",
+    short_help="Upgrade an onboarded external Soperator cluster end to end.",
     epilog=(
-        "Examples: nebius-cxcli ext-soperator migrate "
+        "Examples: nebius-cxcli ext-soperator upgrade "
         "./deployments/tenant/project/config.yaml --target external-cluster --dry-run; "
-        "nebius-cxcli ext-soperator migrate ./deployments/tenant/project/config.yaml "
+        "nebius-cxcli ext-soperator upgrade ./deployments/tenant/project/config.yaml "
         "--target external-cluster --execute --approve. --target is the cxcli target "
         "id saved as deploy.targets[].instance_id, not the Nebius cluster_id or "
-        "display name. The command reads generated/reports/"
-        f"{SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME}/<target>/manifest.json, validates the accepted onboarding "
-        "analysis, and prints the target remediation and compute/storage migration plan. "
-        "If the accepted onboarding report has no migration-owned actions, run render and "
-        "deploy <config.yaml> instead; deploy writes deploy-report.md and runs "
-        "deploy-time validations. Use deploy --target <target-id> only to narrow one run. "
-        "--execute verifies the source release and discovery fingerprint before mutation, "
-        "checkpoints the live run, "
-        "records explicit approval when --approve is passed, auto-detects source worker "
-        "node groups from live Nebius node-group names and Slurm worker labels, checks "
-        "net-new aligned SFS, net-new service-role node-group quota, and safe-surge "
-        "worker wave spare capacity when selected, requires selected worker nodes to start Ready "
-        "and schedulable, and requires an empty Slurm queue before approved "
-        "mutations, upgrades the external "
-        "MK8s control plane first, then updates service-role source node groups one "
-        "group at a time with zero-surge node-group updates (max_surge=0, "
-        "max_unavailable=1, drain_timeout=30m), updates worker groups with zero-surge "
-        "by default or the configured safe-surge rollout (max_surge=1, max_unavailable=0, "
-        "drain_timeout=30m), restores the original strategy, applies target GPU stack app rows when "
-        "selected, creates or reuses aligned SFS filesystems, attaches them to "
-        "discovered Nebius node groups, runs data-copy jobs when old and target PVC "
-        "pairs exist, shows an interactive progress spinner and phase-aware "
-        "Soperator migration status with phase ids, labels, overall health, "
-        "and component summaries while approved phases run, validates Soperator "
-        "reconciliation, runs configured "
-        "deploy-time deploy.targets[].deployment_testing.* checks, runs the required "
-        "Soperator deployment snapshot with soperator-manager Deployment, "
-        "jail storage object, Pending Soperator pod/event, SlurmCluster, and NodeSet "
-        "visibility checks, leaves Slurm jobs and NCCL/performance work for explicit "
-        "acceptance-test benchmark runs, writes "
-        "ext-soperator-migrate-report.md with the MK8s GPU and Soperator/Slurm validation "
-        "rollups, refreshes deploy-report.md as a secondary deploy-compatible "
-        "MK8s GPU summary, and "
-        "rechecks completed selected remediation/upgrade/cutover actions "
-        "against live state, retries them if they drift, repeats the final MK8s "
-        "readiness check for accepted external node-template work, verifies the "
-        "target Helm release workloads, suspends old source-family Flux "
-        "Kustomization desired state, deletes suspended old source-family Flux "
-        "HelmRelease records, retires stale profile-derived source-family Helm "
-        "release records while preserving shared/storage resources, and checkpoints "
-        "pending gates instead of retiring old infrastructure early."
+        "display name. The target must already be onboarded and accepted through "
+        "ext-soperator onboard. Dry-run refreshes discovery and prints the plan. "
+        "--execute --approve refreshes discovery, creates a restore-capable backup, "
+        "then runs checkpointed external MK8s control-plane/node-template rollout, "
+        "Soperator Helm cutover, validation, and reports."
     ),
 )
-def soperator_migrate_command(
+def soperator_external_upgrade_command(
     config_path: Annotated[
         Path,
         typer.Argument(metavar="CONFIG_YAML", help=_CONFIG_YAML_ARGUMENT_HELP),
@@ -45921,13 +46053,39 @@ def soperator_migrate_command(
             ),
         ),
     ] = None,
+    backup_dir: Annotated[
+        Path | None,
+        typer.Option("--backup-dir", help="Backup directory. Default: <config.yaml parent>/backups."),
+    ] = None,
+    job_policy: Annotated[
+        str | None,
+        typer.Option(
+            "--job-policy",
+            help="Slurm job policy: interactive, wait, cancel-selected, cancel-all, or fail.",
+        ),
+    ] = None,
+    cancel_job: Annotated[
+        list[str] | None,
+        typer.Option("--cancel-job", help="Slurm job id to cancel with --job-policy cancel-selected."),
+    ] = None,
+    job_wait_timeout: Annotated[
+        str,
+        typer.Option(
+            "--job-wait-timeout",
+            help="Maximum wait for Slurm jobs, for example 2h; 0s means unlimited.",
+        ),
+    ] = _SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
+    job_refresh_interval: Annotated[
+        str,
+        typer.Option("--job-refresh-interval", help="Refresh interval while waiting for Slurm jobs."),
+    ] = _SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
     dry_run: Annotated[
         bool,
         typer.Option(
             "--dry-run/--execute",
             help=(
-                "Use --dry-run for the read-only plan. Use --execute only after "
-                "accepting that plan; it performs checkpointed live preflight and "
+                "Use --dry-run for discovery refresh and the read-only plan. Use "
+                "--execute only after accepting that plan; it performs checkpointed live preflight and "
                 "advances supported external MK8s control-plane/node-template, "
                 "target GPU stack, storage, copy, compute, cutover, validation, "
                 "and retirement phases with guarded resume checkpoints."
@@ -45939,11 +46097,18 @@ def soperator_migrate_command(
         typer.Option(
             "--approve/--no-approve",
             help=(
-                "Confirm approval for the accepted migration plan during --execute. "
+                "Confirm approval for the accepted external upgrade plan during --execute. "
                 "Required before any checkpointed mutating phase can run."
             ),
         ),
     ] = False,
+    interactive: Annotated[
+        bool,
+        typer.Option(
+            "--interactive/--no-interactive",
+            help="Prompt for Slurm job decisions when --job-policy is interactive.",
+        ),
+    ] = True,
     worker_rollout_strategy: Annotated[
         str | None,
         typer.Option(
@@ -46020,26 +46185,76 @@ def soperator_migrate_command(
         ),
     ] = None,
 ) -> None:
-    """Plan or execute accepted external Soperator migration actions."""
+    """Plan or execute an accepted external Soperator upgrade."""
     try:
         payload = _load_source_payload(config_path)
         target_ref = _resolve_soperator_migration_target_ref(
             payload,
             target_ref=target_ref_opt,
         )
+        legacy_checkpoint = legacy_soperator_migration_checkpoint_path(config_path, target_ref)
+        if legacy_checkpoint.exists():
+            raise RuntimeError(
+                "Retired external Soperator checkpoint found at "
+                f"{legacy_checkpoint}. Remove it after review; ext-soperator upgrade "
+                "does not resume retired checkpoints."
+            )
         validate_soperator_onboarding_acceptance(payload, target_ref=target_ref)
-        source_report = _load_soperator_source_discovery_report(
-            config_path=config_path,
-            target_ref=target_ref,
-        )
         target = soperator_onboarding_target(payload, target_ref=target_ref)
         onboarding = target.get("soperator_onboarding") if isinstance(target, Mapping) else {}
         if not isinstance(onboarding, Mapping):
             onboarding = {}
+        node_template_target = onboarding.get("node_template_upgrade")
+        if not isinstance(node_template_target, Mapping):
+            node_template_target = {}
+        discovery_path = _run_external_soperator_discovery_command(
+            config_path=config_path,
+            payload=payload,
+            target_ref=target_ref,
+            cluster_id=None,
+            kube_context=None,
+            access="external",
+            output_dir=None,
+            namespace=None,
+            release_name=None,
+            to_chart_version=_non_empty_text(onboarding.get("target_version")),
+            to_k8s_version=(
+                _non_empty_text(node_template_target.get("target_k8s_version"))
+                or _non_empty_text(node_template_target.get("k8s_version"))
+                or _non_empty_text(node_template_target.get("version"))
+            ),
+            to_os=(
+                _non_empty_text(node_template_target.get("target_os"))
+                or _non_empty_text(node_template_target.get("os"))
+            ),
+            to_gpu_stack_preset=(
+                _non_empty_text(node_template_target.get("target_gpu_stack_preset"))
+                or _non_empty_text(node_template_target.get("gpu_stack_preset"))
+            ),
+            redaction="local",
+        )
+        console.print(f"External Soperator discovery refreshed: {discovery_path}", soft_wrap=True)
+        source_report = _load_soperator_source_discovery_report(
+            config_path=config_path,
+            target_ref=target_ref,
+        )
         _require_soperator_migration_actions(
             config_path=config_path,
             target_ref=target_ref,
             onboarding=onboarding,
+        )
+        resolved_job_policy = _soperator_upgrade_job_policy(
+            policy=job_policy,
+            interactive=interactive,
+        )
+        selected_cancel_jobs = tuple(cancel_job or ())
+        job_wait_timeout_seconds = _soperator_upgrade_duration_seconds(
+            job_wait_timeout,
+            option_name="--job-wait-timeout",
+        )
+        job_refresh_interval_seconds = _soperator_upgrade_duration_seconds(
+            job_refresh_interval,
+            option_name="--job-refresh-interval",
         )
         for line in _format_soperator_migration_plan_lines(
             config_path=config_path,
@@ -46056,6 +46271,12 @@ def soperator_migrate_command(
             strategy_drain_timeout=strategy_drain_timeout,
         ):
             console.print(_style_soperator_migration_plan_line(line), soft_wrap=True)
+        console.print(f"Slurm job policy: {resolved_job_policy}", soft_wrap=True)
+        console.print(
+            "Backup: restore-capable archive with raw Secrets and accounting DB dump "
+            "is required before approved mutation.",
+            soft_wrap=True,
+        )
         if not dry_run:
             post_migration_config_lines: tuple[str, ...] = ()
             with (
@@ -46064,14 +46285,64 @@ def soperator_migrate_command(
                     payload, target_ref=target_ref
                 ) as execution_payload,
             ):
+                command_args = _external_soperator_upgrade_command_args(
+                    config_path=config_path,
+                    target_ref=target_ref,
+                    backup_dir=backup_dir,
+                    job_policy=resolved_job_policy,
+                    cancel_job=selected_cancel_jobs,
+                    job_wait_timeout=job_wait_timeout,
+                    job_refresh_interval=job_refresh_interval,
+                    worker_rollout_strategy=worker_rollout_strategy,
+                    worker_wave_groups=worker_wave_groups,
+                    worker_wave_percent=worker_wave_percent,
+                    max_parallel_worker_groups=max_parallel_worker_groups,
+                    strategy_max_surge_count=strategy_max_surge_count,
+                    strategy_max_unavailable_count=strategy_max_unavailable_count,
+                    strategy_drain_timeout=strategy_drain_timeout,
+                    dry_run=False,
+                    approve=approve,
+                    interactive=interactive,
+                )
+                backup_metadata: dict[str, Any] | None = None
+                if approve:
+                    backup_metadata = external_soperator_upgrade_resume_backup_metadata(
+                        config_path,
+                        target_ref,
+                    )
+                    if backup_metadata is not None:
+                        console.print(
+                            "Backup: reusing restore-capable backup metadata from the "
+                            "existing external upgrade checkpoint.",
+                            soft_wrap=True,
+                        )
+                    else:
+                        effective_kube_context = _external_soperator_backup_kube_context(
+                            execution_payload,
+                            target_ref=target_ref,
+                            kube_context=None,
+                        )
+                        backup_metadata = _create_external_soperator_upgrade_backup(
+                            config_path=config_path,
+                            source_payload=dict(execution_payload),
+                            target_ref=target_ref,
+                            backup_dir=backup_dir,
+                            kube_context=effective_kube_context,
+                            command=command_args,
+                        )
                 execution_result = execute_soperator_migration(
                     config_path=config_path,
                     target_ref=target_ref,
                     payload=execution_payload,
                     source_report=source_report,
+                    backup_metadata=backup_metadata,
                     snapshot_collector=collect_kubectl_soperator_snapshot,
                     approved=approve,
                     status_callback=emit_status,
+                    job_policy=resolved_job_policy,
+                    cancel_job_ids=selected_cancel_jobs,
+                    job_wait_timeout_seconds=job_wait_timeout_seconds,
+                    job_refresh_interval_seconds=job_refresh_interval_seconds,
                     worker_rollout_strategy=worker_rollout_strategy,
                     worker_wave_groups=worker_wave_groups,
                     worker_wave_percent=worker_wave_percent,
@@ -49147,9 +49418,9 @@ def acceptance_test_benchmark_command(
         "--skip-validations skips optional deployment-testing checks only); "
         "nebius-cxcli deploy ./deployments/tenant/project/config.yaml --no-auto-auth-bootstrap "
         "(fails on missing service-account credentials instead of refreshing them). "
-        "For external Soperator onboarding targets with migration-owned actions, deploy "
-        "fails before Terraform/Flux work and prints the required ext-soperator migrate "
-        "dry-run/execute commands, because migrate owns ad hoc Nebius API migration phases. "
+        "For external Soperator onboarding targets with external-upgrade-owned actions, deploy "
+        "fails before Terraform/Flux work and prints the required ext-soperator upgrade "
+        "dry-run/execute commands, because upgrade owns ad hoc Nebius API upgrade phases. "
         "When qosConfiguration.enabled=true the Soperator chart runs a post-install Helm hook Job "
         "(kubectl exec into the accounting pod) that reconciles sacctmgr "
         "accounts/QOS/associations."
@@ -49220,7 +49491,7 @@ def deploy_command(
     contract so source-config changes after render do not silently alter
     the deployed bundle. The external Soperator onboarding safety guard checks
     both the generated runtime config and the current source config.yaml so
-    older or stale rendered bundles fail closed when migration-owned actions are
+    older or stale rendered bundles fail closed when external-upgrade-owned actions are
     still selected. Before Terraform apply it runs a generated-bundle
     deploy preflight covering strict readiness checks, VPC networking preflight,
     live Nebius quota/capacity validation, Terraform validation, and rendered
@@ -49234,13 +49505,13 @@ def deploy_command(
     cluster handoff such as MK8s is enabled, deploy also refreshes local
     kubeconfig access for that cluster even if no app charts are configured.
     For external Soperator onboarding targets whose accepted action list
-    contains migration-owned work such as Soperator upgrade, external
-    control-plane/node-template upgrade, storage migration, or compute
-    migration, deploy refuses before preflight and directs the operator to
-    `ext-soperator migrate`; deploy cannot perform those ad hoc Nebius API
-    migration phases. Use migrate for reruns/resume while those actions remain
-    selected. A fully completed `ext-soperator migrate --execute` refreshes
-    config.yaml from live post-migration discovery when possible; if refresh was
+    contains external-upgrade-owned work such as Soperator upgrade, external
+    control-plane/node-template upgrade, storage remediation, or compute
+    replacement, deploy refuses before preflight and directs the operator to
+    `ext-soperator upgrade`; deploy cannot perform those ad hoc Nebius API
+    upgrade phases. Use upgrade for reruns/resume while those actions remain
+    selected. A fully completed `ext-soperator upgrade --execute` refreshes
+    config.yaml from live post-upgrade discovery when possible; if refresh was
     skipped, rerun `ext-soperator onboard`, rerender, and deploy only for normal
     rendered reconciliation if needed.
     When more than one built-in cluster target is present, deploy reconciles

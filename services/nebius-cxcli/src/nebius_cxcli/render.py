@@ -33,7 +33,8 @@ class RenderResult:
 _LIFECYCLE_REPORT_FILENAMES = frozenset(
     {
         "deploy-report.md",
-        "ext-soperator-migrate-report.md",
+        "ext-soperator-upgrade-report.md",
+        "ext-soperator-upgrade-report.json",
         "soperator-upgrade-report.md",
         "soperator-upgrade-report.json",
         "upgrade-node-group-report.md",

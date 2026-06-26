@@ -797,19 +797,19 @@ def _assert_soperator_onboard_next_steps(
     assert f"nebius-cxcli validate {config_arg}" in lines
     assert f"nebius-cxcli render {config_arg}" in lines
     if migration_required:
-        assert "Route: render -> ext-soperator migrate, not render -> deploy." in output
+        assert "Route: render -> ext-soperator upgrade, not render -> deploy." in output
         assert "deploy only reconciles the rendered Terraform/Flux desired state" in output
         assert f"nebius-cxcli deploy {config_arg}" not in lines
         assert (
-            f"nebius-cxcli ext-soperator migrate {config_arg} --target {target_arg} --dry-run"
+            f"nebius-cxcli ext-soperator upgrade {config_arg} --target {target_arg} --dry-run"
             in lines
         )
         assert (
-            "nebius-cxcli ext-soperator migrate "
+            "nebius-cxcli ext-soperator upgrade "
             f"{config_arg} --target {target_arg} --execute --approve" in lines
         )
         assert "After the dry run is accepted:" in output
-        assert "Do not run `nebius-cxcli deploy` before `ext-soperator migrate`" in output
+        assert "Do not run `nebius-cxcli deploy` before `ext-soperator upgrade`" in output
     else:
         assert "Route: render -> deploy." in output
         assert f"nebius-cxcli deploy {config_arg}" in lines
@@ -818,7 +818,7 @@ def _assert_soperator_onboard_next_steps(
             "to this generated target."
         ) in output
         assert (
-            f"`nebius-cxcli ext-soperator migrate {config_arg} --target {target_arg} --dry-run`"
+            f"`nebius-cxcli ext-soperator upgrade {config_arg} --target {target_arg} --dry-run`"
             not in output
         )
 
@@ -1044,6 +1044,24 @@ def _write_old_soperator_migration_config(
     return config_path
 
 
+def _stub_external_soperator_upgrade_backup(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        cli_module,
+        "_create_external_soperator_upgrade_backup",
+        lambda **_kwargs: {
+            "required": True,
+            "path": "backups/ext-soperator-upgrade-external-cluster.tar.gz",
+            "size_bytes": 123,
+            "sha256": "backup-sha256",
+            "manifest_sha256": "manifest-sha256",
+            "included_categories": ["source", "kubernetes", "soperator", "slurm", "accounting"],
+            "raw_secret_material": True,
+            "accounting_db_dump": True,
+            "report_redacted": True,
+        },
+    )
+
+
 def _soperator_discovery_manifest_path(
     config_path: Path,
     target_ref: str = "external-cluster",
@@ -1097,10 +1115,10 @@ def test_soperator_route_guidance_explains_keep_existing_migration_required(
     )
     text = "\n".join(lines)
 
-    assert "Route: render -> ext-soperator migrate, not render -> deploy." in text
+    assert "Route: render -> ext-soperator upgrade, not render -> deploy." in text
     assert "Soperator chart upgrade" in text
     assert "external MK8s control-plane/node-template upgrade via Nebius API" in text
-    assert "target GPU/RDMA stack remediation selected with migration work" in text
+    assert "target GPU/RDMA stack remediation selected with external upgrade work" in text
     assert "Existing storage and compute layout were accepted" in text
     assert "aligned SFS filesystems or replacement compute node groups" in text
     assert "aligned SFS/data migration" not in text
@@ -1139,36 +1157,36 @@ def test_render_deploy_hint_lists_execute_for_multiple_migration_targets(
     output = "\n".join(printed)
     lines = output.splitlines()
     config_arg = shlex.quote(str(config_path.resolve()))
-    assert "Route: render -> ext-soperator migrate, not render -> deploy." in output
+    assert "Route: render -> ext-soperator upgrade, not render -> deploy." in output
     assert "external-cluster" in output
     assert "second-cluster" in output
-    assert "Next step: dry-run each migration-required Soperator target:" in lines
+    assert "Next step: dry-run each external-upgrade-required Soperator target:" in lines
     assert (
         cli_module.copy_paste_command_markup(
-            f"nebius-cxcli ext-soperator migrate {config_arg} --target external-cluster --dry-run"
+            f"nebius-cxcli ext-soperator upgrade {config_arg} --target external-cluster --dry-run"
         )
         in lines
     )
     assert (
         cli_module.copy_paste_command_markup(
-            f"nebius-cxcli ext-soperator migrate {config_arg} --target second-cluster --dry-run"
+            f"nebius-cxcli ext-soperator upgrade {config_arg} --target second-cluster --dry-run"
         )
         in lines
     )
     assert "After accepting each dry-run plan, execute that target:" in lines
     assert (
         cli_module.copy_paste_command_markup(
-            f"nebius-cxcli ext-soperator migrate {config_arg} --target external-cluster --execute --approve"
+            f"nebius-cxcli ext-soperator upgrade {config_arg} --target external-cluster --execute --approve"
         )
         in lines
     )
     assert (
         cli_module.copy_paste_command_markup(
-            f"nebius-cxcli ext-soperator migrate {config_arg} --target second-cluster --execute --approve"
+            f"nebius-cxcli ext-soperator upgrade {config_arg} --target second-cluster --execute --approve"
         )
         in lines
     )
-    assert "Do not run `nebius-cxcli deploy` before `ext-soperator migrate`" in output
+    assert "Do not run `nebius-cxcli deploy` before `ext-soperator upgrade`" in output
 
 
 def test_deploy_blocks_migration_required_soperator_onboarding_target(
@@ -1202,7 +1220,7 @@ def test_deploy_blocks_migration_required_soperator_onboarding_target(
         cli_module,
         "_run_deploy_preflight",
         lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("deploy preflight must not run for migration-required Soperator target")
+            AssertionError("deploy preflight must not run for external-upgrade-required Soperator target")
         ),
     )
 
@@ -1218,18 +1236,18 @@ def test_deploy_blocks_migration_required_soperator_onboarding_target(
 
     message = str(exc_info.value)
     assert (
-        "Deploy is blocked for migration-required external Soperator onboarding target(s)"
+        "Deploy is blocked for external-upgrade-required Soperator onboarding target(s)"
         in message
     )
     assert "external-cluster" in message
     assert "Soperator chart upgrade" in message
     assert "external MK8s control-plane/node-template upgrade via Nebius API" in message
     assert "aligned SFS/data migration" not in message
-    assert "nebius-cxcli ext-soperator migrate" in message
+    assert "nebius-cxcli ext-soperator upgrade" in message
     assert "--dry-run" in message
     assert "--execute --approve" in message
-    assert "Use migrate for reruns/resume while these actions remain selected" in message
-    assert "fully completed `ext-soperator migrate --execute` refreshes config.yaml" in message
+    assert "Use upgrade for reruns/resume while these actions remain selected" in message
+    assert "fully completed `ext-soperator upgrade --execute` refreshes config.yaml" in message
     assert "rerun `ext-soperator onboard`, rerun render" in message
 
 
@@ -1344,7 +1362,7 @@ def test_deploy_owned_soperator_adoption_cleanup_skips_migration_owned_work(
     monkeypatch.setattr(
         cli_module,
         "_retire_stale_source_soperator_helm_releases",
-        lambda **_kwargs: pytest.fail("deploy must not retire migration-owned targets"),
+        lambda **_kwargs: pytest.fail("deploy must not retire external-upgrade-owned targets"),
     )
 
     cli_module._retire_deploy_owned_soperator_source_state(
@@ -5197,10 +5215,10 @@ def test_soperator_onboard_prompts_source_version_when_discovery_has_crds_only(
     )
 
     assert result.exit_code == 0, result.output
-    assert "Loading Soperator migration profile versions..." in result.output
+    assert "Loading Soperator upgrade compatibility profile versions..." in result.output
     assert "deploy.targets[].soperator_onboarding.source_version" in result.output
     assert "Detected Soperator version: 3.0.5" in result.output
-    assert "Migration profile: v3-to-target" in result.output
+    assert "Upgrade profile: v3-to-target" in result.output
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]
     assert onboarding["accepted"] is True
@@ -5377,7 +5395,7 @@ def test_soperator_onboard_detects_legacy_controller_release_without_prompt(
     assert result.exit_code == 0, result.output
     assert "deploy.targets[].soperator_onboarding.source_version" not in result.output
     assert "Detected Soperator version: 1.23.3" in result.output
-    assert "Migration profile: legacy-v1-to-target" in result.output
+    assert "Upgrade profile: legacy-v1-to-target" in result.output
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]
     assert onboarding["accepted"] is True
@@ -5455,7 +5473,7 @@ def test_soperator_onboard_noninteractive_uses_source_version_for_crds_only_clus
 
     assert result.exit_code == 0, result.output
     assert "Detected Soperator version: 3.0.5" in result.output
-    assert "Migration profile: v3-to-target" in result.output
+    assert "Upgrade profile: v3-to-target" in result.output
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]
     assert onboarding["state"] == "existing-soperator-supported"
@@ -6595,21 +6613,29 @@ def test_soperator_onboard_option_path_uses_analyzer_for_compatible_layout(
     assert "upgrade-soperator" in onboarding["actions"]
 
 
-def test_soperator_migrate_dry_run_prints_onboarding_migration_plan(tmp_path: Path) -> None:
+def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     config_path = _write_old_soperator_migration_config(tmp_path)
+    monkeypatch.setattr(
+        cli_module,
+        "collect_kubectl_soperator_snapshot",
+        lambda **_kwargs: _old_soperator_snapshot(),
+    )
 
     result = runner.invoke(
         app,
         [
             "ext-soperator",
-            "migrate",
+            "upgrade",
             str(config_path),
             "--dry-run",
         ],
     )
 
     assert result.exit_code == 0, result.output
-    assert "Soperator migration target: external-cluster" in result.output
+    assert "External Soperator upgrade target: external-cluster" in result.output
     assert "Source discovery bundle:" in result.output
     assert "soperator-discovery/external-cluster/manifest.json" in result.output
     assert "Onboarding state: existing-soperator-supported" in result.output
@@ -6617,9 +6643,9 @@ def test_soperator_migrate_dry_run_prints_onboarding_migration_plan(tmp_path: Pa
     assert "Target version: 4.0.1-ps.1" in result.output
     assert "Storage mode: create-aligned-sfs" in result.output
     assert "Compute mode: create-aligned-node-groups" in result.output
-    assert "Migration required: yes" in result.output
-    assert "Storage migration required: yes" in result.output
-    assert "Compute migration required: yes" in result.output
+    assert "External upgrade required: yes" in result.output
+    assert "Storage upgrade work required: yes" in result.output
+    assert "Compute upgrade work required: yes" in result.output
     assert "Soperator upgrade required: yes" in result.output
     assert "External node-template upgrade required: yes" in result.output
     assert "Target GPU stack reconciliation required: yes" in result.output
@@ -6653,7 +6679,7 @@ def test_soperator_migrate_dry_run_prints_onboarding_migration_plan(tmp_path: Pa
         app,
         [
             "ext-soperator",
-            "migrate",
+            "upgrade",
             str(config_path),
             "--dry-run",
             "--strategy-max-unavailable-count",
@@ -6665,16 +6691,22 @@ def test_soperator_migrate_dry_run_prints_onboarding_migration_plan(tmp_path: Pa
     assert "active worker group capacity may be reduced by 3 nodes" in (custom_zero_surge.output)
 
 
-def test_soperator_migrate_dry_run_validates_worker_rollout_cli_overrides(
+def test_ext_soperator_upgrade_dry_run_validates_worker_rollout_cli_overrides(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config_path = _write_old_soperator_migration_config(tmp_path)
+    monkeypatch.setattr(
+        cli_module,
+        "collect_kubectl_soperator_snapshot",
+        lambda **_kwargs: _old_soperator_snapshot(),
+    )
 
     result = runner.invoke(
         app,
         [
             "ext-soperator",
-            "migrate",
+            "upgrade",
             str(config_path),
             "--dry-run",
             "--worker-wave-groups",
@@ -6689,7 +6721,7 @@ def test_soperator_migrate_dry_run_validates_worker_rollout_cli_overrides(
         app,
         [
             "ext-soperator",
-            "migrate",
+            "upgrade",
             str(config_path),
             "--dry-run",
             "--worker-rollout-strategy",
@@ -6708,7 +6740,7 @@ def test_soperator_migrate_dry_run_validates_worker_rollout_cli_overrides(
         app,
         [
             "ext-soperator",
-            "migrate",
+            "upgrade",
             str(config_path),
             "--dry-run",
             "--worker-rollout-strategy",
@@ -6725,8 +6757,8 @@ def test_soperator_migrate_dry_run_validates_worker_rollout_cli_overrides(
 
 
 def test_soperator_migration_plan_styles_topic_labels() -> None:
-    required_line = cli_module._style_soperator_migration_plan_line("Migration required: yes")
-    assert "[bold yellow]Migration required:[/bold yellow]" in required_line
+    required_line = cli_module._style_soperator_migration_plan_line("External upgrade required: yes")
+    assert "[bold yellow]External upgrade required:[/bold yellow]" in required_line
     assert "[bold yellow]yes[/bold yellow]" in required_line
 
     mode_line = cli_module._style_soperator_migration_plan_line(
@@ -6749,14 +6781,14 @@ def test_soperator_migration_plan_styles_topic_labels() -> None:
 
 def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.MonkeyPatch) -> None:
     styled = cli_module._style_soperator_migration_status_message(
-        "Soperator migration status [4s] phase external-node-template-upgrade "
+        "External Soperator upgrade status [4s] phase external-node-template-upgrade "
         "[External node-template upgrade] (degraded): MK8s Node Groups degraded: "
         "Node groups: 4 group(s); gpu-pool:3/4 Ready || "
         "Nodes: 7/8 Ready; in transition gpu-node-a:replacing (down) | "
         "Slurm Workers draining: workers drained=1"
     )
 
-    assert "[bold cyan]Soperator migration status[/bold cyan]" in styled
+    assert "[bold cyan]External Soperator upgrade status[/bold cyan]" in styled
     assert "phase external-node-template-upgrade" in styled
     assert "External node-template upgrade" in styled
     assert "([bold yellow]degraded[/bold yellow]):" in styled
@@ -6794,15 +6826,15 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
 
     with cli_module._soperator_migration_status_emitter() as emit:
         emit(
-            "Soperator migration status [4s] phase external-node-template-upgrade "
+            "External Soperator upgrade status [4s] phase external-node-template-upgrade "
             "[External node-template upgrade] (degraded): MK8s Node Groups degraded: "
             "Node groups: 4 group(s); gpu-pool:3/4 Ready || Nodes: 7/8 Ready"
         )
 
     assert initial_messages
-    assert "Preparing Soperator migration execute" in initial_messages[0]
+    assert "Preparing external Soperator upgrade execute" in initial_messages[0]
     assert updates
-    assert "[bold cyan]Soperator migration status[/bold cyan] [4s] phase " in updates[0]
+    assert "[bold cyan]External Soperator upgrade status[/bold cyan] [4s] phase " in updates[0]
     assert "external-node-template-upgrade" in updates[0]
     assert "External node-template upgrade" in updates[0]
     assert "[bold white]MK8s Node Groups[/bold white]" in updates[0]
@@ -6810,8 +6842,9 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
     assert "[bold magenta]Nodes:[/bold magenta]" in updates[0]
 
 
-def test_soperator_migrate_dry_run_rejects_gpu_reconciliation_only_deploy_route(
+def test_ext_soperator_upgrade_dry_run_rejects_gpu_reconciliation_only_deploy_route(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config_path = _write_old_soperator_migration_config(
         tmp_path,
@@ -6829,12 +6862,17 @@ def test_soperator_migrate_dry_run_rejects_gpu_reconciliation_only_deploy_route(
     source_report = json.loads(findings_path.read_text(encoding="utf-8"))
     source_report["onboarding_report"]["migration_plan"] = []
     _write_soperator_discovery_section(config_path, "findings.json", source_report)
+    monkeypatch.setattr(
+        cli_module,
+        "collect_kubectl_soperator_snapshot",
+        lambda **_kwargs: _old_soperator_snapshot(),
+    )
 
     result = runner.invoke(
         app,
         [
             "ext-soperator",
-            "migrate",
+            "upgrade",
             str(config_path),
             "--dry-run",
         ],
@@ -6842,7 +6880,7 @@ def test_soperator_migrate_dry_run_rejects_gpu_reconciliation_only_deploy_route(
 
     assert result.exit_code == 1
     output_lines = result.output.splitlines()
-    assert output_lines[0].startswith("NOTE: ")
+    assert any(line.startswith("NOTE: ") for line in output_lines)
     assert "ERROR:" not in result.output
     assert any(line.startswith("nebius-cxcli validate ") for line in output_lines)
     assert any(line.startswith("nebius-cxcli render ") for line in output_lines)
@@ -6852,7 +6890,7 @@ def test_soperator_migrate_dry_run_rejects_gpu_reconciliation_only_deploy_route(
         for line in output_lines
     )
     normalized_output = " ".join(result.output.split())
-    assert "has no migration-owned onboarding actions" in normalized_output
+    assert "has no external-upgrade-owned onboarding actions" in normalized_output
     assert "reconcile-target-gpu-stack" in normalized_output
     assert "Run these commands to reconcile deploy-owned work:" in normalized_output
     assert "nebius-cxcli validate" in normalized_output
@@ -6918,8 +6956,9 @@ def test_soperator_migrate_dry_run_rejects_gpu_reconciliation_only_deploy_route(
         ),
     ],
 )
-def test_soperator_migrate_dry_run_respects_storage_compute_mode_matrix(
+def test_ext_soperator_upgrade_dry_run_respects_storage_compute_mode_matrix(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     storage_mode: str,
     compute_mode: str,
     present: tuple[str, ...],
@@ -6930,8 +6969,13 @@ def test_soperator_migrate_dry_run_respects_storage_compute_mode_matrix(
         storage_mode=storage_mode,
         compute_mode=compute_mode,
     )
+    monkeypatch.setattr(
+        cli_module,
+        "collect_kubectl_soperator_snapshot",
+        lambda *, kube_context: _old_soperator_snapshot(),
+    )
 
-    result = runner.invoke(app, ["ext-soperator", "migrate", str(config_path), "--dry-run"])
+    result = runner.invoke(app, ["ext-soperator", "upgrade", str(config_path), "--dry-run"])
 
     assert result.exit_code == 0, result.output
     assert f"Storage mode: {storage_mode}" in result.output
@@ -6942,7 +6986,7 @@ def test_soperator_migrate_dry_run_respects_storage_compute_mode_matrix(
         assert phase_id not in result.output
 
 
-def test_soperator_migrate_execute_runs_checkpointed_preflight(
+def test_ext_soperator_upgrade_execute_runs_checkpointed_preflight(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -6957,7 +7001,7 @@ def test_soperator_migrate_execute_runs_checkpointed_preflight(
         app,
         [
             "ext-soperator",
-            "migrate",
+            "upgrade",
             str(config_path),
             "--target",
             "external-cluster",
@@ -6966,16 +7010,16 @@ def test_soperator_migrate_execute_runs_checkpointed_preflight(
     )
 
     assert result.exit_code == 0, result.output
-    assert "Soperator migration target: external-cluster" in result.output
+    assert "External Soperator upgrade target: external-cluster" in result.output
     assert "Execution mode: execute." in result.output
     assert "Execute preflight checkpoint:" in result.output
     assert "Live source version verified: 3.0.5" in result.output
     assert "Pending phase: customer-approval" in result.output
-    assert "Migration performed: no." in result.output
+    assert "Upgrade performed: no." in result.output
     checkpoint_path = (
         config_path.parent
         / ".nebius-cxcli"
-        / "soperator-migrations"
+        / "ext-soperator-upgrades"
         / "external-cluster"
         / "checkpoint.json"
     )
@@ -6984,7 +7028,7 @@ def test_soperator_migrate_execute_runs_checkpointed_preflight(
     assert checkpoint["pending_phase"] == "customer-approval"
 
 
-def test_soperator_migrate_execute_approved_pending_phase_exits_nonzero(
+def test_ext_soperator_upgrade_execute_approved_pending_phase_exits_nonzero(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -7007,6 +7051,7 @@ def test_soperator_migrate_execute_approved_pending_phase_exits_nonzero(
         )
 
     monkeypatch.setattr(cli_module, "execute_soperator_migration", _execute)
+    _stub_external_soperator_upgrade_backup(monkeypatch)
     monkeypatch.setattr(
         cli_module,
         "collect_kubectl_soperator_snapshot",
@@ -7017,7 +7062,7 @@ def test_soperator_migrate_execute_approved_pending_phase_exits_nonzero(
         app,
         [
             "ext-soperator",
-            "migrate",
+            "upgrade",
             str(config_path),
             "--target",
             "external-cluster",
@@ -7031,7 +7076,92 @@ def test_soperator_migrate_execute_approved_pending_phase_exits_nonzero(
     assert "Pending reason: Slurm NCCL benchmark failed" in result.output
 
 
-def test_soperator_migrate_execute_derives_kube_context_from_cluster_id(
+def test_ext_soperator_upgrade_execute_reuses_checkpoint_backup_after_mutation_started(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = _write_old_soperator_migration_config(tmp_path)
+    checkpoint_path = soperator_migration_module.soperator_migration_checkpoint_path(
+        config_path,
+        "external-cluster",
+    )
+    original_backup = {
+        "path": "backups/original-pre-upgrade.tar.gz",
+        "sha256": "original-sha256",
+        "manifest_sha256": "original-manifest-sha256",
+    }
+    checkpoint_path.parent.mkdir(parents=True)
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "schema": soperator_migration_module.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+                "target_ref": "external-cluster",
+                "completed_phases": ["target-gpu-stack-remediation"],
+                "backup": original_backup,
+            }
+        ),
+        encoding="utf-8",
+    )
+    backup_calls: list[dict[str, object]] = []
+    observed: dict[str, object] = {}
+
+    def _backup(**kwargs):
+        backup_calls.append(dict(kwargs))
+        return {
+            "path": "backups/partial-state.tar.gz",
+            "sha256": "partial-sha256",
+        }
+
+    def _execute(**kwargs):
+        observed["backup_metadata"] = kwargs["backup_metadata"]
+        return SoperatorMigrationExecutionResult(
+            checkpoint_path=checkpoint_path,
+            completed_phases=(
+                "discovery-and-plan",
+                "customer-approval",
+                "target-gpu-stack-remediation",
+            ),
+            pending_phase="none",
+            pending_reason="",
+            live_source_version="4.0.1",
+            target_version=_soperator_test_chart_version(),
+            mutation_performed=True,
+            lines=("resume completed",),
+        )
+
+    monkeypatch.setattr(cli_module, "_create_external_soperator_upgrade_backup", _backup)
+    monkeypatch.setattr(cli_module, "execute_soperator_migration", _execute)
+    monkeypatch.setattr(
+        cli_module,
+        "_refresh_soperator_onboarding_after_completed_migration",
+        lambda **_kwargs: ("Post-upgrade config refresh: skipped in test",),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "collect_kubectl_soperator_snapshot",
+        lambda *, kube_context: _old_soperator_snapshot(),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "upgrade",
+            str(config_path),
+            "--target",
+            "external-cluster",
+            "--execute",
+            "--approve",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert backup_calls == []
+    assert observed["backup_metadata"] == original_backup
+    assert "reusing restore-capable backup metadata" in result.output
+
+
+def test_ext_soperator_upgrade_execute_derives_kube_context_from_cluster_id(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -7080,7 +7210,7 @@ def test_soperator_migrate_execute_derives_kube_context_from_cluster_id(
     monkeypatch.setattr(
         cli_module,
         "collect_kubectl_soperator_snapshot",
-        lambda *, kube_context: _old_soperator_snapshot(),
+        lambda **_kwargs: _old_soperator_snapshot(),
     )
     real_execute = cli_module.execute_soperator_migration
 
@@ -7094,7 +7224,7 @@ def test_soperator_migrate_execute_derives_kube_context_from_cluster_id(
         app,
         [
             "ext-soperator",
-            "migrate",
+            "upgrade",
             str(config_path),
             "--target",
             "external-cluster",
@@ -7107,13 +7237,14 @@ def test_soperator_migrate_execute_derives_kube_context_from_cluster_id(
     assert "cluster-id execute path used" in result.output
 
 
-def test_soperator_migrate_execute_records_approval_and_worker_groups(
+def test_ext_soperator_upgrade_execute_records_approval_and_worker_groups(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config_path = _write_old_soperator_migration_config(tmp_path)
     _stub_soperator_migration_quota(monkeypatch)
     _stub_soperator_migration_gpu_validations(monkeypatch)
+    _stub_external_soperator_upgrade_backup(monkeypatch)
     monkeypatch.setattr(
         cli_module,
         "collect_kubectl_soperator_snapshot",
@@ -7131,7 +7262,7 @@ def test_soperator_migrate_execute_records_approval_and_worker_groups(
         app,
         [
             "ext-soperator",
-            "migrate",
+            "upgrade",
             str(config_path),
             "--target",
             "external-cluster",
@@ -7142,7 +7273,7 @@ def test_soperator_migrate_execute_records_approval_and_worker_groups(
 
     assert result.exit_code == 0, result.output
     assert "Auto-selected source worker node groups: gpu-pool" in result.output
-    assert "Soperator migration status" in result.output
+    assert "External Soperator upgrade status" in result.output
     assert "phase target-gpu-stack-remediation" in result.output
     assert "phase create-aligned-sfs" in result.output
     assert (
@@ -7153,19 +7284,19 @@ def test_soperator_migrate_execute_records_approval_and_worker_groups(
         "retire-old-resources"
     ) in result.output
     assert "Pending phase: none" in result.output
-    assert "Migration performed: yes." in result.output
-    migrate_report_path = (
-        config_path.parent / "generated" / "reports" / "ext-soperator-migrate-report.md"
+    assert "Upgrade performed: yes." in result.output
+    upgrade_report_path = (
+        config_path.parent / "generated" / "reports" / "ext-soperator-upgrade-report.md"
     )
-    assert f"Migrate report: {migrate_report_path}" in result.output
-    assert migrate_report_path.exists()
-    migrate_report = migrate_report_path.read_text(encoding="utf-8")
-    assert "- Migration performed: `yes`" in migrate_report
-    assert "Soperator and Slurm smoke" in migrate_report
+    assert f"Upgrade report: {upgrade_report_path}" in result.output
+    assert upgrade_report_path.exists()
+    upgrade_report = upgrade_report_path.read_text(encoding="utf-8")
+    assert "- Upgrade performed: `yes`" in upgrade_report
+    assert "Soperator and Slurm smoke" in upgrade_report
     checkpoint_path = (
         config_path.parent
         / ".nebius-cxcli"
-        / "soperator-migrations"
+        / "ext-soperator-upgrades"
         / "external-cluster"
         / "checkpoint.json"
     )
@@ -7174,11 +7305,12 @@ def test_soperator_migrate_execute_records_approval_and_worker_groups(
     assert checkpoint["pending_phase"] == "none"
 
 
-def test_soperator_migrate_execute_refreshes_config_after_completed_migration(
+def test_ext_soperator_upgrade_execute_refreshes_config_after_completed_upgrade(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config_path = _write_old_soperator_migration_config(tmp_path)
+    _stub_external_soperator_upgrade_backup(monkeypatch)
 
     def _execute(**_kwargs):
         return SoperatorMigrationExecutionResult(
@@ -7210,7 +7342,7 @@ def test_soperator_migrate_execute_refreshes_config_after_completed_migration(
         app,
         [
             "ext-soperator",
-            "migrate",
+            "upgrade",
             str(config_path),
             "--target",
             "external-cluster",
@@ -7221,7 +7353,7 @@ def test_soperator_migrate_execute_refreshes_config_after_completed_migration(
 
     assert result.exit_code == 0, result.output
     assert "migration completed" in result.output
-    assert "Post-migration config refresh: updated" in result.output
+    assert "Post-upgrade config refresh: updated" in result.output
     assert "future reconciliation should use render -> deploy" in result.output
     refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     target = refreshed["deploy"]["targets"][0]
@@ -7237,13 +7369,14 @@ def test_soperator_migrate_execute_refreshes_config_after_completed_migration(
     assert soperator_row["placements"]["worker-gpu"] == ["worker-gpu-pool"]
 
 
-def test_soperator_migrate_execute_auto_selects_worker_groups_for_approval(
+def test_ext_soperator_upgrade_execute_auto_selects_worker_groups_for_approval(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config_path = _write_old_soperator_migration_config(tmp_path)
     _stub_soperator_migration_quota(monkeypatch)
     _stub_soperator_migration_gpu_validations(monkeypatch)
+    _stub_external_soperator_upgrade_backup(monkeypatch)
     monkeypatch.setattr(
         cli_module,
         "collect_kubectl_soperator_snapshot",
@@ -7261,7 +7394,7 @@ def test_soperator_migrate_execute_auto_selects_worker_groups_for_approval(
         app,
         [
             "ext-soperator",
-            "migrate",
+            "upgrade",
             str(config_path),
             "--target",
             "external-cluster",
@@ -7274,18 +7407,26 @@ def test_soperator_migrate_execute_auto_selects_worker_groups_for_approval(
     assert "Auto-selected source worker node groups: gpu-pool" in result.output
 
 
-def test_soperator_migrate_requires_matching_source_discovery_report(tmp_path: Path) -> None:
+def test_ext_soperator_upgrade_requires_matching_source_discovery_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     config_path = _write_old_soperator_migration_config(tmp_path)
     report_path = _soperator_discovery_manifest_path(config_path)
     report_payload = json.loads(report_path.read_text(encoding="utf-8"))
     report_payload["target_ref"] = "different-cluster"
     report_path.write_text(json.dumps(report_payload), encoding="utf-8")
+    monkeypatch.setattr(
+        cli_module,
+        "_run_external_soperator_discovery_command",
+        lambda **_kwargs: report_path,
+    )
 
     result = runner.invoke(
         app,
         [
             "ext-soperator",
-            "migrate",
+            "upgrade",
             str(config_path),
             "--target",
             "external-cluster",
