@@ -1256,7 +1256,7 @@ def _source_report_payload(
     snapshot = _mapping(source_report.get("snapshot"))
     report = _mapping(source_report.get("report"))
     if not snapshot or not report:
-        raise RuntimeError("Soperator source discovery report is missing snapshot or report data.")
+        raise RuntimeError("Soperator source discovery bundle is missing snapshot or report data.")
     return snapshot, report
 
 
@@ -10724,8 +10724,8 @@ def _checkpoint_for_run(
             )
             if not same_resume_contract:
                 raise RuntimeError(
-                    "Soperator migration checkpoint is stale because the source discovery report changed. "
-                    "Review the new report and remove the old checkpoint before executing."
+                    "Soperator migration checkpoint is stale because the source discovery bundle changed. "
+                    "Review the new bundle and remove the old checkpoint before executing."
                 )
             previous_source_report_fingerprint = str(
                 existing.get("source_report_fingerprint", "") or ""
@@ -12332,7 +12332,7 @@ def _execute_soperator_migration_unlocked(
     source_analysis_fingerprint = str(report.get("fingerprint", "") or "").strip()
     if not source_analysis_fingerprint:
         raise RuntimeError(
-            "Soperator source discovery report is missing its analysis fingerprint. "
+            "Soperator source discovery bundle is missing its analysis fingerprint. "
             "Rerun `nebius-cxcli ext-soperator onboard` before executing migration."
         )
     expected_source_contract = _execution_source_contract(source_snapshot)

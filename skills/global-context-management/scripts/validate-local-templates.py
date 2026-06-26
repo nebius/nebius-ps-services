@@ -193,22 +193,18 @@ def assert_agent_delegation_context(context: str) -> None:
         raise AssertionError("non-read-only agent leaked into context")
     if "agents/alpha_mapper.toml" in context:
         raise AssertionError("agent config path leaked into context")
-    if (
-        "Local policy asks the main Codex agent to dynamically spawn bounded "
-        "read-only helpers"
-        not in context
-    ):
+    if "Local policy asks read-only helper delegation" not in context:
         raise AssertionError("delegation policy context missing")
-    if "do not wait for another user prompt" not in context:
-        raise AssertionError("dynamic subagent spawning guidance missing")
     if "Available read-only roles:" not in context:
         raise AssertionError("read-only role list missing")
-    if "Suggested role timing:" not in context:
+    if "Timing:" not in context:
         raise AssertionError("role timing hint missing")
-    if "Choose the smallest useful set of targeted roles" not in context:
+    if "Use smallest useful role set" not in context:
         raise AssertionError("targeted subagent selection guidance missing")
-    if "do not spawn every role by default" not in context:
+    if "do not spawn every role" not in context:
         raise AssertionError("bounded subagent selection guidance missing")
+    if "Final: close completed/unneeded helper handles when close exists." not in context:
+        raise AssertionError("subagent cleanup guidance missing")
     forbidden = (
         "For every subagent you spawn",
         "close the completed subagent thread",
@@ -351,6 +347,9 @@ def assert_doc_contracts(root: Path) -> None:
     config_root = root.parent / "config-codex"
     config_skill = (config_root / "SKILL.md").read_text(encoding="utf-8")
     config_readme = (config_root / "README.md").read_text(encoding="utf-8")
+    config_reference = (config_root / "references" / "local-setup.md").read_text(
+        encoding="utf-8"
+    )
     agents_template = (config_root / "assets" / "AGENTS.md.template").read_text(
         encoding="utf-8"
     )
@@ -370,6 +369,9 @@ def assert_doc_contracts(root: Path) -> None:
         "No legacy task-state",
         "it must allow writes under\n`$CODEX_HOME/task-state`",
         "rolling summary, not an append-only log",
+        "close every spawned subagent handle",
+        "Completed agents remain open",
+        "final lifecycle sweep",
     )
     for needle in required_skill:
         if needle not in gcm_skill:
@@ -385,6 +387,10 @@ def assert_doc_contracts(root: Path) -> None:
         "Any local PreToolUse write guard must explicitly allow\n`$CODEX_HOME/task-state` writes",
         "rolling summary, not an append-only transcript",
         "summarize any older task-state file",
+        "close every spawned subagent handle",
+        "Completed agents can remain open",
+        "final lifecycle sweep",
+        "subagent was spawned and closed",
     )
     for needle in required_gcm:
         if needle not in gcm_readme:
@@ -398,14 +404,35 @@ def assert_doc_contracts(root: Path) -> None:
         "No manual or legacy",
         "rolling summary, not an append-only transcript",
         "summarize oversized historical files",
+        "close every spawned subagent",
+        "final lifecycle sweep",
     )
     for needle in required_config:
         if needle not in config_readme:
             raise AssertionError(f"config-codex README missing: {needle}")
 
+    required_config_reference = (
+        "close every spawned subagent handle",
+        "residual open or running handle",
+        "subagent was spawned and closed",
+    )
+    for needle in required_config_reference:
+        if needle not in config_reference:
+            raise AssertionError(f"config-codex local setup reference missing: {needle}")
+
+    forbidden_probe = "Wait for it, then report whether the subagent was spawned"
+    for label, text in (
+        ("global-context-management README", gcm_readme),
+        ("config-codex local setup reference", config_reference),
+    ):
+        if forbidden_probe in text:
+            raise AssertionError(f"{label} still has stale subagent probe")
+
     required_config_skill = (
         "current.md` as a compact rolling\n   summary, not an append-only transcript",
         "summarize oversized\n   historical task-state files before relying on them",
+        "close every spawned helper handle",
+        "unavailable or failed cleanup",
     )
     for needle in required_config_skill:
         if needle not in config_skill:
@@ -431,6 +458,7 @@ def assert_doc_contracts(root: Path) -> None:
 
     required_prompt_hook_summary = (
         "Keep current.md summarized; replace stale details instead of appending logs.",
+        "Final: close completed/unneeded helper handles",
     )
     for needle in required_prompt_hook_summary:
         if needle not in prompt_hook:
@@ -439,6 +467,8 @@ def assert_doc_contracts(root: Path) -> None:
     required_agents_template = (
         "Treat `current.md` as a rolling summary, not an append-only transcript",
         "summarize any\n  oversized historical task-state file",
+        "close every spawned subagent handle",
+        "report if cleanup is unavailable or fails",
     )
     for needle in required_agents_template:
         if needle not in agents_template:

@@ -106,6 +106,11 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Hardened `global-context-management` and mirrored `config-codex` guidance so
+  parent agents must close every spawned subagent handle that is completed or
+  no longer needed before finalizing when close controls are available, and
+  must report any unavailable or failed cleanup instead of leaving helper
+  sessions open silently.
 - Strengthened `global-context-management` and `config-codex` task-state
   guidance so `$CODEX_HOME/task-state/<workspace>-<hash>/<session-id>/current.md`
   is documented, templated, and hook-advertised as a compact rolling summary
@@ -414,10 +419,11 @@ All notable changes to the reusable Codex skills are tracked here.
   inject model-visible context and do not directly call subagent tools.
 - Clarified the read-only subagent lifecycle: the parent agent should ask
   helpers for concise final summaries, wait for results, consolidate them, and
-  close completed subagent threads when close controls are available and no
-  follow-up is needed. When multiple helpers are running, the parent should
-  close each completed handle as its terminal result arrives and continue
-  waiting on the remaining handles.
+  close spawned subagent handles when close controls are available once they
+  are completed or no longer needed. When multiple helpers are running, the
+  parent should close each completed handle as its terminal result arrives,
+  continue waiting on the remaining handles, and report any unavailable or
+  failed cleanup before finalizing.
 - Documented the parent/subagent mental model in the `config-codex` and
   `global-context-management` READMEs.
 - Clarified that direct live hook probes with synthetic `session_id` values can

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shlex
@@ -1041,6 +1042,42 @@ def _write_old_soperator_migration_config(
     cli_module._refresh_soperator_onboarding_fingerprints(payload)
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     return config_path
+
+
+def _soperator_discovery_manifest_path(
+    config_path: Path,
+    target_ref: str = "external-cluster",
+) -> Path:
+    return (
+        config_path.parent
+        / "generated"
+        / "reports"
+        / "soperator-discovery"
+        / target_ref
+        / "manifest.json"
+    )
+
+
+def _soperator_discovery_section_path(
+    config_path: Path,
+    section: str,
+    target_ref: str = "external-cluster",
+) -> Path:
+    return _soperator_discovery_manifest_path(config_path, target_ref).parent / section
+
+
+def _write_soperator_discovery_section(
+    config_path: Path,
+    section: str,
+    payload: dict[str, object],
+    target_ref: str = "external-cluster",
+) -> None:
+    section_path = _soperator_discovery_section_path(config_path, section, target_ref)
+    section_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    manifest_path = _soperator_discovery_manifest_path(config_path, target_ref)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["checksums"][section] = hashlib.sha256(section_path.read_bytes()).hexdigest()
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
 
 
 def test_soperator_route_guidance_explains_keep_existing_migration_required(
@@ -5051,14 +5088,9 @@ def test_soperator_onboard_interactive_lists_project_mk8s_clusters(
     assert target["soperator_onboarding"]["compute_mode"] == "keep-existing-compute"
     assert "kube_context" not in target
     assert "analysis_report" not in target["soperator_onboarding"]
-    source_report = (
-        config_path.parent
-        / "generated"
-        / "reports"
-        / "ext-soperator-onboard-source-discovery-report.json"
-    )
+    source_report = _soperator_discovery_manifest_path(config_path, "selected-cluster")
     assert source_report.exists()
-    assert "Wrote Soperator source discovery report:" in result.output
+    assert "Wrote Soperator discovery bundle:" in result.output
     assert [(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]] == [
         ("soperator", "selected-cluster"),
         ("cert-manager", "selected-cluster"),
@@ -6578,8 +6610,8 @@ def test_soperator_migrate_dry_run_prints_onboarding_migration_plan(tmp_path: Pa
 
     assert result.exit_code == 0, result.output
     assert "Soperator migration target: external-cluster" in result.output
-    assert "Source discovery report:" in result.output
-    assert "ext-soperator-onboard-source-discovery-report.json" in result.output
+    assert "Source discovery bundle:" in result.output
+    assert "soperator-discovery/external-cluster/manifest.json" in result.output
     assert "Onboarding state: existing-soperator-supported" in result.output
     assert "Source version: 3.0.5" in result.output
     assert "Target version: 4.0.1-ps.1" in result.output
@@ -6793,15 +6825,10 @@ def test_soperator_migrate_dry_run_rejects_gpu_reconciliation_only_deploy_route(
     onboarding["node_template_upgrade"] = {}
     cli_module._refresh_soperator_onboarding_fingerprints(payload)
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-    report_path = (
-        config_path.parent
-        / "generated"
-        / "reports"
-        / "ext-soperator-onboard-source-discovery-report.json"
-    )
-    source_report = json.loads(report_path.read_text(encoding="utf-8"))
-    source_report["report"]["migration_plan"] = []
-    report_path.write_text(json.dumps(source_report), encoding="utf-8")
+    findings_path = _soperator_discovery_section_path(config_path, "findings.json")
+    source_report = json.loads(findings_path.read_text(encoding="utf-8"))
+    source_report["onboarding_report"]["migration_plan"] = []
+    _write_soperator_discovery_section(config_path, "findings.json", source_report)
 
     result = runner.invoke(
         app,
@@ -7249,12 +7276,7 @@ def test_soperator_migrate_execute_auto_selects_worker_groups_for_approval(
 
 def test_soperator_migrate_requires_matching_source_discovery_report(tmp_path: Path) -> None:
     config_path = _write_old_soperator_migration_config(tmp_path)
-    report_path = (
-        config_path.parent
-        / "generated"
-        / "reports"
-        / "ext-soperator-onboard-source-discovery-report.json"
-    )
+    report_path = _soperator_discovery_manifest_path(config_path)
     report_payload = json.loads(report_path.read_text(encoding="utf-8"))
     report_payload["target_ref"] = "different-cluster"
     report_path.write_text(json.dumps(report_payload), encoding="utf-8")
@@ -7274,6 +7296,105 @@ def test_soperator_migrate_requires_matching_source_discovery_report(tmp_path: P
     assert result.exit_code == 1
     assert "belongs to target 'different-cluster'" in result.output
     assert "not 'external-cluster'" in result.output
+
+
+def test_soperator_discover_command_routes_to_shared_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("{}\n", encoding="utf-8")
+    bundle_path = (
+        tmp_path / "generated" / "reports" / "soperator-discovery" / "mk8s" / "manifest.json"
+    )
+    bundle_path.parent.mkdir(parents=True)
+    bundle_path.write_text("{}\n", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def _fake_discover(**kwargs):
+        captured.update(kwargs)
+        return bundle_path
+
+    monkeypatch.setattr(cli_module, "_run_managed_soperator_discovery_command", _fake_discover)
+
+    result = runner.invoke(
+        app,
+        [
+            "soperator",
+            "discover",
+            str(config_path),
+            "--target",
+            "mk8s",
+            "--to-chart-version",
+            "4.0.2-ps.1",
+            "--to-k8s-version",
+            "1.33",
+            "--redaction",
+            "local",
+            "--no-interactive",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["target_ref"] == "mk8s"
+    assert captured["to_chart_version"] == "4.0.2-ps.1"
+    assert captured["to_k8s_version"] == "1.33"
+    assert captured["redaction"] == "local"
+    assert captured["interactive"] is False
+    assert f"Soperator discovery manifest: {bundle_path}" in result.output
+
+
+def test_ext_soperator_discover_command_routes_to_shared_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("client_info: {}\n", encoding="utf-8")
+    bundle_path = (
+        tmp_path
+        / "generated"
+        / "reports"
+        / "soperator-discovery"
+        / "external-cluster"
+        / "manifest.json"
+    )
+    bundle_path.parent.mkdir(parents=True)
+    bundle_path.write_text("{}\n", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        cli_module,
+        "_resolve_existing_soperator_discovery_config_path",
+        lambda _path: config_path,
+    )
+
+    def _fake_discover(**kwargs):
+        captured.update(kwargs)
+        return bundle_path
+
+    monkeypatch.setattr(cli_module, "_run_external_soperator_discovery_command", _fake_discover)
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "discover",
+            str(tmp_path),
+            "--target",
+            "external-cluster",
+            "--cluster-id",
+            "mk8scluster-123",
+            "--to-os",
+            "ubuntu24.04",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["target_ref"] == "external-cluster"
+    assert captured["cluster_id"] == "mk8scluster-123"
+    assert captured["to_os"] == "ubuntu24.04"
+    assert captured["redaction"] == "support"
+    assert f"Soperator discovery manifest: {bundle_path}" in result.output
 
 
 def test_soperator_onboard_noninteractive_options_add_external_target(
@@ -7482,14 +7603,13 @@ def test_soperator_onboard_target_match_hides_stale_source_release_from_summary(
     assert "Selected onboarding actions:" in result.output
     assert "adopt-soperator" in result.output
 
-    source_report = (
-        config_path.parent
-        / "generated"
-        / "reports"
-        / "ext-soperator-onboard-source-discovery-report.json"
+    source_report = _soperator_discovery_section_path(
+        config_path,
+        "findings.json",
+        "training-cluster",
     )
     report_payload = json.loads(source_report.read_text(encoding="utf-8"))
-    findings = report_payload["report"]["findings"]
+    findings = report_payload["onboarding_report"]["findings"]
     assert any(
         finding["status"] == "stale-source-release" and finding["severity"] == "info"
         for finding in findings

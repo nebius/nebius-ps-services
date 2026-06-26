@@ -34,7 +34,6 @@ _LIFECYCLE_REPORT_FILENAMES = frozenset(
     {
         "deploy-report.md",
         "ext-soperator-migrate-report.md",
-        "ext-soperator-onboard-source-discovery-report.json",
         "soperator-upgrade-report.md",
         "soperator-upgrade-report.json",
         "upgrade-node-group-report.md",
@@ -43,6 +42,7 @@ _LIFECYCLE_REPORT_FILENAMES = frozenset(
         "upgrade-node-template-report.json",
     }
 )
+_LIFECYCLE_REPORT_DIRNAMES = frozenset({"soperator-discovery"})
 _REPORT_JSON_REF_RE = re.compile(r"`([^`/\\]+\.json)`")
 
 
@@ -83,12 +83,21 @@ def _lifecycle_report_artifact_names(reports_dir: Path) -> tuple[str, ...]:
     return tuple(sorted(names))
 
 
+def _lifecycle_report_artifact_dirnames(reports_dir: Path) -> tuple[str, ...]:
+    if not reports_dir.is_dir():
+        return ()
+    return tuple(
+        sorted(name for name in _LIFECYCLE_REPORT_DIRNAMES if (reports_dir / name).is_dir())
+    )
+
+
 def _preserve_lifecycle_report_artifacts(
     staged_paths: ProjectPaths,
     final_paths: ProjectPaths,
 ) -> None:
     names = _lifecycle_report_artifact_names(final_paths.reports_dir)
-    if not names:
+    dirnames = _lifecycle_report_artifact_dirnames(final_paths.reports_dir)
+    if not names and not dirnames:
         return
     staged_paths.reports_dir.mkdir(parents=True, exist_ok=True)
     for name in names:
@@ -97,6 +106,12 @@ def _preserve_lifecycle_report_artifacts(
         if not source.is_file() or target.exists():
             continue
         shutil.copy2(source, target)
+    for name in dirnames:
+        source = final_paths.reports_dir / name
+        target = staged_paths.reports_dir / name
+        if not source.is_dir() or target.exists():
+            continue
+        shutil.copytree(source, target)
 
 
 def promote_staged_generated_paths(

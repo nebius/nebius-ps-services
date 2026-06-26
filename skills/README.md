@@ -409,8 +409,9 @@ recoverable by using durable task-state files, limiting noisy parent-thread
 exploration, delegating bounded read-only investigation when the user
 explicitly authorizes delegation or enables a local hook delegation policy and
 the runtime permits it, choosing targeted helper roles after authorization
-instead of requiring the prompt to name them, closing completed subagent
-threads after their results are consolidated when close controls are available,
+instead of requiring the prompt to name them, closing every spawned subagent
+handle that is completed or no longer needed before finalizing when close
+controls are available, reporting any unavailable or failed cleanup,
 and reviewing risk before final answers. Its public skill files stay generic;
 local hooks, custom agent config, and task-state files belong under
 `$CODEX_HOME`. The hook setup advertises session-scoped task-state paths

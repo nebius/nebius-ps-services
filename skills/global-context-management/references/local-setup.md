@@ -85,7 +85,9 @@ global file.
   delegation is authorized, useful, available, and permitted.
 - When subagents are used, ask them for concise final summaries, wait for the
   result, consolidate it in the parent thread, and close completed subagent
-  threads when close controls are available and no follow-up is needed.
+  threads when close controls are available. Before the final response, close
+  every spawned subagent handle that is completed or no longer needed; if close
+  controls are unavailable or cleanup fails, report that residual handle.
   With multiple subagents, close each completed handle as its terminal result
   arrives, then continue waiting on the remaining handles.
 - If delegation is authorized and useful but subagent tools are not visible,
@@ -146,6 +148,8 @@ every configured read-only role by default: use `repo_mapper` and
 `test_strategist` early only when useful and independent, close completed
 helpers after consolidation, and use `risk_reviewer` near the end only for
 non-trivial or risky changes.
+Completed helpers can still count toward concurrency until closed, so cleanup
+is part of the parent agent's completion contract when close controls exist.
 
 If the user wants hook-assisted delegation for complex prompts, create this
 local-only policy file:
@@ -169,9 +173,11 @@ dynamically decides whether to spawn the smallest useful set of targeted
 read-only helpers. The hint tells Codex not to spawn every configured role by
 default. The parent agent still owns lifecycle cleanup: wait for returned
 summaries, consolidate them, and close completed subagent threads when close
-controls are available and no follow-up is needed. With multiple subagents,
-close each completed handle as its terminal result arrives and continue waiting
-on the remaining handles.
+controls are available. Before the final response, close every spawned handle
+that is completed or no longer needed. With multiple subagents, close each
+completed handle as its terminal result arrives and continue waiting on the
+remaining handles. If close controls are unavailable or cleanup fails, report
+the residual open or running handle instead of leaving it silent.
 
 ## Hook Review
 
@@ -242,9 +248,9 @@ Use a second probe for subagent availability:
 
 ```text
 Use $global-context-management. Explicitly spawn one read-only repo_mapper
-subagent to inspect this repository. Do not edit files. Wait for it, then
-report whether the subagent was spawned, and keep raw command output out of
-the answer.
+subagent to inspect this repository. Do not edit files. Wait for it, close it
+after the result when close controls are available, then report whether the
+subagent was spawned and closed. Keep raw command output out of the answer.
 ```
 
 If the probe does not spawn a subagent, check:

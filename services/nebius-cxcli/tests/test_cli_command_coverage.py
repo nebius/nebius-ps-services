@@ -176,6 +176,88 @@ def _fake_paths(tmp_path: Path) -> ProjectPaths:
     )
 
 
+def _stub_soperator_upgrade_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    paths: ProjectPaths,
+    calls: list[object],
+) -> None:
+    backup_path = paths.project_dir / "backups" / "soperator-upgrade-test.tar.gz"
+
+    def _backup(**_kwargs: object) -> cli._SoperatorUpgradeBackupResult:
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
+        backup_path.write_text("backup", encoding="utf-8")
+        return cli._SoperatorUpgradeBackupResult(
+            path=backup_path,
+            size_bytes=6,
+            sha256="archive-sha",
+            included_categories=("accounting", "kubernetes", "slurm"),
+            secret_material_included=True,
+            accounting_db_included=True,
+            manifest_sha256="manifest-sha",
+        )
+
+    fingerprint = cli._SoperatorUpgradeConfigFingerprint(
+        values_sha256="values",
+        slurm_policy_sha256="slurm",
+        accounting_policy_sha256="accounting",
+        node_mapping_sha256="nodes",
+    )
+
+    monkeypatch.setattr(cli, "_create_restore_capable_soperator_upgrade_backup", _backup)
+    monkeypatch.setattr(
+        cli,
+        "_capture_soperator_upgrade_config_fingerprint",
+        lambda **_kwargs: fingerprint,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_compare_soperator_upgrade_config_fingerprints",
+        lambda **_kwargs: {"status": "matched"},
+    )
+
+    def _discover(**_kwargs: object) -> Path:
+        path = paths.reports_dir / "soperator-discovery" / "mk8s" / "manifest.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"schema": "discovery"}\n', encoding="utf-8")
+        return path
+
+    monkeypatch.setattr(cli, "_run_managed_soperator_discovery_command", _discover)
+
+
+def _run_soperator_upgrade_for_test(
+    *,
+    config_path: Path,
+    target_ref: str | None = "mk8s",
+    to_chart_version: str | None = "0.26.0",
+    to_k8s_version: str | None = None,
+    to_os: str | None = None,
+    to_gpu_stack_preset: str | None = None,
+    node_group: str = "",
+    job_policy: str | None = None,
+    dry_run: bool = False,
+    interactive: bool = False,
+) -> None:
+    cli._run_soperator_upgrade_command(
+        config_path=config_path,
+        target_ref=target_ref,
+        to_chart_version=to_chart_version,
+        to_k8s_version=to_k8s_version,
+        to_os=to_os,
+        to_gpu_stack_preset=to_gpu_stack_preset,
+        node_group=node_group,
+        disruption_policy=cli.DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
+        drain_timeout="auto",
+        strategy_max_surge_count=None,
+        backup_dir=None,
+        job_policy=job_policy,
+        cancel_job=(),
+        job_wait_timeout=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
+        job_refresh_interval=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
+        dry_run=dry_run,
+        interactive=interactive,
+    )
+
+
 def _iter_registered_help_args(
     typer_app: Any, prefix: tuple[str, ...] = ()
 ) -> tuple[tuple[str, ...], ...]:
@@ -2690,7 +2772,8 @@ def test_upgrade_helm_chart_rejects_soperator_selector_with_canonical_command(
     ]
     assert "Soperator chart upgrades use the canonical command" in rendered
     assert (
-        f"nebius-cxcli soperator upgrade {paths.config_path} --target mk8s --to-version 0.26.0"
+        f"nebius-cxcli soperator upgrade {paths.config_path} --target mk8s "
+        "--to-chart-version 0.26.0"
     ) in rendered_flat
     assert "only upgrades non-Soperator app charts" in rendered_flat
     assert "Soperator upgrade plan" not in rendered_flat
@@ -2858,18 +2941,20 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
             calls.append(("soperator-validation", kwargs["phase_label"])) or ()
         ),
     )
+    _stub_soperator_upgrade_runtime(monkeypatch, paths, calls)
 
     cli.soperator_upgrade_command(
         paths.config_path,
         target_ref="mk8s",
-        to_version="0.26.0",
+        to_chart_version="0.26.0",
     )
 
     payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
     assert payload["apps"]["charts"][0]["version"] == "0.26.0"
     assert calls == [
         "migration-guard",
-        ("validate", "Soperator upgrade preflight"),
+        ("validate", "Soperator cluster upgrade preflight"),
+        "soperator-static-ready",
         ("soperator-validation", "Preflight"),
         "render",
         ("validate", "Validate rendered Soperator upgrade to 0.26.0"),
@@ -2881,6 +2966,118 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
         "soperator-static-ready",
         ("soperator-validation", "Postflight"),
     ]
+
+
+def test_soperator_upgrade_mk8s_only_runs_node_template_phase_without_raw_kubectl_drain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    paths.infra_dir.mkdir(parents=True)
+    paths.flux_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
+    paths.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "infra": {
+                    "components": [
+                        {
+                            "id": "mk8s",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "inputs": {},
+                        }
+                    ]
+                },
+                "apps": {
+                    "charts": [
+                        {
+                            "id": "soperator",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "namespace": "soperator",
+                            "release-name": "soperator",
+                            "target_ref": "mk8s",
+                            "version": "0.25.0",
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    generated_config = SimpleNamespace()
+    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    calls: list[object] = []
+
+    monkeypatch.setattr(
+        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_generated_bundle_validation",
+        lambda *_args, **kwargs: calls.append(("validate", kwargs["title"])) or {},
+    )
+    monkeypatch.setattr(
+        cli,
+        "_verify_soperator_static_upgrade_ready",
+        lambda *_args, **_kwargs: calls.append("soperator-static-ready"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_raise_if_soperator_upgrade_would_bypass_migration",
+        lambda *_args, **_kwargs: calls.append("migration-guard"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_soperator_upgrade_validation_phase",
+        lambda *_args, **kwargs: (
+            calls.append(("soperator-validation", kwargs["phase_label"])) or ()
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_handle_soperator_upgrade_running_jobs",
+        lambda **_kwargs: calls.append("slurm-jobs") or ("worker-1",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_soperator_mk8s_node_template_phase",
+        lambda **kwargs: calls.append(("mk8s-node-template", kwargs)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_restore_slurm_nodes",
+        lambda **kwargs: calls.append(("slurm-restore", kwargs)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_soperator_upgrade_kubectl_cluster",
+        lambda *args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError(f"raw kubectl call was not expected: {args}")
+        ),
+    )
+    _stub_soperator_upgrade_runtime(monkeypatch, paths, calls)
+
+    _run_soperator_upgrade_for_test(
+        config_path=paths.config_path,
+        to_chart_version=None,
+        to_k8s_version="1.33",
+        node_group="worker",
+        job_policy="fail",
+    )
+
+    payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
+    assert payload["apps"]["charts"][0]["version"] == "0.25.0"
+    assert "slurm-jobs" in calls
+    mk8s_calls = [call for call in calls if isinstance(call, tuple) and call[0] == "mk8s-node-template"]
+    assert len(mk8s_calls) == 1
+    assert mk8s_calls[0][1]["to_k8s_version"] == "1.33"
+    assert mk8s_calls[0][1]["node_group"] == "worker"
+    assert any(isinstance(call, tuple) and call[0] == "slurm-restore" for call in calls)
 
 
 def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
@@ -2963,11 +3160,24 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
             or {"status": "suspended", "patched": ["nccl"], "skipped": []}
         ),
     )
+    _stub_soperator_upgrade_runtime(monkeypatch, paths, calls)
 
     cli._run_soperator_upgrade_command(
         config_path=paths.config_path,
         target_ref="mk8s",
-        to_version="0.26.0",
+        to_chart_version="0.26.0",
+        to_k8s_version=None,
+        to_os=None,
+        to_gpu_stack_preset=None,
+        node_group="",
+        disruption_policy=cli.DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
+        drain_timeout="auto",
+        strategy_max_surge_count=None,
+        backup_dir=None,
+        job_policy=None,
+        cancel_job=(),
+        job_wait_timeout=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
+        job_refresh_interval=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
         dry_run=False,
         interactive=False,
     )
@@ -2979,7 +3189,8 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
     assert chart["values"]["soperator-activechecks"]["waitForChecks"]["enabled"] is True
     assert calls == [
         "migration-guard",
-        ("validate", "Soperator upgrade preflight"),
+        ("validate", "Soperator cluster upgrade preflight"),
+        "soperator-static-ready",
         "render",
         ("validate", "Validate rendered Soperator ActiveChecks suspension"),
         (
@@ -3018,16 +3229,21 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
     assert [event["event"] for event in checkpoint["events"]] == [
         "planned",
         "preflight-generated-validation-started",
-        "preflight-generated-validation-completed",
+        "preflight-completed",
+        "discovery-created",
+        "backup-created",
         "activechecks-suspend-started",
         "activechecks-suspended",
         "preflight-soperator-validation-completed",
-        "upgrade-applied",
-        "postflight-soperator-validation-completed",
+        "chart-applied",
+        "postflight-completed",
         "activechecks-restore-started",
         "activechecks-restored",
+        "slurm-restored",
         "completed",
     ]
+    assert checkpoint["backup"]["sha256"] == "archive-sha"
+    assert checkpoint["backup"]["accounting_db_dump"] is True
     upgrade_report = (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_FILENAME).read_text(
         encoding="utf-8"
     )
@@ -3117,14 +3333,11 @@ def test_soperator_upgrade_restores_activechecks_after_failed_upgrade(
             or {"status": "suspended", "patched": ["nccl"], "skipped": []}
         ),
     )
+    _stub_soperator_upgrade_runtime(monkeypatch, paths, calls)
 
     with pytest.raises(RuntimeError, match="postflight failed"):
-        cli._run_soperator_upgrade_command(
+        _run_soperator_upgrade_for_test(
             config_path=paths.config_path,
-            target_ref="mk8s",
-            to_version="0.26.0",
-            dry_run=False,
-            interactive=False,
         )
 
     payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
@@ -3150,6 +3363,7 @@ def test_soperator_upgrade_restores_activechecks_after_failed_upgrade(
     assert checkpoint["failure"] == {
         "error": "postflight failed",
         "activechecks_restore": "restored",
+        "slurm_restore": "not-required",
     }
     assert "activechecks-restored-after-failure" in [
         event["event"] for event in checkpoint["events"]
@@ -3236,14 +3450,11 @@ def test_soperator_upgrade_restores_activechecks_after_suspend_validation_failur
             calls.append(("soperator-validation", kwargs["phase_label"])) or ()
         ),
     )
+    _stub_soperator_upgrade_runtime(monkeypatch, paths, calls)
 
     with pytest.raises(RuntimeError, match="suspension validation failed"):
-        cli._run_soperator_upgrade_command(
+        _run_soperator_upgrade_for_test(
             config_path=paths.config_path,
-            target_ref="mk8s",
-            to_version="0.26.0",
-            dry_run=False,
-            interactive=False,
         )
 
     payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
@@ -3253,7 +3464,8 @@ def test_soperator_upgrade_restores_activechecks_after_suspend_validation_failur
     assert chart["values"]["soperator-activechecks"]["waitForChecks"]["enabled"] is True
     assert calls == [
         "migration-guard",
-        ("validate", "Soperator upgrade preflight"),
+        ("validate", "Soperator cluster upgrade preflight"),
+        "soperator-static-ready",
         "render",
         ("validate", "Validate rendered Soperator ActiveChecks suspension"),
         "render",
@@ -3273,6 +3485,7 @@ def test_soperator_upgrade_restores_activechecks_after_suspend_validation_failur
     assert checkpoint["failure"] == {
         "error": "suspension validation failed",
         "activechecks_restore": "restored",
+        "slurm_restore": "not-required",
     }
     assert "activechecks-restored-after-failure" in [
         event["event"] for event in checkpoint["events"]
@@ -3400,13 +3613,10 @@ def test_soperator_upgrade_resumes_pending_activechecks_restore_from_checkpoint(
             or {"status": "suspended", "patched": ["nccl"], "skipped": []}
         ),
     )
+    _stub_soperator_upgrade_runtime(monkeypatch, paths, calls)
 
-    cli._run_soperator_upgrade_command(
+    _run_soperator_upgrade_for_test(
         config_path=paths.config_path,
-        target_ref="mk8s",
-        to_version="0.26.0",
-        dry_run=False,
-        interactive=False,
     )
 
     payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
@@ -3416,7 +3626,8 @@ def test_soperator_upgrade_resumes_pending_activechecks_restore_from_checkpoint(
     assert chart["values"]["soperator-activechecks"]["waitForChecks"]["enabled"] is True
     assert calls == [
         "migration-guard",
-        ("validate", "Soperator upgrade preflight"),
+        ("validate", "Soperator cluster upgrade preflight"),
+        "soperator-static-ready",
         "render",
         ("validate", "Validate rendered Soperator ActiveChecks suspension"),
         (
@@ -3528,7 +3739,7 @@ def test_soperator_upgrade_resumed_activechecks_restore_survives_preflight_failu
     def generated_validation(*_args: Any, **kwargs: Any) -> dict[str, Any]:
         title = kwargs["title"]
         calls.append(("validate", title))
-        if title == "Soperator upgrade preflight":
+        if title == "Soperator cluster upgrade preflight":
             raise RuntimeError("preflight failed")
         return {}
 
@@ -3572,12 +3783,8 @@ def test_soperator_upgrade_resumed_activechecks_restore_survives_preflight_failu
     )
 
     with pytest.raises(RuntimeError, match="preflight failed"):
-        cli._run_soperator_upgrade_command(
+        _run_soperator_upgrade_for_test(
             config_path=paths.config_path,
-            target_ref="mk8s",
-            to_version="0.26.0",
-            dry_run=False,
-            interactive=False,
         )
 
     payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
@@ -3587,7 +3794,7 @@ def test_soperator_upgrade_resumed_activechecks_restore_survives_preflight_failu
     assert chart["values"]["soperator-activechecks"]["waitForChecks"]["enabled"] is True
     assert calls == [
         "migration-guard",
-        ("validate", "Soperator upgrade preflight"),
+        ("validate", "Soperator cluster upgrade preflight"),
         "render",
         ("validate", "Validate rendered Soperator ActiveChecks restore after failed upgrade"),
         (
@@ -3602,6 +3809,7 @@ def test_soperator_upgrade_resumed_activechecks_restore_survives_preflight_failu
     assert checkpoint["failure"] == {
         "error": "preflight failed",
         "activechecks_restore": "restored",
+        "slurm_restore": "not-required",
     }
     event_names = [event["event"] for event in checkpoint["events"]]
     assert "resumed" in event_names
@@ -3899,7 +4107,7 @@ def test_soperator_upgrade_guided_prompts_dry_run_before_mutation(
         prompt_paths.append(path_label)
         prompt_hints[path_label] = cast(str | None, _kwargs.get("prompt_hint"))
         prompt_defaults[path_label] = current
-        if path_label == "soperator.upgrade.to_version":
+        if path_label == "soperator.upgrade.to_chart_version":
             return current, False
         return answers[path_label], False
 
@@ -3920,18 +4128,17 @@ def test_soperator_upgrade_guided_prompts_dry_run_before_mutation(
 
     rendered = rich_console.export_text()
     assert prompt_paths == [
-        "soperator.upgrade.to_version",
+        "soperator.upgrade.to_chart_version",
         "soperator.upgrade.dry_run",
     ]
-    assert prompt_hints["soperator.upgrade.to_version"] == "current: 0.25.0"
-    assert prompt_defaults["soperator.upgrade.to_version"] == "0.26.0"
+    assert prompt_hints["soperator.upgrade.to_chart_version"] == "current: 0.25.0"
+    assert prompt_defaults["soperator.upgrade.to_chart_version"] == "0.26.0"
     assert "Soperator upgrade plan" in rendered
     assert "- chart version: 0.25.0 -> 0.26.0" in rendered
     assert "Dry run only" in rendered
-    assert (
-        f"nebius-cxcli soperator upgrade {paths.config_path} "
-        "--target mk8s --to-version 0.26.0 --no-interactive --dry-run"
-    ) in rendered
+    assert f"nebius-cxcli soperator upgrade {paths.config_path}" in rendered
+    assert "--target mk8s --to-chart-version 0.26.0" in rendered
+    assert "--no-interactive --dry-run" in rendered
     assert paths.config_path.read_text(encoding="utf-8") == original_config
 
 
@@ -3991,13 +4198,11 @@ def test_soperator_upgrade_no_interactive_requires_version_before_prompt(
     monkeypatch.setattr(cli, "_upgrade_interactive_prompts_enabled", lambda: True)
     monkeypatch.setattr(cli, "_prompt_scalar_override", _prompt_scalar)
 
-    with pytest.raises(RuntimeError, match="Missing --to-version"):
-        cli._run_soperator_upgrade_command(
+    with pytest.raises(RuntimeError, match="Missing target change flag"):
+        _run_soperator_upgrade_for_test(
             config_path=paths.config_path,
             target_ref="mk8s",
-            to_version=None,
-            dry_run=False,
-            interactive=False,
+            to_chart_version=None,
         )
     assert prompted is False
 
@@ -7513,7 +7718,7 @@ def test_render_command_force_allows_noninteractive_overwrite(
     fake_paths.reports_dir.mkdir(parents=True, exist_ok=True)
     deploy_report = fake_paths.reports_dir / "deploy-report.md"
     deploy_detail_report = fake_paths.reports_dir / "deploy-gpu-visibility-report-mk8s.json"
-    onboard_report = fake_paths.reports_dir / "ext-soperator-onboard-source-discovery-report.json"
+    onboard_report = fake_paths.reports_dir / "soperator-discovery" / "external-cluster"
     migrate_report = fake_paths.reports_dir / "ext-soperator-migrate-report.md"
     migrate_detail_report = fake_paths.reports_dir / "deploy-smoke-report-external.json"
     node_template_report = fake_paths.reports_dir / "upgrade-node-template-report.md"
@@ -7528,7 +7733,8 @@ def test_render_command_force_allows_noninteractive_overwrite(
         encoding="utf-8",
     )
     deploy_detail_report.write_text('{"status": "passed"}\n', encoding="utf-8")
-    onboard_report.write_text('{"schema": "onboard"}\n', encoding="utf-8")
+    onboard_report.mkdir(parents=True)
+    (onboard_report / "manifest.json").write_text('{"schema": "discovery"}\n', encoding="utf-8")
     migrate_report.write_text(
         "# Soperator Migration Report\n\n- `deploy-smoke-report-external.json`: `PASS` - ok\n",
         encoding="utf-8",
@@ -7565,7 +7771,9 @@ def test_render_command_force_allows_noninteractive_overwrite(
     assert calls["rendered"] is True
     assert deploy_report.read_text(encoding="utf-8").startswith("# Deploy Report")
     assert deploy_detail_report.read_text(encoding="utf-8") == '{"status": "passed"}\n'
-    assert onboard_report.read_text(encoding="utf-8") == '{"schema": "onboard"}\n'
+    assert (onboard_report / "manifest.json").read_text(encoding="utf-8") == (
+        '{"schema": "discovery"}\n'
+    )
     assert migrate_report.read_text(encoding="utf-8").startswith("# Soperator Migration Report")
     assert migrate_detail_report.read_text(encoding="utf-8") == '{"passed": true}\n'
     assert node_template_report.read_text(encoding="utf-8").startswith(
@@ -19037,7 +19245,43 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         env={"COLUMNS": "240"},
         terminal_width=240,
     )
+    managed_soperator_backup_result = runner.invoke(
+        cli.app,
+        ["soperator", "backup", "--help"],
+        env={"COLUMNS": "240"},
+        terminal_width=240,
+    )
+    managed_soperator_discover_result = runner.invoke(
+        cli.app,
+        ["soperator", "discover", "--help"],
+        env={"COLUMNS": "240"},
+        terminal_width=240,
+    )
+    managed_soperator_restore_result = runner.invoke(
+        cli.app,
+        ["soperator", "restore", "--help"],
+        env={"COLUMNS": "240"},
+        terminal_width=240,
+    )
     soperator_result = runner.invoke(cli.app, ["ext-soperator", "--help"])
+    ext_soperator_backup_result = runner.invoke(
+        cli.app,
+        ["ext-soperator", "backup", "--help"],
+        env={"COLUMNS": "240"},
+        terminal_width=240,
+    )
+    ext_soperator_discover_result = runner.invoke(
+        cli.app,
+        ["ext-soperator", "discover", "--help"],
+        env={"COLUMNS": "240"},
+        terminal_width=240,
+    )
+    ext_soperator_restore_result = runner.invoke(
+        cli.app,
+        ["ext-soperator", "restore", "--help"],
+        env={"COLUMNS": "240"},
+        terminal_width=240,
+    )
     soperator_onboard_result = runner.invoke(
         cli.app,
         ["ext-soperator", "onboard", "--help"],
@@ -19072,7 +19316,15 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert flux_destroy_result.exit_code == 0, flux_destroy_result.output
     assert managed_soperator_result.exit_code == 0, managed_soperator_result.output
     assert managed_soperator_upgrade_result.exit_code == 0, managed_soperator_upgrade_result.output
+    assert managed_soperator_backup_result.exit_code == 0, managed_soperator_backup_result.output
+    assert (
+        managed_soperator_discover_result.exit_code == 0
+    ), managed_soperator_discover_result.output
+    assert managed_soperator_restore_result.exit_code == 0, managed_soperator_restore_result.output
     assert soperator_result.exit_code == 0, soperator_result.output
+    assert ext_soperator_backup_result.exit_code == 0, ext_soperator_backup_result.output
+    assert ext_soperator_discover_result.exit_code == 0, ext_soperator_discover_result.output
+    assert ext_soperator_restore_result.exit_code == 0, ext_soperator_restore_result.output
     assert soperator_onboard_result.exit_code == 0, soperator_onboard_result.output
     assert soperator_migrate_result.exit_code == 0, soperator_migrate_result.output
     assert email_result.exit_code == 0, email_result.output
@@ -19097,7 +19349,13 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     flux_destroy_help = _plain_output(flux_destroy_result.output)
     managed_soperator_help = _plain_output(managed_soperator_result.output)
     managed_soperator_upgrade_help = _plain_output(managed_soperator_upgrade_result.output)
+    managed_soperator_backup_help = _plain_output(managed_soperator_backup_result.output)
+    managed_soperator_discover_help = _plain_output(managed_soperator_discover_result.output)
+    managed_soperator_restore_help = _plain_output(managed_soperator_restore_result.output)
     soperator_help = _plain_output(soperator_result.output)
+    ext_soperator_backup_help = _plain_output(ext_soperator_backup_result.output)
+    ext_soperator_discover_help = _plain_output(ext_soperator_discover_result.output)
+    ext_soperator_restore_help = _plain_output(ext_soperator_restore_result.output)
     soperator_onboard_help = _plain_output(soperator_onboard_result.output)
     soperator_migrate_help = _plain_output(soperator_migrate_result.output)
     email_help = _plain_output(email_result.output)
@@ -19108,7 +19366,15 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     normalized_soperator_help = " ".join(soperator_help.split())
     normalized_managed_soperator_help = " ".join(managed_soperator_help.split())
     normalized_managed_soperator_upgrade_help = " ".join(managed_soperator_upgrade_help.split())
+    normalized_managed_soperator_backup_help = " ".join(managed_soperator_backup_help.split())
+    normalized_managed_soperator_discover_help = " ".join(
+        managed_soperator_discover_help.split()
+    )
+    normalized_managed_soperator_restore_help = " ".join(managed_soperator_restore_help.split())
     normalized_soperator_onboard_help = " ".join(soperator_onboard_help.split())
+    normalized_ext_soperator_backup_help = " ".join(ext_soperator_backup_help.split())
+    normalized_ext_soperator_discover_help = " ".join(ext_soperator_discover_help.split())
+    normalized_ext_soperator_restore_help = " ".join(ext_soperator_restore_help.split())
     normalized_soperator_migrate_help = " ".join(soperator_migrate_help.split())
     normalized_wireguard_help = " ".join(wireguard_help.split())
     normalized_ssh_jumphost_help = " ".join(ssh_jumphost_help.split())
@@ -19276,15 +19542,39 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "complete production MK8s+SFS+Soperator cluster" in normalized_create_help
     assert "soperator [OPTIONS] COMMAND [ARGS]" in managed_soperator_help
     assert "Manage cxcli-managed Soperator deployments" in (normalized_managed_soperator_help)
-    assert "Soperator-aware chart upgrades with Slurm preflight and postflight validation" in (
+    assert "Soperator-aware MK8s node-template plus chart upgrades" in (
         normalized_managed_soperator_help
     )
     assert "CXCLI managed workflow" in normalized_managed_soperator_help
     assert "soperator upgrade <config.yaml>" in normalized_managed_soperator_help
-    assert "External/adopted clusters" in normalized_managed_soperator_upgrade_help
+    assert "backup" in managed_soperator_help
+    assert "discover" in managed_soperator_help
+    assert "restore" in managed_soperator_help
+    assert "backup [OPTIONS] CONFIG_YAML" in managed_soperator_backup_help
+    assert "discover [OPTIONS] CONFIG_YAML" in managed_soperator_discover_help
+    assert "restore [OPTIONS] BACKUP_ARCHIVE" in managed_soperator_restore_help
+    assert "--backup-dir" in normalized_managed_soperator_backup_help
+    assert "--kube-context" in normalized_managed_soperator_backup_help
+    assert "raw Kubernetes Secrets" in normalized_managed_soperator_backup_help
+    assert "--output-dir" in normalized_managed_soperator_discover_help
+    assert "--redaction" in normalized_managed_soperator_discover_help
+    assert "soperator-discovery/<target>/manifest.json" in (
+        normalized_managed_soperator_discover_help
+    )
+    assert "--execute" in normalized_managed_soperator_restore_help
+    assert "--approve" in normalized_managed_soperator_restore_help
+    assert "--restore-accounting-db" in normalized_managed_soperator_restore_help
+    assert "Restore is dry-run by default" in normalized_managed_soperator_restore_help
+    assert "Standalone MK8s node-template upgrades" in normalized_managed_soperator_upgrade_help
     assert "upgrade [OPTIONS] CONFIG_YAML" in managed_soperator_upgrade_help
     assert "--target" in normalized_managed_soperator_upgrade_help
-    assert "--to-version" in normalized_managed_soperator_upgrade_help
+    assert "--to-chart-version" in normalized_managed_soperator_upgrade_help
+    assert "--to-k8s-version" in normalized_managed_soperator_upgrade_help
+    assert "--to-os" in normalized_managed_soperator_upgrade_help
+    assert "--to-gpu-stack-preset" in normalized_managed_soperator_upgrade_help
+    assert "--job-policy" in normalized_managed_soperator_upgrade_help
+    assert "--backup-dir" in normalized_managed_soperator_upgrade_help
+    assert "--to-version" not in normalized_managed_soperator_upgrade_help
     assert "--dry-run" in normalized_managed_soperator_upgrade_help
     assert "--interactive --no-interactive" in normalized_managed_soperator_upgrade_help
     assert "Target Soperator chart/app version" in normalized_managed_soperator_upgrade_help
@@ -19292,6 +19582,22 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "Manage existing external Nebius MK8s clusters for Soperator" in (
         normalized_soperator_help
     )
+    assert "backup" in soperator_help
+    assert "discover" in soperator_help
+    assert "restore" in soperator_help
+    assert "backup [OPTIONS] CONFIG_YAML" in ext_soperator_backup_help
+    assert "discover [OPTIONS] CONFIG_OR_DEPLOYMENTS_ROOT" in ext_soperator_discover_help
+    assert "restore [OPTIONS] BACKUP_ARCHIVE" in ext_soperator_restore_help
+    assert "--kube-context" in normalized_ext_soperator_backup_help
+    assert "must be onboarded and accepted" in normalized_ext_soperator_backup_help
+    assert "--cluster-id" in normalized_ext_soperator_discover_help
+    assert "--output-dir" in normalized_ext_soperator_discover_help
+    assert "with exactly one existing project config.yaml" in normalized_ext_soperator_discover_help
+    assert "onboard resolves or creates" not in normalized_ext_soperator_discover_help
+    assert "soperator-discovery/<target>/manifest.json" in normalized_ext_soperator_discover_help
+    assert "--execute" in normalized_ext_soperator_restore_help
+    assert "--approve" in normalized_ext_soperator_restore_help
+    assert "--restore-accounting-db" in normalized_ext_soperator_restore_help
     assert "migrate is only for accepted onboarding plans that contain migration-owned actions" in (
         normalized_soperator_help
     )
@@ -19438,9 +19744,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         "nebius-cxcli ext-soperator migrate ./deployments/tenant/project/config.yaml "
         "--target external-cluster --execute --approve"
     ) in normalized_soperator_migrate_help
-    assert "ext-soperator-onboard-source-discovery-report.json" in (
-        normalized_soperator_migrate_help
-    )
+    assert "soperator-discovery/<target>/manifest.json" in normalized_soperator_migrate_help
     assert "validates the accepted onboarding analysis" in normalized_soperator_migrate_help
     assert "If the accepted onboarding report has no migration-owned actions" in (
         normalized_soperator_migrate_help
@@ -19686,13 +19990,28 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "using --setup." in normalized_email_help
 
 
-def test_managed_soperator_command_group_exposes_upgrade() -> None:
+def test_managed_soperator_command_group_exposes_lifecycle_commands() -> None:
     result = runner.invoke(cli.app, ["soperator", "--help"])
 
     assert result.exit_code == 0, result.output
     output = _plain_output(result.output)
     assert "Manage cxcli-managed Soperator deployments" in output
+    assert "backup" in output
+    assert "discover" in output
+    assert "restore" in output
     assert "upgrade" in output
+
+
+def test_external_soperator_command_group_exposes_backup_restore() -> None:
+    result = runner.invoke(cli.app, ["ext-soperator", "--help"])
+
+    assert result.exit_code == 0, result.output
+    output = _plain_output(result.output)
+    assert "Manage existing external Nebius MK8s clusters for Soperator" in output
+    assert "backup" in output
+    assert "discover" in output
+    assert "restore" in output
+    assert "migrate" in output
 
 
 def test_public_command_help_omits_legacy_mk8s_shortcut_fields() -> None:

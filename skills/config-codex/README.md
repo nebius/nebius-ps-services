@@ -210,10 +210,16 @@ The custom agent config layers define three bounded roles:
 
 They inspect, summarize, and report. The main agent owns edits, final
 decisions, and cleanup. After a helper returns its final summary, the main
-agent should consolidate the useful result and close the completed subagent
-thread when close controls are available and no follow-up is needed.
+agent should consolidate the useful result and close every spawned subagent
+handle with `close_agent` or equivalent close controls once it is completed or
+no longer needed. Completed helpers can remain open and count toward the
+concurrency limit until closed, so cleanup is part of the parent agent's
+completion contract when close controls exist.
 With multiple helpers, it should close each completed handle as its terminal
-result arrives and continue waiting on the remaining handles.
+result arrives and continue waiting on the remaining handles. Before the final
+answer, it should run a final lifecycle sweep over every spawned handle and
+report any handle that could not be closed because close controls were
+unavailable or failed.
 
 The expected operating model is:
 
@@ -223,9 +229,11 @@ Parent agent:
   2. Continue parent work while helpers run when the parent is not blocked.
   3. Wait for helper results before relying on their findings.
   4. Treat wait results and async completion notices as terminal results.
-  5. Close each completed handle as soon as no follow-up is needed.
-  6. Use helper output as evidence, not final authority.
-  7. Own edits, verification, risk judgment, and the final answer.
+  5. Close each completed or no-longer-needed handle when close controls exist.
+  6. Sweep all spawned handles before the final answer.
+  7. Report any unavailable or failed close operation.
+  8. Use helper output as evidence, not final authority.
+  9. Own edits, verification, risk judgment, and the final answer.
 ```
 
 Custom agents require the `multi_agent` feature, the configured `[agents.*]`

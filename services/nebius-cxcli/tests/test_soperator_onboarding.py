@@ -7,6 +7,7 @@ import pytest
 
 import nebius_cxcli.soperator_onboarding as soperator_onboarding_module
 from nebius_cxcli.runtime_validation import validate_runtime_payload
+from nebius_cxcli.soperator_discovery import load_soperator_discovery_bundle
 from nebius_cxcli.soperator_onboarding import (
     ONBOARDING_ACTION_ADOPT_SOPERATOR,
     ONBOARDING_ACTION_APPROVE_MIGRATION,
@@ -1104,11 +1105,11 @@ def test_onboarding_report_writer_prefers_matching_source_discovery_report(tmp_p
             "migration_plan": [],
         }
     }
-    source_report_path = tmp_path / "generated" / "reports" / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
-    source_report_path.parent.mkdir(parents=True)
-    source_report_path.write_text(
-        json.dumps(source_report),
-        encoding="utf-8",
+    write_source_soperator_discovery_report(
+        tmp_path,
+        target_ref="cluster1",
+        snapshot=_snapshot(),
+        report=source_report["report"],
     )
 
     written = write_soperator_onboarding_reports(payload, tmp_path / "generated")
@@ -1974,11 +1975,19 @@ def test_source_discovery_report_writer_persists_full_snapshot(tmp_path) -> None
         cluster_name="cluster1",
     )
 
-    assert path == tmp_path / "generated" / "reports" / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert path == (
+        tmp_path
+        / "generated"
+        / "reports"
+        / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
+        / "cluster1"
+        / "manifest.json"
+    )
+    payload = load_soperator_discovery_bundle(path)
     assert payload["cluster_id"] == "mk8scluster-123"
     assert payload["report"]["state"] == "no-soperator-detected"
     assert payload["snapshot"]["node_groups"]["h100"]["gpu"] is True
+    assert (path.parent / "summary.md").exists()
 
 
 def test_source_discovery_report_writer_is_stable_for_same_discovery(tmp_path) -> None:
@@ -1998,7 +2007,11 @@ def test_source_discovery_report_writer_is_stable_for_same_discovery(tmp_path) -
         cluster_id="mk8scluster-123",
         cluster_name="cluster1",
     )
-    before = path.read_text(encoding="utf-8")
+    before = {
+        item.name: item.read_text(encoding="utf-8")
+        for item in sorted(path.parent.iterdir())
+        if item.is_file()
+    }
 
     report_payload = report.to_dict()
     report_payload["analyzed_at"] = "2030-01-01T00:00:00Z"
@@ -2011,7 +2024,12 @@ def test_source_discovery_report_writer_is_stable_for_same_discovery(tmp_path) -
         cluster_name="cluster1",
     )
 
-    assert path.read_text(encoding="utf-8") == before
+    after = {
+        item.name: item.read_text(encoding="utf-8")
+        for item in sorted(path.parent.iterdir())
+        if item.is_file()
+    }
+    assert after == before
 
 
 def test_onboarding_report_writer_preserves_collection_errors(tmp_path) -> None:

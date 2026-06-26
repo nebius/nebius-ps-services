@@ -46,6 +46,8 @@ def test_design_architecture_summary_matches_upgrade_surface() -> None:
         architecture_flat
     )
     assert "managed `soperator upgrade`" in design_flat
+    assert "Standalone `soperator backup` / `soperator restore`" in design_flat
+    assert "restore-ready YAML for namespaced in-cluster material" in design_flat
     assert (
         "fails fast for `apps:soperator@<target>` with the canonical `soperator upgrade` command"
         in (design_flat)
@@ -375,12 +377,34 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
         "`--to-preset`, `--to-os`, `--to-gpu-stack-preset`, `--to-fabric`, "
         "`--dry-run/--execute`, `--approve/--no-approve`"
     ) in common_flags
+    assert (
+        "- `soperator backup`: `--target`, `--backup-dir`, `--namespace`, "
+        "`--release-name`, `--kube-context`, `--dry-run`, "
+        "`--interactive/--no-interactive`"
+    ) in common_flags_flat
+    assert (
+        "- `soperator restore`: `--target`, `--namespace`, `--kube-context`, "
+        "`--dry-run/--execute`, `--approve/--no-approve`, "
+        "`--restore-accounting-db/--no-restore-accounting-db`"
+    ) in common_flags_flat
     assert "Node-layer upgrades" not in common_flags
     assert "--disruption-policy" not in supporting
     assert "allow-unavailable" not in supporting
     assert (
-        "- `soperator upgrade`: `--target`, `--to-version`, `--dry-run`, "
-        "`--interactive/--no-interactive`"
+        "- `soperator upgrade`: `--target`, `--to-chart-version`, `--to-k8s-version`, "
+        "`--to-os`, `--to-gpu-stack-preset`, `--node-group`, `--strategy`, "
+        "`--strategy-max-surge-count`, `--drain-timeout`, `--backup-dir`, "
+        "`--job-policy`, `--cancel-job`, `--job-wait-timeout`, "
+        "`--job-refresh-interval`, `--dry-run`, `--interactive/--no-interactive`"
+    ) in common_flags_flat
+    assert (
+        "- `ext-soperator backup`: `--target`, `--backup-dir`, `--namespace`, "
+        "`--release-name`, `--kube-context`, `--dry-run`"
+    ) in common_flags_flat
+    assert (
+        "- `ext-soperator restore`: `--target`, `--namespace`, `--kube-context`, "
+        "`--dry-run/--execute`, `--approve/--no-approve`, "
+        "`--restore-accounting-db/--no-restore-accounting-db`"
     ) in common_flags_flat
     assert (
         "- `upgrade helm-chart`: `--to-version`, `--dry-run`, "
@@ -481,9 +505,17 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "`nebius-cxcli soperator` is for Soperator app rows that cxcli already manages" in (
         soperator_flat
     )
+    assert "`soperator backup` and `soperator restore` create or apply restore-capable archives" in (
+        soperator_flat
+    )
     assert "`nebius-cxcli soperator upgrade`" in soperator
     assert "`nebius-cxcli ext-soperator` is for existing Nebius MK8s clusters" in (soperator_flat)
-    assert "For later chart-only upgrades of that cxcli-managed row, use" in soperator_flat
+    assert "`ext-soperator backup` and `ext-soperator restore` use the same archive contract" in (
+        soperator_flat
+    )
+    assert "For later full-cluster or chart-only upgrades of that cxcli-managed row, use" in (
+        soperator_flat
+    )
     assert (
         "It is separate from the Managed Soperator service exposed through the Nebius Console."
         in (soperator_flat)
@@ -503,6 +535,17 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "`nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>`" in soperator
     assert (
         "`nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --dry-run`"
+        in soperator
+    )
+    assert "`nebius-cxcli soperator backup <config.yaml> --target <target>`" in soperator
+    assert "`nebius-cxcli soperator restore <backup.tar.gz> --execute --approve`" in (
+        soperator
+    )
+    assert "`nebius-cxcli ext-soperator backup <config.yaml> --target <target>`" in (
+        soperator
+    )
+    assert (
+        "`nebius-cxcli ext-soperator restore <backup.tar.gz> --kube-context <new-context> --execute --approve`"
         in soperator
     )
     assert soperator.index("`nebius-cxcli soperator upgrade") < soperator.index(
@@ -527,7 +570,9 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
         in soperator
     )
     assert (
-        "`nebius-cxcli soperator upgrade <config.yaml> --target <target> --to-version <chart-version>`"
+        "`nebius-cxcli soperator upgrade <config.yaml> --target <target> "
+        "[--to-chart-version <chart-version>] [--to-k8s-version <major.minor>] "
+        "[--to-os <image>] [--to-gpu-stack-preset <preset>]`"
         in soperator
     )
     assert "Compatibility entry point for Soperator chart upgrades" not in soperator
@@ -544,8 +589,16 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "canonical cxcli-managed Soperator upgrade path is `soperator upgrade`" in (
         soperator_flat
     )
-    assert "live Soperator/Slurm smoke preflight" in soperator_flat
-    assert "soperator.upgrade.to_version" in soperator_flat
+    assert "restore-capable backup" in soperator_flat
+    assert "raw Kubernetes Secret restore material" in soperator_flat
+    assert "chart-managed MariaDB Slurm accounting DB dump" in soperator_flat
+    assert "restore-ready Kubernetes manifests" in soperator_flat
+    assert "Deployments, StatefulSets, DaemonSets, CronJobs, RBAC" in soperator_flat
+    assert "The restore command is dry-run by default and requires `--execute --approve`" in (
+        soperator_flat
+    )
+    assert "does not run raw `kubectl drain`" in soperator_flat
+    assert "soperator.upgrade.to_chart_version" in soperator_flat
     assert "active `component_sources.yaml` Soperator chart pin as the default target version" in (
         soperator_flat
     )
@@ -557,10 +610,10 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
         "Use `ext-soperator onboard` plus `ext-soperator migrate` when the source cluster is not"
         in soperator_flat
     )
-    assert "A full cxcli-managed Soperator cluster upgrade that changes both MK8s" in (
+    assert "A cxcli-managed Soperator cluster upgrade can involve the underlying MK8s" in (
         soperator_flat
     )
-    assert "It is not always a two-phase process for chart-only or MK8s-only changes" in (
+    assert "Use `nebius-cxcli soperator upgrade` as the canonical maintenance-window command" in (
         soperator_flat
     )
     assert (
@@ -679,8 +732,10 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
         "upgrade helm-chart <config.yaml> apps:<chart>@<target> --to-version <chart-version>"
     ) in upgrade
     assert (
-        "soperator upgrade <config.yaml> --target <target> --to-version <chart-version>"
+        "soperator upgrade <config.yaml> --target <target> --to-chart-version <chart-version>"
     ) in upgrade
+    assert "restore-capable backup, live Soperator/Slurm preflight" in upgrade_flat
+    assert "protected config comparison" in upgrade_flat
     assert "Use `soperator upgrade` instead of the generic Helm path" in upgrade_flat
     assert "active `component_sources.yaml` Soperator chart pin as the default target version" in (
         upgrade_flat
@@ -1253,8 +1308,13 @@ def test_docs_define_component_selector_contract() -> None:
     assert "Rerendering preserves command-owned runtime reports" in readme_flat
     assert "All lifecycle reports stay in the single `generated/reports/` folder" in readme_flat
     assert "Each command owns a deterministic latest artifact" in readme_flat
+    assert "`nebius-cxcli soperator discover <config.yaml> --target <target>`" in readme_flat
+    assert (
+        "`nebius-cxcli ext-soperator discover <config.yaml-or-deployments-root> --target <target>`"
+        in readme_flat
+    )
     for report_name in (
-        "`ext-soperator-onboard-source-discovery-report.json`",
+        "`soperator-discovery/<target>/manifest.json`",
         "`ext-soperator-migrate-report.md`",
         "`upgrade-node-template-report.md`",
         "`upgrade-node-template-report.json`",
@@ -1285,7 +1345,7 @@ def test_docs_define_component_selector_contract() -> None:
         in readme_flat
     )
     assert (
-        "`config.yaml` and `generated/reports/ext-soperator-onboard-source-discovery-report.json` into the deploy-owned onboarding shape"
+        "`config.yaml` and the `generated/reports/soperator-discovery/<target>/` bundle into the deploy-owned onboarding shape"
         in readme_flat
     )
     assert "edit `config.yaml`, run `render`, then run `deploy`" in readme_flat
@@ -1334,7 +1394,7 @@ def test_docs_define_component_selector_contract() -> None:
     assert "Reruns are action-idempotent rather than checkpoint-only" in readme_flat
     assert "rechecks the corresponding live state" in readme_flat
     assert (
-        "Rerunning `ext-soperator onboard` is safe and refreshes the source discovery report"
+        "Rerunning `ext-soperator onboard` is safe and refreshes the source discovery bundle"
         in readme_flat
     )
     assert (
@@ -1454,7 +1514,7 @@ def test_docs_define_component_selector_contract() -> None:
         in design_flat
     )
     for report_name in (
-        "`ext-soperator-onboard-source-discovery-report.json`",
+        "`soperator-discovery/<target>/manifest.json`",
         "`ext-soperator-migrate-report.md`",
         "`upgrade-node-template-report.md`",
         "`upgrade-node-template-report.json`",
@@ -1533,7 +1593,7 @@ def test_docs_define_component_selector_contract() -> None:
     )
     assert "rechecks completed action phases against live state before skipping them" in design_flat
     assert "Rerunning `ext-soperator onboard` remains read-only" in design_flat
-    assert "refreshes the source report with provider template evidence" in design_flat
+    assert "refreshes the source discovery bundle with provider template evidence" in design_flat
     assert (
         "removes `upgrade-external-node-template` only when the live control plane and every discovered node-group template already match"
         in design_flat

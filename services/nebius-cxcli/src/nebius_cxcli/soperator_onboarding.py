@@ -21,10 +21,16 @@ import yaml
 
 from .component_instances import normalize_component_token
 from .runtime_config import to_plain_data
+from .soperator_discovery import (
+    SOPERATOR_DISCOVERY_DIR_NAME,
+    load_soperator_discovery_bundle,
+    soperator_discovery_manifest_path,
+    write_soperator_discovery_bundle,
+)
 
 ONBOARDING_SCHEMA = "nebius-cxcli-soperator-onboarding/v2"
 ONBOARDING_REPORT_DIR = "reports"
-SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME = "ext-soperator-onboard-source-discovery-report.json"
+SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME = SOPERATOR_DISCOVERY_DIR_NAME
 ONBOARDING_STATE_NO_SOPERATOR_DETECTED = "no-soperator-detected"
 ONBOARDING_STATE_EXISTING_SOPERATOR_SUPPORTED = "existing-soperator-supported"
 ONBOARDING_STATE_EXISTING_SOPERATOR_TARGET = "existing-soperator-target"
@@ -307,10 +313,13 @@ def soperator_onboarding_report_path(target_ref: str) -> str:
     return f"generated/{ONBOARDING_REPORT_DIR}/soperator-onboarding-{normalized}.json"
 
 
-def source_soperator_discovery_report_path(project_dir: Path) -> Path:
-    return (
-        project_dir / "generated" / ONBOARDING_REPORT_DIR / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
-    )
+def source_soperator_discovery_report_path(
+    project_dir: Path,
+    target_ref: str | None = None,
+) -> Path:
+    if target_ref:
+        return soperator_discovery_manifest_path(project_dir, target_ref)
+    return project_dir / "generated" / ONBOARDING_REPORT_DIR / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
 
 
 def soperator_onboarding_target(
@@ -2898,8 +2907,8 @@ def _matching_source_discovery_report(
     if source_report_path is None or not source_report_path.exists():
         return None
     try:
-        payload = json.loads(source_report_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        payload = load_soperator_discovery_bundle(source_report_path)
+    except (OSError, ValueError, json.JSONDecodeError):
         return None
     if not isinstance(payload, Mapping):
         return None
@@ -3037,7 +3046,10 @@ def write_soperator_onboarding_reports(
             target_ref=target_ref,
             pinned_chart_version=pinned_chart_version,
             pinned_app_version=pinned_app_version,
-            source_report_path=source_soperator_discovery_report_path(generated_dir.parent),
+            source_report_path=source_soperator_discovery_report_path(
+                generated_dir.parent,
+                target_ref,
+            ),
         )
         path = reports_dir / f"soperator-onboarding-{target_ref}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -3070,45 +3082,37 @@ def write_source_soperator_discovery_report(
     report: SoperatorOnboardingReport | Mapping[str, Any],
     cluster_id: str = "",
     cluster_name: str = "",
+    source_kind: str = "external",
+    command: Sequence[str] | None = None,
+    namespace: str = "",
+    release_name: str = "",
+    kube_context: str = "",
+    chart_values: Mapping[str, Any] | None = None,
+    slurm_snapshot: Mapping[str, Any] | None = None,
+    accounting_snapshot: Mapping[str, Any] | None = None,
+    target_versions: Mapping[str, Any] | None = None,
+    output_dir: Path | None = None,
+    redaction: str = "support",
 ) -> Path:
-    path = source_soperator_discovery_report_path(target_dir)
-    report_payload = (
-        report.to_dict() if isinstance(report, SoperatorOnboardingReport) else dict(report)
+    return write_soperator_discovery_bundle(
+        target_dir,
+        target_ref=target_ref,
+        snapshot=snapshot,
+        report=report,
+        source_kind=source_kind,
+        command=command,
+        cluster_id=cluster_id,
+        cluster_name=cluster_name,
+        namespace=namespace,
+        release_name=release_name,
+        kube_context=kube_context,
+        chart_values=chart_values,
+        slurm_snapshot=slurm_snapshot,
+        accounting_snapshot=accounting_snapshot,
+        target_versions=target_versions,
+        output_dir=output_dir,
+        redaction=redaction,
     )
-    payload = {
-        "schema": "nebius-cxcli-source-soperator-discovery/v1",
-        "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-        "target_ref": normalize_component_token(target_ref),
-        "cluster_id": str(cluster_id or "").strip(),
-        "cluster_name": str(cluster_name or "").strip(),
-        "report": report_payload,
-        "snapshot": to_plain_data(snapshot),
-    }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    _preserve_source_discovery_timestamps_if_stable(path=path, payload=payload)
-    rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
-    if path.exists():
-        with suppress(OSError):
-            if path.read_text(encoding="utf-8") == rendered:
-                return path
-    tmp_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as handle:
-            tmp_path = Path(handle.name)
-            handle.write(rendered)
-        tmp_path.replace(path)
-    finally:
-        if tmp_path is not None and tmp_path.exists():
-            with suppress(OSError):
-                tmp_path.unlink()
-    return path
 
 
 def collect_kubectl_soperator_snapshot(

@@ -3853,7 +3853,7 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     stale_report = paths.reports_dir / "old.json"
     deploy_report = paths.reports_dir / "deploy-report.md"
     deploy_detail_report = paths.reports_dir / "deploy-gpu-visibility-report-mk8s.json"
-    onboard_report = paths.reports_dir / "ext-soperator-onboard-source-discovery-report.json"
+    onboard_report = paths.reports_dir / "soperator-discovery" / "external-cluster"
     migrate_report = paths.reports_dir / "ext-soperator-migrate-report.md"
     migration_detail_report = paths.reports_dir / "deploy-smoke-report-external.json"
     unreferenced_migration_like_report = paths.reports_dir / "deploy-smoke-report-old.json"
@@ -3881,7 +3881,8 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
         encoding="utf-8",
     )
     deploy_detail_report.write_text('{"status": "passed"}\n', encoding="utf-8")
-    onboard_report.write_text('{"schema": "onboard"}\n', encoding="utf-8")
+    onboard_report.mkdir(parents=True)
+    (onboard_report / "manifest.json").write_text('{"schema": "discovery"}\n', encoding="utf-8")
     migrate_report.write_text(
         "# Soperator Migration Report\n\n- `deploy-smoke-report-external.json`: `PASS` - ok\n",
         encoding="utf-8",
@@ -3903,7 +3904,9 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     assert not stale_report.exists()
     assert deploy_report.read_text(encoding="utf-8").startswith("# Deploy Report")
     assert deploy_detail_report.read_text(encoding="utf-8") == '{"status": "passed"}\n'
-    assert onboard_report.read_text(encoding="utf-8") == '{"schema": "onboard"}\n'
+    assert (onboard_report / "manifest.json").read_text(encoding="utf-8") == (
+        '{"schema": "discovery"}\n'
+    )
     assert migrate_report.read_text(encoding="utf-8").startswith("# Soperator Migration Report")
     assert migration_detail_report.read_text(encoding="utf-8") == '{"passed": true}\n'
     assert not unreferenced_migration_like_report.exists()

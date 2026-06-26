@@ -6,6 +6,26 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Added read-only Soperator discovery commands: `soperator discover` for
+  cxcli-managed clusters and `ext-soperator discover` for external clusters.
+  Both write the canonical support-safe
+  `generated/reports/soperator-discovery/<target>/` bundle with manifest,
+  identity, Kubernetes, Slurm, accounting, customizations, fingerprints,
+  findings, and summary files; discovery is not a backup and omits raw Secret
+  values, SQL, DB dumps, tokens, and cert material.
+- Added standalone restore-capable Soperator backup/restore commands:
+  `soperator backup`, `soperator restore`, `ext-soperator backup`, and
+  `ext-soperator restore`. The backup archive now includes raw and
+  restore-ready Kubernetes in-cluster resources plus chart-managed MariaDB
+  accounting DB material, while restore validates checksums and stays dry-run
+  until `--execute --approve`.
+- Changed managed `soperator upgrade` into the canonical cxcli-managed
+  Soperator cluster upgrade command. It now accepts `--to-chart-version`,
+  optional MK8s node-template target flags, Slurm running-job policy flags, and
+  `--backup-dir`; creates a restore-capable local backup with raw Kubernetes
+  Secret material plus chart-managed MariaDB accounting DB dump before mutation;
+  and writes the combined checkpoint/report without requiring a separate
+  render/deploy step.
 - Fixed `ext-soperator onboard` for external MK8s clusters with heterogeneous
   GPU worker groups. Target-scoped GPU app value materialization now accepts
   mixed GPU presets and RDMA/non-RDMA groups when the resolved chart defaults do
@@ -258,7 +278,7 @@ All notable changes to this project are tracked here. This changelog follows
   `upgrade node-group --execute --approve` writes
   `upgrade-node-group-report.md` / `.json` at the approved pre-mutation gate,
   external Soperator source discovery is now
-  `ext-soperator-onboard-source-discovery-report.json`, external migration uses
+  `soperator-discovery/<target>/manifest.json`, external migration uses
   `ext-soperator-migrate-report.md`, and cxcli-managed Soperator chart upgrades
   use `soperator-upgrade-report.md` / `soperator-upgrade-report.json`; the old
   generic report names are not kept as aliases.
@@ -326,7 +346,7 @@ All notable changes to this project are tracked here. This changelog follows
 - Removed the Soperator compatibility redirect from
   `upgrade helm-chart apps:soperator@<target>`; Soperator chart upgrades now
   fail fast there and point to the single canonical
-  `soperator upgrade <config.yaml> --target <target> --to-version <version>`
+  `soperator upgrade <config.yaml> --target <target> --to-chart-version <version>`
   command.
 - Exposed the live Nebius MK8s compatibility-matrix summary in infra upgrade
   plans: `upgrade node-template` now prints the returned OS and
@@ -470,7 +490,7 @@ All notable changes to this project are tracked here. This changelog follows
   easier to recognize.
 - Fixed `render` so the transactional `generated/` replacement preserves
   command-owned runtime reports such as `deploy-report.md`, external Soperator
-  `ext-soperator-onboard-source-discovery-report.json`,
+  `soperator-discovery/<target>/manifest.json`,
   `ext-soperator-migrate-report.md`, `upgrade-node-template-report.md` /
   `.json`, `upgrade-node-group-report.md` / `.json`,
   `soperator-upgrade-report.md` / `soperator-upgrade-report.json`, and JSON
@@ -575,7 +595,7 @@ All notable changes to this project are tracked here. This changelog follows
 - Improved external Soperator migration completion handoff. After a fully
   completed `ext-soperator migrate --execute`, cxcli now performs a live
   post-migration discovery refresh and rewrites `config.yaml` plus
-  `generated/reports/ext-soperator-onboard-source-discovery-report.json` into
+  `generated/reports/soperator-discovery/<target>/manifest.json` into
   the same deploy-owned onboarding shape that a rerun of `ext-soperator onboard` would produce, while
   leaving pending or still-migration-owned plans blocked from normal deploy. The
   README and design guide now call out `generated/reports/ext-soperator-migrate-report.md`
@@ -762,7 +782,7 @@ All notable changes to this project are tracked here. This changelog follows
   next-step hints now prefer plain `deploy <config.yaml>` and document
   `deploy --target <target-id>` only as a narrowing selector.
 - Tightened external Soperator rerun idempotency. No-op `ext-soperator
-  onboard` reruns now keep stable source discovery reports instead of churning
+  onboard` reruns now keep stable source discovery bundles instead of churning
   timestamps that invalidate migration checkpoints, and `ext-soperator
   migrate --execute` rechecks completed selected actions against live state so
   missing GPU-stack releases, node-template drift, aligned-SFS gaps, or target
@@ -888,7 +908,7 @@ All notable changes to this project are tracked here. This changelog follows
 - Added `nebius-cxcli ext-soperator migrate <config.yaml>` as the explicit
   Soperator migration command surface. It validates the accepted onboarding
   analysis, reads
-  `generated/reports/ext-soperator-onboard-source-discovery-report.json`, prints
+  `generated/reports/soperator-discovery/<target>/manifest.json`, prints
   the target remediation and compute/storage migration plan in dry-run mode, and
   runs checkpointed live phases in `--execute` mode. The executor rechecks the
   live source release and discovery fingerprint before the first mutation,
@@ -1287,7 +1307,7 @@ All notable changes to this project are tracked here. This changelog follows
   `component add soperator@<external-target>` now infers onboarding for
   existing external MK8s targets and repairs missing target-scoped
   Soperator-required app rows without adding Terraform MK8s/SFS rows. External
-  onboarding now writes a source-cluster discovery report next to the project
+  onboarding now writes a source-cluster discovery bundle next to the project
   config, records stable `no-soperator-detected` or existing-Soperator
   migration states, matches installed releases against committed migration
   profile history, and plans `keep-existing-storage` or `create-aligned-sfs`

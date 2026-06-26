@@ -148,8 +148,15 @@ Subagents inspect, summarize, and report. They do not edit code. The main agent
 owns consolidation, implementation, final verification, and the final answer.
 The main agent also owns cleanup: after spawning a helper, it should wait for
 the final summary, fold the useful result back into the parent thread, and
-close the completed subagent thread when close controls are available and no
-follow-up is needed.
+close every spawned subagent handle with `close_agent` or equivalent close
+controls once it is completed or no longer needed.
+Completed agents can remain open and count toward the concurrency limit until
+they are closed, so cleanup is part of the parent agent's completion contract
+when close controls exist.
+If the parent is finalizing while a helper is still running and the result is
+no longer needed, it should close that handle before the final response. If the
+result is still needed, it should wait for a terminal status, consolidate the
+result, then close the handle.
 Do not spawn every configured role by default. Keep `max_threads = 4` as the
 conservative local thread budget. Use `repo_mapper` and `test_strategist` early
 only when their work is useful and independent, close them after consolidation,
@@ -157,6 +164,9 @@ then use `risk_reviewer` near the end only for non-trivial or risky changes.
 When several helpers are running, the main agent should close each completed
 handle as soon as its terminal result arrives, then keep waiting for the
 remaining handles until all spawned helpers are closed.
+Before the final answer, the main agent should run a final lifecycle sweep over
+every spawned handle and report any handle that could not be closed because
+close controls were unavailable or failed.
 
 Subagents are not a guaranteed visible button or separate UI in every surface.
 They depend on the `multi_agent` feature, current runtime tools, configured
@@ -228,9 +238,11 @@ Parent agent:
   2. Continue parent work while helpers run when the parent is not blocked.
   3. Wait for helper results before relying on their findings.
   4. Treat wait results and async completion notices as terminal results.
-  5. Close each completed handle as soon as no follow-up is needed.
-  6. Use helper output as evidence, not final authority.
-  7. Own edits, verification, risk judgment, and the final answer.
+  5. Close each completed or no-longer-needed handle when close controls exist.
+  6. Sweep all spawned handles before the final answer.
+  7. Report any unavailable or failed close operation.
+  8. Use helper output as evidence, not final authority.
+  9. Own edits, verification, risk judgment, and the final answer.
 ```
 
 ## Runtime Boundaries
@@ -246,9 +258,11 @@ What it can do is change future behavior:
 - delegate broad read-only mapping and validation planning when authorized by
   the prompt or local hook policy, useful, and available
 - require concise summaries from subagents
-- close completed subagent threads after their results are consolidated, when
-  close controls are available
+- close completed or no-longer-needed subagent threads after their results are
+  consolidated, when close controls are available
 - repeat wait-and-close until every spawned subagent handle is closed
+- sweep spawned handles before the final answer and report any close failure or
+  unavailable close controls
 - push final risk review into a bounded read-only pass
 
 If context is still growing too quickly, check the working pattern first:
@@ -268,8 +282,9 @@ For a complex task, the intended flow is:
 4. Use read-only subagents when they reduce parent-thread noise, delegation is
    authorized by the prompt or local hook policy, and the current runtime
    permits delegation. Use `repo_mapper` and `test_strategist` early only when
-   useful and independent; close completed helpers after consolidation. Do not
-   spawn every configured role by default.
+   useful and independent; close completed helpers after consolidation and
+   close no-longer-needed running helpers before finalizing. Do not spawn every
+   configured role by default.
 5. Implement the smallest coherent change in the main thread.
 6. Inspect the diff and run focused validation.
 7. Use `risk_reviewer` near the end only for non-trivial or risky changes.
@@ -305,7 +320,9 @@ The main agent does this after delegation:
   "Keep working when not blocked.
    Wait for final helper summaries.
    Treat wait results and async completion notices as terminal.
-   Close each completed handle.
+   Close each completed or no-longer-needed handle.
+   Sweep all spawned handles before the final answer.
+   Report unavailable or failed cleanup.
    Use helper output as evidence.
    Own the final decision."
 ```
@@ -431,9 +448,9 @@ not permitted. A useful non-mutating probe is:
 
 ```text
 Use $global-context-management. Explicitly spawn one read-only repo_mapper
-subagent to inspect this repository. Do not edit files. Wait for it, then
-report whether the subagent was spawned, and keep raw command output out of
-the answer.
+subagent to inspect this repository. Do not edit files. Wait for it, close it
+after the result when close controls are available, then report whether the
+subagent was spawned and closed. Keep raw command output out of the answer.
 ```
 
 To test policy-driven injection without hardcoding agent names into the public

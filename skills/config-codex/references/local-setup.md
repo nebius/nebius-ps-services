@@ -199,7 +199,9 @@ read-only helpers. After authorization, the prompt does not need to name a
 specific helper role.
 The parent agent still owns lifecycle cleanup: wait for returned summaries,
 consolidate them, and close completed subagent threads when close controls are
-available and no follow-up is needed.
+available. Before the final response, close every spawned subagent handle that
+is completed or no longer needed. If close controls are unavailable or cleanup
+fails, report the residual open or running handle instead of leaving it silent.
 With multiple subagents, close each completed handle as its terminal result
 arrives and continue waiting on the remaining handles.
 
@@ -392,7 +394,7 @@ Then run an explicit subagent probe:
 
 ```bash
 codex exec --sandbox read-only --cd <PROJECT_ROOT> \
-  "Use $global-context-management. Explicitly spawn one read-only repo_mapper subagent to inspect this repository. Do not edit files. Wait for it, then report whether the subagent was spawned."
+  "Use $global-context-management. Explicitly spawn one read-only repo_mapper subagent to inspect this repository. Do not edit files. Wait for it, close it after the result when close controls are available, then report whether the subagent was spawned and closed."
 ```
 
 If that succeeds but ordinary complex prompts do not spawn subagents, the
