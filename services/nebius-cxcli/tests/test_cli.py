@@ -5488,6 +5488,167 @@ def test_soperator_onboard_noninteractive_uses_source_version_for_crds_only_clus
     assert onboarding["migration_profile_id"] == "v3-to-target"
 
 
+def test_soperator_onboard_noninteractive_uses_explicit_target_chart_version(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+    config_path = _project_config_path(deployments_root)
+
+    def _snapshot(*, kube_context: str) -> dict[str, object]:
+        assert kube_context == "legacy-context"
+        return {
+            "node_groups": {"gpu-pool": {"gpu": True, "node_count": 1}},
+            "helm_releases": [],
+            "crds": ["slurmclusters.slurm.nebius.ai"],
+            "namespaces": ["soperator"],
+            "collection_errors": [],
+        }
+
+    target_chart_version = "4.0.1-ps.2"
+    monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _snapshot)
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "onboard",
+            str(config_path),
+            "--cluster-id",
+            "mk8scluster-legacy",
+            "--target-id",
+            "legacy-cluster",
+            "--kube-context",
+            "legacy-context",
+            "--storage-mode",
+            "create-aligned-sfs",
+            "--compute-mode",
+            "create-aligned-node-groups",
+            "--source-version",
+            "3.0.5",
+            "--to-chart-version",
+            target_chart_version,
+            "--no-interactive",
+            "--no-validate-sources",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert f"Target Soperator version: {target_chart_version}" in result.output
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    target = payload["deploy"]["targets"][0]
+    onboarding = target["soperator_onboarding"]
+    assert onboarding["target_version"] == target_chart_version
+    soperator = next(row for row in payload["apps"]["charts"] if row["id"] == "soperator")
+    assert soperator["version"] == target_chart_version
+
+    manifest = json.loads(
+        _soperator_discovery_manifest_path(config_path, "legacy-cluster").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert manifest["target_versions"]["chart_version"] == target_chart_version
+    command = manifest["command"]
+    assert command[command.index("--to-chart-version") + 1] == target_chart_version
+
+
+def test_soperator_onboard_noninteractive_validates_explicit_target_chart_version(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+    config_path = _project_config_path(deployments_root)
+
+    def _snapshot(*, kube_context: str) -> dict[str, object]:
+        assert kube_context == "legacy-context"
+        return {
+            "node_groups": {"gpu-pool": {"gpu": True, "node_count": 1}},
+            "helm_releases": [],
+            "crds": ["slurmclusters.slurm.nebius.ai"],
+            "namespaces": ["soperator"],
+            "collection_errors": [],
+    }
+
+    validation_calls: list[dict[str, object]] = []
+    target_chart_version = "4.0.1-ps.2"
+    expected_chart_name, expected_chart_repo = cli_module._soperator_target_chart_source()
+    monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _snapshot)
+    monkeypatch.setattr(
+        cli_module,
+        "_validate_component_sources_or_raise",
+        lambda **_kwargs: None,
+    )
+
+    def _validation_issues(**kwargs: object) -> list[str]:
+        validation_calls.append(dict(kwargs))
+        return []
+
+    monkeypatch.setattr(
+        cli_module,
+        "_resolve_helm_chart_validation_issues",
+        _validation_issues,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "onboard",
+            str(config_path),
+            "--cluster-id",
+            "mk8scluster-legacy",
+            "--target-id",
+            "legacy-cluster",
+            "--kube-context",
+            "legacy-context",
+            "--storage-mode",
+            "create-aligned-sfs",
+            "--compute-mode",
+            "create-aligned-node-groups",
+            "--source-version",
+            "3.0.5",
+            "--to-chart-version",
+            target_chart_version,
+            "--no-interactive",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert validation_calls == [
+        {
+            "chart_name": expected_chart_name,
+            "chart_repo": expected_chart_repo,
+            "chart_version": target_chart_version,
+            "chart_meta_cache": {},
+        }
+    ]
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]
+    assert onboarding["target_version"] == target_chart_version
+    soperator = next(row for row in payload["apps"]["charts"] if row["id"] == "soperator")
+    assert soperator["version"] == target_chart_version
+
+
 def test_soperator_onboard_deployments_root_creates_project_config(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -6387,6 +6548,7 @@ def test_soperator_onboard_interactive_prints_mode_choice_guidance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
+    target_chart_version = cli_module._soperator_upgrade_catalog_to_version_default()
 
     class FakeConsole:
         is_terminal = False
@@ -6451,6 +6613,8 @@ def test_soperator_onboard_interactive_prints_mode_choice_guidance(
     row = cli_module._prompt_soperator_onboarding_target_row(
         payload={"client_info": {"nebius": {"project_id": "project-123"}}},
         project_id="project-123",
+        to_chart_version=target_chart_version,
+        validate_sources=False,
     )
 
     assert row["soperator_onboarding"]["storage_mode"] == "keep-existing-storage"
@@ -6471,6 +6635,72 @@ def test_soperator_onboard_option_path_rejects_invalid_compute_mode() -> None:
             storage_mode=None,
             compute_mode="legacy-compute",
         )
+
+
+def test_soperator_onboard_target_chart_version_validates_non_default_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        cli_module,
+        "_soperator_onboarding_target_version_default",
+        lambda: "4.0.2-ps.3",
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_soperator_target_chart_source",
+        lambda: ("soperator", "oci://example.invalid/soperator"),
+    )
+
+    def _validation_issues(**kwargs: object) -> list[str]:
+        calls.append(dict(kwargs))
+        return []
+
+    monkeypatch.setattr(
+        cli_module,
+        "_resolve_helm_chart_validation_issues",
+        _validation_issues,
+    )
+
+    assert (
+        cli_module._validate_soperator_onboarding_target_chart_version(
+            "4.0.1-ps.2",
+            validate_sources=True,
+        )
+        == "4.0.1-ps.2"
+    )
+    assert calls == [
+        {
+            "chart_name": "soperator",
+            "chart_repo": "oci://example.invalid/soperator",
+            "chart_version": "4.0.1-ps.2",
+            "chart_meta_cache": {},
+        }
+    ]
+
+
+def test_soperator_onboard_target_chart_version_skips_default_source_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cli_module,
+        "_soperator_onboarding_target_version_default",
+        lambda: "4.0.2-ps.3",
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_resolve_helm_chart_validation_issues",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("default should not revalidate")),
+    )
+
+    assert (
+        cli_module._validate_soperator_onboarding_target_chart_version(
+            "4.0.2-ps.3",
+            validate_sources=True,
+        )
+        == "4.0.2-ps.3"
+    )
 
 
 def test_soperator_onboard_option_path_allows_explicit_keep_existing_storage(
@@ -7912,8 +8142,10 @@ def test_soperator_onboard_prints_target_compatible_layout_decisions(
     command = manifest["command"]
     assert command[command.index("--storage-mode") + 1] == "create-aligned-sfs"
     assert command[command.index("--compute-mode") + 1] == "create-aligned-node-groups"
+    assert command[command.index("--to-chart-version") + 1] == _soperator_test_chart_version()
     assert "--no-interactive" in command
     assert "--no-validate-sources" in command
+    assert manifest["target_versions"]["chart_version"] == _soperator_test_chart_version()
     assert manifest["target_versions"]["k8s_version"] == "1.33"
     assert manifest["target_versions"]["os"] == "ubuntu24.04"
     assert manifest["target_versions"]["gpu_stack_preset"] == "cuda13.0"

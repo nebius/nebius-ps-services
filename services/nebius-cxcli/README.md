@@ -2705,6 +2705,7 @@ nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root> \
   --target-id <logical-target-id> \
   --storage-mode keep-existing-storage \
   --compute-mode keep-existing-compute \
+  --to-chart-version <soperator-chart-version> \
   --no-interactive
 ```
 
@@ -2747,6 +2748,14 @@ Important onboarding flags:
 - When unsure about storage or compute mode, choose the aligned SFS and
   node-group options; cxcli will keep existing storage or compute automatically
   when the live cluster already satisfies the target Soperator layout.
+- `--to-chart-version`: target Soperator chart version for onboarding analysis
+  and the accepted external upgrade plan. Defaults to the
+  `component_sources.yaml` Soperator chart pin. Interactive onboarding prompts
+  with that default; non-interactive runs can pass an exact supported chart
+  version. With source validation enabled, non-default versions must resolve
+  from the configured Soperator chart source. cxcli persists the value to
+  `deploy.targets[].soperator_onboarding.target_version` and the Soperator app
+  chart row so `render` and `ext-soperator upgrade` target the same version.
 - `--source-version`: source Soperator version to use when discovery finds
   Soperator CRDs but no compatible Helm release version. Interactive onboarding
   asks the operator to choose a source version from the exact committed
@@ -4645,8 +4654,8 @@ Common command flags:
 - `ext-soperator onboard`: `--client-name`, `--tenant-id`, `--project-id`,
   `--region-id`, `--email`, `--cluster-id`, `--target-id`,
   `--kube-context`, `--access`, `--storage-mode`, `--compute-mode`,
-  `--source-version`, `--worker-rollout-strategy`, `--worker-wave-groups`,
-  `--worker-wave-percent`, `--max-parallel-worker-groups`,
+  `--to-chart-version`, `--source-version`, `--worker-rollout-strategy`,
+  `--worker-wave-groups`, `--worker-wave-percent`, `--max-parallel-worker-groups`,
   `--strategy-max-surge-count`, `--strategy-max-unavailable-count`,
   `--strategy-drain-timeout`, `--validate-sources/--no-validate-sources`,
   `--no-interactive`

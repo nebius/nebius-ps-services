@@ -424,8 +424,8 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
         "- `ext-soperator onboard`: `--client-name`, `--tenant-id`, `--project-id`, "
         "`--region-id`, `--email`, `--cluster-id`, `--target-id`, "
         "`--kube-context`, `--access`, `--storage-mode`, `--compute-mode`, "
-        "`--source-version`, `--worker-rollout-strategy`, `--worker-wave-groups`, "
-        "`--worker-wave-percent`, `--max-parallel-worker-groups`, "
+        "`--to-chart-version`, `--source-version`, `--worker-rollout-strategy`, "
+        "`--worker-wave-groups`, `--worker-wave-percent`, `--max-parallel-worker-groups`, "
         "`--strategy-max-surge-count`, `--strategy-max-unavailable-count`, "
         "`--strategy-drain-timeout`, `--validate-sources/--no-validate-sources`, "
         "`--no-interactive`"
@@ -1312,6 +1312,7 @@ def test_docs_define_component_selector_contract() -> None:
         "  --target-id <logical-target-id> \\\n"
         "  --storage-mode keep-existing-storage \\\n"
         "  --compute-mode keep-existing-compute \\\n"
+        "  --to-chart-version <soperator-chart-version> \\\n"
         "  --no-interactive"
     ) in readme
     assert (
@@ -1431,6 +1432,13 @@ def test_docs_define_component_selector_contract() -> None:
     assert "Onboarding asks for two independent layers" in readme_flat
     assert "compute mode is `keep-existing-compute` or `create-aligned-node-groups`" in readme_flat
     assert "Keeping existing compute preserves the discovered node groups" in readme_flat
+    assert "`--to-chart-version`: target Soperator chart version" in readme
+    assert "Defaults to the `component_sources.yaml` Soperator chart pin" in readme_flat
+    assert "non-default versions must resolve from the configured Soperator chart source" in (
+        readme_flat
+    )
+    assert "`deploy.targets[].soperator_onboarding.target_version`" in readme_flat
+    assert "`render` and `ext-soperator upgrade` target the same version" in readme_flat
     assert "discovered storage sizes are lower bounds" in readme_flat
     assert "Render/deploy must not request a smaller PVC/PV size" in readme_flat
     assert "from the live node-group ids" in readme_flat

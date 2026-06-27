@@ -20318,6 +20318,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--storage-mode" in normalized_soperator_onboard_help
     assert "--compute-mode" in normalized_soperator_onboard_help
     assert "--source-version" in normalized_soperator_onboard_help
+    assert "--to-chart-version" in normalized_soperator_onboard_help
     assert "--validate-sources --no-validate-sources" in normalized_soperator_onboard_help
     assert "keep-existing-storage preserves live PVC/PV sizes and selectors" in (
         normalized_soperator_onboard_help
@@ -20328,10 +20329,15 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "source version used only when discovery cannot infer" in (
         normalized_soperator_onboard_help
     )
+    assert "Target Soperator chart version for onboarding analysis" in (
+        normalized_soperator_onboard_help
+    )
+    assert "component_sources.yaml Soperator chart pin" in normalized_soperator_onboard_help
     assert "--cluster-id mk8scluster-..." in normalized_soperator_onboard_help
     assert "--target-id external-cluster" in normalized_soperator_onboard_help
     assert "--storage-mode keep-existing-storage" in normalized_soperator_onboard_help
     assert "--compute-mode keep-existing-compute" in normalized_soperator_onboard_help
+    assert "--to-chart-version <chart-version>" in normalized_soperator_onboard_help
     assert "--worker-rollout-strategy" in normalized_soperator_onboard_help
     assert "--worker-wave-groups" in normalized_soperator_onboard_help
     assert "--worker-wave-percent" in normalized_soperator_onboard_help

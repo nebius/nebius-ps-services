@@ -55,6 +55,13 @@ All notable changes to this project are tracked here. This changelog follows
   `.nebius-cxcli/ext-soperator-upgrades/<target>/checkpoint.json`, write
   `generated/reports/ext-soperator-upgrade-report.md` and `.json`, and handle
   affected-node Slurm jobs with `--job-policy` before MK8s rollout work.
+- Added external Soperator onboarding target chart selection. The
+  `ext-soperator onboard` command now accepts `--to-chart-version`, prompts
+  with the `component_sources.yaml` Soperator chart pin by default, validates
+  non-default values against the configured Soperator chart source when source
+  validation is enabled, and keeps
+  `deploy.targets[].soperator_onboarding.target_version` aligned with the
+  Soperator app chart row.
 - Clarified external Soperator safe-surge worker wave controls. Fixed
   `worker_wave_groups` now owns the exact concurrent worker-group count, while
   `max_parallel_worker_groups` is accepted only as an optional cap for

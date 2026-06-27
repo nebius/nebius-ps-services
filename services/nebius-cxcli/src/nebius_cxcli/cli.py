@@ -14256,6 +14256,116 @@ def _soperator_catalog_pinned_versions() -> tuple[str, str]:
     return chart_version, app_version
 
 
+def _soperator_onboarding_target_version_default() -> str:
+    default_version = _soperator_upgrade_catalog_to_version_default()
+    if default_version:
+        return default_version
+    chart_version, _app_version = _soperator_catalog_pinned_versions()
+    return chart_version
+
+
+def _soperator_target_chart_source() -> tuple[str, str]:
+    chart = helm_chart_source_by_id(_SOPERATOR_APP_ID)
+    if chart is None:
+        raise RuntimeError("Soperator chart source is not declared in component_sources.yaml.")
+    portable = getattr(chart, "portable_source", None)
+    chart_name = (
+        _non_empty_text(getattr(portable, "chart_name", ""))
+        or _non_empty_text(getattr(chart, "chart_name", ""))
+        or _SOPERATOR_APP_ID
+    )
+    chart_repo = _non_empty_text(getattr(portable, "repo", "")) or _non_empty_text(
+        getattr(chart, "repo", "")
+    )
+    if not chart_repo:
+        raise RuntimeError("Soperator chart source is missing source.portable.repo.")
+    return chart_name, chart_repo
+
+
+def _validate_soperator_onboarding_target_chart_version(
+    value: object,
+    *,
+    validate_sources: bool,
+) -> str:
+    version = _validate_helm_chart_version_value(
+        str(value or ""),
+        option_name="--to-chart-version",
+    )
+    if not validate_sources:
+        return version
+    default_version = _soperator_onboarding_target_version_default()
+    if version == default_version:
+        return version
+    chart_name, chart_repo = _soperator_target_chart_source()
+    issues = _resolve_helm_chart_validation_issues(
+        chart_name=chart_name,
+        chart_repo=chart_repo,
+        chart_version=version,
+        chart_meta_cache={},
+    )
+    if issues:
+        raise RuntimeError(
+            "Soperator target chart version validation failed for "
+            f"'{version}':\n  - " + "\n  - ".join(issues)
+        )
+    return version
+
+
+def _warn_if_soperator_onboarding_target_appears_lower(
+    *,
+    target_version: str,
+    default_version: str,
+) -> None:
+    comparison = _compare_chart_versions(target_version, default_version)
+    if comparison is None or comparison >= 0:
+        return
+    console.print(
+        f"{warning_markup('WARNING:', bold=True)} selected Soperator target chart version "
+        f"{target_version} appears lower than the catalog default {default_version}. "
+        "cxcli will record this accepted onboarding target, but Helm/Soperator "
+        "downgrades are not guaranteed safe; review release notes, CRDs/schema "
+        "migrations, application state, and backups before executing.",
+        soft_wrap=True,
+    )
+
+
+def _resolve_soperator_onboarding_target_chart_version(
+    *,
+    to_chart_version: str | None,
+    interactive: bool,
+    validate_sources: bool,
+) -> str:
+    default_version = _soperator_onboarding_target_version_default()
+    if not default_version:
+        raise RuntimeError(
+            "Soperator onboarding could not determine the catalog-pinned target "
+            "chart version from component_sources.yaml."
+        )
+    raw_version = _non_empty_text(to_chart_version)
+    if not raw_version and interactive:
+        raw_version, should_stop = _prompt_scalar_override(
+            "deploy.targets[].soperator_onboarding.target_version",
+            default_version,
+            prompt_hint="catalog default",
+            type_hint="string",
+            required=True,
+        )
+        if should_stop:
+            raise _WizardQuitRequested
+        if _wizard_backtrack_requested(raw_version):
+            raw_version = default_version
+    selected_version = raw_version or default_version
+    version = _validate_soperator_onboarding_target_chart_version(
+        selected_version,
+        validate_sources=validate_sources,
+    )
+    _warn_if_soperator_onboarding_target_appears_lower(
+        target_version=version,
+        default_version=default_version,
+    )
+    return version
+
+
 def _soperator_source_version_sort_key(version: str) -> tuple[int, ...]:
     match = re.search(r"([0-9]+(?:\.[0-9]+){0,3})", str(version or ""))
     if match is None:
@@ -15171,6 +15281,7 @@ def _soperator_onboard_bundle_command_args(
     storage_mode: str | None = None,
     compute_mode: str | None = None,
     source_version: str | None = None,
+    to_chart_version: str | None = None,
     worker_rollout_strategy: str | None = None,
     worker_wave_groups: int | None = None,
     worker_wave_percent: int | None = None,
@@ -15220,6 +15331,13 @@ def _soperator_onboard_bundle_command_args(
         compute_mode if compute_mode is not None else accepted_compute_mode,
     )
     _append_text_option("--source-version", source_version)
+    accepted_target_version = ""
+    if isinstance(onboarding, Mapping) and use_accepted_row:
+        accepted_target_version = _non_empty_text(onboarding.get("target_version"))
+    _append_text_option(
+        "--to-chart-version",
+        to_chart_version if to_chart_version is not None else accepted_target_version,
+    )
     _append_text_option("--worker-rollout-strategy", worker_rollout_strategy)
     if worker_wave_groups is not None:
         args.extend(["--worker-wave-groups", str(worker_wave_groups)])
@@ -16174,6 +16292,8 @@ def _prompt_soperator_onboarding_target_row(
     storage_mode: str | None = None,
     compute_mode: str | None = None,
     source_version: str | None = None,
+    to_chart_version: str | None = None,
+    validate_sources: bool = True,
     worker_rollout_strategy: str | None = None,
     worker_wave_groups: int | None = None,
     worker_wave_percent: int | None = None,
@@ -16226,7 +16346,12 @@ def _prompt_soperator_onboarding_target_row(
                 cluster_id=cluster_id,
                 access="external",
             )
-    chart_version, app_version = _soperator_catalog_pinned_versions()
+    chart_version = _resolve_soperator_onboarding_target_chart_version(
+        to_chart_version=to_chart_version,
+        interactive=True,
+        validate_sources=validate_sources,
+    )
+    app_version = chart_version
     with _soperator_onboarding_status("Building Soperator upgrade profile diff..."):
         report = analyze_soperator_onboarding_snapshot(
             snapshot,
@@ -16380,7 +16505,9 @@ def _soperator_onboarding_target_row_from_options(
     storage_mode: str | None,
     compute_mode: str | None = None,
     source_version: str | None = None,
+    to_chart_version: str | None = None,
     interactive: bool = False,
+    validate_sources: bool = True,
     worker_rollout_strategy: str | None = None,
     worker_wave_groups: int | None = None,
     worker_wave_percent: int | None = None,
@@ -16433,7 +16560,12 @@ def _soperator_onboarding_target_row_from_options(
         or normalize_component_token(normalized_cluster_id)
         or "mk8s"
     )
-    chart_version, app_version = _soperator_catalog_pinned_versions()
+    chart_version = _resolve_soperator_onboarding_target_chart_version(
+        to_chart_version=to_chart_version,
+        interactive=interactive,
+        validate_sources=validate_sources,
+    )
+    app_version = chart_version
     with _soperator_onboarding_status("Building Soperator upgrade profile diff..."):
         report = analyze_soperator_onboarding_snapshot(
             snapshot,
@@ -16593,6 +16725,30 @@ def _ensure_soperator_onboarding_app_row(
     return True
 
 
+def _sync_soperator_onboarding_app_chart_version(
+    payload: dict[str, Any],
+    *,
+    target_ref: str,
+    target_row: Mapping[str, Any],
+) -> None:
+    onboarding = target_row.get("soperator_onboarding")
+    if not isinstance(onboarding, Mapping):
+        return
+    target_version = _non_empty_text(onboarding.get("target_version"))
+    if not target_version:
+        return
+    charts = _scope_rows(payload, scope="apps")
+    for row in charts:
+        if not isinstance(row, dict):
+            continue
+        if (
+            component_type_id(row) == _SOPERATOR_APP_ID
+            and component_instance_id(row) == target_ref
+        ):
+            row["version"] = target_version
+            return
+
+
 def _apply_soperator_onboarding_to_payload(
     payload: dict[str, Any],
     *,
@@ -16619,6 +16775,11 @@ def _apply_soperator_onboarding_to_payload(
     _materialize_single_target_app_bindings(payload)
     _ensure_soperator_onboarding_target(payload, interactive=False)
     _materialize_soperator_component_defaults(payload)
+    _sync_soperator_onboarding_app_chart_version(
+        payload,
+        target_ref=target_ref,
+        target_row=target_row,
+    )
     _merge_soperator_onboarding_adoption_values_for_target(
         payload,
         target_ref=target_ref,
@@ -45720,6 +45881,7 @@ def ext_soperator_discover_command(
         "--tenant-id TENANT --project-id PROJECT --region-id eu-north1 "
         "--cluster-id mk8scluster-... --target-id external-cluster "
         "--storage-mode keep-existing-storage --compute-mode keep-existing-compute "
+        "--to-chart-version <chart-version> "
         "--no-interactive; "
         "nebius-cxcli validate <config.yaml>; nebius-cxcli render <config.yaml>. "
         "--cluster-id selects the Nebius MK8s cluster to adopt. --target-id is only "
@@ -45862,6 +46024,16 @@ def soperator_onboard_command(
             ),
         ),
     ] = None,
+    to_chart_version: Annotated[
+        str | None,
+        typer.Option(
+            "--to-chart-version",
+            help=(
+                "Target Soperator chart version for onboarding analysis. Defaults to "
+                "the component_sources.yaml Soperator chart pin."
+            ),
+        ),
+    ] = None,
     worker_rollout_strategy: Annotated[
         str | None,
         typer.Option(
@@ -45991,6 +46163,8 @@ def soperator_onboard_command(
                     project_id=resolved_project_id,
                     provider_lookup=provider_lookup,
                     source_version=source_version_opt,
+                    to_chart_version=to_chart_version,
+                    validate_sources=validate_sources,
                     compute_mode=compute_mode_opt,
                     worker_rollout_strategy=worker_rollout_strategy,
                     worker_wave_groups=worker_wave_groups,
@@ -46008,6 +46182,8 @@ def soperator_onboard_command(
                     storage_mode=storage_mode_opt,
                     compute_mode=compute_mode_opt,
                     source_version=source_version_opt,
+                    to_chart_version=to_chart_version,
+                    validate_sources=validate_sources,
                     worker_rollout_strategy=worker_rollout_strategy,
                     worker_wave_groups=worker_wave_groups,
                     worker_wave_percent=worker_wave_percent,
@@ -46026,7 +46202,9 @@ def soperator_onboard_command(
                 storage_mode=storage_mode_opt,
                 compute_mode=compute_mode_opt,
                 source_version=source_version_opt,
+                to_chart_version=to_chart_version,
                 interactive=interactive_mode,
+                validate_sources=validate_sources,
                 worker_rollout_strategy=worker_rollout_strategy,
                 worker_wave_groups=worker_wave_groups,
                 worker_wave_percent=worker_wave_percent,
@@ -46036,6 +46214,12 @@ def soperator_onboard_command(
                 strategy_drain_timeout=strategy_drain_timeout,
             )
 
+        accepted_onboarding = target_row.get("soperator_onboarding")
+        accepted_to_chart_version = ""
+        if isinstance(accepted_onboarding, Mapping):
+            accepted_to_chart_version = _non_empty_text(
+                accepted_onboarding.get("target_version")
+            )
         onboard_command_args = _soperator_onboard_bundle_command_args(
             config_path=config_path,
             target_row=target_row,
@@ -46046,6 +46230,7 @@ def soperator_onboard_command(
             storage_mode=storage_mode_opt,
             compute_mode=compute_mode_opt,
             source_version=source_version_opt,
+            to_chart_version=_non_empty_text(to_chart_version) or accepted_to_chart_version,
             worker_rollout_strategy=worker_rollout_strategy,
             worker_wave_groups=worker_wave_groups,
             worker_wave_percent=worker_wave_percent,
