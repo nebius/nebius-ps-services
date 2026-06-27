@@ -19,6 +19,27 @@ All notable changes to this project are tracked here. This changelog follows
   restore-ready Kubernetes in-cluster resources plus chart-managed MariaDB
   accounting DB material, while restore validates checksums and stays dry-run
   until `--execute --approve`.
+- Fixed Soperator backup and discovery `wckey` snapshots to use Slurm-portable
+  `Cluster,User,WCKey` fields, and made accounting DB dump/restore resolve the
+  target-specific `*-acct-db-0` pod instead of assuming the old static pod name.
+  This avoids backup failures on clusters where `sacctmgr show wckey` does not
+  expose an `Account` field or the MariaDB pod is named after the Slurm cluster.
+- Fixed Soperator accounting DB backup dumps and restore imports to authenticate
+  with the chart-provided `MARIADB_ROOT_PASSWORD` environment instead of
+  assuming local root access without a password.
+- Added Soperator upgrade Slurm requeue policies: `--job-policy requeue-selected`
+  with repeated `--requeue-job`, `--job-policy requeue-all`,
+  `--job-policy requeue-hold-selected` with repeated `--requeue-job`, and
+  `--job-policy requeue-hold-all`. The policies call `scontrol requeue` or
+  `scontrol requeuehold`, wait for selected jobs to leave nodes selected for
+  the MK8s rollout, and still stop if those jobs keep running there. The
+  managed Soperator upgrade path drains cxcli-owned Slurm nodes before requeue
+  or requeue-hold.
+- Fixed managed Soperator upgrade protected-config comparison so cxcli-owned
+  Slurm drains and Nebius node replacement state no longer look like customer
+  config drift after an MK8s node-template phase.
+- Hardened MK8s node-template waits to require two consecutive node-group ready
+  observations before advancing to the next staged node group.
 - Changed managed `soperator upgrade` into the canonical cxcli-managed
   Soperator cluster upgrade command. It now accepts `--to-chart-version`,
   optional MK8s node-template target flags, Slurm running-job policy flags, and
@@ -73,13 +94,18 @@ All notable changes to this project are tracked here. This changelog follows
   cxcli-managed cluster upgrades run the Terraform-managed MK8s layer first and
   the Soperator chart upgrade second only when both layers change, while
   external clusters use `ext-soperator onboard` and guarded `ext-soperator
-  upgrade` for onboarding-selected MK8s/Soperator upgrade work.
+  upgrade` for onboarding-selected MK8s/Soperator upgrade work. The docs now
+  spell out the staged upgrade process, validation gates, Slurm job-policy
+  decisions, report/checkpoint outputs, and completion handoff for both paths.
 - Added Soperator GPU driver-jail guardrails for Nebius-image GPU workers.
   cxcli now materializes the chart-owned `gpuDriverJail` contract for managed
   and migrated GPU NodeSets, fails fast on conflicting external mounts, and
   validates both the static NodeSet mount/init contract and Slurm job-root
   visibility of non-empty `libcuda.so.1`, `libnvidia-ml.so.1`, and
-  `nvidia-smi` in acceptance smoke and Slurm NCCL benchmark reports.
+  `nvidia-smi` in acceptance smoke and Slurm NCCL benchmark reports. The
+  deploy/upgrade snapshot skips the static NodeSet contract for known
+  pre-contract charts such as `4.0.1-ps.2`, then enforces it for
+  `4.0.2-ps.3` and newer.
 - Fixed Soperator deploy smoke to wait through bounded first-run storage and
   pod startup before evaluating the Pending-pod snapshot. It still does not wait
   for full Slurm availability or run Slurm jobs during deploy.

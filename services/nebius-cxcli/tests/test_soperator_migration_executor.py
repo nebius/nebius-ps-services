@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -4533,6 +4533,451 @@ def test_execute_external_node_template_blocks_nonempty_slurm_queue_before_mutat
         call[0][:4] == ("nebius", "mk8s", "node-group", "update") and "--version" in call[0]
         for call in runner.calls
     )
+
+
+def _external_upgrade_slurm_runner(
+    *,
+    queue_outputs: list[str],
+    calls: list[tuple[str, ...]],
+) -> Callable[..., SoperatorMigrationCommandResult]:
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "login-0"},
+                                "status": {"phase": "Running"},
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:8] == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "exec",
+            "login-0",
+            "--",
+        ) and command[8:10] == ("squeue", "-h"):
+            return SoperatorMigrationCommandResult(command, 0, queue_outputs.pop(0), "")
+        return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
+
+    return runner
+
+
+def test_external_upgrade_cancel_selected_policy_cancels_jobs() -> None:
+    calls: list[tuple[str, ...]] = []
+    queue_outputs = [
+        "42|alice|RUNNING|gpu|worker-gpu-0-0|00:05|30:00|25:00|restartable-train\n",
+        "",
+    ]
+
+    lines = migration._handle_external_upgrade_slurm_jobs(
+        command_runner=_external_upgrade_slurm_runner(
+            queue_outputs=queue_outputs,
+            calls=calls,
+        ),
+        kube_context="external-context",
+        node_names=("worker-gpu-0-0",),
+        policy="cancel-selected",
+        cancel_job_ids=("42",),
+        requeue_job_ids=(),
+        wait_timeout_seconds=0,
+        refresh_interval_seconds=1,
+    )
+
+    assert lines == ["Slurm job preflight: cleared blocking jobs with policy cancel-selected."]
+    assert any(call[8:] == ("scancel", "42") for call in calls)
+
+
+def test_external_upgrade_cancel_all_policy_cancels_all_jobs() -> None:
+    calls: list[tuple[str, ...]] = []
+    queue_outputs = [
+        "\n".join(
+            (
+                "42|alice|RUNNING|gpu|worker-gpu-0-0|00:05|30:00|25:00|restartable-train",
+                "43|bob|RUNNING|gpu|worker-gpu-0-0|00:02|30:00|28:00|restartable-eval",
+            )
+        )
+        + "\n",
+        "",
+    ]
+
+    lines = migration._handle_external_upgrade_slurm_jobs(
+        command_runner=_external_upgrade_slurm_runner(
+            queue_outputs=queue_outputs,
+            calls=calls,
+        ),
+        kube_context="external-context",
+        node_names=("worker-gpu-0-0",),
+        policy="cancel-all",
+        cancel_job_ids=(),
+        requeue_job_ids=(),
+        wait_timeout_seconds=0,
+        refresh_interval_seconds=1,
+    )
+
+    assert lines == ["Slurm job preflight: cleared blocking jobs with policy cancel-all."]
+    assert any(call[8:] == ("scancel", "42", "43") for call in calls)
+
+
+def test_external_upgrade_wait_policy_waits_until_jobs_clear(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+    queue_outputs = [
+        "42|alice|RUNNING|gpu|worker-gpu-0-0|00:05|30:00|25:00|restartable-train\n",
+        "42|alice|RUNNING|gpu|worker-gpu-0-0|00:05|30:00|25:00|restartable-train\n",
+        "",
+    ]
+    sleeps: list[int] = []
+    monkeypatch.setattr(migration.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    lines = migration._handle_external_upgrade_slurm_jobs(
+        command_runner=_external_upgrade_slurm_runner(
+            queue_outputs=queue_outputs,
+            calls=calls,
+        ),
+        kube_context="external-context",
+        node_names=("worker-gpu-0-0",),
+        policy="wait",
+        cancel_job_ids=(),
+        requeue_job_ids=(),
+        wait_timeout_seconds=30,
+        refresh_interval_seconds=1,
+    )
+
+    assert lines == ["Slurm job preflight: waited for blocking jobs to finish."]
+    assert sleeps == [1]
+    assert queue_outputs == []
+
+
+def test_external_upgrade_requeue_selected_policy_requeues_jobs() -> None:
+    calls: list[tuple[str, ...]] = []
+    queue_outputs = [
+        "42|alice|RUNNING|gpu|worker-gpu-0-0|00:05|30:00|25:00|restartable-train\n",
+        "",
+    ]
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "login-0"},
+                                "status": {"phase": "Running"},
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:8] == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "exec",
+            "login-0",
+            "--",
+        ) and command[8:10] == ("squeue", "-h"):
+            return SoperatorMigrationCommandResult(command, 0, queue_outputs.pop(0), "")
+        return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
+
+    lines = migration._handle_external_upgrade_slurm_jobs(
+        command_runner=runner,
+        kube_context="external-context",
+        node_names=("worker-gpu-0-0",),
+        policy="requeue-selected",
+        cancel_job_ids=(),
+        requeue_job_ids=("42",),
+        wait_timeout_seconds=0,
+        refresh_interval_seconds=1,
+    )
+
+    assert lines == ["Slurm job preflight: cleared blocking jobs with policy requeue-selected."]
+    assert any(call[8:] == ("scontrol", "requeue", "42") for call in calls)
+
+
+def test_external_upgrade_requeue_hold_selected_policy_holds_jobs() -> None:
+    calls: list[tuple[str, ...]] = []
+    queue_outputs = [
+        "42|alice|RUNNING|gpu|worker-gpu-0-0|00:05|30:00|25:00|restartable-train\n",
+        "",
+    ]
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "login-0"},
+                                "status": {"phase": "Running"},
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:8] == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "exec",
+            "login-0",
+            "--",
+        ) and command[8:10] == ("squeue", "-h"):
+            return SoperatorMigrationCommandResult(command, 0, queue_outputs.pop(0), "")
+        return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
+
+    lines = migration._handle_external_upgrade_slurm_jobs(
+        command_runner=runner,
+        kube_context="external-context",
+        node_names=("worker-gpu-0-0",),
+        policy="requeue-hold-selected",
+        cancel_job_ids=(),
+        requeue_job_ids=("42",),
+        wait_timeout_seconds=0,
+        refresh_interval_seconds=1,
+    )
+
+    assert lines == ["Slurm job preflight: cleared blocking jobs with policy requeue-hold-selected."]
+    assert any(call[8:] == ("scontrol", "requeuehold", "42") for call in calls)
+
+
+def test_external_upgrade_requeue_hold_all_policy_holds_all_jobs() -> None:
+    calls: list[tuple[str, ...]] = []
+    queue_outputs = [
+        "\n".join(
+            (
+                "42|alice|RUNNING|gpu|worker-gpu-0-0|00:05|30:00|25:00|restartable-train",
+                "43|bob|RUNNING|gpu|worker-gpu-0-0|00:02|30:00|28:00|restartable-eval",
+            )
+        )
+        + "\n",
+        "",
+    ]
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "login-0"},
+                                "status": {"phase": "Running"},
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:8] == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "exec",
+            "login-0",
+            "--",
+        ) and command[8:10] == ("squeue", "-h"):
+            return SoperatorMigrationCommandResult(command, 0, queue_outputs.pop(0), "")
+        return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
+
+    lines = migration._handle_external_upgrade_slurm_jobs(
+        command_runner=runner,
+        kube_context="external-context",
+        node_names=("worker-gpu-0-0",),
+        policy="requeue-hold-all",
+        cancel_job_ids=(),
+        requeue_job_ids=(),
+        wait_timeout_seconds=0,
+        refresh_interval_seconds=1,
+    )
+
+    assert lines == ["Slurm job preflight: cleared blocking jobs with policy requeue-hold-all."]
+    assert any(call[8:] == ("scontrol", "requeuehold", "42", "43") for call in calls)
+
+
+def test_external_upgrade_requeue_policy_waits_for_slurm_transition(monkeypatch) -> None:
+    calls: list[tuple[str, ...]] = []
+    queue_outputs = [
+        "42|alice|RUNNING|gpu|worker-gpu-0-0|00:05|30:00|25:00|restartable-train\n",
+        "42|alice|RUNNING|gpu|worker-gpu-0-0|00:05|30:00|25:00|restartable-train\n",
+        "",
+    ]
+    sleeps: list[int] = []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "login-0"},
+                                "status": {"phase": "Running"},
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:8] == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "exec",
+            "login-0",
+            "--",
+        ) and command[8:10] == ("squeue", "-h"):
+            return SoperatorMigrationCommandResult(command, 0, queue_outputs.pop(0), "")
+        return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
+
+    monkeypatch.setattr(migration.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    lines = migration._handle_external_upgrade_slurm_jobs(
+        command_runner=runner,
+        kube_context="external-context",
+        node_names=("worker-gpu-0-0",),
+        policy="requeue-all",
+        cancel_job_ids=(),
+        requeue_job_ids=(),
+        wait_timeout_seconds=30,
+        refresh_interval_seconds=1,
+    )
+
+    assert lines == ["Slurm job preflight: cleared blocking jobs with policy requeue-all."]
+    assert any(call[8:] == ("scontrol", "requeue", "42") for call in calls)
+    assert sleeps == [1]
+    assert queue_outputs == []
 
 
 def test_completed_migration_mk8s_check_fails_when_live_node_template_drifts() -> None:

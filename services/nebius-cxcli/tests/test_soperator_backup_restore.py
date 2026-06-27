@@ -141,6 +141,14 @@ def test_soperator_backup_archive_contains_restore_material(
                         "spec": {"clusterName": "slurm"},
                     }
                 ],
+                "pods": [
+                    {
+                        "apiVersion": "v1",
+                        "kind": "Pod",
+                        "metadata": {"name": "soperator-acct-db-0"},
+                        "status": {"phase": "Running"},
+                    }
+                ],
             }
             return _command_result(args, _kubernetes_list(items_by_resource.get(resource, [])))
         raise AssertionError(f"unexpected kubectl args: {args}")
@@ -201,6 +209,125 @@ def test_soperator_backup_archive_contains_restore_material(
     assert "clusterIP" not in service_restore
     assert "nodePort" not in service_restore
     assert "status" not in deployment_restore
+
+
+def test_soperator_backup_uses_portable_wckey_snapshot_fields(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    commands: list[str] = []
+
+    def fake_login_command(
+        namespace: str,
+        command: str,
+        **_kwargs: Any,
+    ) -> cli._SoperatorUpgradeCommandResult:
+        assert namespace == "soperator"
+        commands.append(command)
+        return _command_result(["login", command], "snapshot\n")
+
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_login_command", fake_login_command)
+
+    included = cli._soperator_upgrade_collect_slurm_snapshots(
+        namespace="soperator",
+        output_dir=tmp_path / "slurm",
+    )
+    discovery = cli._collect_soperator_discovery_accounting_snapshot(
+        namespace="soperator",
+        kube_context=None,
+    )
+
+    assert "slurm/sacctmgr-wckeys.txt" in included
+    assert discovery["commands"]["sacctmgr_wckeys"]["returncode"] == 0
+    assert "sacctmgr -nP show wckey format=Cluster,User,WCKey" in commands
+    assert all("show wckey format=Cluster,Account,User,WCKey" not in command for command in commands)
+
+
+def test_soperator_backup_resolves_target_mariadb_pod(monkeypatch) -> None:
+    def fake_kubectl(
+        namespace: str,
+        args: list[str],
+        **_kwargs: Any,
+    ) -> cli._SoperatorUpgradeCommandResult:
+        assert namespace == "soperator"
+        assert args == ["get", "pods", "-o", "json"]
+        return _command_result(
+            args,
+            _kubernetes_list(
+                [
+                    {
+                        "apiVersion": "v1",
+                        "kind": "Pod",
+                        "metadata": {"name": "other-acct-db-0"},
+                        "status": {"phase": "Running"},
+                    },
+                    {
+                        "apiVersion": "v1",
+                        "kind": "Pod",
+                        "metadata": {"name": "soperator-upgrade-live-acct-db-0"},
+                        "status": {"phase": "Running"},
+                    },
+                ]
+            ),
+        )
+
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_kubectl", fake_kubectl)
+
+    assert (
+        cli._soperator_upgrade_resolve_mariadb_pod(
+            "soperator",
+            target_ref="soperator-upgrade-live",
+        )
+        == "soperator-upgrade-live-acct-db-0"
+    )
+
+
+def test_soperator_backup_uses_mariadb_root_password_env(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    exec_commands: list[str] = []
+
+    def fake_kubectl(
+        namespace: str,
+        args: list[str],
+        **_kwargs: Any,
+    ) -> cli._SoperatorUpgradeCommandResult:
+        assert namespace == "soperator"
+        if args == ["get", "pods", "-o", "json"]:
+            return _command_result(
+                args,
+                _kubernetes_list(
+                    [
+                        {
+                            "apiVersion": "v1",
+                            "kind": "Pod",
+                            "metadata": {"name": "mk8s-acct-db-0"},
+                            "status": {"phase": "Running"},
+                        }
+                    ]
+                ),
+            )
+        if args[:2] == ["exec", "mk8s-acct-db-0"]:
+            command = args[-1]
+            exec_commands.append(command)
+            if "mariadb-dump" in command or "mysqldump" in command:
+                return _command_result(args, "CREATE DATABASE slurm_acct_db;\n")
+            return _command_result(args, "slurm_acct_db|12\n")
+        raise AssertionError(f"unexpected kubectl args: {args}")
+
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_kubectl", fake_kubectl)
+
+    cli._soperator_upgrade_dump_accounting_db(
+        namespace="soperator",
+        output_dir=tmp_path,
+        target_ref="mk8s",
+    )
+
+    assert len(exec_commands) == 2
+    assert all("MARIADB_ROOT_PASSWORD" in command for command in exec_commands)
+    assert all("--defaults-extra-file=\"$defaults_file\"" in command for command in exec_commands)
+    assert all("--password" not in command for command in exec_commands)
 
 
 def test_standalone_soperator_backup_does_not_require_generated_context(
@@ -365,6 +492,20 @@ def test_soperator_restore_execute_applies_manifests_and_imports_db(
         **_kwargs: Any,
     ) -> cli._SoperatorUpgradeCommandResult:
         calls.append(("namespaced", namespace, tuple(args), input_text))
+        if args == ["get", "pods", "-o", "json"]:
+            return _command_result(
+                args,
+                _kubernetes_list(
+                    [
+                        {
+                            "apiVersion": "v1",
+                            "kind": "Pod",
+                            "metadata": {"name": "mk8s-acct-db-0"},
+                            "status": {"phase": "Running"},
+                        }
+                    ]
+                ),
+            )
         if args[:2] == ["get", "deployment/accounting"]:
             return _command_result(args, json.dumps({"spec": {"replicas": 1}}))
         return _command_result(args)
@@ -385,7 +526,8 @@ def test_soperator_restore_execute_applies_manifests_and_imports_db(
     assert ("cluster", "", ("create", "namespace", "restored"), None) in calls
     assert any(call[2][:2] == ("apply", "-f") for call in calls)
     assert any(
-        call[2][:2] == ("exec", "soperator-acct-db-0")
+        call[2][:2] == ("exec", "mk8s-acct-db-0")
+        and "MARIADB_ROOT_PASSWORD" in call[2][-1]
         and call[3] == "CREATE DATABASE slurm;\n"
         for call in calls
     )

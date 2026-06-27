@@ -186,7 +186,7 @@ def test_soperator_validation_fails_missing_gpu_driver_jail_nodeset_contract() -
 
     soperator_validation._check_gpu_driver_jail_nodeset_contract(
         _runner,
-        {"namespace": "soperator"},
+        {"namespace": "soperator", "target_version": "4.0.2-ps.3"},
         checks,
     )
 
@@ -208,6 +208,44 @@ def test_soperator_validation_fails_missing_gpu_driver_jail_nodeset_contract() -
                     "driver_jail_init": False,
                 }
             ],
+        }
+    ]
+
+
+def test_soperator_validation_skips_gpu_driver_jail_nodeset_contract_for_old_chart() -> None:
+    checks: list[dict[str, object]] = []
+    calls: list[tuple[str, ...]] = []
+
+    def _runner(
+        args,
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorValidationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        return SoperatorValidationCommandResult(command, 0, '{"items": []}', "")
+
+    soperator_validation._check_gpu_driver_jail_nodeset_contract(
+        _runner,
+        {"namespace": "soperator", "target_version": "4.0.1-ps.2"},
+        checks,
+    )
+
+    assert calls == []
+    assert checks == [
+        {
+            "name": "GPU driver jail NodeSet contract",
+            "status": "skipped",
+            "passed": False,
+            "summary": (
+                "Soperator chart version 4.0.1-ps.2 predates the chart-owned "
+                "GPU driver jail NodeSet contract."
+            ),
+            "target_version": "4.0.1-ps.2",
+            "minimum_contract_version": "4.0.2-ps.3",
         }
     ]
 

@@ -181,6 +181,168 @@ class _Runner:
         return "ClusterName=cluster"
 
 
+class _NodeRunner(_Runner):
+    def __init__(
+        self,
+        node_name: str,
+        *,
+        node_labels: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__()
+        self.node_name = node_name
+        self.node_labels = node_labels or {"nebius.com/node-group": "workers"}
+
+    def _node(self) -> dict[str, Any]:
+        return {
+            "kind": "Node",
+            "metadata": {"name": self.node_name, "labels": self.node_labels},
+            "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+        }
+
+
+class _ManagedChartRunner(_Runner):
+    def __init__(self, chart_version: str) -> None:
+        super().__init__()
+        self.chart_version = chart_version
+
+    def __call__(
+        self,
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 120,
+        check: bool = True,
+    ) -> _Result:
+        del input_text, timeout_seconds, check
+        command = tuple(str(arg) for arg in args)
+        if "deployments" in command:
+            self.calls.append(command)
+            return _Result(command, 0, _json({"items": [self._deployment()]}))
+        if "daemonsets" in command:
+            self.calls.append(command)
+            return _Result(command, 0, _json({"items": [self._daemonset()]}))
+        return super().__call__(command)
+
+    def _chart_labels(self) -> dict[str, str]:
+        return {"helm.sh/chart": f"soperator-{self.chart_version}"}
+
+    def _configmap(self) -> dict[str, Any]:
+        return {
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": "soperator-upgrade-live-mount-scripts",
+                "namespace": "soperator",
+                "labels": self._chart_labels(),
+            },
+            "data": {"mount.sh": "mount-home"},
+        }
+
+    def _slurmcluster(self) -> dict[str, Any]:
+        return {
+            "kind": "SlurmCluster",
+            "metadata": {
+                "name": "soperator-upgrade-live",
+                "namespace": "soperator",
+                "labels": self._chart_labels(),
+            },
+            "spec": {
+                "clusterName": "soperator-upgrade-live",
+                "chartDefault": self.chart_version,
+            },
+            "status": {"phase": "Available"},
+        }
+
+    def _nodeset(self) -> dict[str, Any]:
+        return {
+            "kind": "NodeSet",
+            "metadata": {
+                "name": "worker-gpu-0",
+                "namespace": "soperator",
+                "labels": self._chart_labels(),
+            },
+            "spec": {
+                "template": {
+                    "spec": {
+                        "initScript": "mount-home",
+                        "chartDefault": self.chart_version,
+                    }
+                }
+            },
+            "status": {"phase": "Ready"},
+        }
+
+    def _deployment(self) -> dict[str, Any]:
+        return {
+            "kind": "Deployment",
+            "metadata": {
+                "name": "soperator-manager",
+                "namespace": "soperator",
+                "labels": self._chart_labels(),
+            },
+            "spec": {
+                "replicas": 1,
+                "template": {
+                    "metadata": {"labels": self._chart_labels()},
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": "manager",
+                                "image": f"registry/soperator:{self.chart_version}",
+                            }
+                        ]
+                    },
+                },
+            },
+            "status": {"readyReplicas": 1, "availableReplicas": 1},
+        }
+
+    def _daemonset(self) -> dict[str, Any]:
+        return {
+            "kind": "DaemonSet",
+            "metadata": {
+                "name": "controller-placeholder",
+                "namespace": "soperator",
+                "labels": self._chart_labels(),
+            },
+            "spec": {
+                "template": {
+                    "metadata": {"labels": self._chart_labels()},
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": "placeholder",
+                                "image": f"registry/placeholder:{self.chart_version}",
+                            }
+                        ]
+                    },
+                },
+            },
+            "status": {"readyReplicas": 1},
+        }
+
+    def _exec_output(self, command: Sequence[str]) -> str:
+        joined = " ".join(command)
+        if "show config" in joined:
+            return f"ClusterName=cluster\nChartDefault={self.chart_version}"
+        if "show nodes" in joined:
+            return f"NodeName=worker-0 State=IDLE ChartDefault={self.chart_version}"
+        return super()._exec_output(command)
+
+
+class _RuntimeOnlyRunner(_Runner):
+    def __init__(self, runtime_token: str) -> None:
+        super().__init__()
+        self.runtime_token = runtime_token
+
+    def _exec_output(self, command: Sequence[str]) -> str:
+        joined = " ".join(command)
+        if "show config" in joined:
+            return f"ClusterName=cluster\nRuntimeToken={self.runtime_token}"
+        if "show nodes" in joined:
+            return f"NodeName=worker-0 State=IDLE RuntimeToken={self.runtime_token}"
+        return super()._exec_output(command)
+
+
 def _json(payload: dict[str, Any]) -> str:
     return json.dumps(payload)
 
@@ -208,6 +370,115 @@ def test_configmap_and_nodeset_drift_are_protected_deltas() -> None:
     }
     assert ("configmaps", "soperator/slurm-config", "remediation_required") in resources
     assert ("nodesets", "soperator/worker", "remediation_required") in resources
+
+
+def test_managed_chart_upgrade_classifies_chart_owned_deltas_as_intentional() -> None:
+    before = _capture(_ManagedChartRunner("4.0.1-ps.2"))
+    result = run_post_upgrade_fast_verification(
+        command_runner=_ManagedChartRunner("4.0.2-ps.3"),
+        target_ref="gpu",
+        namespace="soperator",
+        kube_context="external-context",
+        before_state=before,
+        managed_chart_upgrade=True,
+    )
+
+    assert result.status == "passed"
+    assert result.comparison["status"] == "intentional-upgrade"
+    assert result.comparison["approval_required_count"] == 0
+    assert any(
+        delta["kind"] == "nodesets"
+        and delta["field"] == "spec_hash"
+        and delta["classification"] == "intentional_upgrade"
+        for delta in result.comparison["deltas"]
+    )
+
+
+def test_managed_chart_upgrade_keeps_non_chart_nodeset_drift_protected() -> None:
+    before = _capture(_Runner(nodeset_script="mount-home"))
+    result = run_post_upgrade_fast_verification(
+        command_runner=_Runner(nodeset_script="changed-mount-home"),
+        target_ref="gpu",
+        namespace="soperator",
+        kube_context="external-context",
+        before_state=before,
+        managed_chart_upgrade=True,
+    )
+
+    assert result.status == "failed"
+    assert any(
+        delta["kind"] == "nodesets"
+        and delta["field"] == "spec_hash"
+        and delta["classification"] == "remediation_required"
+        for delta in result.comparison["deltas"]
+    )
+
+
+def test_managed_chart_upgrade_classifies_slurm_runtime_hash_deltas_as_intentional() -> None:
+    before = _capture(_RuntimeOnlyRunner("before"))
+    result = run_post_upgrade_fast_verification(
+        command_runner=_RuntimeOnlyRunner("after"),
+        target_ref="gpu",
+        namespace="soperator",
+        kube_context="external-context",
+        before_state=before,
+        managed_chart_upgrade=True,
+    )
+
+    assert result.status == "passed"
+    assert result.comparison["approval_required_count"] == 0
+    assert {
+        (delta["kind"], delta["field"], delta["classification"])
+        for delta in result.comparison["deltas"]
+    } >= {
+        ("slurm_runtime", "slurm_config", "intentional_upgrade"),
+        ("slurm_runtime", "slurm_nodes", "intentional_upgrade"),
+    }
+
+
+def test_managed_node_template_upgrade_classifies_node_replacement_as_intentional() -> None:
+    before = _capture(_NodeRunner("node-old"))
+    result = run_post_upgrade_fast_verification(
+        command_runner=_NodeRunner("node-new"),
+        target_ref="gpu",
+        namespace="soperator",
+        kube_context="external-context",
+        before_state=before,
+        managed_node_template_upgrade=True,
+    )
+
+    assert result.status == "passed"
+    assert result.comparison["status"] == "intentional-upgrade"
+    assert result.comparison["approval_required_count"] == 0
+    assert {
+        (delta["kind"], delta["field"], delta["before"], delta["after"], delta["classification"])
+        for delta in result.comparison["deltas"]
+        if delta["kind"] == "nodes" and delta["field"] == "presence"
+    } == {
+        ("nodes", "presence", "present", "absent", "intentional_upgrade"),
+        ("nodes", "presence", "absent", "present", "intentional_upgrade"),
+    }
+
+
+def test_managed_node_template_upgrade_keeps_node_label_drift_protected() -> None:
+    before = _capture(_NodeRunner("node-1", node_labels={"nebius.com/node-group": "workers"}))
+    result = run_post_upgrade_fast_verification(
+        command_runner=_NodeRunner("node-1", node_labels={"nebius.com/node-group": "other"}),
+        target_ref="gpu",
+        namespace="soperator",
+        kube_context="external-context",
+        before_state=before,
+        managed_node_template_upgrade=True,
+    )
+
+    assert result.status == "failed"
+    assert any(
+        delta["kind"] == "nodes"
+        and delta["field"] == "labels"
+        and delta["classification"] == "remediation_required"
+        and delta["approval_required"] is True
+        for delta in result.comparison["deltas"]
+    )
 
 
 def test_custom_resource_specs_and_annotations_are_redacted_from_report_payload() -> None:

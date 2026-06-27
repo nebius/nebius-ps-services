@@ -383,6 +383,12 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
         "`--interactive/--no-interactive`"
     ) in common_flags_flat
     assert (
+        "- `soperator discover`: `--target`, `--output-dir`, `--namespace`, "
+        "`--release-name`, `--kube-context`, `--to-chart-version`, "
+        "`--to-k8s-version`, `--to-os`, `--to-gpu-stack-preset`, "
+        "`--redaction`, `--interactive/--no-interactive`"
+    ) in common_flags_flat
+    assert (
         "- `soperator restore`: `--target`, `--namespace`, `--kube-context`, "
         "`--dry-run/--execute`, `--approve/--no-approve`, "
         "`--restore-accounting-db/--no-restore-accounting-db`"
@@ -394,8 +400,10 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
         "- `soperator upgrade`: `--target`, `--to-chart-version`, `--to-k8s-version`, "
         "`--to-os`, `--to-gpu-stack-preset`, `--node-group`, `--strategy`, "
         "`--strategy-max-surge-count`, `--drain-timeout`, `--backup-dir`, "
-        "`--job-policy`, `--cancel-job`, `--job-wait-timeout`, "
-        "`--job-refresh-interval`, `--dry-run`, `--interactive/--no-interactive`"
+        "`--job-policy`, `--cancel-job`, `--requeue-job`, `--job-wait-timeout`, "
+        "`--job-refresh-interval`, `--dry-run`, "
+        "`--approve-remediation/--no-approve-remediation`, "
+        "`--interactive/--no-interactive`"
     ) in common_flags_flat
     assert (
         "- `ext-soperator backup`: `--target`, `--backup-dir`, `--namespace`, "
@@ -424,13 +432,18 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
     ) in common_flags_flat
     assert (
         "- `ext-soperator upgrade`: `--target`, `--backup-dir`, `--job-policy`, "
-        "`--cancel-job`, `--job-wait-timeout`, `--job-refresh-interval`, "
+        "`--cancel-job`, `--requeue-job`, `--job-wait-timeout`, `--job-refresh-interval`, "
         "`--dry-run/--execute`, `--approve/--no-approve`, "
+        "`--approve-remediation/--no-approve-remediation`, "
         "`--interactive/--no-interactive`, `--worker-rollout-strategy`, "
         "`--worker-wave-groups`, `--worker-wave-percent`, "
         "`--max-parallel-worker-groups`, `--strategy-max-surge-count`, "
         "`--strategy-max-unavailable-count`, `--strategy-drain-timeout`"
     ) in common_flags_flat
+    assert (
+        "squeue --states=PD -h -o '%A|%r' | awk -F'|' "
+        "'$2 == \"JobHeldAdmin\" { print $1 }' | xargs -r scontrol release"
+    ) in readme
     assert (
         "- `upgrade helm-chart`: `--to-version`, `--dry-run`, "
         "`--interactive/--no-interactive` (non-Soperator app charts only)"
@@ -645,6 +658,25 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
         "For external Soperator clusters, start with onboarding instead of the Terraform-managed MK8s upgrade commands"
         in soperator_flat
     )
+    assert "External upgrade follows these stages:" in soperator_flat
+    assert "Plan and dry run: load `config.yaml`, read the accepted discovery bundle" in (
+        soperator_flat
+    )
+    assert "Execute preflight: refresh live discovery, verify the source release" in (
+        soperator_flat
+    )
+    assert "Validation hold: verify external MK8s control-plane and node-group readiness" in (
+        soperator_flat
+    )
+    assert "Completion and handoff: write `ext-soperator-upgrade-report.md` and JSON" in (
+        soperator_flat
+    )
+    assert "For Kubernetes minor changes, run provider-supported hops" in soperator_flat
+    assert "upgrade a managed cluster from `1.32` to `1.34` as one" in soperator_flat
+    assert "CXCLI-managed Soperator upgrade follows these stages:" in soperator_flat
+    assert "Preflight and backup: validate the current bundle" in soperator_flat
+    assert "Slurm and MK8s rollout: when MK8s target flags are supplied" in soperator_flat
+    assert "Postflight validation and restore: restore Slurm node state" in soperator_flat
     assert "`upgrade node-group --execute --approve` writes the approved pre-mutation checkpoint" in (
         soperator_flat
     )
@@ -1581,6 +1613,16 @@ def test_docs_define_component_selector_contract() -> None:
         "rechecks the live source release and full discovery fingerprint, creates a restore-capable backup before the first mutation"
         in design_flat
     )
+    assert "The external stage model is explicit" in design_flat
+    assert (
+        "execute preflight refreshes live discovery, verifies source release/fingerprint"
+        in design_flat
+    )
+    assert "validation hold verifies MK8s, target Soperator" in design_flat
+    assert "completion writes the external upgrade reports" in design_flat
+    assert "The managed stage model is explicit" in design_flat
+    assert "planning/dry-run resolves chart and MK8s target intent" in design_flat
+    assert "Kubernetes minor upgrades must follow provider-supported hops" in design_flat
     assert (
         "target GPU stack reconciliation phase when paired with external upgrade work"
         in design_flat
@@ -1622,9 +1664,10 @@ def test_docs_define_component_selector_contract() -> None:
         in design_flat
     )
     assert "normal `validate`, `render`, and `deploy` can run from any workstation" in design_flat
-    assert "handles Slurm jobs on affected worker nodes through the `--job-policy` decision state" in (
-        design_flat
-    )
+    assert (
+        "handles Slurm jobs on affected worker nodes through the `--job-policy` "
+        "wait, cancel, requeue, or requeue-hold decision state"
+    ) in design_flat
     assert "`generated/reports/ext-soperator-upgrade-report.json`" in design_flat
     assert "auto-detects source worker node groups" in design_flat
     assert "`slurm.nebius.ai/nodeset` worker labels" in design_flat

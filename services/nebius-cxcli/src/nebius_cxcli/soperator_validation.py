@@ -79,6 +79,7 @@ _SOPERATOR_STORAGE_PENDING_MARKERS = (
     "mountvolume",
     "volume",
 )
+_GPU_DRIVER_JAIL_NODESET_CONTRACT_MIN_VERSION = "4.0.2-ps.3"
 
 
 def _smoke_script(
@@ -1959,6 +1960,42 @@ def _resource_item_name(item: Mapping[str, Any]) -> str:
     return str(_as_mapping(item.get("metadata")).get("name", "") or "").strip()
 
 
+def _chart_version_key(value: Any) -> tuple[tuple[int, ...], int] | None:
+    text = str(value or "").strip().removeprefix("v")
+    match = re.search(r"([0-9]+(?:\.[0-9]+){1,3})(?:-ps\.(\d+))?", text)
+    if match is None:
+        return None
+    core = tuple(int(part) for part in match.group(1).split("."))
+    ps_suffix = int(match.group(2)) if match.group(2) is not None else -1
+    return core, ps_suffix
+
+
+def _chart_version_at_least(value: Any, minimum: str) -> bool | None:
+    value_key = _chart_version_key(value)
+    minimum_key = _chart_version_key(minimum)
+    if value_key is None or minimum_key is None:
+        return None
+    value_core, value_ps = value_key
+    minimum_core, minimum_ps = minimum_key
+    core_len = max(len(value_core), len(minimum_core))
+    normalized_value_core = value_core + (0,) * (core_len - len(value_core))
+    normalized_minimum_core = minimum_core + (0,) * (core_len - len(minimum_core))
+    if normalized_value_core != normalized_minimum_core:
+        return normalized_value_core > normalized_minimum_core
+    return value_ps >= minimum_ps
+
+
+def _gpu_driver_jail_nodeset_contract_required(spec: Mapping[str, Any]) -> bool:
+    target_version = str(spec.get("target_version", "") or "").strip()
+    if not target_version:
+        return True
+    required = _chart_version_at_least(
+        target_version,
+        _GPU_DRIVER_JAIL_NODESET_CONTRACT_MIN_VERSION,
+    )
+    return True if required is None else required
+
+
 def _nodeset_gpu_driver_jail_mount_ok(spec: Mapping[str, Any]) -> bool:
     volumes = _as_mapping(_as_mapping(spec.get("slurmd")).get("volumes"))
     mounts = volumes.get("customVolumeMounts")
@@ -2000,6 +2037,22 @@ def _check_gpu_driver_jail_nodeset_contract(
     spec: Mapping[str, Any],
     checks: list[dict[str, Any]],
 ) -> None:
+    target_version = str(spec.get("target_version", "") or "").strip()
+    if not _gpu_driver_jail_nodeset_contract_required(spec):
+        _append_check(
+            checks,
+            name="GPU driver jail NodeSet contract",
+            status="skipped",
+            summary=(
+                f"Soperator chart version {target_version} predates the chart-owned "
+                "GPU driver jail NodeSet contract."
+            ),
+            extra={
+                "target_version": target_version,
+                "minimum_contract_version": _GPU_DRIVER_JAIL_NODESET_CONTRACT_MIN_VERSION,
+            },
+        )
+        return
     namespace = str(spec.get("namespace", "") or SOPERATOR_NAMESPACE).strip()
     command = _kubectl_args(spec, "-n", namespace, "get", "nodesets", "-o", "json")
     result = runner(command, timeout_seconds=_snapshot_command_timeout_seconds(spec), check=False)

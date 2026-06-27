@@ -2454,13 +2454,27 @@ _SOPERATOR_ACTIVECHECKS_UPGRADE_PATHS = (
     "values.soperator-activechecks.waitForChecks.enabled",
 )
 _SOPERATOR_UPGRADE_JOB_POLICIES = frozenset(
-    {"interactive", "wait", "cancel-selected", "cancel-all", "fail"}
+    {
+        "interactive",
+        "wait",
+        "cancel-selected",
+        "cancel-all",
+        "requeue-selected",
+        "requeue-all",
+        "requeue-hold-selected",
+        "requeue-hold-all",
+        "fail",
+    }
+)
+_SOPERATOR_UPGRADE_JOB_POLICY_HELP = (
+    "Slurm job policy: interactive, wait, cancel-selected, cancel-all, "
+    "requeue-selected, requeue-all, requeue-hold-selected, requeue-hold-all, or fail."
 )
 _SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL = "30s"
 _SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT = "0s"
 _SOPERATOR_UPGRADE_LOGIN_POD = "login-0"
 _SOPERATOR_UPGRADE_ACCOUNTING_DEPLOYMENT = "accounting"
-_SOPERATOR_UPGRADE_MARIADB_POD = "soperator-acct-db-0"
+_SOPERATOR_UPGRADE_DEFAULT_MARIADB_POD = "soperator-acct-db-0"
 _SOPERATOR_BACKUP_REQUIRED_KUBERNETES_RESOURCES = frozenset(
     {"slurmclusters", "configmaps", "secrets"}
 )
@@ -4488,6 +4502,7 @@ def _managed_soperator_upgrade_run_post_verification(
     namespace: str,
     before_state: ProtectedCustomerState | None,
     paths: ProjectPaths,
+    managed_node_template_upgrade: bool,
     approve_remediation: bool,
 ) -> Any:
     result = run_post_upgrade_fast_verification(
@@ -4499,6 +4514,8 @@ def _managed_soperator_upgrade_run_post_verification(
         source_payload=source_payload,
         terraform_plan_command=("nebius-cxcli", "terraform", "plan", str(paths.generated_dir)),
         external_cluster=False,
+        managed_chart_upgrade=True,
+        managed_node_template_upgrade=managed_node_template_upgrade,
         remediation_approved=approve_remediation,
     )
     return result
@@ -4739,7 +4756,7 @@ def _soperator_upgrade_collect_slurm_snapshots(
             "sacctmgr -nP show assoc format=Cluster,Account,User,Partition,QOS,DefaultQOS,"
             "Fairshare,GrpTRES,MaxTRES,Priority"
         ),
-        "sacctmgr-wckeys.txt": "sacctmgr -nP show wckey format=Cluster,Account,User,WCKey",
+        "sacctmgr-wckeys.txt": "sacctmgr -nP show wckey format=Cluster,User,WCKey",
     }
     included: list[str] = []
     for filename, command in commands.items():
@@ -4806,23 +4823,97 @@ def _soperator_upgrade_restore_accounting(
     )
 
 
+def _soperator_upgrade_preferred_mariadb_pod_names(target_ref: str | None) -> tuple[str, ...]:
+    names: list[str] = []
+    normalized_target = normalize_component_token(target_ref)
+    if normalized_target:
+        names.append(f"{normalized_target}-acct-db-0")
+    names.append(_SOPERATOR_UPGRADE_DEFAULT_MARIADB_POD)
+    return tuple(dict.fromkeys(names))
+
+
+def _soperator_upgrade_resolve_mariadb_pod(
+    namespace: str,
+    *,
+    target_ref: str | None = None,
+    kube_context: str | None = None,
+) -> str:
+    preferred = _soperator_upgrade_preferred_mariadb_pod_names(target_ref)
+    result = _run_soperator_upgrade_kubectl(
+        namespace,
+        ["get", "pods", "-o", "json"],
+        kube_context=kube_context,
+        timeout_seconds=60,
+        check=False,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return preferred[0]
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return preferred[0]
+    items = payload.get("items")
+    if not isinstance(items, list):
+        return preferred[0]
+    pods: dict[str, Mapping[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        metadata = item.get("metadata")
+        name = _non_empty_text(metadata.get("name")) if isinstance(metadata, Mapping) else ""
+        if name:
+            pods[name] = item
+    for name in preferred:
+        if name in pods:
+            return name
+    candidates = sorted(name for name in pods if name.endswith("-acct-db-0"))
+    running = [
+        name
+        for name in candidates
+        if isinstance(pods[name].get("status"), Mapping)
+        and _non_empty_text(pods[name]["status"].get("phase")) == "Running"
+    ]
+    if len(running) == 1:
+        return running[0]
+    if len(candidates) == 1:
+        return candidates[0]
+    if candidates:
+        raise RuntimeError(
+            "Could not determine the Soperator accounting DB pod. "
+            "Found multiple '*-acct-db-0' pods: " + ", ".join(candidates)
+        )
+    return preferred[0]
+
+
 def _soperator_upgrade_dump_accounting_db(
     *,
     namespace: str,
     output_dir: Path,
+    target_ref: str | None = None,
     kube_context: str | None = None,
 ) -> tuple[Path, dict[str, Any]]:
     output_dir.mkdir(parents=True, exist_ok=True)
     dump_path = output_dir / "slurm-accounting-db.sql"
+    mariadb_pod = _soperator_upgrade_resolve_mariadb_pod(
+        namespace,
+        target_ref=target_ref,
+        kube_context=kube_context,
+    )
     dump_command = (
         "set -euo pipefail; "
+        'test -n "${MARIADB_ROOT_PASSWORD:-}"; '
+        'defaults_file="$(mktemp)"; '
+        'trap \'rm -f "$defaults_file"\' EXIT; '
+        'chmod 600 "$defaults_file"; '
+        'printf "[client]\\nuser=root\\npassword=%s\\n" "$MARIADB_ROOT_PASSWORD" > "$defaults_file"; '
         "dump_bin=$(command -v mariadb-dump || command -v mysqldump); "
         'test -n "$dump_bin"; '
-        '"$dump_bin" --single-transaction --quick --routines --events --triggers --all-databases'
+        '"$dump_bin" --defaults-extra-file="$defaults_file" '
+        "--single-transaction --quick --routines --events --triggers --all-databases"
     )
     result = _run_soperator_upgrade_kubectl(
         namespace,
-        ["exec", _SOPERATOR_UPGRADE_MARIADB_POD, "--", "bash", "-lc", dump_command],
+        ["exec", mariadb_pod, "--", "bash", "-lc", dump_command],
         kube_context=kube_context,
         timeout_seconds=1800,
         check=False,
@@ -4837,16 +4928,21 @@ def _soperator_upgrade_dump_accounting_db(
     dump_path.write_text(result.stdout, encoding="utf-8")
     verify_command = (
         "set -euo pipefail; "
+        'test -n "${MARIADB_ROOT_PASSWORD:-}"; '
+        'defaults_file="$(mktemp)"; '
+        'trap \'rm -f "$defaults_file"\' EXIT; '
+        'chmod 600 "$defaults_file"; '
+        'printf "[client]\\nuser=root\\npassword=%s\\n" "$MARIADB_ROOT_PASSWORD" > "$defaults_file"; '
         "client_bin=$(command -v mariadb || command -v mysql); "
         'test -n "$client_bin"; '
-        '"$client_bin" -N -e '
+        '"$client_bin" --defaults-extra-file="$defaults_file" -N -e '
         "'SELECT TABLE_SCHEMA, COUNT(*) FROM information_schema.TABLES "
         "WHERE TABLE_SCHEMA NOT IN (\"information_schema\",\"performance_schema\","
         "\"mysql\",\"sys\") GROUP BY TABLE_SCHEMA ORDER BY TABLE_SCHEMA;'"
     )
     verify = _run_soperator_upgrade_kubectl(
         namespace,
-        ["exec", _SOPERATOR_UPGRADE_MARIADB_POD, "--", "bash", "-lc", verify_command],
+        ["exec", mariadb_pod, "--", "bash", "-lc", verify_command],
         kube_context=kube_context,
         timeout_seconds=300,
         check=False,
@@ -4854,6 +4950,7 @@ def _soperator_upgrade_dump_accounting_db(
     verification = {
         "dump_sha256": _soperator_upgrade_file_sha256(dump_path),
         "dump_bytes": dump_path.stat().st_size,
+        "pod": mariadb_pod,
         "table_counts": verify.stdout if verify.returncode == 0 else "",
         "table_count_status": "collected" if verify.returncode == 0 else "not_collected",
     }
@@ -5006,6 +5103,7 @@ def _create_restore_capable_soperator_upgrade_backup(
             dump_path, accounting_verification = _soperator_upgrade_dump_accounting_db(
                 namespace=namespace,
                 output_dir=root / "accounting",
+                target_ref=target.target_ref,
                 kube_context=kube_context,
             )
             included.append(str(dump_path.relative_to(root)))
@@ -5332,6 +5430,7 @@ def _soperator_restore_accounting_db(
     root: Path,
     restore_plan: Mapping[str, Any],
     namespace: str,
+    target_ref: str | None,
     kube_context: str | None,
 ) -> None:
     dump_relative = _soperator_restore_accounting_dump_path(restore_plan)
@@ -5344,13 +5443,23 @@ def _soperator_restore_accounting_db(
         )
         restore_command = (
             "set -euo pipefail; "
+            'test -n "${MARIADB_ROOT_PASSWORD:-}"; '
+            'defaults_file="$(mktemp)"; '
+            'trap \'rm -f "$defaults_file"\' EXIT; '
+            'chmod 600 "$defaults_file"; '
+            'printf "[client]\\nuser=root\\npassword=%s\\n" "$MARIADB_ROOT_PASSWORD" > "$defaults_file"; '
             "client_bin=$(command -v mariadb || command -v mysql); "
             'test -n "$client_bin"; '
-            '"$client_bin" < /dev/stdin'
+            '"$client_bin" --defaults-extra-file="$defaults_file" < /dev/stdin'
+        )
+        mariadb_pod = _soperator_upgrade_resolve_mariadb_pod(
+            namespace,
+            target_ref=target_ref,
+            kube_context=kube_context,
         )
         _run_soperator_upgrade_kubectl(
             namespace,
-            ["exec", _SOPERATOR_UPGRADE_MARIADB_POD, "--", "bash", "-lc", restore_command],
+            ["exec", mariadb_pod, "--", "bash", "-lc", restore_command],
             kube_context=kube_context,
             input_text=dump_path.read_text(encoding="utf-8"),
             timeout_seconds=1800,
@@ -5446,6 +5555,7 @@ def _run_soperator_restore_archive(
                 root=root,
                 restore_plan=restore_plan,
                 namespace=restore_namespace,
+                target_ref=manifest_target,
                 kube_context=kube_context,
             )
         console.print(
@@ -5486,7 +5596,6 @@ def _capture_soperator_upgrade_config_fingerprint(
     slurm_policy_commands = [
         "scontrol show config | egrep -i '^(AccountingStorage|AccountingStore|Priority|Fair|SelectType|Scheduler|SlurmctldParameters)' || true",
         "scontrol show partition",
-        "scontrol show nodes",
     ]
     accounting_policy_commands = [
         "sacctmgr -nP show qos format=Name,Priority,UsageFactor,GrpTRES,MaxTRES,MaxWall,Flags",
@@ -5504,7 +5613,7 @@ def _capture_soperator_upgrade_config_fingerprint(
     )
     node_mapping = _run_soperator_upgrade_login_command(
         namespace,
-        "sinfo -h -N -o '%N|%P|%t|%f|%G'",
+        "sinfo -h -N -o '%N|%P|%f|%G'",
         timeout_seconds=120,
     ).stdout
     return _SoperatorUpgradeConfigFingerprint(
@@ -5548,7 +5657,8 @@ def _soperator_upgrade_job_policy(*, policy: str | None, interactive: bool) -> s
     if resolved == "interactive" and not interactive:
         raise RuntimeError(
             "--job-policy interactive requires an interactive terminal. Use wait, fail, "
-            "cancel-selected, or cancel-all with --no-interactive."
+            "cancel-selected, cancel-all, requeue-selected, requeue-all, "
+            "requeue-hold-selected, or requeue-hold-all with --no-interactive."
         )
     return resolved
 
@@ -5621,6 +5731,52 @@ def _soperator_upgrade_cancel_jobs(namespace: str, job_ids: Sequence[str]) -> No
     )
 
 
+def _soperator_upgrade_requeue_jobs(
+    namespace: str,
+    job_ids: Sequence[str],
+    *,
+    hold: bool = False,
+) -> None:
+    selected = tuple(_non_empty_text(job_id) for job_id in job_ids if _non_empty_text(job_id))
+    if not selected:
+        return
+    action = "requeuehold" if hold else "requeue"
+    _run_soperator_upgrade_login_command(
+        namespace,
+        f"scontrol {action} " + " ".join(shlex.quote(job_id) for job_id in selected),
+        timeout_seconds=120,
+    )
+
+
+def _soperator_upgrade_wait_for_requeued_jobs_to_leave_nodes(
+    *,
+    namespace: str,
+    node_names: Sequence[str],
+    job_ids: Sequence[str],
+    timeout_seconds: int,
+    refresh_interval_seconds: int,
+) -> None:
+    selected = frozenset(_non_empty_text(job_id) for job_id in job_ids if _non_empty_text(job_id))
+    if not selected:
+        return
+    transition_timeout = min(timeout_seconds if timeout_seconds > 0 else 300, 300)
+    deadline = time.monotonic() + max(transition_timeout, 1)
+    while True:
+        remaining = [
+            job
+            for job in _soperator_upgrade_running_jobs(namespace=namespace, node_names=node_names)
+            if job.job_id in selected
+        ]
+        if not remaining:
+            return
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"{len(remaining)} Slurm job(s) still run on affected nodes after requeue/requeuehold. "
+                "Rerun after they finish or cancel them explicitly."
+            )
+        time.sleep(max(refresh_interval_seconds, 1))
+
+
 def _soperator_upgrade_wait_for_jobs(
     *,
     namespace: str,
@@ -5656,7 +5812,8 @@ def _soperator_upgrade_wait_for_jobs(
             if deadline is not None and time.monotonic() >= deadline:
                 raise RuntimeError(
                     "Timed out waiting for Slurm jobs to finish. Rerun with a longer "
-                    "--job-wait-timeout, cancel selected jobs, or use --job-policy fail."
+                    "--job-wait-timeout, cancel, requeue, or requeue-hold selected jobs, "
+                    "or use --job-policy fail."
                 )
             time.sleep(max(refresh_interval_seconds, 1))
 
@@ -5760,6 +5917,7 @@ def _handle_soperator_upgrade_running_jobs(
     node_group: str,
     policy: str,
     cancel_job_ids: Sequence[str],
+    requeue_job_ids: Sequence[str],
     wait_timeout_seconds: int,
     refresh_interval_seconds: int,
     checkpoint_id: str,
@@ -5780,7 +5938,8 @@ def _handle_soperator_upgrade_running_jobs(
         while True:
             _print_soperator_upgrade_jobs_table(jobs)
             action = typer.prompt(
-                "Choose Slurm job action: refresh, wait, cancel-selected, cancel-all, abort",
+                "Choose Slurm job action: refresh, wait, cancel-selected, cancel-all, "
+                "requeue-selected, requeue-all, requeue-hold-selected, requeue-hold-all, abort",
                 default="refresh",
             ).strip()
             if action == "refresh":
@@ -5812,13 +5971,82 @@ def _handle_soperator_upgrade_running_jobs(
                 if not jobs:
                     return owned_drained_nodes
                 continue
+            if action == "requeue-selected":
+                raw_ids = typer.prompt("Job IDs to requeue, comma separated", default="")
+                selected = tuple(
+                    item.strip() for item in raw_ids.split(",") if item.strip()
+                )
+                _soperator_upgrade_requeue_jobs(namespace, selected)
+                _soperator_upgrade_wait_for_requeued_jobs_to_leave_nodes(
+                    namespace=namespace,
+                    node_names=node_names,
+                    job_ids=selected,
+                    timeout_seconds=wait_timeout_seconds,
+                    refresh_interval_seconds=refresh_interval_seconds,
+                )
+                jobs = _soperator_upgrade_running_jobs(namespace=namespace, node_names=node_names)
+                if not jobs:
+                    return owned_drained_nodes
+                continue
+            if action == "requeue-all":
+                selected = tuple(job.job_id for job in jobs)
+                _soperator_upgrade_requeue_jobs(namespace, selected)
+                _soperator_upgrade_wait_for_requeued_jobs_to_leave_nodes(
+                    namespace=namespace,
+                    node_names=node_names,
+                    job_ids=selected,
+                    timeout_seconds=wait_timeout_seconds,
+                    refresh_interval_seconds=refresh_interval_seconds,
+                )
+                jobs = _soperator_upgrade_running_jobs(namespace=namespace, node_names=node_names)
+                if not jobs:
+                    return owned_drained_nodes
+                continue
+            if action == "requeue-hold-selected":
+                raw_ids = typer.prompt("Job IDs to requeue and hold, comma separated", default="")
+                selected = tuple(
+                    item.strip() for item in raw_ids.split(",") if item.strip()
+                )
+                _soperator_upgrade_requeue_jobs(namespace, selected, hold=True)
+                _soperator_upgrade_wait_for_requeued_jobs_to_leave_nodes(
+                    namespace=namespace,
+                    node_names=node_names,
+                    job_ids=selected,
+                    timeout_seconds=wait_timeout_seconds,
+                    refresh_interval_seconds=refresh_interval_seconds,
+                )
+                jobs = _soperator_upgrade_running_jobs(namespace=namespace, node_names=node_names)
+                if not jobs:
+                    return owned_drained_nodes
+                continue
+            if action == "requeue-hold-all":
+                selected = tuple(job.job_id for job in jobs)
+                _soperator_upgrade_requeue_jobs(namespace, selected, hold=True)
+                _soperator_upgrade_wait_for_requeued_jobs_to_leave_nodes(
+                    namespace=namespace,
+                    node_names=node_names,
+                    job_ids=selected,
+                    timeout_seconds=wait_timeout_seconds,
+                    refresh_interval_seconds=refresh_interval_seconds,
+                )
+                jobs = _soperator_upgrade_running_jobs(namespace=namespace, node_names=node_names)
+                if not jobs:
+                    return owned_drained_nodes
+                continue
             if action == "abort":
                 raise RuntimeError("Soperator upgrade aborted while Slurm jobs are still running.")
-            console.print("[yellow]Unknown action; choose refresh, wait, cancel-selected, cancel-all, or abort.[/yellow]")
+            console.print(
+                "[yellow]Unknown action; choose refresh, wait, cancel-selected, "
+                "cancel-all, requeue-selected, requeue-all, requeue-hold-selected, "
+                "requeue-hold-all, or abort.[/yellow]"
+            )
     if policy == "fail":
         raise RuntimeError(
             "Running Slurm jobs exist on affected nodes. Use --job-policy wait, "
-            "--job-policy cancel-selected with --cancel-job, or --job-policy cancel-all."
+            "--job-policy cancel-selected with --cancel-job, --job-policy cancel-all, "
+            "--job-policy requeue-selected with --requeue-job, --job-policy requeue-all, "
+            "--job-policy requeue-hold-selected with --requeue-job, or "
+            "--job-policy requeue-hold-all."
         )
     if policy == "cancel-selected":
         selected = tuple(_non_empty_text(job_id) for job_id in cancel_job_ids if _non_empty_text(job_id))
@@ -5827,6 +6055,50 @@ def _handle_soperator_upgrade_running_jobs(
         _soperator_upgrade_cancel_jobs(namespace, selected)
     elif policy == "cancel-all":
         _soperator_upgrade_cancel_jobs(namespace, [job.job_id for job in jobs])
+    elif policy == "requeue-selected":
+        selected = tuple(_non_empty_text(job_id) for job_id in requeue_job_ids if _non_empty_text(job_id))
+        if not selected:
+            raise RuntimeError("--job-policy requeue-selected requires at least one --requeue-job.")
+        _soperator_upgrade_requeue_jobs(namespace, selected)
+        _soperator_upgrade_wait_for_requeued_jobs_to_leave_nodes(
+            namespace=namespace,
+            node_names=node_names,
+            job_ids=selected,
+            timeout_seconds=wait_timeout_seconds,
+            refresh_interval_seconds=refresh_interval_seconds,
+        )
+    elif policy == "requeue-all":
+        selected = tuple(job.job_id for job in jobs)
+        _soperator_upgrade_requeue_jobs(namespace, selected)
+        _soperator_upgrade_wait_for_requeued_jobs_to_leave_nodes(
+            namespace=namespace,
+            node_names=node_names,
+            job_ids=selected,
+            timeout_seconds=wait_timeout_seconds,
+            refresh_interval_seconds=refresh_interval_seconds,
+        )
+    elif policy == "requeue-hold-selected":
+        selected = tuple(_non_empty_text(job_id) for job_id in requeue_job_ids if _non_empty_text(job_id))
+        if not selected:
+            raise RuntimeError("--job-policy requeue-hold-selected requires at least one --requeue-job.")
+        _soperator_upgrade_requeue_jobs(namespace, selected, hold=True)
+        _soperator_upgrade_wait_for_requeued_jobs_to_leave_nodes(
+            namespace=namespace,
+            node_names=node_names,
+            job_ids=selected,
+            timeout_seconds=wait_timeout_seconds,
+            refresh_interval_seconds=refresh_interval_seconds,
+        )
+    elif policy == "requeue-hold-all":
+        selected = tuple(job.job_id for job in jobs)
+        _soperator_upgrade_requeue_jobs(namespace, selected, hold=True)
+        _soperator_upgrade_wait_for_requeued_jobs_to_leave_nodes(
+            namespace=namespace,
+            node_names=node_names,
+            job_ids=selected,
+            timeout_seconds=wait_timeout_seconds,
+            refresh_interval_seconds=refresh_interval_seconds,
+        )
     elif policy == "wait":
         _soperator_upgrade_wait_for_jobs(
             namespace=namespace,
@@ -8629,6 +8901,7 @@ def _external_soperator_upgrade_command_args(
     backup_dir: Path | None,
     job_policy: str,
     cancel_job: Sequence[str],
+    requeue_job: Sequence[str],
     job_wait_timeout: str,
     job_refresh_interval: str,
     worker_rollout_strategy: str | None,
@@ -8649,6 +8922,8 @@ def _external_soperator_upgrade_command_args(
     args.extend(["--job-policy", job_policy])
     for job_id in cancel_job:
         args.extend(["--cancel-job", str(job_id)])
+    for job_id in requeue_job:
+        args.extend(["--requeue-job", str(job_id)])
     args.extend(["--job-wait-timeout", job_wait_timeout])
     args.extend(["--job-refresh-interval", job_refresh_interval])
     if _non_empty_text(worker_rollout_strategy):
@@ -9010,7 +9285,7 @@ def _collect_soperator_discovery_accounting_snapshot(
                 "sacctmgr -nP show assoc format=Cluster,Account,User,Partition,QOS,"
                 "DefaultQOS,Fairshare,GrpTRES,MaxTRES,Priority"
             ),
-            "sacctmgr_wckeys": "sacctmgr -nP show wckey format=Cluster,Account,User,WCKey",
+            "sacctmgr_wckeys": "sacctmgr -nP show wckey format=Cluster,User,WCKey",
         },
     )
 
@@ -9672,12 +9947,22 @@ def soperator_upgrade_command(
         str | None,
         typer.Option(
             "--job-policy",
-            help="Slurm job policy: interactive, wait, cancel-selected, cancel-all, or fail.",
+            help=_SOPERATOR_UPGRADE_JOB_POLICY_HELP,
         ),
     ] = None,
     cancel_job: Annotated[
         list[str] | None,
         typer.Option("--cancel-job", help="Slurm job id to cancel with --job-policy cancel-selected."),
+    ] = None,
+    requeue_job: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--requeue-job",
+            help=(
+                "Slurm job id to requeue with --job-policy requeue-selected "
+                "or requeue-hold-selected."
+            ),
+        ),
     ] = None,
     job_wait_timeout: Annotated[
         str,
@@ -9726,6 +10011,7 @@ def soperator_upgrade_command(
             backup_dir=backup_dir,
             job_policy=job_policy,
             cancel_job=tuple(cancel_job or ()),
+            requeue_job=tuple(requeue_job or ()),
             job_wait_timeout=job_wait_timeout,
             job_refresh_interval=job_refresh_interval,
             dry_run=dry_run,
@@ -9753,6 +10039,7 @@ def _run_soperator_upgrade_command(
     backup_dir: Path | None,
     job_policy: str | None,
     cancel_job: Sequence[str],
+    requeue_job: Sequence[str],
     job_wait_timeout: str,
     job_refresh_interval: str,
     dry_run: bool,
@@ -9810,6 +10097,7 @@ def _run_soperator_upgrade_command(
         backup_dir=backup_dir,
         job_policy=_soperator_upgrade_job_policy(policy=job_policy, interactive=interactive),
         cancel_job=cancel_job,
+        requeue_job=requeue_job,
         job_wait_timeout=job_wait_timeout,
         job_refresh_interval=job_refresh_interval,
         dry_run=dry_run,
@@ -9833,6 +10121,7 @@ def _soperator_upgrade_command_args(
     backup_dir: Path | None,
     job_policy: str,
     cancel_job: Sequence[str],
+    requeue_job: Sequence[str],
     job_wait_timeout: str,
     job_refresh_interval: str,
     dry_run: bool,
@@ -9866,6 +10155,8 @@ def _soperator_upgrade_command_args(
     args.extend(["--job-policy", job_policy])
     for job_id in cancel_job:
         args.extend(["--cancel-job", str(job_id)])
+    for job_id in requeue_job:
+        args.extend(["--requeue-job", str(job_id)])
     args.extend(["--job-wait-timeout", job_wait_timeout])
     args.extend(["--job-refresh-interval", job_refresh_interval])
     args.append("--approve-remediation" if approve_remediation else "--no-approve-remediation")
@@ -9970,6 +10261,7 @@ def _run_managed_soperator_cluster_upgrade(
     backup_dir: Path | None,
     job_policy: str,
     cancel_job: Sequence[str],
+    requeue_job: Sequence[str],
     job_wait_timeout: str,
     job_refresh_interval: str,
     dry_run: bool,
@@ -10006,6 +10298,7 @@ def _run_managed_soperator_cluster_upgrade(
         backup_dir=backup_dir,
         job_policy=job_policy,
         cancel_job=cancel_job,
+        requeue_job=requeue_job,
         job_wait_timeout=job_wait_timeout,
         job_refresh_interval=job_refresh_interval,
         dry_run=True,
@@ -10063,6 +10356,7 @@ def _run_managed_soperator_cluster_upgrade(
             backup_dir=backup_dir,
             job_policy=job_policy,
             cancel_job=cancel_job,
+            requeue_job=requeue_job,
             job_wait_timeout=job_wait_timeout,
             job_refresh_interval=job_refresh_interval,
             dry_run=False,
@@ -10327,6 +10621,7 @@ def _run_managed_soperator_cluster_upgrade(
                 node_group=node_group,
                 policy=job_policy,
                 cancel_job_ids=cancel_job,
+                requeue_job_ids=requeue_job,
                 wait_timeout_seconds=_soperator_upgrade_duration_seconds(
                     job_wait_timeout,
                     option_name="--job-wait-timeout",
@@ -10501,6 +10796,7 @@ def _run_managed_soperator_cluster_upgrade(
                 namespace=plan.namespace or "default",
                 before_state=protected_state_before,
                 paths=staged_paths,
+                managed_node_template_upgrade=requested_mk8s_change,
                 approve_remediation=approve_remediation,
             )
         checkpoint["upgrade_safety"] = update_safety_payload_with_verification(
@@ -46403,12 +46699,22 @@ def soperator_external_upgrade_command(
         str | None,
         typer.Option(
             "--job-policy",
-            help="Slurm job policy: interactive, wait, cancel-selected, cancel-all, or fail.",
+            help=_SOPERATOR_UPGRADE_JOB_POLICY_HELP,
         ),
     ] = None,
     cancel_job: Annotated[
         list[str] | None,
         typer.Option("--cancel-job", help="Slurm job id to cancel with --job-policy cancel-selected."),
+    ] = None,
+    requeue_job: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--requeue-job",
+            help=(
+                "Slurm job id to requeue with --job-policy requeue-selected "
+                "or requeue-hold-selected."
+            ),
+        ),
     ] = None,
     job_wait_timeout: Annotated[
         str,
@@ -46600,6 +46906,7 @@ def soperator_external_upgrade_command(
             interactive=interactive,
         )
         selected_cancel_jobs = tuple(cancel_job or ())
+        selected_requeue_jobs = tuple(requeue_job or ())
         job_wait_timeout_seconds = _soperator_upgrade_duration_seconds(
             job_wait_timeout,
             option_name="--job-wait-timeout",
@@ -46643,6 +46950,7 @@ def soperator_external_upgrade_command(
                     backup_dir=backup_dir,
                     job_policy=resolved_job_policy,
                     cancel_job=selected_cancel_jobs,
+                    requeue_job=selected_requeue_jobs,
                     job_wait_timeout=job_wait_timeout,
                     job_refresh_interval=job_refresh_interval,
                     worker_rollout_strategy=worker_rollout_strategy,
@@ -46706,6 +47014,7 @@ def soperator_external_upgrade_command(
                     status_callback=emit_status,
                     job_policy=resolved_job_policy,
                     cancel_job_ids=selected_cancel_jobs,
+                    requeue_job_ids=selected_requeue_jobs,
                     job_wait_timeout_seconds=job_wait_timeout_seconds,
                     job_refresh_interval_seconds=job_refresh_interval_seconds,
                     approve_remediation=approve_remediation,

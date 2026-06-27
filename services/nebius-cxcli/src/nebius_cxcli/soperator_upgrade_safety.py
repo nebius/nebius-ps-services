@@ -401,18 +401,72 @@ def compare_protected_customer_state(
 
 
 def _classify_external_intentional_deltas(comparison: Mapping[str, Any]) -> dict[str, Any]:
+    return _classify_intentional_deltas(
+        comparison,
+        predicate=_is_external_source_flux_cleanup_delta,
+        remediation="Expected external migration cleanup of source-family Flux desired state.",
+    )
+
+
+def _classify_managed_chart_upgrade_deltas(comparison: Mapping[str, Any]) -> dict[str, Any]:
+    payload = dict(to_plain_data(comparison))
+    raw_deltas = [item for item in payload.get("deltas", []) or [] if isinstance(item, Mapping)]
+    chart_touched_resources = {
+        _delta_resource_key(item) for item in raw_deltas if _is_managed_chart_metadata_delta(item)
+    }
+    managed_runtime_touched = any(
+        _is_managed_chart_runtime_source_delta(item, chart_touched_resources)
+        for item in raw_deltas
+    )
+    deltas: list[dict[str, Any]] = []
+    for item in raw_deltas:
+        delta = dict(item)
+        if _is_managed_chart_upgrade_delta(
+            delta,
+            chart_touched_resources=chart_touched_resources,
+            managed_runtime_touched=managed_runtime_touched,
+        ):
+            delta["classification"] = "intentional_upgrade"
+            delta["approval_required"] = False
+            delta["remediation"] = "Expected managed Soperator chart-owned state change."
+        deltas.append(delta)
+    blocked = [delta for delta in deltas if delta.get("classification") == "blocked"]
+    approval = [delta for delta in deltas if bool(delta.get("approval_required"))]
+    payload["deltas"] = deltas
+    payload["blocked_count"] = len(blocked)
+    payload["approval_required_count"] = len(approval)
+    payload["status"] = (
+        "matched"
+        if not deltas
+        else ("blocked" if blocked else ("drift-detected" if approval else "intentional-upgrade"))
+    )
+    return payload
+
+
+def _classify_managed_node_template_upgrade_deltas(comparison: Mapping[str, Any]) -> dict[str, Any]:
+    return _classify_intentional_deltas(
+        comparison,
+        predicate=_is_managed_node_template_upgrade_delta,
+        remediation="Expected managed MK8s node-template replacement of Kubernetes node instances.",
+    )
+
+
+def _classify_intentional_deltas(
+    comparison: Mapping[str, Any],
+    *,
+    predicate: Callable[[Mapping[str, Any]], bool],
+    remediation: str,
+) -> dict[str, Any]:
     payload = dict(to_plain_data(comparison))
     deltas: list[dict[str, Any]] = []
     for item in payload.get("deltas", []) or []:
         if not isinstance(item, Mapping):
             continue
         delta = dict(item)
-        if _is_external_source_flux_cleanup_delta(delta):
+        if predicate(delta):
             delta["classification"] = "intentional_upgrade"
             delta["approval_required"] = False
-            delta["remediation"] = (
-                "Expected external migration cleanup of source-family Flux desired state."
-            )
+            delta["remediation"] = remediation
         deltas.append(delta)
     blocked = [delta for delta in deltas if delta.get("classification") == "blocked"]
     approval = [delta for delta in deltas if bool(delta.get("approval_required"))]
@@ -446,6 +500,89 @@ def _is_external_source_flux_cleanup_delta(delta: Mapping[str, Any]) -> bool:
     return False
 
 
+def _is_managed_node_template_upgrade_delta(delta: Mapping[str, Any]) -> bool:
+    kind = str(delta.get("kind", "") or "")
+    field = str(delta.get("field", "") or "")
+    before = str(delta.get("before", "") or "")
+    after = str(delta.get("after", "") or "")
+    return (
+        kind == "nodes"
+        and field == "presence"
+        and (before, after) in {("present", "absent"), ("absent", "present")}
+    )
+
+
+def _delta_resource_key(delta: Mapping[str, Any]) -> tuple[str, str]:
+    return str(delta.get("kind", "") or ""), str(delta.get("resource", "") or "")
+
+
+def _is_managed_chart_metadata_delta(delta: Mapping[str, Any]) -> bool:
+    kind = str(delta.get("kind", "") or "")
+    resource = str(delta.get("resource", "") or "")
+    field = str(delta.get("field", "") or "")
+    name = resource.rsplit("/", 1)[-1]
+    if kind == "configmaps":
+        return field in {"labels", "annotation_keys", "annotation_sha256_by_key"}
+    if kind in {"nodesets", "slurmclusters"}:
+        return field in {"labels", "annotation_keys", "annotation_sha256_by_key"}
+    if kind in {"workloads.deployments", "workloads.daemonsets", "workloads.statefulsets"}:
+        return name in _MANAGED_CHART_WORKLOAD_NAMES and field in {
+            "labels",
+            "annotation_keys",
+            "annotation_sha256_by_key",
+        }
+    return False
+
+
+def _is_managed_chart_runtime_source_delta(
+    delta: Mapping[str, Any],
+    chart_touched_resources: set[tuple[str, str]],
+) -> bool:
+    kind = str(delta.get("kind", "") or "")
+    return kind in {"nodesets", "slurmclusters"} and _delta_resource_key(delta) in chart_touched_resources
+
+
+_MANAGED_CHART_WORKLOAD_NAMES = frozenset(
+    {
+        "accounting",
+        "controller-placeholder",
+        "rest",
+        "sconfigcontroller",
+        "soperator-manager",
+        "soperator-mariadb-operator",
+        "soperator-mariadb-operator-webhook",
+    }
+)
+
+
+def _is_managed_chart_upgrade_delta(
+    delta: Mapping[str, Any],
+    *,
+    chart_touched_resources: set[tuple[str, str]],
+    managed_runtime_touched: bool,
+) -> bool:
+    kind = str(delta.get("kind", "") or "")
+    resource = str(delta.get("resource", "") or "")
+    field = str(delta.get("field", "") or "")
+    name = resource.rsplit("/", 1)[-1]
+    if _is_managed_chart_metadata_delta(delta):
+        return True
+    if kind in {"nodesets", "slurmclusters"}:
+        return (
+            _delta_resource_key(delta) in chart_touched_resources
+            and field in {"spec_hash", "spec_keys"}
+        )
+    if kind == "slurm_runtime":
+        return field in {"slurm_config", "slurm_nodes"}
+    if kind in {"workloads.deployments", "workloads.daemonsets", "workloads.statefulsets"}:
+        return (
+            _delta_resource_key(delta) in chart_touched_resources
+            and name in _MANAGED_CHART_WORKLOAD_NAMES
+            and field == "template_hash"
+        )
+    return False
+
+
 def build_remediation_approval_plan(
     comparison: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -476,6 +613,8 @@ def run_post_upgrade_fast_verification(
     source_payload: Mapping[str, Any] | None = None,
     terraform_plan_command: Sequence[str] | None = None,
     external_cluster: bool = False,
+    managed_chart_upgrade: bool = False,
+    managed_node_template_upgrade: bool = False,
     remediation_approved: bool = False,
     timeout_seconds: int = 120,
 ) -> PostUpgradeVerificationResult:
@@ -507,6 +646,11 @@ def run_post_upgrade_fast_verification(
         comparison = compare_protected_customer_state(before=before_state, after=after_state)
         if external_cluster:
             comparison = _classify_external_intentional_deltas(comparison)
+        else:
+            if managed_chart_upgrade:
+                comparison = _classify_managed_chart_upgrade_deltas(comparison)
+            if managed_node_template_upgrade:
+                comparison = _classify_managed_node_template_upgrade_deltas(comparison)
         checks.append(
             _protected_comparison_check(
                 comparison,
