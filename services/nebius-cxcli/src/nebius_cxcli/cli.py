@@ -430,6 +430,8 @@ from .soperator_onboarding import (
     ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_GPU_STACK_PRESET,
     ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION,
     ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS,
+    ONBOARDING_REQUIRED_STORAGE_KEYS,
+    ONBOARDING_SERVICE_ROLES,
     ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS,
     ONBOARDING_STORAGE_MODE_KEEP_EXISTING,
     SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME,
@@ -14331,7 +14333,7 @@ def _prompt_soperator_onboarding_source_version(report: Any) -> str:
     if source_version:
         console.print(
             f"[dim]Detected Soperator version {source_version}, but cxcli also found "
-            "a Soperator-like Helm release with noncanonical identity. Confirm the "
+            "a Soperator Helm release with non-standard identity. Confirm the "
             "source Soperator version so cxcli can match an exact committed "
             "upgrade compatibility profile row or known major-generation profile "
             "before managing the release.[/dim]"
@@ -14478,26 +14480,152 @@ def _print_soperator_onboarding_report_summary(report: Any) -> None:
     if migration_profile_id:
         console.print(f"[dim]Upgrade profile: {migration_profile_id}[/dim]")
     for finding in report.findings:
-        print_info_finding = finding.layer == "gpu-stack" and finding.status == "verified"
+        print_info_finding = (
+            (finding.layer == "gpu-stack" and finding.status == "verified")
+            or (
+                finding.layer in {"placements", "storage-sfs", "mk8s-node-template"}
+                and finding.status == "target-compatible"
+            )
+        )
         if finding.severity in {"required", "recommended"} or print_info_finding:
             console.print(f"[dim]- {finding.layer}: {finding.status} - {finding.message}[/dim]")
-    if getattr(report, "migration_plan", ()):
+    console.print(
+        "[dim]Onboard discovery is read-only for the live cluster; this command records "
+        "config decisions only and does not mutate external resources.[/dim]"
+    )
+
+
+def _soperator_onboarding_report_mapping_from_target_row(
+    target_row: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    report_material = target_row.get(_SOPERATOR_DISCOVERY_REPORT_PRIVATE_KEY)
+    if not isinstance(report_material, Mapping):
+        return {}
+    report = report_material.get("report")
+    return report if isinstance(report, Mapping) else {}
+
+
+def _soperator_onboarding_find_report_finding(
+    report: Mapping[str, Any],
+    *,
+    layer: str,
+    status: str,
+) -> Mapping[str, Any]:
+    findings = report.get("findings")
+    if not isinstance(findings, Sequence) or isinstance(findings, (str, bytes, bytearray)):
+        return {}
+    for finding in findings:
+        if not isinstance(finding, Mapping):
+            continue
+        if (
+            str(finding.get("layer", "") or "").strip() == layer
+            and str(finding.get("status", "") or "").strip() == status
+        ):
+            return finding
+    return {}
+
+
+def _soperator_onboarding_layout_groups_text(groups_by_role: Mapping[str, Sequence[str]]) -> str:
+    role_order = (*ONBOARDING_SERVICE_ROLES, "worker", "worker-cpu", "worker-gpu")
+    parts: list[str] = []
+    for role in role_order:
+        raw_groups = groups_by_role.get(role)
+        if not isinstance(raw_groups, Sequence) or isinstance(
+            raw_groups,
+            (str, bytes, bytearray),
+        ):
+            continue
+        groups = [_non_empty_text(group) for group in raw_groups if _non_empty_text(group)]
+        if groups:
+            parts.append(f"{role}: {', '.join(groups)}")
+    extra_roles = sorted(
+        role
+        for role in groups_by_role
+        if role not in set(role_order) and _non_empty_text(role)
+    )
+    for role in extra_roles:
+        raw_groups = groups_by_role.get(role)
+        if not isinstance(raw_groups, Sequence) or isinstance(
+            raw_groups,
+            (str, bytes, bytearray),
+        ):
+            continue
+        groups = [_non_empty_text(group) for group in raw_groups if _non_empty_text(group)]
+        if groups:
+            parts.append(f"{role}: {', '.join(groups)}")
+    return "; ".join(parts)
+
+
+def _print_soperator_onboarding_decision_summary(target_row: Mapping[str, Any]) -> None:
+    onboarding = target_row.get("soperator_onboarding")
+    if not isinstance(onboarding, Mapping):
+        return
+    report = _soperator_onboarding_report_mapping_from_target_row(target_row)
+    storage_mode = _non_empty_text(onboarding.get("storage_mode"))
+    compute_mode = _non_empty_text(onboarding.get("compute_mode"))
+    storage_compatible = bool(
+        _soperator_onboarding_find_report_finding(
+            report,
+            layer="storage-sfs",
+            status="target-compatible",
+        )
+    )
+    compute_finding = _soperator_onboarding_find_report_finding(
+        report,
+        layer="placements",
+        status="target-compatible",
+    )
+    compute_compatible = bool(compute_finding)
+
+    console.print("[dim]Soperator onboarding decisions:[/dim]")
+    if storage_mode == ONBOARDING_STORAGE_MODE_KEEP_EXISTING:
+        if storage_compatible:
+            console.print(
+                "[dim]- Storage layout decision: keep existing storage. Existing "
+                f"{', '.join(ONBOARDING_REQUIRED_STORAGE_KEYS)} storage matches the target "
+                "Soperator layout; no aligned SFS creation or storage data migration is "
+                "planned.[/dim]"
+            )
+        else:
+            console.print(
+                "[dim]- Storage layout decision: keep existing storage. cxcli will preserve "
+                "the discovered storage contract and will not plan aligned SFS creation; "
+                "review storage-sfs findings in the discovery bundle before upgrade.[/dim]"
+            )
+    elif storage_mode == ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS:
         console.print(
-            "[dim]External upgrade phases: "
-            + ", ".join(phase.id for phase in report.migration_plan)
-            + "[/dim]"
+            "[dim]- Storage layout decision: create aligned SFS. cxcli records aligned "
+            "SFS remediation for the external upgrade plan; storage changes require "
+            "customer approval before execution.[/dim]"
         )
-    selected_actions = [
-        (
-            f"{action.title} ({action.id})"
-            if str(action.title or "").strip()
-            else str(action.id or "").strip()
+
+    if compute_mode == ONBOARDING_COMPUTE_MODE_KEEP_EXISTING:
+        if compute_compatible:
+            roles = compute_finding.get("evidence")
+            role_text = ""
+            if isinstance(roles, Mapping):
+                raw_roles = roles.get("roles")
+                if isinstance(raw_roles, Mapping):
+                    role_text = _soperator_onboarding_layout_groups_text(raw_roles)
+            suffix = f" Discovered placements: {role_text}." if role_text else ""
+            console.print(
+                "[dim]- Compute layout decision: keep existing compute. Existing "
+                "Soperator service-role and worker node-group labels match the target "
+                "layout; no replacement compute node groups or compute migration are "
+                f"planned.{suffix}[/dim]"
+            )
+        else:
+            console.print(
+                "[dim]- Compute layout decision: keep existing compute. cxcli will reuse "
+                "discovered node groups through apps.charts[].placements; no replacement "
+                "compute node groups are planned.[/dim]"
+            )
+    elif compute_mode == ONBOARDING_COMPUTE_MODE_CREATE_ALIGNED_NODE_GROUPS:
+        console.print(
+            "[dim]- Compute layout decision: create profile-aligned node groups. cxcli "
+            "records compute remediation for the external upgrade plan; worker migration "
+            "is guarded by ext-soperator upgrade.[/dim]"
         )
-        for action in report.actions
-        if action.selected and str(action.id or "").strip()
-    ]
-    if selected_actions:
-        console.print("[dim]Selected onboarding actions: " + ", ".join(selected_actions) + "[/dim]")
 
 
 def _soperator_onboarding_storage_mode_choices(default: str) -> list[OptionChoice]:
@@ -14578,16 +14706,18 @@ _SOPERATOR_ROLLOUT_FIELD_GUIDANCE = {
         "scale each wave from the total worker-group count."
     ),
     "worker_wave_groups": (
-        "Safe-surge worker wave groups: number of worker groups updated per wave. "
-        "Larger values finish faster but increase quota needs and rollout blast radius."
+        "Safe-surge worker wave groups: fixed number of worker groups updated per "
+        "wave. This is already the concurrent worker-group limit; larger values "
+        "finish faster but increase quota needs and rollout blast radius."
     ),
     "worker_wave_percent": (
         "Safe-surge worker wave percent: percentage of worker groups updated per wave. "
-        "cxcli rounds up to at least one group."
+        "cxcli rounds up to at least one group; optionally cap the result with "
+        "max_parallel_worker_groups."
     ),
     "max_parallel_worker_groups": (
-        "Max parallel worker groups: optional hard cap for concurrent worker-group "
-        "updates. Leave blank to use the wave budget."
+        "Max parallel worker groups: optional upper cap for percent-based "
+        "safe-surge waves. Leave blank to use the percentage result."
     ),
     "max_surge_count": (
         "Max surge count: temporary extra nodes per worker group. Use 1 for capacity-"
@@ -14740,22 +14870,22 @@ def _prompt_soperator_onboarding_rollout_manifest(
                     required=True,
                 )
             )
-        _print_soperator_rollout_field_guidance("max_parallel_worker_groups")
-        max_parallel_raw = _prompt_soperator_rollout_value(
-            "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.max_parallel_worker_groups",
-            selected_current.max_parallel_worker_groups,
-            validator=lambda value: _soperator_rollout_manifest_from_options(
-                onboarding,
-                worker_rollout_strategy=strategy,
-                worker_wave_groups=worker_wave_groups,
-                worker_wave_percent=worker_wave_percent,
-                max_parallel_worker_groups=None if value in {None, ""} else int(value),
-            ),
-            type_hint="integer",
-            required=False,
-            unset_on_skip=True,
-        )
-        max_parallel = None if max_parallel_raw in {None, ""} else int(max_parallel_raw)
+            _print_soperator_rollout_field_guidance("max_parallel_worker_groups")
+            max_parallel_raw = _prompt_soperator_rollout_value(
+                "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.max_parallel_worker_groups",
+                selected_current.max_parallel_worker_groups,
+                validator=lambda value: _soperator_rollout_manifest_from_options(
+                    onboarding,
+                    worker_rollout_strategy=strategy,
+                    worker_wave_groups=worker_wave_groups,
+                    worker_wave_percent=worker_wave_percent,
+                    max_parallel_worker_groups=None if value in {None, ""} else int(value),
+                ),
+                type_hint="integer",
+                required=False,
+                unset_on_skip=True,
+            )
+            max_parallel = None if max_parallel_raw in {None, ""} else int(max_parallel_raw)
     _print_soperator_rollout_field_guidance("max_surge_count")
     max_surge = int(
         _prompt_soperator_rollout_value(
@@ -15030,10 +15160,129 @@ def _soperator_onboarding_empty_snapshot() -> dict[str, Any]:
     return {"node_groups": {}, "helm_releases": [], "crds": [], "collection_errors": []}
 
 
+def _soperator_onboard_bundle_command_args(
+    *,
+    config_path: Path,
+    target_row: Mapping[str, Any],
+    target_id: str | None = None,
+    cluster_id: str | None = None,
+    kube_context: str | None = None,
+    access: str | None = None,
+    storage_mode: str | None = None,
+    compute_mode: str | None = None,
+    source_version: str | None = None,
+    worker_rollout_strategy: str | None = None,
+    worker_wave_groups: int | None = None,
+    worker_wave_percent: int | None = None,
+    max_parallel_worker_groups: int | None = None,
+    strategy_max_surge_count: int | None = None,
+    strategy_max_unavailable_count: int | None = None,
+    strategy_drain_timeout: str | None = None,
+    validate_sources: bool | None = None,
+    no_interactive: bool | None = None,
+    use_accepted_row: bool = True,
+) -> tuple[str, ...]:
+    args = ["nebius-cxcli", "ext-soperator", "onboard", str(config_path)]
+
+    def _append_text_option(flag: str, value: object) -> None:
+        text = _non_empty_text(value)
+        if text:
+            args.extend([flag, text])
+
+    target_ref = _non_empty_text(target_id)
+    if not target_ref and use_accepted_row:
+        target_ref = component_instance_id(target_row)
+    if target_ref:
+        args.extend(["--target-id", target_ref])
+    resolved_cluster_id = _non_empty_text(cluster_id)
+    if not resolved_cluster_id and use_accepted_row:
+        resolved_cluster_id = _non_empty_text(target_row.get("cluster_id"))
+    _append_text_option("--cluster-id", resolved_cluster_id)
+    resolved_kube_context = _non_empty_text(kube_context)
+    if not resolved_kube_context and use_accepted_row:
+        resolved_kube_context = _non_empty_text(target_row.get("kube_context"))
+    _append_text_option("--kube-context", resolved_kube_context)
+    if access is not None and _normalize_mk8s_handoff_access(access) != "external":
+        args.extend(["--access", _normalize_mk8s_handoff_access(access)])
+
+    onboarding = target_row.get("soperator_onboarding")
+    accepted_storage_mode = ""
+    accepted_compute_mode = ""
+    if isinstance(onboarding, Mapping) and use_accepted_row:
+        accepted_storage_mode = _non_empty_text(onboarding.get("storage_mode"))
+        accepted_compute_mode = _non_empty_text(onboarding.get("compute_mode"))
+    _append_text_option(
+        "--storage-mode",
+        storage_mode if storage_mode is not None else accepted_storage_mode,
+    )
+    _append_text_option(
+        "--compute-mode",
+        compute_mode if compute_mode is not None else accepted_compute_mode,
+    )
+    _append_text_option("--source-version", source_version)
+    _append_text_option("--worker-rollout-strategy", worker_rollout_strategy)
+    if worker_wave_groups is not None:
+        args.extend(["--worker-wave-groups", str(worker_wave_groups)])
+    if worker_wave_percent is not None:
+        args.extend(["--worker-wave-percent", str(worker_wave_percent)])
+    if max_parallel_worker_groups is not None:
+        args.extend(["--max-parallel-worker-groups", str(max_parallel_worker_groups)])
+    if strategy_max_surge_count is not None:
+        args.extend(["--strategy-max-surge-count", str(strategy_max_surge_count)])
+    if strategy_max_unavailable_count is not None:
+        args.extend(["--strategy-max-unavailable-count", str(strategy_max_unavailable_count)])
+    _append_text_option("--strategy-drain-timeout", strategy_drain_timeout)
+    if validate_sources is False:
+        args.append("--no-validate-sources")
+    if no_interactive:
+        args.append("--no-interactive")
+    return tuple(args)
+
+
+def _soperator_onboarding_report_target_versions(
+    *,
+    report: Mapping[str, Any],
+    onboarding: Mapping[str, Any] | None,
+) -> dict[str, str]:
+    evidence: Mapping[str, Any] = {}
+    for status in ("target-compatible", "remediation-planned"):
+        finding = _soperator_onboarding_find_report_finding(
+            report,
+            layer="mk8s-node-template",
+            status=status,
+        )
+        raw_evidence = finding.get("evidence") if isinstance(finding, Mapping) else None
+        if isinstance(raw_evidence, Mapping):
+            evidence = raw_evidence
+            break
+    return {
+        "chart_version": _non_empty_text(report.get("target_version")),
+        "k8s_version": _non_empty_text(
+            _mapping_path_value(
+                onboarding or {},
+                "node_template_upgrade.target_k8s_version",
+            )
+        )
+        or _non_empty_text(evidence.get("target_k8s_version")),
+        "os": _non_empty_text(
+            _mapping_path_value(onboarding or {}, "node_template_upgrade.target_os")
+        )
+        or _non_empty_text(evidence.get("target_os")),
+        "gpu_stack_preset": _non_empty_text(
+            _mapping_path_value(
+                onboarding or {},
+                "node_template_upgrade.target_gpu_stack_preset",
+            )
+        )
+        or _non_empty_text(evidence.get("target_gpu_stack_preset")),
+    }
+
+
 def _write_soperator_source_discovery_report_from_target_row(
     *,
     config_path: Path,
     target_row: Mapping[str, Any],
+    command: Sequence[str] | None = None,
 ) -> Path | None:
     report_material = target_row.get(_SOPERATOR_DISCOVERY_REPORT_PRIVATE_KEY)
     if not isinstance(report_material, Mapping):
@@ -15055,7 +15304,16 @@ def _write_soperator_source_discovery_report_from_target_row(
         cluster_id=cluster_id,
         cluster_name=cluster_name,
         source_kind="external",
+        command=command
+        or _soperator_onboard_bundle_command_args(
+            config_path=config_path,
+            target_row=target_row,
+        ),
         kube_context=_non_empty_text(target_row.get("kube_context")),
+        target_versions=_soperator_onboarding_report_target_versions(
+            report=report,
+            onboarding=onboarding if isinstance(onboarding, Mapping) else None,
+        ),
     )
 
 
@@ -16050,6 +16308,7 @@ def _prompt_soperator_onboarding_target_row(
             target_row,
             _prompt_soperator_onboarding_rollout_manifest(target_row),
         )
+    _print_soperator_onboarding_decision_summary(target_row)
     return target_row
 
 
@@ -16221,6 +16480,7 @@ def _soperator_onboarding_target_row_from_options(
             strategy_drain_timeout=strategy_drain_timeout,
         ),
     )
+    _print_soperator_onboarding_decision_summary(target_row)
     return target_row
 
 
@@ -45617,8 +45877,9 @@ def soperator_onboard_command(
         typer.Option(
             "--worker-wave-groups",
             help=(
-                "Worker rollout wave budget as a fixed number of worker groups. "
-                "Mutually exclusive with --worker-wave-percent."
+                "Fixed number of worker groups to update per safe-surge wave. "
+                "Mutually exclusive with --worker-wave-percent and "
+                "--max-parallel-worker-groups."
             ),
         ),
     ] = None,
@@ -45628,7 +45889,8 @@ def soperator_onboard_command(
             "--worker-wave-percent",
             help=(
                 "Worker rollout wave budget as a percentage of worker groups, rounded "
-                "up to at least one. Mutually exclusive with --worker-wave-groups."
+                "up to at least one. Can be capped with --max-parallel-worker-groups. "
+                "Mutually exclusive with --worker-wave-groups."
             ),
         ),
     ] = None,
@@ -45636,7 +45898,10 @@ def soperator_onboard_command(
         int | None,
         typer.Option(
             "--max-parallel-worker-groups",
-            help="Maximum worker node groups to update in one worker rollout wave.",
+            help=(
+                "Optional upper cap for percent-based safe-surge waves. Use "
+                "--worker-wave-groups instead for an exact fixed group count."
+            ),
         ),
     ] = None,
     strategy_max_surge_count: Annotated[
@@ -45771,9 +46036,31 @@ def soperator_onboard_command(
                 strategy_drain_timeout=strategy_drain_timeout,
             )
 
+        onboard_command_args = _soperator_onboard_bundle_command_args(
+            config_path=config_path,
+            target_row=target_row,
+            target_id=target_id_opt,
+            cluster_id=cluster_id_opt,
+            kube_context=kube_context_opt,
+            access=access_opt,
+            storage_mode=storage_mode_opt,
+            compute_mode=compute_mode_opt,
+            source_version=source_version_opt,
+            worker_rollout_strategy=worker_rollout_strategy,
+            worker_wave_groups=worker_wave_groups,
+            worker_wave_percent=worker_wave_percent,
+            max_parallel_worker_groups=max_parallel_worker_groups,
+            strategy_max_surge_count=strategy_max_surge_count,
+            strategy_max_unavailable_count=strategy_max_unavailable_count,
+            strategy_drain_timeout=strategy_drain_timeout,
+            validate_sources=validate_sources,
+            no_interactive=no_interactive,
+            use_accepted_row=False,
+        )
         source_report_path = _write_soperator_source_discovery_report_from_target_row(
             config_path=config_path,
             target_row=target_row,
+            command=onboard_command_args,
         )
 
         next_payload = copy.deepcopy(payload)
@@ -46784,8 +47071,9 @@ def soperator_external_upgrade_command(
         typer.Option(
             "--worker-wave-groups",
             help=(
-                "Worker rollout wave budget as a fixed number of worker groups. "
-                "Mutually exclusive with --worker-wave-percent and overrides config.yaml."
+                "Fixed number of worker groups to update per safe-surge wave. "
+                "Overrides config.yaml. Mutually exclusive with --worker-wave-percent "
+                "and --max-parallel-worker-groups."
             ),
         ),
     ] = None,
@@ -46795,8 +47083,8 @@ def soperator_external_upgrade_command(
             "--worker-wave-percent",
             help=(
                 "Worker rollout wave budget as a percentage of worker groups, rounded "
-                "up to at least one. Mutually exclusive with --worker-wave-groups and "
-                "overrides config.yaml."
+                "up to at least one. Can be capped with --max-parallel-worker-groups. "
+                "Overrides config.yaml. Mutually exclusive with --worker-wave-groups."
             ),
         ),
     ] = None,
@@ -46805,7 +47093,8 @@ def soperator_external_upgrade_command(
         typer.Option(
             "--max-parallel-worker-groups",
             help=(
-                "Maximum worker node groups to update in one safe-surge wave. "
+                "Optional upper cap for percent-based safe-surge waves. Use "
+                "--worker-wave-groups instead for an exact fixed group count. "
                 "Overrides deploy.targets[].soperator_onboarding.node_template_upgrade."
                 "rollout.max_parallel_worker_groups for this run."
             ),

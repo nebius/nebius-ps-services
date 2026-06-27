@@ -5277,7 +5277,14 @@ def test_soperator_onboard_uses_detected_profile_for_mixed_release_identity() ->
     assert report.source_version == "3.0.7"
     assert report.migration_profile_id == "v3-to-target"
     assert cli_module._soperator_onboarding_report_needs_source_version(report) is False
-    assert any(finding.status == "noncanonical-release-detected" for finding in report.findings)
+    release_finding = next(
+        finding for finding in report.findings if finding.status == "helm-release-detected"
+    )
+    assert "name=soperator" in release_finding.message
+    assert "namespace=custom" in release_finding.message
+    assert "chart=helm-soperator-3.0.7" in release_finding.message
+    assert "version=3.0.7" in release_finding.message
+    assert "matched migration profile v3-to-target" in release_finding.message
 
 
 def test_soperator_source_version_validator_accepts_generation_profile_patch() -> None:
@@ -6755,6 +6762,25 @@ def test_ext_soperator_upgrade_dry_run_validates_worker_rollout_cli_overrides(
     assert conflict.exit_code != 0
     assert "mutually exclusive" in conflict.output
 
+    redundant_cap = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "upgrade",
+            str(config_path),
+            "--dry-run",
+            "--worker-rollout-strategy",
+            "safe-surge",
+            "--worker-wave-groups",
+            "1",
+            "--max-parallel-worker-groups",
+            "1",
+        ],
+    )
+
+    assert redundant_cap.exit_code != 0
+    assert "only supported with worker_wave_percent" in redundant_cap.output
+
 
 def test_soperator_migration_plan_styles_topic_labels() -> None:
     required_line = cli_module._style_soperator_migration_plan_line("External upgrade required: yes")
@@ -7741,8 +7767,9 @@ def test_soperator_onboard_target_match_hides_stale_source_release_from_summary(
     assert "gpu-stack: verified" in result.output
     assert "not a failure signal" in result.output
     assert "target remediation will apply" not in result.output
-    assert "Selected onboarding actions:" in result.output
-    assert "adopt-soperator" in result.output
+    assert "Selected onboarding actions:" not in result.output
+    assert "External upgrade phases:" not in result.output
+    assert "Onboard discovery is read-only for the live cluster" in result.output
 
     source_report = _soperator_discovery_section_path(
         config_path,
@@ -7755,6 +7782,141 @@ def test_soperator_onboard_target_match_hides_stale_source_release_from_summary(
         finding["status"] == "stale-source-release" and finding["severity"] == "info"
         for finding in findings
     )
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    target = payload["deploy"]["targets"][0]
+    assert "adopt-soperator" in target["soperator_onboarding"]["actions"]
+
+
+def test_soperator_onboard_prints_target_compatible_layout_decisions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+
+    def _snapshot(*, kube_context: str) -> dict[str, object]:
+        assert kube_context == "training-context"
+        node_groups: dict[str, object] = {}
+        for role in ("system", "controller", "login", "accounting", "worker-gpu"):
+            node_groups[role] = {
+                "gpu": role == "worker-gpu",
+                "node_count": 2 if role == "worker-gpu" else 1,
+                "labels": {
+                    "nebius.com/node-group": role,
+                    "slurm.nebius.ai/nodeset": role,
+                },
+                "allocatable": {"nvidia.com/gpu": "8"} if role == "worker-gpu" else {},
+            }
+        for raw_group in node_groups.values():
+            assert isinstance(raw_group, dict)
+            raw_group["provider"] = {
+                "node_template": {
+                    "k8s_version": "1.33",
+                    "os": "ubuntu24.04",
+                    "gpu_stack_preset": "cuda13.0" if raw_group.get("gpu") is True else "",
+                }
+            }
+        return {
+            "provider": {
+                "mk8s_cluster": {
+                    "id": "mk8scluster-training",
+                    "name": "training",
+                    "control_plane_version": "1.33",
+                }
+            },
+            "node_groups": node_groups,
+            "storage": {
+                "jail": {"source": "pvc/jail"},
+                "controller-spool": {"source": "pvc/controller-spool"},
+                "accounting": {"source": "pvc/accounting"},
+            },
+            "helm_releases": [
+                {
+                    "name": "soperator-controller",
+                    "namespace": "soperator-system",
+                    "chart": "helm-soperator-1.23.3",
+                    "app_version": "1.23.3",
+                    "status": "deployed",
+                }
+            ],
+            "crds": ["slurmclusters.slurm.nebius.ai"],
+            "namespaces": ["soperator", "soperator-system"],
+            "collection_errors": [],
+        }
+
+    monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _snapshot)
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "onboard",
+            str(config_path),
+            "--cluster-id",
+            "mk8scluster-training",
+            "--target-id",
+            "training-cluster",
+            "--kube-context",
+            "training-context",
+            "--storage-mode",
+            "create-aligned-sfs",
+            "--compute-mode",
+            "create-aligned-node-groups",
+            "--no-interactive",
+            "--no-validate-sources",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    normalized_output = " ".join(result.output.split())
+    assert "storage-sfs: target-compatible" in result.output
+    assert "placements: target-compatible" in result.output
+    assert "mk8s-node-template: target-compatible" in result.output
+    assert "Storage layout decision: keep existing storage" in result.output
+    assert "no aligned SFS creation or storage data migration is planned" in normalized_output
+    assert "Compute layout decision: keep existing compute" in result.output
+    assert "no replacement compute node groups or compute migration are planned" in normalized_output
+    assert "Discovered placements: system: system; controller: controller" in normalized_output
+    assert "Selected onboarding actions:" not in result.output
+    assert "External upgrade phases:" not in result.output
+
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]
+    assert onboarding["storage_mode"] == "keep-existing-storage"
+    assert onboarding["compute_mode"] == "keep-existing-compute"
+    assert "create-aligned-sfs" not in onboarding["actions"]
+    assert "plan-soperator-compute-migration" not in onboarding["actions"]
+    assert "upgrade-external-node-template" not in onboarding["actions"]
+
+    manifest_path = (
+        config_path.parent
+        / "generated"
+        / "reports"
+        / "soperator-discovery"
+        / "training-cluster"
+        / "manifest.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["command"][:3] == ["nebius-cxcli", "ext-soperator", "onboard"]
+    command = manifest["command"]
+    assert command[command.index("--storage-mode") + 1] == "create-aligned-sfs"
+    assert command[command.index("--compute-mode") + 1] == "create-aligned-node-groups"
+    assert "--no-interactive" in command
+    assert "--no-validate-sources" in command
+    assert manifest["target_versions"]["k8s_version"] == "1.33"
+    assert manifest["target_versions"]["os"] == "ubuntu24.04"
+    assert manifest["target_versions"]["gpu_stack_preset"] == "cuda13.0"
 
 
 def test_soperator_onboard_noninteractive_cluster_id_generates_kube_access(

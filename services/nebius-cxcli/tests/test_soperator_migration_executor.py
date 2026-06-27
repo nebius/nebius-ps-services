@@ -1996,6 +1996,35 @@ def test_external_node_template_rollout_config_validation_and_cli_precedence() -
             worker_wave_percent=1,
         )
 
+    with pytest.raises(ValueError, match="only supported with worker_wave_percent"):
+        migration.resolve_external_node_template_rollout(
+            onboarding,
+            strategy="safe-surge",
+            worker_wave_groups=1,
+            max_parallel_worker_groups=1,
+        )
+
+    onboarding["node_template_upgrade"] = {
+        "rollout": {
+            "strategy": "safe-surge",
+            "worker_wave_percent": 10,
+            "max_parallel_worker_groups": 2,
+        }
+    }
+    fixed_override = migration.resolve_external_node_template_rollout(
+        onboarding,
+        worker_wave_groups=1,
+    )
+    assert fixed_override.to_manifest_dict() == {
+        "strategy": "safe-surge",
+        "worker_wave_groups": 1,
+        "worker_group_strategy": {
+            "max_surge_count": 1,
+            "max_unavailable_count": 0,
+            "drain_timeout": "30m",
+        },
+    }
+
     onboarding["node_template_upgrade"] = {
         "rollout": {
             "worker_wave_groups": 1,
@@ -2003,6 +2032,16 @@ def test_external_node_template_rollout_config_validation_and_cli_precedence() -
         }
     }
     with pytest.raises(ValueError, match="must set only one"):
+        migration.resolve_external_node_template_rollout(onboarding)
+
+    onboarding["node_template_upgrade"] = {
+        "rollout": {
+            "strategy": "safe-surge",
+            "worker_wave_groups": 1,
+            "max_parallel_worker_groups": 1,
+        }
+    }
+    with pytest.raises(ValueError, match="only supported with worker_wave_percent"):
         migration.resolve_external_node_template_rollout(onboarding)
 
     onboarding["node_template_upgrade"] = {

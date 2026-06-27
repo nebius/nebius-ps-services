@@ -2756,7 +2756,11 @@ Important onboarding flags:
   pinned-target `soperator` release is already present, older same-name
   source-family Helm records are treated as
   informational stale discovery evidence in the saved report and do not force
-  source-version confirmation.
+  source-version confirmation. Discovery enumerates Helm releases across all
+  namespaces and stores only Soperator-like releases, so a known Soperator
+  release name in a non-standard namespace is reported with its release name,
+  namespace, chart, detected version, and matched migration profile instead of
+  requiring source-version input.
 - `--worker-rollout-strategy`, `--worker-wave-groups`,
   `--worker-wave-percent`, `--max-parallel-worker-groups`,
   `--strategy-max-surge-count`, `--strategy-max-unavailable-count`, and
@@ -2766,9 +2770,13 @@ Important onboarding flags:
   non-interactive onboarding. They use the same semantics as the upgrade flags:
   `zero-surge` is the default and avoids surge quota but can temporarily reduce
   worker capacity, `safe-surge` uses temporary worker nodes and verifies the
-  needed quota and capacity during `--execute` preflight before mutation, `none` waits
-  indefinitely for drain completion, and a finite drain timeout can let Nebius
-  delete the node after that timeout when eviction is still blocked.
+  needed quota and capacity during `--execute` preflight before mutation.
+  `--worker-wave-groups` is the exact fixed worker-group count per safe-surge
+  wave; `--worker-wave-percent` scales from the discovered worker-group count;
+  `--max-parallel-worker-groups` is only an optional upper cap for percent-based
+  waves. `none` waits indefinitely for drain completion, and a finite drain
+  timeout can let Nebius delete the node after that timeout when eviction is
+  still blocked.
 - `--validate-sources` / `--no-validate-sources`: validate selected Soperator
   dependency chart sources before writing `config.yaml`; enabled by default.
   Use `--no-validate-sources` only when the workstation cannot run the source
@@ -2781,9 +2789,17 @@ The accepted onboarding report controls the next step:
 
 - If no existing Soperator is detected, onboarding prepares the external target
   for a normal cxcli-rendered Soperator install.
-- If an older or noncanonical existing Soperator is detected and the selected
-  source version matches an exact profile row or known major-generation profile,
-  onboarding can mark the state as upgrade-supported and record
+- The initial discovery summary is read-only and does not list future upgrade
+  phases as live onboarding actions. After the storage and compute modes are
+  resolved, onboarding prints the accepted layout decisions explicitly. When
+  discovery reports `storage-sfs: target-compatible` and
+  `placements: target-compatible`, `keep-existing-storage` means no aligned SFS
+  creation or storage data migration is planned, and `keep-existing-compute`
+  means no replacement compute node groups or compute migration are planned.
+- If an older Soperator or Soperator Helm release with non-standard identity is
+  detected and the selected source version matches an exact profile row or
+  known major-generation profile, onboarding can mark the state as
+  upgrade-supported and record
   `upgrade-soperator`,
   `approve-external-soperator-upgrade`, storage remediation, or compute replacement
   actions.
@@ -3121,10 +3137,13 @@ Interactive Slurm job actions map to these Slurm commands:
   surge worker quota, but can reduce active worker capacity during the rollout.
   `safe-surge` uses temporary worker nodes and checks the required quota and
   capacity before mutation.
-- `--worker-wave-groups`, `--worker-wave-percent`, and
-  `--max-parallel-worker-groups`: bound safe-surge worker waves across worker
-  groups. The fixed and percent wave-budget flags are mutually exclusive, and
-  `--worker-wave-percent` is a percentage of worker groups, not worker nodes.
+- `--worker-wave-groups`: exact fixed number of worker groups to update per
+  safe-surge wave.
+- `--worker-wave-percent` and `--max-parallel-worker-groups`: percent-based
+  safe-surge wave sizing plus an optional upper cap. `--worker-wave-percent` is
+  a percentage of worker groups, not worker nodes. Do not combine
+  `--max-parallel-worker-groups` with `--worker-wave-groups`; the fixed group
+  count is already the concurrency limit.
 - `--strategy-max-surge-count`, `--strategy-max-unavailable-count`, and
   `--strategy-drain-timeout`: configure the Nebius node-group strategy inside
   each active worker group. zero-surge defaults are `0`, `1`, and `30m`;
@@ -3160,8 +3179,10 @@ deploy:
           rollout:
             strategy: safe-surge
             worker_wave_percent: 1
-            # worker_wave_groups: 10
+            # Optional cap only for percent-based waves:
             # max_parallel_worker_groups: 10
+            # Or set an exact fixed wave size instead:
+            # worker_wave_groups: 10
             worker_group_strategy:
               max_surge_count: 1
               max_unavailable_count: 0

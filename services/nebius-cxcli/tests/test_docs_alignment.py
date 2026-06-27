@@ -1422,6 +1422,11 @@ def test_docs_define_component_selector_contract() -> None:
         "`nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run`" in readme
     )
     assert "`ext-soperator onboard` is read-only against live cluster state" in readme_flat
+    assert "The initial discovery summary is read-only" in readme_flat
+    assert "does not list future upgrade phases as live onboarding actions" in readme_flat
+    assert "prints the accepted layout decisions explicitly" in readme_flat
+    assert "no aligned SFS creation or storage data migration is planned" in readme_flat
+    assert "no replacement compute node groups or compute migration are planned" in readme_flat
     assert "runs the supported phases in order" in readme_flat
     assert "Onboarding asks for two independent layers" in readme_flat
     assert "compute mode is `keep-existing-compute` or `create-aligned-node-groups`" in readme_flat
@@ -1442,6 +1447,10 @@ def test_docs_define_component_selector_contract() -> None:
         in readme_flat
     )
     assert "rather than as source-version uncertainty or selected onboarding work" in readme_flat
+    assert "Discovery enumerates Helm releases across all namespaces" in readme_flat
+    assert "stores only Soperator-like releases" in readme_flat
+    assert "known Soperator release name in a non-standard namespace" in readme_flat
+    assert "matched migration profile instead of requiring source-version input" in readme_flat
     assert "local `.nebius-cxcli/ext-soperator-upgrades/` timeout-guarded checkpoint" in readme_flat
     assert "`--approve` / `--no-approve`: record customer approval" in readme_flat
     assert "auto-detects source worker node groups" in readme_flat
@@ -1554,6 +1563,17 @@ def test_docs_define_component_selector_contract() -> None:
     assert "does not accept arbitrary vanilla Kubernetes clusters" in design_flat
     assert "`deploy.targets[].inventory.node_groups`" in design
     assert "two independent layer choices" in design_flat
+    assert "The discovery summary printed during onboarding is read-only" in design_flat
+    assert "does not present external upgrade phases as actions taken by the onboard command" in (
+        design_flat
+    )
+    assert "onboarding prints the accepted layout decisions" in design_flat
+    assert "target-compatible storage means no aligned SFS creation or storage data migration is planned" in (
+        design_flat
+    )
+    assert "target-compatible compute means no replacement compute node groups or compute migration are planned" in (
+        design_flat
+    )
     assert "`keep-existing-compute` or `create-aligned-node-groups`" in design_flat
     assert "Keeping existing compute preserves discovered node groups" in design_flat
     assert "This is primarily a day-2 Soperator management and upgrade path" in design_flat
@@ -1652,6 +1672,10 @@ def test_docs_define_component_selector_contract() -> None:
         "do not trigger the source-version recovery prompt or selected onboarding work"
         in design_flat
     )
+    assert "Helm release discovery enumerates all namespaces" in design_flat
+    assert "stores only Soperator-like releases in the discovery bundle" in design_flat
+    assert "reports known Soperator release names from non-standard namespaces" in design_flat
+    assert "`helm-release-detected`" in design
     assert "`soperator_migration_profiles.yaml`" in design
     assert "local `.nebius-cxcli/ext-soperator-upgrades/` timeout-guarded checkpoint" in design_flat
     assert ".nebius-cxcli/soperator-upgrades/<target>/checkpoint.json" in design

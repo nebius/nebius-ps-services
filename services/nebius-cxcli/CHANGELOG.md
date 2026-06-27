@@ -55,6 +55,22 @@ All notable changes to this project are tracked here. This changelog follows
   `.nebius-cxcli/ext-soperator-upgrades/<target>/checkpoint.json`, write
   `generated/reports/ext-soperator-upgrade-report.md` and `.json`, and handle
   affected-node Slurm jobs with `--job-policy` before MK8s rollout work.
+- Clarified external Soperator safe-surge worker wave controls. Fixed
+  `worker_wave_groups` now owns the exact concurrent worker-group count, while
+  `max_parallel_worker_groups` is accepted only as an optional cap for
+  percent-based safe-surge waves; the onboarding wizard no longer asks for the
+  redundant cap after a fixed group count is selected.
+- Clarified external Soperator onboarding output. The read-only discovery
+  summary no longer prints future external upgrade phases or selected actions
+  as if onboarding will mutate the cluster, and onboarding now prints explicit
+  accepted storage and compute layout decisions after mode resolution.
+- Reworded compatible non-standard Soperator Helm release discovery as
+  `helm-release-detected`, including the detected release name, namespace,
+  chart, source version, and matched migration profile in the onboarding
+  finding message. Soperator discovery now enumerates Helm releases across all
+  namespaces and stores only Soperator-like releases, so non-standard Soperator
+  namespaces are reachable by onboard/discover without adding unrelated Helm
+  release inventory to the discovery bundle.
 - Added a shared Soperator upgrade safety layer used by both managed
   `soperator upgrade` and external `ext-soperator upgrade`. Both flows now
   capture protected customer state after backup and before mutation, run the
@@ -701,7 +717,7 @@ All notable changes to this project are tracked here. This changelog follows
   values.
 - Fixed `ext-soperator onboard` source-version prompting when discovery finds
   both a compatible Soperator release version and another Soperator-like Helm
-  release with noncanonical identity; interactive onboarding now asks the
+  release with non-standard identity; interactive onboarding now asks the
   operator to confirm the source version instead of leaving a
   `source-version-required` finding in the final summary. If the compatible
   release is already the pinned target and the other same-name record is an

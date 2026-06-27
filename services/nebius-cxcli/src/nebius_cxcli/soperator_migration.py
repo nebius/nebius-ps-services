@@ -884,17 +884,30 @@ def resolve_external_node_template_rollout(
         ):
             resolved_wave_percent = SOPERATOR_WORKER_ROLLOUT_DEFAULT_WAVE_PERCENT
 
+    if worker_wave_groups is not None:
+        raw_max_parallel = max_parallel_worker_groups
+        max_parallel_field_name = "--max-parallel-worker-groups"
+    else:
+        raw_max_parallel = (
+            max_parallel_worker_groups
+            if max_parallel_worker_groups is not None
+            else config.get("max_parallel_worker_groups")
+        )
+        max_parallel_field_name = (
+            "--max-parallel-worker-groups"
+            if max_parallel_worker_groups is not None
+            else (
+                "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout."
+                "max_parallel_worker_groups"
+            )
+        )
+
     if resolved_strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_ZERO_SURGE:
         zero_surge_wave_fields: list[str] = []
         if resolved_wave_groups is not None:
             zero_surge_wave_fields.append("worker_wave_groups")
         if resolved_wave_percent is not None:
             zero_surge_wave_fields.append("worker_wave_percent")
-        raw_max_parallel = (
-            max_parallel_worker_groups
-            if max_parallel_worker_groups is not None
-            else config.get("max_parallel_worker_groups")
-        )
         if raw_max_parallel is not None and str(raw_max_parallel).strip():
             zero_surge_wave_fields.append("max_parallel_worker_groups")
         if zero_surge_wave_fields:
@@ -907,18 +920,18 @@ def resolve_external_node_template_rollout(
         resolved_wave_percent = None
         resolved_parallel = None
     else:
+        if (
+            resolved_wave_groups is not None
+            and raw_max_parallel is not None
+            and str(raw_max_parallel).strip()
+        ):
+            raise ValueError(
+                f"{max_parallel_field_name} is only supported with worker_wave_percent; "
+                "worker_wave_groups already sets the fixed concurrent worker-group count."
+            )
         resolved_parallel = _positive_int_or_none(
-            max_parallel_worker_groups
-            if max_parallel_worker_groups is not None
-            else config.get("max_parallel_worker_groups"),
-            field_name=(
-                "--max-parallel-worker-groups"
-                if max_parallel_worker_groups is not None
-                else (
-                    "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout."
-                    "max_parallel_worker_groups"
-                )
-            ),
+            raw_max_parallel,
+            field_name=max_parallel_field_name,
         )
     use_config_worker_group_strategy = not cli_strategy or cli_strategy == config_strategy
     worker_group_strategy = (

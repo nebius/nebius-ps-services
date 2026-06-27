@@ -233,7 +233,7 @@ def test_collect_snapshot_groups_nodes_by_unique_nebius_node_group_id(
     )
 
 
-def test_collect_snapshot_discovers_soperator_helm_releases_by_namespace(
+def test_collect_snapshot_discovers_soperator_helm_releases_across_namespaces(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     helm_commands: list[list[str]] = []
@@ -246,7 +246,7 @@ def test_collect_snapshot_discovers_soperator_helm_releases_by_namespace(
 
     def fake_helm_json(cmd, *_args, **_kwargs):  # type: ignore[no-untyped-def]
         helm_commands.append(list(cmd))
-        if "-n" in cmd and cmd[cmd.index("-n") + 1] == "flux-system":
+        if "-A" in cmd:
             return [
                 {
                     "name": "flux-system-soperator-fluxcd",
@@ -254,7 +254,21 @@ def test_collect_snapshot_discovers_soperator_helm_releases_by_namespace(
                     "chart": "helm-soperator-2.0.5",
                     "app_version": "2.0.5",
                     "status": "deployed",
-                }
+                },
+                {
+                    "name": "soperator",
+                    "namespace": "custom",
+                    "chart": "helm-soperator-3.0.7",
+                    "app_version": "3.0.7",
+                    "status": "deployed",
+                },
+                {
+                    "name": "unrelated",
+                    "namespace": "default",
+                    "chart": "postgres-1.0.0",
+                    "app_version": "1.0.0",
+                    "status": "deployed",
+                },
             ]
         return []
 
@@ -269,18 +283,32 @@ def test_collect_snapshot_discovers_soperator_helm_releases_by_namespace(
             "chart": "helm-soperator-2.0.5",
             "app_version": "2.0.5",
             "status": "deployed",
-        }
+        },
+        {
+            "name": "soperator",
+            "namespace": "custom",
+            "chart": "helm-soperator-3.0.7",
+            "app_version": "3.0.7",
+            "status": "deployed",
+        },
     ]
     assert helm_commands
-    assert all("-A" not in cmd for cmd in helm_commands)
+    assert any(
+        cmd[:4] == ["helm", "--kube-context", "ctx", "list"] and "-A" in cmd
+        for cmd in helm_commands
+    )
     assert {cmd[cmd.index("-n") + 1] for cmd in helm_commands if "-n" in cmd} == {
-        "soperator",
-        "soperator-system",
-        "flux-system",
         "nvidia-gpu-operator",
         "nvidia-network-operator",
     }
     assert snapshot["gpu_stack"]["helm_releases"] == []
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref="cluster1",
+        pinned_chart_version="4.0.2-ps.1",
+        pinned_app_version="4.0.2",
+    )
+    assert any(finding.status == "helm-release-detected" for finding in report.findings)
 
 
 def test_collect_snapshot_discovers_gpu_stack_helm_releases_and_policies(
@@ -1318,6 +1346,40 @@ def test_soperator_onboarding_analyzer_requires_source_version_for_incompatible_
     assert any(finding.status == "source-version-required" for finding in report.findings)
 
 
+def test_soperator_onboarding_analyzer_uses_detected_version_for_nonstandard_release_identity() -> (
+    None
+):
+    report = analyze_soperator_onboarding_snapshot(
+        _snapshot(
+            release={
+                "name": "soperator",
+                "namespace": "custom",
+                "chart": "helm-soperator-3.0.7",
+                "app_version": "3.0.7",
+            }
+        ),
+        target_ref="cluster1",
+        pinned_chart_version="4.0.2-ps.1",
+        pinned_app_version="4.0.2",
+    )
+
+    assert report.state == "existing-soperator-supported"
+    assert report.source_version == "3.0.7"
+    assert report.migration_profile_id == "v3-to-target"
+    assert ONBOARDING_ACTION_UPGRADE_SOPERATOR in {action.id for action in report.actions}
+    assert not any(finding.status == "source-version-required" for finding in report.findings)
+    release_finding = next(
+        finding for finding in report.findings if finding.status == "helm-release-detected"
+    )
+    assert release_finding.evidence.get("source_version") == "3.0.7"
+    assert release_finding.evidence.get("migration_profile_id") == "v3-to-target"
+    assert "name=soperator" in release_finding.message
+    assert "namespace=custom" in release_finding.message
+    assert "chart=helm-soperator-3.0.7" in release_finding.message
+    assert "version=3.0.7" in release_finding.message
+    assert "matched migration profile v3-to-target" in release_finding.message
+
+
 def test_soperator_onboarding_analyzer_source_version_finding_names_profile_contract() -> None:
     snapshot = _snapshot()
     snapshot["crds"] = ["slurmclusters.slurm.nebius.ai"]
@@ -1521,7 +1583,16 @@ def test_soperator_onboarding_analyzer_uses_profile_for_detected_patch(
         and finding.evidence.get("source_version") == source_version
         for finding in report.findings
     )
-    assert any(finding.status == "noncanonical-release-detected" for finding in report.findings)
+    release_finding = next(
+        finding for finding in report.findings if finding.status == "helm-release-detected"
+    )
+    assert release_finding.evidence.get("source_version") == source_version
+    assert release_finding.evidence.get("migration_profile_id") == "v3-to-target"
+    assert "name=soperator" in release_finding.message
+    assert "namespace=custom" in release_finding.message
+    assert f"chart=helm-soperator-{source_version}" in release_finding.message
+    assert f"version={source_version}" in release_finding.message
+    assert "matched migration profile v3-to-target" in release_finding.message
 
 
 def test_soperator_onboarding_analyzer_blocks_collection_errors() -> None:
@@ -1927,6 +1998,22 @@ def test_runtime_validation_rejects_soperator_worker_rollout_conflicting_budget(
     }
 
     with pytest.raises(ValueError, match="must set only one"):
+        validate_runtime_payload(payload)
+
+
+def test_runtime_validation_rejects_soperator_fixed_groups_with_parallel_cap() -> None:
+    payload = _onboarding_payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]  # type: ignore[index]
+    onboarding["node_template_upgrade"] = {  # type: ignore[index]
+        "rollout": {
+            "strategy": "safe-surge",
+            "worker_wave_groups": 2,
+            "max_parallel_worker_groups": 2,
+        }
+    }
+
+    with pytest.raises(ValueError, match="only supported with worker_wave_percent"):
         validate_runtime_payload(payload)
 
 

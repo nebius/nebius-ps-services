@@ -923,7 +923,11 @@ exact row or a known major-generation profile group in
 profile id. If a canonical pinned-target `soperator` release is already
 present, older same-name source-family Helm records are treated as stale
 discovery evidence in the saved report and do not trigger the source-version
-recovery prompt or selected onboarding work. It also has two independent layer
+recovery prompt or selected onboarding work. Helm release discovery enumerates
+all namespaces, stores only Soperator-like releases in the discovery bundle, and
+reports known Soperator release names from non-standard namespaces as
+`helm-release-detected` with release name, namespace, chart, detected version,
+and matched migration profile. It also has two independent layer
 choices: storage mode is
 `keep-existing-storage` or
 `create-aligned-sfs`, and compute mode is `keep-existing-compute` or
@@ -1077,7 +1081,8 @@ worker node groups from live Nebius MK8s node-group names and Kubernetes
 and records the resolved groups in the checkpoint. The
 executor upgrades the external MK8s control plane first, updates service-role
 node groups serially with zero-surge strategy restore, updates worker node
-groups with zero-surge by default or bounded safe-surge waves when selected,
+groups with zero-surge by default or safe-surge waves when selected, using an
+exact fixed worker-group count or a percent-based wave with an optional cap,
 handles Slurm jobs on affected worker nodes through the `--job-policy` wait,
 cancel, requeue, or requeue-hold decision state,
 clears stale GPU driver presets
@@ -1342,8 +1347,10 @@ node_template_upgrade:
   rollout:
     strategy: safe-surge
     worker_wave_percent: 1
-    # worker_wave_groups: 10
+    # Optional cap only for percent-based waves:
     # max_parallel_worker_groups: 10
+    # Or set an exact fixed wave size instead:
+    # worker_wave_groups: 10
     worker_group_strategy:
       max_surge_count: 1
       max_unavailable_count: 0
@@ -3035,7 +3042,13 @@ The command boundary is intentional:
   target's `deploy.targets[].inventory.node_groups` inventory, refreshes
   Nebius control-plane and node-group template state by node group when
   `--cluster-id` access is available, and records independent storage and
-  compute mode choices. `keep-existing-compute`
+  compute mode choices. The discovery summary printed during onboarding is
+  read-only and does not present external upgrade phases as actions taken by
+  the onboard command. After the storage and compute modes are resolved,
+  onboarding prints the accepted layout decisions: target-compatible storage
+  means no aligned SFS creation or storage data migration is planned, and
+  target-compatible compute means no replacement compute node groups or compute
+  migration are planned. `keep-existing-compute`
   preserves the discovered node groups and target-scoped
   `apps.charts[].placements.*` choices. `create-aligned-node-groups` creates or
   reuses profile-aligned service-role node groups and maps profile worker

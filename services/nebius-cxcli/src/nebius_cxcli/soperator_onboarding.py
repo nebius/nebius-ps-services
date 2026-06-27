@@ -118,7 +118,6 @@ SOPERATOR_MIGRATION_PROFILE_DATA_FILE = Path(__file__).with_name(
 SOPERATOR_COMPATIBLE_RELEASE_NAMES = frozenset({"soperator", "slurm-operator"})
 SOPERATOR_COMPATIBLE_CONTROLLER_RELEASE_NAMES = frozenset({"soperator-controller"})
 SOPERATOR_COMPATIBLE_CHART_IDENTITIES = frozenset({"soperator", "helm-soperator", "slurm-operator"})
-SOPERATOR_HELM_DISCOVERY_NAMESPACES = ("soperator", "soperator-system", "flux-system")
 GPU_STACK_HELM_DISCOVERY_NAMESPACES = ("nvidia-gpu-operator", "nvidia-network-operator")
 _EPHEMERAL_HELM_RELEASE_KEYS = frozenset(
     {"description", "last_deployed", "revision", "status", "updated"}
@@ -1518,6 +1517,23 @@ def _release_detected_version(release: Mapping[str, Any]) -> str:
     return ""
 
 
+def _release_detected_summary(
+    release: Mapping[str, Any],
+    *,
+    source_version: str,
+    migration_profile_id: str = "",
+) -> str:
+    parts = [
+        f"name={_release_name(release) or 'unknown'}",
+        f"namespace={_release_namespace(release) or 'unknown'}",
+        f"chart={str(release.get('chart', '') or '').strip() or 'unknown'}",
+        f"version={source_version or _release_detected_version(release) or 'unknown'}",
+    ]
+    profile = str(migration_profile_id or "").strip()
+    suffix = f"; matched migration profile {profile}" if profile else ""
+    return "Detected Soperator Helm release: " + ", ".join(parts) + suffix + "."
+
+
 def _release_namespace(release: Mapping[str, Any]) -> str:
     return str(release.get("namespace", "") or "").strip()
 
@@ -1536,6 +1552,14 @@ def _is_soperator_release_candidate(release: Mapping[str, Any]) -> bool:
         release_name in SOPERATOR_COMPATIBLE_RELEASE_NAMES
         or release_name in SOPERATOR_COMPATIBLE_CONTROLLER_RELEASE_NAMES
         or _release_chart_identity(release) in SOPERATOR_COMPATIBLE_CHART_IDENTITIES
+    )
+
+
+def _has_known_soperator_release_name(release: Mapping[str, Any]) -> bool:
+    release_name = _release_name(release)
+    return (
+        release_name in SOPERATOR_COMPATIBLE_RELEASE_NAMES
+        or release_name in SOPERATOR_COMPATIBLE_CONTROLLER_RELEASE_NAMES
     )
 
 
@@ -2390,10 +2414,17 @@ def analyze_soperator_onboarding_snapshot(
             target_version=target_version,
         )
     )
-    incompatible_release = next(
-        (release for release in incompatible_releases if release not in shadowed_stale_releases),
-        None,
+    reviewable_incompatible_releases = tuple(
+        release for release in incompatible_releases if release not in shadowed_stale_releases
     )
+    incompatible_release = next(
+        (
+            release
+            for release in reviewable_incompatible_releases
+            if _has_known_soperator_release_name(release)
+        ),
+        None,
+    ) or next(iter(reviewable_incompatible_releases), None)
     if shadowed_stale_releases:
         findings.append(
             SoperatorOnboardingFinding(
@@ -2409,9 +2440,17 @@ def analyze_soperator_onboarding_snapshot(
             )
         )
 
-    detected_source_version = (
-        _release_detected_version(soperator_release)
+    detected_source_release = (
+        soperator_release
         if isinstance(soperator_release, Mapping)
+        else incompatible_release
+        if isinstance(incompatible_release, Mapping)
+        and _has_known_soperator_release_name(incompatible_release)
+        else None
+    )
+    detected_source_version = (
+        _release_detected_version(detected_source_release)
+        if isinstance(detected_source_release, Mapping)
         else ""
     )
     detected_source_profile = (
@@ -2452,16 +2491,28 @@ def analyze_soperator_onboarding_snapshot(
             findings.append(
                 SoperatorOnboardingFinding(
                     layer="soperator",
-                    status="noncanonical-release-detected",
+                    status="helm-release-detected",
                     severity="recommended",
                     message=(
-                        "Compatible Soperator release version was detected and matched to a "
-                        "migration profile; the noncanonical Soperator-like Helm release is "
-                        "kept as review evidence instead of requiring source-version input."
+                        _release_detected_summary(
+                            incompatible_release,
+                            source_version=detected_source_version,
+                            migration_profile_id=str(
+                                detected_source_profile.get("profile_id", "")
+                                if isinstance(detected_source_profile, Mapping)
+                                else ""
+                            ),
+                        )
+                        + " No manual source-version input is required."
                     ),
                     evidence={
                         "release": dict(incompatible_release),
                         "source_version": detected_source_version,
+                        "migration_profile_id": str(
+                            detected_source_profile.get("profile_id", "")
+                            if isinstance(detected_source_profile, Mapping)
+                            else ""
+                        ),
                     },
                 )
             )
@@ -2473,7 +2524,7 @@ def analyze_soperator_onboarding_snapshot(
                 status="source-version-selected",
                 severity="recommended",
                 message=(
-                    "Existing Soperator-like Helm release has noncanonical identity; "
+                    "Existing Soperator Helm release has non-standard identity; "
                     "operator-selected source version will be used for migration profile matching."
                 ),
                 evidence={
@@ -2534,10 +2585,12 @@ def analyze_soperator_onboarding_snapshot(
     remediation: tuple[SoperatorRemediationItem, ...] = ()
     migration_plan: tuple[SoperatorMigrationPhase, ...] = ()
 
-    if source_version and (isinstance(soperator_release, Mapping) or manual_source_version_applies):
-        if isinstance(soperator_release, Mapping):
-            live_chart = _release_chart_version(soperator_release)
-            live_app = str(soperator_release.get("app_version", "") or "").strip()
+    if source_version and (
+        isinstance(detected_source_release, Mapping) or manual_source_version_applies
+    ):
+        if isinstance(detected_source_release, Mapping):
+            live_chart = _release_chart_version(detected_source_release)
+            live_app = str(detected_source_release.get("app_version", "") or "").strip()
         else:
             live_chart = source_version
             live_app = source_version
@@ -3213,16 +3266,17 @@ def collect_kubectl_soperator_snapshot(
             errors=collection_errors,
             extra_env=extra_env,
         )
-    helm_releases = []
-    for namespace in SOPERATOR_HELM_DISCOVERY_NAMESPACES:
-        namespace_releases = _helm_json(
-            ["helm", "--kube-context", context, "list", "-n", namespace, "-o", "json"],
-            timeout,
-            errors=collection_errors,
-            extra_env=extra_env,
-        )
-        if isinstance(namespace_releases, list):
-            helm_releases.extend(namespace_releases)
+    all_helm_releases = _helm_json(
+        ["helm", "--kube-context", context, "list", "-A", "-o", "json"],
+        timeout,
+        errors=collection_errors,
+        extra_env=extra_env,
+    )
+    helm_releases = [
+        release
+        for release in all_helm_releases
+        if isinstance(release, Mapping) and _is_soperator_release_candidate(release)
+    ] if isinstance(all_helm_releases, list) else []
     gpu_stack_helm_releases = []
     for namespace in GPU_STACK_HELM_DISCOVERY_NAMESPACES:
         namespace_releases = _helm_json(

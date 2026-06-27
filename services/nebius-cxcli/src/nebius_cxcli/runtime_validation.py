@@ -174,6 +174,12 @@ def _validate_soperator_onboarding_rollout(onboarding: Mapping[str, Any], field_
         rollout.get("max_parallel_worker_groups") is not None
         and _as_text(rollout.get("max_parallel_worker_groups")) != ""
     )
+    if strategy == "safe-surge" and groups_present and parallel_present:
+        raise ValueError(
+            f"{field_label}.node_template_upgrade.rollout.max_parallel_worker_groups "
+            "is only supported with worker_wave_percent; worker_wave_groups already "
+            "sets the fixed concurrent worker-group count"
+        )
     if strategy == "zero-surge":
         zero_surge_wave_fields = []
         if groups_present:

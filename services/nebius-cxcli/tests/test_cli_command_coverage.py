@@ -20336,6 +20336,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--worker-wave-groups" in normalized_soperator_onboard_help
     assert "--worker-wave-percent" in normalized_soperator_onboard_help
     assert "--max-parallel-worker-groups" in normalized_soperator_onboard_help
+    assert "percent-based safe-surge waves" in normalized_soperator_onboard_help
     assert "--strategy-max-surge-count" in normalized_soperator_onboard_help
     assert "--strategy-max-unavailable-count" in normalized_soperator_onboard_help
     assert "--strategy-drain-timeout" in normalized_soperator_onboard_help
@@ -20431,6 +20432,9 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--worker-wave-groups" in normalized_ext_soperator_upgrade_help
     assert "--worker-wave-percent" in normalized_ext_soperator_upgrade_help
     assert "--max-parallel-worker-groups" in normalized_ext_soperator_upgrade_help
+    assert "Use --worker-wave-groups instead for an exact fixed group count" in (
+        normalized_ext_soperator_upgrade_help
+    )
     assert "--strategy-max-surge-count" in normalized_ext_soperator_upgrade_help
     assert "--strategy-max-unavailable-count" in normalized_ext_soperator_upgrade_help
     assert "--strategy-drain-timeout" in normalized_ext_soperator_upgrade_help
