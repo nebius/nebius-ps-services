@@ -223,6 +223,52 @@ def _stub_soperator_upgrade_runtime(
 
     monkeypatch.setattr(cli, "_run_managed_soperator_discovery_command", _discover)
 
+    before_state = cli.ProtectedCustomerState(
+        target_ref="mk8s",
+        namespace="soperator",
+        captured_at="before",
+        sections={"pods": {"available": True, "items": []}},
+    )
+    after_state = cli.ProtectedCustomerState(
+        target_ref="mk8s",
+        namespace="soperator",
+        captured_at="after",
+        sections={"pods": {"available": True, "items": []}},
+    )
+
+    monkeypatch.setattr(
+        cli,
+        "_managed_soperator_upgrade_capture_protected_state",
+        lambda **_kwargs: before_state,
+    )
+
+    def _post_verification(**_kwargs: object) -> SimpleNamespace:
+        payload = {
+            "status": "passed",
+            "passed": True,
+            "checks": [{"name": "pods-running-or-completed", "status": "passed"}],
+        }
+        return SimpleNamespace(
+            status="passed",
+            passed=True,
+            checks=tuple(payload["checks"]),
+            protected_state=after_state,
+            comparison={
+                "status": "matched",
+                "before_hash": before_state.content_hash,
+                "after_hash": after_state.content_hash,
+                "deltas": [],
+                "blocked_count": 0,
+                "approval_required_count": 0,
+            },
+            command_audit=(),
+            heavy_validation_followups=(),
+            zero_downtime_eligibility={"status": "passed", "eligible": True},
+            as_payload=lambda: payload,
+        )
+
+    monkeypatch.setattr(cli, "_managed_soperator_upgrade_run_post_verification", _post_verification)
+
 
 def _run_soperator_upgrade_for_test(
     *,
@@ -2966,6 +3012,27 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
         "soperator-static-ready",
         ("soperator-validation", "Postflight"),
     ]
+    report = json.loads(
+        (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_JSON_FILENAME).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert report["upgrade_safety"]["post_upgrade_verification"]["status"] == "passed"
+    assert report["protected_customer_state"]["before_hash"]
+    assert report["protected_customer_state"]["after_hash"]
+    assert report["fast_smoke"]["status"] == "passed"
+    assert report["current_phase"]["id"] == "completed"
+    assert report["current_phase"]["component"].startswith("apps:soperator")
+    assert any(item["id"] == "backup" for item in report["phase_history"])
+    assert any(item["id"] == "shared-safety-verification" for item in report["phase_history"])
+    markdown_report = (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_FILENAME).read_text(
+        encoding="utf-8"
+    )
+    assert "- Current phase: `completed`" in markdown_report
+    assert "for `apps:soperator" in markdown_report
+    assert "## Phase History" in markdown_report
+    assert "`backup`" in markdown_report
+    assert "`shared-safety-verification`" in markdown_report
 
 
 def test_soperator_upgrade_mk8s_only_runs_node_template_phase_without_raw_kubectl_drain(
@@ -3232,6 +3299,7 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
         "preflight-completed",
         "discovery-created",
         "backup-created",
+        "protected-state-captured",
         "activechecks-suspend-started",
         "activechecks-suspended",
         "preflight-soperator-validation-completed",
@@ -3240,6 +3308,7 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
         "activechecks-restore-started",
         "activechecks-restored",
         "slurm-restored",
+        "shared-safety-verified",
         "completed",
     ]
     assert checkpoint["backup"]["sha256"] == "archive-sha"

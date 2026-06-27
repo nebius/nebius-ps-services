@@ -13,8 +13,10 @@ from nebius_cxcli import soperator_migration as migration
 from nebius_cxcli.quota_checks import QuotaCheck, QuotaReport, QuotaRequirement
 from nebius_cxcli.soperator_migration import (
     SoperatorMigrationCommandResult,
-    execute_soperator_migration,
     soperator_migration_checkpoint_path,
+)
+from nebius_cxcli.soperator_migration import (
+    execute_soperator_migration as _execute_soperator_migration,
 )
 from nebius_cxcli.soperator_onboarding import (
     analyze_soperator_onboarding_snapshot,
@@ -286,6 +288,12 @@ def _backup_metadata(label: str = "original-pre-upgrade") -> dict[str, Any]:
         "sha256": f"{label}-sha256",
         "manifest_sha256": f"{label}-manifest-sha256",
     }
+
+
+def execute_soperator_migration(*args: Any, **kwargs: Any):
+    if kwargs.get("approved") is True and "backup_metadata" not in kwargs:
+        kwargs["backup_metadata"] = _backup_metadata("test-pre-upgrade")
+    return _execute_soperator_migration(*args, **kwargs)
 
 
 def _add_external_gpu_cluster_inventory(payload: dict[str, Any]) -> None:
@@ -1548,6 +1556,31 @@ def test_execute_writes_checkpoint_and_stops_before_mutation(tmp_path: Path) -> 
     assert checkpoint["events"][0]["event"] == "execute-preflight-completed"
 
 
+def test_execute_requires_backup_metadata_before_approved_mutation(tmp_path: Path) -> None:
+    runner = _FakeCommandRunner()
+
+    with pytest.raises(RuntimeError, match="requires restore-capable backup metadata"):
+        _execute_soperator_migration(
+            config_path=tmp_path / "config.yaml",
+            target_ref="external-cluster",
+            payload=_payload(),
+            source_report=_source_report(),
+            snapshot_collector=lambda *, kube_context: _snapshot(),
+            approved=True,
+            command_runner=runner,
+        )
+
+    commands = [call[0] for call in runner.calls]
+    assert not any(
+        command[:4] == ("nebius", "compute", "filesystem", "create") for command in commands
+    )
+    assert not any(command[:4] == ("nebius", "mk8s", "cluster", "update") for command in commands)
+    assert not any(
+        command[:4] == ("helm", "--kube-context", "external-context", "upgrade")
+        for command in commands
+    )
+
+
 def test_write_checkpoint_preserves_existing_file_when_replace_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2247,7 +2280,7 @@ def test_execute_records_approval_and_runs_checkpointed_mutators(tmp_path: Path)
     assert checkpoint["completed_phases"] == list(result.completed_phases)
     assert checkpoint["pending_phase"] == "none"
     assert checkpoint["worker_node_groups"] == ["gpu-pool"]
-    assert checkpoint["events"][1]["event"] == "customer-approval-recorded"
+    assert "customer-approval-recorded" in {event["event"] for event in checkpoint["events"]}
     assert set(checkpoint["phase_state"]["create-aligned-sfs"]["filesystems"]) == {
         "jail",
         "controller-spool",
@@ -3361,6 +3394,8 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
     assert "- Upgrade performed: `yes`" in migrate_report
     assert "Soperator and Slurm smoke" in migrate_report
     assert "### MK8s GPU" in migrate_report
+    assert "## Shared Upgrade Safety" in migrate_report
+    assert "shared safety=passed/passed" in migrate_report
     assert "deploy-smoke-report-external-cluster.json" in migrate_report
     assert "`deploy-gpu-stack-readiness-report-external-cluster.json`: `PASS`" in migrate_report
     assert "`deploy-gpu-visibility-report-external-cluster.json`: `PASS`" in migrate_report
@@ -3390,6 +3425,9 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
     assert checkpoint["upgrade_report_json"].endswith(
         "generated/reports/ext-soperator-upgrade-report.json"
     )
+    assert checkpoint["upgrade_safety"]["post_upgrade_verification"]["status"] == "passed"
+    assert checkpoint["upgrade_safety"]["protected_customer_state"]["before_hash"]
+    assert checkpoint["upgrade_safety"]["protected_customer_state"]["after_hash"]
     assert upgrade_json_report["schema"] == "nebius-cxcli-ext-soperator-upgrade-report/v1"
     assert upgrade_json_report["target_ref"] == "external-cluster"
     assert upgrade_json_report["upgrade_performed"] is True
@@ -3397,7 +3435,11 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
     assert upgrade_json_report["checkpoint_path"].endswith(
         ".nebius-cxcli/ext-soperator-upgrades/external-cluster/checkpoint.json"
     )
-    assert upgrade_json_report["backup"] == {}
+    assert upgrade_json_report["backup"]["path"] == "backups/test-pre-upgrade.tar.gz"
+    assert upgrade_json_report["backup"]["sha256"] == "test-pre-upgrade-sha256"
+    assert upgrade_json_report["post_upgrade_verification"]["status"] == "passed"
+    assert upgrade_json_report["protected_customer_state"]["before_hash"]
+    assert upgrade_json_report["fast_smoke"]["status"] == "passed"
     assert "validation-and-rollback-hold" in {
         phase["id"] for phase in upgrade_json_report["phases"]
     }
@@ -5819,6 +5861,12 @@ def test_execute_emits_phase_aware_status_for_storage_and_compute(tmp_path: Path
     )
 
     assert result.pending_phase == "none"
+    assert any("phase execute-preflight" in message for message in messages)
+    assert any("phase backup" in message for message in messages)
+    assert any("phase protected-state-capture" in message for message in messages)
+    assert any("phase post-upgrade-mk8s-check" in message for message in messages)
+    assert any("phase post-upgrade-helm-check" in message for message in messages)
+    assert any("phase report" in message for message in messages)
     assert any(
         "phase create-aligned-sfs" in message
         and "[Aligned SFS creation]" in message
@@ -7326,6 +7374,7 @@ def test_execute_reconciles_completed_compute_cutover_cleanup(tmp_path: Path) ->
         source_report=source_report,
         snapshot_collector=lambda *, kube_context: snapshot,
         command_runner=runner,
+        approve_remediation=True,
     )
 
     assert result.pending_phase == "none"

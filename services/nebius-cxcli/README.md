@@ -2263,13 +2263,13 @@ to render/apply the Soperator app and to run guarded external upgrade phases.
 | `nebius-cxcli soperator discover <config.yaml> --target <target>` | Write a read-only support-safe discovery bundle for a cxcli-managed Soperator cluster before upgrade or support review. | Uses the generated managed MK8s kube handoff unless `--kube-context` overrides it. Writes `generated/reports/soperator-discovery/<target>/manifest.json` plus identity, Kubernetes, Slurm, accounting, customizations, fingerprints, findings, and summary files. It is not a backup and does not include raw Secret values, SQL, DB dumps, tokens, or cert material. |
 | `nebius-cxcli soperator backup <config.yaml> --target <target>` | Create a restore-capable backup for a cxcli-managed Soperator target before upgrade, migration, or other maintenance. | Temporarily quiesces the chart-managed accounting deployment, writes a local mode-`0600` `soperator-backup-*.tar.gz` archive under `<config.yaml parent>/backups` by default, and includes raw Kubernetes Secrets, ConfigMaps, service accounts, services, PVCs, workloads, RBAC, policy/networking resources, Soperator CRs, Helm values, Slurm snapshots, and the chart-managed MariaDB accounting DB dump. Secret values and SQL are never printed. |
 | `nebius-cxcli soperator restore <backup.tar.gz> --execute --approve` | Restore a Soperator backup archive onto a new empty compatible cxcli-managed cluster namespace. | Dry-run by default. With `--execute --approve`, validates archive checksums, creates the namespace when needed, rewrites archived namespaced resources to the selected namespace, applies restore-ready Kubernetes manifests, quiesces accounting, imports the DB dump into chart-managed MariaDB, and restores accounting replicas. |
-| `nebius-cxcli soperator upgrade <config.yaml> --target <target> [--to-chart-version <chart-version>] [--to-k8s-version <major.minor>] [--to-os <image>] [--to-gpu-stack-preset <preset>]` | Upgrade a cxcli-managed Soperator cluster after it is already part of the generated bundle. Omitted MK8s flags mean MK8s no-op; when MK8s flags are supplied without `--to-chart-version`, the chart is a no-op. Use this for cxcli-created Soperator targets and for external targets only after onboarding/external upgrade has handed them back to the deploy-owned desired-state path. | Soperator-aware cxcli-managed full upgrade: validates the current bundle, creates a restore-capable local backup with raw Kubernetes Secrets and chart-managed MariaDB accounting DB dump, drains cxcli-owned Slurm worker nodes and handles running jobs when MK8s changes are requested, runs the Terraform-managed node-template workflow, applies the Soperator chart when requested, verifies static Soperator chart version on live Kubernetes objects, compares protected Slurm/Soperator config fingerprints, reruns required Soperator/Slurm validation, and writes `generated/reports/soperator-upgrade-report.md` / `.json`. |
+| `nebius-cxcli soperator upgrade <config.yaml> --target <target> [--to-chart-version <chart-version>] [--to-k8s-version <major.minor>] [--to-os <image>] [--to-gpu-stack-preset <preset>]` | Upgrade a cxcli-managed Soperator cluster after it is already part of the generated bundle. Omitted MK8s flags mean MK8s no-op; when MK8s flags are supplied without `--to-chart-version`, the chart is a no-op. Use this for cxcli-created Soperator targets and for external targets only after onboarding/external upgrade has handed them back to the deploy-owned desired-state path. | Soperator-aware cxcli-managed full upgrade: validates the current bundle, creates a restore-capable local backup with raw Kubernetes Secrets and chart-managed MariaDB accounting DB dump, captures protected customer state before mutation, drains cxcli-owned Slurm worker nodes and handles running jobs when MK8s changes are requested, runs the Terraform-managed node-template workflow, applies the Soperator chart when requested, verifies static Soperator chart version on live Kubernetes objects, compares protected Slurm/Soperator config fingerprints plus shared protected-state hashes, reruns required Soperator/Slurm validation, runs bounded read-only fast safety checks, and writes `generated/reports/soperator-upgrade-report.md` / `.json`. |
 | `nebius-cxcli ext-soperator discover <config.yaml-or-deployments-root> --target <target>` | Write the same read-only discovery bundle for an external Soperator source cluster, either from an onboarded target or direct `--cluster-id` / `--kube-context` source access. | Writes `generated/reports/soperator-discovery/<target>/manifest.json` and the same section files used by managed discovery. It collects facts and remediation findings only; customer-approved remediation remains owned by `ext-soperator onboard`, `ext-soperator upgrade`, or `soperator upgrade`. |
 | `nebius-cxcli ext-soperator backup <config.yaml> --target <target>` | Create the same restore-capable archive for an onboarded external Soperator source cluster. | Validates the accepted external onboarding target, uses the stored kube context or temporary Nebius kubeconfig handoff for `cluster_id` targets, then runs the same sensitive archive flow as managed backup. Chart-managed MariaDB is required in v1; `externalDB.enabled=true` fails fast before mutation. |
 | `nebius-cxcli ext-soperator restore <backup.tar.gz> --kube-context <new-context> --execute --approve` | Restore a Soperator archive onto a newly empty external target cluster. | Archive-driven and dry-run by default. With approval, applies restore-ready Kubernetes manifests and imports the chart-managed MariaDB accounting dump into the selected kube context. |
 | `nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>` | Register one existing Nebius MK8s cluster by `cluster_id`, discover source Soperator state, choose storage/compute onboarding modes, and write the accepted onboarding plan. | Read-only against live cluster state; writes local `config.yaml` and the canonical discovery bundle at `generated/reports/soperator-discovery/<target>/manifest.json`. Non-interactive runs use `--cluster-id` and optional `--target-id`; no-op reruns preserve stable discovery content so unchanged onboarding does not invalidate external upgrade checkpoints. |
 | `nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run` | Inspect the accepted external-cluster upgrade plan before any live mutation. | Read-only; refreshes discovery, validates accepted onboarding, refuses deploy-owned/no-upgrade action sets with render/deploy guidance, and prints a color-highlighted phase plan in interactive terminals. |
-| `nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --execute --approve` | Execute approved external-cluster MK8s control-plane/node-template, target GPU stack, storage, compute, Soperator Helm cutover, configured MK8s GPU deployment testing, and required Soperator/Slurm smoke validation when the dry run is accepted. | Creates a restore-capable backup before mutation, mutates only supported external upgrade surfaces, handles affected-node Slurm jobs through `--job-policy`, writes a local checkpoint, rechecks completed selected actions against live state on rerun, verifies external MK8s node-template state, verifies target Helm chart workloads, suspends old source-family Flux Kustomization desired state, deletes suspended old source-family Flux HelmRelease records, retires stale profile-derived source-family Helm release records while preserving shared/storage resources, writes validation detail reports under `generated/reports/`, writes MK8s GPU deployment-testing and Soperator/Slurm validation rollups into `generated/reports/ext-soperator-upgrade-report.md` and `.json`, refreshes `deploy-report.md` as a secondary deploy-compatible MK8s GPU summary, and stops at guarded pending gates. |
+| `nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --execute --approve` | Execute approved external-cluster MK8s control-plane/node-template, target GPU stack, storage, compute, Soperator Helm cutover, configured MK8s GPU deployment testing, and required Soperator/Slurm smoke validation when the dry run is accepted. | Creates a restore-capable backup before mutation, captures protected customer state before approved mutation, mutates only supported external upgrade surfaces, handles affected-node Slurm jobs through `--job-policy`, writes a local checkpoint, rechecks completed selected actions against live state on rerun, verifies external MK8s node-template state, verifies target Helm chart workloads, suspends old source-family Flux Kustomization desired state, deletes suspended old source-family Flux HelmRelease records, retires stale profile-derived source-family Helm release records while preserving shared/storage resources, writes validation detail reports under `generated/reports/`, runs the shared bounded read-only fast safety checks in validation hold, writes MK8s GPU deployment-testing, Soperator/Slurm validation, and protected-state rollups into `generated/reports/ext-soperator-upgrade-report.md` and `.json`, refreshes `deploy-report.md` as a secondary deploy-compatible MK8s GPU summary only after protected comparison passes, and stops at guarded pending gates. |
 | `nebius-cxcli upgrade node-template` and `upgrade node-group` | Upgrade Terraform-managed MK8s infrastructure underneath a cxcli-managed deployment. | `node-template` owns Kubernetes version, OS, and Nebius-image GPU stack rolling updates and writes `generated/reports/upgrade-node-template-report.md` / `.json` after verification. Node-group hardware, preset, CPU/GPU kind, GPU cluster, or fabric changes require the approved `upgrade node-group` planner; current execute writes `generated/reports/upgrade-node-group-report.md` / `.json` with the approved pre-mutation checkpoint and then stops before live replacement/cutover/retirement. |
 
 Operationally, finish a running `ext-soperator upgrade` or `soperator upgrade`
@@ -3044,6 +3044,10 @@ Important external upgrade flags:
   live execution.
 - `--approve` / `--no-approve`: record customer approval for the accepted
   external upgrade plan. Mutating phases require approval.
+- `--approve-remediation` / `--no-approve-remediation`: record operator
+  approval for `remediation_required` protected-state deltas reported by the
+  shared verifier. Deltas classified as `blocked` still stop the run and cannot
+  be overridden by this flag.
 - `--job-policy interactive|wait|fail|cancel-selected|cancel-all`: decide how
   to handle Slurm jobs running on nodes affected by an external MK8s rollout.
   `interactive` shows the affected jobs and asks the operator, `wait` polls
@@ -3108,8 +3112,9 @@ deploy:
 
 Before the first mutation, `--execute --approve` refreshes live discovery,
 verifies the accepted onboarding fingerprint and source release, creates a
-restore-capable backup, and enriches the accepted inventory from live Nebius
-MK8s node-group names and Kubernetes node labels. cxcli then auto-detects
+restore-capable backup, captures shared protected customer state, and enriches
+the accepted inventory from live Nebius MK8s node-group names and Kubernetes
+node labels. cxcli then auto-detects
 source worker node groups from console-visible Nebius
 node-group names plus `slurm.nebius.ai/nodeset` worker labels such as
 `worker-gpu` or `worker-cpu`. For approved execution, cxcli also runs a strict
@@ -3181,10 +3186,15 @@ groups, normalize target Slurm plugin runtime settings, recreate target worker
 Kruise StatefulSets when source-era specs cannot be mutated in place, validate
 Soperator reconciliation, and hold old storage retirement for explicit
 confirmation. The validation hold also runs the configured deploy-time MK8s GPU
-readiness/CUDA checks and the required Soperator deployment snapshot with
+readiness/CUDA checks, the required Soperator deployment snapshot with
 Soperator manager, jail storage, Pending pod/event, SlurmCluster, and NodeSet
-visibility checks. Slurm jobs and NCCL/performance work are reserved for explicit
-`acceptance-test benchmark` runs; the upgrade run writes
+visibility checks, and the shared read-only fast safety verifier. That verifier
+checks expected pod phases, protected PVCs, `/home` mount evidence, ActiveChecks
+restore state, observability-agent workload evidence when present, zero-downtime
+blocking evidence, and protected-state before/after deltas. Slurm jobs,
+backend metrics/log ingestion, Terraform drift review, and NCCL/performance work
+are reported as heavy/manual follow-ups unless an existing validation path owns
+them; the upgrade run writes
 `generated/reports/ext-soperator-upgrade-report.md` with MK8s GPU and Soperator/Slurm
 validation rollups plus phase and event summaries, writes
 `generated/reports/ext-soperator-upgrade-report.json`, and also refreshes
@@ -3238,14 +3248,18 @@ infrastructure retirement phases remain guarded by their explicit checkpoints
 because rerunning them can have customer-data or teardown impact.
 
 Approved `--execute` runs show an interactive spinner while live preflight and
-mutating phases are active, and log phase-aware `External Soperator upgrade status`
-lines in non-interactive output. Every line starts with the elapsed time,
-canonical phase id, human-readable phase label, and overall phase health before
-component details, so a single copied line is enough to identify the active
-phase. Storage phases show aligned SFS/PVC copy progress plus MK8s and Slurm
-serving/degradation signals. Compute and cutover phases show MK8s status as
-separate `Node groups:` and `Nodes:` sections: node-group readiness stays in
-the first section, while node-level rollout transitions such as
+mutating phases are active, emit concise `External Soperator upgrade phase ...`
+comments for preflight, backup metadata lookup/reuse, backup archive creation,
+protected-state capture, final post-upgrade checks, and report writing, and log
+phase-aware `External Soperator upgrade status` lines in non-interactive
+output. Every status line starts with the elapsed time, canonical phase id,
+human-readable phase label, and overall phase health before component details,
+so a single
+copied line is enough to identify the active phase. Storage phases show aligned
+SFS/PVC copy progress plus MK8s and Slurm serving/degradation signals. Compute
+and cutover phases show MK8s status as separate `Node groups:` and `Nodes:`
+sections: node-group readiness stays in the first section, while node-level
+rollout transitions such as
 `replacing (cordoned)` and real problem-node details such as `NotReady (down)`
 stay in the second section. Transition nodes and down states are highlighted in
 terminal output, while large clusters stay summarized with `+N more` suffixes.
@@ -3309,14 +3323,27 @@ replacement/cutover/retirement.
 
 `soperator upgrade` is the cxcli-managed full Soperator cluster upgrade. It
 validates the current generated bundle, writes a restore-capable backup with
-raw Secrets and a chart-managed MariaDB accounting DB dump, handles Slurm worker
-drain and running-job policy for affected MK8s nodes, runs the node-template
-workflow when requested, applies the Soperator chart when requested, verifies
-the static Soperator chart version on live Kubernetes objects, compares
-protected customer config fingerprints, reruns the required Soperator/Slurm
-smoke validation, and writes command-owned validation details plus
+raw Secrets and a chart-managed MariaDB accounting DB dump, captures shared
+protected customer state before mutation, handles Slurm worker drain and
+running-job policy for affected MK8s nodes, runs the node-template workflow when
+requested, applies the Soperator chart when requested, verifies the static
+Soperator chart version on live Kubernetes objects, compares protected customer
+config fingerprints plus shared protected-state before/after hashes, reruns the
+required Soperator/Slurm smoke validation, runs the same bounded read-only fast
+safety verifier used by external upgrades, and writes command-owned validation
+details plus
 `generated/reports/soperator-upgrade-report.md` /
 `generated/reports/soperator-upgrade-report.json`.
+The command prints and checkpoints the current phase with the component label
+and a concise operator comment from preflight through backup, protected-state
+capture, rollout, postflight, shared safety verification, and final report
+writing. Quiet terminal phases such as discovery, backup, protected-state
+capture, live ActiveChecks patching, Slurm restore, shared safety verification,
+and report writing keep a spinner active. The Markdown and JSON reports include
+the final `current_phase` and phase history.
+Use `--approve-remediation` only to record approval for
+`remediation_required` protected-state deltas; blocked data-loss or downtime
+deltas still stop the run.
 `upgrade helm-chart` is intentionally non-Soperator-only and fails fast for
 `apps:soperator@<target>` with the canonical `soperator upgrade` command. The
 cxcli-managed upgrade path does not run the external source-cluster upgrade

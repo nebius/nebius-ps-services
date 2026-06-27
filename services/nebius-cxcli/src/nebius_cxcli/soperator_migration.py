@@ -84,6 +84,16 @@ from .soperator_onboarding import (
     soperator_migration_profile_group,
     soperator_onboarding_target,
 )
+from .soperator_upgrade_safety import (
+    ProtectedCustomerState,
+    capture_protected_customer_state,
+    protected_customer_state_from_payload,
+    run_post_upgrade_fast_verification,
+    safety_report_markdown_lines,
+    update_safety_payload_with_before,
+    update_safety_payload_with_verification,
+    upgrade_safety_checkpoint_payload,
+)
 from .soperator_validation import (
     SOPERATOR_CLUSTER_VALIDATION_KIND,
     SoperatorValidationCommandResult,
@@ -10562,6 +10572,86 @@ def _migration_validation_command_runner(
     return _run
 
 
+def _migration_safety_baseline_from_checkpoint(
+    checkpoint: Mapping[str, Any],
+) -> ProtectedCustomerState | None:
+    safety = checkpoint.get("upgrade_safety")
+    safety_map = safety if isinstance(safety, Mapping) else {}
+    protected = safety_map.get("protected_customer_state")
+    protected_map = protected if isinstance(protected, Mapping) else {}
+    before = protected_map.get("before")
+    return protected_customer_state_from_payload(before if isinstance(before, Mapping) else None)
+
+
+def _capture_external_upgrade_protected_state(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    payload: Mapping[str, Any],
+    target_ref: str,
+    kube_context: str,
+) -> ProtectedCustomerState:
+    state = capture_protected_customer_state(
+        command_runner=command_runner,
+        target_ref=target_ref,
+        namespace=_SOPERATOR_NAMESPACE,
+        kube_context=kube_context,
+        source_payload=payload,
+    )
+    if not state.complete:
+        details = "; ".join(state.warnings) or "unknown protected-state capture failure"
+        raise RuntimeError(
+            "External Soperator upgrade protected-state capture is incomplete; refusing to mutate. "
+            + details
+        )
+    return state
+
+
+def _run_external_upgrade_safety_verification(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    checkpoint: Mapping[str, Any],
+    payload: Mapping[str, Any],
+    target_ref: str,
+    kube_context: str,
+    approve_remediation: bool,
+) -> Any:
+    before_state = _migration_safety_baseline_from_checkpoint(checkpoint)
+    result = run_post_upgrade_fast_verification(
+        command_runner=command_runner,
+        target_ref=target_ref,
+        namespace=_SOPERATOR_NAMESPACE,
+        kube_context=kube_context,
+        before_state=before_state,
+        source_payload=payload,
+        external_cluster=True,
+        remediation_approved=approve_remediation,
+    )
+    return result
+
+
+def external_soperator_upgrade_protected_comparison_passed(
+    *,
+    config_path: Path,
+    target_ref: str,
+) -> bool:
+    checkpoint = _load_checkpoint(soperator_migration_checkpoint_path(config_path, target_ref))
+    if checkpoint is None:
+        return False
+    safety = checkpoint.get("upgrade_safety")
+    safety_map = safety if isinstance(safety, Mapping) else {}
+    verification = safety_map.get("post_upgrade_verification")
+    verification_map = verification if isinstance(verification, Mapping) else {}
+    comparison = verification_map.get("comparison")
+    comparison_map = comparison if isinstance(comparison, Mapping) else {}
+    protected = safety_map.get("protected_customer_state")
+    protected_map = protected if isinstance(protected, Mapping) else {}
+    return (
+        bool(verification_map.get("passed"))
+        and int(comparison_map.get("blocked_count") or 0) == 0
+        and str(protected_map.get("after_hash", "") or "").strip() != ""
+    )
+
+
 def _run_migration_soperator_cluster_validation(
     *,
     config_path: Path,
@@ -10750,6 +10840,7 @@ def _execute_validation_hold_phase(
     kube_context: str,
     target_version: str,
     command_runner: SoperatorMigrationCommandRunner,
+    approve_remediation: bool = False,
 ) -> tuple[bool, list[str]]:
     phase = _phase_state(checkpoint, "validation-and-rollback-hold")
     _ensure_live_nodes_ready(live_snapshot)
@@ -10780,6 +10871,30 @@ def _execute_validation_hold_phase(
         command_runner=command_runner,
         phase=phase,
     )
+    safety_result = _run_external_upgrade_safety_verification(
+        command_runner=command_runner,
+        checkpoint=checkpoint,
+        payload=payload,
+        target_ref=target_ref,
+        kube_context=kube_context,
+        approve_remediation=approve_remediation,
+    )
+    checkpoint["upgrade_safety"] = update_safety_payload_with_verification(
+        checkpoint.get("upgrade_safety") if isinstance(checkpoint.get("upgrade_safety"), Mapping) else None,
+        safety_result,
+        remediation_approved=approve_remediation,
+    )
+    phase["shared_safety_verification"] = safety_result.as_payload()
+    if not safety_result.passed:
+        failed = [
+            str(check.get("name") or "check")
+            for check in safety_result.checks
+            if isinstance(check, Mapping) and check.get("status") == "failed"
+        ]
+        raise SoperatorMigrationPhasePending(
+            "Shared Soperator upgrade safety verification failed"
+            + (": " + ", ".join(failed) if failed else ".")
+        )
     phase["validation_contract_revision"] = _VALIDATION_HOLD_REVISION
     phase["validated_at"] = _utc_now()
     return bool(phase.get("mk8s_gpu_validations") or phase.get("soperator_cluster_validations")), [
@@ -10787,6 +10902,8 @@ def _execute_validation_hold_phase(
         *helm_state_lines,
         *validation_lines,
         *soperator_validation_lines,
+        "Shared Soperator upgrade safety verification completed: "
+        + str(safety_result.status),
     ]
 
 
@@ -10992,9 +11109,22 @@ def _phase_report_summary(phase_id: str, phase: Mapping[str, Any]) -> str:
         return f"target Soperator chart and SlurmCluster cutover validated{f' for {target}' if target else ''}."
     if phase_id == "validation-and-rollback-hold":
         gpu_count = _positive_int(phase.get("mk8s_gpu_validation_count"), fallback=0)
-        soperator_count = _positive_int(phase.get("soperator_cluster_validation_count"), fallback=0)
+        soperator_count = _positive_int(
+            phase.get("soperator_cluster_validation_count"),
+            fallback=0,
+        )
+        safety = _mapping(phase.get("shared_safety_verification"))
+        safety_status = str(safety.get("status", "") or "not_run")
+        safety_passed = safety.get("passed")
+        if safety_passed is True:
+            safety_result = "passed"
+        elif safety_passed is False:
+            safety_result = "failed"
+        else:
+            safety_result = "unknown"
         return (
-            f"validation checks recorded: MK8s GPU={gpu_count}, Soperator/Slurm={soperator_count}."
+            f"validation checks recorded: MK8s GPU={gpu_count}, "
+            f"Soperator/Slurm={soperator_count}; shared safety={safety_status}/{safety_result}."
         )
     if phase_id == "retire-old-resources":
         retired = _sequence_of_mappings(phase.get("retired_node_groups"))
@@ -11157,6 +11287,8 @@ def _write_soperator_migrate_report(
             ],
         )
     )
+    lines.extend(safety_report_markdown_lines(_mapping(checkpoint.get("upgrade_safety"))))
+    lines.append("")
     events = _sequence_of_mappings(checkpoint.get("events"))
     lines.extend(["## Event Log", ""])
     if events:
@@ -11169,6 +11301,7 @@ def _write_soperator_migrate_report(
     else:
         lines.append("- No checkpoint events recorded.")
     lines.append("")
+    upgrade_safety = _mapping(checkpoint.get("upgrade_safety"))
     json_report = {
         "schema": "nebius-cxcli-ext-soperator-upgrade-report/v1",
         "target_ref": target_ref,
@@ -11189,6 +11322,27 @@ def _write_soperator_migrate_report(
         "helm": to_plain_data(_mapping(checkpoint.get("helm"))),
         "validation": to_plain_data(validation_phase),
         "events": [to_plain_data(event) for event in events],
+        "upgrade_safety": to_plain_data(upgrade_safety),
+        "protected_customer_state": to_plain_data(
+            _mapping(upgrade_safety.get("protected_customer_state"))
+        ),
+        "remediation_approvals": to_plain_data(
+            upgrade_safety.get("remediation_approvals", [])
+            if isinstance(upgrade_safety.get("remediation_approvals"), list)
+            else []
+        ),
+        "post_upgrade_verification": to_plain_data(
+            _mapping(upgrade_safety.get("post_upgrade_verification"))
+        ),
+        "fast_smoke": to_plain_data(_mapping(upgrade_safety.get("fast_smoke"))),
+        "heavy_validation_followups": to_plain_data(
+            upgrade_safety.get("heavy_validation_followups", [])
+            if isinstance(upgrade_safety.get("heavy_validation_followups"), list)
+            else []
+        ),
+        "zero_downtime_eligibility": to_plain_data(
+            _mapping(upgrade_safety.get("zero_downtime_eligibility"))
+        ),
     }
     _write_text_atomic(
         json_report_path,
@@ -11262,7 +11416,9 @@ def _checkpoint_for_run(
             "created_at": _utc_now(),
             "completed_phases": [],
             "events": [],
+            "upgrade_safety": upgrade_safety_checkpoint_payload(),
         }
+    checkpoint.setdefault("upgrade_safety", upgrade_safety_checkpoint_payload())
     checkpoint["updated_at"] = _utc_now()
     checkpoint["planned_phases"] = list(phase_ids)
     if source_report_refreshed:
@@ -12787,6 +12943,7 @@ def execute_soperator_migration(
     backup_metadata: Mapping[str, Any] | None = None,
     snapshot_collector: Callable[..., Mapping[str, Any]],
     approved: bool = False,
+    approve_remediation: bool = False,
     command_runner: SoperatorMigrationCommandRunner | None = None,
     status_callback: Callable[[str], None] | None = None,
     status_poll_interval_seconds: float = 30.0,
@@ -12828,6 +12985,7 @@ def execute_soperator_migration(
             backup_metadata=backup_metadata,
             snapshot_collector=snapshot_collector,
             approved=approved,
+            approve_remediation=approve_remediation,
             command_runner=command_runner,
             status_callback=status_callback,
             status_poll_interval_seconds=status_poll_interval_seconds,
@@ -12854,6 +13012,7 @@ def _execute_soperator_migration_unlocked(
     backup_metadata: Mapping[str, Any] | None = None,
     snapshot_collector: Callable[..., Mapping[str, Any]],
     approved: bool = False,
+    approve_remediation: bool = False,
     command_runner: SoperatorMigrationCommandRunner | None = None,
     status_callback: Callable[[str], None] | None = None,
     status_poll_interval_seconds: float = 30.0,
@@ -12873,6 +13032,16 @@ def _execute_soperator_migration_unlocked(
     if not normalized_target:
         raise RuntimeError("External Soperator upgrade execute requires a target ref.")
     active_command_runner = command_runner or _default_command_runner
+
+    def _emit_phase_comment(phase_id: str, comment: str) -> None:
+        if status_callback is None:
+            return
+        status_callback(f"External Soperator upgrade phase {phase_id}: {comment}")
+
+    _emit_phase_comment(
+        "execute-preflight",
+        "verifying onboarding, live source contract, checkpoint, and rollout plan.",
+    )
     onboarding = _target_onboarding(payload, normalized_target)
     rollout = resolve_external_node_template_rollout(
         onboarding,
@@ -12986,6 +13155,10 @@ def _execute_soperator_migration_unlocked(
     if backup_metadata:
         plain_backup = to_plain_data(dict(backup_metadata))
         incoming_backup = dict(plain_backup) if isinstance(plain_backup, Mapping) else {}
+    _emit_phase_comment(
+        "backup",
+        "verifying restore-capable backup metadata before approved mutation.",
+    )
     if mutating_progress_started:
         if not backup_state:
             raise RuntimeError(
@@ -13050,6 +13223,7 @@ def _execute_soperator_migration_unlocked(
         str(checkpoint.get("customer_approved_at", "") or "").strip()
     )
     effective_approval = approved or existing_approval
+    protected_state_before = _migration_safety_baseline_from_checkpoint(checkpoint)
     preflight_worker_groups: tuple[str, ...] = ()
     _service_rollout_groups, inferred_rollout_worker_groups = (
         _split_external_node_template_upgrade_groups(
@@ -13121,6 +13295,35 @@ def _execute_soperator_migration_unlocked(
         quota_preflight_lines = [
             "Quota preflight: deferred until customer approval because no mutating phase will run."
         ]
+    if effective_approval and not quota_preflight_pending_phase:
+        if not backup_state and (set(phase_ids) & _MUTATING_PHASE_IDS):
+            raise RuntimeError(
+                "External Soperator upgrade requires restore-capable backup metadata before "
+                "approved mutation. Run through `nebius-cxcli ext-soperator upgrade --execute "
+                "--approve` so cxcli can create or reuse the pre-upgrade backup."
+            )
+        if protected_state_before is None:
+            _emit_phase_comment(
+                "protected-state-capture",
+                "capturing protected customer state before external remediation or rollout.",
+            )
+            protected_state_before = _capture_external_upgrade_protected_state(
+                command_runner=active_command_runner,
+                payload=payload,
+                target_ref=normalized_target,
+                kube_context=kube_context,
+            )
+            checkpoint["upgrade_safety"] = update_safety_payload_with_before(
+                checkpoint.get("upgrade_safety") if isinstance(checkpoint.get("upgrade_safety"), Mapping) else None,
+                protected_state_before,
+                backup=backup_state or {"status": "not-recorded"},
+            )
+            _append_event(checkpoint, "protected-state-captured")
+            _write_checkpoint(checkpoint_path, checkpoint)
+            _emit_phase_comment(
+                "protected-state-capture",
+                "protected customer-state baseline captured and checkpointed.",
+            )
     _append_event(
         checkpoint,
         "execute-preflight-completed",
@@ -13306,6 +13509,7 @@ def _execute_soperator_migration_unlocked(
                 kube_context=kube_context,
                 target_version=target_version,
                 command_runner=active_command_runner,
+                approve_remediation=approve_remediation,
             ),
             "retire-old-resources": lambda: _execute_retire_old_resources_phase(
                 checkpoint=checkpoint,
@@ -13369,6 +13573,10 @@ def _execute_soperator_migration_unlocked(
                 _checkpoint_progress()
 
     if not pending_phase and effective_approval:
+        _emit_phase_comment(
+            "post-upgrade-mk8s-check",
+            "verifying completed MK8s node-template and worker rollout state.",
+        )
         mk8s_state_lines = _verify_completed_soperator_migration_mk8s_state(
             payload=payload,
             source_report=execution_source_report,
@@ -13380,6 +13588,10 @@ def _execute_soperator_migration_unlocked(
         mk8s_phase_lines = [f"post-upgrade-mk8s-check: {line}" for line in mk8s_state_lines]
         phase_lines.extend(mk8s_phase_lines)
         try:
+            _emit_phase_comment(
+                "post-upgrade-helm-check",
+                "verifying final Helm releases and target Soperator readiness.",
+            )
             helm_state_lines = _verify_completed_soperator_migration_helm_state(
                 command_runner=active_command_runner,
                 kube_context=kube_context,
@@ -13406,6 +13618,10 @@ def _execute_soperator_migration_unlocked(
     json_report_path = _upgrade_report_json_path(config_path)
     checkpoint["upgrade_report"] = str(report_path)
     checkpoint["upgrade_report_json"] = str(json_report_path)
+    _emit_phase_comment(
+        "report",
+        "writing external Soperator upgrade checkpoint and reports.",
+    )
     _append_event(
         checkpoint,
         "upgrade-report-written",

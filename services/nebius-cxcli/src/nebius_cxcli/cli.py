@@ -410,6 +410,7 @@ from .soperator_migration import (
     _source_worker_nodeset_values,
     _source_worker_partition_configuration,
     execute_soperator_migration,
+    external_soperator_upgrade_protected_comparison_passed,
     external_soperator_upgrade_resume_backup_metadata,
     legacy_soperator_migration_checkpoint_path,
     resolve_external_node_template_rollout,
@@ -447,6 +448,16 @@ from .soperator_onboarding import (
     validate_soperator_onboarding_acceptance,
     write_soperator_onboarding_reports,
     write_source_soperator_discovery_report,
+)
+from .soperator_upgrade_safety import (
+    ProtectedCustomerState,
+    capture_protected_customer_state,
+    protected_customer_state_from_payload,
+    run_post_upgrade_fast_verification,
+    safety_report_markdown_lines,
+    update_safety_payload_with_before,
+    update_safety_payload_with_verification,
+    upgrade_safety_checkpoint_payload,
 )
 from .soperator_validation import (
     SOPERATOR_CLUSTER_VALIDATION_KIND,
@@ -4252,6 +4263,22 @@ def _soperator_upgrade_now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def _soperator_upgrade_phase_payload(
+    phase_id: str,
+    comment: str,
+    *,
+    component: str | None = None,
+) -> dict[str, str]:
+    payload = {
+        "id": phase_id,
+        "comment": comment,
+        "updated_at": _soperator_upgrade_now_iso(),
+    }
+    if component:
+        payload["component"] = component
+    return payload
+
+
 def _write_text_atomic(path: Path, content: str, *, encoding: str = "utf-8") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     data = content.encode(encoding)
@@ -4404,6 +4431,77 @@ def _run_soperator_upgrade_kubectl_cluster(
         timeout_seconds=timeout_seconds,
         check=check,
     )
+
+
+def _soperator_upgrade_safety_command_runner(
+    args: Sequence[str],
+    *,
+    input_text: str | None = None,
+    timeout_seconds: int = 120,
+    check: bool = True,
+) -> _SoperatorUpgradeCommandResult:
+    return _run_soperator_upgrade_process(
+        args,
+        input_text=input_text,
+        timeout_seconds=timeout_seconds,
+        check=check,
+    )
+
+
+def _managed_soperator_upgrade_capture_protected_state(
+    *,
+    source_payload: Mapping[str, Any],
+    target: _HelmChartUpgradeTarget,
+    namespace: str,
+) -> ProtectedCustomerState:
+    state = capture_protected_customer_state(
+        command_runner=_soperator_upgrade_safety_command_runner,
+        target_ref=target.target_ref,
+        namespace=namespace,
+        kube_context=None,
+        source_payload=source_payload,
+    )
+    if not state.complete:
+        details = "; ".join(state.warnings) or "unknown protected-state capture failure"
+        raise RuntimeError(
+            "Soperator upgrade protected-state capture is incomplete; refusing to mutate. "
+            + details
+        )
+    return state
+
+
+def _managed_soperator_upgrade_baseline_from_checkpoint(
+    checkpoint: Mapping[str, Any],
+) -> ProtectedCustomerState | None:
+    safety = checkpoint.get("upgrade_safety")
+    safety_map = safety if isinstance(safety, Mapping) else {}
+    protected = safety_map.get("protected_customer_state")
+    protected_map = protected if isinstance(protected, Mapping) else {}
+    before = protected_map.get("before")
+    return protected_customer_state_from_payload(before if isinstance(before, Mapping) else None)
+
+
+def _managed_soperator_upgrade_run_post_verification(
+    *,
+    source_payload: Mapping[str, Any],
+    target: _HelmChartUpgradeTarget,
+    namespace: str,
+    before_state: ProtectedCustomerState | None,
+    paths: ProjectPaths,
+    approve_remediation: bool,
+) -> Any:
+    result = run_post_upgrade_fast_verification(
+        command_runner=_soperator_upgrade_safety_command_runner,
+        target_ref=target.target_ref,
+        namespace=namespace,
+        kube_context=None,
+        before_state=before_state,
+        source_payload=source_payload,
+        terraform_plan_command=("nebius-cxcli", "terraform", "plan", str(paths.generated_dir)),
+        external_cluster=False,
+        remediation_approved=approve_remediation,
+    )
+    return result
 
 
 def _run_soperator_upgrade_login_command(
@@ -6000,9 +6098,15 @@ def _new_soperator_upgrade_checkpoint(
     checkpoint_path: Path,
     paths: ProjectPaths,
 ) -> dict[str, Any]:
+    planned_phase = _soperator_upgrade_phase_payload(
+        "planned",
+        "Upgrade planned; no live mutation has started.",
+    )
     return {
         "schema": SOPERATOR_UPGRADE_CHECKPOINT_SCHEMA,
         "status": "planned",
+        "current_phase": planned_phase,
+        "phase_history": [planned_phase],
         "target_ref": plan.target.target_ref,
         "selector": plan.target.selector,
         "namespace": plan.namespace or "default",
@@ -6042,6 +6146,7 @@ def _new_soperator_upgrade_checkpoint(
             "post_mk8s": None,
             "postflight": None,
         },
+        "upgrade_safety": upgrade_safety_checkpoint_payload(),
         "checkpoint_path": _soperator_upgrade_relative_path(
             checkpoint_path,
             root=paths.project_dir,
@@ -6238,7 +6343,21 @@ def _write_soperator_upgrade_report(
     paths.reports_dir.mkdir(parents=True, exist_ok=True)
     json_path = paths.reports_dir / SOPERATOR_UPGRADE_REPORT_JSON_FILENAME
     markdown_path = paths.reports_dir / SOPERATOR_UPGRADE_REPORT_FILENAME
-    _write_text_atomic(json_path, json.dumps(dict(checkpoint), indent=2, sort_keys=True) + "\n")
+    safety = checkpoint.get("upgrade_safety")
+    safety_map = safety if isinstance(safety, Mapping) else {}
+    json_payload = dict(checkpoint)
+    for key in (
+        "protected_customer_state",
+        "remediation_approvals",
+        "post_upgrade_verification",
+        "fast_smoke",
+        "heavy_validation_followups",
+        "backup",
+        "zero_downtime_eligibility",
+    ):
+        if key in safety_map:
+            json_payload[key] = safety_map[key]
+    _write_text_atomic(json_path, json.dumps(json_payload, indent=2, sort_keys=True) + "\n")
 
     activechecks = checkpoint.get("activechecks")
     activechecks_map = activechecks if isinstance(activechecks, Mapping) else {}
@@ -6264,6 +6383,13 @@ def _write_soperator_upgrade_report(
                 continue
             event = str(item.get("event") or "event")
             when = str(item.get("time") or "")
+            detail_parts: list[str] = []
+            for detail_key in ("phase", "reason", "status", "passed", "error"):
+                if detail_key not in item:
+                    continue
+                detail_value = item.get(detail_key)
+                if isinstance(detail_value, (str, int, float, bool)):
+                    detail_parts.append(f"{detail_key}={detail_value}")
             report_refs = item.get("validation_reports")
             report_text = ""
             if isinstance(report_refs, list):
@@ -6274,11 +6400,45 @@ def _write_soperator_upgrade_report(
                         + ", ".join(f"`{report}`" for report in report_names)
                         + ")"
                     )
+            detail_text = " (" + ", ".join(detail_parts) + ")" if detail_parts else ""
             event_lines.append(
-                f"{index}. `{event}`" + (f" at `{when}`" if when else "") + report_text
+                f"{index}. `{event}`"
+                + (f" at `{when}`" if when else "")
+                + detail_text
+                + report_text
             )
     if not event_lines:
         event_lines.append("1. `planned`")
+
+    current_phase = checkpoint.get("current_phase")
+    current_phase_map = current_phase if isinstance(current_phase, Mapping) else {}
+    current_phase_id = str(current_phase_map.get("id") or "unknown")
+    current_phase_comment = str(
+        current_phase_map.get("comment") or "No phase comment recorded."
+    )
+    current_phase_component = str(current_phase_map.get("component") or "").strip()
+    current_phase_component_text = (
+        f" for `{current_phase_component}`" if current_phase_component else ""
+    )
+    phase_history = checkpoint.get("phase_history")
+    phase_history_lines: list[str] = []
+    if isinstance(phase_history, list):
+        for item in phase_history:
+            if not isinstance(item, Mapping):
+                continue
+            phase_id = str(item.get("id") or "").strip()
+            if not phase_id:
+                continue
+            comment = str(item.get("comment") or "No phase comment recorded.")
+            component = str(item.get("component") or "").strip()
+            component_text = f" for `{component}`" if component else ""
+            updated_at = str(item.get("updated_at") or "")
+            timestamp = f" at `{updated_at}`" if updated_at else ""
+            phase_history_lines.append(
+                f"- `{phase_id}`{component_text}{timestamp}: {comment}"
+            )
+    if not phase_history_lines:
+        phase_history_lines.append("- No phase history recorded.")
 
     backup = checkpoint.get("backup")
     backup_map = backup if isinstance(backup, Mapping) else {}
@@ -6287,12 +6447,15 @@ def _write_soperator_upgrade_report(
         f"- Size: `{backup_map.get('size_bytes') or 0}` bytes",
         f"- SHA256: `{backup_map.get('sha256') or 'not-created'}`",
         f"- Manifest SHA256: `{backup_map.get('manifest_sha256') or 'not-created'}`",
-        "- Sensitive material: raw Kubernetes Secrets and accounting DB dump are included in the archive.",
+        "- Sensitive material: raw Kubernetes Secrets and accounting DB dump are included "
+        "in the archive.",
         "- Report redaction: Secret values and SQL dump contents are not printed.",
     ]
     categories = backup_map.get("included_categories")
     if isinstance(categories, list) and categories:
-        backup_lines.append("- Included categories: " + ", ".join(f"`{item}`" for item in categories))
+        backup_lines.append(
+            "- Included categories: " + ", ".join(f"`{item}`" for item in categories)
+        )
 
     discovery = checkpoint.get("discovery")
     discovery_map = discovery if isinstance(discovery, Mapping) else {}
@@ -6348,8 +6511,14 @@ def _write_soperator_upgrade_report(
             f"- Release: `{checkpoint.get('namespace', 'default')}/{checkpoint.get('release_name', '')}`",
             f"- Chart version: `{checkpoint.get('current_version') or 'unset'}` -> `{checkpoint.get('target_version') or 'unset'}`",
             f"- Status: `{checkpoint.get('status', 'unknown')}`",
+            f"- Current phase: `{current_phase_id}`"
+            f"{current_phase_component_text} - {current_phase_comment}",
             f"- Checkpoint: `{checkpoint.get('checkpoint_path', '')}`",
             f"- JSON report: `{SOPERATOR_UPGRADE_REPORT_JSON_FILENAME}`",
+            "",
+            "## Phase History",
+            "",
+            *phase_history_lines,
             "",
             "## Soperator Discovery",
             "",
@@ -6379,6 +6548,12 @@ def _write_soperator_upgrade_report(
                 else "- Result: no ActiveChecks suspend/restore was required."
             ),
             *snapshot_lines,
+            "",
+            *safety_report_markdown_lines(
+                checkpoint.get("upgrade_safety")
+                if isinstance(checkpoint.get("upgrade_safety"), Mapping)
+                else None
+            ),
             "",
             "## Events",
             "",
@@ -8465,6 +8640,7 @@ def _external_soperator_upgrade_command_args(
     strategy_drain_timeout: str | None,
     dry_run: bool,
     approve: bool,
+    approve_remediation: bool,
     interactive: bool,
 ) -> tuple[str, ...]:
     args = ["nebius-cxcli", "ext-soperator", "upgrade", str(config_path), "--target", target_ref]
@@ -8492,6 +8668,7 @@ def _external_soperator_upgrade_command_args(
     args.append("--interactive" if interactive else "--no-interactive")
     args.append("--dry-run" if dry_run else "--execute")
     args.append("--approve" if approve else "--no-approve")
+    args.append("--approve-remediation" if approve_remediation else "--no-approve-remediation")
     return tuple(args)
 
 
@@ -9516,6 +9693,16 @@ def soperator_upgrade_command(
             "--dry-run", help="Print the Soperator cluster upgrade plan without writing or applying."
         ),
     ] = False,
+    approve_remediation: Annotated[
+        bool,
+        typer.Option(
+            "--approve-remediation/--no-approve-remediation",
+            help=(
+                "Record approval for remediation-required protected-state deltas. "
+                "Blocked data-loss or downtime deltas are never overrideable."
+            ),
+        ),
+    ] = False,
     interactive: Annotated[
         bool,
         typer.Option(
@@ -9542,6 +9729,7 @@ def soperator_upgrade_command(
             job_wait_timeout=job_wait_timeout,
             job_refresh_interval=job_refresh_interval,
             dry_run=dry_run,
+            approve_remediation=approve_remediation,
             interactive=interactive,
         )
     except typer.Exit:
@@ -9568,7 +9756,8 @@ def _run_soperator_upgrade_command(
     job_wait_timeout: str,
     job_refresh_interval: str,
     dry_run: bool,
-    interactive: bool,
+    approve_remediation: bool = False,
+    interactive: bool = True,
 ) -> None:
     source_payload = _load_source_payload(config_path)
     target_missing = not _non_empty_text(target_ref)
@@ -9624,6 +9813,7 @@ def _run_soperator_upgrade_command(
         job_wait_timeout=job_wait_timeout,
         job_refresh_interval=job_refresh_interval,
         dry_run=dry_run,
+        approve_remediation=approve_remediation,
         interactive=interactive,
     )
 
@@ -9646,6 +9836,7 @@ def _soperator_upgrade_command_args(
     job_wait_timeout: str,
     job_refresh_interval: str,
     dry_run: bool,
+    approve_remediation: bool = False,
 ) -> tuple[str, ...]:
     args = [
         "nebius-cxcli",
@@ -9677,6 +9868,7 @@ def _soperator_upgrade_command_args(
         args.extend(["--cancel-job", str(job_id)])
     args.extend(["--job-wait-timeout", job_wait_timeout])
     args.extend(["--job-refresh-interval", job_refresh_interval])
+    args.append("--approve-remediation" if approve_remediation else "--no-approve-remediation")
     args.append("--no-interactive")
     if dry_run:
         args.append("--dry-run")
@@ -9781,7 +9973,8 @@ def _run_managed_soperator_cluster_upgrade(
     job_wait_timeout: str,
     job_refresh_interval: str,
     dry_run: bool,
-    interactive: bool,
+    approve_remediation: bool = False,
+    interactive: bool = True,
 ) -> None:
     del interactive
     generated_config, paths, manifest = _load_deploy_context_readonly(config_path)
@@ -9816,6 +10009,7 @@ def _run_managed_soperator_cluster_upgrade(
         job_wait_timeout=job_wait_timeout,
         job_refresh_interval=job_refresh_interval,
         dry_run=True,
+        approve_remediation=approve_remediation,
     )
     repeat_dry_run_command = shlex.join(command_args) if dry_run else None
     _print_upgrade_plan_lines(
@@ -9872,6 +10066,7 @@ def _run_managed_soperator_cluster_upgrade(
             job_wait_timeout=job_wait_timeout,
             job_refresh_interval=job_refresh_interval,
             dry_run=False,
+            approve_remediation=approve_remediation,
         )
     )
     checkpoint["mk8s"] = {
@@ -9891,10 +10086,44 @@ def _run_managed_soperator_cluster_upgrade(
 
     restore_required = bool(resume_checkpoint is not None and lifecycle.required)
     slurm_restore_nodes: tuple[str, ...] = ()
+    protected_state_before = _managed_soperator_upgrade_baseline_from_checkpoint(checkpoint)
+    component_label = (
+        f"{target.selector} ({plan.namespace or 'default'}/{plan.release_name})"
+    )
 
     def _checkpoint(event: str, **details: Any) -> None:
         _append_soperator_upgrade_event(checkpoint, event, **details)
         _write_soperator_upgrade_checkpoint(checkpoint_path, checkpoint)
+
+    def _phase_display(phase_id: str, comment: str) -> str:
+        return f"Soperator upgrade phase [{phase_id}] for {component_label}: {comment}"
+
+    def _set_phase(phase_id: str, comment: str) -> None:
+        phase = _soperator_upgrade_phase_payload(
+            phase_id,
+            comment,
+            component=component_label,
+        )
+        checkpoint["current_phase"] = phase
+        history = checkpoint.setdefault("phase_history", [])
+        if not isinstance(history, list):
+            history = []
+            checkpoint["phase_history"] = history
+        history.append(phase)
+        console.print(_phase_display(phase_id, comment), soft_wrap=True)
+        _write_soperator_upgrade_checkpoint(checkpoint_path, checkpoint)
+
+    @contextmanager
+    def _phase_spinner(phase_id: str, comment: str) -> Iterator[None]:
+        _set_phase(phase_id, comment)
+        if getattr(console, "is_terminal", False) and hasattr(console, "status"):
+            with console.status(
+                "[cyan]" + escape(_phase_display(phase_id, comment)) + "[/cyan]",
+                spinner="dots",
+            ):
+                yield
+            return
+        yield
 
     def _checkpoint_backup_event(event: str) -> None:
         _checkpoint(event)
@@ -9941,6 +10170,10 @@ def _run_managed_soperator_cluster_upgrade(
         return staged_config, staged_paths, staged_manifest
 
     try:
+        _set_phase(
+            "preflight",
+            "Validating the generated bundle and current Soperator chart readiness.",
+        )
         _checkpoint("preflight-generated-validation-started")
         _run_generated_bundle_validation(
             generated_config,
@@ -9959,21 +10192,25 @@ def _run_managed_soperator_cluster_upgrade(
             _expected_version_plan(plan.current_version),
         )
         _checkpoint("preflight-completed")
-        discovery_path = _run_managed_soperator_discovery_command(
-            config_path=config_path,
-            source_payload=source_payload,
-            target_ref=target.target_ref,
-            output_dir=None,
-            namespace=plan.namespace,
-            release_name=plan.release_name,
-            kube_context=None,
-            to_chart_version=to_chart_version,
-            to_k8s_version=to_k8s_version,
-            to_os=to_os,
-            to_gpu_stack_preset=to_gpu_stack_preset,
-            redaction="local",
-            interactive=False,
-        )
+        with _phase_spinner(
+            "discovery",
+            "Capturing a support-safe read-only discovery bundle before backup and mutation.",
+        ):
+            discovery_path = _run_managed_soperator_discovery_command(
+                config_path=config_path,
+                source_payload=source_payload,
+                target_ref=target.target_ref,
+                output_dir=None,
+                namespace=plan.namespace,
+                release_name=plan.release_name,
+                kube_context=None,
+                to_chart_version=to_chart_version,
+                to_k8s_version=to_k8s_version,
+                to_os=to_os,
+                to_gpu_stack_preset=to_gpu_stack_preset,
+                redaction="local",
+                interactive=False,
+            )
         checkpoint["discovery"] = {
             "path": str(discovery_path),
             "bundle_dir": str(discovery_path.parent),
@@ -9989,19 +10226,23 @@ def _run_managed_soperator_cluster_upgrade(
         config_comparison = checkpoint.setdefault("config_comparison", {})
         if isinstance(config_comparison, dict):
             config_comparison["pre_upgrade"] = pre_fingerprint.as_payload()
-        backup = _create_restore_capable_soperator_upgrade_backup(
-            config_path=config_path,
-            backup_dir=backup_dir,
-            source_payload=source_payload,
-            generated_config=generated_config,
-            manifest=manifest,
-            target=target,
-            plan=plan,
-            checkpoint_id=checkpoint_id,
-            target_k8s_version=to_k8s_version,
-            command=checkpoint.get("command", []),
-            checkpoint_event=_checkpoint_backup_event,
-        )
+        with _phase_spinner(
+            "backup",
+            "Creating the restore-capable backup before any upgrade mutation.",
+        ):
+            backup = _create_restore_capable_soperator_upgrade_backup(
+                config_path=config_path,
+                backup_dir=backup_dir,
+                source_payload=source_payload,
+                generated_config=generated_config,
+                manifest=manifest,
+                target=target,
+                plan=plan,
+                checkpoint_id=checkpoint_id,
+                target_k8s_version=to_k8s_version,
+                command=checkpoint.get("command", []),
+                checkpoint_event=_checkpoint_backup_event,
+            )
         checkpoint["backup"] = {
             "required": True,
             "path": str(backup.path),
@@ -10014,8 +10255,28 @@ def _run_managed_soperator_cluster_upgrade(
             "report_redacted": True,
         }
         _checkpoint("backup-created")
+        if protected_state_before is None:
+            with _phase_spinner(
+                "protected-state-capture",
+                "Capturing managed-equivalent protected customer state for later comparison.",
+            ):
+                protected_state_before = _managed_soperator_upgrade_capture_protected_state(
+                    source_payload=source_payload,
+                    target=target,
+                    namespace=plan.namespace or "default",
+                )
+            checkpoint["upgrade_safety"] = update_safety_payload_with_before(
+                checkpoint.get("upgrade_safety") if isinstance(checkpoint.get("upgrade_safety"), Mapping) else None,
+                protected_state_before,
+                backup=checkpoint["backup"] if isinstance(checkpoint.get("backup"), Mapping) else None,
+            )
+            _checkpoint("protected-state-captured")
 
         if lifecycle.required:
+            _set_phase(
+                "activechecks-suspend",
+                "Temporarily suspending cxcli-owned ActiveChecks for the upgrade window.",
+            )
             _checkpoint("activechecks-suspend-started")
             _soperator_upgrade_suspend_activechecks_values(source_payload, target)
             restore_required = True
@@ -10025,18 +10286,26 @@ def _run_managed_soperator_cluster_upgrade(
                 validation_title="Validate rendered Soperator ActiveChecks suspension",
                 expected_plan=current_version_plan,
             )
-            live_suspend = _suspend_live_soperator_activechecks(
-                generated_config,
-                paths,
-                manifest,
-                current_version_plan,
-                source_payload=source_payload,
-            )
+            with _phase_spinner(
+                "activechecks-live-suspend",
+                "Patching live ActiveChecks resources so old checks do not relaunch.",
+            ):
+                live_suspend = _suspend_live_soperator_activechecks(
+                    generated_config,
+                    paths,
+                    manifest,
+                    current_version_plan,
+                    source_payload=source_payload,
+                )
             activechecks_state = checkpoint.setdefault("activechecks", {})
             if isinstance(activechecks_state, dict):
                 activechecks_state["live_suspend"] = live_suspend
             _checkpoint("activechecks-suspended", live_suspend=live_suspend)
 
+        _set_phase(
+            "soperator-preflight-validation",
+            "Running live Soperator and Slurm validation before mutation.",
+        )
         _run_soperator_upgrade_validation_phase(
             generated_config,
             paths,
@@ -10048,6 +10317,10 @@ def _run_managed_soperator_cluster_upgrade(
         _checkpoint("preflight-soperator-validation-completed")
 
         if requested_mk8s_change:
+            _set_phase(
+                "slurm-job-drain",
+                "Applying the configured Slurm running-job policy before node-template rollout.",
+            )
             _checkpoint("slurm-drain-started")
             slurm_restore_nodes = _handle_soperator_upgrade_running_jobs(
                 namespace=plan.namespace or "default",
@@ -10076,6 +10349,10 @@ def _run_managed_soperator_cluster_upgrade(
                 "job_policy": job_policy,
             }
             _checkpoint("slurm-jobs-cleared")
+            _set_phase(
+                "mk8s-node-template",
+                "Rolling the requested MK8s node-template changes through the managed path.",
+            )
             _run_soperator_mk8s_node_template_phase(
                 config_path=config_path,
                 target_ref=target.target_ref,
@@ -10091,6 +10368,10 @@ def _run_managed_soperator_cluster_upgrade(
             if isinstance(mk8s_state, dict):
                 mk8s_state["status"] = "completed"
             _checkpoint("mk8s-completed")
+            _set_phase(
+                "post-mk8s-validation",
+                "Verifying Soperator and protected config after the MK8s rollout.",
+            )
             source_payload = _load_source_payload(config_path)
             generated_config, paths, manifest = _load_deploy_context(config_path)
             post_mk8s_reports = _run_soperator_upgrade_validation_phase(
@@ -10119,6 +10400,10 @@ def _run_managed_soperator_cluster_upgrade(
                 validation_reports=_soperator_upgrade_relative_paths(paths, post_mk8s_reports),
             )
 
+        _set_phase(
+            "soperator-chart",
+            "Applying or confirming the target Soperator Helm chart version.",
+        )
         changed = _update_source_helm_chart_version(
             source_payload,
             target=target,
@@ -10139,6 +10424,10 @@ def _run_managed_soperator_cluster_upgrade(
             )
             _checkpoint("chart-applied")
 
+        _set_phase(
+            "postflight-validation",
+            "Running final Soperator validation and protected config comparison.",
+        )
         postflight_reports = _run_soperator_upgrade_validation_phase(
             staged_config,
             staged_paths,
@@ -10169,6 +10458,10 @@ def _run_managed_soperator_cluster_upgrade(
         )
 
         if lifecycle.required:
+            _set_phase(
+                "activechecks-restore",
+                "Restoring pre-upgrade ActiveChecks settings.",
+            )
             _checkpoint("activechecks-restore-started")
             _soperator_upgrade_restore_activechecks_values(
                 source_payload,
@@ -10186,25 +10479,69 @@ def _run_managed_soperator_cluster_upgrade(
             _checkpoint("activechecks-restored", reason="not-required")
 
         if slurm_restore_nodes:
-            _soperator_upgrade_restore_slurm_nodes(
-                namespace=plan.namespace or "default",
-                node_names=slurm_restore_nodes,
-            )
+            with _phase_spinner(
+                "slurm-restore",
+                "Resuming nodes that cxcli drained for the managed rollout.",
+            ):
+                _soperator_upgrade_restore_slurm_nodes(
+                    namespace=plan.namespace or "default",
+                    node_names=slurm_restore_nodes,
+                )
         slurm_state = checkpoint.setdefault("slurm", {})
         if isinstance(slurm_state, dict):
             slurm_state["restore_manual_command"] = None
         _checkpoint("slurm-restored")
-        _checkpoint("completed")
-        upgrade_report_path, _upgrade_report_json_path = _write_soperator_upgrade_report(
-            staged_paths,
-            checkpoint,
+        with _phase_spinner(
+            "shared-safety-verification",
+            "Running the shared protected-state and fast smoke verification.",
+        ):
+            safety_verification = _managed_soperator_upgrade_run_post_verification(
+                source_payload=source_payload,
+                target=target,
+                namespace=plan.namespace or "default",
+                before_state=protected_state_before,
+                paths=staged_paths,
+                approve_remediation=approve_remediation,
+            )
+        checkpoint["upgrade_safety"] = update_safety_payload_with_verification(
+            checkpoint.get("upgrade_safety") if isinstance(checkpoint.get("upgrade_safety"), Mapping) else None,
+            safety_verification,
+            remediation_approved=approve_remediation,
         )
+        _checkpoint(
+            "shared-safety-verified",
+            status=safety_verification.status,
+            passed=safety_verification.passed,
+        )
+        if not safety_verification.passed:
+            failed = [
+                str(check.get("name") or "check")
+                for check in safety_verification.checks
+                if isinstance(check, Mapping) and check.get("status") == "failed"
+            ]
+            raise RuntimeError(
+                "Soperator post-upgrade shared safety verification failed"
+                + (": " + ", ".join(failed) if failed else ".")
+            )
+        with _phase_spinner(
+            "completed",
+            "All managed Soperator upgrade gates passed; writing final reports.",
+        ):
+            _checkpoint("completed")
+            upgrade_report_path, _upgrade_report_json_path = _write_soperator_upgrade_report(
+                staged_paths,
+                checkpoint,
+            )
         console.print(f"Soperator upgrade report: {upgrade_report_path}", soft_wrap=True)
         console.print(
             "[green]Soperator cluster upgrade completed[/green]: "
             f"{target.target_ref} chart {plan.current_version or 'unset'} -> {to_chart_version}"
         )
     except Exception as exc:
+        _set_phase(
+            "failed",
+            "Upgrade failed; checkpointing cleanup requirements before raising the error.",
+        )
         _checkpoint("failed", error=str(exc))
         activechecks_restore_status = (
             "already-restored"
@@ -10214,12 +10551,16 @@ def _run_managed_soperator_cluster_upgrade(
         if lifecycle.required and restore_required:
             try:
                 activechecks_restore_status = "started"
-                _checkpoint("activechecks-restore-after-failure-started")
-                _soperator_upgrade_restore_activechecks_values(
-                    source_payload,
-                    target,
-                    lifecycle,
-                )
+                with _phase_spinner(
+                    "activechecks-restore-after-failure",
+                    "Restoring ActiveChecks after the failed upgrade attempt.",
+                ):
+                    _checkpoint("activechecks-restore-after-failure-started")
+                    _soperator_upgrade_restore_activechecks_values(
+                        source_payload,
+                        target,
+                        lifecycle,
+                    )
                 expected_version = _non_empty_text(
                     _source_helm_chart_row(source_payload, target).get("version")
                 )
@@ -45393,6 +45734,7 @@ def _style_soperator_migration_status_message(message: str) -> str:
     styled = escape(message)
     replacements = (
         ("External Soperator upgrade status", "[bold cyan]External Soperator upgrade status[/bold cyan]"),
+        ("External Soperator upgrade phase", "[bold cyan]External Soperator upgrade phase[/bold cyan]"),
         ("MK8s Node Groups", "[bold white]MK8s Node Groups[/bold white]"),
         ("Slurm Workers", "[bold white]Slurm Workers[/bold white]"),
         ("Node groups:", "[bold cyan]Node groups:[/bold cyan]"),
@@ -46102,6 +46444,16 @@ def soperator_external_upgrade_command(
             ),
         ),
     ] = False,
+    approve_remediation: Annotated[
+        bool,
+        typer.Option(
+            "--approve-remediation/--no-approve-remediation",
+            help=(
+                "Record approval for remediation-required protected-state deltas. "
+                "Blocked data-loss or downtime deltas are never overrideable."
+            ),
+        ),
+    ] = False,
     interactive: Annotated[
         bool,
         typer.Option(
@@ -46302,15 +46654,24 @@ def soperator_external_upgrade_command(
                     strategy_drain_timeout=strategy_drain_timeout,
                     dry_run=False,
                     approve=approve,
+                    approve_remediation=approve_remediation,
                     interactive=interactive,
                 )
                 backup_metadata: dict[str, Any] | None = None
                 if approve:
+                    emit_status(
+                        "External Soperator upgrade phase backup: checking for reusable "
+                        "restore-capable backup metadata."
+                    )
                     backup_metadata = external_soperator_upgrade_resume_backup_metadata(
                         config_path,
                         target_ref,
                     )
                     if backup_metadata is not None:
+                        emit_status(
+                            "External Soperator upgrade phase backup: reusing existing "
+                            "restore-capable backup metadata."
+                        )
                         console.print(
                             "Backup: reusing restore-capable backup metadata from the "
                             "existing external upgrade checkpoint.",
@@ -46321,6 +46682,10 @@ def soperator_external_upgrade_command(
                             execution_payload,
                             target_ref=target_ref,
                             kube_context=None,
+                        )
+                        emit_status(
+                            "External Soperator upgrade phase backup: creating "
+                            "restore-capable backup archive before mutation."
                         )
                         backup_metadata = _create_external_soperator_upgrade_backup(
                             config_path=config_path,
@@ -46343,6 +46708,7 @@ def soperator_external_upgrade_command(
                     cancel_job_ids=selected_cancel_jobs,
                     job_wait_timeout_seconds=job_wait_timeout_seconds,
                     job_refresh_interval_seconds=job_refresh_interval_seconds,
+                    approve_remediation=approve_remediation,
                     worker_rollout_strategy=worker_rollout_strategy,
                     worker_wave_groups=worker_wave_groups,
                     worker_wave_percent=worker_wave_percent,
@@ -46352,6 +46718,15 @@ def soperator_external_upgrade_command(
                     strategy_drain_timeout=strategy_drain_timeout,
                 )
                 if execution_result.pending_phase == "none":
+                    if not external_soperator_upgrade_protected_comparison_passed(
+                        config_path=config_path,
+                        target_ref=target_ref,
+                    ):
+                        raise RuntimeError(
+                            "Post-upgrade config refresh is blocked because shared protected-state "
+                            "verification did not complete successfully. Review "
+                            "ext-soperator-upgrade-report.json before accepting the new live state."
+                        )
                     post_migration_config_lines = (
                         _refresh_soperator_onboarding_after_completed_migration(
                             config_path=config_path,

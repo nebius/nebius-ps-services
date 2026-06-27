@@ -588,8 +588,9 @@ and chart source-family changes.
   upgrade layer: omitted MK8s flags are MK8s no-ops; when MK8s flags are
   supplied without `--to-chart-version`, the chart is a no-op; and one command
   owns preflight, restore-capable backup, optional MK8s node-template rollout,
-  optional Soperator chart apply, validation, protected config comparison, and
-  report generation. Generic `upgrade helm-chart` still fails fast for
+  optional Soperator chart apply, validation, shared protected customer-state
+  capture/comparison, bounded read-only fast safety checks, and report
+  generation. Generic `upgrade helm-chart` still fails fast for
   `apps:soperator@<target>` with the canonical `soperator upgrade` command
   instead of keeping a duplicate compatibility path. The Soperator path writes
   a local mode-0600 backup archive with raw Kubernetes Secret restore material,
@@ -614,8 +615,14 @@ and chart source-family changes.
   the cxcli-managed upgrade fails closed before the chart upgrade so the report
   does not claim an ambiguous live suspension. The flow writes
   `generated/reports/soperator-upgrade-report.md` and
-  `generated/reports/soperator-upgrade-report.json` for postflight and restore
-  evidence. If the process is interrupted after ActiveChecks are
+  `generated/reports/soperator-upgrade-report.json` with before/after protected
+  customer-state hashes, deltas, fast safety results, zero-downtime eligibility,
+  backup evidence, manual heavy follow-ups, the final `current_phase`, and the
+  phase history with component-aware operator comments. Quiet terminal phases
+  such as discovery, backup, protected-state capture, live ActiveChecks
+  patching, Slurm restore, shared safety verification, and report writing keep
+  a spinner active. If the process is interrupted
+  after ActiveChecks are
   suspended, rerunning the same `soperator upgrade` command reuses the local
   upgrade checkpoint and restores the original values before completing the
   maintenance flow.
@@ -1055,15 +1062,18 @@ reconciliation, runs the required MK8s node inventory smoke, runs the
 target-scoped `deploy.targets[].deployment_testing.mk8s_gpu.*` checks configured
   in `config.yaml`, such as operator readiness and bounded GPU visibility when
   those checks are enabled, runs the required fast Soperator deployment
-  snapshot, and leaves Slurm CLI, `srun`, all-node hostname, all-node GPU
-  allocation, and NCCL/performance work to explicit `acceptance-test` commands,
-  writes
-`generated/reports/ext-soperator-upgrade-report.md` and
-`generated/reports/ext-soperator-upgrade-report.json` with MK8s GPU,
-Soperator/Slurm validation rollups, backup metadata, Slurm decisions, phase
-state, and recovery notes, refreshes `generated/reports/deploy-report.md` as a
-secondary deploy-compatible MK8s GPU summary, and checkpoints pending gates
-instead of retiring old resources early. During chart takeover it suspends legacy Flux HelmReleases
+  snapshot, runs the same shared protected customer-state comparison and
+  bounded read-only fast safety checks used by managed upgrade, and leaves Slurm
+  CLI, `srun`, all-node hostname, all-node GPU allocation, backend metrics/log
+  ingestion, Terraform drift review, and NCCL/performance work to explicit
+  manual or `acceptance-test` commands, writes
+  `generated/reports/ext-soperator-upgrade-report.md` and
+  `generated/reports/ext-soperator-upgrade-report.json` with MK8s GPU,
+  Soperator/Slurm validation rollups, protected-state hashes and deltas, backup
+  metadata, Slurm decisions, phase state, and recovery notes, refreshes
+  `generated/reports/deploy-report.md` as a secondary deploy-compatible MK8s GPU
+  summary only after protected comparison passes, and checkpoints pending gates
+  instead of retiring old resources early. During chart takeover it suspends legacy Flux HelmReleases
 that match the old Soperator release, applies Soperator CRDs with server-side
 conflict resolution, retries bounded admission-webhook startup races while the
 target controller/webhook becomes ready, and removes legacy source-family
@@ -1131,15 +1141,19 @@ still settling, the executor re-reads the node group, stores
 `waiting-rollout` on the external-node-template checkpoint when readiness is
 not complete, and resumes from live state on the next identical execute
 command instead of submitting a duplicate update.
-The executor-owned live status surface uses an interactive spinner backed by
-phase-aware status snapshots: storage phases emit `External Soperator upgrade status`
-with the elapsed time, canonical phase id, human-readable phase label, and
-overall phase health before component details. Storage phases then show aligned
-SFS/PVC copy progress plus MK8s and Slurm continuity signals, while compute and
-cutover phases emit MK8s status as separate `Node groups:` and `Nodes:`
-sections. Node-group readiness stays in the first section, while node-level
-external-upgrade rollout transitions such as `replacing (cordoned)` and real
-problem-node details such as `NotReady (down)` stay in the second section.
+The executor-owned live status surface uses concise
+`External Soperator upgrade phase ...` comments for preflight, backup metadata
+lookup/reuse, backup archive creation, protected-state capture, final
+post-upgrade checks, and report writing, plus an
+interactive spinner backed by phase-aware status snapshots. Storage phases emit
+`External Soperator upgrade status` with the elapsed time, canonical phase id,
+human-readable phase label, and overall phase health before component details.
+Storage phases then show aligned SFS/PVC copy progress plus MK8s and Slurm
+continuity signals, while compute and cutover phases emit MK8s status as
+separate `Node groups:` and `Nodes:` sections. Node-group readiness stays in
+the first section, while node-level external-upgrade rollout transitions such
+as `replacing (cordoned)` and problem-node details like `NotReady (down)` stay
+in the second section.
 Transition nodes and down states are highlighted in
 terminal output, and large clusters stay compact with `+N more` suffixes. Slurm
 worker names/states, queue health, and Soperator SlurmCluster reconciliation

@@ -34,6 +34,20 @@ All notable changes to this project are tracked here. This changelog follows
   `.nebius-cxcli/ext-soperator-upgrades/<target>/checkpoint.json`, write
   `generated/reports/ext-soperator-upgrade-report.md` and `.json`, and handle
   affected-node Slurm jobs with `--job-policy` before MK8s rollout work.
+- Added a shared Soperator upgrade safety layer used by both managed
+  `soperator upgrade` and external `ext-soperator upgrade`. Both flows now
+  capture protected customer state after backup and before mutation, run the
+  same bounded read-only post-upgrade fast verification, report before/after
+  protected-state hashes and deltas, expose `--approve-remediation` for
+  remediation-required deltas while keeping blocked data-loss/downtime deltas
+  non-overrideable, keep protected-state report payloads to redacted keys and
+  fingerprints instead of raw custom-resource specs or annotations, fail closed
+  when approved external mutation lacks restore-capable backup metadata, and
+  print/checkpoint the current upgrade phase with component-aware operator
+  comments and terminal spinners around quiet long-running steps from preflight
+  through final report writing, while keeping heavy follow-ups such as backend
+  metrics/log queries, Terraform drift
+  review, and full Slurm acceptance audits out of the required fast gate.
 - Fixed `ext-soperator onboard` for external MK8s clusters with heterogeneous
   GPU worker groups. Target-scoped GPU app value materialization now accepts
   mixed GPU presets and RDMA/non-RDMA groups when the resolved chart defaults do
