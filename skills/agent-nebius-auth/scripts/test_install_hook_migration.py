@@ -177,8 +177,48 @@ class AgentNebiusAuthHookInstallMigrationTest(unittest.TestCase):
             "Removed legacy agent-nebius-auth inline config hook block(s): 1",
             result.stdout,
         )
+        self.assertIn("Hooks status:", result.stdout)
+        self.assertIn("changed agent-nebius-auth/assets/hooks", result.stdout)
+        self.assertIn("changed config-codex/assets/hooks", result.stdout)
+        self.assertIn("changed sdlc-start/assets/hooks", result.stdout)
+        self.assertIn("files: updated 1", result.stdout)
+        self.assertIn("registrations: added 1", result.stdout)
+        self.assertIn("registrations: added 2", result.stdout)
+        self.assertIn("Summary: files updated 10, unchanged 0; registrations added 5", result.stdout)
+        self.assertNotIn("Discovered hook source directories", result.stdout)
+        self.assertNotIn("Hook files:", result.stdout)
+        self.assertNotIn("Hook registrations:", result.stdout)
+        self.assertNotIn("This did not modify hooks.json", result.stdout)
+        self.assertIn("Action required: hook files or registrations changed", result.stderr)
         self.assertNotIn(PROJECT, result.stdout)
         self.assertNotIn(PROJECT, result.stderr)
+
+    def test_repeated_install_all_hooks_reports_unchanged_by_source(self) -> None:
+        first = self.run_all_hooks_installer()
+        second = self.run_all_hooks_installer()
+
+        for result in (first, second):
+            self.assertEqual(
+                result.returncode,
+                0,
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}",
+            )
+
+        self.assertIn("unchanged agent-nebius-auth/assets/hooks", second.stdout)
+        self.assertIn("unchanged config-codex/assets/hooks", second.stdout)
+        self.assertIn("unchanged sdlc-start/assets/hooks", second.stdout)
+        self.assertIn("files: unchanged 1", second.stdout)
+        self.assertIn("files: unchanged 3", second.stdout)
+        self.assertIn("files: unchanged 6", second.stdout)
+        self.assertIn("registrations: unchanged 1", second.stdout)
+        self.assertIn("registrations: unchanged 2", second.stdout)
+        self.assertIn("Summary: files updated 0, unchanged 10; registrations unchanged 5", second.stdout)
+        self.assertNotIn("Discovered hook source directories", second.stdout)
+        self.assertNotIn("Template suffixes were stripped", second.stdout)
+        self.assertNotIn("Hook files:", second.stdout)
+        self.assertNotIn("Hook registrations:", second.stdout)
+        self.assertNotIn("This did not modify hooks.json", second.stdout)
+        self.assertNotIn("Action required: hook files or registrations changed", second.stderr)
 
     def test_selector_conflict_fails_before_registering_hooks(self) -> None:
         self.write_legacy_config_block()
@@ -236,7 +276,9 @@ class AgentNebiusAuthHookInstallMigrationTest(unittest.TestCase):
         )
         self.assertEqual(len(self.hook_registrations()), 1)
         self.assertTrue(self.installed_hook_path().is_file())
-        self.assertIn("Registered hook entries added: 0", second.stdout)
+        self.assertIn("registrations: unchanged 1", second.stdout)
+        self.assertIn("Summary: files updated 0, unchanged 1; registrations unchanged 1", second.stdout)
+        self.assertNotIn("Action required: hook files or registrations changed", second.stderr)
         self.assertNotIn("Removed legacy agent-nebius-auth inline config hook", second.stdout)
 
         credential = self.home / ".nebius" / f"codex-agent-authkey.{PROJECT}.json"

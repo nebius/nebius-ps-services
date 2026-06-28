@@ -128,6 +128,9 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Simplified `install-skills.sh --install-all-hooks --register-hooks` output
+  into a single per-source `Hooks status` report and only shows the restart and
+  trust warning when hook files or registrations changed.
 - Simplified `agent-nebius-auth` setup inputs so operators pass `--tenant-id`
   plus exactly one project selector, either `--project-id` or
   `--project-name`; the setup script now resolves the missing project metadata
