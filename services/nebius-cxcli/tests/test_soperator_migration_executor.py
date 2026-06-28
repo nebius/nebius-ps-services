@@ -72,6 +72,31 @@ def test_command_not_found_recognizes_explicit_not_found_status(stderr: str) -> 
     assert migration._command_not_found(result) is True
 
 
+def test_execution_source_contract_ignores_slurmcluster_secrets_redaction() -> None:
+    redacted = _snapshot()
+    live = _snapshot()
+    redacted["soperator_resources"] = [
+        {
+            "apiVersion": "slurm.nebius.ai/v1alpha1",
+            "kind": "SlurmCluster",
+            "metadata": {"name": "soperator", "namespace": "soperator"},
+            "spec": {"secrets": "[redacted]", "clusterName": "soperator"},
+        }
+    ]
+    live["soperator_resources"] = [
+        {
+            "apiVersion": "slurm.nebius.ai/v1alpha1",
+            "kind": "SlurmCluster",
+            "metadata": {"name": "soperator", "namespace": "soperator"},
+            "spec": {"secrets": {}, "clusterName": "soperator"},
+        }
+    ]
+
+    assert migration._fingerprint(
+        migration._execution_source_contract(redacted)
+    ) == migration._fingerprint(migration._execution_source_contract(live))
+
+
 @pytest.mark.parametrize(
     "stderr",
     [
@@ -1803,7 +1828,7 @@ def test_quota_preflight_does_not_count_preserved_worker_groups(
     ) in lines
 
 
-def test_worker_safe_surge_quota_preflight_counts_active_wave(
+def test_safe_surge_quota_preflight_counts_service_and_worker_active_groups(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     snapshot = _snapshot_with_compute_source()
@@ -1824,7 +1849,7 @@ def test_worker_safe_surge_quota_preflight_counts_active_wave(
 
     monkeypatch.setattr(migration, "estimate_mk8s_quota_requirements", _record_quota_inputs)
 
-    requirements, gaps, lines = migration._worker_surge_node_group_quota_requirements(
+    requirements, gaps, lines = migration._safe_surge_node_group_quota_requirements(
         payload=payload,
         target_ref="external-cluster",
         source_report=_source_report(snapshot),
@@ -1835,11 +1860,17 @@ def test_worker_safe_surge_quota_preflight_counts_active_wave(
 
     assert requirements == []
     assert gaps == []
-    assert recorded_inputs
-    planned_groups = recorded_inputs[0]["node_groups"]
-    assert isinstance(planned_groups, dict)
-    assert set(planned_groups) == {"external-cluster-gpu-pool-safe-surge"}
-    assert planned_groups["external-cluster-gpu-pool-safe-surge"]["node_count"] == 1
+    assert len(recorded_inputs) == 2
+    service_planned_groups = recorded_inputs[0]["node_groups"]
+    assert isinstance(service_planned_groups, dict)
+    assert set(service_planned_groups) == {"external-cluster-cpu-pool-safe-surge"}
+    assert service_planned_groups["external-cluster-cpu-pool-safe-surge"]["node_count"] == 1
+    worker_planned_groups = recorded_inputs[1]["node_groups"]
+    assert isinstance(worker_planned_groups, dict)
+    assert set(worker_planned_groups) == {"external-cluster-gpu-pool-safe-surge"}
+    assert worker_planned_groups["external-cluster-gpu-pool-safe-surge"]["node_count"] == 1
+    assert any("safe-surge service group cpu-pool" in line for line in lines)
+    assert any("safe-surge worker wave 1" in line for line in lines)
     assert any("requires 1 temporary surge node(s) per group" in line for line in lines)
 
 
@@ -1866,8 +1897,8 @@ def test_execute_worker_safe_surge_quota_shortage_blocks_before_mutation(
     runner = _FakeCommandRunner()
     recorded_inputs: list[dict[str, Any]] = []
 
-    def _estimate_worker_safe_surge(**kwargs: object):
-        if kwargs.get("context") != "external soperator upgrade worker safe-surge quota preflight":
+    def _estimate_safe_surge(**kwargs: object):
+        if kwargs.get("context") != "external soperator upgrade safe-surge quota preflight":
             return (), ()
         inputs = kwargs.get("inputs")
         assert isinstance(inputs, dict)
@@ -1875,19 +1906,19 @@ def test_execute_worker_safe_surge_quota_shortage_blocks_before_mutation(
         return (
             QuotaRequirement(
                 component_id="mk8s",
-                instance_id="external-cluster-soperator-worker-surge-wave-1",
-                component_label="external worker safe-surge",
+                instance_id="external-cluster-soperator-safe-surge-worker-wave-1",
+                component_label="external safe-surge",
                 quota_name="compute.instance.count",
                 region="eu-north1",
                 required=1,
-                reason="safe-surge worker wave",
+                reason="safe-surge active group",
             ),
         ), ()
 
-    def _insufficient_worker_safe_surge(**kwargs: object) -> QuotaReport:
+    def _insufficient_safe_surge(**kwargs: object) -> QuotaReport:
         requirements = tuple(kwargs.get("requirements") or ())
         assert any(
-            isinstance(item, QuotaRequirement) and item.reason == "safe-surge worker wave"
+            isinstance(item, QuotaRequirement) and item.reason == "safe-surge active group"
             for item in requirements
         )
         return QuotaReport(
@@ -1898,12 +1929,12 @@ def test_execute_worker_safe_surge_quota_shortage_blocks_before_mutation(
             checks=(
                 QuotaCheck(
                     component_id="mk8s",
-                    instance_id="external-cluster-soperator-worker-surge-wave-1",
-                    component_label="external worker safe-surge",
+                    instance_id="external-cluster-soperator-safe-surge-worker-wave-1",
+                    component_label="external safe-surge",
                     quota_name="compute.instance.count",
                     region="eu-north1",
                     required=1,
-                    reason="safe-surge worker wave",
+                    reason="safe-surge active group",
                     unit="1",
                     available=0,
                     sufficient=False,
@@ -1917,11 +1948,11 @@ def test_execute_worker_safe_surge_quota_shortage_blocks_before_mutation(
             ),
         )
 
-    monkeypatch.setattr(migration, "estimate_mk8s_quota_requirements", _estimate_worker_safe_surge)
+    monkeypatch.setattr(migration, "estimate_mk8s_quota_requirements", _estimate_safe_surge)
     monkeypatch.setattr(
         migration,
         "assess_live_quota_requirements",
-        _insufficient_worker_safe_surge,
+        _insufficient_safe_surge,
     )
 
     with pytest.raises(RuntimeError, match="quota preflight failed before any cluster mutation"):
@@ -2087,7 +2118,7 @@ def test_external_node_template_completion_recheck_rejects_k8s_downgrade_target(
     runner = _FakeCommandRunner(
         cluster={
             "metadata": {"id": "cluster-123", "name": "external-cluster"},
-            "spec": {"control_plane": {"version": "1.33"}},
+            "spec": {"control_plane": {"version": "1.34"}},
         }
     )
 
@@ -2273,7 +2304,8 @@ def test_zero_surge_full_update_file_clears_cpu_gpu_settings() -> None:
 
 
 def test_execute_records_approval_and_runs_checkpointed_mutators(tmp_path: Path) -> None:
-    source_report = _source_report()
+    snapshot = _snapshot()
+    source_report = _source_report(snapshot)
     runner = _FakeCommandRunner()
     result = execute_soperator_migration(
         config_path=tmp_path / "config.yaml",
@@ -2281,7 +2313,7 @@ def test_execute_records_approval_and_runs_checkpointed_mutators(tmp_path: Path)
         payload=_payload(),
         source_report=source_report,
         backup_metadata=_backup_metadata(),
-        snapshot_collector=lambda *, kube_context: _snapshot(),
+        snapshot_collector=lambda *, kube_context: snapshot,
         approved=True,
         command_runner=runner,
         worker_rollout_strategy="safe-surge",
@@ -2328,6 +2360,33 @@ def test_execute_records_approval_and_runs_checkpointed_mutators(tmp_path: Path)
     assert {
         item["id"] for item in checkpoint["phase_state"]["target-gpu-stack-remediation"]["charts"]
     } == {"nvidia-gpu-operator", "nvidia-network-operator"}
+    for phase_id in result.completed_phases:
+        if phase_id in {"discovery-and-plan", "customer-approval"}:
+            continue
+        verification = checkpoint["phase_state"][phase_id]["fast_verification"]
+        assert verification["status"] == "passed"
+        assert verification["passed"] is True
+        assert verification["verified_at"]
+    assert "execute-phase-fast-verification-passed" in {
+        event["event"] for event in checkpoint["events"]
+    }
+    reports_dir = tmp_path / "generated" / "reports"
+    migrate_report = (reports_dir / "ext-soperator-upgrade-report.md").read_text(encoding="utf-8")
+    upgrade_json_report = json.loads(
+        (reports_dir / "ext-soperator-upgrade-report.json").read_text(encoding="utf-8")
+    )
+    assert "## Stage Fast Verification" in migrate_report
+    assert "`target-gpu-stack-remediation`: `PASS`" in migrate_report
+    stage_verification = {
+        item["phase_id"]: item for item in upgrade_json_report["stage_verification"]
+    }
+    assert stage_verification["external-node-template-upgrade"]["status"] == "passed"
+    assert stage_verification["target-gpu-stack-remediation"]["passed"] is True
+    assert stage_verification["post-upgrade-mk8s-check"]["status"] == "passed"
+    assert stage_verification["post-upgrade-helm-check"]["status"] == "passed"
+    phase_reports = {item["id"]: item for item in upgrade_json_report["phases"]}
+    assert phase_reports["target-gpu-stack-remediation"]["fast_verification"]["status"] == "passed"
+    assert phase_reports["post-upgrade-helm-check"]["fast_verification"]["status"] == "passed"
 
     runner.calls.clear()
     resumed = execute_soperator_migration(
@@ -2362,6 +2421,214 @@ def test_execute_records_approval_and_runs_checkpointed_mutators(tmp_path: Path)
     assert checkpoint["completed_phases"] == list(result.completed_phases)
     assert checkpoint["pending_phase"] == "none"
     assert checkpoint["worker_node_groups"] == ["gpu-pool"]
+
+
+def test_execute_fast_verification_failure_keeps_same_phase_pending(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = _snapshot()
+    source_report = _source_report(snapshot)
+    monkeypatch.setattr(
+        migration,
+        "_target_gpu_stack_remediation_satisfied",
+        lambda **_kwargs: False,
+    )
+
+    result = execute_soperator_migration(
+        config_path=tmp_path / "config.yaml",
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=source_report,
+        backup_metadata=_backup_metadata("fast-verification-pending"),
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        approved=True,
+        command_runner=_FakeCommandRunner(),
+        worker_rollout_strategy="safe-surge",
+    )
+
+    assert result.pending_phase == "target-gpu-stack-remediation"
+    assert "fast stage verification failed after target-gpu-stack-remediation" in (
+        result.pending_reason
+    )
+    assert result.mutation_performed is True
+    assert "target-gpu-stack-remediation" not in result.completed_phases
+    checkpoint_path = soperator_migration_checkpoint_path(
+        tmp_path / "config.yaml",
+        "external-cluster",
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["pending_phase"] == "target-gpu-stack-remediation"
+    verification = checkpoint["phase_state"]["target-gpu-stack-remediation"]["fast_verification"]
+    assert verification["status"] == "failed"
+    assert verification["passed"] is False
+    assert (
+        "target GPU stack Helm releases or post-render patches are not ready"
+        in (verification["summary"])
+    )
+    assert (
+        checkpoint["phase_state"]["external-node-template-upgrade"]["fast_verification"]["status"]
+        == "passed"
+    )
+    assert "execute-phase-fast-verification-failed" in {
+        event["event"] for event in checkpoint["events"]
+    }
+    reports_dir = tmp_path / "generated" / "reports"
+    migrate_report = (reports_dir / "ext-soperator-upgrade-report.md").read_text(encoding="utf-8")
+    upgrade_json_report = json.loads(
+        (reports_dir / "ext-soperator-upgrade-report.json").read_text(encoding="utf-8")
+    )
+    assert "`target-gpu-stack-remediation`: `FAIL`" in migrate_report
+    assert upgrade_json_report["pending_phase"] == "target-gpu-stack-remediation"
+    stage_verification = {
+        item["phase_id"]: item for item in upgrade_json_report["stage_verification"]
+    }
+    assert stage_verification["target-gpu-stack-remediation"]["status"] == "failed"
+    assert stage_verification["rolling-compute-migration"]["status"] == "not_run"
+
+
+def test_execute_final_helm_check_failure_writes_pending_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_report = _source_report(_snapshot())
+    original_helm_verifier = migration._verify_completed_soperator_migration_helm_state
+    verifier_calls = 0
+
+    def _fail_final_helm_check(**kwargs: Any) -> list[str]:
+        nonlocal verifier_calls
+        verifier_calls += 1
+        if verifier_calls >= 2:
+            raise RuntimeError("target Helm release is not ready")
+        return original_helm_verifier(**kwargs)
+
+    monkeypatch.setattr(
+        migration,
+        "_verify_completed_soperator_migration_helm_state",
+        _fail_final_helm_check,
+    )
+
+    result = execute_soperator_migration(
+        config_path=tmp_path / "config.yaml",
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=source_report,
+        backup_metadata=_backup_metadata("final-helm-pending"),
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        approved=True,
+        command_runner=_FakeCommandRunner(),
+        worker_rollout_strategy="safe-surge",
+    )
+
+    assert result.pending_phase == "post-upgrade-helm-check"
+    assert result.pending_reason == "target Helm release is not ready"
+    checkpoint_path = soperator_migration_checkpoint_path(
+        tmp_path / "config.yaml",
+        "external-cluster",
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["pending_phase"] == "post-upgrade-helm-check"
+    assert checkpoint["phase_state"]["post-upgrade-mk8s-check"]["fast_verification"][
+        "status"
+    ] == "passed"
+    helm_verification = checkpoint["phase_state"]["post-upgrade-helm-check"][
+        "fast_verification"
+    ]
+    assert helm_verification["status"] == "failed"
+    assert helm_verification["passed"] is False
+    assert "execute-phase-fast-verification-failed" in {
+        event["event"] for event in checkpoint["events"]
+    }
+    reports_dir = tmp_path / "generated" / "reports"
+    upgrade_json_report = json.loads(
+        (reports_dir / "ext-soperator-upgrade-report.json").read_text(encoding="utf-8")
+    )
+    stage_verification = {
+        item["phase_id"]: item for item in upgrade_json_report["stage_verification"]
+    }
+    assert stage_verification["post-upgrade-mk8s-check"]["status"] == "passed"
+    assert stage_verification["post-upgrade-helm-check"]["status"] == "failed"
+    assert upgrade_json_report["pending_phase"] == "post-upgrade-helm-check"
+    migrate_report = (reports_dir / "ext-soperator-upgrade-report.md").read_text(
+        encoding="utf-8"
+    )
+    assert "`post-upgrade-helm-check`: `FAIL`" in migrate_report
+
+
+def test_execute_final_mk8s_check_failure_writes_pending_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_report = _source_report(_snapshot())
+    original_mk8s_verifier = migration._verify_completed_soperator_migration_mk8s_state
+    verifier_calls = 0
+    helm_calls = 0
+
+    def _fail_final_mk8s_check(**kwargs: Any) -> list[str]:
+        nonlocal verifier_calls
+        verifier_calls += 1
+        if verifier_calls >= 2:
+            raise RuntimeError("target MK8s node-template state is not ready")
+        return original_mk8s_verifier(**kwargs)
+
+    def _record_helm_check(**_kwargs: Any) -> list[str]:
+        nonlocal helm_calls
+        helm_calls += 1
+        return ["Verified target Soperator Helm chart readiness."]
+
+    monkeypatch.setattr(
+        migration,
+        "_verify_completed_soperator_migration_mk8s_state",
+        _fail_final_mk8s_check,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_verify_completed_soperator_migration_helm_state",
+        _record_helm_check,
+    )
+
+    result = execute_soperator_migration(
+        config_path=tmp_path / "config.yaml",
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=source_report,
+        backup_metadata=_backup_metadata("final-mk8s-pending"),
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        approved=True,
+        command_runner=_FakeCommandRunner(),
+        worker_rollout_strategy="safe-surge",
+    )
+
+    assert result.pending_phase == "post-upgrade-mk8s-check"
+    assert result.pending_reason == "target MK8s node-template state is not ready"
+    assert helm_calls == 1
+    checkpoint_path = soperator_migration_checkpoint_path(
+        tmp_path / "config.yaml",
+        "external-cluster",
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["pending_phase"] == "post-upgrade-mk8s-check"
+    mk8s_verification = checkpoint["phase_state"]["post-upgrade-mk8s-check"][
+        "fast_verification"
+    ]
+    assert mk8s_verification["status"] == "failed"
+    assert mk8s_verification["passed"] is False
+    assert "post-upgrade-helm-check" not in checkpoint["phase_state"]
+    reports_dir = tmp_path / "generated" / "reports"
+    upgrade_json_report = json.loads(
+        (reports_dir / "ext-soperator-upgrade-report.json").read_text(encoding="utf-8")
+    )
+    stage_verification = {
+        item["phase_id"]: item for item in upgrade_json_report["stage_verification"]
+    }
+    assert stage_verification["post-upgrade-mk8s-check"]["status"] == "failed"
+    assert stage_verification["post-upgrade-helm-check"]["status"] == "not_run"
+    assert upgrade_json_report["pending_phase"] == "post-upgrade-mk8s-check"
+    migrate_report = (reports_dir / "ext-soperator-upgrade-report.md").read_text(
+        encoding="utf-8"
+    )
+    assert "`post-upgrade-mk8s-check`: `FAIL`" in migrate_report
+    assert "`post-upgrade-helm-check`: `PENDING`" in migrate_report
 
 
 def test_execute_preserves_original_backup_metadata_after_mutating_resume(
@@ -2419,7 +2686,8 @@ def test_execute_clears_stale_pending_phase_after_successful_resume(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source_report = _source_report()
+    snapshot = _snapshot()
+    source_report = _source_report(snapshot)
     runner = _FakeCommandRunner()
     validation_calls = 0
     retire_pending_observations: list[tuple[str, str]] = []
@@ -2439,11 +2707,24 @@ def test_execute_clears_stale_pending_phase_after_successful_resume(
             {},
         )
         phase["validation_contract_revision"] = migration._VALIDATION_HOLD_REVISION
+        phase["shared_safety_verification"] = {
+            "status": "passed",
+            "passed": True,
+            "checks": [],
+        }
+        phase["soperator_cluster_validation_count"] = 1
+        phase["soperator_cluster_validation_reports"] = [
+            "generated/reports/deploy-smoke-report-external-cluster.json"
+        ]
+        phase["mk8s_gpu_validation_count"] = 0
+        phase["mk8s_gpu_validation_reports"] = []
         return True, ["validation recovered"]
 
     def _observing_retire(**kwargs: Any) -> tuple[bool, list[str]]:
         checkpoint = kwargs["checkpoint"]
         assert isinstance(checkpoint, dict)
+        phase = checkpoint.setdefault("phase_state", {}).setdefault("retire-old-resources", {})
+        phase["skipped_reason"] = "test retire skipped"
         retire_pending_observations.append(
             (
                 str(checkpoint.get("pending_phase", "") or ""),
@@ -2481,7 +2762,7 @@ def test_execute_clears_stale_pending_phase_after_successful_resume(
         target_ref="external-cluster",
         payload=_payload(),
         source_report=source_report,
-        snapshot_collector=lambda *, kube_context: _snapshot(),
+        snapshot_collector=lambda *, kube_context: snapshot,
         approved=True,
         command_runner=runner,
         worker_rollout_strategy="safe-surge",
@@ -3430,7 +3711,9 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
         (reports_dir / "ext-soperator-upgrade-report.json").read_text(encoding="utf-8")
     )
     assert "## Upgrade Steps" in migrate_report
+    assert "## Stage Fast Verification" in migrate_report
     assert "- Upgrade performed: `yes`" in migrate_report
+    assert "`validation-and-rollback-hold`: `PASS`" in migrate_report
     assert "Soperator and Slurm smoke" in migrate_report
     assert "### MK8s GPU" in migrate_report
     assert "## Shared Upgrade Safety" in migrate_report
@@ -3479,6 +3762,9 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
     assert upgrade_json_report["post_upgrade_verification"]["status"] == "passed"
     assert upgrade_json_report["protected_customer_state"]["before_hash"]
     assert upgrade_json_report["fast_smoke"]["status"] == "passed"
+    assert {item["phase_id"]: item["status"] for item in upgrade_json_report["stage_verification"]}[
+        "validation-and-rollback-hold"
+    ] == "passed"
     assert "validation-and-rollback-hold" in {
         phase["id"] for phase in upgrade_json_report["phases"]
     }
@@ -3554,7 +3840,7 @@ def test_external_node_template_quiesces_one_node_service_roles(
     assert isinstance(onboarding, dict)
     onboarding["actions"] = ["upgrade-external-node-template"]
     onboarding["node_template_upgrade"] = {
-        "target_k8s_version": "1.33",
+        "target_k8s_version": "1.34",
         "target_os": "ubuntu24.04",
         "target_gpu_stack_preset": "cuda13.0",
     }
@@ -3714,15 +4000,28 @@ def test_execute_upgrades_external_node_template_with_safe_surge_strategy(
     tmp_path: Path,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    source_report = _source_report()
-    runner = _FakeCommandRunner()
+    snapshot = _snapshot()
+    snapshot["node_groups"]["login"] = {
+        "gpu": False,
+        "node_count": 1,
+        "labels": {
+            "nebius.com/node-group": "login",
+            "nebius.com/node-group-id": "nodegroup-login",
+            "slurm.nebius.ai/nodeset": "login",
+        },
+        "nodes": ["login-node-a"],
+    }
+    source_report = _source_report(snapshot)
+    runner = _FakeCommandRunner(
+        existing_node_groups=[_legacy_service_node_group("login")],
+    )
 
     result = execute_soperator_migration(
         config_path=config_path,
         target_ref="external-cluster",
         payload=_payload(),
         source_report=source_report,
-        snapshot_collector=lambda *, kube_context: _snapshot(),
+        snapshot_collector=lambda *, kube_context: snapshot,
         approved=True,
         command_runner=runner,
         worker_rollout_strategy="safe-surge",
@@ -3734,7 +4033,7 @@ def test_execute_upgrades_external_node_template_with_safe_surge_strategy(
     ]
     assert [
         command[command.index("--control-plane-version") + 1] for command in cluster_updates
-    ] == ["1.32", "1.33"]
+    ] == ["1.32", "1.33", "1.34"]
     node_template_updates = [
         call[0]
         for call in runner.calls
@@ -3744,7 +4043,7 @@ def test_execute_upgrades_external_node_template_with_safe_surge_strategy(
     ]
     assert node_template_updates
     update_command = node_template_updates[0]
-    assert update_command[update_command.index("--version") + 1] == "1.33"
+    assert update_command[update_command.index("--version") + 1] == "1.34"
     assert (
         update_command[update_command.index("--template-gpu-settings-drivers-preset") + 1]
         == "cuda13.0"
@@ -3770,6 +4069,33 @@ def test_execute_upgrades_external_node_template_with_safe_surge_strategy(
     assert restore_command[restore_command.index("--strategy-max-surge-count") + 1] == "1"
     assert restore_command[restore_command.index("--strategy-max-unavailable-count") + 1] == "0"
     assert restore_command[restore_command.index("--strategy-drain-timeout") + 1] == "0s"
+    login_update_commands = [
+        call[0]
+        for call in runner.calls
+        if call[0][:4] == ("nebius", "mk8s", "node-group", "update")
+        and call[0][4] == "nodegroup-login"
+        and "--version" in call[0]
+    ]
+    assert login_update_commands
+    login_update_command = login_update_commands[0]
+    assert login_update_command[login_update_command.index("--strategy-max-surge-count") + 1] == "1"
+    assert (
+        login_update_command[login_update_command.index("--strategy-max-unavailable-count") + 1]
+        == "0"
+    )
+    assert login_update_command[login_update_command.index("--strategy-drain-timeout") + 1] == "30m"
+    commands = [call[0] for call in runner.calls]
+    assert (
+        "kubectl",
+        "--context",
+        "external-context",
+        "-n",
+        "soperator",
+        "scale",
+        "statefulsets.apps.kruise.io/login",
+        "--replicas",
+        "0",
+    ) not in commands
 
     checkpoint = json.loads(
         soperator_migration_checkpoint_path(config_path, "external-cluster").read_text(
@@ -3786,7 +4112,8 @@ def test_execute_upgrades_external_node_template_with_safe_surge_strategy(
             "drain_timeout": "30m",
         },
     }
-    assert phase["control_plane"]["hops"]["1.33"]["status"] == "completed"
+    assert phase["control_plane"]["hops"]["1.34"]["status"] == "completed"
+    assert phase["node_groups"]["login"]["strategy"] == "safe-surge"
     assert phase["node_groups"]["gpu-pool"]["strategy"] == "safe-surge"
     assert phase["node_groups"]["gpu-pool"]["strategy_restored"] is True
     assert phase["worker_waves"] == [["gpu-pool"]]
@@ -3888,7 +4215,7 @@ def test_execute_external_node_template_parallel_worker_failure_checkpoints_afte
     assert isinstance(onboarding, dict)
     onboarding["actions"] = ["upgrade-external-node-template"]
     onboarding["node_template_upgrade"] = {
-        "target_k8s_version": "1.33",
+        "target_k8s_version": "1.34",
         "target_os": "ubuntu24.04",
         "target_gpu_stack_preset": "cuda13.0",
         "rollout": {"strategy": "safe-surge", "worker_wave_percent": 100},
@@ -4125,7 +4452,7 @@ def test_execute_external_node_template_resume_waiting_rollout_without_duplicate
     for node_group in runner.existing_node_groups:
         metadata = node_group.get("metadata")
         if isinstance(metadata, dict) and metadata.get("id") == "nodegroup-gpu-pool":
-            node_group["status"] = _ready_node_group_status(version="1.33", nodes=2)
+            node_group["status"] = _ready_node_group_status(version="1.34", nodes=2)
 
     resumed = execute_soperator_migration(
         config_path=config_path,
@@ -4215,7 +4542,7 @@ def test_execute_external_node_template_resumes_failed_timeout_from_live_state(
             continue
         spec = node_group.setdefault("spec", {})
         assert isinstance(spec, dict)
-        spec["version"] = "1.33"
+        spec["version"] = "1.34"
         template = spec.setdefault("template", {})
         assert isinstance(template, dict)
         template["os"] = "ubuntu24.04"
@@ -4227,7 +4554,7 @@ def test_execute_external_node_template_resumes_failed_timeout_from_live_state(
             "max_unavailable": {"count": 0},
             "drain_timeout": "30m",
         }
-        node_group["status"] = _ready_node_group_status(version="1.33", nodes=2)
+        node_group["status"] = _ready_node_group_status(version="1.34", nodes=2)
 
     resumed = execute_soperator_migration(
         config_path=config_path,
@@ -4632,6 +4959,204 @@ def _external_upgrade_slurm_runner(
     return runner
 
 
+def test_external_upgrade_slurm_jobs_translates_kubernetes_node_names() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {"items": [{"metadata": {"name": "login-0"}, "status": {"phase": "Running"}}]}
+                ),
+                "",
+            )
+        if command[8:] == ("scontrol", "show", "nodes"):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "\n".join(
+                    (
+                        "NodeName=worker-3 Arch=x86_64 CoresPerSocket=8",
+                        "   NodeAddr=10.1.18.140 NodeHostName=worker-3 Version=24.11.6",
+                        "   InstanceId=computeinstance-e00e8ctxvehgkyged0",
+                    )
+                ),
+                "",
+            )
+        if command[8:10] == ("squeue", "-h"):
+            return SoperatorMigrationCommandResult(command, 0, "", "")
+        return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
+
+    jobs = migration._external_upgrade_slurm_jobs(
+        command_runner=runner,
+        kube_context="external-context",
+        node_names=("computeinstance-e00e8ctxvehgkyged0",),
+    )
+
+    assert jobs == ()
+    squeue_calls = [call for call in calls if call[8:10] == ("squeue", "-h")]
+    assert len(squeue_calls) == 1
+    assert squeue_calls[0][-2:] == ("-w", "worker-3")
+
+
+def test_external_upgrade_slurm_jobs_falls_back_to_controller_for_login_config_failure() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {"items": [{"metadata": {"name": "login-0"}, "status": {"phase": "Running"}}]}
+                ),
+                "",
+            )
+        if command[6:9] == ("login-0", "--", "scontrol"):
+            return SoperatorMigrationCommandResult(
+                command,
+                1,
+                "",
+                "scontrol: fatal: Could not establish a configuration source",
+            )
+        if command[6:11] == ("controller-0", "-c", "slurmctld", "--", "scontrol"):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "\n".join(
+                    (
+                        "NodeName=worker-0 Arch=x86_64 CoresPerSocket=8",
+                        "   NodeAddr=10.1.18.140 NodeHostName=worker-0 Version=24.11.6",
+                        "   InstanceId=computeinstance-e00worker0",
+                    )
+                ),
+                "",
+            )
+        if command[6:9] == ("login-0", "--", "squeue"):
+            return SoperatorMigrationCommandResult(
+                command,
+                1,
+                "",
+                "squeue: fatal: Could not establish a configuration source",
+            )
+        if command[6:11] == ("controller-0", "-c", "slurmctld", "--", "squeue"):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "42|user|RUNNING|main|worker-0|00:01|00:30|00:29|long-job\n",
+                "",
+            )
+        return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
+
+    jobs = migration._external_upgrade_slurm_jobs(
+        command_runner=runner,
+        kube_context="external-context",
+        node_names=("computeinstance-e00worker0",),
+    )
+
+    assert [job.job_id for job in jobs] == ["42"]
+    assert [job.nodes for job in jobs] == ["worker-0"]
+    assert any(call[6:11] == ("controller-0", "-c", "slurmctld", "--", "squeue") for call in calls)
+
+
+def test_external_upgrade_slurm_jobs_retries_unfiltered_for_invalid_node_name() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {"items": [{"metadata": {"name": "login-0"}, "status": {"phase": "Running"}}]}
+                ),
+                "",
+            )
+        if command[8:] == ("scontrol", "show", "nodes"):
+            return SoperatorMigrationCommandResult(command, 1, "", "slurmctld unavailable")
+        if command[8:10] == ("squeue", "-h") and "-w" in command:
+            return SoperatorMigrationCommandResult(
+                command, 1, "", "squeue: error: Invalid node name computeinstance-1"
+            )
+        if command[8:10] == ("squeue", "-h"):
+            return SoperatorMigrationCommandResult(command, 0, "", "")
+        return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
+
+    jobs = migration._external_upgrade_slurm_jobs(
+        command_runner=runner,
+        kube_context="external-context",
+        node_names=("computeinstance-1",),
+    )
+
+    assert jobs == ()
+    squeue_calls = [call for call in calls if call[8:10] == ("squeue", "-h")]
+    assert len(squeue_calls) == 2
+    assert squeue_calls[0][-2:] == ("-w", "computeinstance-1")
+    assert "-w" not in squeue_calls[1]
+
+
 def test_external_upgrade_cancel_selected_policy_cancels_jobs() -> None:
     calls: list[tuple[str, ...]] = []
     queue_outputs = [
@@ -4859,7 +5384,9 @@ def test_external_upgrade_requeue_hold_selected_policy_holds_jobs() -> None:
         refresh_interval_seconds=1,
     )
 
-    assert lines == ["Slurm job preflight: cleared blocking jobs with policy requeue-hold-selected."]
+    assert lines == [
+        "Slurm job preflight: cleared blocking jobs with policy requeue-hold-selected."
+    ]
     assert any(call[8:] == ("scontrol", "requeuehold", "42") for call in calls)
 
 
@@ -5024,7 +5551,7 @@ def test_completed_migration_mk8s_check_fails_when_live_node_template_drifts() -
     runner = _FakeCommandRunner(
         cluster={
             "metadata": {"id": "cluster-123", "name": "external-cluster"},
-            "spec": {"control_plane": {"version": "1.33"}},
+            "spec": {"control_plane": {"version": "1.34"}},
         },
         existing_node_groups=[
             {
@@ -5034,7 +5561,7 @@ def test_completed_migration_mk8s_check_fails_when_live_node_template_drifts() -
                     "parent_id": "cluster-123",
                 },
                 "spec": {
-                    "version": "1.33",
+                    "version": "1.34",
                     "template": {
                         "resources": {
                             "platform": "gpu-h100-sxm",
@@ -5064,7 +5591,7 @@ def test_completed_migration_mk8s_check_fails_when_status_is_missing() -> None:
     runner = _FakeCommandRunner(
         cluster={
             "metadata": {"id": "cluster-123", "name": "external-cluster"},
-            "spec": {"control_plane": {"version": "1.33"}},
+            "spec": {"control_plane": {"version": "1.34"}},
         },
         existing_node_groups=[
             {
@@ -5074,7 +5601,7 @@ def test_completed_migration_mk8s_check_fails_when_status_is_missing() -> None:
                     "parent_id": "cluster-123",
                 },
                 "spec": {
-                    "version": "1.33",
+                    "version": "1.34",
                     "template": {
                         "resources": {
                             "platform": "gpu-h100-sxm",
@@ -5114,7 +5641,7 @@ def test_completed_migration_mk8s_check_fails_when_status_counts_are_missing() -
                     "parent_id": "cluster-123",
                 },
                 "spec": {
-                    "version": "1.33",
+                    "version": "1.34",
                     "template": {
                         "resources": {
                             "platform": "gpu-h100-sxm",
@@ -5124,7 +5651,7 @@ def test_completed_migration_mk8s_check_fails_when_status_counts_are_missing() -
                         "os": {"name": "ubuntu24.04"},
                     },
                 },
-                "status": {"version": "1.33"},
+                "status": {"version": "1.34"},
             }
         ],
     )
@@ -5167,7 +5694,7 @@ def test_execute_rechecks_live_control_plane_before_skipping_completed_hop(
     assert isinstance(onboarding, dict)
     onboarding["actions"] = ["upgrade-external-node-template"]
     onboarding["node_template_upgrade"] = {
-        "target_k8s_version": "1.33",
+        "target_k8s_version": "1.34",
         "target_os": "ubuntu24.04",
         "target_gpu_stack_preset": "cuda13.0",
     }
@@ -5224,7 +5751,7 @@ def test_execute_rechecks_live_control_plane_before_skipping_completed_hop(
     ]
     assert [
         command[command.index("--control-plane-version") + 1] for command in cluster_updates
-    ] == ["1.32", "1.33"]
+    ] == ["1.32", "1.33", "1.34"]
 
 
 def test_execute_auto_selects_console_worker_node_group_names_from_live_inventory(
@@ -5391,7 +5918,10 @@ def test_execute_auto_selects_console_worker_node_group_names_from_live_inventor
                     "namespace": "soperator",
                     "annotations": {"meta.helm.sh/release-name": "soperator-nodesets"},
                 },
-                "spec": {"replicas": 2},
+                "spec": {
+                    "replicas": 2,
+                    "nodeConfig": {"dynamic": "", "static": "CPUs=15"},
+                },
                 "status": {"phase": "Ready", "replicas": 2},
             },
             "worker-gpu": {
@@ -5400,7 +5930,16 @@ def test_execute_auto_selects_console_worker_node_group_names_from_live_inventor
                     "namespace": "soperator",
                     "annotations": {"meta.helm.sh/release-name": "soperator-nodesets"},
                 },
-                "spec": {"replicas": 2},
+                "spec": {
+                    "replicas": 2,
+                    "nodeConfig": {
+                        "dynamic": "",
+                        "static": (
+                            "CPUs=128 Boards=1 SocketsPerBoard=2 CoresPerSocket=32 "
+                            "ThreadsPerCore=2 Gres=gpu:8"
+                        ),
+                    },
+                },
                 "status": {"phase": "Ready", "replicas": 2},
             },
         },
@@ -5728,6 +6267,51 @@ def test_source_worker_nodeset_values_defaults_worker_proc_mount() -> None:
 
     assert values[0]["slurmd"]["security"]["procMount"] == "Default"
     assert values[0]["munge"]["security"]["procMount"] == "Default"
+
+
+def test_source_worker_nodeset_values_uses_single_mismatched_worker_group_capacity() -> None:
+    nodeset = _source_worker_nodeset("worker", gpu=False)
+    spec = nodeset["spec"]
+    assert isinstance(spec, dict)
+    node_config = spec["nodeConfig"]
+    assert isinstance(node_config, dict)
+    node_config["static"] = (
+        "Boards=1 SocketsPerBoard=1 CoresPerSocket=32 ThreadsPerCore=1 Gres=gpu:1 Port=6818"
+    )
+    spec["customInitContainers"] = [
+        {"name": "cxcli-gpu-driver-jail", "image": "chart-owned"},
+        {"name": "site-init", "image": "site/custom"},
+    ]
+    snapshot = _snapshot()
+    snapshot["soperator_resources"] = [nodeset]
+    snapshot["node_groups"] = {
+        "worker-0-0": {
+            "gpu": True,
+            "node_count": 4,
+            "labels": {
+                "slurm.nebius.ai/nodeset": "worker-0",
+                "nebius.com/node-group-id": "nodegroup-worker-0-0",
+            },
+            "allocatable": {"nvidia.com/gpu": "1"},
+            "nodes": ["node-a"],
+        }
+    }
+    live_snapshot = {
+        "nodes": [
+            {
+                "metadata": {"name": "node-a"},
+                "status": {"capacity": {"cpu": "16"}},
+            }
+        ]
+    }
+
+    values = migration._source_worker_nodeset_values(  # noqa: SLF001
+        _source_report(snapshot),
+        live_snapshot=live_snapshot,
+    )
+
+    assert values[0]["nodeConfig"]["static"] == "CPUs=16 Gres=gpu:1"
+    assert values[0]["customInitContainers"] == [{"name": "site-init", "image": "site/custom"}]
 
 
 def test_live_source_slurmcluster_present_treats_timeout_as_absent() -> None:
@@ -6717,7 +7301,7 @@ def test_execute_runs_data_copy_jobs_when_source_storage_exists(tmp_path: Path) 
         )
         and call[0][6].startswith("job/")
     ]
-    assert len(job_status_calls) == 6
+    assert len(job_status_calls) == 9
 
 
 def test_execute_blocks_data_copy_when_target_pvc_is_missing(tmp_path: Path) -> None:
@@ -7216,6 +7800,15 @@ def test_execute_migrates_compute_when_slurm_resources_exist(tmp_path: Path) -> 
         call for call in runner.calls if call[0][:4] == ("nebius", "mk8s", "node-group", "create")
     ]
     assert len(create_calls) == 4
+    create_payloads = [json.loads(call[0][4]) for call in create_calls]
+    accounting_payload = next(
+        payload
+        for payload in create_payloads
+        if payload["metadata"]["name"] == "external-cluster-accounting"
+    )
+    accounting_labels = accounting_payload["spec"]["template"]["metadata"]["labels"]
+    assert accounting_labels["slurm.nebius.ai/nodeset"] == "accounting"
+    assert accounting_labels["slurm.nebius.ai/nodeset-name"] == "accounting"
     helm_upgrades = [call for call in runner.calls if call[0][0] == "helm" and "upgrade" in call[0]]
     assert [call[0][5] for call in helm_upgrades[:3]] == [
         "gpu-operator",
@@ -7554,6 +8147,99 @@ def test_rolling_compute_migration_resumes_slurm_after_post_drain_failure(
         )
 
     assert resumed == ["resumed"]
+
+
+def test_reconcile_slurm_worker_runtime_identity_uses_current_worker_pods() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command[:7] == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {
+                                    "name": "worker-0",
+                                    "labels": {"slurm.nebius.ai/worker": "true"},
+                                },
+                                "spec": {"nodeName": "computeinstance-new-0"},
+                                "status": {"phase": "Running"},
+                            },
+                            {
+                                "metadata": {
+                                    "name": "worker-1",
+                                    "labels": {"slurm.nebius.ai/nodeset": "worker"},
+                                },
+                                "spec": {"nodeName": "computeinstance-new-1"},
+                                "status": {"phase": "Running"},
+                            },
+                            {
+                                "metadata": {
+                                    "name": "login-0",
+                                    "labels": {"app.kubernetes.io/component": "login"},
+                                },
+                                "spec": {"nodeName": "computeinstance-login"},
+                                "status": {"phase": "Running"},
+                            },
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:7] == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "exec",
+            "controller-0",
+        ):
+            script = command[-1]
+            assert "expected_instance=computeinstance-new-0" in script
+            assert "expected_instance=computeinstance-new-1" in script
+            assert "computeinstance-login" not in script
+            assert 'scontrol update NodeName="${node}" InstanceId="${expected_instance}"' in script
+            assert 'scontrol update NodeName="${node}" NodeAddr="${expected_addr}"' in script
+            assert "State=RESUME" not in script
+            assert "resume_nodes" not in script
+            assert "state_lower" not in script
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "worker-0 InstanceId computeinstance-old-0 -> computeinstance-new-0\n",
+                "",
+            )
+        return SoperatorMigrationCommandResult(command, 0, "{}", "")
+
+    lines = migration._reconcile_slurm_worker_runtime_identity(
+        command_runner=runner,
+        kube_context="external-context",
+        target_ref="external-cluster",
+    )
+
+    assert lines == ["worker-0 InstanceId computeinstance-old-0 -> computeinstance-new-0"]
+    assert len(calls) == 2
 
 
 def test_execution_lock_replaces_dead_pid_lock(

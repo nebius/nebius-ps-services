@@ -371,9 +371,13 @@ Expected evidence:
 - The injected task-state path is session-scoped under
   `$CODEX_HOME/task-state/<workspace>-<hash>/<session-id>/current.md`.
 - Complex-task guidance tells Codex to read current task state when prior
-  context may matter, then keep checkpoint updates concise.
+  context may matter, consider bounded same-workspace prior task-state
+  candidate paths when matching summaries exist, then keep checkpoint updates
+  concise.
   `current.md` should remain a rolling summary, not an append-only transcript;
   stale or oversized historical details should be summarized before use.
+  Candidate paths are optional stale hints; hooks must not inject historical
+  task-state contents.
   If the optional policy is enabled, it should also mention the discovered
   configured read-only agents by name.
 - Sandbox configuration and any installed PreToolUse write guard allow
@@ -389,6 +393,9 @@ model state. Prefer
 validation because it uses disposable temporary homes. If a hook payload has no
 `session_id`, task state is unavailable and no manual or legacy fallback path is
 created.
+The validator also checks bounded related prior task-state candidate discovery
+for same-workspace files and verifies that unrelated workspace files and
+historical task-state contents are not injected into hook context.
 
 Then run an explicit subagent probe:
 

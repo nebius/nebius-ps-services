@@ -1,0 +1,6 @@
+interface:
+  display_name: "Code Review"
+  short_description: "Strict implementation-quality code review"
+  default_prompt: "Use $code-review to audit the current branch for structural code-quality regressions, missed simplifications, abstraction problems, and maintainability blockers."
+policy:
+  allow_implicit_invocation: true

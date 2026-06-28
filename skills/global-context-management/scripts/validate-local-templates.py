@@ -23,6 +23,7 @@ import tomllib
 ROOT_MARKERS = ("SKILL.md", "assets", "references")
 SENTINEL_MARKER = "PROMPT_CONTENT_SENTINEL_DO_NOT_PERSIST"
 STATE_REUSE_MARKER = "TASK_STATE_REUSE_SENTINEL_KEEP_FOR_AGENT_READ"
+RELATED_STATE_SECRET_MARKER = "RELATED_STATE_SECRET_SENTINEL_DO_NOT_INJECT"
 
 
 def skill_dir() -> Path:
@@ -182,7 +183,7 @@ config_file = "agents/write_worker.toml"
 
 
 def assert_agent_delegation_context(context: str) -> None:
-    if len(context) > 1200:
+    if len(context) > 1700:
         raise AssertionError("delegation context is too large for a lightweight hint")
     expected = ("alpha_mapper", "beta_test_planner", "gamma_risk_reviewer")
     for name in expected:
@@ -368,6 +369,8 @@ def assert_doc_contracts(root: Path) -> None:
     required_skill = (
         "No legacy task-state",
         "it must allow writes under\n`$CODEX_HOME/task-state`",
+        "same-workspace prior task-state candidate paths",
+        "must not inject\nhistorical task-state contents",
         "rolling summary, not an append-only log",
         "close every spawned subagent handle",
         "Completed agents remain open",
@@ -382,11 +385,15 @@ def assert_doc_contracts(root: Path) -> None:
         "`SessionStart` hook injects the path without creating a missing `current.md`",
         "manual or legacy fallback path",
         "hidden state automatically active",
+        "same-workspace prior `current.md` candidate paths",
+        "must not inject historical task-state contents",
+        "current session's advertised `current.md` remains the only write target",
         "continuity note",
         "should not create task-state files or directories",
         "Any local PreToolUse write guard must explicitly allow\n`$CODEX_HOME/task-state` writes",
         "rolling summary, not an append-only transcript",
         "summarize any older task-state file",
+        "bounded\nsame-workspace related task-state candidate discovery",
         "close every spawned subagent handle",
         "Completed agents can remain open",
         "final lifecycle sweep",
@@ -400,6 +407,7 @@ def assert_doc_contracts(root: Path) -> None:
         "Treat runtime activation as unverified",
         "task-state path under",
         "Direct hook unit probes against a live `$CODEX_HOME`",
+        "same-workspace prior `current.md` candidate paths",
         "do not create missing scaffold",
         "No manual or legacy",
         "rolling summary, not an append-only transcript",
@@ -412,6 +420,9 @@ def assert_doc_contracts(root: Path) -> None:
             raise AssertionError(f"config-codex README missing: {needle}")
 
     required_config_reference = (
+        "bounded same-workspace prior task-state\n  candidate paths",
+        "hooks must not inject historical\n  task-state contents",
+        "bounded related prior task-state candidate discovery",
         "close every spawned subagent handle",
         "residual open or running handle",
         "subagent was spawned and closed",
@@ -429,6 +440,8 @@ def assert_doc_contracts(root: Path) -> None:
             raise AssertionError(f"{label} still has stale subagent probe")
 
     required_config_skill = (
+        "Prompt-time hooks may list bounded same-workspace prior task-state candidate",
+        "must not inject historical task-state\n   contents",
         "current.md` as a compact rolling\n   summary, not an append-only transcript",
         "summarize oversized\n   historical task-state files before relying on them",
         "close every spawned helper handle",
@@ -458,6 +471,8 @@ def assert_doc_contracts(root: Path) -> None:
 
     required_prompt_hook_summary = (
         "Keep current.md summarized; replace stale details instead of appending logs.",
+        "Related same-workspace task-state candidates (not loaded):",
+        "verify against current repo/runtime evidence",
         "Final: close completed/unneeded helper handles",
     )
     for needle in required_prompt_hook_summary:
@@ -465,6 +480,7 @@ def assert_doc_contracts(root: Path) -> None:
             raise AssertionError(f"UserPromptSubmit template missing: {needle}")
 
     required_agents_template = (
+        "If hooks suggest same-workspace prior task-state candidate paths",
         "Treat `current.md` as a rolling summary, not an append-only transcript",
         "summarize any\n  oversized historical task-state file",
         "close every spawned subagent handle",
@@ -593,6 +609,85 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
         raise AssertionError("missing-session simple prompt unexpectedly produced context")
     assert_missing_state_path(legacy_state, codex_home)
 
+    related_state_one = expected_state_file(
+        codex_home, resolved_root, "older related task-state"
+    )
+    related_state_one.parent.mkdir(parents=True, exist_ok=True)
+    related_state_one.write_text(
+        (
+            "# Current Codex task state\n\n"
+            "## Objective\n\n"
+            "- Review hooks and task-state discovery.\n"
+            f"- Private detail: {RELATED_STATE_SECRET_MARKER}\n"
+        ),
+        encoding="utf-8",
+    )
+    related_state_two = expected_state_file(
+        codex_home, resolved_root, "second related task-state"
+    )
+    related_state_two.parent.mkdir(parents=True, exist_ok=True)
+    related_state_two.write_text(
+        (
+            "# Current Codex task state\n\n"
+            "## Objective\n\n"
+            "- Review hooks candidate ranking.\n"
+        ),
+        encoding="utf-8",
+    )
+    unrelated_same_workspace = expected_state_file(
+        codex_home, resolved_root, "unrelated same-workspace task-state"
+    )
+    unrelated_same_workspace.parent.mkdir(parents=True, exist_ok=True)
+    unrelated_same_workspace.write_text(
+        "# Current Codex task state\n\n## Objective\n\n- Banana orange kiwi.\n",
+        encoding="utf-8",
+    )
+    continuation_only_state = expected_state_file(
+        codex_home, resolved_root, "continuation words only task-state"
+    )
+    continuation_only_state.parent.mkdir(parents=True, exist_ok=True)
+    continuation_only_state.write_text(
+        (
+            "# Current Codex task state\n\n"
+            "## Objective\n\n"
+            "- Continue previous prior resume same.\n"
+        ),
+        encoding="utf-8",
+    )
+    heading_only_state = expected_state_file(
+        codex_home, resolved_root, "heading only task-state"
+    )
+    heading_only_state.parent.mkdir(parents=True, exist_ok=True)
+    heading_only_state.write_text(
+        (
+            "# Current Codex task state\n\n"
+            "## Workspace\n\n"
+            "## Objective\n\n"
+            "## Constraints\n\n"
+            "## Current plan\n\n"
+            "## Decisions made\n\n"
+            "## Relevant files and symbols\n\n"
+            "## Commands run\n\n"
+            "## Test status\n\n"
+            "## Risks\n\n"
+            "## Next action\n\n"
+            "## Summary hygiene\n"
+        ),
+        encoding="utf-8",
+    )
+    unrelated_workspace = (
+        codex_home
+        / "task-state"
+        / "other-workspace-000000000000"
+        / "related-looking-session"
+        / "current.md"
+    )
+    unrelated_workspace.parent.mkdir(parents=True, exist_ok=True)
+    unrelated_workspace.write_text(
+        "# Current Codex task state\n\n## Objective\n\n- Review hooks elsewhere.\n",
+        encoding="utf-8",
+    )
+
     complex_payload = {
         "session_id": "session one/with spaces",
         "cwd": cwd,
@@ -617,7 +712,17 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
         not in context
     ):
         raise AssertionError("complex prompt missing task-state summary guidance")
-    if len(context) > 900:
+    if "Related same-workspace task-state candidates (not loaded):" not in context:
+        raise AssertionError("complex prompt missing related task-state candidates")
+    for related_state in (related_state_one, related_state_two):
+        if str(related_state) not in context:
+            raise AssertionError(f"related task-state path missing: {related_state}")
+    for unrelated_state in (unrelated_same_workspace, unrelated_workspace):
+        if str(unrelated_state) in context:
+            raise AssertionError(f"unrelated task-state path leaked: {unrelated_state}")
+    if RELATED_STATE_SECRET_MARKER in context:
+        raise AssertionError("hook injected related task-state contents")
+    if len(context) > 1300:
         raise AssertionError("non-delegated UserPromptSubmit context is too large")
     if "sdlc-start" in context:
         raise AssertionError("UserPromptSubmit should not route sdlc-start")
@@ -630,6 +735,41 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
     if SENTINEL_MARKER in context:
         raise AssertionError("hook echoed prompt content into model context")
     assert_no_prompt_leak(state_file)
+
+    continuation_payload = {
+        "session_id": "continuation prompt session",
+        "cwd": cwd,
+        "hook_event_name": "UserPromptSubmit",
+        "turn_id": "turn-continuation",
+        "prompt": "Please continue the previous review.",
+    }
+    continuation_context = extract_context(
+        run_hook(user_script, continuation_payload, env).stdout
+    )
+    if str(related_state_one) not in continuation_context:
+        raise AssertionError("continuation prompt did not include overlapping state")
+    if str(unrelated_same_workspace) in continuation_context:
+        raise AssertionError(
+            "continuation prompt listed unrelated same-workspace task state"
+        )
+    if str(continuation_only_state) in continuation_context:
+        raise AssertionError(
+            "continuation prompt listed task state matched only by continuation words"
+        )
+    heading_only_payload = {
+        "session_id": "heading-only continuation prompt session",
+        "cwd": cwd,
+        "hook_event_name": "UserPromptSubmit",
+        "turn_id": "turn-heading-only-continuation",
+        "prompt": "Please continue the previous plan.",
+    }
+    heading_only_context = extract_context(
+        run_hook(user_script, heading_only_payload, env).stdout
+    )
+    if str(heading_only_state) in heading_only_context:
+        raise AssertionError(
+            "continuation prompt listed task state matched only by template headings"
+        )
 
     fresh_complex_payload = {
         "session_id": "fresh complex session",
@@ -702,6 +842,8 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
     assert_agent_delegation_context(delegated_context)
     if SENTINEL_MARKER in delegated_context:
         raise AssertionError("hook echoed prompt content into delegated model context")
+    if RELATED_STATE_SECRET_MARKER in delegated_context:
+        raise AssertionError("hook injected related task-state contents with delegation")
     assert_no_prompt_leak(state_file)
 
 

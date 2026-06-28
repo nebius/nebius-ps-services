@@ -15,17 +15,27 @@ import nebius_cxcli.cli as cli
 runner = CliRunner()
 
 
-def _command_result(args: list[str], stdout: str = "", returncode: int = 0) -> Any:
+def _command_result(
+    args: list[str],
+    stdout: str = "",
+    returncode: int = 0,
+    stderr: str | None = None,
+) -> Any:
     return cli._SoperatorUpgradeCommandResult(
         args=tuple(args),
         returncode=returncode,
         stdout=stdout,
-        stderr="" if returncode == 0 else "failed",
+        stderr=stderr if stderr is not None else ("" if returncode == 0 else "failed"),
     )
 
 
 def _kubernetes_list(items: list[dict[str, Any]]) -> str:
     return json.dumps({"apiVersion": "v1", "kind": "List", "items": items})
+
+
+def _assert_archive_has_unique_members(archive: tarfile.TarFile) -> None:
+    names = archive.getnames()
+    assert len(names) == len(set(names))
 
 
 def _source_payload() -> dict[str, Any]:
@@ -61,6 +71,48 @@ def _source_payload() -> dict[str, Any]:
             ]
         },
     }
+
+
+def test_soperator_login_command_falls_back_to_controller_for_config_source_failure(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def fake_kubectl(
+        namespace: str,
+        args: list[str],
+        **_kwargs: Any,
+    ) -> cli._SoperatorUpgradeCommandResult:
+        assert namespace == "soperator"
+        command = tuple(args)
+        calls.append(command)
+        if command[:3] == ("exec", "login-0", "--"):
+            return _command_result(
+                list(command),
+                returncode=1,
+                stderr=(
+                    "squeue: error: resolve_ctls_from_dns_srv: res_nsearch error: Unknown host\n"
+                    "squeue: fatal: Could not establish a configuration source"
+                ),
+            )
+        if command[:6] == ("exec", "controller-0", "-c", "slurmctld", "--", "bash"):
+            return _command_result(list(command), "123|user|RUNNING\n")
+        raise AssertionError(f"unexpected kubectl args: {args}")
+
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_kubectl", fake_kubectl)
+
+    result = cli._run_soperator_upgrade_login_command(
+        "soperator",
+        "squeue -h",
+        kube_context="ctx",
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == "123|user|RUNNING\n"
+    assert calls == [
+        ("exec", "login-0", "--", "bash", "-lc", "squeue -h"),
+        ("exec", "controller-0", "-c", "slurmctld", "--", "bash", "-lc", "squeue -h"),
+    ]
 
 
 def test_soperator_backup_archive_contains_restore_material(
@@ -186,6 +238,7 @@ def test_soperator_backup_archive_contains_restore_material(
     assert os.stat(backup.path.parent).st_mode & 0o777 == 0o700
     assert os.stat(backup.path).st_mode & 0o777 == 0o600
     with tarfile.open(backup.path, "r:gz") as archive:
+        _assert_archive_has_unique_members(archive)
         names = set(archive.getnames())
         assert "backup-manifest.json" in names
         assert "restore-plan.json" in names
@@ -209,6 +262,116 @@ def test_soperator_backup_archive_contains_restore_material(
     assert "clusterIP" not in service_restore
     assert "nodePort" not in service_restore
     assert "status" not in deployment_restore
+
+
+def test_soperator_backup_allows_missing_accounting_db(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(_source_payload()), encoding="utf-8")
+    target = cli._parse_soperator_upgrade_target("mk8s")
+    plan = cli._plan_helm_chart_upgrade(
+        payload=_source_payload(),
+        target=target,
+        target_version="0.26.0",
+    )
+
+    def fake_kubectl(
+        namespace: str,
+        args: list[str],
+        **kwargs: Any,
+    ) -> cli._SoperatorUpgradeCommandResult:
+        assert namespace == "soperator"
+        if args[:2] == ["get", "deployment/accounting"]:
+            return _command_result(
+                args,
+                returncode=1,
+                stderr='Error from server (NotFound): deployments.apps "accounting" not found',
+            )
+        if args[:1] == ["scale"]:
+            raise AssertionError("accounting deployment should not be scaled when absent")
+        if args[:1] == ["get"]:
+            resource = args[1]
+            items_by_resource: dict[str, list[dict[str, Any]]] = {
+                "secrets": [
+                    {
+                        "apiVersion": "v1",
+                        "kind": "Secret",
+                        "metadata": {"name": "slurm-secret"},
+                        "data": {"password": "c2VjcmV0"},
+                    }
+                ],
+                "configmaps": [],
+                "services": [],
+                "deployments.apps": [],
+                "slurmclusters": [],
+                "pods": [],
+            }
+            return _command_result(args, _kubernetes_list(items_by_resource.get(resource, [])))
+        raise AssertionError(f"unexpected kubectl args: {args}")
+
+    def fake_login_command(
+        namespace: str,
+        command: str,
+        **_kwargs: Any,
+    ) -> cli._SoperatorUpgradeCommandResult:
+        assert namespace == "soperator"
+        if command.startswith("sacctmgr "):
+            return _command_result(
+                ["login", command],
+                returncode=1,
+                stderr=(
+                    "You are not running a supported accounting_storage plugin\n"
+                    "Only 'accounting_storage/slurmdbd' is supported."
+                ),
+            )
+        return _command_result(["login", command], "snapshot\n")
+
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_kubectl", fake_kubectl)
+    monkeypatch.setattr(
+        cli,
+        "_run_soperator_upgrade_process",
+        lambda args, **_kwargs: _command_result(list(args), '{"values": true}\n'),
+    )
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_login_command", fake_login_command)
+
+    backup = cli._create_restore_capable_soperator_upgrade_backup(
+        config_path=config_path,
+        backup_dir=tmp_path / "backups",
+        source_payload=_source_payload(),
+        generated_config=SimpleNamespace(client_info={"client_name": "client-a"}),
+        manifest={"schema": "manifest"},
+        target=target,
+        plan=plan,
+        checkpoint_id="checkpoint-1",
+        target_k8s_version=None,
+        command=["nebius-cxcli", "soperator", "backup", str(config_path)],
+        archive_prefix="soperator-backup",
+        source_kind="managed-backup",
+    )
+
+    assert backup.accounting_db_included is False
+    extract_dir = tmp_path / "extracted"
+    cli._soperator_restore_extract_archive(backup.path, extract_dir)
+    cli._soperator_restore_verify_archive(extract_dir)
+    with tarfile.open(backup.path, "r:gz") as archive:
+        _assert_archive_has_unique_members(archive)
+        names = set(archive.getnames())
+        assert "accounting/slurm-accounting-db.sql" not in names
+        assert "accounting/slurm-accounting-db-verification.json" in names
+        assert "slurm/sacctmgr-clusters.txt" in names
+        manifest = json.loads(archive.extractfile("backup-manifest.json").read())
+        restore_plan = json.loads(archive.extractfile("restore-plan.json").read())
+        sacctmgr_clusters = archive.extractfile("slurm/sacctmgr-clusters.txt").read().decode()
+
+    assert manifest["sensitive_material"]["accounting_db_dump"] is False
+    assert manifest["accounting_db"]["status"] == "not_collected"
+    assert restore_plan["restore_material"]["accounting_db_dump"] is None
+    assert restore_plan["accounting_db"]["dump"] is None
+    assert restore_plan["security"]["contains_accounting_db_dump"] is False
+    assert "# not_collected" in sacctmgr_clusters
+    assert "accounting_storage/slurmdbd" in sacctmgr_clusters
 
 
 def test_soperator_backup_uses_portable_wckey_snapshot_fields(

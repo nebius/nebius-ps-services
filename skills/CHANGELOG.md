@@ -47,6 +47,28 @@ All notable changes to the reusable Codex skills are tracked here.
   before implementation, with source priority across the current project
   folder, sibling repo folders, related skills, internal Confluence/Slack/Jira
   sources when available, and official vendor docs.
+- Added the `research` Codex skill for senior-engineer technical due
+  diligence on technologies, APIs, RFCs, protocols, architecture patterns,
+  products, and feature requirements, with ranked sources, internals,
+  operations, limitations, alternatives, and actionable recommendations.
+- Added the `design` Codex skill for general software design before
+  implementation, covering brownfield and greenfield paths, requirement
+  understanding, code/docs inspection, official-doc technology research,
+  component and architecture design, alternatives evaluation, and Codex
+  `/plan` handoff.
+- Added the `code-review` Codex skill for strict implementation-quality audits
+  of the current branch, local diff, changed files, or provided patches,
+  focused on maintainability, abstraction quality, modularity, type boundaries,
+  file-size growth, spaghetti branches, and missed structural simplifications.
+- Added the `system-design-rules` Codex skill for applying a refined 100-rule
+  software system design checklist to architecture proposals, ADRs, design
+  docs, API and data model choices, reliability, security, observability,
+  performance, cost, migration, and team-ownership decisions before
+  implementation.
+- Added the `task-implementer` Codex skill for narrow brownfield implementation
+  loops that order prompt-derived work as `task-1` through `task-n`, keep one
+  write task active at a time, and hand off between fresh Codex sessions
+  through private markdown checkpoints.
 - Added the `agentic-sdlc-test` Codex skill for safely verifying the Agentic
   SDLC workflow from outside the workflow with global `sdlc-*` skill discovery,
   hook configuration inspection, disposable PreToolUse and Stop hook fixture
@@ -106,6 +128,11 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Added bounded same-workspace prior task-state candidate discovery to the
+  `global-context-management` prompt hook and mirrored `config-codex` hook
+  template, exposing candidate paths only while keeping historical task-state
+  contents out of model context and preserving the current session
+  `current.md` as the write target.
 - Hardened `global-context-management` and mirrored `config-codex` guidance so
   parent agents must close every spawned subagent handle that is completed or
   no longer needed before finalizing when close controls are available, and

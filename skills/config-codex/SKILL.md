@@ -120,6 +120,11 @@ For existing `$CODEX_HOME/config.toml`:
    summary, not an append-only transcript: replace stale details with the
    latest validated state, omit raw logs and secrets, and summarize oversized
    historical task-state files before relying on them.
+   Prompt-time hooks may list bounded same-workspace prior task-state candidate
+   paths for complex prompts, but must not inject historical task-state
+   contents. The parent agent should read only relevant candidates as stale
+   hints, verify them against current repo or runtime evidence, and keep the
+   current session's advertised `current.md` as the write target.
    For hook scripts, custom-agent assets, and optional policy assets, use
    replace-if-unmodified behavior:
    copy missing files, leave matching files unchanged, and stop for review when
@@ -203,7 +208,8 @@ Use the focused checks in `references/local-setup.md`. At minimum:
 
 Do not claim runtime activation is proven until a fresh Codex session has
 loaded the config, the hooks have been trusted in `/hooks`, and a non-mutating
-probe shows the injected task-state path and read/update guidance.
+probe shows the injected task-state path, read/update guidance, and bounded
+related prior task-state candidate hints when matching prior summaries exist.
 
 Do not claim subagent activation is proven until a fresh Codex session receives
 a prompt request or local hook policy request to use subagents and can spawn a

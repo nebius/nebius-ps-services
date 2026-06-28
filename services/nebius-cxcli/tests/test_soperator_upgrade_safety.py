@@ -7,9 +7,14 @@ from typing import Any
 
 from nebius_cxcli.soperator_upgrade_safety import (
     ProtectedCustomerState,
+    _classify_external_intentional_deltas,
+    build_stage_fast_verification_payload,
     capture_protected_customer_state,
     compare_protected_customer_state,
     run_post_upgrade_fast_verification,
+    stage_fast_verification_check,
+    stage_fast_verification_markdown_lines,
+    stage_fast_verification_report,
 )
 
 
@@ -343,6 +348,17 @@ class _RuntimeOnlyRunner(_Runner):
         return super()._exec_output(command)
 
 
+class _UnresponsiveSlurmRunner(_Runner):
+    def _exec_output(self, command: Sequence[str]) -> str:
+        joined = " ".join(command)
+        if "show nodes" in joined:
+            return (
+                "NodeName=worker-0 State=IDLE+CLOUD+NOT_RESPONDING\n"
+                "NodeName=worker-1 State=DOWN+CLOUD"
+            )
+        return super()._exec_output(command)
+
+
 def _json(payload: dict[str, Any]) -> str:
     return json.dumps(payload)
 
@@ -434,6 +450,26 @@ def test_managed_chart_upgrade_classifies_slurm_runtime_hash_deltas_as_intention
         ("slurm_runtime", "slurm_config", "intentional_upgrade"),
         ("slurm_runtime", "slurm_nodes", "intentional_upgrade"),
     }
+
+
+def test_zero_downtime_fails_when_slurm_workers_are_not_responsive() -> None:
+    result = run_post_upgrade_fast_verification(
+        command_runner=_UnresponsiveSlurmRunner(),
+        target_ref="gpu",
+        namespace="soperator",
+        kube_context="external-context",
+    )
+
+    assert result.status == "failed"
+    assert result.zero_downtime_eligibility["eligible"] is False
+    assert result.zero_downtime_eligibility["slurm_problem_nodes"] == [
+        {"name": "worker-0", "state": "IDLE+CLOUD+NOT_RESPONDING"},
+        {"name": "worker-1", "state": "DOWN+CLOUD"},
+    ]
+    assert any(
+        check["name"] == "zero-downtime-eligibility" and check["status"] == "failed"
+        for check in result.checks
+    )
 
 
 def test_managed_node_template_upgrade_classifies_node_replacement_as_intentional() -> None:
@@ -664,6 +700,170 @@ def test_home_mount_and_activechecks_baseline_are_verified() -> None:
     assert "activechecks-restored" in failed
 
 
+def test_activechecks_restored_allows_baseline_suspended_checks() -> None:
+    before = _capture(
+        _Runner(
+            activecheck={
+                "kind": "ActiveCheck",
+                "metadata": {"name": "storage", "namespace": "soperator"},
+                "spec": {"suspend": True},
+                "status": {"phase": "Completed"},
+            },
+        )
+    )
+
+    result = run_post_upgrade_fast_verification(
+        command_runner=_Runner(
+            activecheck={
+                "kind": "ActiveCheck",
+                "metadata": {"name": "storage", "namespace": "soperator"},
+                "spec": {"suspend": True},
+                "status": {"phase": "Completed"},
+            },
+        ),
+        target_ref="gpu",
+        namespace="soperator",
+        kube_context="external-context",
+        before_state=before,
+        external_cluster=True,
+    )
+
+    assert not any(
+        check["name"] == "activechecks-restored" and check["status"] == "failed"
+        for check in result.checks
+    )
+
+
+def test_external_migration_classifier_allows_owned_presence_and_keeps_config_drift() -> None:
+    comparison = {
+        "schema": "nebius-cxcli-soperator-upgrade-safety/v1",
+        "status": "drift-detected",
+        "before_hash": "before",
+        "after_hash": "after",
+        "blocked_count": 0,
+        "approval_required_count": 2,
+        "deltas": [
+            {
+                "kind": "configmaps",
+                "resource": "soperator/cxcli-ext-upg-1223b-slurm-configs",
+                "field": "presence",
+                "before": "absent",
+                "after": "present",
+                "classification": "remediation_required",
+                "approval_required": True,
+                "remediation": "Review and approve this protected Kubernetes resource drift.",
+            },
+            {
+                "kind": "secrets",
+                "resource": "soperator/sh.helm.release.v1.soperator.v2",
+                "field": "presence",
+                "before": "absent",
+                "after": "present",
+                "classification": "remediation_required",
+                "approval_required": True,
+                "remediation": "Review and approve this protected Kubernetes resource drift.",
+            },
+            {
+                "kind": "slurmclusters",
+                "resource": "soperator/cxcli-ext-upg-1223b",
+                "field": "presence",
+                "before": "absent",
+                "after": "present",
+                "classification": "remediation_required",
+                "approval_required": True,
+                "remediation": "Review and approve this protected Kubernetes resource drift.",
+            },
+            {
+                "kind": "configmaps",
+                "resource": "soperator/customer-config",
+                "field": "spec_hash",
+                "before": "old",
+                "after": "new",
+                "classification": "remediation_required",
+                "approval_required": True,
+                "remediation": "Review and approve this protected Kubernetes resource drift.",
+            },
+        ],
+    }
+
+    classified = _classify_external_intentional_deltas(
+        comparison,
+        target_ref="cxcli-ext-upg-1223b",
+    )
+
+    by_resource = {item["resource"]: item for item in classified["deltas"]}
+    assert by_resource["soperator/cxcli-ext-upg-1223b-slurm-configs"]["classification"] == "intentional_upgrade"
+    assert by_resource["soperator/cxcli-ext-upg-1223b-slurm-configs"]["approval_required"] is False
+    assert by_resource["soperator/sh.helm.release.v1.soperator.v2"]["classification"] == "intentional_upgrade"
+    assert by_resource["soperator/cxcli-ext-upg-1223b"]["classification"] == "intentional_upgrade"
+    assert by_resource["soperator/customer-config"]["classification"] == "remediation_required"
+    assert classified["approval_required_count"] == 1
+
+
+def test_external_migration_classifier_keeps_unowned_flux_and_slurm_policy_drift_protected() -> None:
+    comparison: dict[str, object] = {
+        "schema": "nebius-cxcli-soperator-upgrade-safety/v1",
+        "status": "drift-detected",
+        "before_hash": "before",
+        "after_hash": "after",
+        "blocked_count": 0,
+        "approval_required_count": 4,
+        "deltas": [
+            {
+                "kind": "flux.helmreleases",
+                "resource": "customer/customer-app",
+                "field": "spec_hash",
+                "before": "old",
+                "after": "new",
+                "classification": "remediation_required",
+                "approval_required": True,
+                "remediation": "Review and approve this protected Kubernetes resource drift.",
+            },
+            {
+                "kind": "slurm_runtime",
+                "resource": "slurm-runtime",
+                "field": "accounting_qos",
+                "before": "old",
+                "after": "new",
+                "classification": "remediation_required",
+                "approval_required": True,
+                "remediation": "Review and approve this protected Slurm runtime drift.",
+            },
+            {
+                "kind": "slurm_runtime",
+                "resource": "slurm-runtime",
+                "field": "accounting_associations",
+                "before": "old",
+                "after": "new",
+                "classification": "remediation_required",
+                "approval_required": True,
+                "remediation": "Review and approve this protected Slurm runtime drift.",
+            },
+            {
+                "kind": "slurm_runtime",
+                "resource": "slurm-runtime",
+                "field": "slurm_partitions",
+                "before": "old",
+                "after": "new",
+                "classification": "remediation_required",
+                "approval_required": True,
+                "remediation": "Review and approve this protected Slurm runtime drift.",
+            },
+        ],
+    }
+
+    classified = _classify_external_intentional_deltas(
+        comparison,
+        target_ref="cxcli-ext-upg-1223b",
+    )
+
+    assert classified["approval_required_count"] == 4
+    assert classified["blocked_count"] == 0
+    for delta in classified["deltas"]:
+        assert delta["classification"] == "remediation_required"
+        assert delta["approval_required"] is True
+
+
 def test_helmrelease_suspended_state_drift_is_detected() -> None:
     before = ProtectedCustomerState(
         target_ref="gpu",
@@ -725,3 +925,43 @@ def test_safety_capture_uses_readonly_kubectl_commands_only() -> None:
     assert runner.calls
     for command in runner.calls:
         assert not (set(command) & forbidden)
+
+
+def test_stage_fast_verification_payload_and_report_defaults_are_canonical() -> None:
+    passed = build_stage_fast_verification_payload(
+        phase_id="soperator-chart",
+        status="passed",
+        summary="chart aligned",
+        checks=[stage_fast_verification_check("chart version", "passed", "expected")],
+        verified_at="2026-06-27T00:00:00Z",
+    )
+    failed = build_stage_fast_verification_payload(
+        phase_id="postflight-validation",
+        status="failed",
+        summary="protected config changed",
+        checks=[stage_fast_verification_check("config comparison", "failed", "drift")],
+        verified_at="2026-06-27T00:00:01Z",
+    )
+    pending = build_stage_fast_verification_payload(
+        phase_id="mk8s-node-template",
+        status="skipped",
+        summary="not selected",
+        checks=[stage_fast_verification_check("node-template", "skipped", "not requested")],
+        verified_at="2026-06-27T00:00:02Z",
+    )
+
+    assert passed["passed"] is True
+    assert failed["passed"] is False
+    assert pending["passed"] is None
+    assert stage_fast_verification_report("missing-stage", {}) == {
+        "phase_id": "missing-stage",
+        "status": "not_run",
+        "passed": None,
+        "summary": "No fast stage verification recorded.",
+        "checks": [],
+    }
+
+    markdown = "\n".join(stage_fast_verification_markdown_lines([passed, failed, pending]))
+    assert "`soperator-chart`: `PASS` - chart aligned" in markdown
+    assert "`postflight-validation`: `FAIL` - protected config changed" in markdown
+    assert "`mk8s-node-template`: `SKIP` - not selected" in markdown

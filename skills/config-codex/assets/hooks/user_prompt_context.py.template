@@ -17,6 +17,76 @@ except ModuleNotFoundError:  # pragma: no cover - for older Python hook hosts.
     tomllib = None
 
 
+MAX_RELATED_STATE_FILES = 3
+MAX_RELATED_STATE_SCAN_FILES = 30
+MAX_RELATED_STATE_SCAN_BYTES = 12_000
+MAX_PROMPT_TERMS = 32
+
+STOP_TERMS = {
+    "about",
+    "after",
+    "again",
+    "also",
+    "and",
+    "are",
+    "can",
+    "codex",
+    "commands",
+    "constraints",
+    "could",
+    "current",
+    "decisions",
+    "does",
+    "files",
+    "for",
+    "from",
+    "has",
+    "have",
+    "hygiene",
+    "how",
+    "into",
+    "make",
+    "made",
+    "not",
+    "now",
+    "objective",
+    "please",
+    "plan",
+    "relevant",
+    "risks",
+    "run",
+    "should",
+    "state",
+    "status",
+    "summary",
+    "symbols",
+    "task",
+    "task-state",
+    "test",
+    "that",
+    "the",
+    "then",
+    "there",
+    "this",
+    "when",
+    "where",
+    "with",
+    "work",
+    "workspace",
+    "works",
+}
+
+CONTINUATION_TERMS = {
+    "continue",
+    "continuation",
+    "previous",
+    "prior",
+    "proceed",
+    "resume",
+    "same",
+}
+
+
 COMPLEX_KEYWORDS = (
     "implement",
     "refactor",
@@ -96,11 +166,15 @@ def codex_home() -> Path:
     return Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
 
 
+def workspace_state_dir(root: str, home: Path) -> Path:
+    workspace_name = safe_segment(Path(root).name or "workspace") or "workspace"
+    workspace_hash = hashlib.sha256(root.encode("utf-8")).hexdigest()[:12]
+    return home / "task-state" / f"{workspace_name}-{workspace_hash}"
+
+
 def state_file_for_payload(root: str, payload: dict) -> Path | None:
     home = codex_home()
 
-    workspace_name = safe_segment(Path(root).name or "workspace") or "workspace"
-    workspace_hash = hashlib.sha256(root.encode("utf-8")).hexdigest()[:12]
     session_id = payload.get("session_id")
     if not session_id:
         return None
@@ -108,12 +182,7 @@ def state_file_for_payload(root: str, payload: dict) -> Path | None:
     if not session_segment:
         return None
 
-    state_dir = (
-        home
-        / "task-state"
-        / f"{workspace_name}-{workspace_hash}"
-        / session_segment
-    )
+    state_dir = workspace_state_dir(root, home) / session_segment
 
     state_file = state_dir / "current.md"
     if state_file.exists():
@@ -123,6 +192,112 @@ def state_file_for_payload(root: str, payload: dict) -> Path | None:
         chmod_private(state_file, 0o600)
 
     return state_file
+
+
+def prompt_terms(text: str) -> set[str]:
+    terms: list[str] = []
+    seen: set[str] = set()
+    for raw in re.findall(r"[a-z0-9][a-z0-9_.-]{1,}", text.lower()):
+        term = raw.strip("._-")
+        if (
+            len(term) < 3
+            or term in STOP_TERMS
+            or term in CONTINUATION_TERMS
+            or term in seen
+        ):
+            continue
+        terms.append(term)
+        seen.add(term)
+        if len(terms) >= MAX_PROMPT_TERMS:
+            break
+    return set(terms)
+
+
+def is_continuation_prompt(prompt: str) -> bool:
+    terms = set(re.findall(r"[a-z0-9][a-z0-9_.-]{1,}", prompt.lower()))
+    return bool(terms & CONTINUATION_TERMS)
+
+
+def read_state_sample(path: Path) -> str:
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            return handle.read(MAX_RELATED_STATE_SCAN_BYTES)
+    except OSError:
+        return ""
+
+
+def related_task_state_candidates(
+    *,
+    root: str,
+    payload: dict,
+    prompt: str,
+    home: Path,
+) -> list[Path]:
+    workspace_dir = workspace_state_dir(root, home)
+    if not workspace_dir.exists():
+        return []
+
+    current_state = state_file_for_payload(root, payload)
+    prompt_words = prompt_terms(prompt)
+    continuation_prompt = is_continuation_prompt(prompt)
+    if not prompt_words:
+        return []
+
+    candidates: list[tuple[int, float, Path]] = []
+    try:
+        paths = sorted(
+            workspace_dir.glob("*/current.md"),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        return []
+
+    for path in paths[:MAX_RELATED_STATE_SCAN_FILES]:
+        if current_state is not None:
+            try:
+                if path.resolve() == current_state.resolve():
+                    continue
+            except OSError:
+                if path == current_state:
+                    continue
+        if not path.is_file():
+            continue
+
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+
+        sample = read_state_sample(path)
+        overlap = prompt_words & prompt_terms(sample)
+        if not overlap:
+            continue
+        score = len(overlap) * 10 + (1 if continuation_prompt else 0)
+        candidates.append((score, mtime, path))
+
+    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [path for _, _, path in candidates[:MAX_RELATED_STATE_FILES]]
+
+
+def related_task_state_context(root: str, payload: dict, prompt: str, home: Path) -> str:
+    candidates = related_task_state_candidates(
+        root=root,
+        payload=payload,
+        prompt=prompt,
+        home=home,
+    )
+    if not candidates:
+        return ""
+
+    lines = ["Related same-workspace task-state candidates (not loaded):"]
+    for path in candidates:
+        lines.append(f"- `{path}`")
+    lines.append(
+        "Read only the candidate(s) that appear relevant to the current task; "
+        "treat them as stale hints and verify against current repo/runtime evidence."
+    )
+    return "\n".join(lines) + "\n"
 
 
 def read_json_file(path: Path) -> dict:
@@ -334,6 +509,7 @@ creating a manual fallback path or repo-local state file.
     context = f"""Global context hint for a complex prompt.
 
 {task_state_context}
+{related_task_state_context(root, payload, prompt, home)}
 Keep raw exploration output out of the parent context. Use configured read-only
 subagents when delegation is authorized by the user prompt or local hook policy,
 the runtime exposes subagent tools, and active instructions permit it.

@@ -147,6 +147,7 @@ The hook layer injects durable context before Codex starts work:
 ```text
 Here is the workspace root.
 Here is the task-state path.
+Here are bounded same-workspace prior task-state candidate paths, when relevant.
 Do not create task state automatically.
 Read existing task state when prior context may matter.
 Keep raw logs and broad exploration output out of task state.
@@ -165,6 +166,12 @@ superseded details with the latest validated state, keep only the objective,
 constraints, decisions, changed files, validation status, risks, and next
 action needed for continuation, and summarize oversized historical files
 before relying on them.
+For complex prompts, the prompt-time hook may also list a bounded set of
+same-workspace prior `current.md` candidate paths from the same workspace hash
+bucket. It injects paths only, not historical task-state contents. The parent
+agent should read only relevant candidates as stale hints, verify them against
+current repo or runtime evidence, and keep the current session's advertised
+`current.md` as the write target.
 If a user deliberately opts in by creating
 `$CODEX_HOME/hooks/global_context_policy.json`, the `UserPromptSubmit` hook can
 also discover configured read-only agents from `$CODEX_HOME/config.toml` and
@@ -437,12 +444,13 @@ setup.
    ```
 
    The probe should also show that complex-task guidance tells Codex to read
-   current task state when prior context may matter and update it at
-   checkpoints. To prove subagent activation, run a second probe whose prompt
-   explicitly asks Codex to spawn a read-only helper, or enable the local hook
-   policy and run a complex prompt that should discover configured read-only
-   agents from `$CODEX_HOME` and authorize the parent agent to dynamically
-   choose useful helpers.
+   current task state when prior context may matter, consider bounded related
+   same-workspace prior task-state candidate paths when matching summaries
+   exist, and update the current `current.md` at checkpoints. To prove subagent
+   activation, run a second probe whose prompt explicitly asks Codex to spawn a
+   read-only helper, or enable the local hook policy and run a complex prompt
+   that should discover configured read-only agents from `$CODEX_HOME` and
+   authorize the parent agent to dynamically choose useful helpers.
 
    If subagent controls are not visible in an otherwise authorized probe, the
    agent should use `tool_search` to look for deferred multi-agent/subagent
@@ -455,10 +463,12 @@ setup.
    `global-context-management/scripts/validate-local-templates.py` for
    hook-unit validation because it uses disposable temporary homes and checks
    that `SessionStart` and `UserPromptSubmit` do not create missing scaffold
-   files, an existing nonempty `current.md` is preserved for the agent to read
-   instead of being overwritten or injected into hook context, and loose
-   task-state file permissions are repaired on reuse. No manual or legacy
-   task-state path is created when a hook payload lacks `session_id`.
+   files, related same-workspace prior task-state candidate paths are bounded
+   and do not leak contents or unrelated workspace files, an existing nonempty
+   `current.md` is preserved for the agent to read instead of being overwritten
+   or injected into hook context, and loose task-state file permissions are
+   repaired on reuse. No manual or legacy task-state path is created when a
+   hook payload lacks `session_id`.
 
 ## File Responsibilities
 

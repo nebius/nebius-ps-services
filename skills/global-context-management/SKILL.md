@@ -58,6 +58,8 @@ implementation and final judgment.
 - The durable task-state path injected by hooks, when available.
 - An existing task-state file at that path, when it exists and prior context may
   matter.
+- Optional same-workspace prior task-state candidate paths injected by hooks for
+  complex prompts, when bounded relevance checks find likely related summaries.
 - Optional user-enabled hook-policy context that requests bounded read-only
   delegation for the current prompt.
 - Current runtime tool availability, including whether subagent controls are
@@ -67,6 +69,9 @@ implementation and final judgment.
 
 - Read the injected task-state file at task start, resume, or after compaction
   when it exists and prior decisions may matter.
+- Read hook-suggested same-workspace prior task-state candidates only when they
+  appear relevant to the current task; treat them as stale hints and verify
+  against current repository or runtime evidence.
 - Read target project files with targeted `rg`, `rg --files`, and small file
   ranges before editing.
 - When changing this skill or its local setup contract, read `README.md`,
@@ -147,6 +152,14 @@ for creating and updating the file when continuity is useful. If a local
 PreToolUse write guard is installed, it must allow writes under
 `$CODEX_HOME/task-state` while continuing to block unrelated `$CODEX_HOME`
 runtime edits such as hook rewrites.
+
+For complex prompts, `UserPromptSubmit` may also list a small bounded set of
+same-workspace prior `current.md` candidate paths from the same
+`$CODEX_HOME/task-state/<workspace>-<hash>/` bucket. The hook must not inject
+historical task-state contents. The parent agent may read a candidate only when
+it appears relevant to the current task, and must treat it as stale context to
+verify instead of active truth. The current session's advertised `current.md`
+remains the only write target.
 
 At the start of a complex task, resume, or context transition, read the
 existing task-state file before planning when it may contain prior decisions,
@@ -278,6 +291,9 @@ for a subagent would stall the next step.
   do not create a manual or repo-local fallback.
 - If task state exists but appears stale, treat it as a hint and verify drifted
   facts before acting on them.
+- If hook-suggested related task-state candidates are absent, irrelevant,
+  unreadable, or stale, continue from current thread, memory, and repository
+  evidence instead of inventing fallback state.
 - If delegation is authorized and useful but controls are not visible, use
   `tool_search` to look for multi-agent/subagent tools before reporting
   delegation unavailable.
@@ -293,8 +309,10 @@ for a subagent would stall the next step.
 ## Process
 
 1. Understand the task and constraints.
-2. Read existing global task state when prior context may matter; create the
-   task-state file only when complex work needs continuity, then update it.
+2. Read existing global task state when prior context may matter. If the hook
+   suggests same-workspace prior task-state candidates, read only the relevant
+   ones and verify their claims. Create the current task-state file only when
+   complex work needs continuity, then update it.
 3. Explore with targeted reads; use read-only subagents when delegation is
    authorized by the prompt or a user-enabled local hook policy, useful for the
    task, available, and permitted. Wait for their final summaries and close

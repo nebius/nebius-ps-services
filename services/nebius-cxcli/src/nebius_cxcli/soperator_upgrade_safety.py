@@ -400,11 +400,18 @@ def compare_protected_customer_state(
     }
 
 
-def _classify_external_intentional_deltas(comparison: Mapping[str, Any]) -> dict[str, Any]:
+def _classify_external_intentional_deltas(
+    comparison: Mapping[str, Any],
+    *,
+    target_ref: str,
+) -> dict[str, Any]:
     return _classify_intentional_deltas(
         comparison,
-        predicate=_is_external_source_flux_cleanup_delta,
-        remediation="Expected external migration cleanup of source-family Flux desired state.",
+        predicate=lambda delta: _is_external_intentional_migration_delta(
+            delta,
+            target_ref=target_ref,
+        ),
+        remediation="Expected external migration ownership, chart takeover, or node replacement drift.",
     )
 
 
@@ -498,6 +505,85 @@ def _is_external_source_flux_cleanup_delta(delta: Mapping[str, Any]) -> bool:
         name = resource.rsplit("/", 1)[-1]
         return name == "soperator-fluxcd"
     return False
+
+
+def _is_external_intentional_migration_delta(
+    delta: Mapping[str, Any],
+    *,
+    target_ref: str,
+) -> bool:
+    if _is_external_source_flux_cleanup_delta(delta):
+        return True
+    kind = str(delta.get("kind", "") or "")
+    resource = str(delta.get("resource", "") or "")
+    field = str(delta.get("field", "") or "")
+    before = str(delta.get("before", "") or "")
+    after = str(delta.get("after", "") or "")
+    name = resource.rsplit("/", 1)[-1]
+    if kind == "nodes" and field == "presence":
+        return (before, after) in {("present", "absent"), ("absent", "present")}
+    if kind == "slurm_runtime":
+        return field in {"slurm_config", "slurm_nodes"}
+    if kind in {"configmaps", "secrets", "nodesets", "slurmclusters"}:
+        return field == "presence" and _is_external_migration_owned_resource_name(
+            name,
+            target_ref=target_ref,
+        )
+    if kind in {"workloads.deployments", "workloads.daemonsets", "workloads.statefulsets"}:
+        return (name in _EXTERNAL_MIGRATION_WORKLOAD_NAMES or name.startswith(f"{target_ref}-")) and field in {
+            "presence",
+            "labels",
+            "annotation_sha256_by_key",
+            "template_hash",
+            "replicas",
+        }
+    return False
+
+
+def _is_external_migration_owned_resource_name(name: str, *, target_ref: str) -> bool:
+    if target_ref and (name == target_ref or name.startswith(f"{target_ref}-")):
+        return True
+    prefixes = (
+        "sh.helm.release.v1.soperator.",
+        "soperator-",
+        "helm-soperator",
+        "mariadb-",
+        "sbatch-script-",
+    )
+    return name in _EXTERNAL_MIGRATION_OWNED_RESOURCE_NAMES or name.startswith(prefixes)
+
+
+_EXTERNAL_MIGRATION_OWNED_RESOURCE_NAMES = frozenset(
+    {
+        "accounting",
+        "accounting-mount",
+        "controller-placeholder",
+        "controller-spool-mount",
+        "jail-mount",
+        "rest",
+        "sconfigcontroller",
+        "soperator",
+        "topology-node-labels",
+        "webhook-server-cert",
+        "worker",
+    }
+)
+
+
+_EXTERNAL_MIGRATION_WORKLOAD_NAMES = frozenset(
+    {
+        "accounting",
+        "accounting-mount",
+        "controller-placeholder",
+        "controller-spool-mount",
+        "jail-mount",
+        "rest",
+        "sconfigcontroller",
+        "soperator-manager",
+        "soperator-mariadb-operator",
+        "soperator-mariadb-operator-webhook",
+    }
+)
 
 
 def _is_managed_node_template_upgrade_delta(delta: Mapping[str, Any]) -> bool:
@@ -645,7 +731,10 @@ def run_post_upgrade_fast_verification(
     if before_state is not None:
         comparison = compare_protected_customer_state(before=before_state, after=after_state)
         if external_cluster:
-            comparison = _classify_external_intentional_deltas(comparison)
+            comparison = _classify_external_intentional_deltas(
+                comparison,
+                target_ref=target_ref,
+            )
         else:
             if managed_chart_upgrade:
                 comparison = _classify_managed_chart_upgrade_deltas(comparison)
@@ -692,6 +781,79 @@ def run_post_upgrade_fast_verification(
         heavy_validation_followups=tuple(followups),
         zero_downtime_eligibility=zero_downtime,
     )
+
+
+def stage_fast_verification_check(name: str, status: str, summary: str) -> dict[str, str]:
+    return {
+        "name": name,
+        "status": status,
+        "summary": summary,
+    }
+
+
+def stage_fast_verification_failed(checks: Sequence[Mapping[str, Any]]) -> bool:
+    return any(str(check.get("status", "") or "") == "failed" for check in checks)
+
+
+def build_stage_fast_verification_payload(
+    *,
+    phase_id: str,
+    status: str,
+    summary: str,
+    checks: Sequence[Mapping[str, Any]],
+    verified_at: str | None = None,
+) -> dict[str, Any]:
+    passed = True if status == "passed" else False if status == "failed" else None
+    return {
+        "phase_id": phase_id,
+        "status": status,
+        "passed": passed,
+        "summary": summary,
+        "verified_at": verified_at or _utc_now(),
+        "checks": [to_plain_data(dict(check)) for check in checks],
+    }
+
+
+def stage_fast_verification_report(
+    phase_id: str,
+    phase: Mapping[str, Any],
+) -> dict[str, Any]:
+    verification = phase.get("fast_verification")
+    verification_map = verification if isinstance(verification, Mapping) else {}
+    if verification_map:
+        plain = to_plain_data(verification_map)
+        payload = dict(plain) if isinstance(plain, Mapping) else {}
+        payload.setdefault("phase_id", phase_id)
+        payload.setdefault("status", "not_run")
+        payload.setdefault("passed", None)
+        payload.setdefault("summary", "No fast verification summary recorded.")
+        payload.setdefault("checks", [])
+        return payload
+    return {
+        "phase_id": phase_id,
+        "status": "not_run",
+        "passed": None,
+        "summary": "No fast stage verification recorded.",
+        "checks": [],
+    }
+
+
+def stage_fast_verification_markdown_lines(
+    verifications: Sequence[Mapping[str, Any]],
+    *,
+    empty_message: str = "No executable upgrade stages were selected.",
+) -> list[str]:
+    lines = ["## Stage Fast Verification", ""]
+    if verifications:
+        for verification in verifications:
+            phase_id = str(verification.get("phase_id", "") or "unknown")
+            status = str(verification.get("status", "") or "not_run")
+            summary = str(verification.get("summary", "") or "No summary recorded.")
+            lines.append(f"- `{phase_id}`: `{_status_label(status)}` - {summary}")
+    else:
+        lines.append(f"- {empty_message}")
+    lines.append("")
+    return lines
 
 
 def upgrade_safety_checkpoint_payload() -> dict[str, Any]:
@@ -852,6 +1014,19 @@ def safety_report_markdown_lines(safety_payload: Mapping[str, Any] | None) -> li
     else:
         lines.append("- No heavy follow-up checks recorded.")
     return lines
+
+
+def _status_label(status: str) -> str:
+    normalized = status.strip().lower().replace("_", "-")
+    if normalized in {"passed", "pass"}:
+        return "PASS"
+    if normalized in {"failed", "fail", "blocked"}:
+        return "FAIL"
+    if normalized in {"skipped", "skip"}:
+        return "SKIP"
+    if normalized in {"not-run", "not_run", "pending"}:
+        return "PENDING"
+    return status.upper() if status else "UNKNOWN"
 
 
 def _safety_payload_copy(safety_payload: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -1298,7 +1473,37 @@ def _capture_slurm_runtime(
             "line_count": len([line for line in result.stdout.splitlines() if line.strip()]),
             "summary": _truncate(_normalize_whitespace(result.stdout), 300),
         }
+        if key == "slurm_nodes":
+            captured[key]["problem_nodes"] = [
+                dict(item) for item in _slurm_problem_nodes_from_scontrol(result.stdout)
+            ]
     return captured
+
+
+def _slurm_problem_nodes_from_scontrol(output: str) -> tuple[Mapping[str, str], ...]:
+    problems: list[dict[str, str]] = []
+    current_node = ""
+    for raw_line in output.splitlines():
+        for token in str(raw_line or "").strip().split():
+            if "=" not in token:
+                continue
+            key, value = token.split("=", 1)
+            if key == "NodeName":
+                current_node = value
+                continue
+            if key != "State" or not current_node:
+                continue
+            state = value.strip()
+            state_upper = state.upper()
+            if (
+                "*" in state
+                or "NOT_RESPONDING" in state_upper
+                or "DOWN" in state_upper
+                or "DRAIN" in state_upper
+                or "FAIL" in state_upper
+            ):
+                problems.append({"name": current_node, "state": state})
+    return tuple(problems)
 
 
 def _sanitize_source_payload(payload: Mapping[str, Any], *, target_ref: str) -> dict[str, Any]:
@@ -1651,7 +1856,11 @@ def _activechecks_check(
             "summary": "ActiveChecks were not enabled or not discoverable before upgrade.",
         }
     missing = sorted(name for name in before_items if name not in after_items)
-    suspended = sorted(name for name, item in after_items.items() if bool(item.get("suspend")))
+    suspended = sorted(
+        name
+        for name, item in after_items.items()
+        if bool(item.get("suspend")) and not bool(before_items.get(name, {}).get("suspend"))
+    )
     failed = sorted(
         name
         for name, item in after_items.items()
@@ -1679,7 +1888,7 @@ def _activechecks_check(
     return {
         "name": "activechecks-restored",
         "status": "passed",
-        "summary": f"{len(before_items)} ActiveCheck resource(s) are present and unsuspended.",
+        "summary": f"{len(before_items)} ActiveCheck resource(s) match the baseline suspend state.",
     }
 
 
@@ -1758,6 +1967,13 @@ def _zero_downtime_eligibility(
     ready_count = sum(1 for item in nodes.values() if str(item.get("ready", "") or "").lower() == "true")
     if nodes and ready_count == 0:
         reasons.append("no Ready Kubernetes nodes were captured")
+    slurm_problem_nodes = _slurm_runtime_problem_nodes(after_state)
+    if slurm_problem_nodes:
+        sample = ", ".join(
+            f"{item.get('name')}:{item.get('state')}" for item in slurm_problem_nodes[:6]
+        )
+        suffix = "" if len(slurm_problem_nodes) <= 6 else f" (+{len(slurm_problem_nodes) - 6} more)"
+        reasons.append(f"Slurm worker nodes are not responsive: {sample}{suffix}")
     eligible = not reasons
     return {
         "status": "passed" if eligible else "blocked",
@@ -1770,7 +1986,26 @@ def _zero_downtime_eligibility(
             "captured": len(nodes),
             "ready": ready_count,
         },
+        "slurm_problem_nodes": [to_plain_data(item) for item in slurm_problem_nodes],
     }
+
+
+def _slurm_runtime_problem_nodes(state: ProtectedCustomerState) -> tuple[Mapping[str, str], ...]:
+    runtime = _as_mapping(state.sections.get("slurm_runtime"))
+    slurm_nodes = _as_mapping(runtime.get("slurm_nodes"))
+    structured = slurm_nodes.get("problem_nodes")
+    if isinstance(structured, Sequence) and not isinstance(structured, (str, bytes, bytearray)):
+        items = tuple(dict(item) for item in structured if isinstance(item, Mapping))
+        if items:
+            return items
+    summary = str(slurm_nodes.get("summary", "") or "")
+    if summary:
+        return _slurm_problem_nodes_from_scontrol(summary)
+    return ()
+
+
+def _as_mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
 
 
 def _heavy_validation_followups(

@@ -3761,12 +3761,12 @@ def test_soperator_rollout_prompt_guidance_includes_concise_field_comments(
     }
     joined = "\n".join(captured)
     assert "Strategy: zero-surge is the default" in joined
-    assert "safe-surge preserves capacity with temporary surge nodes" in joined
+    assert "safe-surge preserves service and worker capacity with temporary surge nodes" in joined
     assert "Safe-surge wave budget: choose groups for a fixed batch size" in joined
     assert "Safe-surge worker wave groups: fixed number of worker groups" in joined
     assert "Max parallel worker groups" not in joined
-    assert "Max surge count: temporary extra nodes per worker group" in joined
-    assert "Max unavailable count: nodes per worker group allowed down" in joined
+    assert "Max surge count: temporary extra nodes per active group" in joined
+    assert "Max unavailable count: nodes per group allowed down" in joined
     assert "Drain timeout: time to wait for pod eviction" in joined
 
 

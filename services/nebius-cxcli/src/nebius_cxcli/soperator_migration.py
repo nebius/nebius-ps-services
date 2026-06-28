@@ -8,6 +8,7 @@ import json
 import math
 import os
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -65,6 +66,7 @@ from .quota_checks import (
 )
 from .runtime_config import to_plain_data
 from .soperator_gpu_driver_jail import (
+    SOPERATOR_GPU_DRIVER_JAIL_INIT_CONTAINER_NAME,
     ensure_soperator_gpu_driver_jail_values,
     normalize_soperator_gpu_driver_jail_mounts,
 )
@@ -86,10 +88,15 @@ from .soperator_onboarding import (
 )
 from .soperator_upgrade_safety import (
     ProtectedCustomerState,
+    build_stage_fast_verification_payload,
     capture_protected_customer_state,
     protected_customer_state_from_payload,
     run_post_upgrade_fast_verification,
     safety_report_markdown_lines,
+    stage_fast_verification_check,
+    stage_fast_verification_failed,
+    stage_fast_verification_markdown_lines,
+    stage_fast_verification_report,
     update_safety_payload_with_before,
     update_safety_payload_with_verification,
     upgrade_safety_checkpoint_payload,
@@ -136,6 +143,10 @@ _SOPERATOR_SERVICE_ROLES = ("system", "controller", "login", "accounting")
 _SOPERATOR_COMPUTE_ROLES = (*_SOPERATOR_SERVICE_ROLES, "worker")
 _TARGET_GPU_STACK_PHASE_ID = "target-gpu-stack-remediation"
 _EXTERNAL_NODE_TEMPLATE_PHASE_ID = "external-node-template-upgrade"
+_POST_UPGRADE_CHECK_PHASE_IDS = ("post-upgrade-mk8s-check", "post-upgrade-helm-check")
+_FAST_STAGE_VERIFICATION_PHASE_IDS = frozenset(
+    (*_MUTATING_PHASE_IDS, *_POST_UPGRADE_CHECK_PHASE_IDS)
+)
 _STATUS_PHASE_LABELS = {
     "discovery-and-plan": "Discovery and upgrade plan",
     "customer-approval": "Customer approval gate",
@@ -147,6 +158,8 @@ _STATUS_PHASE_LABELS = {
     "final-control-plane-cutover": "Final control-plane cutover",
     "validation-and-rollback-hold": "Validation and rollback hold",
     "retire-old-resources": "Retire old resources",
+    "post-upgrade-mk8s-check": "Post-upgrade MK8s check",
+    "post-upgrade-helm-check": "Post-upgrade Helm check",
 }
 _TARGET_GPU_STACK_APP_ORDER = ("nvidia-gpu-operator", "nvidia-network-operator")
 _SOPERATOR_ROLE_STORAGE_KEYS: Mapping[str, tuple[str, ...]] = {
@@ -215,6 +228,8 @@ _SOPERATOR_STORAGE_DEFAULTS: Mapping[str, Mapping[str, Any]] = {
 }
 _SOPERATOR_NAMESPACE = "soperator"
 _SOPERATOR_TARGET_RELEASE_NAME = "soperator"
+_SOPERATOR_CONTROLLER_POD = "controller-0"
+_SOPERATOR_CONTROLLER_CONTAINER = "slurmctld"
 _SOPERATOR_SOURCE_RELEASE_NAMES = frozenset(
     {
         "flux-system-soperator-fluxcd",
@@ -285,7 +300,7 @@ _SOPERATOR_SOURCE_CHART_PREFIXES = (
     "helm-storageclasses",
     "slurm-operator",
 )
-_ROLLING_COMPUTE_VALUES_REVISION = 8
+_ROLLING_COMPUTE_VALUES_REVISION = 10
 _VALIDATION_HOLD_REVISION = 2
 _TARGET_SLURM_PLUGIN_DIR = "/usr/lib/x86_64-linux-gnu/slurm"
 _HELM_OWNERSHIP_CONFLICT_RE = re.compile(
@@ -1103,33 +1118,38 @@ def _external_node_template_rollout_plan_lines(
     waves = _external_node_template_worker_waves(worker_groups, rollout=rollout)
     worker_names = [name for name, _raw_group in worker_groups]
     lines = [
-        f"Worker rollout strategy: {rollout.strategy}",
+        f"Node-template rollout strategy: {rollout.strategy}",
         "Worker wave parallelism: "
         + _worker_rollout_budget_label(rollout, worker_group_count=len(worker_groups)),
-        "Worker per-group strategy: " + _effective_worker_group_strategy_label(rollout),
+        "Node-group per-group strategy: " + _effective_worker_group_strategy_label(rollout),
     ]
     if rollout.strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE:
         surge_count = rollout.strategy_max_surge_count
         lines.append(
-            f"Worker spare capacity required: {surge_count} surge node(s) per worker "
-            "group in the active wave; --execute preflight verifies quota and capacity "
-            "before any cluster mutation."
+            f"Safe-surge spare capacity required: {surge_count} surge node(s) per active "
+            "service group or worker group in the active worker wave; --execute preflight "
+            "verifies quota and capacity before any cluster mutation."
         )
         if rollout.strategy_drain_timeout != "none":
             lines.append(
-                "Worker drain timeout: finite timeout may let Nebius delete a node after "
+                "Node-group drain timeout: finite timeout may let Nebius delete a node after "
                 f"{rollout.strategy_drain_timeout} if draining is still blocked."
             )
     else:
         unavailable_count = rollout.strategy_max_unavailable_count
         lines.append(
-            "Worker spare capacity required: no surge worker quota; active worker group "
+            "Zero-surge spare capacity required: no surge quota; active service or worker group "
             f"capacity may be reduced by {unavailable_count} node"
             f"{'' if unavailable_count == 1 else 's'} during rollout."
         )
     if service_groups:
+        service_strategy = (
+            rollout.strategy
+            if rollout.strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE
+            else "zero-surge"
+        )
         lines.append(
-            "Service-role rollout: serial zero-surge for "
+            f"Service-role rollout: serial {service_strategy} for "
             + ", ".join(name for name, _raw_group in service_groups)
             + "."
         )
@@ -1149,7 +1169,9 @@ def _nebius_project_id(payload: Mapping[str, Any]) -> str:
     nebius = _mapping(client_info.get("nebius"))
     project_id = str(nebius.get("project_id", "") or "").strip()
     if not project_id:
-        raise RuntimeError("External Soperator upgrade execute requires client_info.nebius.project_id.")
+        raise RuntimeError(
+            "External Soperator upgrade execute requires client_info.nebius.project_id."
+        )
     return project_id
 
 
@@ -1361,6 +1383,7 @@ _SOPERATOR_DEFAULTED_SPEC_PATHS: Mapping[str, tuple[tuple[str, ...], ...]] = {
     "SlurmCluster": (
         ("spec", "clusterType"),
         ("spec", "plugStackConfig", "pyxis", "importerPath"),
+        ("spec", "secrets"),
         ("spec", "slurmNodes", "controller", "openMetrics"),
         ("spec", "slurmNodes", "controller", "sssdDebugLevel"),
         ("spec", "slurmNodes", "login", "sssdDebugLevel"),
@@ -2378,7 +2401,7 @@ def _external_node_template_strategy_cli_args(
     *,
     worker_group: bool,
 ) -> tuple[list[str], str]:
-    if worker_group:
+    if worker_group or rollout.strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE:
         return _soperator_worker_strategy_cli_args(rollout), rollout.strategy
     return _soperator_zero_surge_strategy_cli_args(), "zero-surge"
 
@@ -2973,18 +2996,22 @@ def _target_pvc_name_for_storage_key(payload: Mapping[str, Any], target_ref: str
     return defaults[key]
 
 
+def _copy_job_name_for_storage_key(key: str) -> str:
+    normalized = normalize_component_token(key) or key.replace("_", "-")
+    return f"cxcli-soperator-sync-{normalized}"
+
+
 def _copy_job_manifest(
     *,
     key: str,
     source_pvc: str,
     target_pvc: str,
 ) -> dict[str, Any]:
-    normalized = normalize_component_token(key) or key.replace("_", "-")
     return {
         "apiVersion": "batch/v1",
         "kind": "Job",
         "metadata": {
-            "name": f"cxcli-soperator-sync-{normalized}",
+            "name": _copy_job_name_for_storage_key(key),
             "namespace": _SOPERATOR_NAMESPACE,
             "labels": {
                 "app.kubernetes.io/managed-by": "nebius-cxcli",
@@ -3873,6 +3900,7 @@ def _role_node_group_template(
     labels["nebius.com/node-group"] = source_node_group_label or _SOPERATOR_ROLE_SOURCE_KIND[role]
     labels["slurm.nebius.ai/nodeset-name"] = role
     if role != "worker":
+        labels["slurm.nebius.ai/nodeset"] = role
         labels["nebius.com/gpu"] = "false"
     metadata["labels"] = labels
     template["metadata"] = metadata
@@ -4437,7 +4465,7 @@ def _quota_requirement_totals_label(requirements: Sequence[QuotaRequirement]) ->
     return "; ".join(parts)
 
 
-def _worker_surge_node_group_quota_requirements(
+def _safe_surge_node_group_quota_requirements(
     *,
     payload: Mapping[str, Any],
     target_ref: str,
@@ -4452,16 +4480,16 @@ def _worker_surge_node_group_quota_requirements(
             [],
             [],
             [
-                "Quota preflight worker safe-surge: disabled by zero-surge worker "
-                "rollout strategy; no surge worker quota required."
+                "Quota preflight safe-surge: disabled by zero-surge rollout strategy; "
+                "no surge quota required."
             ],
         )
-    _service_groups, worker_groups = _split_external_node_template_upgrade_groups(
+    service_groups, worker_groups = _split_external_node_template_upgrade_groups(
         source_report=source_report,
         worker_node_groups=worker_node_groups,
     )
-    if not worker_groups:
-        return [], [], ["Quota preflight worker safe-surge: no worker groups detected."]
+    if not service_groups and not worker_groups:
+        return [], [], ["Quota preflight safe-surge: no source node groups detected."]
     waves = _external_node_template_worker_waves(worker_groups, rollout=rollout)
     surge_count = rollout.strategy_max_surge_count
     if surge_count <= 0:
@@ -4469,25 +4497,38 @@ def _worker_surge_node_group_quota_requirements(
             [],
             [],
             [
-                "Quota preflight worker safe-surge: no surge worker quota required "
+                "Quota preflight safe-surge: no surge quota required "
                 "because strategy max_surge_count is 0."
             ],
         )
+    safe_surge_waves: list[tuple[str, str, tuple[tuple[str, Mapping[str, Any]], ...]]] = [
+        (f"service group {group_name}", f"service-{group_name}", ((group_name, raw_group),))
+        for group_name, raw_group in service_groups
+    ]
+    safe_surge_waves.extend(
+        (
+            f"worker wave {wave_index}",
+            f"worker-wave-{wave_index}",
+            wave,
+        )
+        for wave_index, wave in enumerate(waves, start=1)
+    )
     all_requirements: list[QuotaRequirement] = []
     all_gaps: list[QuotaCoverageGap] = []
     lines: list[str] = [
-        "[green]Verified[/green] worker safe-surge preflight: checking spare capacity for "
+        "[green]Verified[/green] safe-surge preflight: checking spare capacity for "
+        + f"{len(service_groups)} service group(s) serially and "
         + _worker_rollout_budget_label(rollout, worker_group_count=len(worker_groups))
-        + f" with {surge_count} surge node(s) per active worker group"
+        + f" with {surge_count} surge node(s) per active group"
         + "."
     ]
-    for wave_index, wave in enumerate(waves, start=1):
+    for wave_label, instance_suffix, wave in safe_surge_waves:
         planned_groups: dict[str, Any] = {}
         for group_name, raw_group in wave:
             node_group_id = _source_group_node_group_id(raw_group)
             if not node_group_id:
                 raise SoperatorMigrationPhasePending(
-                    "quota preflight requires Nebius node group id for source worker "
+                    "quota preflight requires Nebius node group id for source "
                     f"group '{group_name}'."
                 )
             node_group = _node_group_payload_by_id(
@@ -4498,7 +4539,7 @@ def _worker_surge_node_group_quota_requirements(
             if not template:
                 raise SoperatorMigrationPhasePending(
                     "quota preflight could not clone a Nebius node template for source "
-                    f"worker group '{group_name}'."
+                    f"group '{group_name}'."
                 )
             planned_groups[f"{target_ref}-{group_name}-safe-surge"] = {
                 "node_count": surge_count,
@@ -4508,9 +4549,9 @@ def _worker_surge_node_group_quota_requirements(
         requirements, gaps = estimate_mk8s_quota_requirements(
             project_id=project_id,
             region=region,
-            instance_id=f"{target_ref}-soperator-worker-surge-wave-{wave_index}",
+            instance_id=f"{target_ref}-soperator-safe-surge-{instance_suffix}",
             inputs={"node_groups": planned_groups},
-            context="external soperator upgrade worker safe-surge quota preflight",
+            context="external soperator upgrade safe-surge quota preflight",
         )
         wave_requirements = [
             item for item in requirements if item.quota_name != "mk8s.cluster.count"
@@ -4518,7 +4559,7 @@ def _worker_surge_node_group_quota_requirements(
         all_requirements.extend(wave_requirements)
         all_gaps.extend(gaps)
         lines.append(
-            f"[green]Verified[/green] worker safe-surge wave {wave_index}: "
+            f"[green]Verified[/green] safe-surge {wave_label}: "
             + ", ".join(name for name, _raw_group in wave)
             + (
                 f" requires {surge_count} temporary surge node(s) per group, "
@@ -4927,8 +4968,8 @@ def _run_soperator_migration_quota_preflight(
         _EXTERNAL_NODE_TEMPLATE_PHASE_ID in phase_ids
         and _EXTERNAL_NODE_TEMPLATE_PHASE_ID not in completed_phases
     ):
-        worker_requirements, worker_gaps, worker_lines = (
-            _worker_surge_node_group_quota_requirements(
+        safe_surge_requirements, safe_surge_gaps, safe_surge_lines = (
+            _safe_surge_node_group_quota_requirements(
                 payload=payload,
                 target_ref=target_ref,
                 source_report=source_report,
@@ -4937,9 +4978,9 @@ def _run_soperator_migration_quota_preflight(
                 rollout=rollout,
             )
         )
-        requirements.extend(worker_requirements)
-        gaps.extend(worker_gaps)
-        plan_lines.extend(worker_lines)
+        requirements.extend(safe_surge_requirements)
+        gaps.extend(safe_surge_gaps)
+        plan_lines.extend(safe_surge_lines)
 
     if not requirements and not gaps:
         report = QuotaReport(
@@ -5022,7 +5063,7 @@ def _kubectl_exec_login(
     pod = _login_pod_name(command_runner=command_runner, kube_context=kube_context)
     if not pod:
         return SoperatorMigrationCommandResult(tuple(args), 1, "", "login pod not found")
-    return command_runner(
+    result = command_runner(
         [
             "kubectl",
             "--context",
@@ -5034,8 +5075,46 @@ def _kubectl_exec_login(
             "--",
             *args,
         ],
-        check=check,
+        check=False,
         timeout_seconds=timeout_seconds,
+    )
+    if _slurm_cli_needs_controller_fallback(result):
+        controller_result = command_runner(
+            [
+                "kubectl",
+                "--context",
+                kube_context,
+                "-n",
+                _SOPERATOR_NAMESPACE,
+                "exec",
+                _SOPERATOR_CONTROLLER_POD,
+                "-c",
+                _SOPERATOR_CONTROLLER_CONTAINER,
+                "--",
+                *args,
+            ],
+            check=False,
+            timeout_seconds=timeout_seconds,
+        )
+        if controller_result.returncode == 0:
+            return controller_result
+    if check and result.returncode != 0:
+        raise RuntimeError(_command_detail(result))
+    return result
+
+
+def _slurm_cli_needs_controller_fallback(result: SoperatorMigrationCommandResult) -> bool:
+    if result.returncode == 0:
+        return False
+    detail = _command_detail(result).lower()
+    return any(
+        marker in detail
+        for marker in (
+            "could not establish a configuration source",
+            "dns srv lookup failed",
+            "resolve_ctls_from_dns_srv",
+            "failed to fetch config",
+        )
     )
 
 
@@ -5111,28 +5190,100 @@ def _external_upgrade_parse_slurm_jobs(output: str) -> tuple[ExternalSoperatorUp
     return tuple(jobs)
 
 
+def _external_upgrade_parse_slurm_node_aliases(output: str) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    current_node = ""
+    for raw_line in output.splitlines():
+        tokens = str(raw_line or "").strip().split()
+        if not tokens:
+            continue
+        for token in tokens:
+            if "=" not in token:
+                continue
+            key, value = token.split("=", 1)
+            key = key.strip()
+            value = value.strip()
+            if not value or value in {"(null)", "N/A"}:
+                continue
+            if key == "NodeName":
+                current_node = value
+                aliases[value] = value
+                continue
+            if key in {"NodeHostName", "NodeAddr", "InstanceId"} and current_node:
+                aliases[value] = current_node
+    return aliases
+
+
+def _external_upgrade_slurm_node_filter(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    node_names: Sequence[str],
+) -> tuple[str, ...]:
+    selected_nodes = tuple(
+        str(node or "").strip() for node in node_names if str(node or "").strip()
+    )
+    if not selected_nodes:
+        return ()
+    result = _kubectl_exec_login(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        args=("scontrol", "show", "nodes"),
+        check=False,
+        timeout_seconds=120,
+    )
+    if result.returncode != 0:
+        return selected_nodes
+    aliases = _external_upgrade_parse_slurm_node_aliases(result.stdout)
+    if not aliases:
+        return selected_nodes
+    resolved: list[str] = []
+    for node in selected_nodes:
+        slurm_node = aliases.get(node)
+        if not slurm_node:
+            return ()
+        if slurm_node not in resolved:
+            resolved.append(slurm_node)
+    return tuple(resolved)
+
+
 def _external_upgrade_slurm_jobs(
     *,
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
     node_names: Sequence[str],
 ) -> tuple[ExternalSoperatorUpgradeSlurmJob, ...]:
-    args: list[str] = [
-        "squeue",
-        "-h",
-        "-o",
-        "%i|%u|%T|%P|%N|%M|%l|%L|%j",
-    ]
-    selected_nodes = tuple(str(node or "").strip() for node in node_names if str(node or "").strip())
-    if selected_nodes:
-        args.extend(["-w", ",".join(selected_nodes)])
-    result = _kubectl_exec_login(
+    selected_nodes = _external_upgrade_slurm_node_filter(
         command_runner=command_runner,
         kube_context=kube_context,
-        args=tuple(args),
-        check=False,
-        timeout_seconds=120,
+        node_names=node_names,
     )
+
+    def _squeue(nodes: Sequence[str]) -> SoperatorMigrationCommandResult:
+        args: list[str] = [
+            "squeue",
+            "-h",
+            "-o",
+            "%i|%u|%T|%P|%N|%M|%l|%L|%j",
+        ]
+        filtered_nodes = tuple(str(node or "").strip() for node in nodes if str(node or "").strip())
+        if filtered_nodes:
+            args.extend(["-w", ",".join(filtered_nodes)])
+        return _kubectl_exec_login(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            args=tuple(args),
+            check=False,
+            timeout_seconds=120,
+        )
+
+    result = _squeue(selected_nodes)
+    if (
+        result.returncode != 0
+        and selected_nodes
+        and "invalid node name" in _command_detail(result).lower()
+    ):
+        result = _squeue(())
     if result.returncode != 0:
         raise RuntimeError(
             "External Soperator upgrade could not inspect Slurm jobs from a login pod: "
@@ -5158,7 +5309,9 @@ def _external_upgrade_cancel_slurm_jobs(
         timeout_seconds=120,
     )
     if result.returncode != 0:
-        raise RuntimeError("External Soperator upgrade could not cancel Slurm jobs: " + _command_detail(result))
+        raise RuntimeError(
+            "External Soperator upgrade could not cancel Slurm jobs: " + _command_detail(result)
+        )
 
 
 def _external_upgrade_requeue_slurm_jobs(
@@ -5194,7 +5347,9 @@ def _wait_for_external_upgrade_requeued_jobs_to_leave_nodes(
     timeout_seconds: int,
     refresh_interval_seconds: int,
 ) -> tuple[ExternalSoperatorUpgradeSlurmJob, ...]:
-    selected = frozenset(str(job_id or "").strip() for job_id in job_ids if str(job_id or "").strip())
+    selected = frozenset(
+        str(job_id or "").strip() for job_id in job_ids if str(job_id or "").strip()
+    )
     if not selected:
         return _external_upgrade_slurm_jobs(
             command_runner=command_runner,
@@ -5362,7 +5517,9 @@ def _handle_external_upgrade_slurm_jobs(
         raise RuntimeError(
             "--job-policy must be one of: " + ", ".join(sorted(_EXTERNAL_UPGRADE_JOB_POLICIES))
         )
-    selected_nodes = tuple(str(node or "").strip() for node in node_names if str(node or "").strip())
+    selected_nodes = tuple(
+        str(node or "").strip() for node in node_names if str(node or "").strip()
+    )
     jobs = _external_upgrade_slurm_jobs(
         command_runner=command_runner,
         kube_context=kube_context,
@@ -5380,10 +5537,13 @@ def _handle_external_upgrade_slurm_jobs(
     if resolved_policy == "interactive":
         while True:
             _print_external_upgrade_jobs_table(jobs)
-            action = input(
-                "Choose Slurm job action: refresh, wait, cancel-selected, cancel-all, "
-                "requeue-selected, requeue-all, requeue-hold-selected, requeue-hold-all, abort [refresh]: "
-            ).strip() or "refresh"
+            action = (
+                input(
+                    "Choose Slurm job action: refresh, wait, cancel-selected, cancel-all, "
+                    "requeue-selected, requeue-all, requeue-hold-selected, requeue-hold-all, abort [refresh]: "
+                ).strip()
+                or "refresh"
+            )
             _record("operator-selected", selection=action)
             if action == "refresh":
                 jobs = _external_upgrade_slurm_jobs(
@@ -5557,7 +5717,9 @@ def _handle_external_upgrade_slurm_jobs(
         return ["Slurm job preflight: waited for blocking jobs to finish."]
     remaining: tuple[ExternalSoperatorUpgradeSlurmJob, ...] | None = None
     if resolved_policy == "cancel-selected":
-        selected = tuple(str(job_id or "").strip() for job_id in cancel_job_ids if str(job_id or "").strip())
+        selected = tuple(
+            str(job_id or "").strip() for job_id in cancel_job_ids if str(job_id or "").strip()
+        )
         if not selected:
             raise RuntimeError("--job-policy cancel-selected requires at least one --cancel-job.")
         _record("cancel-selected", job_ids=selected)
@@ -5574,7 +5736,9 @@ def _handle_external_upgrade_slurm_jobs(
             job_ids=[job.job_id for job in jobs],
         )
     elif resolved_policy == "requeue-selected":
-        selected = tuple(str(job_id or "").strip() for job_id in requeue_job_ids if str(job_id or "").strip())
+        selected = tuple(
+            str(job_id or "").strip() for job_id in requeue_job_ids if str(job_id or "").strip()
+        )
         if not selected:
             raise RuntimeError("--job-policy requeue-selected requires at least one --requeue-job.")
         _record("requeue-selected", job_ids=selected)
@@ -5608,9 +5772,13 @@ def _handle_external_upgrade_slurm_jobs(
             refresh_interval_seconds=refresh_interval_seconds,
         )
     elif resolved_policy == "requeue-hold-selected":
-        selected = tuple(str(job_id or "").strip() for job_id in requeue_job_ids if str(job_id or "").strip())
+        selected = tuple(
+            str(job_id or "").strip() for job_id in requeue_job_ids if str(job_id or "").strip()
+        )
         if not selected:
-            raise RuntimeError("--job-policy requeue-hold-selected requires at least one --requeue-job.")
+            raise RuntimeError(
+                "--job-policy requeue-hold-selected requires at least one --requeue-job."
+            )
         _record("requeue-hold-selected", job_ids=selected)
         _external_upgrade_requeue_slurm_jobs(
             command_runner=command_runner,
@@ -6908,6 +7076,11 @@ def _source_worker_nodeset_values(
 ) -> list[dict[str, Any]]:
     source_snapshot, _report = _source_report_payload(source_report)
     source_groups_by_nodeset = _source_worker_node_groups_by_nodeset(source_report)
+    sole_source_group = (
+        next(iter(source_groups_by_nodeset.values()))
+        if len(source_groups_by_nodeset) == 1
+        else None
+    )
     result: list[dict[str, Any]] = []
     for resource in _sequence_of_mappings(source_snapshot.get("soperator_resources")):
         if str(resource.get("kind", "") or "").strip().lower() != "nodeset":
@@ -6923,7 +7096,7 @@ def _source_worker_nodeset_values(
         item["name"] = name
         _normalize_source_worker_nodeset_value(
             item,
-            source_group=source_groups_by_nodeset.get(name),
+            source_group=source_groups_by_nodeset.get(name) or sole_source_group,
             live_snapshot=live_snapshot,
             topology=_mapping((topology_by_nodeset or {}).get(name)),
         )
@@ -6976,6 +7149,10 @@ def _nodeset_gpu_count(
         parsed = _positive_int(value, fallback=0)
         if parsed:
             return parsed
+    static = str(_mapping(nodeset.get("nodeConfig")).get("static", "") or "")
+    match = re.search(r"(?:^|\s)Gres=gpu:(?P<count>[0-9]+)(?:\s|$)", static, flags=re.IGNORECASE)
+    if match:
+        return _positive_int(match.group("count"), fallback=0) or None
     return None
 
 
@@ -7159,6 +7336,26 @@ def _strip_reserved_nodeset_custom_volume_mounts(nodeset: dict[str, Any]) -> Non
         volumes["customVolumeMounts"] = kept
     else:
         volumes.pop("customVolumeMounts", None)
+
+
+def _strip_reserved_nodeset_custom_init_containers(nodeset: dict[str, Any]) -> None:
+    containers = nodeset.get("customInitContainers")
+    if not isinstance(containers, Sequence) or isinstance(containers, (str, bytes, bytearray)):
+        return
+    kept: list[Any] = []
+    changed = False
+    for container in containers:
+        name = str(_mapping(container).get("name", "") or "").strip()
+        if name == SOPERATOR_GPU_DRIVER_JAIL_INIT_CONTAINER_NAME:
+            changed = True
+            continue
+        kept.append(container)
+    if not changed:
+        return
+    if kept:
+        nodeset["customInitContainers"] = kept
+    else:
+        nodeset.pop("customInitContainers", None)
 
 
 def _default_worker_security_proc_mount(nodeset: dict[str, Any]) -> None:
@@ -7371,6 +7568,7 @@ def _normalize_source_worker_nodeset_value(
         live_snapshot=live_snapshot,
         topology=topology,
     )
+    _strip_reserved_nodeset_custom_init_containers(nodeset)
     _strip_reserved_nodeset_custom_volume_mounts(nodeset)
     normalize_soperator_gpu_driver_jail_mounts(
         nodeset,
@@ -9169,10 +9367,140 @@ def _resume_drained_slurm_nodes(
     return drained
 
 
+def _target_worker_pod_instance_ids(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+) -> dict[str, str]:
+    payload = _json_from_command(
+        command_runner,
+        [
+            "kubectl",
+            "--context",
+            kube_context,
+            "-n",
+            _SOPERATOR_NAMESPACE,
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ],
+        timeout_seconds=30,
+        check=False,
+    )
+    items = payload.get("items", [])
+    if not isinstance(items, Sequence) or isinstance(items, (str, bytes, bytearray)):
+        return {}
+    result: dict[str, str] = {}
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        metadata = _mapping(item.get("metadata"))
+        labels = _mapping(metadata.get("labels"))
+        name = str(metadata.get("name", "") or "").strip()
+        phase = str(_mapping(item.get("status")).get("phase", "") or "").strip()
+        instance_id = str(_mapping(item.get("spec")).get("nodeName", "") or "").strip()
+        nodeset_name = str(labels.get("slurm.nebius.ai/nodeset", "") or "")
+        worker_label = str(labels.get("slurm.nebius.ai/worker", "") or "").lower()
+        is_worker = (
+            worker_label == "true"
+            or nodeset_name.startswith(_SOURCE_WORKER_NODESET_PREFIX)
+            or name.startswith(f"{_SOURCE_WORKER_NODESET_PREFIX}-")
+        )
+        if name and instance_id and phase == "Running" and is_worker:
+            result[name] = instance_id
+    return result
+
+
+def _reconcile_slurm_worker_runtime_identity(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    target_ref: str,
+) -> list[str]:
+    worker_instances = _target_worker_pod_instance_ids(
+        command_runner=command_runner,
+        kube_context=kube_context,
+    )
+    if not worker_instances:
+        return []
+    service_suffix = f"{target_ref}-nodeset-svc.{_SOPERATOR_NAMESPACE}.svc.cluster.local"
+    script_lines = [
+        "set -euo pipefail",
+        f"service_suffix={shlex.quote(service_suffix)}",
+        "changed=0",
+    ]
+    for node_name, instance_id in sorted(worker_instances.items()):
+        script_lines.extend(
+            [
+                f"node={shlex.quote(node_name)}",
+                f"expected_instance={shlex.quote(instance_id)}",
+                'expected_addr="${node}.${service_suffix}"',
+                "node_state=\"$(scontrol show node \"${node}\" | tr '\\n' ' ' || true)\"",
+                (
+                    'current_addr="$(printf "%s" "${node_state}" '
+                    "| sed -n 's/.* NodeAddr=\\([^ ]*\\).*/\\1/p')\""
+                ),
+                (
+                    'current_instance="$(printf "%s" "${node_state}" '
+                    "| sed -n 's/.* InstanceId=\\([^ ]*\\).*/\\1/p')\""
+                ),
+                'if [[ -n "${current_addr}" && "${current_addr}" != "${expected_addr}" ]]; then',
+                '  scontrol update NodeName="${node}" NodeAddr="${expected_addr}"',
+                '  printf "%s NodeAddr %s -> %s\\n" "${node}" "${current_addr}" "${expected_addr}"',
+                "  changed=1",
+                "fi",
+                (
+                    'if [[ -n "${current_instance}" '
+                    '&& "${current_instance}" != "${expected_instance}" ]]; then'
+                ),
+                '  scontrol update NodeName="${node}" InstanceId="${expected_instance}"',
+                (
+                    '  printf "%s InstanceId %s -> %s\\n" '
+                    '"${node}" "${current_instance}" "${expected_instance}"'
+                ),
+                "  changed=1",
+                "fi",
+            ]
+        )
+    script_lines.extend(
+        [
+            'if (( changed == 0 )); then printf "Slurm worker runtime identity already aligned.\\n"; fi',
+        ]
+    )
+    result = command_runner(
+        [
+            "kubectl",
+            "--context",
+            kube_context,
+            "-n",
+            _SOPERATOR_NAMESPACE,
+            "exec",
+            _SOPERATOR_CONTROLLER_POD,
+            "-c",
+            _SOPERATOR_CONTROLLER_CONTAINER,
+            "--",
+            "bash",
+            "-lc",
+            "\n".join(script_lines),
+        ],
+        check=False,
+        timeout_seconds=180,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Could not reconcile Soperator Slurm worker runtime identity after "
+            f"target cutover: {_command_detail(result)}"
+        )
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
 def _resume_slurm_after_cutover(
     *,
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
+    target_ref: str,
 ) -> list[str]:
     _resume_slurm_partitions(
         command_runner=command_runner,
@@ -9186,6 +9514,16 @@ def _resume_slurm_after_cutover(
     if resumed_nodes:
         lines.append(
             "Slurm nodes resumed after target Soperator cutover: " + ", ".join(resumed_nodes) + "."
+        )
+    identity_lines = _reconcile_slurm_worker_runtime_identity(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        target_ref=target_ref,
+    )
+    if identity_lines:
+        lines.append(
+            "Slurm worker runtime identity reconciled after target Soperator cutover: "
+            + "; ".join(identity_lines)
         )
     return lines
 
@@ -9754,7 +10092,7 @@ def _execute_external_node_template_upgrade_phase(
             checkpoint_writer()
         phase_mutation, work_lines = _run_prepared_group(
             work,
-            allow_service_quiesce=True,
+            allow_service_quiesce=work.get("strategy_label") == "zero-surge",
             write_progress=True,
         )
         mutation_performed = mutation_performed or phase_mutation
@@ -10230,6 +10568,7 @@ def _execute_rolling_compute_migration_phase(
     resume_lines = _resume_slurm_after_cutover(
         command_runner=command_runner,
         kube_context=kube_context,
+        target_ref=target_ref,
     )
     mutation_performed = True
     phase["target_values_revision"] = _ROLLING_COMPUTE_VALUES_REVISION
@@ -10344,6 +10683,7 @@ def _reapply_stale_rolling_compute_values(
         _resume_slurm_after_cutover(
             command_runner=command_runner,
             kube_context=kube_context,
+            target_ref=target_ref,
         )
     )
     phase["target_values_revision"] = _ROLLING_COMPUTE_VALUES_REVISION
@@ -11126,7 +11466,9 @@ def _execute_validation_hold_phase(
         approve_remediation=approve_remediation,
     )
     checkpoint["upgrade_safety"] = update_safety_payload_with_verification(
-        checkpoint.get("upgrade_safety") if isinstance(checkpoint.get("upgrade_safety"), Mapping) else None,
+        checkpoint.get("upgrade_safety")
+        if isinstance(checkpoint.get("upgrade_safety"), Mapping)
+        else None,
         safety_result,
         remediation_approved=approve_remediation,
     )
@@ -11148,8 +11490,7 @@ def _execute_validation_hold_phase(
         *helm_state_lines,
         *validation_lines,
         *soperator_validation_lines,
-        "Shared Soperator upgrade safety verification completed: "
-        + str(safety_result.status),
+        "Shared Soperator upgrade safety verification completed: " + str(safety_result.status),
     ]
 
 
@@ -11236,7 +11577,9 @@ def _load_checkpoint(path: Path) -> dict[str, Any] | None:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"External Soperator upgrade checkpoint is invalid JSON: {path}") from exc
+        raise RuntimeError(
+            f"External Soperator upgrade checkpoint is invalid JSON: {path}"
+        ) from exc
     if not isinstance(payload, dict):
         raise RuntimeError(f"External Soperator upgrade checkpoint must be a JSON object: {path}")
     if payload.get("schema") != SOPERATOR_MIGRATION_EXECUTION_SCHEMA:
@@ -11326,8 +11669,8 @@ def _phase_report_summary(phase_id: str, phase: Mapping[str, Any]) -> str:
         updates = _sequence_of_mappings(phase.get("node_group_updates"))
         return f"external node-template updates recorded: {len(updates)}."
     if phase_id == _TARGET_GPU_STACK_PHASE_ID:
-        apps = _sequence_of_mappings(phase.get("apps"))
-        return f"target GPU stack app rows applied or verified: {len(apps)}."
+        charts = _sequence_of_mappings(phase.get("charts"))
+        return f"target GPU stack charts applied or verified: {len(charts)}."
     if phase_id == "create-aligned-sfs":
         filesystems = _mapping(phase.get("filesystems"))
         return (
@@ -11482,6 +11825,7 @@ def _write_soperator_migrate_report(
         "",
     ]
     phase_reports: list[dict[str, Any]] = []
+    stage_verification_reports: list[dict[str, Any]] = []
     for phase_id in phase_ids:
         status = _phase_report_status(
             phase_id,
@@ -11489,11 +11833,42 @@ def _write_soperator_migrate_report(
             pending_phase=pending_phase,
         )
         phase = _mapping(phase_state.get(phase_id))
+        fast_verification = stage_fast_verification_report(phase_id, phase)
+        if phase_id in _FAST_STAGE_VERIFICATION_PHASE_IDS:
+            stage_verification_reports.append(fast_verification)
         phase_reports.append(
             {
                 "id": phase_id,
                 "status": status_label(status),
                 "summary": _phase_report_summary(phase_id, phase),
+                "fast_verification": fast_verification,
+                "state": to_plain_data(phase),
+            }
+        )
+        lines.extend([f"### {phase_id}", "", f"- Status: `{status_label(status)}`"])
+        lines.append(f"- Summary: {_phase_report_summary(phase_id, phase)}")
+        if phase_id in _FAST_STAGE_VERIFICATION_PHASE_IDS:
+            lines.append(
+                "- Fast verification: `"
+                + status_label(str(fast_verification.get("status", "") or "not_run"))
+                + "` - "
+                + str(fast_verification.get("summary", "") or "No summary recorded.")
+            )
+        lines.append("")
+    for phase_id in _POST_UPGRADE_CHECK_PHASE_IDS:
+        phase = _mapping(phase_state.get(phase_id))
+        fast_verification = stage_fast_verification_report(phase_id, phase)
+        stage_verification_reports.append(fast_verification)
+        verification_status = str(fast_verification.get("status", "") or "not_run")
+        verification_summary = str(
+            fast_verification.get("summary", "") or "No summary recorded."
+        )
+        phase_reports.append(
+            {
+                "id": phase_id,
+                "status": status_label(verification_status),
+                "summary": verification_summary,
+                "fast_verification": fast_verification,
                 "state": to_plain_data(phase),
             }
         )
@@ -11501,11 +11876,16 @@ def _write_soperator_migrate_report(
             [
                 f"### {phase_id}",
                 "",
-                f"- Status: `{status_label(status)}`",
-                f"- Summary: {_phase_report_summary(phase_id, phase)}",
+                f"- Status: `{status_label(verification_status)}`",
+                f"- Summary: {verification_summary}",
+                "- Fast verification: `"
+                + status_label(verification_status)
+                + "` - "
+                + verification_summary,
                 "",
             ]
         )
+    lines.extend(stage_fast_verification_markdown_lines(stage_verification_reports))
     validation_phase = _mapping(phase_state.get("validation-and-rollback-hold"))
     lines.extend(["## Validations", ""])
     lines.extend(
@@ -11562,9 +11942,12 @@ def _write_soperator_migrate_report(
         "upgrade_performed": mutation_performed,
         "completed_phases": list(_ordered_phase_list(completed_phases, phase_ids)),
         "phases": phase_reports,
+        "stage_verification": stage_verification_reports,
         "backup": to_plain_data(_mapping(checkpoint.get("backup"))),
         "slurm": to_plain_data(_mapping(checkpoint.get("slurm"))),
-        "mk8s": to_plain_data(_mapping(_mapping(phase_state).get(_EXTERNAL_NODE_TEMPLATE_PHASE_ID))),
+        "mk8s": to_plain_data(
+            _mapping(_mapping(phase_state).get(_EXTERNAL_NODE_TEMPLATE_PHASE_ID))
+        ),
         "helm": to_plain_data(_mapping(checkpoint.get("helm"))),
         "validation": to_plain_data(validation_phase),
         "events": [to_plain_data(event) for event in events],
@@ -11612,7 +11995,9 @@ def _checkpoint_for_run(
     previous_source_report_fingerprint = ""
     if existing is not None:
         if str(existing.get("target_ref", "") or "") != target_ref:
-            raise RuntimeError("External Soperator upgrade checkpoint belongs to a different target.")
+            raise RuntimeError(
+                "External Soperator upgrade checkpoint belongs to a different target."
+            )
         existing_source_version = str(existing.get("source_version", "") or "").strip()
         existing_target_version = str(existing.get("target_version", "") or "").strip()
         existing_planned_phases = tuple(
@@ -13085,6 +13470,487 @@ def _final_cutover_satisfied(
     return True
 
 
+def _record_phase_fast_verification(
+    *,
+    checkpoint: dict[str, Any],
+    phase_id: str,
+    status: str,
+    summary: str,
+    checks: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    payload = build_stage_fast_verification_payload(
+        phase_id=phase_id,
+        status=status,
+        summary=summary,
+        checks=checks,
+    )
+    phase = _phase_state(checkpoint, phase_id)
+    phase["fast_verification"] = payload
+    _append_event(
+        checkpoint,
+        "execute-phase-fast-verification-" + ("failed" if status == "failed" else "passed"),
+        phase=phase_id,
+        status=status,
+        summary=summary,
+    )
+    return payload
+
+
+def _fast_verification_check(name: str, status: str, summary: str) -> dict[str, str]:
+    return stage_fast_verification_check(name, status, summary)
+
+
+def _fast_verification_failed(checks: Sequence[Mapping[str, Any]]) -> bool:
+    return stage_fast_verification_failed(checks)
+
+
+def _online_bulk_data_sync_fast_verification_checks(
+    *,
+    checkpoint: Mapping[str, Any],
+    kube_context: str,
+    command_runner: SoperatorMigrationCommandRunner,
+) -> tuple[str, list[Mapping[str, str]]]:
+    phase = _mapping(_mapping(checkpoint.get("phase_state")).get("online-bulk-data-sync"))
+    skipped_reason = str(phase.get("skipped_reason", "") or "").strip()
+    if skipped_reason:
+        return (
+            f"data sync skipped as expected: {skipped_reason}.",
+            [
+                _fast_verification_check(
+                    "Data sync planning",
+                    "skipped",
+                    skipped_reason,
+                )
+            ],
+        )
+    jobs = _mapping(phase.get("jobs"))
+    if not jobs:
+        return (
+            "data sync did not record any copy jobs or skip reason.",
+            [
+                _fast_verification_check(
+                    "Data sync jobs",
+                    "failed",
+                    "no copy jobs or skip reason recorded",
+                )
+            ],
+        )
+    checks: list[Mapping[str, str]] = []
+    completed = 0
+    skipped = 0
+    for key, raw_job in sorted(jobs.items()):
+        job_state = _mapping(raw_job)
+        if bool(job_state.get("skipped")):
+            skipped += 1
+            checks.append(
+                _fast_verification_check(
+                    f"Data sync {key}",
+                    "skipped",
+                    "source and target PVC already match",
+                )
+            )
+            continue
+        job_name = _copy_job_name_for_storage_key(str(key))
+        exists, job = _kubectl_get_namespace_resource(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            resource=f"job/{job_name}",
+        )
+        if not exists:
+            checks.append(
+                _fast_verification_check(
+                    f"Data sync {key}",
+                    "failed",
+                    f"copy Job {job_name} was not found",
+                )
+            )
+            continue
+        if _job_condition_true(job, "Failed"):
+            checks.append(
+                _fast_verification_check(
+                    f"Data sync {key}",
+                    "failed",
+                    f"copy Job {job_name} reports Failed=True",
+                )
+            )
+            continue
+        if not _job_condition_true(job, "Complete"):
+            checks.append(
+                _fast_verification_check(
+                    f"Data sync {key}",
+                    "failed",
+                    f"copy Job {job_name} has not completed",
+                )
+            )
+            continue
+        completed += 1
+        checks.append(
+            _fast_verification_check(
+                f"Data sync {key}",
+                "passed",
+                f"copy Job {job_name} completed",
+            )
+        )
+    if _fast_verification_failed(checks):
+        return "one or more data sync jobs are missing, failed, or incomplete.", checks
+    return f"data sync jobs verified complete: {completed}; skipped: {skipped}.", checks
+
+
+def _rolling_compute_fast_verification_checks(
+    *,
+    checkpoint: Mapping[str, Any],
+    payload: Mapping[str, Any],
+    source_report: Mapping[str, Any],
+    live_snapshot: Mapping[str, Any],
+    target_ref: str,
+    kube_context: str,
+    command_runner: SoperatorMigrationCommandRunner,
+) -> tuple[str, list[Mapping[str, str]]]:
+    phase = _mapping(_mapping(checkpoint.get("phase_state")).get("rolling-compute-migration"))
+    skipped_reason = str(phase.get("skipped_reason", "") or "").strip()
+    if skipped_reason:
+        return (
+            f"compute migration skipped as expected: {skipped_reason}.",
+            [
+                _fast_verification_check(
+                    "Compute migration planning",
+                    "skipped",
+                    skipped_reason,
+                )
+            ],
+        )
+    checks: list[Mapping[str, str]] = []
+    try:
+        _kubectl_rollout_status(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            namespace=_SOPERATOR_NAMESPACE,
+            resource="deployment/soperator-manager",
+            timeout="2m",
+        )
+    except RuntimeError as exc:
+        checks.append(
+            _fast_verification_check(
+                "Target Soperator manager rollout",
+                "failed",
+                str(exc).strip() or "rollout status failed",
+            )
+        )
+    else:
+        checks.append(
+            _fast_verification_check(
+                "Target Soperator manager rollout",
+                "passed",
+                "deployment/soperator-manager is rolled out",
+            )
+        )
+    values = _patch_target_values_for_compute(
+        checkpoint=checkpoint,
+        payload=payload,
+        target_ref=target_ref,
+        source_report=source_report,
+        live_snapshot=live_snapshot,
+    )
+    names = _target_worker_nodeset_names(values)
+    for name in names:
+        nodeset = _json_from_command(
+            command_runner,
+            [
+                "kubectl",
+                "--context",
+                kube_context,
+                "-n",
+                _SOPERATOR_NAMESPACE,
+                "get",
+                "nodeset",
+                name,
+                "-o",
+                "json",
+            ],
+            timeout_seconds=120,
+            check=False,
+        )
+        if not _mapping(nodeset.get("metadata")):
+            checks.append(
+                _fast_verification_check(
+                    f"Worker NodeSet {name}",
+                    "failed",
+                    "target worker NodeSet was not found",
+                )
+            )
+            continue
+        ready, detail = _worker_nodeset_ready_state(nodeset)
+        checks.append(
+            _fast_verification_check(
+                f"Worker NodeSet {name}",
+                "passed" if ready else "failed",
+                detail,
+            )
+        )
+    if _fast_verification_failed(checks):
+        return "target Soperator manager or worker NodeSets are not ready.", checks
+    return f"target Soperator manager and worker NodeSets are ready: {len(names)}.", checks
+
+
+def _validation_hold_fast_verification_checks(
+    *,
+    checkpoint: Mapping[str, Any],
+) -> tuple[str, list[Mapping[str, str]]]:
+    phase = _mapping(_mapping(checkpoint.get("phase_state")).get("validation-and-rollback-hold"))
+    revision = _validation_hold_revision(checkpoint)
+    checks: list[Mapping[str, str]] = [
+        _fast_verification_check(
+            "Validation hold contract revision",
+            "passed" if revision >= _VALIDATION_HOLD_REVISION else "failed",
+            f"recorded={revision}, expected={_VALIDATION_HOLD_REVISION}",
+        )
+    ]
+    safety = _mapping(phase.get("shared_safety_verification"))
+    safety_status = str(safety.get("status", "") or "not_run")
+    checks.append(
+        _fast_verification_check(
+            "Shared upgrade safety",
+            "passed" if safety.get("passed") is True else "failed",
+            f"status={safety_status}",
+        )
+    )
+    soperator_count = _positive_int(phase.get("soperator_cluster_validation_count"), fallback=0)
+    soperator_reports = [
+        str(path)
+        for path in phase.get("soperator_cluster_validation_reports", []) or []
+        if str(path).strip()
+    ]
+    checks.append(
+        _fast_verification_check(
+            "Soperator deployment snapshot report",
+            "passed"
+            if soperator_count > 0 and len(soperator_reports) >= soperator_count
+            else "failed",
+            f"reports={len(soperator_reports)}, expected={soperator_count or 1}",
+        )
+    )
+    gpu_count = _positive_int(phase.get("mk8s_gpu_validation_count"), fallback=0)
+    gpu_reports = [
+        str(path)
+        for path in phase.get("mk8s_gpu_validation_reports", []) or []
+        if str(path).strip()
+    ]
+    gpu_status = "passed" if len(gpu_reports) >= gpu_count else "failed"
+    if gpu_count == 0:
+        gpu_status = "skipped"
+    checks.append(
+        _fast_verification_check(
+            "Configured MK8s GPU validation reports",
+            gpu_status,
+            f"reports={len(gpu_reports)}, expected={gpu_count}",
+        )
+    )
+    if _fast_verification_failed(checks):
+        return "validation hold artifacts are incomplete or failed.", checks
+    return "validation hold artifacts and shared safety result are recorded.", checks
+
+
+def _retire_old_resources_fast_verification_checks(
+    *,
+    checkpoint: Mapping[str, Any],
+) -> tuple[str, list[Mapping[str, str]]]:
+    phase = _mapping(_mapping(checkpoint.get("phase_state")).get("retire-old-resources"))
+    skipped_reason = str(phase.get("skipped_reason", "") or "").strip()
+    if skipped_reason:
+        return (
+            f"old-resource retirement skipped as expected: {skipped_reason}.",
+            [
+                _fast_verification_check(
+                    "Old resource retirement",
+                    "skipped",
+                    skipped_reason,
+                )
+            ],
+        )
+    retired = _sequence_of_mappings(phase.get("retired_node_groups"))
+    if retired:
+        summary = f"retired replaced node groups: {len(retired)}."
+        storage_retirement = str(phase.get("storage_retirement", "") or "").strip()
+        if storage_retirement:
+            summary += f" storage_retirement={storage_retirement}."
+        return (
+            summary,
+            [
+                _fast_verification_check(
+                    "Replaced node-group retirement",
+                    "passed",
+                    summary,
+                )
+            ],
+        )
+    return (
+        "old-resource retirement recorded neither retired node groups nor an expected skip.",
+        [
+            _fast_verification_check(
+                "Old resource retirement",
+                "failed",
+                "no retired node groups or skip reason recorded",
+            )
+        ],
+    )
+
+
+def _run_external_upgrade_phase_fast_verification(
+    *,
+    checkpoint: dict[str, Any],
+    phase_id: str,
+    payload: Mapping[str, Any],
+    source_report: Mapping[str, Any],
+    live_snapshot: Mapping[str, Any],
+    target_ref: str,
+    kube_context: str,
+    worker_node_groups: Sequence[str],
+    command_runner: SoperatorMigrationCommandRunner,
+) -> list[str]:
+    try:
+        if phase_id == _EXTERNAL_NODE_TEMPLATE_PHASE_ID:
+            verification_lines = _verify_completed_soperator_migration_mk8s_state(
+                payload=payload,
+                source_report=source_report,
+                target_ref=target_ref,
+                worker_node_groups=worker_node_groups,
+                phase_ids=(phase_id,),
+                command_runner=command_runner,
+            )
+            summary = verification_lines[0] if verification_lines else "node-template verified."
+            checks = [
+                _fast_verification_check(
+                    "External MK8s node-template",
+                    "passed",
+                    summary,
+                )
+            ]
+        elif phase_id == _TARGET_GPU_STACK_PHASE_ID:
+            satisfied = _target_gpu_stack_remediation_satisfied(
+                payload=payload,
+                target_ref=target_ref,
+                kube_context=kube_context,
+                command_runner=command_runner,
+            )
+            summary = (
+                "target GPU stack Helm releases and post-render patches are applied."
+                if satisfied
+                else "target GPU stack Helm releases or post-render patches are not ready."
+            )
+            checks = [
+                _fast_verification_check(
+                    "Target GPU stack",
+                    "passed" if satisfied else "failed",
+                    summary,
+                )
+            ]
+        elif phase_id == "create-aligned-sfs":
+            satisfied = _create_aligned_sfs_satisfied(
+                payload=payload,
+                source_report=source_report,
+                target_ref=target_ref,
+                worker_node_groups=worker_node_groups,
+                command_runner=command_runner,
+            )
+            summary = (
+                "aligned SFS filesystems and source node-group attachments are present."
+                if satisfied
+                else "aligned SFS filesystems or source node-group attachments are incomplete."
+            )
+            checks = [
+                _fast_verification_check(
+                    "Aligned SFS",
+                    "passed" if satisfied else "failed",
+                    summary,
+                )
+            ]
+        elif phase_id == "online-bulk-data-sync":
+            summary, checks = _online_bulk_data_sync_fast_verification_checks(
+                checkpoint=checkpoint,
+                kube_context=kube_context,
+                command_runner=command_runner,
+            )
+        elif phase_id == "rolling-compute-migration":
+            summary, checks = _rolling_compute_fast_verification_checks(
+                checkpoint=checkpoint,
+                payload=payload,
+                source_report=source_report,
+                live_snapshot=live_snapshot,
+                target_ref=target_ref,
+                kube_context=kube_context,
+                command_runner=command_runner,
+            )
+        elif phase_id == "final-control-plane-cutover":
+            phase = _mapping(_mapping(checkpoint.get("phase_state")).get(phase_id))
+            skipped_reason = str(phase.get("skipped_reason", "") or "").strip()
+            if skipped_reason:
+                summary = f"final cutover skipped as expected: {skipped_reason}."
+                checks = [
+                    _fast_verification_check(
+                        "Final control-plane cutover",
+                        "skipped",
+                        skipped_reason,
+                    )
+                ]
+            else:
+                satisfied = _final_cutover_satisfied(
+                    checkpoint=checkpoint,
+                    payload=payload,
+                    source_report=source_report,
+                    live_snapshot=live_snapshot,
+                    target_ref=target_ref,
+                    kube_context=kube_context,
+                    command_runner=command_runner,
+                )
+                summary = (
+                    "target SlurmCluster and expected NodeSets match the cutover state."
+                    if satisfied
+                    else "target SlurmCluster or expected NodeSets do not match the cutover state."
+                )
+                checks = [
+                    _fast_verification_check(
+                        "Final control-plane cutover",
+                        "passed" if satisfied else "failed",
+                        summary,
+                    )
+                ]
+        elif phase_id == "validation-and-rollback-hold":
+            summary, checks = _validation_hold_fast_verification_checks(checkpoint=checkpoint)
+        elif phase_id == "retire-old-resources":
+            summary, checks = _retire_old_resources_fast_verification_checks(checkpoint=checkpoint)
+        else:
+            summary = "no fast verifier is registered for this stage."
+            checks = [
+                _fast_verification_check(
+                    "Fast stage verifier",
+                    "failed",
+                    summary,
+                )
+            ]
+    except Exception as exc:
+        summary = str(exc).strip() or "fast stage verification failed"
+        checks = [
+            _fast_verification_check(
+                _STATUS_PHASE_LABELS.get(phase_id, phase_id),
+                "failed",
+                summary,
+            )
+        ]
+    status = "failed" if _fast_verification_failed(checks) else "passed"
+    _record_phase_fast_verification(
+        checkpoint=checkpoint,
+        phase_id=phase_id,
+        status=status,
+        summary=summary,
+        checks=checks,
+    )
+    if status == "failed":
+        raise SoperatorMigrationPhasePending(
+            f"fast stage verification failed after {phase_id}: {summary}"
+        )
+    return [f"Fast stage verification passed: {summary}"]
+
+
 def _reconcile_completed_action_phases(
     *,
     checkpoint: dict[str, Any],
@@ -13568,7 +14434,9 @@ def _execute_soperator_migration_unlocked(
                 kube_context=kube_context,
             )
             checkpoint["upgrade_safety"] = update_safety_payload_with_before(
-                checkpoint.get("upgrade_safety") if isinstance(checkpoint.get("upgrade_safety"), Mapping) else None,
+                checkpoint.get("upgrade_safety")
+                if isinstance(checkpoint.get("upgrade_safety"), Mapping)
+                else None,
                 protected_state_before,
                 backup=backup_state or {"status": "not-recorded"},
             )
@@ -13785,22 +14653,41 @@ def _execute_soperator_migration_unlocked(
                 pending_reason = f"unsupported external Soperator upgrade phase '{phase_id}'."
                 break
             status_started = False
+            phase_mutation = False
+            verification_lines: list[str] = []
             try:
                 if status_reporter is not None:
                     _append_status_event(status_reporter.set_phase(phase_id), point="phase-start")
                     status_reporter.start()
                     status_started = True
                 phase_mutation, lines = handler()
+                mutation_performed = mutation_performed or phase_mutation
+                phase_lines.extend([f"{phase_id}: {line}" for line in lines])
+                if phase_id in _FAST_STAGE_VERIFICATION_PHASE_IDS:
+                    _emit_phase_comment(phase_id, "running fast stage verification.")
+                    verification_lines = _run_external_upgrade_phase_fast_verification(
+                        checkpoint=checkpoint,
+                        phase_id=phase_id,
+                        payload=payload,
+                        source_report=execution_source_report,
+                        live_snapshot=live_snapshot,
+                        target_ref=normalized_target,
+                        kube_context=kube_context,
+                        worker_node_groups=approved_worker_groups,
+                        command_runner=active_command_runner,
+                    )
             except SoperatorMigrationPhasePending as exc:
                 pending_phase = phase_id
                 pending_reason = str(exc)
+                checkpoint["pending_phase"] = pending_phase
+                checkpoint["pending_reason"] = pending_reason
+                _checkpoint_progress()
                 break
             finally:
                 if status_reporter is not None:
                     _append_status_event(status_reporter.emit(force=True), point="phase-end")
                     if status_started:
                         status_reporter.stop()
-            mutation_performed = mutation_performed or phase_mutation
             completed_phases.add(phase_id)
             _append_event(
                 checkpoint,
@@ -13809,7 +14696,7 @@ def _execute_soperator_migration_unlocked(
                 mutation_performed=phase_mutation,
             )
             _clear_completed_pending_phase(checkpoint, phase_id)
-            phase_lines.extend([f"{phase_id}: {line}" for line in lines])
+            phase_lines.extend([f"{phase_id}: {line}" for line in verification_lines])
             _checkpoint_progress()
             if phase_id in {
                 _EXTERNAL_NODE_TEMPLATE_PHASE_ID,
@@ -13832,34 +14719,111 @@ def _execute_soperator_migration_unlocked(
             "post-upgrade-mk8s-check",
             "verifying completed MK8s node-template and worker rollout state.",
         )
-        mk8s_state_lines = _verify_completed_soperator_migration_mk8s_state(
-            payload=payload,
-            source_report=execution_source_report,
-            target_ref=normalized_target,
-            worker_node_groups=approved_worker_groups,
-            phase_ids=phase_ids,
-            command_runner=active_command_runner,
-        )
-        mk8s_phase_lines = [f"post-upgrade-mk8s-check: {line}" for line in mk8s_state_lines]
-        phase_lines.extend(mk8s_phase_lines)
+        mk8s_phase_lines: list[str] = []
         try:
+            mk8s_state_lines = _verify_completed_soperator_migration_mk8s_state(
+                payload=payload,
+                source_report=execution_source_report,
+                target_ref=normalized_target,
+                worker_node_groups=approved_worker_groups,
+                phase_ids=phase_ids,
+                command_runner=active_command_runner,
+            )
+        except RuntimeError as exc:
+            pending_phase = "post-upgrade-mk8s-check"
+            pending_reason = str(exc).strip() or "post-upgrade MK8s check failed."
+            _record_phase_fast_verification(
+                checkpoint=checkpoint,
+                phase_id=pending_phase,
+                status="failed",
+                summary=pending_reason,
+                checks=[
+                    _fast_verification_check(
+                        "Post-upgrade MK8s state",
+                        "failed",
+                        pending_reason,
+                    )
+                ],
+            )
+            _checkpoint_progress()
+        else:
+            mk8s_summary = (
+                mk8s_state_lines[0]
+                if mk8s_state_lines
+                else "completed MK8s node-template and worker rollout state verified."
+            )
+            _record_phase_fast_verification(
+                checkpoint=checkpoint,
+                phase_id="post-upgrade-mk8s-check",
+                status="passed",
+                summary=mk8s_summary,
+                checks=[
+                    _fast_verification_check(
+                        "Post-upgrade MK8s state",
+                        "passed",
+                        mk8s_summary,
+                    )
+                ],
+            )
+            mk8s_phase_lines = [
+                f"post-upgrade-mk8s-check: {line}" for line in mk8s_state_lines
+            ]
+            phase_lines.extend(mk8s_phase_lines)
+            _checkpoint_progress()
             _emit_phase_comment(
                 "post-upgrade-helm-check",
                 "verifying final Helm releases and target Soperator readiness.",
             )
-            helm_state_lines = _verify_completed_soperator_migration_helm_state(
-                command_runner=active_command_runner,
-                kube_context=kube_context,
-                target_version=target_version,
-            )
-        except RuntimeError as exc:
-            if mk8s_phase_lines:
-                raise RuntimeError("\n".join(mk8s_phase_lines) + "\n" + str(exc)) from exc
-            raise
-        mutation_performed = mutation_performed or _helm_state_lines_include_retirement_mutation(
-            helm_state_lines
-        )
-        phase_lines.extend(f"post-upgrade-helm-check: {line}" for line in helm_state_lines)
+            try:
+                helm_state_lines = _verify_completed_soperator_migration_helm_state(
+                    command_runner=active_command_runner,
+                    kube_context=kube_context,
+                    target_version=target_version,
+                )
+            except RuntimeError as exc:
+                pending_phase = "post-upgrade-helm-check"
+                pending_reason = str(exc).strip() or "post-upgrade Helm check failed."
+                _record_phase_fast_verification(
+                    checkpoint=checkpoint,
+                    phase_id=pending_phase,
+                    status="failed",
+                    summary=pending_reason,
+                    checks=[
+                        _fast_verification_check(
+                            "Post-upgrade Helm state",
+                            "failed",
+                            pending_reason,
+                        )
+                    ],
+                )
+                _checkpoint_progress()
+            else:
+                helm_summary = (
+                    helm_state_lines[0]
+                    if helm_state_lines
+                    else "final Helm releases and target Soperator readiness verified."
+                )
+                _record_phase_fast_verification(
+                    checkpoint=checkpoint,
+                    phase_id="post-upgrade-helm-check",
+                    status="passed",
+                    summary=helm_summary,
+                    checks=[
+                        _fast_verification_check(
+                            "Post-upgrade Helm state",
+                            "passed",
+                            helm_summary,
+                        )
+                    ],
+                )
+                mutation_performed = (
+                    mutation_performed
+                    or _helm_state_lines_include_retirement_mutation(helm_state_lines)
+                )
+                phase_lines.extend(
+                    f"post-upgrade-helm-check: {line}" for line in helm_state_lines
+                )
+                _checkpoint_progress()
 
     if pending_phase:
         checkpoint["pending_phase"] = pending_phase

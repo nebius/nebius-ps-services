@@ -453,10 +453,15 @@ from .soperator_onboarding import (
 )
 from .soperator_upgrade_safety import (
     ProtectedCustomerState,
+    build_stage_fast_verification_payload,
     capture_protected_customer_state,
     protected_customer_state_from_payload,
     run_post_upgrade_fast_verification,
     safety_report_markdown_lines,
+    stage_fast_verification_check,
+    stage_fast_verification_failed,
+    stage_fast_verification_markdown_lines,
+    stage_fast_verification_report,
     update_safety_payload_with_before,
     update_safety_payload_with_verification,
     upgrade_safety_checkpoint_payload,
@@ -2455,6 +2460,17 @@ _SOPERATOR_ACTIVECHECKS_UPGRADE_PATHS = (
     "values.soperator-activechecks.enabled",
     "values.soperator-activechecks.waitForChecks.enabled",
 )
+_SOPERATOR_FAST_STAGE_VERIFICATION_PHASE_IDS = (
+    "activechecks-suspend",
+    "slurm-job-drain",
+    "mk8s-node-template",
+    "post-mk8s-validation",
+    "soperator-chart",
+    "postflight-validation",
+    "activechecks-restore",
+    "slurm-restore",
+    "shared-safety-verification",
+)
 _SOPERATOR_UPGRADE_JOB_POLICIES = frozenset(
     {
         "interactive",
@@ -2475,6 +2491,8 @@ _SOPERATOR_UPGRADE_JOB_POLICY_HELP = (
 _SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL = "30s"
 _SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT = "0s"
 _SOPERATOR_UPGRADE_LOGIN_POD = "login-0"
+_SOPERATOR_UPGRADE_CONTROLLER_POD = "controller-0"
+_SOPERATOR_UPGRADE_CONTROLLER_CONTAINER = "slurmctld"
 _SOPERATOR_UPGRADE_ACCOUNTING_DEPLOYMENT = "accounting"
 _SOPERATOR_UPGRADE_DEFAULT_MARIADB_POD = "soperator-acct-db-0"
 _SOPERATOR_BACKUP_REQUIRED_KUBERNETES_RESOURCES = frozenset(
@@ -4532,13 +4550,57 @@ def _run_soperator_upgrade_login_command(
     timeout_seconds: int = 120,
     check: bool = True,
 ) -> _SoperatorUpgradeCommandResult:
-    return _run_soperator_upgrade_kubectl(
+    result = _run_soperator_upgrade_kubectl(
         namespace,
         ["exec", _SOPERATOR_UPGRADE_LOGIN_POD, "--", "bash", "-lc", command],
         kube_context=kube_context,
         input_text=input_text,
         timeout_seconds=timeout_seconds,
-        check=check,
+        check=False,
+    )
+    if _soperator_upgrade_needs_controller_slurm_fallback(result):
+        controller_result = _run_soperator_upgrade_kubectl(
+            namespace,
+            [
+                "exec",
+                _SOPERATOR_UPGRADE_CONTROLLER_POD,
+                "-c",
+                _SOPERATOR_UPGRADE_CONTROLLER_CONTAINER,
+                "--",
+                "bash",
+                "-lc",
+                command,
+            ],
+            kube_context=kube_context,
+            input_text=input_text,
+            timeout_seconds=timeout_seconds,
+            check=False,
+        )
+        if controller_result.returncode == 0:
+            return controller_result
+    if check and result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(
+            f"Command failed during Soperator upgrade: {shlex.join(result.args)}"
+            + (f"\n{detail}" if detail else "")
+        )
+    return result
+
+
+def _soperator_upgrade_needs_controller_slurm_fallback(
+    result: _SoperatorUpgradeCommandResult,
+) -> bool:
+    if result.returncode == 0:
+        return False
+    detail = f"{result.stderr}\n{result.stdout}".lower()
+    return any(
+        marker in detail
+        for marker in (
+            "could not establish a configuration source",
+            "dns srv lookup failed",
+            "resolve_ctls_from_dns_srv",
+            "failed to fetch config",
+        )
     )
 
 
@@ -4743,13 +4805,15 @@ def _soperator_upgrade_collect_slurm_snapshots(
     kube_context: str | None = None,
 ) -> tuple[str, ...]:
     output_dir.mkdir(parents=True, exist_ok=True)
-    commands = {
+    slurm_commands = {
         "slurm-conf.txt": "cat ${SLURM_CONF:-/etc/slurm/slurm.conf} 2>/dev/null || true",
         "scontrol-show-config.txt": "scontrol show config",
         "scontrol-show-partition.txt": "scontrol show partition",
         "scontrol-show-nodes.txt": "scontrol show nodes",
         "sinfo.txt": "sinfo",
         "squeue.txt": "squeue",
+    }
+    accounting_commands = {
         "sacctmgr-clusters.txt": "sacctmgr -nP show cluster format=Cluster,ControlHost,ControlPort,RPC,Share",
         "sacctmgr-accounts.txt": "sacctmgr -nP show account format=Account,Description,Organization",
         "sacctmgr-users.txt": "sacctmgr -nP show user format=User,DefaultAccount,AdminLevel",
@@ -4761,7 +4825,7 @@ def _soperator_upgrade_collect_slurm_snapshots(
         "sacctmgr-wckeys.txt": "sacctmgr -nP show wckey format=Cluster,User,WCKey",
     }
     included: list[str] = []
-    for filename, command in commands.items():
+    for filename, command in slurm_commands.items():
         result = _run_soperator_upgrade_login_command(
             namespace,
             command,
@@ -4770,7 +4834,50 @@ def _soperator_upgrade_collect_slurm_snapshots(
         )
         (output_dir / filename).write_text(result.stdout, encoding="utf-8")
         included.append(f"slurm/{filename}")
+    for filename, command in accounting_commands.items():
+        result = _run_soperator_upgrade_login_command(
+            namespace,
+            command,
+            kube_context=kube_context,
+            timeout_seconds=180,
+            check=False,
+        )
+        if result.returncode == 0:
+            content = result.stdout
+        else:
+            reason = (result.stderr or result.stdout or "sacctmgr command failed").strip()
+            content = (
+                "# not_collected\n"
+                "# reason: Slurm accounting is unavailable or not backed by slurmdbd.\n"
+                f"# command: {command}\n"
+                f"# detail: {reason}\n"
+            )
+        (output_dir / filename).write_text(content, encoding="utf-8")
+        included.append(f"slurm/{filename}")
     return tuple(included)
+
+
+def _soperator_upgrade_accounting_unavailable_payload(reason: str) -> dict[str, Any]:
+    return {
+        "status": "not_collected",
+        "reason": reason,
+        "dump_sha256": "",
+        "dump_bytes": 0,
+        "pod": "",
+        "table_counts": "",
+        "table_count_status": "not_collected",
+    }
+
+
+def _soperator_upgrade_write_accounting_unavailable(
+    *,
+    output_dir: Path,
+    reason: str,
+) -> dict[str, Any]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    payload = _soperator_upgrade_accounting_unavailable_payload(reason)
+    _soperator_upgrade_write_json(output_dir / "slurm-accounting-db-verification.json", payload)
+    return payload
 
 
 def _soperator_upgrade_quiesce_accounting(
@@ -4787,6 +4894,13 @@ def _soperator_upgrade_quiesce_accounting(
         check=False,
     )
     if get_result.returncode != 0:
+        detail = (get_result.stderr or get_result.stdout or "").strip()
+        normalized_detail = detail.lower()
+        if "notfound" not in normalized_detail and "not found" not in normalized_detail:
+            raise RuntimeError(
+                "Could not inspect chart-managed Soperator accounting deployment."
+                + (f"\n{detail}" if detail else "")
+            )
         raise RuntimeError(
             "Could not find chart-managed Soperator accounting deployment. "
             "This upgrade backup supports chart-managed MariaDB only."
@@ -4972,6 +5086,7 @@ def _soperator_upgrade_manifest_payload(
     generated_at: datetime,
     checksums: Mapping[str, str],
     accounting_verification: Mapping[str, Any],
+    accounting_db_included: bool,
     source_kind: str,
     kubernetes_material: _SoperatorBackupKubernetesMaterial,
 ) -> dict[str, Any]:
@@ -4996,12 +5111,13 @@ def _soperator_upgrade_manifest_payload(
         },
         "command": list(command),
         "redaction_policy": (
-            "Archive contains raw Kubernetes Secret material and accounting DB dump. "
-            "Reports must not print secret values or SQL contents."
+            "Archive contains raw Kubernetes Secret material and may contain an "
+            "accounting DB dump when chart-managed accounting is present. Reports "
+            "must not print secret values or SQL contents."
         ),
         "sensitive_material": {
             "raw_kubernetes_secrets": True,
-            "accounting_db_dump": True,
+            "accounting_db_dump": accounting_db_included,
         },
         "checksums": dict(checksums),
         "accounting_db": dict(accounting_verification),
@@ -5096,28 +5212,47 @@ def _create_restore_capable_soperator_upgrade_backup(
             )
             if checkpoint_event is not None:
                 checkpoint_event("accounting-quiesce-started")
-            accounting_state = _soperator_upgrade_quiesce_accounting(
-                namespace,
-                kube_context=kube_context,
-            )
-            if checkpoint_event is not None:
-                checkpoint_event("accounting-quiesced")
-            dump_path, accounting_verification = _soperator_upgrade_dump_accounting_db(
-                namespace=namespace,
-                output_dir=root / "accounting",
-                target_ref=target.target_ref,
-                kube_context=kube_context,
-            )
-            included.append(str(dump_path.relative_to(root)))
-            included.append("accounting/slurm-accounting-db-verification.json")
-            _soperator_upgrade_restore_accounting(
-                namespace,
-                accounting_state,
-                kube_context=kube_context,
-            )
-            accounting_state = None
-            if checkpoint_event is not None:
-                checkpoint_event("accounting-restored")
+            accounting_db_included = False
+            accounting_dump_relative: str | None = None
+            try:
+                accounting_state = _soperator_upgrade_quiesce_accounting(
+                    namespace,
+                    kube_context=kube_context,
+                )
+            except RuntimeError as exc:
+                if (
+                    "Could not find chart-managed Soperator accounting deployment"
+                    not in str(exc)
+                ):
+                    raise
+                accounting_verification = _soperator_upgrade_write_accounting_unavailable(
+                    output_dir=root / "accounting",
+                    reason=str(exc),
+                )
+                included.append("accounting/slurm-accounting-db-verification.json")
+                if checkpoint_event is not None:
+                    checkpoint_event("accounting-not-collected")
+            else:
+                if checkpoint_event is not None:
+                    checkpoint_event("accounting-quiesced")
+                dump_path, accounting_verification = _soperator_upgrade_dump_accounting_db(
+                    namespace=namespace,
+                    output_dir=root / "accounting",
+                    target_ref=target.target_ref,
+                    kube_context=kube_context,
+                )
+                accounting_dump_relative = str(dump_path.relative_to(root))
+                included.append(accounting_dump_relative)
+                included.append("accounting/slurm-accounting-db-verification.json")
+                accounting_db_included = True
+                _soperator_upgrade_restore_accounting(
+                    namespace,
+                    accounting_state,
+                    kube_context=kube_context,
+                )
+                accounting_state = None
+                if checkpoint_event is not None:
+                    checkpoint_event("accounting-restored")
 
             checksums: dict[str, str] = {}
             for file_path in sorted(path for path in root.rglob("*") if path.is_file()):
@@ -5135,6 +5270,7 @@ def _create_restore_capable_soperator_upgrade_backup(
                 generated_at=generated_at,
                 checksums=checksums,
                 accounting_verification=accounting_verification,
+                accounting_db_included=accounting_db_included,
                 source_kind=source_kind,
                 kubernetes_material=kubernetes_material,
             )
@@ -5153,17 +5289,18 @@ def _create_restore_capable_soperator_upgrade_backup(
                         if Path(path).name
                         in {"slurmclusters.yaml", "nodesets.yaml", "activechecks.yaml"}
                     ],
-                    "accounting_db_dump": "accounting/slurm-accounting-db.sql",
+                    "accounting_db_dump": accounting_dump_relative,
                 },
                 "apply_order": list(kubernetes_material.restore_paths),
                 "accounting_db": {
-                    "dump": "accounting/slurm-accounting-db.sql",
+                    "status": accounting_verification.get("status", "collected"),
+                    "dump": accounting_dump_relative,
                     "verification": "accounting/slurm-accounting-db-verification.json",
                     "chart_managed_mariadb_only": True,
                 },
                 "security": {
                     "contains_raw_kubernetes_secrets": True,
-                    "contains_accounting_db_dump": True,
+                    "contains_accounting_db_dump": accounting_db_included,
                     "recommended_file_mode": "0600",
                 },
             }
@@ -5178,7 +5315,11 @@ def _create_restore_capable_soperator_upgrade_backup(
             _soperator_upgrade_write_json(root / "checksums.json", checksums)
             with tarfile.open(archive_path, "w:gz") as archive:
                 for file_path in sorted(root.rglob("*")):
-                    archive.add(file_path, arcname=file_path.relative_to(root))
+                    archive.add(
+                        file_path,
+                        arcname=file_path.relative_to(root),
+                        recursive=False,
+                    )
         os.chmod(archive_path, 0o600)
         return _SoperatorUpgradeBackupResult(
             path=archive_path,
@@ -5186,7 +5327,7 @@ def _create_restore_capable_soperator_upgrade_backup(
             sha256=_soperator_upgrade_file_sha256(archive_path),
             included_categories=tuple(sorted(set(item.split("/", 1)[0] for item in included))),
             secret_material_included=True,
-            accounting_db_included=True,
+            accounting_db_included=accounting_db_included,
             manifest_sha256=checksums.get("backup-manifest.json", ""),
         )
     finally:
@@ -5254,7 +5395,7 @@ def _soperator_restore_member_path(
     return path
 
 
-def _soperator_restore_accounting_dump_path(restore_plan: Mapping[str, Any]) -> str:
+def _soperator_restore_accounting_dump_path(restore_plan: Mapping[str, Any]) -> str | None:
     accounting = restore_plan.get("accounting_db")
     dump_relative = ""
     if isinstance(accounting, Mapping):
@@ -5264,6 +5405,11 @@ def _soperator_restore_accounting_dump_path(restore_plan: Mapping[str, Any]) -> 
         if isinstance(restore_material, Mapping):
             dump_relative = _non_empty_text(restore_material.get("accounting_db_dump"))
     if not dump_relative:
+        if isinstance(accounting, Mapping) and _non_empty_text(accounting.get("status")) in {
+            "not_collected",
+            "unavailable",
+        }:
+            return None
         raise RuntimeError("Soperator restore plan does not contain an accounting DB dump path.")
     return dump_relative
 
@@ -5292,11 +5438,13 @@ def _soperator_restore_verify_archive(root: Path) -> tuple[dict[str, Any], dict[
         checksums[relative_path] = expected
     for relative_path in _soperator_restore_apply_paths(restore_plan):
         _soperator_restore_member_path(root, relative_path, checksums=checksums)
-    _soperator_restore_member_path(
-        root,
-        _soperator_restore_accounting_dump_path(restore_plan),
-        checksums=checksums,
-    )
+    accounting_dump_path = _soperator_restore_accounting_dump_path(restore_plan)
+    if accounting_dump_path is not None:
+        _soperator_restore_member_path(
+            root,
+            accounting_dump_path,
+            checksums=checksums,
+        )
     return manifest, restore_plan
 
 
@@ -5436,6 +5584,8 @@ def _soperator_restore_accounting_db(
     kube_context: str | None,
 ) -> None:
     dump_relative = _soperator_restore_accounting_dump_path(restore_plan)
+    if dump_relative is None:
+        return
     dump_path = _soperator_restore_member_path(root, dump_relative, checksums=None)
     accounting_state: dict[str, Any] | None = None
     try:
@@ -6420,6 +6570,7 @@ def _new_soperator_upgrade_checkpoint(
             "post_mk8s": None,
             "postflight": None,
         },
+        "stage_verification": {},
         "upgrade_safety": upgrade_safety_checkpoint_payload(),
         "checkpoint_path": _soperator_upgrade_relative_path(
             checkpoint_path,
@@ -6606,6 +6757,72 @@ def _append_soperator_upgrade_event(
     checkpoint["status"] = event
 
 
+def _soperator_upgrade_stage_verification_state(checkpoint: dict[str, Any]) -> dict[str, Any]:
+    state = checkpoint.setdefault("stage_verification", {})
+    if not isinstance(state, dict):
+        state = {}
+        checkpoint["stage_verification"] = state
+    return state
+
+
+def _soperator_upgrade_stage_verification_reports(
+    checkpoint: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    state = checkpoint.get("stage_verification")
+    state_map = state if isinstance(state, Mapping) else {}
+    phase_history = checkpoint.get("phase_history")
+    phase_by_id: dict[str, Mapping[str, Any]] = {}
+    if isinstance(phase_history, list):
+        for item in phase_history:
+            if not isinstance(item, Mapping):
+                continue
+            phase_id = _non_empty_text(item.get("id"))
+            if phase_id:
+                phase_by_id[phase_id] = item
+    reports: list[dict[str, Any]] = []
+    for phase_id in _SOPERATOR_FAST_STAGE_VERIFICATION_PHASE_IDS:
+        phase = state_map.get(phase_id)
+        if not isinstance(phase, Mapping):
+            phase = phase_by_id.get(phase_id, {})
+        reports.append(stage_fast_verification_report(phase_id, phase))
+    return reports
+
+
+def _record_soperator_upgrade_stage_fast_verification(
+    *,
+    checkpoint: dict[str, Any],
+    phase_id: str,
+    summary: str,
+    checks: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    status = "failed" if stage_fast_verification_failed(checks) else "passed"
+    payload = build_stage_fast_verification_payload(
+        phase_id=phase_id,
+        status=status,
+        summary=summary,
+        checks=checks,
+    )
+    state = _soperator_upgrade_stage_verification_state(checkpoint)
+    state[phase_id] = {"fast_verification": payload}
+    current_phase = checkpoint.get("current_phase")
+    if isinstance(current_phase, dict) and current_phase.get("id") == phase_id:
+        current_phase["fast_verification"] = payload
+    phase_history = checkpoint.get("phase_history")
+    if isinstance(phase_history, list):
+        for item in reversed(phase_history):
+            if isinstance(item, dict) and item.get("id") == phase_id:
+                item["fast_verification"] = payload
+                break
+    _append_soperator_upgrade_event(
+        checkpoint,
+        "stage-fast-verification-" + ("failed" if status == "failed" else "passed"),
+        phase=phase_id,
+        status=status,
+        summary=summary,
+    )
+    return payload
+
+
 def _write_soperator_upgrade_checkpoint(path: Path, checkpoint: Mapping[str, Any]) -> None:
     _write_text_atomic(path, json.dumps(checkpoint, indent=2, sort_keys=True) + "\n")
 
@@ -6619,7 +6836,9 @@ def _write_soperator_upgrade_report(
     markdown_path = paths.reports_dir / SOPERATOR_UPGRADE_REPORT_FILENAME
     safety = checkpoint.get("upgrade_safety")
     safety_map = safety if isinstance(safety, Mapping) else {}
+    stage_verification_reports = _soperator_upgrade_stage_verification_reports(checkpoint)
     json_payload = dict(checkpoint)
+    json_payload["stage_verification"] = stage_verification_reports
     for key in (
         "protected_customer_state",
         "remediation_approvals",
@@ -6721,9 +6940,9 @@ def _write_soperator_upgrade_report(
         f"- Size: `{backup_map.get('size_bytes') or 0}` bytes",
         f"- SHA256: `{backup_map.get('sha256') or 'not-created'}`",
         f"- Manifest SHA256: `{backup_map.get('manifest_sha256') or 'not-created'}`",
-        "- Sensitive material: raw Kubernetes Secrets and accounting DB dump are included "
-        "in the archive.",
-        "- Report redaction: Secret values and SQL dump contents are not printed.",
+        "- Sensitive material: raw Kubernetes Secrets are included; accounting DB dump "
+        "is included only when live chart-managed accounting is present.",
+        "- Report redaction: Secret values and SQL dump contents, when present, are not printed.",
     ]
     categories = backup_map.get("included_categories")
     if isinstance(categories, list) and categories:
@@ -6822,6 +7041,11 @@ def _write_soperator_upgrade_report(
                 else "- Result: no ActiveChecks suspend/restore was required."
             ),
             *snapshot_lines,
+            "",
+            *stage_fast_verification_markdown_lines(
+                stage_verification_reports,
+                empty_message="No managed upgrade stage verifications were recorded.",
+            ),
             "",
             *safety_report_markdown_lines(
                 checkpoint.get("upgrade_safety")
@@ -8861,12 +9085,24 @@ def _format_soperator_backup_plan_lines(
         f"- backup directory: `{backup_root}`",
         "- restore material: Kubernetes Secrets, ConfigMaps, service accounts, services, PVCs, "
         "workloads, RBAC, policy/networking objects, Soperator CRs, Slurm snapshots, and "
-        "chart-managed MariaDB accounting DB dump",
-        "- sensitive material: raw Kubernetes Secret values and SQL dump are included in the archive",
+        "chart-managed MariaDB accounting DB dump when live accounting is present",
+        "- sensitive material: raw Kubernetes Secret values are included; SQL dump is included "
+        "only when live chart-managed accounting is present",
     ]
     if dry_run:
         lines.append("Dry run only: no archive was written and accounting was not quiesced.")
     return tuple(lines)
+
+
+def _soperator_backup_sensitive_material_message(
+    backup: _SoperatorUpgradeBackupResult,
+) -> str:
+    parts = ["raw Kubernetes Secrets"] if backup.secret_material_included else []
+    if backup.accounting_db_included:
+        parts.append("accounting DB dump")
+    if not parts:
+        return "Sensitive material included: none."
+    return "Sensitive material included: " + " and ".join(parts) + "."
 
 
 def _soperator_backup_command_args(
@@ -9011,7 +9247,7 @@ def _create_external_soperator_upgrade_backup(
     )
     console.print(f"External Soperator upgrade backup archive: {backup.path}", soft_wrap=True)
     console.print(f"Archive SHA256: {backup.sha256}", soft_wrap=True)
-    console.print("Sensitive material included: raw Kubernetes Secrets and accounting DB dump.")
+    console.print(_soperator_backup_sensitive_material_message(backup))
     return {
         "required": True,
         "path": str(backup.path),
@@ -9109,7 +9345,7 @@ def _run_standalone_soperator_backup(
     )
     console.print(f"Soperator backup archive: {backup.path}", soft_wrap=True)
     console.print(f"Archive SHA256: {backup.sha256}", soft_wrap=True)
-    console.print("Sensitive material included: raw Kubernetes Secrets and accounting DB dump.")
+    console.print(_soperator_backup_sensitive_material_message(backup))
     return backup
 
 
@@ -9300,8 +9536,8 @@ def _soperator_discovery_report_from_snapshot(
 ) -> Any:
     chart_version = _non_empty_text(to_chart_version)
     pinned_chart_version = chart_version
-    pinned_app_version = chart_version
-    if not pinned_chart_version and not pinned_app_version:
+    pinned_app_version = _soperator_onboarding_target_app_version_for_chart(chart_version)
+    if not pinned_chart_version:
         pinned_chart_version, pinned_app_version = _soperator_catalog_pinned_versions()
     return analyze_soperator_onboarding_snapshot(
         snapshot,
@@ -10200,7 +10436,7 @@ def _format_managed_soperator_cluster_upgrade_plan(
             f"`{_non_empty_text(to_gpu_stack_preset) or 'unchanged/operator-managed'}`",
             f"  - node group: `{_non_empty_text(node_group) or 'all selected by plan'}`",
             f"- Slurm job policy: `{job_policy}`",
-            "- backup: restore-capable archive with raw Secrets and accounting DB dump "
+            "- backup: restore-capable archive with raw Secrets and optional accounting DB dump "
             "will be created before mutation",
             "- Kubernetes drain: owned by the managed node-group rollout; this command "
             "does not run raw `kubectl drain`.",
@@ -10465,6 +10701,65 @@ def _run_managed_soperator_cluster_upgrade(
         )
         return staged_config, staged_paths, staged_manifest
 
+    def _activechecks_source_value_checks(*, suspended: bool) -> list[Mapping[str, str]]:
+        row = _source_helm_chart_row(source_payload, target)
+        checks: list[Mapping[str, str]] = []
+        if suspended:
+            for path in _SOPERATOR_ACTIVECHECKS_UPGRADE_PATHS:
+                value = read_component_path(row, path)
+                checks.append(
+                    stage_fast_verification_check(
+                        path,
+                        "passed" if value is False else "failed",
+                        f"value={value!r}, expected=False",
+                    )
+                )
+            return checks
+        for snapshot in lifecycle.snapshots:
+            exists = _mapping_path_exists(row, snapshot.path)
+            value = read_component_path(row, snapshot.path) if exists else None
+            passed = (
+                exists and value == snapshot.value
+                if snapshot.present
+                else not exists
+            )
+            expected = repr(snapshot.value) if snapshot.present else "absent"
+            checks.append(
+                stage_fast_verification_check(
+                    snapshot.path,
+                    "passed" if passed else "failed",
+                    f"value={value!r}, expected={expected}",
+                )
+            )
+        return checks
+
+    def _run_stage_fast_verification(
+        *,
+        phase_id: str,
+        summary: str,
+        checks: Sequence[Mapping[str, Any]],
+        report_paths: ProjectPaths | None = None,
+    ) -> dict[str, Any]:
+        payload = _record_soperator_upgrade_stage_fast_verification(
+            checkpoint=checkpoint,
+            phase_id=phase_id,
+            summary=summary,
+            checks=checks,
+        )
+        _write_soperator_upgrade_checkpoint(checkpoint_path, checkpoint)
+        if payload.get("status") == "failed":
+            _write_soperator_upgrade_report(report_paths or paths, checkpoint)
+            failed = [
+                str(check.get("name") or "check")
+                for check in checks
+                if isinstance(check, Mapping) and check.get("status") == "failed"
+            ]
+            raise RuntimeError(
+                f"Soperator upgrade fast stage verification failed after {phase_id}"
+                + (": " + ", ".join(failed) if failed else ".")
+            )
+        return payload
+
     try:
         _set_phase(
             "preflight",
@@ -10597,6 +10892,22 @@ def _run_managed_soperator_cluster_upgrade(
             if isinstance(activechecks_state, dict):
                 activechecks_state["live_suspend"] = live_suspend
             _checkpoint("activechecks-suspended", live_suspend=live_suspend)
+            live_status = str(live_suspend.get("status", "") or "unknown")
+            activechecks_checks = _activechecks_source_value_checks(suspended=True)
+            activechecks_checks.append(
+                stage_fast_verification_check(
+                    "Live ActiveChecks suspension",
+                    "passed"
+                    if live_status in {"suspended", "no_matching_activechecks"}
+                    else "failed",
+                    f"status={live_status}",
+                )
+            )
+            _run_stage_fast_verification(
+                phase_id="activechecks-suspend",
+                summary="ActiveChecks source values and live resources are suspended.",
+                checks=activechecks_checks,
+            )
 
         _set_phase(
             "soperator-preflight-validation",
@@ -10646,6 +10957,24 @@ def _run_managed_soperator_cluster_upgrade(
                 "job_policy": job_policy,
             }
             _checkpoint("slurm-jobs-cleared")
+            slurm_state = checkpoint.get("slurm")
+            slurm_map = slurm_state if isinstance(slurm_state, Mapping) else {}
+            _run_stage_fast_verification(
+                phase_id="slurm-job-drain",
+                summary="Slurm job policy completed before the MK8s node-template rollout.",
+                checks=[
+                    stage_fast_verification_check(
+                        "Slurm job policy",
+                        "passed" if slurm_map.get("job_policy") == job_policy else "failed",
+                        f"recorded={slurm_map.get('job_policy') or 'unset'}, expected={job_policy}",
+                    ),
+                    stage_fast_verification_check(
+                        "Drained node record",
+                        "passed" if isinstance(slurm_map.get("drained_nodes"), list) else "failed",
+                        f"drained_nodes={len(slurm_map.get('drained_nodes') or [])}",
+                    ),
+                ],
+            )
             _set_phase(
                 "mk8s-node-template",
                 "Rolling the requested MK8s node-template changes through the managed path.",
@@ -10665,6 +10994,49 @@ def _run_managed_soperator_cluster_upgrade(
             if isinstance(mk8s_state, dict):
                 mk8s_state["status"] = "completed"
             _checkpoint("mk8s-completed")
+            mk8s_map = mk8s_state if isinstance(mk8s_state, Mapping) else {}
+            mk8s_version_ok = not _non_empty_text(to_k8s_version) or (
+                mk8s_map.get("target_k8s_version") == to_k8s_version
+            )
+            mk8s_os_ok = not _non_empty_text(to_os) or mk8s_map.get("target_os") == to_os
+            mk8s_gpu_stack_ok = not _non_empty_text(to_gpu_stack_preset) or (
+                mk8s_map.get("target_gpu_stack_preset") == to_gpu_stack_preset
+            )
+            _run_stage_fast_verification(
+                phase_id="mk8s-node-template",
+                summary=(
+                    "Managed MK8s node-template rollout completed through the "
+                    "node-template workflow."
+                ),
+                checks=[
+                    stage_fast_verification_check(
+                        "MK8s rollout status",
+                        "passed" if mk8s_map.get("status") == "completed" else "failed",
+                        f"status={mk8s_map.get('status') or 'unknown'}",
+                    ),
+                    stage_fast_verification_check(
+                        "MK8s target version",
+                        "passed" if mk8s_version_ok else "failed",
+                        "recorded="
+                        + str(mk8s_map.get("target_k8s_version") or "unchanged")
+                        + f", expected={to_k8s_version or 'unchanged'}",
+                    ),
+                    stage_fast_verification_check(
+                        "MK8s target OS",
+                        "passed" if mk8s_os_ok else "failed",
+                        "recorded="
+                        + str(mk8s_map.get("target_os") or "unchanged")
+                        + f", expected={to_os or 'unchanged'}",
+                    ),
+                    stage_fast_verification_check(
+                        "MK8s target GPU stack",
+                        "passed" if mk8s_gpu_stack_ok else "failed",
+                        "recorded="
+                        + str(mk8s_map.get("target_gpu_stack_preset") or "unchanged")
+                        + f", expected={to_gpu_stack_preset or 'unchanged'}",
+                    ),
+                ],
+            )
             _set_phase(
                 "post-mk8s-validation",
                 "Verifying Soperator and protected config after the MK8s rollout.",
@@ -10696,6 +11068,22 @@ def _run_managed_soperator_cluster_upgrade(
                 "post-mk8s-validation-completed",
                 validation_reports=_soperator_upgrade_relative_paths(paths, post_mk8s_reports),
             )
+            _run_stage_fast_verification(
+                phase_id="post-mk8s-validation",
+                summary="Post-MK8s Soperator validation and protected config comparison completed.",
+                checks=[
+                    stage_fast_verification_check(
+                        "Post-MK8s validation reports",
+                        "passed",
+                        f"reports={len(post_mk8s_reports)}",
+                    ),
+                    stage_fast_verification_check(
+                        "Post-MK8s protected config comparison",
+                        "passed" if comparison.get("status") == "matched" else "failed",
+                        f"status={comparison.get('status') or 'unknown'}",
+                    ),
+                ],
+            )
 
         _set_phase(
             "soperator-chart",
@@ -10720,6 +11108,28 @@ def _run_managed_soperator_cluster_upgrade(
                 expected_plan=plan,
             )
             _checkpoint("chart-applied")
+        row_version = _non_empty_text(_source_helm_chart_row(source_payload, target).get("version"))
+        _run_stage_fast_verification(
+            phase_id="soperator-chart",
+            summary="Soperator chart source version is aligned with the requested target.",
+            checks=[
+                stage_fast_verification_check(
+                    "Soperator chart version",
+                    "passed" if row_version == to_chart_version else "failed",
+                    f"recorded={row_version or 'unset'}, expected={to_chart_version}",
+                ),
+                stage_fast_verification_check(
+                    "Soperator chart action",
+                    "passed",
+                    (
+                        "chart already current"
+                        if not changed
+                        else "render, validation, Flux apply, and static readiness completed"
+                    ),
+                ),
+            ],
+            report_paths=staged_paths,
+        )
 
         _set_phase(
             "postflight-validation",
@@ -10753,6 +11163,23 @@ def _run_managed_soperator_cluster_upgrade(
                 postflight_reports,
             ),
         )
+        _run_stage_fast_verification(
+            phase_id="postflight-validation",
+            summary="Postflight Soperator validation and protected config comparison completed.",
+            checks=[
+                stage_fast_verification_check(
+                    "Postflight validation reports",
+                    "passed",
+                    f"reports={len(postflight_reports)}",
+                ),
+                stage_fast_verification_check(
+                    "Protected config comparison",
+                    "passed" if comparison.get("status") == "matched" else "failed",
+                    f"status={comparison.get('status') or 'unknown'}",
+                ),
+            ],
+            report_paths=staged_paths,
+        )
 
         if lifecycle.required:
             _set_phase(
@@ -10772,6 +11199,12 @@ def _run_managed_soperator_cluster_upgrade(
             )
             restore_required = False
             _checkpoint("activechecks-restored")
+            _run_stage_fast_verification(
+                phase_id="activechecks-restore",
+                summary="ActiveChecks source values are restored to their pre-upgrade state.",
+                checks=_activechecks_source_value_checks(suspended=False),
+                report_paths=staged_paths,
+            )
         else:
             _checkpoint("activechecks-restored", reason="not-required")
 
@@ -10788,6 +11221,26 @@ def _run_managed_soperator_cluster_upgrade(
         if isinstance(slurm_state, dict):
             slurm_state["restore_manual_command"] = None
         _checkpoint("slurm-restored")
+        slurm_map = slurm_state if isinstance(slurm_state, Mapping) else {}
+        _run_stage_fast_verification(
+            phase_id="slurm-restore",
+            summary="Slurm nodes drained by cxcli are resumed or no restore was required.",
+            checks=[
+                stage_fast_verification_check(
+                    "Slurm restore command",
+                    "passed" if not _non_empty_text(slurm_map.get("restore_manual_command")) else "failed",
+                    "manual restore command cleared"
+                    if not _non_empty_text(slurm_map.get("restore_manual_command"))
+                    else "manual restore command is still recorded",
+                ),
+                stage_fast_verification_check(
+                    "Slurm restored nodes",
+                    "passed" if slurm_restore_nodes else "skipped",
+                    f"nodes={len(slurm_restore_nodes)}",
+                ),
+            ],
+            report_paths=staged_paths,
+        )
         with _phase_spinner(
             "shared-safety-verification",
             "Running the shared protected-state and fast smoke verification.",
@@ -10810,6 +11263,12 @@ def _run_managed_soperator_cluster_upgrade(
             "shared-safety-verified",
             status=safety_verification.status,
             passed=safety_verification.passed,
+        )
+        _run_stage_fast_verification(
+            phase_id="shared-safety-verification",
+            summary="Shared protected-state and fast safety verification completed.",
+            checks=safety_verification.checks,
+            report_paths=staged_paths,
         )
         if not safety_verification.passed:
             failed = [
@@ -14264,6 +14723,13 @@ def _soperator_onboarding_target_version_default() -> str:
     return chart_version
 
 
+def _soperator_onboarding_target_app_version_for_chart(chart_version: str) -> str:
+    catalog_chart_version, catalog_app_version = _soperator_catalog_pinned_versions()
+    if _non_empty_text(chart_version) == _non_empty_text(catalog_chart_version):
+        return catalog_app_version
+    return ""
+
+
 def _soperator_target_chart_source() -> tuple[str, str]:
     chart = helm_chart_source_by_id(_SOPERATOR_APP_ID)
     if chart is None:
@@ -14807,9 +15273,9 @@ def _soperator_rollout_wave_mode_choices(default: str) -> list[OptionChoice]:
 
 _SOPERATOR_ROLLOUT_FIELD_GUIDANCE = {
     "strategy": (
-        "Strategy: zero-surge is the default and avoids spare worker quota by allowing "
-        "one unavailable node per group; safe-surge preserves capacity with temporary "
-        "surge nodes and requires quota/capacity preflight."
+        "Strategy: zero-surge is the default and avoids spare quota by allowing "
+        "one unavailable node per group; safe-surge preserves service and worker "
+        "capacity with temporary surge nodes and requires quota/capacity preflight."
     ),
     "wave_budget": (
         "Safe-surge wave budget: choose groups for a fixed batch size, or percent to "
@@ -14830,12 +15296,12 @@ _SOPERATOR_ROLLOUT_FIELD_GUIDANCE = {
         "safe-surge waves. Leave blank to use the percentage result."
     ),
     "max_surge_count": (
-        "Max surge count: temporary extra nodes per worker group. Use 1 for capacity-"
+        "Max surge count: temporary extra nodes per active group. Use 1 for capacity-"
         "preserving safe-surge; 0 requires max_unavailable_count greater than 0."
     ),
     "max_unavailable_count": (
-        "Max unavailable count: nodes per worker group allowed down during rollout. "
-        "0 preserves worker capacity; higher values allow temporary capacity loss."
+        "Max unavailable count: nodes per group allowed down during rollout. "
+        "0 preserves service and worker capacity; higher values allow temporary capacity loss."
     ),
     "drain_timeout": (
         "Drain timeout: time to wait for pod eviction before MK8s may delete the node. "
@@ -16351,7 +16817,7 @@ def _prompt_soperator_onboarding_target_row(
         interactive=True,
         validate_sources=validate_sources,
     )
-    app_version = chart_version
+    app_version = _soperator_onboarding_target_app_version_for_chart(chart_version)
     with _soperator_onboarding_status("Building Soperator upgrade profile diff..."):
         report = analyze_soperator_onboarding_snapshot(
             snapshot,
@@ -16565,7 +17031,7 @@ def _soperator_onboarding_target_row_from_options(
         interactive=interactive,
         validate_sources=validate_sources,
     )
-    app_version = chart_version
+    app_version = _soperator_onboarding_target_app_version_for_chart(chart_version)
     with _soperator_onboarding_status("Building Soperator upgrade profile diff..."):
         report = analyze_soperator_onboarding_snapshot(
             snapshot,
@@ -45603,7 +46069,7 @@ def component_add_command(
     epilog=(
         "Example: nebius-cxcli ext-soperator backup <config.yaml> --target external-cluster. "
         "The target must be onboarded and accepted. The archive includes raw Secrets and "
-        "the chart-managed MariaDB accounting DB dump."
+        "the chart-managed MariaDB accounting DB dump when live accounting exists."
     ),
 )
 def ext_soperator_backup_command(
@@ -46039,8 +46505,9 @@ def soperator_onboard_command(
         typer.Option(
             "--worker-rollout-strategy",
             help=(
-                "External worker node-template rollout strategy to persist in config.yaml: "
-                "safe-surge or zero-surge."
+                "External node-template rollout strategy to persist in config.yaml: "
+                "safe-surge or zero-surge. Worker wave flags control worker-group "
+                "parallelism when safe-surge is selected."
             ),
         ),
     ] = None,
@@ -46081,7 +46548,7 @@ def soperator_onboard_command(
         typer.Option(
             "--strategy-max-surge-count",
             help=(
-                "Nebius node-group strategy max_surge count for each active worker group. "
+                "Nebius node-group strategy max_surge count for each active group. "
                 "Default: 0 for zero-surge / 1 for safe-surge."
             ),
         ),
@@ -46091,8 +46558,8 @@ def soperator_onboard_command(
         typer.Option(
             "--strategy-max-unavailable-count",
             help=(
-                "Nebius node-group strategy max_unavailable count for each active worker "
-                "group. Default: 1 for zero-surge / 0 for safe-surge."
+                "Nebius node-group strategy max_unavailable count for each active group. "
+                "Default: 1 for zero-surge / 0 for safe-surge."
             ),
         ),
     ] = None,
@@ -46101,7 +46568,7 @@ def soperator_onboard_command(
         typer.Option(
             "--strategy-drain-timeout",
             help=(
-                "Nebius node-group strategy drain timeout for each active worker group: "
+                "Nebius node-group strategy drain timeout for each active service or worker group: "
                 "none or an explicit Go-style duration such as 30m. Default: 30m."
             ),
         ),
@@ -46348,20 +46815,20 @@ _SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES = (
     "Terraform-owned, so --execute uses direct Nebius updates for Kubernetes "
     "version, node OS image, and Nebius GPU driver preset. Control plane is "
     "upgraded first; service-role node groups are then updated one group at a "
-    "time with temporary zero-surge strategy (max_surge=0, max_unavailable=1, "
-    "drain_timeout=30m), while worker node groups also default to zero-surge. "
+    "time. zero-surge uses temporary max_surge=0, max_unavailable=1, "
+    "drain_timeout=30m and quiesces one-node controller/login/accounting "
+    "workloads; worker node groups also default to zero-surge. "
     "Operators can select safe-surge (max_surge=1, max_unavailable=0, "
-    "drain_timeout=30m) for bounded parallel waves when spare quota/capacity "
-    "is available. Set worker_group_strategy.drain_timeout to none to wait "
+    "drain_timeout=30m) for service groups and bounded worker waves when spare "
+    "quota/capacity is available. Set worker_group_strategy.drain_timeout to none to wait "
     "indefinitely instead of allowing provider drain fallback. cxcli restores "
     "each node group's original strategy.",
-    "Worker node-template quota contract: zero-surge requires no spare worker "
-    "quota but can reduce active capacity by max_unavailable_count node(s) per "
-    "worker group during rollout. With safe-surge, preserved worker groups "
-    "require max_surge_count temporary surge node(s) for each worker group in "
-    "the active wave; cxcli checks the required spare quota and GPU capacity "
-    "and requires selected worker nodes to start Ready and schedulable before "
-    "mutation.",
+    "Node-template quota contract: zero-surge requires no spare quota but can "
+    "reduce active capacity by max_unavailable_count node(s) per group during "
+    "rollout. With safe-surge, active service groups and preserved worker groups "
+    "require max_surge_count temporary surge node(s) for each active group; "
+    "cxcli checks the required spare quota and GPU capacity and requires selected "
+    "worker nodes to start Ready and schedulable before mutation.",
     "Status contract: approved --execute prints phase-aware external Soperator "
     "upgrade status; target remediation phases report MK8s health, storage "
     "phases report SFS/PVC progress and continuity, while compute and cutover "
@@ -46407,17 +46874,18 @@ _SOPERATOR_MIGRATION_PLAN_TOPIC_STYLES = {
     "Soperator upgrade required": "yellow",
     "External node-template upgrade required": "yellow",
     "Target GPU stack reconciliation required": "yellow",
-    "Worker rollout strategy": "bold cyan",
+    "Node-template rollout strategy": "bold cyan",
     "Worker wave parallelism": "bold cyan",
-    "Worker per-group strategy": "bold cyan",
-    "Worker spare capacity required": "bold yellow",
-    "Worker drain timeout": "yellow",
+    "Node-group per-group strategy": "bold cyan",
+    "Safe-surge spare capacity required": "bold yellow",
+    "Zero-surge spare capacity required": "bold yellow",
+    "Node-group drain timeout": "yellow",
     "Service-role rollout": "cyan",
     "Planned worker waves": "cyan",
     "Upgrade phases": "bold magenta",
     "Live executor contract": "bold blue",
     "External node-template contract": "bold blue",
-    "Worker node-template quota contract": "bold blue",
+    "Node-template quota contract": "bold blue",
     "Status contract": "bold blue",
     "Validation contract": "bold blue",
     "Failure handling contract": "bold blue",
@@ -46968,6 +47436,33 @@ def _soperator_migration_execute_payload(
             yield execution_payload
 
 
+def _external_soperator_execute_snapshot_collector(
+    payload: Mapping[str, Any],
+    *,
+    target_ref: str,
+) -> Callable[..., Mapping[str, Any]]:
+    target = soperator_onboarding_target(payload, target_ref=target_ref)
+    if isinstance(target, Mapping):
+        cluster_id = _non_empty_text(target.get("cluster_id"))
+        if cluster_id:
+            access = _non_empty_text(target.get("access")) or "external"
+
+            def _collect_with_provider_inventory(
+                *,
+                kube_context: str | None = None,
+            ) -> Mapping[str, Any]:
+                del kube_context
+                snapshot, _collection_context = _collect_soperator_snapshot_for_nebius_mk8s_cluster(
+                    payload,
+                    cluster_id=cluster_id,
+                    access=access,
+                )
+                return snapshot
+
+            return _collect_with_provider_inventory
+    return collect_kubectl_soperator_snapshot
+
+
 def _soperator_post_migration_provider_snapshot(
     source_report: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -47244,10 +47739,10 @@ def soperator_external_upgrade_command(
         typer.Option(
             "--worker-rollout-strategy",
             help=(
-                "External node-template worker rollout strategy. zero-surge is the "
-                "default and requires no spare worker quota but can reduce active "
-                "capacity; safe-surge uses temporary surge capacity and verifies "
-                "quota/capacity before mutation."
+                "External node-template rollout strategy. zero-surge is the default "
+                "and requires no spare quota but can reduce active capacity; "
+                "safe-surge uses temporary surge capacity for active service groups "
+                "and worker waves and verifies quota/capacity before mutation."
             ),
         ),
     ] = None,
@@ -47290,7 +47785,7 @@ def soperator_external_upgrade_command(
         typer.Option(
             "--strategy-max-surge-count",
             help=(
-                "Nebius node-group strategy max_surge count for each active worker group. "
+                "Nebius node-group strategy max_surge count for each active group. "
                 "Default comes from config.yaml, or 0 for zero-surge / 1 for safe-surge."
             ),
         ),
@@ -47300,8 +47795,8 @@ def soperator_external_upgrade_command(
         typer.Option(
             "--strategy-max-unavailable-count",
             help=(
-                "Nebius node-group strategy max_unavailable count for each active worker "
-                "group. Default comes from config.yaml, or 1 for zero-surge / 0 for safe-surge."
+                "Nebius node-group strategy max_unavailable count for each active group. "
+                "Default comes from config.yaml, or 1 for zero-surge / 0 for safe-surge."
             ),
         ),
     ] = None,
@@ -47310,7 +47805,7 @@ def soperator_external_upgrade_command(
         typer.Option(
             "--strategy-drain-timeout",
             help=(
-                "Nebius node-group strategy drain timeout for each active worker group: "
+                "Nebius node-group strategy drain timeout for each active service or worker group: "
                 "none or an explicit Go-style duration such as 30m. Default comes from "
                 "config.yaml, or 30m."
             ),
@@ -47406,7 +47901,7 @@ def soperator_external_upgrade_command(
             console.print(_style_soperator_migration_plan_line(line), soft_wrap=True)
         console.print(f"Slurm job policy: {resolved_job_policy}", soft_wrap=True)
         console.print(
-            "Backup: restore-capable archive with raw Secrets and accounting DB dump "
+            "Backup: restore-capable archive with raw Secrets and optional accounting DB dump "
             "is required before approved mutation.",
             soft_wrap=True,
         )
@@ -47483,7 +47978,10 @@ def soperator_external_upgrade_command(
                     payload=execution_payload,
                     source_report=source_report,
                     backup_metadata=backup_metadata,
-                    snapshot_collector=collect_kubectl_soperator_snapshot,
+                    snapshot_collector=_external_soperator_execute_snapshot_collector(
+                        execution_payload,
+                        target_ref=target_ref,
+                    ),
                     approved=approve,
                     status_callback=emit_status,
                     job_policy=resolved_job_policy,

@@ -139,11 +139,18 @@ def _with_provider_node_template_inventory(
     stale_gpu_preset: str = "",
 ) -> dict[str, object]:
     snapshot = json.loads(json.dumps(snapshot))
+    target_k8s_version = (
+        soperator_onboarding_module.ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION
+    )
+    target_os = soperator_onboarding_module.ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS
+    target_gpu_stack_preset = (
+        soperator_onboarding_module.ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_GPU_STACK_PRESET
+    )
     snapshot["provider"] = {
         "mk8s_cluster": {
             "id": "mk8scluster-source",
             "name": "source",
-            "control_plane_version": "1.33",
+            "control_plane_version": target_k8s_version,
         }
     }
     node_groups = snapshot["node_groups"]
@@ -156,15 +163,15 @@ def _with_provider_node_template_inventory(
         labels = raw_group.setdefault("labels", {})
         assert isinstance(labels, dict)
         labels.setdefault("nebius.com/node-group-id", node_group_id)
-        gpu_stack_preset = "cuda13.0" if raw_group.get("gpu") is True else ""
+        gpu_stack_preset = target_gpu_stack_preset if raw_group.get("gpu") is True else ""
         if group_name == stale_group:
             gpu_stack_preset = stale_gpu_preset
         raw_group["provider"] = {
             "node_group_id": node_group_id,
             "node_group_name": group_name,
             "node_template": {
-                "k8s_version": "1.33",
-                "os": "ubuntu24.04",
+                "k8s_version": target_k8s_version,
+                "os": target_os,
                 "gpu_stack_preset": gpu_stack_preset,
             },
         }

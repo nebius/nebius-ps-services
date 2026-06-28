@@ -3148,6 +3148,12 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
     assert report["protected_customer_state"]["before_hash"]
     assert report["protected_customer_state"]["after_hash"]
     assert report["fast_smoke"]["status"] == "passed"
+    stage_verification = {item["phase_id"]: item for item in report["stage_verification"]}
+    assert stage_verification["soperator-chart"]["status"] == "passed"
+    assert stage_verification["postflight-validation"]["status"] == "passed"
+    assert stage_verification["shared-safety-verification"]["status"] == "passed"
+    assert stage_verification["mk8s-node-template"]["status"] == "not_run"
+    assert stage_verification["post-mk8s-validation"]["status"] == "not_run"
     assert report["current_phase"]["id"] == "completed"
     assert report["current_phase"]["component"].startswith("apps:soperator")
     assert any(item["id"] == "backup" for item in report["phase_history"])
@@ -3158,8 +3164,122 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
     assert "- Current phase: `completed`" in markdown_report
     assert "for `apps:soperator" in markdown_report
     assert "## Phase History" in markdown_report
+    assert "## Stage Fast Verification" in markdown_report
+    assert "`soperator-chart`: `PASS`" in markdown_report
+    assert "`mk8s-node-template`: `PENDING`" in markdown_report
     assert "`backup`" in markdown_report
     assert "`shared-safety-verification`" in markdown_report
+
+
+def test_soperator_upgrade_fast_stage_failure_blocks_next_stage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    paths.infra_dir.mkdir(parents=True)
+    paths.flux_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
+    paths.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "infra": {
+                    "components": [
+                        {
+                            "id": "mk8s",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "inputs": {},
+                        }
+                    ]
+                },
+                "apps": {
+                    "charts": [
+                        {
+                            "id": "soperator",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "namespace": "soperator",
+                            "release-name": "soperator",
+                            "target_ref": "mk8s",
+                            "version": "0.25.0",
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    generated_config = SimpleNamespace()
+    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    calls: list[object] = []
+
+    monkeypatch.setattr(
+        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_generated_bundle_validation",
+        lambda *_args, **kwargs: calls.append(("validate", kwargs["title"])) or {},
+    )
+    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: calls.append("render"))
+    monkeypatch.setattr(
+        cli,
+        "flux_apply_command",
+        lambda *args, **kwargs: calls.append(("flux-apply", args, kwargs)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_verify_soperator_static_upgrade_ready",
+        lambda *_args, **_kwargs: calls.append("soperator-static-ready"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_raise_if_soperator_upgrade_would_bypass_migration",
+        lambda *_args, **_kwargs: calls.append("migration-guard"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_soperator_upgrade_validation_phase",
+        lambda *_args, **kwargs: (
+            calls.append(("soperator-validation", kwargs["phase_label"])) or ()
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_update_source_helm_chart_version",
+        lambda *_args, **_kwargs: True,
+    )
+    _stub_soperator_upgrade_runtime(monkeypatch, paths, calls)
+
+    with pytest.raises(RuntimeError, match="fast stage verification failed after soperator-chart"):
+        _run_soperator_upgrade_for_test(
+            config_path=paths.config_path,
+            to_chart_version="0.26.0",
+        )
+
+    assert ("soperator-validation", "Postflight") not in calls
+    checkpoint_path = (
+        paths.project_dir / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR / "mk8s" / "checkpoint.json"
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    chart_verification = checkpoint["stage_verification"]["soperator-chart"][
+        "fast_verification"
+    ]
+    assert chart_verification["status"] == "failed"
+    assert chart_verification["passed"] is False
+    assert checkpoint["status"] == "failed"
+
+    report = json.loads(
+        (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_JSON_FILENAME).read_text(
+            encoding="utf-8"
+        )
+    )
+    stage_verification = {item["phase_id"]: item for item in report["stage_verification"]}
+    assert stage_verification["soperator-chart"]["status"] == "failed"
+    assert stage_verification["postflight-validation"]["status"] == "not_run"
 
 
 def test_soperator_upgrade_mk8s_only_runs_node_template_phase_without_raw_kubectl_drain(
@@ -3272,6 +3392,28 @@ def test_soperator_upgrade_mk8s_only_runs_node_template_phase_without_raw_kubect
     assert mk8s_calls[0][1]["to_k8s_version"] == "1.33"
     assert mk8s_calls[0][1]["node_group"] == "worker"
     assert any(isinstance(call, tuple) and call[0] == "slurm-restore" for call in calls)
+    checkpoint_path = (
+        paths.project_dir / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR / "mk8s" / "checkpoint.json"
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    checkpoint_stage_verification = checkpoint["stage_verification"]
+    assert checkpoint_stage_verification["mk8s-node-template"]["fast_verification"][
+        "status"
+    ] == "passed"
+    assert checkpoint_stage_verification["post-mk8s-validation"]["fast_verification"][
+        "status"
+    ] == "passed"
+    report = json.loads(
+        (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_JSON_FILENAME).read_text(
+            encoding="utf-8"
+        )
+    )
+    report_stage_verification = {
+        item["phase_id"]: item for item in report["stage_verification"]
+    }
+    assert report_stage_verification["mk8s-node-template"]["status"] == "passed"
+    assert report_stage_verification["post-mk8s-validation"]["status"] == "passed"
+    assert report_stage_verification["soperator-chart"]["status"] == "passed"
 
 
 def test_soperator_upgrade_cancel_selected_policy_cancels_jobs(
@@ -3856,21 +3998,45 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
         "protected-state-captured",
         "activechecks-suspend-started",
         "activechecks-suspended",
+        "stage-fast-verification-passed",
         "preflight-soperator-validation-completed",
         "chart-applied",
+        "stage-fast-verification-passed",
         "postflight-completed",
+        "stage-fast-verification-passed",
         "activechecks-restore-started",
         "activechecks-restored",
+        "stage-fast-verification-passed",
         "slurm-restored",
+        "stage-fast-verification-passed",
         "shared-safety-verified",
+        "stage-fast-verification-passed",
         "completed",
     ]
     assert checkpoint["backup"]["sha256"] == "archive-sha"
     assert checkpoint["backup"]["accounting_db_dump"] is True
+    stage_verification = checkpoint["stage_verification"]
+    assert stage_verification["activechecks-suspend"]["fast_verification"]["status"] == "passed"
+    assert stage_verification["soperator-chart"]["fast_verification"]["status"] == "passed"
+    assert stage_verification["activechecks-restore"]["fast_verification"]["status"] == "passed"
+    assert stage_verification["shared-safety-verification"]["fast_verification"]["status"] == "passed"
+    upgrade_json = json.loads(
+        (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_JSON_FILENAME).read_text(
+            encoding="utf-8"
+        )
+    )
+    report_stage_verification = {
+        item["phase_id"]: item for item in upgrade_json["stage_verification"]
+    }
+    assert report_stage_verification["activechecks-suspend"]["status"] == "passed"
+    assert report_stage_verification["activechecks-restore"]["status"] == "passed"
     upgrade_report = (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_FILENAME).read_text(
         encoding="utf-8"
     )
     assert "checkpointed suspend/restore was required" in upgrade_report
+    assert "## Stage Fast Verification" in upgrade_report
+    assert "`activechecks-suspend`: `PASS`" in upgrade_report
+    assert "`activechecks-restore`: `PASS`" in upgrade_report
     assert "`activechecks-restored`" in upgrade_report
     assert "`completed`" in upgrade_report
 
@@ -20446,7 +20612,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--strategy-drain-timeout" in normalized_ext_soperator_upgrade_help
     assert "--max-global-unavailable-worker-nodes" not in normalized_ext_soperator_upgrade_help
     assert "--max-global-unavailable-worker-percent" not in normalized_ext_soperator_upgrade_help
-    assert "zero-surge is the default and requires no spare worker quota" in (
+    assert "zero-surge is the default and requires no spare quota" in (
         normalized_ext_soperator_upgrade_help
     )
     assert "safe-surge uses temporary surge capacity" in normalized_ext_soperator_upgrade_help

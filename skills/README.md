@@ -40,7 +40,9 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `align` | Implicit allowed | Project-wide alignment and review across code, wiring, tests, CI, CLI/help, config, documentation, workflows, and project skills. |
 | `align-skill` | Implicit allowed | Review, harden, validate, and improve existing or newly scaffolded Codex or Agent Skill folders after an initial scaffold or draft exists. |
 | `brainstorm` | Implicit allowed | Explore ideas in chat with source-ranked project, repo, skill, internal, and vendor context before implementation. |
+| `code-review` | Implicit allowed | Strict implementation-quality review of local diffs, current branches, changed files, or patches for maintainability and structural simplification. |
 | `global-context-management` | Implicit allowed | Keep complex Codex tasks focused with durable task state, concise parent-thread context, targeted read-only subagents when authorized, focused validation, and final risk review. |
+| `research` | Implicit allowed | Senior-engineer technical due diligence on technologies, APIs, RFCs, protocols, architecture patterns, products, and feature requirements. |
 
 ### Local Setup and Information
 
@@ -71,6 +73,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | Skill | Invocation | Description |
 | --- | --- | --- |
 | `apply-security` | Explicit only | Review or fix security issues across infrastructure, deployment, Helm, Kubernetes, Terraform, CI/CD, shell, and application code. |
+| `design` | Implicit allowed | Design software features, applications, components, APIs, data flows, and technology choices before implementation, ending with a `/plan` handoff. |
 | `github-workflows` | Implicit allowed | Create, review, or standardize GitHub Actions for PR/merge CI, merge automation, reusable workflows, permissions, and release/image YAML. |
 | `gitignore` | Implicit allowed | Create or update stack-aware `.gitignore` files with sensible macOS, VS Code, and detected language/tool defaults. |
 | `helmchart` | Implicit allowed | Create, review, harden, refactor, lint, template, or standardize Helm charts and chart CI. |
@@ -78,6 +81,8 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `nebius` | Implicit allowed | Automate Nebius SDK/cloud workflows for IAM, object storage, VPC, quota, MK8s readiness, GPU/operator decisions, and observability wiring. |
 | `python-project` | Implicit allowed | Scaffold or harden Python projects with modern packaging, `src/` layout, Ruff, pytest, Typer, Pydantic, services, APIs, and CI. |
 | `shell-scripting` | Implicit allowed | Create, refactor, or review Bash automation with strict mode, safe argument parsing, idempotency, and readable CLI output. |
+| `system-design-rules` | Implicit allowed | Evaluate system designs, ADRs, architecture options, APIs, data ownership, reliability, security, observability, scale, cost, and team boundaries with a practical design checklist. |
+| `task-implementer` | Implicit allowed | Break brownfield implementation-loop requests into ordered `task-1`..`task-n` work items and run them sequentially with markdown handoff checkpoints between fresh Codex sessions. |
 | `terraform` | Implicit allowed | Scaffold, standardize, or improve Terraform repositories and modules with state guidance, validation, security controls, examples, and CI. |
 
 ### Agentic SDLC Workflow
@@ -114,13 +119,11 @@ review Terraform code.
 
 OpenAI Codex treats `agents/openai.yaml` as optional skill metadata for UI,
 invocation policy, and dependencies. In this repository, every source skill
-has that file so invocation policy can be reviewed and validated. The listed
-operational setup, commit, PR, merge, publish, security, code-info, container,
-Grafana MCP, and Agentic SDLC verification skills use
-`allow_implicit_invocation: false` and should be started explicitly with
-`$skill-name`. Remaining non-SDLC skills use
-`allow_implicit_invocation: true` so Codex may select them when the task
-matches their metadata.
+has that file so invocation policy can be reviewed and validated. Skills marked
+`Explicit only` in the catalog use `allow_implicit_invocation: false` and
+should be started explicitly with `$skill-name`. Skills marked
+`Implicit allowed` use `allow_implicit_invocation: true` so Codex may select
+them when the task matches their metadata.
 
 ### Prompt Examples
 
@@ -148,6 +151,16 @@ $align-skill Review and standardize skills/foo against the canonical skill struc
 $align-skill Harden this scaffolded skill folder into a safe, secure, fast Codex skill, then validate it.
 
 $brainstorm Explore this architecture idea, gather the relevant project docs, related skills, internal context, and official vendor docs, and challenge weak assumptions before we implement anything.
+
+$research Research Kubernetes Gateway API, explain how it works internally, identify limitations and alternatives, and recommend when we should or should not use it.
+
+$design Design this new feature before implementation: read the requirements, inspect the existing code and docs, research unfamiliar technologies, compare options, and create a /plan handoff.
+
+$code-review Audit the current branch for structural code-quality regressions, missed simplifications, abstraction problems, and maintainability blockers.
+
+$system-design-rules Review this ADR against the system design checklist, compare the trade-offs, and identify missing reliability, data, security, observability, cost, and ownership decisions.
+
+$task-implementer Break this brownfield change into ordered task-1..task-n work items, implement them sequentially with a markdown handoff, and use a fresh Codex session for each task.
 
 $apply-security Scan this repository for infrastructure, CI/CD, shell, and application security issues, then produce a prioritized remediation plan with safe patch candidates.
 
@@ -225,6 +238,65 @@ options, and stops short of editing files, creating tickets, sending messages,
 or mutating external systems. If the user pivots to execution, it should
 summarize the brainstorm and hand off to the appropriate implementation,
 alignment, SDLC, or communication skill.
+
+### `research`
+
+`research` performs senior-engineer technical due diligence on technologies,
+frameworks, APIs, protocols, RFCs, products, architecture patterns, and feature
+requirements. It ranks sources by authority, starts from official docs,
+specifications, papers, and official source code, then uses implementation and
+community sources for maintainer intent and operational pain points. The output
+explains core concepts, architecture, internals, operations, limitations,
+alternatives, and recommendations for design decisions. Use `brainstorm` for
+open-ended ideation, `design` for solution design and `/plan` handoff, and
+`system-design-rules` for checklist review of an existing proposal.
+
+### `design`
+
+`design` turns requirements, existing-system evidence, and technology research
+into a concrete software design before implementation. It follows six phases:
+understand requirements, understand the existing system or greenfield context,
+research missing knowledge against official docs, design the solution, evaluate
+alternatives, and create a Codex `/plan` handoff. Use it for new features,
+major changes, APIs, data flows, integrations, and new applications when the
+user wants a practical design and implementation-ready plan, not immediate
+coding. Use `brainstorm` for open-ended ideation, `system-design-rules` for
+checklist review of an existing proposal, and `sdlc-create-design` for
+Agentic SDLC-owned `docs/design.md`.
+
+### `code-review`
+
+`code-review` performs a strict implementation-quality review of the current
+branch, local diff, changed files, or provided patch. Use it when the user wants
+findings-first feedback on maintainability, abstraction quality, modularity,
+type boundaries, file-size growth, spaghetti branches, and missed structural
+simplifications. It is review-first and should not edit code unless the user
+explicitly asks for fixes. `review-pr` remains the GitHub PR readiness and
+branch-update workflow, while `align` remains the broader project consistency
+and repair workflow. Use `apply-security` for security-specific review and
+`system-design-rules` for design-phase architecture decisions.
+
+### `system-design-rules`
+
+`system-design-rules` applies a refined 100-rule software system design
+checklist to architecture proposals, ADRs, design docs, API and data model
+choices, reliability plans, security posture, observability, performance,
+cost, migration, and team-ownership decisions before implementation. It scales
+review depth to risk, separates facts from assumptions, compares options by
+trade-offs and reversibility, and returns concrete design guidance, validation
+needs, and open questions instead of treating principles as universal laws.
+
+### `task-implementer`
+
+`task-implementer` coordinates small and medium brownfield implementation
+requests that need ordered execution across fresh Codex contexts. It inspects
+the target code before ordering work, records a `task-1` through `task-n` queue
+in a private markdown handoff under `$CODEX_HOME/task-implementer/`, implements
+one task at a time, and updates the handoff after every task with changed files,
+validation, blockers, and the next-session prompt. Because it mutates code and
+may launch follow-on implementation sessions, implicit selection is limited to
+prompts that ask for sequential task-loop execution. Use `$sdlc-start` for
+Agentic SDLC and `align` for final changed-surface alignment.
 
 ### `agentic-sdlc-test`
 
@@ -415,9 +487,11 @@ controls are available, reporting any unavailable or failed cleanup,
 and reviewing risk before final answers. Its public skill files stay generic;
 local hooks, custom agent config, and task-state files belong under
 `$CODEX_HOME`. The hook setup advertises session-scoped task-state paths
-without creating missing state files; an existing file is meant to be read at
-task start, resume, or after compaction when prior context may matter, then
-updated with concise decisions, validation status, and next action. This
+without creating missing state files and may suggest bounded same-workspace
+prior task-state candidate paths for complex prompts without injecting their
+contents; an existing file is meant to be read at task start, resume, or after
+compaction when prior context may matter, then updated with concise decisions,
+validation status, and next action. This
 non-SDLC setup owns `SessionStart` and `UserPromptSubmit` only; Agentic SDLC
 skills and guardrails own SDLC phase selection, run state, `PreToolUse`, and
 `Stop`.

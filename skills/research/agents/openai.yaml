@@ -1,0 +1,6 @@
+interface:
+  display_name: "Research"
+  short_description: "Technical due diligence research for design decisions"
+  default_prompt: "Use $research to investigate a technology, architecture pattern, API, protocol, RFC, product, or feature requirement and turn authoritative sources into actionable engineering recommendations."
+policy:
+  allow_implicit_invocation: true

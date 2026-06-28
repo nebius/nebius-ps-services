@@ -68,6 +68,9 @@ global file.
   resume, or after compaction when prior context may matter. Update it with
   concise checkpoints, and do not create repo-local task-state files unless
   explicitly requested.
+- If hooks suggest same-workspace prior task-state candidate paths, read only
+  candidates that appear relevant to the current task, treat them as stale
+  hints, and verify against current repo or runtime evidence.
 - Keep `current.md` as a rolling summary, not an append-only transcript:
   replace stale details with the latest validated state, and summarize any
   oversized historical task-state file before relying on it.
@@ -235,6 +238,11 @@ sources.
 Treat existing `current.md` files as compact rolling summaries: replace stale
 details instead of appending transcripts, keep raw logs and secrets out, and
 summarize files that have grown too large to scan before relying on them.
+For complex prompts, the prompt-time hook may list a bounded set of
+same-workspace prior `current.md` candidate paths from the same workspace hash
+bucket. It must not inject the contents of those files. Treat candidate paths
+as optional stale context to inspect only when relevant; the current session's
+advertised `current.md` remains the write target.
 
 Direct hook unit probes against a live `$CODEX_HOME` with synthetic
 `session_id` values should not create task-state files or directories. They

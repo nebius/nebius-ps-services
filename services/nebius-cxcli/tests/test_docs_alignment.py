@@ -200,8 +200,7 @@ def test_readme_mk8s_gpu_workload_validation_defaults_include_soperator() -> Non
     assert "`acceptance-benchmark-report-<target>.json`" in acceptance
     assert "one concise result line with `PASSED`, `FAILED`, or `SKIPPED`" in acceptance_flat
     assert (
-        "the suite scope, target, and the most relevant summary or skip reason"
-        in acceptance_flat
+        "the suite scope, target, and the most relevant summary or skip reason" in acceptance_flat
     )
     assert "elapsed time in `hh:mm:ss`" in acceptance_flat
     assert "`elapsed_seconds`" in acceptance
@@ -210,17 +209,13 @@ def test_readme_mk8s_gpu_workload_validation_defaults_include_soperator() -> Non
     assert "default-color labels, summaries, skip reasons, and elapsed times stay unbolded" in (
         acceptance_flat
     )
-    assert (
-        "`k8s-nccl` and `slurm-nccl` both run NCCL `all_reduce_perf`"
-        in acceptance
-    )
+    assert "`k8s-nccl` and `slurm-nccl` both run NCCL `all_reduce_perf`" in acceptance
     assert "Socket/TCPIP transport for Ethernet-only shapes" in acceptance
     assert "RDMA transport for GPU-cluster / InfiniBand shapes" in acceptance
     assert "below-threshold average bandwidth is recorded as a comment" in acceptance
     assert "runs `/usr/bin/all_reduce_perf_mpi`" in acceptance
     assert (
-        "multiple idle one-GPU nodes run a multi-node NCCL benchmark capped at a 2G "
-        "message size"
+        "multiple idle one-GPU nodes run a multi-node NCCL benchmark capped at a 2G message size"
     ) in acceptance
     assert "one total GPU runs a launch/smoke check" in acceptance
     assert "Slurm-level NCCL evidence for a Soperator target" in acceptance_flat
@@ -235,21 +230,17 @@ def test_readme_mk8s_gpu_workload_validation_defaults_include_soperator() -> Non
         "multiple idle one-GPU Slurm nodes run a multi-node NCCL benchmark capped at "
         "a 2G message size"
     ) in design
-    assert (
-        "below-threshold bandwidth is recorded as an informational report comment"
-        in design
-    )
+    assert "below-threshold bandwidth is recorded as an informational report comment" in design
     assert (
         "Acceptance-test terminal output prints a concise `PASSED`, `FAILED`, or `SKIPPED` result line"
         in design
     )
     assert "elapsed duration as `elapsed_seconds` and `elapsed_time`" in design
     assert "formatted `elapsed_time` value in `hh:mm:ss`" in design
+    assert "color-capable terminals render `PASSED` green, `FAILED` red, `SKIPPED` yellow" in design
     assert (
-        "color-capable terminals render `PASSED` green, `FAILED` red, `SKIPPED` yellow"
-        in design
+        "default-color labels, summaries, skip reasons, and elapsed times stay unbolded" in design
     )
-    assert "default-color labels, summaries, skip reasons, and elapsed times stay unbolded" in design
     assert "Render materializes `nebius.com/node-group` on each MK8s node group" in design
     assert "grouped node details" in design
     assert "minimum expected Ready GPU node counts" in design
@@ -324,17 +315,20 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
     assert "drain-timeout defaults" in supporting
     assert "- `acceptance-test smoke <config.yaml>`" in supporting
     assert "Runs explicit post-deploy acceptance smoke suites" in supporting
-    assert "Requires `--suite`; omitted `--suite` fails fast instead of choosing a K8s or Slurm suite" in supporting
+    assert (
+        "Requires `--suite`; omitted `--suite` fails fast instead of choosing a K8s or Slurm suite"
+        in supporting
+    )
     assert "Use `--suite slurm` for Slurm all-node smoke" in supporting
-    assert "After a suite is selected, defaults to every generated target when `--target` is omitted" in supporting
+    assert (
+        "After a suite is selected, defaults to every generated target when `--target` is omitted"
+        in supporting
+    )
     assert "Runs explicit post-deploy benchmark suites" in supporting
     assert "Requires `--suite`; omitted `--suite` fails fast" in supporting
     assert "Use `--suite k8s-nccl` for the Kubernetes NCCL benchmark" in supporting
     assert "`--suite slurm-nccl` for the Slurm NCCL benchmark" in supporting
-    assert (
-        "--max-nodes 4 --timeout 20m --average-bus-bandwidth-threshold-gbps 300"
-        in supporting
-    )
+    assert "--max-nodes 4 --timeout 20m --average-bus-bandwidth-threshold-gbps 300" in supporting
 
     common_flags = supporting.split("Common command flags:", maxsplit=1)[1]
     common_flags_flat = _squash(common_flags)
@@ -489,8 +483,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
         "[Soperator Commands](#soperator-commands) |"
     ) in toc
     assert (
-        "| Post-deploy smoke or benchmark validation | "
-        "[Acceptance Testing](#acceptance-testing) |"
+        "| Post-deploy smoke or benchmark validation | [Acceptance Testing](#acceptance-testing) |"
     ) in toc
     assert ("| Command flags and generated-bundle operations | [Commands](#commands) |") in toc
     assert "- [Recommended Workflow](#recommended-workflow)" in toc
@@ -543,8 +536,9 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "`nebius-cxcli soperator` is for Soperator app rows that cxcli already manages" in (
         soperator_flat
     )
-    assert "`soperator backup` and `soperator restore` create or apply restore-capable archives" in (
-        soperator_flat
+    assert (
+        "`soperator backup` and `soperator restore` create or apply restore-capable archives"
+        in (soperator_flat)
     )
     assert "`nebius-cxcli soperator upgrade`" in soperator
     assert "`nebius-cxcli ext-soperator` is for existing Nebius MK8s clusters" in (soperator_flat)
@@ -567,8 +561,9 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert ".nebius-cxcli/ext-soperator-upgrades/<target>/checkpoint.json" in soperator
     assert ".nebius-cxcli/soperator-upgrades/<target>/checkpoint.json" in soperator
     assert "these checkpoints stay local" in soperator_flat
-    assert "After a completed external upgrade refreshes the target into the deploy-owned shape" in (
-        soperator_flat
+    assert (
+        "After a completed external upgrade refreshes the target into the deploy-owned shape"
+        in (soperator_flat)
     )
     assert "`nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>`" in soperator
     assert (
@@ -576,12 +571,8 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
         in soperator
     )
     assert "`nebius-cxcli soperator backup <config.yaml> --target <target>`" in soperator
-    assert "`nebius-cxcli soperator restore <backup.tar.gz> --execute --approve`" in (
-        soperator
-    )
-    assert "`nebius-cxcli ext-soperator backup <config.yaml> --target <target>`" in (
-        soperator
-    )
+    assert "`nebius-cxcli soperator restore <backup.tar.gz> --execute --approve`" in (soperator)
+    assert "`nebius-cxcli ext-soperator backup <config.yaml> --target <target>`" in (soperator)
     assert (
         "`nebius-cxcli ext-soperator restore <backup.tar.gz> --kube-context <new-context> --execute --approve`"
         in soperator
@@ -600,9 +591,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "non-interactive onboarding" in soperator
     assert "verifies the needed quota and capacity during `--execute` preflight" in (soperator_flat)
     assert "prints a color-highlighted phase plan in interactive terminals" in soperator
-    assert "refuses deploy-owned/no-upgrade action sets with render/deploy guidance" in (
-        soperator
-    )
+    assert "refuses deploy-owned/no-upgrade action sets with render/deploy guidance" in (soperator)
     assert (
         "`nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --execute --approve`"
         in soperator
@@ -610,8 +599,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert (
         "`nebius-cxcli soperator upgrade <config.yaml> --target <target> "
         "[--to-chart-version <chart-version>] [--to-k8s-version <major.minor>] "
-        "[--to-os <image>] [--to-gpu-stack-preset <preset>]`"
-        in soperator
+        "[--to-os <image>] [--to-gpu-stack-preset <preset>]`" in soperator
     )
     assert "Compatibility entry point for Soperator chart upgrades" not in soperator
     assert "`nebius-cxcli upgrade helm-chart <config.yaml> apps:soperator@<target>`" not in (
@@ -676,9 +664,14 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "CXCLI-managed Soperator upgrade follows these stages:" in soperator_flat
     assert "Preflight and backup: validate the current bundle" in soperator_flat
     assert "Slurm and MK8s rollout: when MK8s target flags are supplied" in soperator_flat
+    assert "Fast stage verification gates: after ActiveChecks suspension" in soperator_flat
+    assert "post-MK8s validation, Soperator chart apply" in soperator_flat
+    assert "final post-upgrade MK8s and Helm readiness checks" in soperator_flat
     assert "Postflight validation and restore: restore Slurm node state" in soperator_flat
-    assert "`upgrade node-group --execute --approve` writes the approved pre-mutation checkpoint" in (
-        soperator_flat
+    assert "JSON `stage_verification` details" in soperator_flat
+    assert (
+        "`upgrade node-group --execute --approve` writes the approved pre-mutation checkpoint"
+        in (soperator_flat)
     )
     assert "Onboarded external MK8s clusters are not Terraform-managed" in soperator
     assert "best-effort high availability" in soperator_flat
@@ -837,7 +830,10 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "reusable upgrade wizard choice builder" in unreleased_flat
     assert "Improved external Soperator upgrade completion handoff" in unreleased_flat
     assert "live post-upgrade discovery refresh" in unreleased_flat
-    assert "pending or still-external-upgrade-owned plans blocked from normal deploy" in unreleased_flat
+    assert (
+        "pending or still-external-upgrade-owned plans blocked from normal deploy"
+        in unreleased_flat
+    )
     assert "Documented the Soperator cluster upgrade split" in unreleased_flat
     assert "Reorganized the README navigation" in unreleased_flat
     assert "move Soperator Slurm scheduling guidance under `Soperator Commands`" in (
@@ -1336,7 +1332,8 @@ def test_docs_define_component_selector_contract() -> None:
     assert "External onboarding is not a Terraform import" in readme_flat
     assert "remain outside Terraform ownership" in readme_flat
     assert (
-        "If the accepted onboarding report says no external-upgrade-owned work is required" in readme_flat
+        "If the accepted onboarding report says no external-upgrade-owned work is required"
+        in readme_flat
     )
     assert "deploy the rendered desired state" in readme_flat
     assert "`deploy <config.yaml>` applies the generated desired state" in readme_flat
@@ -1348,10 +1345,7 @@ def test_docs_define_component_selector_contract() -> None:
     )
     assert "Healthy evidence is reported as `gpu-stack: verified`" in readme_flat
     assert "`gpu-rdma: validation-planned`" in readme_flat
-    assert (
-        "Target GPU stack reconciliation alone is not external-upgrade-owned work"
-        in readme_flat
-    )
+    assert "Target GPU stack reconciliation alone is not external-upgrade-owned work" in readme_flat
     assert (
         "if no Soperator chart, storage, compute, or external node-template upgrade action is selected"
         in readme_flat
@@ -1362,6 +1356,8 @@ def test_docs_define_component_selector_contract() -> None:
         "`ext-soperator upgrade --execute` must first verify the live source release, create a restore-capable backup"
         in readme_flat
     )
+    assert "Each executed stage runs a fast stage-scoped verification" in readme_flat
+    assert "leaves that same phase pending" in readme_flat
     assert "After a full successful `ext-soperator upgrade --execute`" in readme_flat
     assert (
         "`generated/reports/ext-soperator-upgrade-report.md` reports `Pending phase: none`"
@@ -1387,6 +1383,8 @@ def test_docs_define_component_selector_contract() -> None:
     ):
         assert report_name in readme_flat
     assert "JSON detail reports referenced from those Markdown reports" in readme_flat
+    assert "`Stage Fast Verification` rollup" in readme_flat
+    assert "JSON `stage_verification` array" in readme_flat
     assert (
         "the selected actions become deploy-owned for the next normal reconciliation" in readme_flat
     )
@@ -1504,7 +1502,11 @@ def test_docs_define_component_selector_contract() -> None:
         "external node-template and target GPU stack reconciliation as their own required actions"
         in readme_flat
     )
-    assert "worker groups default to zero-surge" in readme_flat
+    assert "Worker groups default to zero-surge" in readme_flat
+    assert (
+        "safe-surge uses one temporary replacement node per active service or worker group"
+        in readme_flat
+    )
     assert "cxcli fails fast rather than assuming a vanilla cluster is safe to adopt" in readme_flat
     assert "ignored by cxcli-managed deployments `.gitignore` files" in readme_flat
     assert "creates or reuses aligned jail, controller-spool, and accounting SFS" in readme_flat
@@ -1530,7 +1532,10 @@ def test_docs_define_component_selector_contract() -> None:
         "benchmark` runs" in readme_flat
     )
     assert "Both acceptance-test smoke and benchmark commands require `--suite`" in readme_flat
-    assert "after a suite is selected, they run all generated targets when `--target` is omitted" in readme_flat
+    assert (
+        "after a suite is selected, they run all generated targets when `--target` is omitted"
+        in readme_flat
+    )
     assert "They resolve target handoff from `generated/reports/deploy-report.md`" in readme_flat
     assert "nebius-cxcli-soperator-cluster-validation/v2" in readme_flat
     assert "command `stdout`/`stderr` as arrays of lines" in readme_flat
@@ -1576,11 +1581,13 @@ def test_docs_define_component_selector_contract() -> None:
         design_flat
     )
     assert "onboarding prints the accepted layout decisions" in design_flat
-    assert "target-compatible storage means no aligned SFS creation or storage data migration is planned" in (
-        design_flat
+    assert (
+        "target-compatible storage means no aligned SFS creation or storage data migration is planned"
+        in (design_flat)
     )
-    assert "target-compatible compute means no replacement compute node groups or compute migration are planned" in (
-        design_flat
+    assert (
+        "target-compatible compute means no replacement compute node groups or compute migration are planned"
+        in (design_flat)
     )
     assert "`keep-existing-compute` or `create-aligned-node-groups`" in design_flat
     assert "Keeping existing compute preserves discovered node groups" in design_flat
@@ -1589,15 +1596,16 @@ def test_docs_define_component_selector_contract() -> None:
     assert "If the accepted report says no external-upgrade-owned work is required" in design_flat
     assert "Healthy evidence is reported as `gpu-stack: verified`" in design_flat
     assert "`gpu-rdma: validation-planned` evidence" in design_flat
-    assert (
-        "Target GPU stack reconciliation alone is not external-upgrade-owned work"
-        in design_flat
-    )
+    assert "Target GPU stack reconciliation alone is not external-upgrade-owned work" in design_flat
+    assert "fast stage gates record `fast_verification`" in design_flat
     assert "`ext-soperator upgrade` fails fast with the render/deploy route" in design_flat
     assert "plain `deploy <config.yaml>` reconciles the generated desired state" in design_flat
     assert "`deploy --target <target-id>` is only a narrowing selector" in design_flat
     assert "normal render/deploy applies it as desired state" in design_flat
-    assert "If the accepted onboarding report says external-upgrade-owned work is required" in design_flat
+    assert (
+        "If the accepted onboarding report says external-upgrade-owned work is required"
+        in design_flat
+    )
     assert "skip normal deploy and continue with" in design_flat
     assert "After a full successful `ext-soperator upgrade --execute`" in design_flat
     assert (
@@ -1623,6 +1631,7 @@ def test_docs_define_component_selector_contract() -> None:
         "`soperator-upgrade-report.json`",
     ):
         assert report_name in design_flat
+    assert "JSON `stage_verification` details" in design_flat
     assert "JSON detail files referenced from those Markdown reports" in design_flat
     assert "external-upgrade-owned actions are no longer selected" in design_flat
     assert "future normal reconciliation can use render/deploy" in design_flat
@@ -1636,7 +1645,10 @@ def test_docs_define_component_selector_contract() -> None:
         "`nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run`" in design
     )
     assert "dry-run plan highlights the target/source topics" in design_flat
-    assert "`--execute --approve` refreshes discovery, validates the accepted onboarding analysis" in design_flat
+    assert (
+        "`--execute --approve` refreshes discovery, validates the accepted onboarding analysis"
+        in design_flat
+    )
     assert (
         "rechecks the live source release and full discovery fingerprint, creates a restore-capable backup before the first mutation"
         in design_flat
@@ -1647,6 +1659,11 @@ def test_docs_define_component_selector_contract() -> None:
         in design_flat
     )
     assert "validation hold verifies MK8s, target Soperator" in design_flat
+    assert "every executed stage runs a fast stage-scoped verification" in design_flat
+    assert "including the post-MK8s validation boundary" in design_flat
+    assert "final post-upgrade MK8s and Helm readiness checks" in design_flat
+    assert "`phase_state[<stage>].fast_verification`" in design_flat
+    assert "JSON `stage_verification` array" in design_flat
     assert "completion writes the external upgrade reports" in design_flat
     assert "The managed stage model is explicit" in design_flat
     assert "planning/dry-run resolves chart and MK8s target intent" in design_flat
@@ -1734,13 +1751,13 @@ def test_docs_define_component_selector_contract() -> None:
         in design_flat
     )
     assert "does not create parallel worker node groups" in design_flat
-    assert "serial temporary zero-surge" in design_flat
+    assert "zero-surge quiesces one-node service workloads" in design_flat
     assert "worker groups default to zero-surge" in design_flat
     assert "worker_wave_percent: 1" in readme
     assert "worker_group_strategy:" in readme
     assert "worker_wave_percent: 1" in design
     assert "worker_group_strategy:" in design
-    assert "`max_surge_count` temporary surge node(s) per worker group" in design_flat
+    assert "`max_surge_count` temporary surge node(s) per active service group" in design_flat
     assert "worker-health, and Slurm queue preflights pass" in design_flat
     assert "With safe-surge, remediation counts `max_surge_count`" in design_flat
     assert "requires the Slurm queue to be empty before mutation" in design_flat
@@ -1756,7 +1773,10 @@ def test_docs_define_component_selector_contract() -> None:
     assert "target `SlurmCluster`, and worker `NodeSet` resources" in design_flat
     assert "`acceptance-test smoke --suite slurm`" in design_flat
     assert "Acceptance smoke and benchmark commands require `--suite`" in design_flat
-    assert "after a suite is selected, they run all generated targets when `--target` is omitted" in design_flat
+    assert (
+        "after a suite is selected, they run all generated targets when `--target` is omitted"
+        in design_flat
+    )
     assert "They resolve target handoff from `generated/reports/deploy-report.md`" in design_flat
     assert "`acceptance-test benchmark`" in design_flat
     assert "`deploy-smoke-report-<target>.json`" in design_flat

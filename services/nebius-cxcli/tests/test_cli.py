@@ -5,7 +5,7 @@ import json
 import re
 import shlex
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1220,7 +1220,9 @@ def test_deploy_blocks_migration_required_soperator_onboarding_target(
         cli_module,
         "_run_deploy_preflight",
         lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("deploy preflight must not run for external-upgrade-required Soperator target")
+            AssertionError(
+                "deploy preflight must not run for external-upgrade-required Soperator target"
+            )
         ),
     )
 
@@ -1236,8 +1238,7 @@ def test_deploy_blocks_migration_required_soperator_onboarding_target(
 
     message = str(exc_info.value)
     assert (
-        "Deploy is blocked for external-upgrade-required Soperator onboarding target(s)"
-        in message
+        "Deploy is blocked for external-upgrade-required Soperator onboarding target(s)" in message
     )
     assert "external-cluster" in message
     assert "Soperator chart upgrade" in message
@@ -1379,6 +1380,7 @@ class _FakeSoperatorMigrationCommandRunner:
             "metadata": {"id": "cluster-123", "name": "external-cluster"},
             "spec": {"control_plane": {"version": "1.31"}},
         }
+        self.filesystems: dict[str, dict[str, object]] = {}
         self.node_groups: dict[str, dict[str, object]] = {
             "nodegroup-gpu-pool": {
                 "metadata": {
@@ -1463,13 +1465,25 @@ spec:
         del input_text, timeout_seconds, check
         command = tuple(str(item) for item in args)
         if command[:4] == ("nebius", "compute", "filesystem", "get-by-name"):
-            return SoperatorMigrationCommandResult(command, 1, "", "not found")
+            name = command[command.index("--name") + 1]
+            filesystem = self.filesystems.get(name)
+            if filesystem is None:
+                return SoperatorMigrationCommandResult(command, 1, "", "not found")
+            return SoperatorMigrationCommandResult(command, 0, json.dumps(filesystem), "")
         if command[:4] == ("nebius", "compute", "filesystem", "create"):
             name = command[command.index("--name") + 1]
+            self.filesystems[name] = {
+                "metadata": {"id": f"filesystem-{name}", "name": name},
+                "spec": {
+                    "size_gibibytes": int(command[command.index("--size-gibibytes") + 1]),
+                    "block_size_bytes": int(command[command.index("--block-size-bytes") + 1]),
+                    "type": command[command.index("--type") + 1],
+                },
+            }
             return SoperatorMigrationCommandResult(
                 command,
                 0,
-                json.dumps({"metadata": {"id": f"filesystem-{name}"}}),
+                json.dumps(self.filesystems[name]),
                 "",
             )
         if command[:4] == ("nebius", "mk8s", "node-group", "get"):
@@ -1567,6 +1581,19 @@ spec:
             if "--control-plane-version" in command:
                 control_plane["version"] = command[command.index("--control-plane-version") + 1]
             return SoperatorMigrationCommandResult(command, 0, json.dumps(self.cluster), "")
+        if command and command[0] == "helm" and "status" in command:
+            release_name = command[command.index("status") + 1]
+            namespace = command[command.index("-n") + 1] if "-n" in command else ""
+            for release in self.helm_releases:
+                if release.get("name") == release_name and release.get("namespace") == namespace:
+                    status = str(release.get("status", "") or "")
+                    return SoperatorMigrationCommandResult(
+                        command,
+                        0,
+                        json.dumps({"info": {"status": status}}),
+                        "",
+                    )
+            return SoperatorMigrationCommandResult(command, 1, "", "not found")
         if command and command[0] == "helm" and "list" in command:
             namespace = command[command.index("-n") + 1] if "-n" in command else ""
             filter_pattern = command[command.index("--filter") + 1] if "--filter" in command else ""
@@ -5095,6 +5122,7 @@ def test_soperator_onboard_interactive_lists_project_mk8s_clusters(
     assert listed_projects == ["project-456"]
     assert prompt_labels == [
         "Nebius MK8s cluster",
+        "deploy.targets[].soperator_onboarding.target_version",
         "deploy.targets[].soperator_onboarding.compute_mode",
     ]
     assert snapshot_clusters == ["mk8scluster-e00beta"]
@@ -5587,7 +5615,7 @@ def test_soperator_onboard_noninteractive_validates_explicit_target_chart_versio
             "crds": ["slurmclusters.slurm.nebius.ai"],
             "namespaces": ["soperator"],
             "collection_errors": [],
-    }
+        }
 
     validation_calls: list[dict[str, object]] = []
     target_chart_version = "4.0.1-ps.2"
@@ -6894,20 +6922,22 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "final-control-plane-cutover" in result.output
     assert "Live executor contract:" in result.output
     assert "External node-template contract:" in result.output
-    assert "Worker node-template quota contract:" in result.output
-    assert "Worker rollout strategy: zero-surge" in result.output
+    assert "Node-template quota contract:" in result.output
+    assert "Node-template rollout strategy: zero-surge" in result.output
     assert "Worker wave parallelism: 1 worker group at a time (zero-surge fallback)" in (
         result.output
     )
     assert (
-        "Worker per-group strategy: max_surge=0, max_unavailable=1, drain_timeout=30m"
+        "Node-group per-group strategy: max_surge=0, max_unavailable=1, drain_timeout=30m"
         in result.output
     )
-    assert "Worker spare capacity required: no surge worker quota" in result.output
-    assert "active worker group capacity may be reduced by 1 node" in result.output
+    assert "Zero-surge spare capacity required: no surge quota" in result.output
+    assert "active service or worker group capacity may be reduced by 1 node" in result.output
     assert "Planned worker waves: wave 1: gpu-pool." in result.output
-    assert "temporary zero-surge strategy" in result.output
-    assert "With safe-surge, preserved worker groups require" in result.output
+    assert "zero-surge uses temporary max_surge=0" in result.output
+    assert "With safe-surge, active service groups and preserved worker groups require" in (
+        result.output
+    )
     assert "Failure handling contract:" in result.output
     assert "Resume contract:" in result.output
     assert "Execution mode: dry-run; no cluster changes were made." in result.output
@@ -6925,7 +6955,9 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     )
 
     assert custom_zero_surge.exit_code == 0, custom_zero_surge.output
-    assert "active worker group capacity may be reduced by 3 nodes" in (custom_zero_surge.output)
+    assert "active service or worker group capacity may be reduced by 3 nodes" in (
+        custom_zero_surge.output
+    )
 
 
 def test_ext_soperator_upgrade_dry_run_validates_worker_rollout_cli_overrides(
@@ -7013,7 +7045,9 @@ def test_ext_soperator_upgrade_dry_run_validates_worker_rollout_cli_overrides(
 
 
 def test_soperator_migration_plan_styles_topic_labels() -> None:
-    required_line = cli_module._style_soperator_migration_plan_line("External upgrade required: yes")
+    required_line = cli_module._style_soperator_migration_plan_line(
+        "External upgrade required: yes"
+    )
     assert "[bold yellow]External upgrade required:[/bold yellow]" in required_line
     assert "[bold yellow]yes[/bold yellow]" in required_line
 
@@ -7332,6 +7366,61 @@ def test_ext_soperator_upgrade_execute_approved_pending_phase_exits_nonzero(
     assert "Pending reason: Slurm NCCL benchmark failed" in result.output
 
 
+def test_external_soperator_execute_snapshot_collector_uses_cluster_id_inventory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload: dict[str, object] = {
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {"project_id": "project-123"},
+        },
+        "deploy": {
+            "targets": [
+                {
+                    "instance_id": "external-cluster",
+                    "kind": "external-mk8s",
+                    "ownership": "external",
+                    "cluster_id": "mk8scluster-123",
+                    "access": "internal",
+                    "soperator_onboarding": {"accepted": True},
+                }
+            ]
+        },
+    }
+    calls: list[tuple[str, str]] = []
+
+    def fake_collect(
+        source_payload: Mapping[str, object],
+        *,
+        cluster_id: str,
+        access: str,
+    ) -> tuple[dict[str, object], str]:
+        assert source_payload is payload
+        calls.append((cluster_id, access))
+        return {"provider": {"mk8s_cluster": {"id": cluster_id}}}, "generated-context"
+
+    monkeypatch.setattr(
+        cli_module,
+        "_collect_soperator_snapshot_for_nebius_mk8s_cluster",
+        fake_collect,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "collect_kubectl_soperator_snapshot",
+        lambda **_kwargs: pytest.fail("cluster_id targets must use provider inventory"),
+    )
+
+    collector = cli_module._external_soperator_execute_snapshot_collector(
+        payload,
+        target_ref="external-cluster",
+    )
+
+    assert collector(kube_context="temporary-context") == {
+        "provider": {"mk8s_cluster": {"id": "mk8scluster-123"}}
+    }
+    assert calls == [("mk8scluster-123", "internal")]
+
+
 def test_ext_soperator_upgrade_execute_reuses_checkpoint_backup_after_mutation_started(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -7391,6 +7480,11 @@ def test_ext_soperator_upgrade_execute_reuses_checkpoint_backup_after_mutation_s
         cli_module,
         "_refresh_soperator_onboarding_after_completed_migration",
         lambda **_kwargs: ("Post-upgrade config refresh: skipped in test",),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "external_soperator_upgrade_protected_comparison_passed",
+        lambda **_kwargs: True,
     )
     monkeypatch.setattr(
         cli_module,
@@ -7588,6 +7682,11 @@ def test_ext_soperator_upgrade_execute_refreshes_config_after_completed_upgrade(
         )
 
     monkeypatch.setattr(cli_module, "execute_soperator_migration", _execute)
+    monkeypatch.setattr(
+        cli_module,
+        "external_soperator_upgrade_protected_comparison_passed",
+        lambda **_kwargs: True,
+    )
     monkeypatch.setattr(
         cli_module,
         "collect_kubectl_soperator_snapshot",
@@ -7892,73 +7991,53 @@ def test_soperator_onboard_target_match_hides_stale_source_release_from_summary(
 
     def _snapshot(*, kube_context: str) -> dict[str, object]:
         assert kube_context == "training-context"
-        return {
-            "node_groups": {
-                "gpu-pool": {
-                    "gpu": True,
-                    "node_count": 1,
-                    "labels": {
-                        "nebius.com/node-group": "gpu-pool",
-                        "slurm.nebius.ai/nodeset": "worker-gpu",
-                        "nebius.com/drivers-preset": "cuda13.0",
-                        "nebius.com/nvidia_driver_version": "580.126.09-1ubuntu1",
-                        "nebius.com/cuda_version": "13.0.3-1",
-                    },
-                    "allocatable": {"nvidia.com/gpu": "8", "rdma/shared_device": "63"},
+        snapshot = _post_migration_soperator_snapshot()
+        node_groups = snapshot.get("node_groups")
+        assert isinstance(node_groups, dict)
+        for raw_group in node_groups.values():
+            assert isinstance(raw_group, dict)
+            raw_group["provider"] = {
+                "node_template": {
+                    "k8s_version": "1.34",
+                    "os": "ubuntu24.04",
+                    "gpu_stack_preset": "cuda13.0" if raw_group.get("gpu") is True else "",
                 }
-            },
-            "gpu_stack": {
-                "helm_releases": [
-                    {
-                        "name": "gpu-operator",
-                        "namespace": "nvidia-gpu-operator",
-                        "chart": "gpu-operator-v25.10.0",
-                        "app_version": "v25.10.0",
-                        "status": "deployed",
-                    },
-                    {
-                        "name": "network-operator",
-                        "namespace": "nvidia-network-operator",
-                        "chart": "network-operator-25.7.0",
-                        "app_version": "v25.7.0",
-                        "status": "deployed",
-                    },
-                ],
-                "policies": [
-                    {
-                        "kind": "ClusterPolicy",
-                        "metadata": {"name": "cluster-policy"},
-                        "status": {"state": "ready"},
-                    },
-                    {
-                        "kind": "NicClusterPolicy",
-                        "metadata": {"name": "nic-cluster-policy"},
-                        "status": {"state": "ready"},
-                    },
-                ],
-            },
-            "helm_releases": [
-                {
-                    "name": "soperator",
-                    "namespace": "soperator",
-                    "chart": f"soperator-{_soperator_test_chart_version()}",
-                    "app_version": _soperator_test_app_version(),
-                    "revision": "11",
-                    "status": "deployed",
-                },
-                {
-                    "name": "soperator",
-                    "namespace": "soperator",
-                    "chart": "helm-slurm-cluster-2.0.5",
-                    "app_version": "2.0.5",
-                    "revision": "1",
-                    "status": "deployed",
-                },
-            ],
-            "crds": ["slurmclusters.slurm.nebius.ai"],
-            "namespaces": ["soperator"],
-            "collection_errors": [],
+            }
+            if raw_group.get("gpu") is True:
+                labels = raw_group.setdefault("labels", {})
+                assert isinstance(labels, dict)
+                labels["nebius.com/drivers-preset"] = "cuda13.0"
+                labels["nebius.com/nvidia_driver_version"] = "580.126.09-1ubuntu1"
+                labels["nebius.com/cuda_version"] = "13.0.3-1"
+        snapshot["provider"] = {
+            "mk8s_cluster": {
+                "id": "mk8scluster-training",
+                "name": "training",
+                "control_plane_version": "1.34",
+            }
         }
+        snapshot["helm_releases"] = [
+            {
+                "name": "soperator",
+                "namespace": "soperator",
+                "chart": f"soperator-{_soperator_test_chart_version()}",
+                "chart_version": _soperator_test_chart_version(),
+                "app_version": _soperator_test_app_version(),
+                "revision": "11",
+                "status": "deployed",
+            },
+            {
+                "name": "soperator",
+                "namespace": "soperator",
+                "chart": "helm-slurm-cluster-2.0.5",
+                "chart_version": "2.0.5",
+                "app_version": "2.0.5",
+                "revision": "1",
+                "status": "deployed",
+            },
+        ]
+        snapshot["crds"] = ["slurmclusters.slurm.nebius.ai"]
+        return snapshot
 
     monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _snapshot)
     monkeypatch.setattr(
@@ -8052,18 +8131,18 @@ def test_soperator_onboard_prints_target_compatible_layout_decisions(
             assert isinstance(raw_group, dict)
             raw_group["provider"] = {
                 "node_template": {
-                    "k8s_version": "1.33",
+                    "k8s_version": "1.34",
                     "os": "ubuntu24.04",
                     "gpu_stack_preset": "cuda13.0" if raw_group.get("gpu") is True else "",
-                }
+                },
             }
         return {
             "provider": {
                 "mk8s_cluster": {
                     "id": "mk8scluster-training",
                     "name": "training",
-                    "control_plane_version": "1.33",
-                }
+                    "control_plane_version": "1.34",
+                },
             },
             "node_groups": node_groups,
             "storage": {
@@ -8116,7 +8195,9 @@ def test_soperator_onboard_prints_target_compatible_layout_decisions(
     assert "Storage layout decision: keep existing storage" in result.output
     assert "no aligned SFS creation or storage data migration is planned" in normalized_output
     assert "Compute layout decision: keep existing compute" in result.output
-    assert "no replacement compute node groups or compute migration are planned" in normalized_output
+    assert (
+        "no replacement compute node groups or compute migration are planned" in normalized_output
+    )
     assert "Discovered placements: system: system; controller: controller" in normalized_output
     assert "Selected onboarding actions:" not in result.output
     assert "External upgrade phases:" not in result.output
@@ -8146,7 +8227,7 @@ def test_soperator_onboard_prints_target_compatible_layout_decisions(
     assert "--no-interactive" in command
     assert "--no-validate-sources" in command
     assert manifest["target_versions"]["chart_version"] == _soperator_test_chart_version()
-    assert manifest["target_versions"]["k8s_version"] == "1.33"
+    assert manifest["target_versions"]["k8s_version"] == "1.34"
     assert manifest["target_versions"]["os"] == "ubuntu24.04"
     assert manifest["target_versions"]["gpu_stack_preset"] == "cuda13.0"
 
@@ -8310,9 +8391,7 @@ def test_soperator_onboard_heterogeneous_gpu_inventory_adds_network_operator(
         ("nvidia-gpu-operator", "legacy-cluster"),
         ("nvidia-network-operator", "legacy-cluster"),
     }
-    mk8s_gpu_deployment_testing = payload["deploy"]["targets"][0]["deployment_testing"][
-        "mk8s_gpu"
-    ]
+    mk8s_gpu_deployment_testing = payload["deploy"]["targets"][0]["deployment_testing"]["mk8s_gpu"]
     assert mk8s_gpu_deployment_testing["operator_readiness"]["enabled"] is True
     assert mk8s_gpu_deployment_testing["gpu_visibility"]["enabled"] is True
     assert "nccl" not in mk8s_gpu_deployment_testing
@@ -11890,8 +11969,7 @@ def test_component_add_rejects_soperator_on_managed_mk8s_without_service_roles(
     output = _normalized_cli_output(result.output)
     assert "apps:soperator production-cluster cannot be added" in output
     assert (
-        "missing required Soperator service-role node groups: accounting, controller, "
-        "login, system"
+        "missing required Soperator service-role node groups: accounting, controller, login, system"
     ) in output
     assert config_path.read_text(encoding="utf-8") == original_config
 

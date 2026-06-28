@@ -53,6 +53,7 @@ They should say, in effect:
 ```text
 Here is the workspace root.
 Here is the durable task-state path.
+Here are bounded same-workspace prior task-state candidate paths, when relevant.
 Do not create task state from hooks.
 Read current task state when it already exists and prior context may matter.
 For complex work, use global-context-management.
@@ -70,6 +71,11 @@ manual or legacy fallback path is created.
 
 They must not persist raw prompts, broad command output, stack traces, secrets,
 customer data, private URLs, or broad environment dumps.
+They also must not inject historical task-state contents into model context.
+For complex prompts, `UserPromptSubmit` may list only a small set of
+same-workspace prior `current.md` candidate paths from the same
+`$CODEX_HOME/task-state/<workspace>-<hash>/` bucket. The parent agent decides
+whether any candidate is relevant enough to read.
 
 ### Task-State Lifecycle
 
@@ -89,10 +95,18 @@ that later edits cannot persist. That allowlist is separate from broader
 runtime files such as `$CODEX_HOME/hooks`, which should remain protected unless
 the user intentionally syncs hook sources.
 
+The current session's advertised `current.md` remains the only write target.
+Hook-suggested prior same-workspace `current.md` paths are read candidates, not
+active state. Read them only when they appear relevant to the current task,
+treat them as stale hints, and verify any useful facts against current repo or
+runtime evidence.
+
 Use the task-state file in three places:
 
 1. At task start, resume, or after compaction, read the current file when prior
-   decisions, validation status, or next action may affect the work.
+   decisions, validation status, or next action may affect the work. If the hook
+   suggests related prior same-workspace task-state candidates, read only the
+   relevant candidate summaries.
 2. During the task, update it with concise checkpoints after planning, major
    edits, validation, and risk review.
 3. Before the final answer or a long pause, leave the latest status and next
@@ -301,6 +315,7 @@ The hook does this:
 Before Codex starts working:
   "Here is the repo.
    Here is the task-state path.
+   Here are likely related prior state paths, if any.
    Advertise it for complex prompts; do not create it automatically.
    Read it when it already exists and prior context may matter.
    Use the global workflow for complex work."
@@ -308,7 +323,8 @@ Before Codex starts working:
 The Skill does this:
 
 During the task:
-  "Read useful prior task state, then follow the exact process."
+  "Read useful prior task state or hook-suggested related summaries,
+   verify stale facts, then follow the exact process."
 
 The subagents do this when delegation is authorized and available:
 
@@ -365,9 +381,10 @@ fresh Codex session has loaded and trusted the hooks.
 
 The local template validator uses disposable Codex homes. It verifies hook path
 calculation, lazy SessionStart behavior, private task-state permissions
-including reuse-time permission repair, prompt-leak prevention, and that an
-existing nonempty `current.md` is preserved for the agent to read rather than
-overwritten or copied into hook context.
+including reuse-time permission repair, prompt-leak prevention, bounded
+same-workspace related task-state candidate discovery, no unrelated workspace
+candidate leakage, and that existing nonempty `current.md` files are preserved
+for the agent to read rather than overwritten or copied into hook context.
 
 Runtime subagent activation is also surface-dependent. Treat it as unverified
 until a fresh session can actually spawn a read-only helper after a prompt

@@ -17,13 +17,17 @@ All notable changes to this project are tracked here. This changelog follows
   `soperator backup`, `soperator restore`, `ext-soperator backup`, and
   `ext-soperator restore`. The backup archive now includes raw and
   restore-ready Kubernetes in-cluster resources plus chart-managed MariaDB
-  accounting DB material, while restore validates checksums and stays dry-run
-  until `--execute --approve`.
+  accounting DB material when live chart-managed accounting is present, while
+  restore validates checksums and stays dry-run until `--execute --approve`.
 - Fixed Soperator backup and discovery `wckey` snapshots to use Slurm-portable
   `Cluster,User,WCKey` fields, and made accounting DB dump/restore resolve the
   target-specific `*-acct-db-0` pod instead of assuming the old static pod name.
   This avoids backup failures on clusters where `sacctmgr show wckey` does not
   expose an `Account` field or the MariaDB pod is named after the Slurm cluster.
+- Fixed Soperator backup/restore for clusters without chart-managed Slurm
+  accounting. Backup now records accounting snapshots and restore metadata as
+  not collected instead of failing when `sacctmgr` reports that slurmdbd
+  accounting is unavailable.
 - Fixed Soperator accounting DB backup dumps and restore imports to authenticate
   with the chart-provided `MARIADB_ROOT_PASSWORD` environment instead of
   assuming local root access without a password.
@@ -44,7 +48,7 @@ All notable changes to this project are tracked here. This changelog follows
   Soperator cluster upgrade command. It now accepts `--to-chart-version`,
   optional MK8s node-template target flags, Slurm running-job policy flags, and
   `--backup-dir`; creates a restore-capable local backup with raw Kubernetes
-  Secret material plus chart-managed MariaDB accounting DB dump before mutation;
+  Secret material plus optional chart-managed MariaDB accounting DB dump before mutation;
   and writes the combined checkpoint/report without requiring a separate
   render/deploy step.
 - Changed external Soperator execution to the canonical
@@ -55,6 +59,22 @@ All notable changes to this project are tracked here. This changelog follows
   `.nebius-cxcli/ext-soperator-upgrades/<target>/checkpoint.json`, write
   `generated/reports/ext-soperator-upgrade-report.md` and `.json`, and handle
   affected-node Slurm jobs with `--job-policy` before MK8s rollout work.
+- Added fast stage-scoped verification after every executed
+  `ext-soperator upgrade --execute` stage, including the final post-upgrade
+  MK8s and Helm readiness checks. Failed stage verification keeps the same
+  phase pending instead of advancing, records
+  `phase_state[<stage>].fast_verification` in the checkpoint, and writes the
+  Markdown `Stage Fast Verification` rollup plus JSON `stage_verification`
+  details into `generated/reports/ext-soperator-upgrade-report.md` and `.json`.
+- Added the same fast stage-scoped verification gate to managed
+  `soperator upgrade` runs. Managed upgrades now record per-stage
+  `fast_verification` results in the checkpoint, including the MK8s
+  post-validation boundary, stop before the next stage when a stage gate fails,
+  and write the Markdown `Stage Fast Verification` rollup plus JSON
+  `stage_verification` details into
+  `generated/reports/soperator-upgrade-report.md` and `.json`. Shared
+  stage-verification payload/report helpers are reused by both managed and
+  external Soperator upgrade paths.
 - Added external Soperator onboarding target chart selection. The
   `ext-soperator onboard` command now accepts `--to-chart-version`, prompts
   with the `component_sources.yaml` Soperator chart pin by default, validates
@@ -67,6 +87,27 @@ All notable changes to this project are tracked here. This changelog follows
   `max_parallel_worker_groups` is accepted only as an optional cap for
   percent-based safe-surge waves; the onboarding wizard no longer asks for the
   redundant cap after a fixed group count is selected.
+- Changed external Soperator safe-surge node-template execution so
+  service-role node groups use the same temporary safe-surge strategy when
+  selected, while one-node service workload quiesce remains limited to
+  zero-surge service rollouts.
+- Fixed external Soperator rolling compute migration to stamp both
+  `slurm.nebius.ai/nodeset` and `slurm.nebius.ai/nodeset-name` on created
+  service-role node groups, preventing cloned controller labels from blocking
+  accounting pod scheduling after chart takeover.
+- Fixed external Soperator worker NodeSet rendering for legacy source clusters
+  whose NodeSet name and MK8s worker-group role label differ. cxcli now falls
+  back to the single discovered worker group and strips stale static CPU
+  topology when live `lscpu` topology was unavailable, avoiding Slurm
+  `INVALID_REG` workers after upgrade.
+- Fixed external Soperator target cutover to reconcile Slurm worker runtime
+  `NodeAddr` and `InstanceId` values from the current worker pods after chart
+  takeover, and made zero-downtime safety fail when post-upgrade Slurm workers
+  are `DOWN`, drained, failed, or `NOT_RESPONDING`.
+- Fixed external Soperator safety verification to treat baseline-suspended
+  ActiveChecks as restored when they remain suspended, and to classify
+  migration-owned chart takeover and node replacement deltas as intentional
+  external-upgrade drift instead of remediation-required customer drift.
 - Clarified external Soperator onboarding output. The read-only discovery
   summary no longer prints future external upgrade phases or selected actions
   as if onboarding will mutate the cluster, and onboarding now prints explicit
@@ -609,9 +650,9 @@ All notable changes to this project are tracked here. This changelog follows
   and `accounting` to two fixed nodes each. Their catalog-owned CPU role shape
   now uses `cpu-d3/32vcpu-128gb` as the production minimum.
 - Clarified external Soperator safe-surge rollout output so the dry-run/execute
-  plan says the spare worker quota and capacity gate runs during `--execute`
-  preflight before any cluster mutation, and pinned that gate with executor
-  regression coverage.
+  plan says the spare service/worker quota and capacity gate runs during
+  `--execute` preflight before any cluster mutation, and pinned that gate with
+  executor regression coverage.
 - Clarified external Soperator upgrade status output so external-upgrade-owned
   replacing or cordoned rollout nodes are reported in a separate colored
   `Nodes:` section as transition activity instead of `problem nodes`, while
@@ -1006,12 +1047,11 @@ All notable changes to this project are tracked here. This changelog follows
 - Added a strict external Soperator upgrade quota preflight for approved `--execute`
   runs. The executor now checks net-new aligned SFS storage and net-new
   service-role node groups before any SFS, node-group, or Helm mutation, counts
-  safe-surge preserved worker capacity for the active worker wave, and fails
-  fast on confirmed shortages, unresolved limits, coverage gaps, or quota lookup
-  errors. External service-role template mutations use temporary zero-surge
-  (`max_surge=0`, `max_unavailable=1`, `drain_timeout=30m`) and restore the
-  original strategy afterward; worker template mutations now default to
-  zero-surge and check safe-surge spare capacity only when selected.
+  safe-surge spare capacity for active service groups and worker waves, and
+  fails fast on confirmed shortages, unresolved limits, coverage gaps, or quota
+  lookup errors. External service-role and worker template mutations now default
+  to zero-surge and check safe-surge spare capacity only when selected, restoring
+  each node group's original strategy afterward.
 - Consolidated README Soperator command guidance into a visible
   `Soperator Commands` section covering managed create/deploy, external
   onboarding, migration flags, storage/compute migration modes, safety rules,

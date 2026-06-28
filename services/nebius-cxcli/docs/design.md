@@ -595,8 +595,8 @@ and chart source-family changes.
   instead of keeping a duplicate compatibility path. The Soperator path writes
   a local mode-0600 backup archive with raw Kubernetes Secret restore material,
   Soperator resources/config, Slurm policy snapshots, and a chart-managed
-  MariaDB accounting DB dump before mutation. `externalDB.enabled=true` fails
-  fast in v1 because external DB backup support is not implemented. For MK8s
+  MariaDB accounting DB dump before mutation when live accounting exists.
+  `externalDB.enabled=true` fails fast in v1 because external DB backup support is not implemented. For MK8s
   target changes, the command drains cxcli-owned Slurm worker nodes, applies the
   selected running-job policy, and lets the Terraform/Nebius node-group rollout
   own Kubernetes drain/cordon behavior rather than running raw `kubectl drain`.
@@ -611,9 +611,11 @@ and chart source-family changes.
   rollout drains cxcli-owned Slurm nodes, applies `--job-policy`, and waits for
   Terraform-managed control-plane/node-group readiness; chart apply updates the
   Soperator app row, rerenders, validates, applies Flux/static manifests, and
-  verifies live chart identity; postflight restores Slurm and ActiveChecks,
-  compares protected customer state, runs required Soperator/Slurm smoke plus the
-  shared fast safety verifier, and writes
+  verifies live chart identity; fast stage gates record `fast_verification`
+  after each completed managed upgrade stage, including the post-MK8s
+  validation boundary, before advancing; postflight restores Slurm and
+  ActiveChecks, compares protected customer state, runs required Soperator/Slurm
+  smoke plus the shared fast safety verifier, and writes
   `generated/reports/soperator-upgrade-report.md` and JSON. Kubernetes minor
   upgrades must follow provider-supported hops, so a managed `1.32` to `1.34`
   maintenance path is modeled as a `1.33` run followed by a `1.34` run.
@@ -634,8 +636,9 @@ and chart source-family changes.
   `generated/reports/soperator-upgrade-report.md` and
   `generated/reports/soperator-upgrade-report.json` with before/after protected
   customer-state hashes, deltas, fast safety results, zero-downtime eligibility,
-  backup evidence, manual heavy follow-ups, the final `current_phase`, and the
-  phase history with component-aware operator comments. Quiet terminal phases
+  backup evidence, manual heavy follow-ups, the final `current_phase`, the
+  Markdown `Stage Fast Verification` rollup plus JSON `stage_verification`
+  details, and the phase history with component-aware operator comments. Quiet terminal phases
   such as discovery, backup, protected-state capture, live ActiveChecks
   patching, Slurm restore, shared safety verification, and report writing keep
   a spinner active. If the process is interrupted
@@ -1039,9 +1042,14 @@ discovered worker NodeSets and partition refs when source evidence exists,
 normalizes source-era runtime settings, and retires legacy source Flux/Helm
 records; validation hold verifies MK8s, target Soperator, configured MK8s GPU
 checks, required Soperator deployment snapshot, protected-state deltas, and the
-shared bounded fast safety verifier; completion writes the external upgrade
-reports, checkpoints pending phases, and refreshes the target into the
-deploy-owned shape when `Pending phase: none`.
+shared bounded fast safety verifier; every executed stage runs a fast
+stage-scoped verification before the next stage starts and records
+`phase_state[<stage>].fast_verification`; the final post-upgrade MK8s and Helm
+readiness checks record the same fast-verification shape before report
+completion; completion writes the external upgrade reports with the Markdown
+`Stage Fast Verification` rollup and JSON `stage_verification` array,
+checkpoints pending phases, and refreshes the target into the deploy-owned shape
+when `Pending phase: none`.
 
 When the discovery snapshot contains GPU workers, onboarding records
 `reconcile-target-gpu-stack` and writes the same target-scoped MK8s GPU policy
@@ -1080,14 +1088,15 @@ worker node groups from live Nebius MK8s node-group names and Kubernetes
 `slurm.nebius.ai/nodeset` worker labels, such as `worker-gpu` and `worker-cpu`,
 and records the resolved groups in the checkpoint. The
 executor upgrades the external MK8s control plane first, updates service-role
-node groups serially with zero-surge strategy restore, updates worker node
-groups with zero-surge by default or safe-surge waves when selected, using an
+node groups serially with the selected temporary strategy and original-strategy
+restore, updates worker node groups with zero-surge by default or safe-surge
+waves when selected, using an
 exact fixed worker-group count or a percent-based wave with an optional cap,
 handles Slurm jobs on affected worker nodes through the `--job-policy` wait,
 cancel, requeue, or requeue-hold decision state,
 clears stale GPU driver presets
 from CPU node groups, temporarily quiesces one-node
-controller/login/accounting workloads for their active rollout, applies
+controller/login/accounting workloads only for zero-surge service rollouts, applies
 target-scoped GPU Operator and Network Operator app rows plus the same
 catalog-owned post-render patches that Flux would apply,
 creates or reuses aligned jail, controller-spool, and accounting SFS
@@ -1314,19 +1323,20 @@ worker capacity source, and apply external-upgrade-owned external node-group tem
 changes, including Kubernetes version, node OS image, Nebius-image GPU stack,
 and aligned SFS filesystem attachments, through direct Nebius node-group
 updates. cxcli snapshots each node group's original strategy, keeps
-service-role groups conservative and serial with temporary zero-surge
-(`max_surge=0`, `max_unavailable=1`, `drain_timeout=30m`), and updates worker
-groups with zero-surge by default. Operators can select safe-surge
-(`max_surge=1`, `max_unavailable=0`, `drain_timeout=30m`) for bounded waves
-when spare quota/capacity is available. The rollout config exposes worker-wave
+service-role groups serial, uses temporary zero-surge
+(`max_surge=0`, `max_unavailable=1`, `drain_timeout=30m`) by default, and
+updates worker groups with zero-surge by default. Operators can select
+safe-surge (`max_surge=1`, `max_unavailable=0`, `drain_timeout=30m`) for
+service groups and bounded worker waves when spare quota/capacity is available.
+The rollout config exposes worker-wave
 parallelism across worker groups plus the per-group Nebius strategy
 (`max_surge_count`, `max_unavailable_count`, and `drain_timeout`). Users can set
 `drain_timeout: none` to wait indefinitely instead of allowing provider drain
 fallback after a finite timeout. It clears invalid GPU driver presets from CPU
 templates when legacy groups carry them, quiesces and restores one-node
-controller/login/accounting workloads for the active service-role rollout, and
-requires spare worker surge capacity only when the operator explicitly chooses
-safe-surge.
+controller/login/accounting workloads for zero-surge service-role rollouts, and
+requires spare surge capacity for active service groups or worker waves only
+when the operator explicitly chooses safe-surge.
 
 The persisted rollout shape is:
 
@@ -1371,12 +1381,12 @@ mutation. The preflight counts aligned SFS filesystems that do not already
 exist as spare storage required during copy, and counts target service-role
 node groups that do not already exist as net-new compute capacity. Existing
 worker node groups are preserved in place. The default zero-surge worker
-template remediation skips surge worker quota but can reduce active worker
+template remediation skips surge quota but can reduce active service or worker
 capacity during rollout. With safe-surge, remediation counts
-`max_surge_count` temporary surge node(s) per worker group in the active wave,
-checks the required spare quota and GPU capacity, requires all selected worker
-nodes to start Ready and schedulable, and requires the Slurm queue to be empty
-before mutation.
+`max_surge_count` temporary surge node(s) per active service group or worker
+group in the active wave, checks the required spare quota and GPU capacity,
+requires all selected worker nodes to start Ready and schedulable, and requires
+the Slurm queue to be empty before mutation.
 Confirmed quota shortages, unresolved live limits, coverage gaps, or quota
 lookup failures stop the upgrade before SFS creation, service-role node-group
 creation, or Helm apply starts.
@@ -3059,10 +3069,11 @@ The command boundary is intentional:
   not create parallel worker node groups; external-upgrade-owned external node-group
   template changes, including Kubernetes version, node OS image, Nebius-image
   GPU stack, and aligned SFS filesystem attachments, use direct Nebius
-  node-group updates. Service-role groups use serial temporary zero-surge,
-  while worker groups default to zero-surge and can use safe-surge waves with
-  one temporary replacement node per active worker group after quota/capacity,
-  worker-health, and Slurm queue preflights pass. cxcli restores each node group's original
+  node-group updates. Service-role groups are serial, zero-surge quiesces
+  one-node service workloads, and safe-surge uses one temporary replacement
+  node per active service or worker group after quota/capacity, worker-health,
+  and Slurm queue preflights pass. Worker groups default to zero-surge and can
+  use safe-surge waves. cxcli restores each node group's original
   strategy after the active rollout. Render/deploy refuse
   onboarding mode until
   the target has a current accepted `deploy.targets[].soperator_onboarding`
