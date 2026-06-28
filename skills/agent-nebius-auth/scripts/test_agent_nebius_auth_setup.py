@@ -119,6 +119,27 @@ if args[:3] == ["iam", "service-account", "get-by-name"]:
     print_json({"metadata": {"id": state["service_account_id"]}})
     raise SystemExit(0)
 
+if args[:3] == ["iam", "project", "get"]:
+    project_id = option_value("--id") or (args[3] if len(args) > 3 else "")
+    project_name = state["project_names"].get(project_id, project_id)
+    if not project_id or project_id not in state["project_ids"]:
+        raise SystemExit(4)
+    state["project_get_calls"] += 1
+    save()
+    print_json({"metadata": {"id": project_id, "name": project_name}})
+    raise SystemExit(0)
+
+if args[:3] == ["iam", "project", "get-by-name"]:
+    require_human()
+    project_name = option_value("--name")
+    for project_id, candidate_name in state["project_names"].items():
+        if candidate_name == project_name:
+            state["project_get_by_name_calls"] += 1
+            save()
+            print_json({"metadata": {"id": project_id, "name": candidate_name}})
+            raise SystemExit(0)
+    raise SystemExit(4)
+
 if args[:3] == ["iam", "service-account", "create"]:
     require_human()
     print_json({"metadata": {"id": state["service_account_id"]}})
@@ -230,8 +251,11 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
             "group_get_by_name_calls": 0,
             "profile_create_calls": 0,
             "profile_update_calls": 0,
+            "project_get_calls": 0,
+            "project_get_by_name_calls": 0,
             "profiles": profiles or [HUMAN_PROFILE],
             "project_ids": [PROJECT],
+            "project_names": {PROJECT: PROJECT_NAME},
             "service_account_id": SERVICE_ACCOUNT_ID,
             "group_id": GROUP_ID,
         }
@@ -250,27 +274,34 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
     def default_project_file(self) -> Path:
         return self.home / ".nebius" / "codex-agent-default-project-id"
 
-    def setup_command(self, project: str = PROJECT) -> list[str]:
-        return [
+    def setup_command(
+        self,
+        project: str | None = PROJECT,
+        *,
+        project_name: str | None = None,
+    ) -> list[str]:
+        command = [
             "bash",
             str(SCRIPT),
             "ensure",
             "--tenant-id",
             TENANT,
-            "--project-id",
-            project,
-            "--project-name",
-            PROJECT_NAME,
         ]
+        if project is not None:
+            command.extend(["--project-id", project])
+        if project_name is not None:
+            command.extend(["--project-name", project_name])
+        return command
 
     def run_setup(
         self,
-        project: str = PROJECT,
+        project: str | None = PROJECT,
         *,
+        project_name: str | None = None,
         env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            self.setup_command(project),
+            self.setup_command(project, project_name=project_name),
             cwd=str(SCRIPT.parent.parent),
             env=env or self.env,
             text=True,
@@ -280,12 +311,13 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
 
     def start_setup(
         self,
-        project: str = PROJECT,
+        project: str | None = PROJECT,
         *,
+        project_name: str | None = None,
         env: dict[str, str] | None = None,
     ) -> subprocess.Popen[str]:
         return subprocess.Popen(
-            self.setup_command(project),
+            self.setup_command(project, project_name=project_name),
             cwd=str(SCRIPT.parent.parent),
             env=env or self.env,
             text=True,
@@ -295,11 +327,12 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
 
     def assert_setup_succeeds(
         self,
-        project: str = PROJECT,
+        project: str | None = PROJECT,
         *,
+        project_name: str | None = None,
         env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        result = self.run_setup(project, env=env)
+        result = self.run_setup(project, project_name=project_name, env=env)
         self.assertEqual(
             result.returncode,
             0,
@@ -333,6 +366,7 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
         self.assertEqual(after_second["profile_create_calls"], 1)
         self.assertEqual(after_second["profile_update_calls"], 0)
         self.assertEqual(after_second["agent_iam_attempts"], 0)
+        self.assertEqual(after_second["project_get_calls"], 2)
 
         self.assertFalse((self.codex_home / "config.toml").exists())
         self.assertEqual(
@@ -360,6 +394,30 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
         self.assertIn("--install-hook is no longer supported", result.stderr)
         self.assertIn("install-skills.sh --install-hooks", result.stderr)
         self.assertFalse((self.codex_home / "config.toml").exists())
+        self.assertFalse(self.default_project_file().exists())
+
+    def test_project_name_selector_resolves_project_id(self) -> None:
+        self.write_state()
+        self.write_credential()
+
+        self.assert_setup_succeeds(project=None, project_name=PROJECT_NAME)
+        state = self.read_state()
+
+        self.assertEqual(state["project_get_by_name_calls"], 1)
+        self.assertIn(AGENT_PROFILE, state["profiles"])
+        self.assertEqual(
+            self.default_project_file().read_text(encoding="utf-8").strip(),
+            PROJECT,
+        )
+
+    def test_project_id_and_project_name_together_fail_fast(self) -> None:
+        self.write_state()
+        self.write_credential()
+
+        result = self.run_setup(PROJECT, project_name=PROJECT_NAME)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Pass only one of --project-id or --project-name", result.stderr)
         self.assertFalse(self.default_project_file().exists())
 
     def test_profile_update_preserves_active_human_profile(self) -> None:
@@ -431,6 +489,7 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
         self.write_state()
         state = self.read_state()
         state["project_ids"] = [project_one, project_two]
+        state["project_names"] = {project_one: "Project One", project_two: "Project Two"}
         self.state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
         self.write_credential(project_one)
         self.write_credential(project_two)

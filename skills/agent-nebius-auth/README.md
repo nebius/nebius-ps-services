@@ -48,7 +48,14 @@ Nebius auth:
 ```bash
 bash scripts/agent-nebius-auth.sh ensure \
   --tenant-id <tenant_id> \
-  --project-id <project_id> \
+  --project-id <project_id>
+```
+
+You can also select the project by name under the tenant:
+
+```bash
+bash scripts/agent-nebius-auth.sh ensure \
+  --tenant-id <tenant_id> \
   --project-name <project_name>
 ```
 
@@ -58,6 +65,11 @@ Useful optional flags:
 - `--role <role>`: default `editor`
 - `--repair`: allow replacement of a broken credential after backup
 - `--dry-run`: show the planned setup actions without changing IAM or local auth
+
+Pass exactly one project selector. With `--project-id`, the script resolves the
+project name from Nebius metadata only when group IAM work is needed. With
+`--project-name`, it resolves the project ID before creating local profile and
+credential paths. Passing both fails fast.
 
 The setup path may create or repair Nebius IAM resources. Do not run it against
 production or customer environments unless the operator explicitly asked for
@@ -179,3 +191,7 @@ nebius iam get-access-token --profile codex-agent-<project_id> >/dev/null
   <https://docs.nebius.com/cli/reference/iam/get-access-token>
 - Nebius authorized-key CLI reference:
   <https://docs.nebius.com/cli/reference/iam/auth-public-key>
+- Nebius project `get` CLI reference:
+  <https://docs.nebius.com/cli/reference/iam/project/get>
+- Nebius project `get-by-name` CLI reference:
+  <https://docs.nebius.com/cli/reference/iam/project/get-by-name>

@@ -128,6 +128,13 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Simplified `agent-nebius-auth` setup inputs so operators pass `--tenant-id`
+  plus exactly one project selector, either `--project-id` or
+  `--project-name`; the setup script now resolves the missing project metadata
+  through Nebius project lookup and fails fast when both selectors are passed.
+- Aligned the `config-codex` global `AGENTS.md` template with the compact live
+  Codex policy and synced mirrored prompt-hook delegation wording across
+  `config-codex` and `global-context-management` validation.
 - Added bounded same-workspace prior task-state candidate discovery to the
   `global-context-management` prompt hook and mirrored `config-codex` hook
   template, exposing candidate paths only while keeping historical task-state

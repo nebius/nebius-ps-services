@@ -17,8 +17,9 @@ belongs to the installed Codex `PreToolUse` hook in
 Required:
 
 - tenant ID: Nebius tenant ID that owns the project
-- project ID: Nebius project ID where the agent will work
-- project name: human-readable project name used to derive the group name
+- exactly one project selector:
+  - project ID: Nebius project ID where the agent will work
+  - project name: human-readable project name under the tenant
 
 Defaults:
 
@@ -26,7 +27,7 @@ Defaults:
 - credential file: `~/.nebius/codex-agent-authkey.<project_id>.json`
 - default project selector: `~/.nebius/codex-agent-default-project-id`
 - CLI profile: `codex-agent-<project_id>`
-- group: `codex-agent-<project-name-slug>`
+- group: `codex-agent-<project-name-slug>`, resolved from the project metadata
 - role: `editor`
 - permission scope: project-level access permit on `<project_id>`
 
@@ -39,7 +40,14 @@ command instead of running it.
 ```bash
 bash scripts/agent-nebius-auth.sh ensure \
   --tenant-id <tenant_id> \
-  --project-id <project_id> \
+  --project-id <project_id>
+```
+
+or:
+
+```bash
+bash scripts/agent-nebius-auth.sh ensure \
+  --tenant-id <tenant_id> \
   --project-name <project_name>
 ```
 
@@ -77,6 +85,12 @@ account credential and CLI profile. It intentionally does not install or
 register Codex hooks. The root `install-skills.sh --install-hooks
 agent-nebius-auth/assets/hooks --register-hooks` path is the canonical
 payload/`hooks.json` registration mode for this hook.
+The setup script requires a tenant ID plus exactly one project selector. If
+`--project-id` is provided, the script resolves the project name from Nebius
+project metadata only when group IAM work is needed. If `--project-name` is
+provided, the script resolves the project ID with `nebius iam project
+get-by-name` before creating local profile and credential paths. Passing both
+selectors fails fast.
 After a successful setup, the script records the selected project ID in
 `~/.nebius/codex-agent-default-project-id` so the generic installer-managed
 hook can select the correct project-specific agent profile without an inline
@@ -98,7 +112,8 @@ When the credential file exists, the script:
 4. Verifies that the profile can mint a service-account token.
 5. Verifies basic project access through the service-account profile.
 6. If a human/admin Nebius session is available, verifies and repairs IAM
-   drift for the service account, group, access permit, and membership.
+   drift for the service account, project-name-derived group, access permit,
+   and membership.
 7. If token minting fails, replaces the credential file only when `--repair`
    is set and the current human/admin session can regenerate it.
 8. Records the project ID in `~/.nebius/codex-agent-default-project-id` for the

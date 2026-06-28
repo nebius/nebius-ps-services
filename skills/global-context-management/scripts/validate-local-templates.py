@@ -183,7 +183,7 @@ config_file = "agents/write_worker.toml"
 
 
 def assert_agent_delegation_context(context: str) -> None:
-    if len(context) > 1700:
+    if len(context) > 1800:
         raise AssertionError("delegation context is too large for a lightweight hint")
     expected = ("alpha_mapper", "beta_test_planner", "gamma_risk_reviewer")
     for name in expected:
@@ -194,18 +194,16 @@ def assert_agent_delegation_context(context: str) -> None:
         raise AssertionError("non-read-only agent leaked into context")
     if "agents/alpha_mapper.toml" in context:
         raise AssertionError("agent config path leaked into context")
-    if "Local policy asks read-only helper delegation" not in context:
+    if "Local policy asks the main Codex agent to dynamically spawn bounded" not in context:
         raise AssertionError("delegation policy context missing")
     if "Available read-only roles:" not in context:
         raise AssertionError("read-only role list missing")
-    if "Timing:" not in context:
+    if "Suggested role timing:" not in context:
         raise AssertionError("role timing hint missing")
-    if "Use smallest useful role set" not in context:
+    if "Choose the smallest useful set of targeted roles" not in context:
         raise AssertionError("targeted subagent selection guidance missing")
     if "do not spawn every role" not in context:
         raise AssertionError("bounded subagent selection guidance missing")
-    if "Final: close completed/unneeded helper handles when close exists." not in context:
-        raise AssertionError("subagent cleanup guidance missing")
     forbidden = (
         "For every subagent you spawn",
         "close the completed subagent thread",
@@ -473,18 +471,17 @@ def assert_doc_contracts(root: Path) -> None:
         "Keep current.md summarized; replace stale details instead of appending logs.",
         "Related same-workspace task-state candidates (not loaded):",
         "verify against current repo/runtime evidence",
-        "Final: close completed/unneeded helper handles",
+        "Local policy asks the main Codex agent to dynamically spawn bounded",
+        "Choose the smallest useful set of targeted roles",
     )
     for needle in required_prompt_hook_summary:
         if needle not in prompt_hook:
             raise AssertionError(f"UserPromptSubmit template missing: {needle}")
 
     required_agents_template = (
-        "If hooks suggest same-workspace prior task-state candidate paths",
-        "Treat `current.md` as a rolling summary, not an append-only transcript",
-        "summarize any\n  oversized historical task-state file",
-        "close every spawned subagent handle",
-        "report if cleanup is unavailable or fails",
+        "Read the durable task-state file injected by global hooks",
+        "Keep the parent thread focused on objective, constraints, decisions",
+        "close completed helpers when\n  close controls are available",
     )
     for needle in required_agents_template:
         if needle not in agents_template:

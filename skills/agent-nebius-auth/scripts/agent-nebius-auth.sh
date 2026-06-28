@@ -30,8 +30,7 @@ usage() {
 Usage:
   bash scripts/agent-nebius-auth.sh ensure \
     --tenant-id <tenant_id> \
-    --project-id <project_id> \
-    --project-name <project_name> \
+    (--project-id <project_id> | --project-name <project_name>) \
     [--service-account-name <name>] \
     [--role <role>] \
     [--repair] \
@@ -112,15 +111,25 @@ json_get_id() {
   jq -r '.metadata.id // .id // .items[0].metadata.id // empty'
 }
 
+json_get_name() {
+  jq -r '.metadata.name // .name // .items[0].metadata.name // empty'
+}
+
 validate_inputs() {
   [[ "$COMMAND" == "ensure" ]] || die "Only the 'ensure' command is supported."
   [[ -n "$TENANT_ID" ]] || die "--tenant-id is required."
-  [[ -n "$PROJECT_ID" ]] || die "--project-id is required."
-  [[ -n "$PROJECT_NAME" ]] || die "--project-name is required."
+  [[ -n "$PROJECT_ID" || -n "$PROJECT_NAME" ]] || die "Exactly one of --project-id or --project-name is required."
+  [[ -z "$PROJECT_ID" || -z "$PROJECT_NAME" ]] || die "Pass only one of --project-id or --project-name."
   [[ "$TENANT_ID" =~ ^[A-Za-z0-9._:-]+$ ]] || die "--tenant-id contains unsupported characters."
-  [[ "$PROJECT_ID" =~ ^[A-Za-z0-9._:-]+$ ]] || die "--project-id contains unsupported characters."
+  [[ -z "$PROJECT_ID" || "$PROJECT_ID" =~ ^[A-Za-z0-9._:-]+$ ]] || die "--project-id contains unsupported characters."
+  [[ "$PROJECT_NAME" != *$'\n'* && "$PROJECT_NAME" != *$'\r'* ]] || die "--project-name must be a single line."
   [[ "$SA_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$ ]] || die "--service-account-name is not a safe Nebius resource name."
   [[ "$ROLE" =~ ^[A-Za-z0-9_.-]+$ ]] || die "--role contains unsupported characters."
+}
+
+validate_resolved_project_id() {
+  [[ -n "$PROJECT_ID" ]] || die "Failed to resolve a project ID."
+  [[ "$PROJECT_ID" =~ ^[A-Za-z0-9._:-]+$ ]] || die "Resolved project ID contains unsupported characters."
 }
 
 safe_chmod_credential() {
@@ -170,6 +179,21 @@ current_human_profile() {
   printf '%s\n' "$profile"
 }
 
+require_human_profile() {
+  local profile=""
+
+  if is_dry_run; then
+    printf '%s\n' "dry-run-human-profile"
+    return 0
+  fi
+
+  profile="$(current_human_profile || true)"
+  [[ -n "$profile" ]] || die "Current Nebius active profile is missing or is an agent service-account profile. Activate a human/admin profile, then rerun."
+  nebius iam get-access-token --profile "$profile" >/dev/null \
+    || die "Current Nebius human/default session '$profile' is not valid. Re-authenticate, then rerun."
+  printf '%s\n' "$profile"
+}
+
 profile_restore_target() {
   local profile=""
 
@@ -195,17 +219,80 @@ human_session_available() {
 }
 
 ensure_human_session() {
-  local profile=""
-
   if is_dry_run; then
     log "Would verify the current human/default Nebius session."
     return 0
   fi
 
-  profile="$(current_human_profile || true)"
-  [[ -n "$profile" ]] || die "Current Nebius active profile is missing or is an agent service-account profile. Activate a human/admin profile, then rerun."
-  nebius iam get-access-token --profile "$profile" >/dev/null \
-    || die "Current Nebius human/default session '$profile' is not valid. Re-authenticate, then rerun."
+  require_human_profile >/dev/null
+}
+
+resolve_project_id_from_name() {
+  local profile=""
+  local project_id=""
+
+  if is_dry_run; then
+    log "Would resolve project ID for project '$PROJECT_NAME' under tenant '$TENANT_ID'."
+    printf '%s\n' "dry-run-project-id"
+    return 0
+  fi
+
+  profile="$(require_human_profile)"
+  project_id="$(
+    nebius iam project get-by-name \
+      --name "$PROJECT_NAME" \
+      --parent-id "$TENANT_ID" \
+      --profile "$profile" \
+      --format json | json_get_id
+  )"
+  [[ -n "$project_id" ]] || die "Failed to resolve project ID for project name '$PROJECT_NAME'."
+  printf '%s\n' "$project_id"
+}
+
+resolve_project_name_from_id() {
+  local profile=""
+  local project_name=""
+
+  if [[ -n "$PROJECT_NAME" ]]; then
+    printf '%s\n' "$PROJECT_NAME"
+    return 0
+  fi
+
+  if is_dry_run; then
+    log "Would resolve project name for project ID '$PROJECT_ID'."
+    printf '%s\n' "dry-run-project"
+    return 0
+  fi
+
+  profile="$(require_human_profile)"
+  project_name="$(
+    nebius iam project get \
+      --id "$PROJECT_ID" \
+      --profile "$profile" \
+      --format json | json_get_name
+  )"
+  [[ -n "$project_name" ]] || die "Failed to resolve project name for project ID '$PROJECT_ID'."
+  printf '%s\n' "$project_name"
+}
+
+resolve_project_selector() {
+  if [[ -z "$PROJECT_ID" ]]; then
+    PROJECT_ID="$(resolve_project_id_from_name)"
+  fi
+  validate_resolved_project_id
+}
+
+ensure_group_name() {
+  local project_slug=""
+
+  if [[ -n "${GROUP_NAME:-}" ]]; then
+    return 0
+  fi
+
+  PROJECT_NAME="$(resolve_project_name_from_id)"
+  project_slug="$(slugify "$PROJECT_NAME")"
+  [[ -n "$project_slug" ]] || die "Project name must contain at least one alphanumeric character."
+  GROUP_NAME="codex-agent-${project_slug}"
 }
 
 get_or_create_service_account() {
@@ -242,6 +329,8 @@ get_or_create_service_account() {
 
 get_or_create_group() {
   local group_id=""
+
+  ensure_group_name
 
   if is_dry_run; then
     log "Would get or create group '$GROUP_NAME' under tenant '$TENANT_ID'."
@@ -657,7 +746,6 @@ parse_args() {
 }
 
 main() {
-  local project_slug=""
   local auth_lock_dir=""
   local profile_lock_dir=""
 
@@ -673,10 +761,8 @@ main() {
   need_cmd mktemp
   need_cmd unlink
 
-  project_slug="$(slugify "$PROJECT_NAME")"
-  [[ -n "$project_slug" ]] || die "--project-name must contain at least one alphanumeric character."
+  resolve_project_selector
 
-  GROUP_NAME="codex-agent-${project_slug}"
   PROFILE="codex-agent-${PROJECT_ID}"
   CREDENTIAL_FILE="$HOME/.nebius/codex-agent-authkey.${PROJECT_ID}.json"
   DEFAULT_PROJECT_FILE="$HOME/.nebius/codex-agent-default-project-id"

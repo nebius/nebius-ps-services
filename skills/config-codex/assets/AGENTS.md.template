@@ -76,12 +76,6 @@
   resume, or after compaction when prior context may matter. Update it with
   concise checkpoints, and do not create repo-local task-state files unless
   explicitly requested.
-- If hooks suggest same-workspace prior task-state candidate paths, read only
-  candidates that appear relevant to the current task, treat them as stale
-  hints, and verify against current repo or runtime evidence.
-- Treat `current.md` as a rolling summary, not an append-only transcript:
-  replace stale details with the latest validated state, and summarize any
-  oversized historical task-state file before relying on it.
 - Keep the parent thread focused on objective, constraints, decisions, current
   plan, changed files, verification status, risks, and final answer.
 - Keep raw logs, broad file listings, abandoned attempts, broad environment
@@ -92,9 +86,8 @@
   injects that request, and subagents are useful, available, and permitted.
   After authorization, dynamically choose and spawn targeted helper roles
   yourself instead of waiting for the user to name an exact role. Ask helpers
-  for concise summaries and consolidate results. Before the final response,
-  close every spawned subagent handle that is completed or no longer needed
-  when close controls are available; report if cleanup is unavailable or fails.
+  for concise summaries, consolidate results, and close completed helpers when
+  close controls are available.
 - After code, config, or documentation changes in a turn, before the final
   response, explicitly use `$align` for the changed surfaces unless the user
   says not to. If `$align` is unavailable, perform the equivalent local

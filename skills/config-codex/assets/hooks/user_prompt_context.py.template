@@ -449,7 +449,11 @@ def subagent_context(home: Path) -> str:
     review: list[str] = []
     lines = [
         "",
-        "Local policy asks read-only helper delegation when useful.",
+        (
+            "Local policy asks the main Codex agent to dynamically spawn bounded "
+            "read-only helpers when useful; do not wait for "
+            "another user prompt."
+        ),
         "Available read-only roles:",
     ]
     for agent in agents:
@@ -467,14 +471,15 @@ def subagent_context(home: Path) -> str:
     role_hint_parts = []
     if exploration_or_planning:
         role_hint_parts.append(
-            "explore/plan " + format_agent_names(exploration_or_planning)
+            "exploration/planning: " + format_agent_names(exploration_or_planning)
         )
     if review:
-        role_hint_parts.append("review " + format_agent_names(review))
+        role_hint_parts.append("review: " + format_agent_names(review))
     if role_hint_parts:
-        lines.append("Timing: " + "; ".join(role_hint_parts) + ".")
-    lines.append("Use smallest useful role set; do not spawn every role.")
-    lines.append("Final: close completed/unneeded helper handles when close exists.")
+        lines.append("Suggested role timing: " + "; ".join(role_hint_parts) + ".")
+    lines.append(
+        "Choose the smallest useful set of targeted roles; do not spawn every role by default."
+    )
     return "\n".join(lines) + "\n"
 
 
