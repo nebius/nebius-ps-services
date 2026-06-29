@@ -15211,6 +15211,7 @@ def _soperator_onboarding_report_with_source_version(
     target_ref: str,
     pinned_chart_version: str,
     pinned_app_version: str,
+    target_k8s_version: str | None = None,
     source_version: str | None,
     interactive: bool,
 ) -> Any:
@@ -15227,6 +15228,7 @@ def _soperator_onboarding_report_with_source_version(
         pinned_chart_version=pinned_chart_version,
         pinned_app_version=pinned_app_version,
         source_version_override=source_version_override,
+        target_k8s_version=target_k8s_version,
     )
 
 
@@ -17051,6 +17053,8 @@ def _prompt_soperator_onboarding_target_row(
         target_ref=target_ref,
         pinned_chart_version=chart_version,
         pinned_app_version=app_version,
+        target_k8s_version=to_k8s_version
+        or _soperator_onboarding_target_k8s_version_default(),
         source_version=source_version,
         interactive=True,
     )
@@ -17293,6 +17297,8 @@ def _soperator_onboarding_target_row_from_options(
         target_ref=normalized_target,
         pinned_chart_version=chart_version,
         pinned_app_version=app_version,
+        target_k8s_version=to_k8s_version
+        or _soperator_onboarding_target_k8s_version_default(),
         source_version=source_version,
         interactive=interactive,
     )
@@ -46619,7 +46625,7 @@ def ext_soperator_discover_command(
         "--tenant-id TENANT --project-id PROJECT --region-id eu-north1 "
         "--cluster-id mk8scluster-... --target-id external-cluster "
         "--storage-mode keep-existing-storage --compute-mode keep-existing-compute "
-        "--to-chart-version <chart-version> "
+        "--to-chart-version <chart-version> --to-k8s-version <major.minor> "
         "--no-interactive; "
         "nebius-cxcli validate <config.yaml>; nebius-cxcli render <config.yaml>. "
         "--cluster-id selects the Nebius MK8s cluster to adopt. --target-id is only "
@@ -46772,6 +46778,26 @@ def soperator_onboard_command(
             ),
         ),
     ] = None,
+    to_k8s_version: Annotated[
+        str | None,
+        typer.Option(
+            "--to-k8s-version",
+            help=(
+                "Target Kubernetes major.minor version for external node-template upgrade "
+                "analysis. Required when onboarding selects external MK8s node-template work."
+            ),
+        ),
+    ] = None,
+    allow_unsupported_soperator_upgrade_path: Annotated[
+        bool,
+        typer.Option(
+            "--allow-unsupported-soperator-upgrade-path/--no-allow-unsupported-soperator-upgrade-path",
+            help=(
+                "Allow accepted onboarding for an unsupported or not-validated Soperator "
+                "support-policy path. This does not bypass Kubernetes minor-hop or safety checks."
+            ),
+        ),
+    ] = False,
     worker_rollout_strategy: Annotated[
         str | None,
         typer.Option(
@@ -46903,6 +46929,10 @@ def soperator_onboard_command(
                     provider_lookup=provider_lookup,
                     source_version=source_version_opt,
                     to_chart_version=to_chart_version,
+                    to_k8s_version=to_k8s_version,
+                    allow_unsupported_soperator_upgrade_path=(
+                        allow_unsupported_soperator_upgrade_path
+                    ),
                     validate_sources=validate_sources,
                     compute_mode=compute_mode_opt,
                     worker_rollout_strategy=worker_rollout_strategy,
@@ -46922,6 +46952,10 @@ def soperator_onboard_command(
                     compute_mode=compute_mode_opt,
                     source_version=source_version_opt,
                     to_chart_version=to_chart_version,
+                    to_k8s_version=to_k8s_version,
+                    allow_unsupported_soperator_upgrade_path=(
+                        allow_unsupported_soperator_upgrade_path
+                    ),
                     validate_sources=validate_sources,
                     worker_rollout_strategy=worker_rollout_strategy,
                     worker_wave_groups=worker_wave_groups,
@@ -46942,6 +46976,8 @@ def soperator_onboard_command(
                 compute_mode=compute_mode_opt,
                 source_version=source_version_opt,
                 to_chart_version=to_chart_version,
+                to_k8s_version=to_k8s_version,
+                allow_unsupported_soperator_upgrade_path=allow_unsupported_soperator_upgrade_path,
                 interactive=interactive_mode,
                 validate_sources=validate_sources,
                 worker_rollout_strategy=worker_rollout_strategy,
@@ -46955,10 +46991,16 @@ def soperator_onboard_command(
 
         accepted_onboarding = target_row.get("soperator_onboarding")
         accepted_to_chart_version = ""
+        accepted_to_k8s_version = ""
         if isinstance(accepted_onboarding, Mapping):
             accepted_to_chart_version = _non_empty_text(
                 accepted_onboarding.get("target_version")
             )
+            accepted_node_template = accepted_onboarding.get("node_template_upgrade")
+            if isinstance(accepted_node_template, Mapping):
+                accepted_to_k8s_version = _non_empty_text(
+                    accepted_node_template.get("target_k8s_version")
+                )
         onboard_command_args = _soperator_onboard_bundle_command_args(
             config_path=config_path,
             target_row=target_row,
@@ -46970,6 +47012,8 @@ def soperator_onboard_command(
             compute_mode=compute_mode_opt,
             source_version=source_version_opt,
             to_chart_version=_non_empty_text(to_chart_version) or accepted_to_chart_version,
+            to_k8s_version=_non_empty_text(to_k8s_version) or accepted_to_k8s_version,
+            allow_unsupported_soperator_upgrade_path=allow_unsupported_soperator_upgrade_path,
             worker_rollout_strategy=worker_rollout_strategy,
             worker_wave_groups=worker_wave_groups,
             worker_wave_percent=worker_wave_percent,
