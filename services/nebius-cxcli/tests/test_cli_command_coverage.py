@@ -20448,13 +20448,31 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "discover" in soperator_help
     assert "restore" in soperator_help
     assert "backup [OPTIONS] CONFIG_YAML" in ext_soperator_backup_help
-    assert "discover [OPTIONS] CONFIG_OR_DEPLOYMENTS_ROOT" in ext_soperator_discover_help
+    assert "discover [OPTIONS] [CONFIG_OR_DEPLOYMENTS_ROOT]" in ext_soperator_discover_help
     assert "restore [OPTIONS] BACKUP_ARCHIVE" in ext_soperator_restore_help
     assert "--kube-context" in normalized_ext_soperator_backup_help
     assert "must be onboarded and accepted" in normalized_ext_soperator_backup_help
     assert "--cluster-id" in normalized_ext_soperator_discover_help
+    assert "--client-name" in normalized_ext_soperator_discover_help
+    assert "--project-id" in normalized_ext_soperator_discover_help
+    assert "--tenant-id" in normalized_ext_soperator_discover_help
     assert "--output-dir" in normalized_ext_soperator_discover_help
     assert "with exactly one existing project config.yaml" in normalized_ext_soperator_discover_help
+    assert "Omit for standalone --project-id plus --cluster-id/--kube-context discovery" in (
+        normalized_ext_soperator_discover_help
+    )
+    assert "nebius-cxcli ext-soperator discover --project-id PROJECT --cluster-id MK8SCLUSTER" in (
+        normalized_ext_soperator_discover_help
+    )
+    assert "Default root: config.yaml parent, or current working directory in standalone mode" in (
+        normalized_ext_soperator_discover_help
+    )
+    assert "--tenant-id is optional for standalone discovery" in (
+        normalized_ext_soperator_discover_help
+    )
+    assert "pass --client-name only when you need a specific runtime-auth cache profile" in (
+        normalized_ext_soperator_discover_help
+    )
     assert "onboard resolves or creates" not in normalized_ext_soperator_discover_help
     assert "soperator-discovery/<target>/manifest.json" in normalized_ext_soperator_discover_help
     assert "--execute" in normalized_ext_soperator_restore_help

@@ -904,8 +904,9 @@ discovered live groups under
 instead of Terraform-owning the existing cluster or adding role-named host
 pools. The onboarding discovery summary includes the discovered Kubernetes
 control-plane version, target Kubernetes version, and an `Upgrade Guidance`
-section with the matched Soperator/Kubernetes support-policy rule; discovery
-stays read-only and does not gate unsupported paths by itself. When external
+section with Kubernetes minor hops, Soperator version hops, and the matched
+Soperator/Kubernetes support-policy rule; discovery stays read-only and does
+not gate unsupported paths by itself. When external
 node-template work is selected interactively, the Kubernetes target prompt
 defaults to the next supported minor hop from the discovered live version, not
 the global latest supported minor. Operators can still edit the materialized
@@ -922,8 +923,23 @@ validations. The full
 source-cluster discovery snapshot is written under
 `generated/reports/soperator-discovery/<target>/` with `manifest.json` and
 section files; the config keeps only
-stable onboarding decisions and fingerprints. The onboarding
-flow has
+stable onboarding decisions and fingerprints. The same discovery writer is
+available directly as `nebius-cxcli ext-soperator discover`: it can read an
+onboarded target from `config.yaml`, or it can run before onboarding with
+`--project-id <project-id> --cluster-id <mk8scluster-id>` and no
+config/deployments path. In standalone cluster-id mode, `--tenant-id` is
+accepted only as optional metadata because temporary kubeconfig handoff and
+provider inventory use project-scoped Nebius authentication. `--client-name`
+selects a specific runtime-auth cache profile when needed; otherwise cxcli
+infers the unique cached client name when one exists and continues through the
+normal Nebius SDK auth order when no cache is selected. The default bundle root
+is the current working directory unless `--output-dir` is supplied. Managed and
+external discovery share the same upgrade guidance formatter: when current and
+target versions are known, the console footer and `summary.md` show Kubernetes
+minor hops, Soperator version hops, the matched support-policy rule, and any
+required ordering gate such as upgrading Soperator to `1.23.0` before moving a
+`1.22.x` source cluster to Kubernetes `1.33+`. The
+onboarding flow has
 an explicit source-version recovery path: when Soperator CRDs are present but
 no compatible Helm release version is detected, interactive onboarding asks the
 operator to choose a version from the exact committed upgrade compatibility

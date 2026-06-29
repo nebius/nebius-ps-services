@@ -410,8 +410,9 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
         "`--restore-accounting-db/--no-restore-accounting-db`"
     ) in common_flags_flat
     assert (
-        "- `ext-soperator discover`: `--target`, `--output-dir`, `--namespace`, "
-        "`--release-name`, `--kube-context`, `--cluster-id`, `--access`, "
+        "- `ext-soperator discover`: `--client-name`, `--tenant-id`, `--project-id`, "
+        "`--target`, `--output-dir`, `--namespace`, `--release-name`, "
+        "`--kube-context`, `--cluster-id`, `--access`, "
         "`--to-chart-version`, `--to-k8s-version`, `--to-os`, "
         "`--to-gpu-stack-preset`, `--redaction`"
     ) in common_flags_flat
@@ -1378,9 +1379,18 @@ def test_docs_define_component_selector_contract() -> None:
     assert "Each command owns a deterministic latest artifact" in readme_flat
     assert "`nebius-cxcli soperator discover <config.yaml> --target <target>`" in readme_flat
     assert (
-        "`nebius-cxcli ext-soperator discover <config.yaml-or-deployments-root> --target <target>`"
+        "`nebius-cxcli ext-soperator discover [<config.yaml-or-deployments-root>] --target <target>`"
         in readme_flat
     )
+    assert (
+        "`nebius-cxcli ext-soperator discover --project-id <project-id> --cluster-id <mk8scluster-id>`"
+        in readme_flat
+    )
+    assert "`--tenant-id` is optional metadata" in readme_flat
+    assert "`--client-name` selects a specific runtime-auth cache profile when needed" in (
+        readme_flat
+    )
+    assert "project-scoped Nebius authentication" in design_flat
     for report_name in (
         "`soperator-discovery/<target>/manifest.json`",
         "`ext-soperator-upgrade-report.md`",
@@ -1451,6 +1461,8 @@ def test_docs_define_component_selector_contract() -> None:
     assert "defaults this field to the next provider-supported minor hop" in readme_flat
     assert "does not jump straight to the latest supported minor" in readme_flat
     assert "`summary.md` includes `Upgrade Guidance` without gating discovery" in readme_flat
+    assert "that section shows Kubernetes minor hops, Soperator version hops" in readme_flat
+    assert "Soperator `1.23.0` before Kubernetes `1.33+`" in readme_flat
     assert "print the matched Soperator/Kubernetes support-policy rule during the decision summary" in (
         readme_flat
     )
@@ -1599,6 +1611,10 @@ def test_docs_define_component_selector_contract() -> None:
     assert "The discovery summary printed during onboarding is read-only" in design_flat
     assert "includes the discovered/current and target Kubernetes minor versions" in design_flat
     assert "plus `Upgrade Guidance`" in design_flat
+    assert "Kubernetes minor hops, Soperator version hops" in design_flat
+    assert "upgrading Soperator to `1.23.0` before moving a `1.22.x` source cluster" in (
+        design_flat
+    )
     assert "defaults to one provider-supported minor hop from the discovered control-plane version" in (
         design_flat
     )

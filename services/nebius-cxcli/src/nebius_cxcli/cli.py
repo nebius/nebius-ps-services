@@ -9411,7 +9411,10 @@ def _normalize_soperator_discovery_redaction(raw_value: str | None) -> str:
 def _soperator_discovery_command_args(
     *,
     command_group: str,
-    config_path: Path,
+    config_path: Path | None,
+    client_name: str | None = None,
+    tenant_id: str | None = None,
+    project_id: str | None = None,
     target_ref: str | None,
     output_dir: Path | None,
     namespace: str | None,
@@ -9424,7 +9427,15 @@ def _soperator_discovery_command_args(
     to_gpu_stack_preset: str | None,
     redaction: str,
 ) -> tuple[str, ...]:
-    args = ["nebius-cxcli", command_group, "discover", str(config_path)]
+    args = ["nebius-cxcli", command_group, "discover"]
+    if config_path is not None:
+        args.append(str(config_path))
+    if _non_empty_text(client_name):
+        args.extend(["--client-name", str(client_name)])
+    if _non_empty_text(tenant_id):
+        args.extend(["--tenant-id", str(tenant_id)])
+    if _non_empty_text(project_id):
+        args.extend(["--project-id", str(project_id)])
     if _non_empty_text(target_ref):
         args.extend(["--target", str(target_ref)])
     if output_dir is not None:
@@ -9588,7 +9599,11 @@ def _soperator_discovery_report_from_snapshot(
 
 def _write_soperator_discovery_bundle_from_snapshot(
     *,
-    config_path: Path,
+    project_dir: Path | None = None,
+    config_path: Path | None = None,
+    client_name: str | None = None,
+    tenant_id: str | None = None,
+    project_id: str | None = None,
     target_ref: str,
     snapshot: Mapping[str, Any],
     source_kind: str,
@@ -9605,6 +9620,10 @@ def _write_soperator_discovery_bundle_from_snapshot(
     to_gpu_stack_preset: str | None = None,
     redaction: str = "support",
 ) -> Path:
+    if project_dir is None:
+        if config_path is None:
+            raise RuntimeError("Soperator discovery requires a project directory or config path.")
+        project_dir = config_path.parent
     normalized_redaction = _normalize_soperator_discovery_redaction(redaction)
     report = _soperator_discovery_report_from_snapshot(
         snapshot,
@@ -9634,6 +9653,9 @@ def _write_soperator_discovery_bundle_from_snapshot(
     command_args = _soperator_discovery_command_args(
         command_group=command_group,
         config_path=config_path,
+        client_name=client_name,
+        tenant_id=tenant_id,
+        project_id=project_id,
         target_ref=target_ref,
         output_dir=output_dir,
         namespace=namespace,
@@ -9647,7 +9669,7 @@ def _write_soperator_discovery_bundle_from_snapshot(
         redaction=normalized_redaction,
     )
     return write_source_soperator_discovery_report(
-        config_path.parent,
+        project_dir,
         target_ref=target_ref,
         snapshot=snapshot,
         report=report,
@@ -9727,6 +9749,7 @@ def _run_managed_soperator_discovery_command(
     redaction: str,
     interactive: bool,
 ) -> Path:
+    normalized_redaction = _normalize_soperator_discovery_redaction(redaction)
     target, plan = _soperator_backup_plan_from_payload(
         source_payload=source_payload,
         target_ref=target_ref,
@@ -9779,7 +9802,7 @@ def _run_managed_soperator_discovery_command(
                     to_k8s_version=to_k8s_version,
                     to_os=to_os,
                     to_gpu_stack_preset=to_gpu_stack_preset,
-                    redaction=redaction,
+                    redaction=normalized_redaction,
                 )
     return _write_soperator_discovery_bundle_from_snapshot(
         config_path=config_path,
@@ -9795,7 +9818,7 @@ def _run_managed_soperator_discovery_command(
         to_k8s_version=to_k8s_version,
         to_os=to_os,
         to_gpu_stack_preset=to_gpu_stack_preset,
-        redaction=redaction,
+        redaction=normalized_redaction,
     )
 
 
@@ -9835,10 +9858,56 @@ def _resolve_external_soperator_discovery_target_ref(
     )
 
 
+def _standalone_external_soperator_discovery_payload(
+    *,
+    client_name: str | None,
+    tenant_id: str | None,
+    project_id: str | None,
+) -> dict[str, Any]:
+    return {
+        "client_info": {
+            "client_name": _non_empty_text(client_name),
+            "nebius": {
+                "tenant_id": _non_empty_text(tenant_id),
+                "project_id": _non_empty_text(project_id),
+                "region_id": "",
+            },
+            "notifications": {"email": None},
+        },
+        "infra": {"components": []},
+        "apps": {"charts": []},
+        "deploy": {"targets": []},
+    }
+
+
+def _standalone_external_soperator_discovery_client_name(
+    *,
+    project_id: str | None,
+    client_name: str | None,
+) -> str:
+    explicit = _non_empty_text(client_name)
+    if explicit:
+        return explicit
+    normalized_project_id = _non_empty_text(project_id)
+    if not normalized_project_id:
+        return ""
+    matches = [
+        name for name, pid in _discover_runtime_auth_profiles() if pid == normalized_project_id
+    ]
+    unique = sorted(set(matches))
+    if len(unique) == 1:
+        return unique[0]
+    return ""
+
+
 def _run_external_soperator_discovery_command(
     *,
-    config_path: Path,
+    project_dir: Path | None = None,
+    config_path: Path | None,
     payload: dict[str, Any],
+    client_name: str | None = None,
+    tenant_id: str | None = None,
+    project_id: str | None = None,
     target_ref: str | None,
     cluster_id: str | None,
     kube_context: str | None,
@@ -9852,6 +9921,7 @@ def _run_external_soperator_discovery_command(
     to_gpu_stack_preset: str | None,
     redaction: str,
 ) -> Path:
+    normalized_redaction = _normalize_soperator_discovery_redaction(redaction)
     resolved_target_ref = _resolve_external_soperator_discovery_target_ref(
         payload,
         target_ref=target_ref,
@@ -9867,13 +9937,25 @@ def _run_external_soperator_discovery_command(
         explicit_context = explicit_context or _non_empty_text(target.get("kube_context"))
         resolved_access = _non_empty_text(target.get("access")) or resolved_access
     if resolved_cluster_id and not explicit_context:
+        _client_name, _tenant_id, resolved_project_id, _region_id, _email = (
+            _identity_values_from_payload(payload)
+        )
+        if not resolved_project_id:
+            raise RuntimeError(
+                "External Soperator discovery by --cluster-id requires --project-id when "
+                "CONFIG_OR_DEPLOYMENTS_ROOT is omitted."
+            )
         snapshot, collection_context = _collect_soperator_snapshot_for_nebius_mk8s_cluster(
             payload,
             cluster_id=resolved_cluster_id,
             access=resolved_access,
         )
         return _write_soperator_discovery_bundle_from_snapshot(
+            project_dir=project_dir,
             config_path=config_path,
+            client_name=client_name,
+            tenant_id=tenant_id,
+            project_id=project_id,
             target_ref=resolved_target_ref,
             snapshot=snapshot,
             source_kind="external",
@@ -9888,7 +9970,7 @@ def _run_external_soperator_discovery_command(
             to_k8s_version=to_k8s_version,
             to_os=to_os,
             to_gpu_stack_preset=to_gpu_stack_preset,
-            redaction=redaction,
+            redaction=normalized_redaction,
         )
     if not explicit_context:
         raise RuntimeError(
@@ -9897,7 +9979,11 @@ def _run_external_soperator_discovery_command(
         )
     snapshot = collect_kubectl_soperator_snapshot(kube_context=explicit_context)
     return _write_soperator_discovery_bundle_from_snapshot(
+        project_dir=project_dir,
         config_path=config_path,
+        client_name=client_name,
+        tenant_id=tenant_id,
+        project_id=project_id,
         target_ref=resolved_target_ref,
         snapshot=snapshot,
         source_kind="external",
@@ -9912,7 +9998,7 @@ def _run_external_soperator_discovery_command(
         to_k8s_version=to_k8s_version,
         to_os=to_os,
         to_gpu_stack_preset=to_gpu_stack_preset,
-        redaction=redaction,
+        redaction=normalized_redaction,
     )
 
 
@@ -15181,10 +15267,233 @@ def _soperator_support_policy_plan_lines(
     return tuple(lines)
 
 
+_SOPERATOR_K8S_133_GATE_VERSION = "1.33"
+_SOPERATOR_K8S_133_MIN_VERSION = "1.23.0"
+
+
+def _soperator_discovery_support_evidence(
+    report: Mapping[str, Any] | Any,
+) -> Mapping[str, Any]:
+    for finding in soperator_upgrade_support_findings(report):
+        evidence = _soperator_support_finding_evidence(finding)
+        if evidence:
+            return evidence
+    return {}
+
+
+def _soperator_discovery_report_value(
+    report: Mapping[str, Any] | Any,
+    key: str,
+) -> str:
+    if isinstance(report, Mapping):
+        return _non_empty_text(report.get(key))
+    return _non_empty_text(getattr(report, key, ""))
+
+
+def _soperator_discovery_version_tuple(version: str) -> tuple[int, int, int] | None:
+    normalized = normalize_soperator_release_version(version)
+    match = re.fullmatch(r"([0-9]+)\.([0-9]+)(?:\.([0-9]+))?", normalized)
+    if match is None:
+        return None
+    patch = int(match.group(3)) if match.group(3) is not None else 0
+    return (int(match.group(1)), int(match.group(2)), patch)
+
+
+def _soperator_discovery_version_less_than(version: str, minimum: str) -> bool:
+    left = _soperator_discovery_version_tuple(version)
+    right = _soperator_discovery_version_tuple(minimum)
+    if left is None or right is None:
+        return False
+    return left < right
+
+
+def _soperator_discovery_version_at_least(version: str, minimum: str) -> bool:
+    left = _soperator_discovery_version_tuple(version)
+    right = _soperator_discovery_version_tuple(minimum)
+    if left is None or right is None:
+        return False
+    return left >= right
+
+
+def _soperator_discovery_k8s_version_tuple(version: str) -> tuple[int, int] | None:
+    try:
+        parsed = parse_k8s_version(version)
+    except ValueError:
+        return None
+    return (parsed.major, parsed.minor)
+
+
+def _soperator_discovery_k8s_at_least(version: str, minimum: str) -> bool:
+    left = _soperator_discovery_k8s_version_tuple(version)
+    right = _soperator_discovery_k8s_version_tuple(minimum)
+    if left is None or right is None:
+        return False
+    return left >= right
+
+
+def _soperator_discovery_k8s_hops(
+    current_version: str,
+    target_version: str,
+) -> tuple[str, ...]:
+    try:
+        current = parse_k8s_version(current_version)
+        target = parse_k8s_version(target_version)
+    except ValueError:
+        values = [_non_empty_text(current_version), _non_empty_text(target_version)]
+        return tuple(dict.fromkeys(value for value in values if value))
+    if current.major != target.major or current.minor > target.minor:
+        values = [current.minor_text, target.minor_text]
+        return tuple(dict.fromkeys(value for value in values if value))
+    return tuple(f"{current.major}.{minor}" for minor in range(current.minor, target.minor + 1))
+
+
+def _soperator_discovery_support_path_values(
+    report: Mapping[str, Any] | Any,
+) -> tuple[str, str, str, str]:
+    evidence = _soperator_discovery_support_evidence(report)
+    source_soperator = _non_empty_text(evidence.get("source_version"))
+    if not source_soperator:
+        source_soperator = _soperator_discovery_report_value(report, "source_version")
+    target_soperator = _non_empty_text(evidence.get("target_version"))
+    if not target_soperator:
+        target_soperator = _soperator_discovery_report_value(report, "target_version")
+    current_k8s = _non_empty_text(evidence.get("current_k8s_version"))
+    if not current_k8s:
+        current_k8s = _soperator_discovery_report_value(report, "current_k8s_version")
+    target_k8s = _non_empty_text(evidence.get("target_k8s_version"))
+    if not target_k8s:
+        target_k8s = _soperator_discovery_report_value(report, "target_k8s_version")
+    return source_soperator, target_soperator, current_k8s, target_k8s
+
+
+def _soperator_discovery_requires_123_before_k8s_133(
+    *,
+    source_soperator: str,
+    target_soperator: str,
+    current_k8s: str,
+    target_k8s: str,
+) -> bool:
+    if not (
+        _soperator_discovery_k8s_at_least(target_k8s, _SOPERATOR_K8S_133_GATE_VERSION)
+        and not _soperator_discovery_k8s_at_least(
+            current_k8s,
+            _SOPERATOR_K8S_133_GATE_VERSION,
+        )
+    ):
+        return False
+    return (
+        _soperator_discovery_version_less_than(
+            source_soperator,
+            _SOPERATOR_K8S_133_MIN_VERSION,
+        )
+        and _soperator_discovery_version_at_least(
+            target_soperator,
+            _SOPERATOR_K8S_133_MIN_VERSION,
+        )
+    )
+
+
+def _soperator_discovery_soperator_hops(
+    *,
+    source_soperator: str,
+    target_soperator: str,
+    include_k8s_133_gate: bool,
+) -> tuple[str, ...]:
+    values = [_non_empty_text(source_soperator)]
+    if include_k8s_133_gate:
+        values.append(_SOPERATOR_K8S_133_MIN_VERSION)
+    values.append(_non_empty_text(target_soperator))
+    return tuple(dict.fromkeys(value for value in values if value))
+
+
+def _soperator_discovery_upgrade_order_steps(
+    *,
+    k8s_hops: tuple[str, ...],
+    soperator_hops: tuple[str, ...],
+    include_k8s_133_gate: bool,
+) -> tuple[str, ...]:
+    if not k8s_hops and not soperator_hops:
+        return ()
+    if not include_k8s_133_gate:
+        steps: list[str] = []
+        if len(soperator_hops) > 1:
+            steps.append(f"Soperator {' -> '.join(soperator_hops)}")
+        if len(k8s_hops) > 1:
+            steps.append(f"Kubernetes {' -> '.join(k8s_hops)}")
+        if not steps:
+            return ()
+        return ("  - Recommended order: " + "; ".join(steps) + ".",)
+    k8s_from_gate = tuple(
+        hop
+        for hop in k8s_hops
+        if _soperator_discovery_k8s_at_least(hop, _SOPERATOR_K8S_133_GATE_VERSION)
+    )
+    steps = []
+    if len(soperator_hops) >= 2:
+        steps.append(
+            f"Soperator {soperator_hops[0]} -> {_SOPERATOR_K8S_133_MIN_VERSION} "
+            f"while Kubernetes stays {k8s_hops[0] if k8s_hops else 'below 1.33'}"
+        )
+    if k8s_from_gate and len(k8s_hops) > 1:
+        steps.append(f"Kubernetes {' -> '.join(k8s_hops)}")
+    if (
+        len(soperator_hops) >= 3
+        and soperator_hops[-1] != _SOPERATOR_K8S_133_MIN_VERSION
+    ):
+        steps.append(
+            f"Soperator {_SOPERATOR_K8S_133_MIN_VERSION} -> {soperator_hops[-1]}"
+        )
+    if not steps:
+        return ()
+    return ("  - Recommended order: " + "; ".join(steps) + ".",)
+
+
+def _soperator_discovery_upgrade_path_lines(
+    report: Mapping[str, Any] | Any,
+) -> tuple[str, ...]:
+    source_soperator, target_soperator, current_k8s, target_k8s = (
+        _soperator_discovery_support_path_values(report)
+    )
+    k8s_hops = _soperator_discovery_k8s_hops(current_k8s, target_k8s)
+    include_k8s_133_gate = _soperator_discovery_requires_123_before_k8s_133(
+        source_soperator=source_soperator,
+        target_soperator=target_soperator,
+        current_k8s=current_k8s,
+        target_k8s=target_k8s,
+    )
+    soperator_hops = _soperator_discovery_soperator_hops(
+        source_soperator=source_soperator,
+        target_soperator=target_soperator,
+        include_k8s_133_gate=include_k8s_133_gate,
+    )
+    if not k8s_hops and not soperator_hops:
+        return ()
+    lines = ["- Upgrade path evaluation:"]
+    if k8s_hops:
+        lines.append(f"  - Kubernetes: {' -> '.join(k8s_hops)}")
+    if soperator_hops:
+        lines.append(f"  - Soperator: {' -> '.join(soperator_hops)}")
+    if include_k8s_133_gate:
+        lines.append(
+            "  - Required gate: upgrade Soperator to at least "
+            f"{_SOPERATOR_K8S_133_MIN_VERSION} before moving Kubernetes to "
+            f"{_SOPERATOR_K8S_133_GATE_VERSION}+."
+        )
+    lines.extend(
+        _soperator_discovery_upgrade_order_steps(
+            k8s_hops=k8s_hops,
+            soperator_hops=soperator_hops,
+            include_k8s_133_gate=include_k8s_133_gate,
+        )
+    )
+    return tuple(lines)
+
+
 def _soperator_discovery_upgrade_guidance_lines(
     report: Mapping[str, Any] | Any,
 ) -> tuple[str, ...]:
-    lines = list(
+    lines = list(_soperator_discovery_upgrade_path_lines(report))
+    lines.extend(
         _soperator_support_policy_plan_lines(
             report,
             reject_disposition="execute requires override",
@@ -46712,20 +47021,60 @@ def ext_soperator_restore_command(
     "discover",
     short_help="Write a read-only discovery bundle for an external Soperator cluster.",
     epilog=(
-        "Example: nebius-cxcli ext-soperator discover <config.yaml> --target external-cluster. "
+        "Examples: "
+        "nebius-cxcli ext-soperator discover <config.yaml> --target external-cluster; "
+        "nebius-cxcli ext-soperator discover --project-id PROJECT --cluster-id MK8SCLUSTER. "
         "Use --cluster-id for direct Nebius MK8s access or --kube-context for local kubeconfig "
-        "access. Discovery writes generated/reports/soperator-discovery/<target>/manifest.json "
-        "and does not back up raw restore material."
+        "access. --tenant-id is optional for standalone discovery because cluster handoff "
+        "uses project-scoped Nebius auth; pass --client-name only when you need a specific "
+        "runtime-auth cache profile. Discovery writes "
+        "generated/reports/soperator-discovery/<target>/manifest.json and does not back up "
+        "raw restore material."
     ),
 )
 def ext_soperator_discover_command(
     target_path: Annotated[
-        Path,
+        Path | None,
         typer.Argument(
             metavar="CONFIG_OR_DEPLOYMENTS_ROOT",
-            help=_SOPERATOR_DISCOVER_TARGET_ARGUMENT_HELP,
+            help=(
+                _SOPERATOR_DISCOVER_TARGET_ARGUMENT_HELP
+                + " Omit for standalone --project-id plus --cluster-id/--kube-context discovery; "
+                "the default bundle root is the current directory."
+            ),
         ),
-    ],
+    ] = None,
+    client_name: Annotated[
+        str | None,
+        typer.Option(
+            "--client-name",
+            help=(
+                "Optional client name for standalone discovery runtime-auth cache lookup. "
+                "When omitted, cxcli uses the unique cached profile for --project-id if one "
+                "exists, or falls back to the normal Nebius SDK auth order."
+            ),
+        ),
+    ] = None,
+    tenant_id: Annotated[
+        str | None,
+        typer.Option(
+            "--tenant-id",
+            help=(
+                "Optional Nebius tenant identifier for standalone discovery metadata. "
+                "Not required for --cluster-id handoff."
+            ),
+        ),
+    ] = None,
+    project_id: Annotated[
+        str | None,
+        typer.Option(
+            "--project-id",
+            help=(
+                "Nebius project identifier for standalone --cluster-id discovery when no "
+                "config/deployments path is supplied."
+            ),
+        ),
+    ] = None,
     target_ref: Annotated[
         str | None,
         typer.Option(
@@ -46742,8 +47091,8 @@ def ext_soperator_discover_command(
         typer.Option(
             "--output-dir",
             help=(
-                "Exact output directory for the discovery bundle. Default: "
-                "<config.yaml parent>/generated/reports/soperator-discovery/<target>."
+                "Exact output directory for the discovery bundle. Default root: "
+                "config.yaml parent, or current working directory in standalone mode."
             ),
         ),
     ] = None,
@@ -46798,11 +47147,55 @@ def ext_soperator_discover_command(
     ] = "support",
 ) -> None:
     try:
-        config_path = _resolve_existing_soperator_discovery_config_path(target_path)
-        payload = _load_source_payload(config_path)
+        if target_path is not None:
+            if (
+                _non_empty_text(client_name)
+                or _non_empty_text(tenant_id)
+                or _non_empty_text(project_id)
+            ):
+                raise RuntimeError(
+                    "Pass --client-name/--tenant-id/--project-id only for standalone "
+                    "ext-soperator discover when CONFIG_OR_DEPLOYMENTS_ROOT is omitted."
+                )
+            config_path: Path | None = _resolve_existing_soperator_discovery_config_path(
+                target_path
+            )
+            project_dir = config_path.parent
+            payload = _load_source_payload(config_path)
+            command_client_name = None
+            command_tenant_id = None
+            command_project_id = None
+        else:
+            if not _non_empty_text(cluster_id) and not _non_empty_text(kube_context):
+                raise RuntimeError(
+                    "Standalone ext-soperator discover requires --cluster-id or --kube-context. "
+                    "Pass CONFIG_OR_DEPLOYMENTS_ROOT to discover an existing config/onboarded target."
+                )
+            if _non_empty_text(cluster_id) and not _non_empty_text(project_id):
+                raise RuntimeError(
+                    "Standalone ext-soperator discover with --cluster-id requires --project-id. "
+                    "--tenant-id is optional."
+                )
+            config_path = None
+            project_dir = Path.cwd()
+            command_client_name = _standalone_external_soperator_discovery_client_name(
+                project_id=project_id,
+                client_name=client_name,
+            )
+            payload = _standalone_external_soperator_discovery_payload(
+                client_name=command_client_name,
+                tenant_id=tenant_id,
+                project_id=project_id,
+            )
+            command_tenant_id = tenant_id
+            command_project_id = project_id
         path = _run_external_soperator_discovery_command(
+            project_dir=project_dir,
             config_path=config_path,
             payload=payload,
+            client_name=command_client_name,
+            tenant_id=command_tenant_id,
+            project_id=command_project_id,
             target_ref=target_ref,
             cluster_id=cluster_id,
             kube_context=kube_context,

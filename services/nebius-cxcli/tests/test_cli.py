@@ -8195,18 +8195,22 @@ def test_soperator_discovery_result_prints_k8s_versions(
         "load_soperator_discovery_bundle",
         lambda _path: {
             "current_k8s_version": "1.32",
-            "target_k8s_version": "1.33",
+            "target_k8s_version": "1.34",
             "report": {
                 "findings": [
                     {
                         "layer": "soperator-upgrade-support",
                         "status": "supported",
-                        "message": "This path is in the support matrix.",
+                        "message": (
+                            "Soperator 4.x targeting Kubernetes 1.33+ matches "
+                            "the committed cxcli support policy."
+                        ),
                         "evidence": {
                             "rule_id": "k8s-1-33-soperator-4-supported",
-                            "source_version": "1.23.3",
-                            "target_version": "4.0.1-ps.1",
-                            "target_k8s_version": "1.33",
+                            "source_version": "1.22.3",
+                            "target_version": "4.0.2",
+                            "current_k8s_version": "1.32",
+                            "target_k8s_version": "1.34",
                         },
                     }
                 ]
@@ -8220,13 +8224,73 @@ def test_soperator_discovery_result_prints_k8s_versions(
         f"Soperator discovery manifest: {bundle_path}",
         f"Soperator discovery summary: {summary_path}",
         "Current Kubernetes version: 1.32",
-        "Target Kubernetes version: 1.33",
+        "Target Kubernetes version: 1.34",
+        "- Upgrade path evaluation:",
+        "  - Kubernetes: 1.32 -> 1.33 -> 1.34",
+        "  - Soperator: 1.22.3 -> 1.23.0 -> 4.0.2",
+        "  - Required gate: upgrade Soperator to at least 1.23.0 before moving Kubernetes to 1.33+.",
+        "  - Recommended order: Soperator 1.22.3 -> 1.23.0 while Kubernetes stays "
+        "1.32; Kubernetes 1.32 -> 1.33 -> 1.34; Soperator 1.23.0 -> 4.0.2.",
         "- Soperator support policy: status=supported, rule=k8s-1-33-soperator-4-supported, "
-        "source Soperator=1.23.3, target Soperator=4.0.1-ps.1, target Kubernetes=1.33",
-        "  - This path is in the support matrix.",
+        "source Soperator=1.22.3, target Soperator=4.0.2, target Kubernetes=1.34",
+        "  - Soperator 4.x targeting Kubernetes 1.33+ matches the committed cxcli support "
+        "policy.",
         "- Discovery is read-only; unsupported or not-validated paths are gated when accepting "
         "onboarding or executing upgrade.",
     ]
+
+
+def test_soperator_discovery_upgrade_guidance_skips_123_gate_when_source_is_ready() -> None:
+    guidance = cli_module._soperator_discovery_upgrade_guidance_lines(
+        {
+            "findings": [
+                {
+                    "layer": "soperator-upgrade-support",
+                    "status": "supported",
+                    "message": "This path is in the support matrix.",
+                    "evidence": {
+                        "rule_id": "k8s-1-33-soperator-4-supported",
+                        "source_version": "1.23.3",
+                        "target_version": "4.0.2",
+                        "current_k8s_version": "1.32",
+                        "target_k8s_version": "1.34",
+                    },
+                }
+            ]
+        }
+    )
+
+    assert "  - Kubernetes: 1.32 -> 1.33 -> 1.34" in guidance
+    assert "  - Soperator: 1.23.3 -> 4.0.2" in guidance
+    assert not any("Required gate" in line for line in guidance)
+
+
+def test_soperator_discovery_upgrade_guidance_keeps_full_k8s_minor_path_before_gate() -> None:
+    guidance = cli_module._soperator_discovery_upgrade_guidance_lines(
+        {
+            "findings": [
+                {
+                    "layer": "soperator-upgrade-support",
+                    "status": "supported",
+                    "message": "This path is in the support matrix.",
+                    "evidence": {
+                        "rule_id": "k8s-1-33-soperator-4-supported",
+                        "source_version": "1.22.3",
+                        "target_version": "4.0.2",
+                        "current_k8s_version": "1.31",
+                        "target_k8s_version": "1.34",
+                    },
+                }
+            ]
+        }
+    )
+
+    assert "  - Kubernetes: 1.31 -> 1.32 -> 1.33 -> 1.34" in guidance
+    assert (
+        "  - Recommended order: Soperator 1.22.3 -> 1.23.0 while Kubernetes "
+        "stays 1.31; Kubernetes 1.31 -> 1.32 -> 1.33 -> 1.34; "
+        "Soperator 1.23.0 -> 4.0.2."
+    ) in guidance
 
 
 def test_ext_soperator_discover_command_routes_to_shared_bundle(
@@ -8280,6 +8344,244 @@ def test_ext_soperator_discover_command_routes_to_shared_bundle(
     assert captured["to_os"] == "ubuntu24.04"
     assert captured["redaction"] == "support"
     assert f"Soperator discovery manifest: {bundle_path}" in result.output
+
+
+def test_ext_soperator_discover_command_accepts_standalone_project_cluster(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle_path = (
+        tmp_path
+        / "generated"
+        / "reports"
+        / "soperator-discovery"
+        / "mk8scluster-123"
+        / "manifest.json"
+    )
+    bundle_path.parent.mkdir(parents=True)
+    bundle_path.write_text("{}\n", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def _fake_discover(**kwargs):
+        captured.update(kwargs)
+        return bundle_path
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        cli_module,
+        "_discover_runtime_auth_profiles",
+        lambda: [("client-a", "project-456")],
+    )
+    monkeypatch.setattr(cli_module, "_run_external_soperator_discovery_command", _fake_discover)
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "discover",
+            "--tenant-id",
+            "tenant-123",
+            "--project-id",
+            "project-456",
+            "--cluster-id",
+            "mk8scluster-123",
+            "--to-os",
+            "ubuntu24.04",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["project_dir"] == tmp_path
+    assert captured["config_path"] is None
+    assert captured["client_name"] == "client-a"
+    assert captured["tenant_id"] == "tenant-123"
+    assert captured["project_id"] == "project-456"
+    assert captured["target_ref"] is None
+    assert captured["cluster_id"] == "mk8scluster-123"
+    assert captured["to_os"] == "ubuntu24.04"
+    payload = captured["payload"]
+    assert isinstance(payload, dict)
+    assert payload["client_info"]["client_name"] == "client-a"
+    assert payload["client_info"]["nebius"]["tenant_id"] == "tenant-123"
+    assert payload["client_info"]["nebius"]["project_id"] == "project-456"
+    assert f"Soperator discovery manifest: {bundle_path}" in result.output
+
+
+def test_ext_soperator_discover_standalone_cluster_requires_project_id() -> None:
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "discover",
+            "--cluster-id",
+            "mk8scluster-123",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "requires" in result.output
+    assert "--project-id" in result.output
+
+
+def test_ext_soperator_discover_invalid_redaction_fails_before_cluster_collection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli_module, "_discover_runtime_auth_profiles", lambda: [])
+
+    def _unexpected_cluster_collection(*_args, **_kwargs):
+        raise AssertionError("cluster collection should not run for invalid redaction")
+
+    monkeypatch.setattr(
+        cli_module,
+        "_collect_soperator_snapshot_for_nebius_mk8s_cluster",
+        _unexpected_cluster_collection,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "discover",
+            "--project-id",
+            "project-456",
+            "--cluster-id",
+            "mk8scluster-123",
+            "--redaction",
+            "invalid",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Soperator discovery --redaction must be one of: support, local." in result.output
+    assert "cluster collection should not run" not in result.output
+
+
+def test_external_soperator_discovery_without_onboarding_writes_cluster_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cli_module,
+        "_collect_soperator_snapshot_for_nebius_mk8s_cluster",
+        lambda *_args, **_kwargs: (_old_soperator_snapshot_with_provider(), "generated-context"),
+    )
+    monkeypatch.setattr(cli_module, "_collect_soperator_discovery_helm_values", lambda **_: {})
+    monkeypatch.setattr(cli_module, "_collect_soperator_discovery_slurm_snapshot", lambda **_: {})
+    monkeypatch.setattr(
+        cli_module,
+        "_collect_soperator_discovery_accounting_snapshot",
+        lambda **_: {},
+    )
+    payload = cli_module._standalone_external_soperator_discovery_payload(
+        client_name="client-a",
+        tenant_id=None,
+        project_id="project-456",
+    )
+
+    path = cli_module._run_external_soperator_discovery_command(
+        project_dir=tmp_path,
+        config_path=None,
+        payload=payload,
+        client_name="client-a",
+        tenant_id=None,
+        project_id="project-456",
+        target_ref=None,
+        cluster_id="mk8scluster-123",
+        kube_context=None,
+        access="external",
+        output_dir=None,
+        namespace=None,
+        release_name=None,
+        to_chart_version=None,
+        to_k8s_version=None,
+        to_os=None,
+        to_gpu_stack_preset=None,
+        redaction="support",
+    )
+
+    assert path == (
+        tmp_path
+        / "generated"
+        / "reports"
+        / "soperator-discovery"
+        / "mk8scluster-123"
+        / "manifest.json"
+    )
+    bundle = cli_module.load_soperator_discovery_bundle(path)
+    assert bundle["target_ref"] == "mk8scluster-123"
+    assert bundle["cluster_id"] == "mk8scluster-123"
+    assert bundle["kube_context"] == "generated-context"
+    assert bundle["source_kind"] == "external"
+    assert bundle["command"][:2] == ["nebius-cxcli", "ext-soperator"]
+    assert "--client-name" in bundle["command"]
+    assert "client-a" in bundle["command"]
+    assert "--project-id" in bundle["command"]
+    assert "project-456" in bundle["command"]
+    assert "--tenant-id" not in bundle["command"]
+
+
+def test_external_soperator_discovery_cluster_snapshot_uses_cached_client_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, object] = {}
+    payload = cli_module._standalone_external_soperator_discovery_payload(
+        client_name="client-a",
+        tenant_id=None,
+        project_id="project-456",
+    )
+
+    monkeypatch.setattr(cli_module, "_runtime_auth_env_available", lambda: False)
+
+    def _cache_load(**kwargs):
+        calls["cache_load"] = kwargs
+        return True
+
+    def _handoff_spec(**kwargs):
+        calls["handoff"] = kwargs
+        return cli_module._Mk8sKubeconfigSpec(
+            cluster_entry_name="cluster",
+            user_entry_name="user",
+            context_name="generated-context",
+            server="https://mk8s.example.test",
+            ca_pem="ca",
+            exec_command="nebius-cxcli",
+            exec_args=(
+                "mk8s-token",
+                "--project-id",
+                "project-456",
+                "--client-name",
+                "client-a",
+            ),
+        )
+
+    monkeypatch.setattr(cli_module, "_runtime_auth_cache_load", _cache_load)
+    monkeypatch.setattr(cli_module, "_mk8s_cluster_handoff_spec_for_identity", _handoff_spec)
+    monkeypatch.setattr(
+        cli_module,
+        "collect_kubectl_soperator_snapshot",
+        lambda **_kwargs: _old_soperator_snapshot(),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_collect_provider_mk8s_template_snapshot",
+        lambda *_args, **_kwargs: {"mk8s_cluster": {}, "node_groups": {}},
+    )
+
+    snapshot, context = cli_module._collect_soperator_snapshot_for_nebius_mk8s_cluster(
+        payload,
+        cluster_id="mk8scluster-123",
+        access="external",
+    )
+
+    assert context == "generated-context"
+    assert snapshot["helm_releases"]
+    assert calls["cache_load"] == {"project_id": "project-456", "client_name": "client-a"}
+    assert calls["handoff"] == {
+        "project_id": "project-456",
+        "client_name": "client-a",
+        "cluster_id": "mk8scluster-123",
+        "access": "external",
+    }
 
 
 def test_soperator_onboard_noninteractive_options_add_external_target(
@@ -8624,6 +8926,9 @@ def test_soperator_onboard_prints_target_compatible_layout_decisions(
     assert manifest["target_versions"]["gpu_stack_preset"] == "cuda13.0"
     summary = (manifest_path.parent / "summary.md").read_text(encoding="utf-8")
     assert "## Upgrade Guidance" in summary
+    assert "- Upgrade path evaluation:" in summary
+    assert "  - Kubernetes: 1.34" in summary
+    assert "  - Soperator: 1.23.3 ->" in summary
     assert "Soperator support policy: status=supported" in summary
 
 

@@ -19,7 +19,14 @@ All notable changes to this project are tracked here. This changelog follows
   `generated/reports/soperator-discovery/<target>/` bundle with manifest,
   identity, Kubernetes, Slurm, accounting, customizations, fingerprints,
   findings, and summary files; discovery is not a backup and omits raw Secret
-  values, SQL, DB dumps, tokens, and cert material.
+  values, SQL, DB dumps, tokens, and cert material. External discovery can now
+  run before onboarding with `--project-id <project-id> --cluster-id
+  <mk8scluster-id>` and no config/deployments path; `--tenant-id` is optional
+  metadata for that standalone cluster-id mode, and `--client-name` can select a
+  runtime-auth cache profile when project-scoped cache selection is needed. The
+  discovery footer and summary now include a Soperator/Kubernetes upgrade path
+  evaluation, including the Soperator `1.23.0` gate before Kubernetes `1.33+`
+  when a source `1.22.x` cluster is targeting Soperator `4.x`.
 - Added standalone restore-capable Soperator backup/restore commands:
   `soperator backup`, `soperator restore`, `ext-soperator backup`, and
   `ext-soperator restore`. The backup archive now includes raw and
