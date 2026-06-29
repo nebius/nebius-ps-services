@@ -585,8 +585,12 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "nebius-cxcli ext-soperator backup <config.yaml> --target <target>" in soperator
     assert (
         "nebius-cxcli ext-soperator backup \\ --project-id <project-id> \\ "
-        "--cluster-id <mk8scluster-id>"
+        "--cluster-id <mk8scluster-id> \\ --access internal"
     ) in soperator_flat
+    assert "`--access external` selects the public control-plane endpoint" in soperator_flat
+    assert "`--access internal` selects the private endpoint" in soperator_flat
+    assert "VPN or another private network path is already available" in soperator_flat
+    assert "`--access` is rejected with standalone `--kube-context`" in soperator_flat
     assert (
         "`nebius-cxcli ext-soperator restore <backup.tar.gz> --kube-context <new-context> --execute --approve`"
         in soperator

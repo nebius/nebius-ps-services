@@ -652,9 +652,14 @@ and chart source-family changes.
   restore-capable archive contract outside the upgrade workflow. Managed
   backup remains config-based; external backup can use an accepted onboarded
   target or run before onboarding with direct `--project-id` plus
-  `--cluster-id` or `--kube-context` access. Direct external backup collects
-  live Helm release evidence before planning so archive metadata records the
-  source Soperator version. External backup archive names begin with
+  `--cluster-id` or `--kube-context` access. For direct `--cluster-id` backup,
+  `--access external` selects the public control-plane endpoint and
+  `--access internal` selects the private endpoint; private access requires an
+  existing VPN or other private network path. `--access` is rejected with
+  standalone `--kube-context` because the kubeconfig context already selects
+  its API endpoint. Direct external backup collects live Helm release evidence
+  before planning so archive metadata records the source Soperator version.
+  External backup archive names begin with
   `external-soperator-backup-` so operators can distinguish them from
   cxcli-managed `soperator backup` archives. Backup writes raw Kubernetes JSON plus
   restore-ready YAML for namespaced in-cluster material: Secrets, ConfigMaps,

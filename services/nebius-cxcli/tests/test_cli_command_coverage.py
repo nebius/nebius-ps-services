@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+import types
 from collections.abc import Callable, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import replace
@@ -18191,6 +18192,94 @@ def test_install_flux_controllers_waits_for_namespace_before_apply(
     assert calls[-1] == ("wait_crds_ready", {"KUBECONFIG": "/tmp/kubeconfig"})
 
 
+@pytest.mark.parametrize(
+    ("access", "expected_server"),
+    [
+        ("external", "https://public.example.invalid"),
+        ("internal", "https://private.example.invalid"),
+    ],
+)
+def test_mk8s_cluster_handoff_spec_selects_control_plane_endpoint_for_access(
+    access: str,
+    expected_server: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeSdk:
+        def sync_close(self) -> None:
+            captured["closed"] = True
+
+    class FakeGetClusterRequest:
+        def __init__(self, *, id: str) -> None:
+            self.id = id
+
+    cluster = SimpleNamespace(
+        metadata=SimpleNamespace(name="private-cluster"),
+        status=SimpleNamespace(
+            control_plane=SimpleNamespace(
+                endpoints=SimpleNamespace(
+                    public_endpoint="https://public.example.invalid",
+                    private_endpoint="https://private.example.invalid",
+                ),
+                auth=SimpleNamespace(cluster_ca_certificate="FAKE-CA"),
+            )
+        ),
+    )
+
+    class FakeGetOperation:
+        def wait(self) -> object:
+            return cluster
+
+    class FakeClusterServiceClient:
+        def __init__(self, sdk: object) -> None:
+            captured["sdk"] = sdk
+
+        def get(self, request: object) -> FakeGetOperation:
+            captured["request_id"] = getattr(request, "id", None)
+            return FakeGetOperation()
+
+    def _package(name: str) -> types.ModuleType:
+        module = types.ModuleType(name)
+        module.__path__ = []  # type: ignore[attr-defined]
+        return module
+
+    nebius_package = _package("nebius")
+    api_package = _package("nebius.api")
+    api_nebius_package = _package("nebius.api.nebius")
+    mk8s_package = _package("nebius.api.nebius.mk8s")
+    v1_module = types.ModuleType("nebius.api.nebius.mk8s.v1")
+    v1_module.ClusterServiceClient = FakeClusterServiceClient
+    v1_module.GetClusterRequest = FakeGetClusterRequest
+    nebius_package.api = api_package  # type: ignore[attr-defined]
+    api_package.nebius = api_nebius_package  # type: ignore[attr-defined]
+    api_nebius_package.mk8s = mk8s_package  # type: ignore[attr-defined]
+    mk8s_package.v1 = v1_module  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "nebius", nebius_package)
+    monkeypatch.setitem(sys.modules, "nebius.api", api_package)
+    monkeypatch.setitem(sys.modules, "nebius.api.nebius", api_nebius_package)
+    monkeypatch.setitem(sys.modules, "nebius.api.nebius.mk8s", mk8s_package)
+    monkeypatch.setitem(sys.modules, "nebius.api.nebius.mk8s.v1", v1_module)
+
+    def _init_nebius_sdk(**kwargs: object) -> FakeSdk:
+        captured["init_kwargs"] = kwargs
+        return FakeSdk()
+
+    monkeypatch.setattr(cli, "init_nebius_sdk", _init_nebius_sdk)
+
+    spec = cli._mk8s_cluster_handoff_spec_for_identity(
+        project_id="project-456",
+        client_name="client-a",
+        cluster_id="mk8scluster-123",
+        access=access,
+    )
+
+    assert spec.server == expected_server
+    assert captured["request_id"] == "mk8scluster-123"
+    assert captured["init_kwargs"]["parent_id"] == "project-456"
+    assert captured["closed"] is True
+
+
 def test_prepare_cluster_handoff_kube_env_writes_exec_kubeconfig_and_persists_local_copy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -20465,6 +20554,10 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         "--project-id plus --cluster-id/--kube-context form before onboarding"
         in normalized_ext_soperator_backup_help
     )
+    assert "--access internal" in normalized_ext_soperator_backup_help
+    assert "external uses the public control-plane endpoint" in normalized_ext_soperator_backup_help
+    assert "internal uses the private endpoint" in normalized_ext_soperator_backup_help
+    assert "preexisting private network reachability" in normalized_ext_soperator_backup_help
     assert "external-soperator-backup-" in normalized_ext_soperator_backup_help
     assert "--cluster-id" in normalized_ext_soperator_discover_help
     assert "--client-name" in normalized_ext_soperator_discover_help

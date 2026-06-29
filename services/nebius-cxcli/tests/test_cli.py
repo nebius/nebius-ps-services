@@ -775,6 +775,50 @@ def _component_add(config_path: Path, *extra: str, input_text: str | None = None
     )
 
 
+def _set_mk8s_public_endpoint_false(config_yaml: str) -> str:
+    payload = yaml.safe_load(config_yaml) or {}
+    assert isinstance(payload, dict)
+    components = payload.get("infra", {}).get("components", [])
+    assert isinstance(components, list)
+    mk8s_row = next(
+        row
+        for row in components
+        if isinstance(row, dict)
+        and str(row.get("id", "")).strip().lower() == "mk8s"
+        and bool(row.get("enabled", False))
+    )
+    inputs = mk8s_row.setdefault("inputs", {})
+    assert isinstance(inputs, dict)
+    cluster = inputs.setdefault("cluster", {})
+    assert isinstance(cluster, dict)
+    cluster["public_endpoint"] = False
+    return yaml.safe_dump(payload, sort_keys=False)
+
+
+def _assert_private_mk8s_handoff(payload: dict, config_path: Path) -> None:
+    mk8s_row = next(
+        row
+        for row in payload.get("infra", {}).get("components", [])
+        if isinstance(row, dict) and str(row.get("id", "")).strip().lower() == "mk8s"
+    )
+    assert mk8s_row["inputs"]["cluster"]["public_endpoint"] is False
+
+    handoff = next(
+        item
+        for item in cli_module._enabled_cluster_handoffs(payload)
+        if item["component_id"] == "mk8s" and item["instance_id"] == "mk8s"
+    )
+    assert handoff["access"] == "internal"
+
+    paths = cli_module.resolve_project_paths(config_path)
+    target = next(
+        item
+        for item in cli_module._enabled_deploy_targets(payload, paths)
+        if item["component_id"] == "mk8s" and item["instance_id"] == "mk8s"
+    )
+    assert target["access"] == "internal"
+
+
 def _assert_soperator_onboard_next_steps(
     output: str,
     *,
@@ -2174,6 +2218,62 @@ def test_create_guided_prefilled_infra_and_apps_example_is_accepted(
         assert infra_enabled[component_id] is True
     for app_id in ("n8n", "gateway-helm", "cert-manager"):
         assert apps_enabled[app_id] is True
+
+
+def test_create_mk8s_public_endpoint_false_generates_internal_handoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    captured: dict[str, object] = {}
+
+    def _field_wizard(**kwargs: object) -> tuple[str, bool]:
+        captured["selected_infra"] = set(kwargs["selected_infra"])  # type: ignore[arg-type]
+        captured["selected_apps"] = set(kwargs["selected_apps"])  # type: ignore[arg-type]
+        return _set_mk8s_public_endpoint_false(str(kwargs["config_yaml"])), True
+
+    monkeypatch.setattr(
+        cli_module,
+        "_wizard_continue_phase",
+        lambda *_args, **_kwargs: cli_module._WizardPhaseDecision(proceed=True),
+    )
+    monkeypatch.setattr(cli_module, "_run_component_field_wizard", _field_wizard)
+    monkeypatch.setattr(
+        cli_module,
+        "_warn_on_live_quota_issues",
+        lambda *_args, **_kwargs: _empty_quota_report(),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "create",
+            str(deployments_root),
+            "--client-name",
+            "client-a",
+            "--tenant-id",
+            "tenant-123",
+            "--project-id",
+            "project-456",
+            "--region-id",
+            "eu-north1",
+            "--email",
+            "ops@example.com",
+            "--infra",
+            "mk8s",
+            "--app",
+            "none",
+            "--no-validate-sources",
+            "--no-validate-config",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == {"selected_infra": {"mk8s"}, "selected_apps": set()}
+    config_path = _project_config_path(deployments_root)
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    _assert_private_mk8s_handoff(payload, config_path)
 
 
 def test_create_noninteractive_auto_selects_single_live_vpc_choice(tmp_path: Path) -> None:
@@ -8707,6 +8807,65 @@ def test_ext_soperator_backup_standalone_cluster_requires_project_id() -> None:
     assert "--project-id" in result.output
 
 
+def test_ext_soperator_backup_standalone_kube_context_rejects_access_without_cluster_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli_module, "_discover_runtime_auth_profiles", lambda: [])
+    monkeypatch.setattr(
+        cli_module,
+        "_run_standalone_soperator_backup",
+        lambda **_kwargs: pytest.fail("backup should not run when --access has no --cluster-id"),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "backup",
+            "--kube-context",
+            "source-context",
+            "--access",
+            "internal",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code != 0
+    normalized = " ".join(result.output.split())
+    assert "--access is only valid with --cluster-id" in normalized
+    assert "--kube-context uses the endpoint already configured" in normalized
+
+
+@pytest.mark.parametrize(
+    "extra_args",
+    [
+        ["--cluster-id", "mk8scluster-123"],
+        ["--access", "internal"],
+    ],
+)
+def test_ext_soperator_backup_config_rejects_standalone_handoff_flags(
+    tmp_path: Path,
+    extra_args: list[str],
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("{}\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "backup",
+            str(config_path),
+            "--target",
+            "external-cluster",
+            *extra_args,
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "only for standalone ext-soperator backup" in " ".join(result.output.split())
+
+
 def test_standalone_external_soperator_backup_cluster_uses_temporary_handoff(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -12888,6 +13047,46 @@ def test_component_add_allows_multiple_mk8s_instances(tmp_path: Path) -> None:
         "mk8s",
         "training-cluster",
     ]
+
+
+def test_component_add_mk8s_public_endpoint_false_generates_internal_handoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+
+    captured: dict[str, object] = {}
+
+    def _field_wizard(**kwargs: object) -> tuple[str, bool]:
+        captured["selected_infra"] = set(kwargs["selected_infra"])  # type: ignore[arg-type]
+        captured["selected_apps"] = set(kwargs["selected_apps"])  # type: ignore[arg-type]
+        return _set_mk8s_public_endpoint_false(str(kwargs["config_yaml"])), True
+
+    monkeypatch.setattr(
+        cli_module,
+        "_wizard_continue_phase",
+        lambda *_args, **_kwargs: cli_module._WizardPhaseDecision(proceed=True),
+    )
+    monkeypatch.setattr(cli_module, "_run_component_field_wizard", _field_wizard)
+
+    config_path = _project_config_path(deployments_root)
+    result = _component_add(config_path, "mk8s", input_text="\n")
+
+    assert result.exit_code == 0, result.output
+    assert captured == {"selected_infra": {"mk8s"}, "selected_apps": set()}
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    _assert_private_mk8s_handoff(payload, config_path)
 
 
 def test_component_add_rejects_singular_app_scope_with_plural_hint(tmp_path: Path) -> None:

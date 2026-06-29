@@ -9597,6 +9597,11 @@ def _run_standalone_external_soperator_backup(
         kube_context=kube_context,
     )
     resolved_access = _normalize_mk8s_handoff_access(access)
+    if not _non_empty_text(cluster_id) and resolved_access != "external":
+        raise RuntimeError(
+            "Standalone ext-soperator backup --access is only valid with --cluster-id. "
+            "--kube-context uses the endpoint already configured in the selected kubeconfig context."
+        )
     payload = _standalone_external_soperator_backup_payload(
         client_name=client_name,
         tenant_id=tenant_id,
@@ -47211,11 +47216,15 @@ def component_add_command(
     short_help="Create a restore-capable backup for an external Soperator cluster.",
     epilog=(
         "Examples: nebius-cxcli ext-soperator backup <config.yaml> --target external-cluster; "
-        "nebius-cxcli ext-soperator backup --project-id PROJECT --cluster-id MK8SCLUSTER. "
+        "nebius-cxcli ext-soperator backup --project-id PROJECT --cluster-id MK8SCLUSTER "
+        "[--access internal]. "
         "Use the config form for an onboarded and accepted target, or the standalone "
-        "--project-id plus --cluster-id/--kube-context form before onboarding. The archive "
-        "name starts with external-soperator-backup- and includes raw Secrets plus the "
-        "chart-managed MariaDB accounting DB dump when live accounting exists."
+        "--project-id plus --cluster-id/--kube-context form before onboarding. For standalone "
+        "--cluster-id backup, --access external selects the public control-plane endpoint and "
+        "--access internal selects the private endpoint; cxcli assumes this machine already has "
+        "private network reachability for internal access. The archive name starts with "
+        "external-soperator-backup- and includes raw Secrets plus the chart-managed MariaDB "
+        "accounting DB dump when live accounting exists."
     ),
 )
 def ext_soperator_backup_command(
@@ -47297,7 +47306,11 @@ def ext_soperator_backup_command(
         str,
         typer.Option(
             "--access",
-            help="MK8s API endpoint for --cluster-id temporary kubeconfig: external or internal.",
+            help=(
+                "Standalone --cluster-id kubeconfig endpoint: external uses the public "
+                "control-plane endpoint; internal uses the private endpoint and requires "
+                "preexisting private network reachability."
+            ),
         ),
     ] = "external",
     dry_run: Annotated[

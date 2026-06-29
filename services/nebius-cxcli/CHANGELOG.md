@@ -35,7 +35,11 @@ All notable changes to this project are tracked here. This changelog follows
   restore validates checksums and stays dry-run until `--execute --approve`.
   External backup can now also run before onboarding with
   `ext-soperator backup --project-id <project-id> --cluster-id
-  <mk8scluster-id>` or a direct `--kube-context`.
+  <mk8scluster-id>` or a direct `--kube-context`; standalone `--cluster-id`
+  backup now documents that `--access external` selects the public endpoint and
+  `--access internal` selects the private endpoint, and rejects `--access` with
+  standalone `--kube-context` because the kubeconfig context already selects
+  its endpoint.
 - Fixed standalone external Soperator backup planning to reuse live Helm
   release evidence from the source cluster, report source kind
   `external-soperator-backup`, and write plain backup archive names without
