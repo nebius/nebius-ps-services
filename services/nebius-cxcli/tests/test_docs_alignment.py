@@ -50,6 +50,7 @@ def test_design_architecture_summary_matches_upgrade_surface() -> None:
     assert "external backup can use an accepted onboarded target or run before onboarding" in (
         design_flat
     )
+    assert "external-soperator-backup-" in design_flat
     assert "restore-ready YAML for namespaced in-cluster material" in design_flat
     assert (
         "fails fast for `apps:soperator@<target>` with the canonical `soperator upgrade` command"
@@ -553,6 +554,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "`ext-soperator backup` and `ext-soperator restore` use the same archive contract" in (
         soperator_flat
     )
+    assert "external-soperator-backup-*.tar.gz" in soperator
     assert "For later full-cluster or chart-only upgrades of that cxcli-managed row, use" in (
         soperator_flat
     )

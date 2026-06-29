@@ -4426,6 +4426,12 @@ def _soperator_upgrade_backup_filename(
     )
 
 
+def _soperator_backup_archive_prefix(source_kind: str) -> str:
+    if source_kind == "external-soperator-backup":
+        return "external-soperator-backup"
+    return "soperator-backup"
+
+
 def _soperator_upgrade_duration_seconds(value: str, *, option_name: str) -> int:
     raw = _non_empty_text(value) or "0s"
     if raw in {"0", "0s", "none"}:
@@ -9412,7 +9418,7 @@ def _run_standalone_soperator_backup(
             kube_context=kube_context,
             dry_run=False,
         ),
-        archive_prefix="soperator-backup",
+        archive_prefix=_soperator_backup_archive_prefix(source_kind),
         source_kind=source_kind,
         kube_context=kube_context,
     )
@@ -47208,8 +47214,8 @@ def component_add_command(
         "nebius-cxcli ext-soperator backup --project-id PROJECT --cluster-id MK8SCLUSTER. "
         "Use the config form for an onboarded and accepted target, or the standalone "
         "--project-id plus --cluster-id/--kube-context form before onboarding. The archive "
-        "includes raw Secrets and the chart-managed MariaDB accounting DB dump when live "
-        "accounting exists."
+        "name starts with external-soperator-backup- and includes raw Secrets plus the "
+        "chart-managed MariaDB accounting DB dump when live accounting exists."
     ),
 )
 def ext_soperator_backup_command(
@@ -47403,7 +47409,7 @@ def ext_soperator_backup_command(
     "restore",
     short_help="Restore a Soperator backup archive onto an empty external cluster.",
     epilog=(
-        "Example: nebius-cxcli ext-soperator restore ./backups/soperator-backup-...tar.gz "
+        "Example: nebius-cxcli ext-soperator restore ./backups/external-soperator-backup-...tar.gz "
         "--kube-context new-cluster --execute --approve. Restore is dry-run by default."
     ),
 )

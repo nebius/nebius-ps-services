@@ -654,7 +654,9 @@ and chart source-family changes.
   target or run before onboarding with direct `--project-id` plus
   `--cluster-id` or `--kube-context` access. Direct external backup collects
   live Helm release evidence before planning so archive metadata records the
-  source Soperator version. Backup writes raw Kubernetes JSON plus
+  source Soperator version. External backup archive names begin with
+  `external-soperator-backup-` so operators can distinguish them from
+  cxcli-managed `soperator backup` archives. Backup writes raw Kubernetes JSON plus
   restore-ready YAML for namespaced in-cluster material: Secrets, ConfigMaps,
   service accounts, services, PVCs, Deployments, StatefulSets, DaemonSets,
   CronJobs, RBAC, PodDisruptionBudgets, NetworkPolicies, HPAs, Ingresses, and

@@ -40,6 +40,9 @@ All notable changes to this project are tracked here. This changelog follows
   release evidence from the source cluster, report source kind
   `external-soperator-backup`, and write plain backup archive names without
   fake chart/Kubernetes upgrade transitions.
+- Changed external Soperator backup archive names to start with
+  `external-soperator-backup-` so they are easy to distinguish from
+  cxcli-managed `soperator backup` archives.
 - Added terminal spinners around Soperator backup and discovery collection so
   managed and external `soperator` / `ext-soperator` backup and discover
   commands show progress during quiet live-cluster work.

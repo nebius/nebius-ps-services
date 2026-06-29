@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import tarfile
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -71,6 +72,25 @@ def _source_payload() -> dict[str, Any]:
             ]
         },
     }
+
+
+def test_soperator_backup_filename_uses_external_prefix_without_upgrade_transitions() -> None:
+    filename = cli._soperator_upgrade_backup_filename(
+        target_ref="mk8scluster-e00wrz1h8fhxgbdf8j",
+        chart_from="1.22.3",
+        chart_to="1.22.3",
+        k8s_from=None,
+        k8s_to=None,
+        generated_at=datetime(2026, 6, 29, 20, 34, 59, tzinfo=UTC),
+        prefix="external-soperator-backup",
+        include_transitions=False,
+    )
+
+    assert (
+        filename
+        == "external-soperator-backup-mk8scluster-e00wrz1h8fhxgbdf8j-"
+        "20260629T203459Z-chart-1.22.3.tar.gz"
+    )
 
 
 def test_soperator_login_command_falls_back_to_controller_for_config_source_failure(
@@ -542,6 +562,55 @@ def test_standalone_soperator_backup_does_not_require_generated_context(
     assert backup is not None
     assert captured["manifest"]["status"] == "not_collected"
     assert captured["generated_config"].client_info == payload["client_info"]
+    assert captured["archive_prefix"] == "soperator-backup"
+
+
+def test_standalone_external_soperator_backup_uses_external_archive_prefix(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    payload = _source_payload()
+    config_path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        cli,
+        "_load_deploy_context_readonly",
+        lambda _config_path: (_ for _ in ()).throw(RuntimeError("render missing")),
+    )
+
+    def fake_backup(**kwargs: Any) -> cli._SoperatorUpgradeBackupResult:
+        captured.update(kwargs)
+        return cli._SoperatorUpgradeBackupResult(
+            path=tmp_path / "backups" / "external-soperator-backup.tar.gz",
+            size_bytes=1,
+            sha256="archive-sha",
+            included_categories=("accounting", "kubernetes"),
+            secret_material_included=True,
+            accounting_db_included=True,
+            manifest_sha256="manifest-sha",
+        )
+
+    monkeypatch.setattr(cli, "_create_restore_capable_soperator_upgrade_backup", fake_backup)
+
+    backup = cli._run_standalone_soperator_backup(
+        config_path=config_path,
+        source_payload=payload,
+        target_ref="mk8s",
+        backup_dir=tmp_path / "backups",
+        namespace=None,
+        release_name=None,
+        kube_context="ctx",
+        dry_run=False,
+        interactive=False,
+        source_kind="external-soperator-backup",
+        command_group="ext-soperator",
+    )
+
+    assert backup is not None
+    assert captured["archive_prefix"] == "external-soperator-backup"
+    assert captured["source_kind"] == "external-soperator-backup"
 
 
 def _write_restore_archive(

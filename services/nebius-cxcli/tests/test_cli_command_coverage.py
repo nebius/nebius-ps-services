@@ -20465,6 +20465,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         "--project-id plus --cluster-id/--kube-context form before onboarding"
         in normalized_ext_soperator_backup_help
     )
+    assert "external-soperator-backup-" in normalized_ext_soperator_backup_help
     assert "--cluster-id" in normalized_ext_soperator_discover_help
     assert "--client-name" in normalized_ext_soperator_discover_help
     assert "--project-id" in normalized_ext_soperator_discover_help
@@ -20491,6 +20492,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--execute" in normalized_ext_soperator_restore_help
     assert "--approve" in normalized_ext_soperator_restore_help
     assert "--restore-accounting-db" in normalized_ext_soperator_restore_help
+    assert "external-soperator-backup-" in normalized_ext_soperator_restore_help
     assert "upgrade is only for accepted onboarding plans that contain external-upgrade-owned actions" in (
         normalized_soperator_help
     )
