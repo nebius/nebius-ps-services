@@ -375,6 +375,7 @@ def test_ext_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path)
         dry_run=False,
         approve=True,
         approve_remediation=False,
+        allow_unsupported_soperator_upgrade_path=False,
         interactive=False,
     )
 
@@ -407,6 +408,7 @@ def _run_soperator_upgrade_for_test(
     node_group: str = "",
     job_policy: str | None = None,
     dry_run: bool = False,
+    allow_unsupported_soperator_upgrade_path: bool = False,
     interactive: bool = False,
 ) -> None:
     cli._run_soperator_upgrade_command(
@@ -427,6 +429,7 @@ def _run_soperator_upgrade_for_test(
         job_wait_timeout=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
         job_refresh_interval=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
         dry_run=dry_run,
+        allow_unsupported_soperator_upgrade_path=allow_unsupported_soperator_upgrade_path,
         interactive=interactive,
     )
 
@@ -3382,6 +3385,7 @@ def test_soperator_upgrade_mk8s_only_runs_node_template_phase_without_raw_kubect
         to_k8s_version="1.33",
         node_group="worker",
         job_policy="fail",
+        allow_unsupported_soperator_upgrade_path=True,
     )
 
     payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
@@ -20393,6 +20397,9 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--dry-run" in normalized_managed_soperator_upgrade_help
     assert "--interactive --no-interactive" in normalized_managed_soperator_upgrade_help
     assert "Target Soperator chart/app version" in normalized_managed_soperator_upgrade_help
+    assert "does not bypass Kubernetes minor-hop, backup, quota, protected-state" in (
+        normalized_managed_soperator_upgrade_help
+    )
     assert "ext-soperator [OPTIONS] COMMAND [ARGS]" in soperator_help
     assert "Manage existing external Nebius MK8s clusters for Soperator" in (
         normalized_soperator_help
@@ -20499,6 +20506,12 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         normalized_soperator_onboard_help
     )
     assert "component_sources.yaml Soperator chart pin" in normalized_soperator_onboard_help
+    assert "Interactive onboarding defaults to the next discovered minor hop" in (
+        normalized_soperator_onboard_help
+    )
+    assert "does not bypass Kubernetes minor-hop, backup, quota, protected-state" in (
+        normalized_soperator_onboard_help
+    )
     assert "--cluster-id mk8scluster-..." in normalized_soperator_onboard_help
     assert "--target-id external-cluster" in normalized_soperator_onboard_help
     assert "--storage-mode keep-existing-storage" in normalized_soperator_onboard_help
@@ -20616,6 +20629,9 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         normalized_ext_soperator_upgrade_help
     )
     assert "safe-surge uses temporary surge capacity" in normalized_ext_soperator_upgrade_help
+    assert "does not bypass Kubernetes minor-hop, backup, quota, protected-state" in (
+        normalized_ext_soperator_upgrade_help
+    )
     assert "remove [OPTIONS] [COMPONENT_SELECTOR]..." in component_remove_help
     assert "--config CONFIG_YAML" in normalized_component_remove_help
     assert (

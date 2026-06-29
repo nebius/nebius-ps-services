@@ -37,12 +37,19 @@ Map the existing architecture in concise terms: components, responsibilities,
 data ownership, call flow, extension points, validation paths, and constraints.
 
 For greenfield work, confirm that there is no relevant existing implementation
-after a quick local check. Then design from requirements, technology research,
-and the user's intended deployment or operating context.
+after a quick local check. Then design from requirements, research-backed
+technology choices, and the user's intended deployment or operating context.
 
-### 3. Research Missing Knowledge
+### 3. Use `research` For Missing Knowledge
 
-List unfamiliar or version-sensitive facts before designing. Research them
+List unfamiliar or version-sensitive facts before designing. When the
+`research` skill is installed and relevant, use it for topic,
+feature-requirement, architecture-pattern, product, standard, and technology
+due diligence. Bring the resulting evidence back into `design` for synthesis,
+option selection, and `/plan` creation.
+
+Only do direct research inside `design` for tiny clarifications or when
+`research` is unavailable or not applicable. In that fallback path, research
 against current official documentation whenever available.
 
 Use official-source priority:
@@ -165,5 +172,8 @@ ownership, new platform, or costly rollback.
   `sdlc-create-design` or `sdlc-create-plan`.
 - Design is complete and code should change: use `/plan`, then the relevant
   implementation, infrastructure, frontend, testing, or alignment skill.
+- Design needs substantial topic, feature-requirement, product, standard, or
+  technology due diligence: use `research`, then return to `design` for
+  synthesis and `/plan` handoff.
 - Design exposes changed docs or contracts after implementation: run `align` on
   the changed surfaces.

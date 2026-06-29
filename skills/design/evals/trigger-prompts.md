@@ -12,12 +12,14 @@ Design a new quota-aware preflight for this CLI before we implement it.
 
 ```text
 I need a software design for adding SSO to this existing app. Read the code,
-research the auth libraries, compare options, and give me a /plan handoff.
+use research for the auth-library due diligence, compare options, and give me a
+/plan handoff.
 ```
 
 ```text
-There is no code yet. Research the stack choices and design a small API service
-with persistence, tests, observability, and rollout guidance.
+There is no code yet. Use research for the stack and requirement due diligence,
+then design a small API service with persistence, tests, observability, and
+rollout guidance.
 ```
 
 ```text

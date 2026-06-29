@@ -1,0 +1,85 @@
+:root {
+  color-scheme: light;
+  --text: #1f2933;
+  --muted: #52606d;
+  --paper: #ffffff;
+  --line: #d9e2ec;
+  --accent: #0f766e;
+  --accent-soft: #e6fffb;
+  --code: #f0f4f8;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #f8fafc;
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  line-height: 1.6;
+}
+
+main {
+  width: min(820px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 48px 0 72px;
+}
+
+h1,
+h2,
+h3 {
+  line-height: 1.2;
+}
+
+h1 {
+  font-size: 2.25rem;
+  margin: 0 0 0.75rem;
+}
+
+h2 {
+  border-top: 1px solid var(--line);
+  margin-top: 2.25rem;
+  padding-top: 1.25rem;
+}
+
+a {
+  color: var(--accent);
+}
+
+.lesson-meta,
+.review-cue {
+  background: var(--accent-soft);
+  border-left: 4px solid var(--accent);
+  padding: 1rem;
+}
+
+.exercise,
+.answer-key {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  padding: 1rem;
+}
+
+code,
+pre {
+  background: var(--code);
+}
+
+pre {
+  overflow-x: auto;
+  padding: 1rem;
+}
+
+@media print {
+  body {
+    background: var(--paper);
+  }
+
+  main {
+    width: 100%;
+    padding: 0;
+  }
+}

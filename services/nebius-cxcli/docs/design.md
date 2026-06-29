@@ -901,8 +901,15 @@ discovered live groups under
 `deploy.targets[].soperator_onboarding` action plan, and derives
 `apps.charts[].placements` from discovered inventory and the selected profile
 instead of Terraform-owning the existing cluster or adding role-named host
-pools. Operators can still edit the materialized placements in `config.yaml`
-before render; render compiles those placements into Soperator chart-native
+pools. The onboarding discovery summary includes the discovered Kubernetes
+control-plane version, target Kubernetes version, and an `Upgrade Guidance`
+section with the matched Soperator/Kubernetes support-policy rule; discovery
+stays read-only and does not gate unsupported paths by itself. When external
+node-template work is selected interactively, the Kubernetes target prompt
+defaults to the next supported minor hop from the discovered live version, not
+the global latest supported minor. Operators can still edit the materialized
+placements in `config.yaml` before render; render compiles those placements into Soperator
+chart-native
 `k8sNodeFilters`, `slurmNodes.*.k8sNodeFilterName`, storage selectors,
 partition refs, and worker `nodesets[]`. The onboarding command asks for the
 target cluster plus storage and compute intent. Generated onboarding NodeSets use live inventory-derived
@@ -1144,7 +1151,8 @@ storage and compute early. Reruns are action-idempotent: the accepted
 `deploy.targets[].soperator_onboarding.actions` list defines the desired work,
 and `ext-soperator upgrade --execute` rechecks completed action phases against
 live state before skipping them. Rerunning `ext-soperator onboard` remains
-read-only, but it refreshes the source discovery bundle with provider template evidence
+read-only, but it refreshes the source discovery bundle with provider template
+evidence and current/target Kubernetes version fields
 and removes `upgrade-external-node-template` only when the live control plane
 and every discovered node-group template already match the target Kubernetes
 version, node OS image, and Nebius GPU `drivers_preset` / CUDA stack where
@@ -3053,12 +3061,18 @@ The command boundary is intentional:
   Nebius control-plane and node-group template state by node group when
   `--cluster-id` access is available, and records independent storage and
   compute mode choices. The discovery summary printed during onboarding is
-  read-only and does not present external upgrade phases as actions taken by
-  the onboard command. After the storage and compute modes are resolved,
+  read-only, includes the discovered/current and target Kubernetes minor
+  versions plus `Upgrade Guidance`, and does not present external upgrade
+  phases as actions taken by the onboard command. If external node-template
+  work is selected, the interactive Kubernetes target prompt defaults to one
+  provider-supported minor hop from the discovered control-plane version. After
+  the storage and compute modes are resolved,
   onboarding prints the accepted layout decisions: target-compatible storage
   means no aligned SFS creation or storage data migration is planned, and
   target-compatible compute means no replacement compute node groups or compute
-  migration are planned. `keep-existing-compute`
+  migration are planned. It also prints the matched Soperator/Kubernetes
+  support-policy rule; unsupported accepted plans still require
+  `--allow-unsupported-soperator-upgrade-path`. `keep-existing-compute`
   preserves the discovered node groups and target-scoped
   `apps.charts[].placements.*` choices. `create-aligned-node-groups` creates or
   reuses profile-aligned service-role node groups and maps profile worker

@@ -7,7 +7,10 @@ import pytest
 
 import nebius_cxcli.soperator_onboarding as soperator_onboarding_module
 from nebius_cxcli.runtime_validation import validate_runtime_payload
-from nebius_cxcli.soperator_discovery import load_soperator_discovery_bundle
+from nebius_cxcli.soperator_discovery import (
+    load_soperator_discovery_bundle,
+    soperator_discovery_k8s_minor_text,
+)
 from nebius_cxcli.soperator_onboarding import (
     ONBOARDING_ACTION_ADOPT_SOPERATOR,
     ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
@@ -2233,7 +2236,7 @@ def test_onboarding_report_writer_persists_target_report(tmp_path) -> None:
 
 
 def test_source_discovery_report_writer_persists_full_snapshot(tmp_path) -> None:
-    snapshot = _snapshot()
+    snapshot = _with_provider_node_template_inventory(_snapshot())
     report = analyze_soperator_onboarding_snapshot(
         snapshot,
         target_ref="cluster1",
@@ -2248,6 +2251,12 @@ def test_source_discovery_report_writer_persists_full_snapshot(tmp_path) -> None
         report=report,
         cluster_id="mk8scluster-123",
         cluster_name="cluster1",
+        target_versions={
+            "k8s_version": (
+                soperator_onboarding_module.ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION
+            )
+        },
+        guidance_lines=("- Soperator support policy: status=supported, rule=test-rule",),
     )
 
     assert path == (
@@ -2260,9 +2269,61 @@ def test_source_discovery_report_writer_persists_full_snapshot(tmp_path) -> None
     )
     payload = load_soperator_discovery_bundle(path)
     assert payload["cluster_id"] == "mk8scluster-123"
+    assert (
+        payload["current_k8s_version"]
+        == soperator_onboarding_module.ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION
+    )
+    assert (
+        payload["target_k8s_version"]
+        == soperator_onboarding_module.ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION
+    )
     assert payload["report"]["state"] == "no-soperator-detected"
     assert payload["snapshot"]["node_groups"]["h100"]["gpu"] is True
-    assert (path.parent / "summary.md").exists()
+    summary = (path.parent / "summary.md").read_text(encoding="utf-8")
+    assert "- Current Kubernetes version:" in summary
+    assert "- Target Kubernetes version:" in summary
+    assert "## Upgrade Guidance" in summary
+    assert "- Soperator support policy: status=supported, rule=test-rule" in summary
+
+
+def test_source_discovery_report_writer_omits_malformed_k8s_versions(tmp_path) -> None:
+    snapshot = _snapshot()
+    snapshot["provider"] = {
+        "mk8s_cluster": {
+            "id": "mk8scluster-123",
+            "name": "cluster1",
+            "control_plane_version": "version pending",
+        }
+    }
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref="cluster1",
+        pinned_chart_version="4.0.1-ps.1",
+        pinned_app_version="4.0.1",
+    )
+
+    path = write_source_soperator_discovery_report(
+        tmp_path,
+        target_ref="cluster1",
+        snapshot=snapshot,
+        report=report,
+        cluster_id="mk8scluster-123",
+        cluster_name="cluster1",
+        target_versions={"k8s_version": "not-a-version"},
+    )
+
+    payload = load_soperator_discovery_bundle(path)
+    assert payload["current_k8s_version"] == ""
+    assert payload["target_k8s_version"] == ""
+    summary = (path.parent / "summary.md").read_text(encoding="utf-8")
+    assert "- Current Kubernetes version:" not in summary
+    assert "- Target Kubernetes version:" not in summary
+
+
+def test_soperator_discovery_k8s_minor_text_rejects_freeform_status_text() -> None:
+    assert soperator_discovery_k8s_minor_text("v1.32.7") == "1.32"
+    assert soperator_discovery_k8s_minor_text("1.33+provider.1") == "1.33"
+    assert soperator_discovery_k8s_minor_text("version 1.32 pending") == ""
 
 
 def test_source_discovery_report_writer_is_stable_for_same_discovery(tmp_path) -> None:

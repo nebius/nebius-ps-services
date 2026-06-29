@@ -41,6 +41,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `align-skill` | Implicit allowed | Review, harden, validate, and improve existing or newly scaffolded Codex or Agent Skill folders after an initial scaffold or draft exists. |
 | `brainstorm` | Implicit allowed | Explore ideas in chat with source-ranked project, repo, skill, internal, and vendor context before implementation. |
 | `code-review` | Implicit allowed | Strict implementation-quality review of local diffs, current branches, changed files, or patches for maintainability and structural simplification. |
+| `create-learning-course` | Explicit only | Create public-safe learning courses, course workspaces, syllabi, lessons, exercises, glossaries, and publication review checkpoints. |
 | `global-context-management` | Implicit allowed | Keep complex Codex tasks focused with durable task state, concise parent-thread context, targeted read-only subagents when authorized, focused validation, and final risk review. |
 | `research` | Implicit allowed | Senior-engineer technical due diligence on technologies, APIs, RFCs, protocols, architecture patterns, products, and feature requirements. |
 
@@ -152,9 +153,11 @@ $align-skill Harden this scaffolded skill folder into a safe, secure, fast Codex
 
 $brainstorm Explore this architecture idea, gather the relevant project docs, related skills, internal context, and official vendor docs, and challenge weak assumptions before we implement anything.
 
+$create-learning-course Create a public-safe course workspace for engineers learning Kubernetes networking, with mission, syllabus, sources, HTML lessons, exercises, glossary, and publication review.
+
 $research Research Kubernetes Gateway API, explain how it works internally, identify limitations and alternatives, and recommend when we should or should not use it.
 
-$design Design this new feature before implementation: read the requirements, inspect the existing code and docs, research unfamiliar technologies, compare options, and create a /plan handoff.
+$design Design this new feature before implementation: read the requirements, inspect the existing code and docs, route unfamiliar topic and technology research through $research, compare options, and create a /plan handoff.
 
 $code-review Audit the current branch for structural code-quality regressions, missed simplifications, abstraction problems, and maintainability blockers.
 
@@ -239,6 +242,20 @@ or mutating external systems. If the user pivots to execution, it should
 summarize the brainstorm and hand off to the appropriate implementation,
 alignment, SDLC, or communication skill.
 
+### `create-learning-course`
+
+`create-learning-course` turns a learner mission, trusted source set, target
+audience, and desired outcomes into a public-safe course workspace. It creates
+or revises artifacts such as `MISSION.md`, `COURSE.md`, `SYLLABUS.md`,
+`RESOURCES.md`, HTML or Markdown lessons, exercises, glossaries, reference
+sheets, learning records, reusable assets, and `PUBLICATION-REVIEW.md`.
+Invoke it explicitly with `$create-learning-course`; implicit invocation is
+disabled because the workflow can create or revise many local files.
+The skill adapts the public `teach` skill pattern for course authoring while
+adding explicit redaction, source-citation, high-stakes-topic, and publication
+safety checks so generated courses avoid secrets, private endpoints, customer
+data, raw logs, and proprietary internal material.
+
 ### `research`
 
 `research` performs senior-engineer technical due diligence on technologies,
@@ -253,11 +270,12 @@ open-ended ideation, `design` for solution design and `/plan` handoff, and
 
 ### `design`
 
-`design` turns requirements, existing-system evidence, and technology research
-into a concrete software design before implementation. It follows six phases:
-understand requirements, understand the existing system or greenfield context,
-research missing knowledge against official docs, design the solution, evaluate
-alternatives, and create a Codex `/plan` handoff. Use it for new features,
+`design` turns requirements, existing-system evidence, and `research`-backed
+topic, requirement, and technology due diligence into a concrete software
+design before implementation. It follows six phases: understand requirements,
+understand the existing system or greenfield context, route missing knowledge
+through `research` when available, design the solution, evaluate alternatives,
+and create a Codex `/plan` handoff. Use it for new features,
 major changes, APIs, data flows, integrations, and new applications when the
 user wants a practical design and implementation-ready plan, not immediate
 coding. Use `brainstorm` for open-ended ideation, `system-design-rules` for

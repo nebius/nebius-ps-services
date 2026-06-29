@@ -880,6 +880,31 @@ def _old_soperator_snapshot() -> dict[str, object]:
     }
 
 
+def _old_soperator_snapshot_with_provider() -> dict[str, object]:
+    snapshot = _old_soperator_snapshot()
+    snapshot["provider"] = {
+        "mk8s_cluster": {
+            "id": "mk8scluster-external",
+            "name": "external-cluster",
+            "control_plane_version": "1.31",
+        }
+    }
+    node_groups = snapshot["node_groups"]
+    assert isinstance(node_groups, dict)
+    gpu_pool = node_groups["gpu-pool"]
+    assert isinstance(gpu_pool, dict)
+    gpu_pool["provider"] = {
+        "node_template": {
+            "k8s_version": "1.31",
+            "os": cli_module.ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS,
+            "gpu_stack_preset": (
+                cli_module.ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_GPU_STACK_PRESET
+            ),
+        }
+    }
+    return snapshot
+
+
 def _post_migration_soperator_snapshot() -> dict[str, object]:
     def _node_group(role: str, *, gpu: bool = False) -> dict[str, object]:
         allocatable = {"cpu": "4"}
@@ -975,7 +1000,7 @@ def _write_old_soperator_migration_config(
     compute_mode: str | None = None,
 ) -> Path:
     config_path = tmp_path / "config.yaml"
-    snapshot = _old_soperator_snapshot()
+    snapshot = _old_soperator_snapshot_with_provider()
     target = cli_module._soperator_onboarding_target_defaults(
         "external-cluster",
         kube_context="external-context",
@@ -6666,6 +6691,138 @@ def test_soperator_onboard_interactive_prints_mode_choice_guidance(
     ]
 
 
+def test_soperator_onboard_interactive_defaults_node_template_target_to_next_minor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    printed: list[str] = []
+    prompt_calls: list[tuple[str, object, dict[str, object]]] = []
+
+    class FakeConsole:
+        is_terminal = False
+
+        def print(self, *args: object, **_kwargs: object) -> None:
+            printed.append(" ".join(str(arg) for arg in args))
+
+    snapshot = {
+        "provider": {
+            "mk8s_cluster": {
+                "id": "mk8scluster-external",
+                "name": "external-cluster",
+                "control_plane_version": "1.32",
+            }
+        },
+        "node_groups": {
+            "gpu-pool": {
+                "gpu": True,
+                "node_count": 2,
+                "labels": {
+                    "nebius.com/node-group": "gpu-pool",
+                    "nebius.com/node-group-id": "nodegroup-gpu-pool",
+                    "slurm.nebius.ai/nodeset": "worker-gpu",
+                },
+                "provider": {
+                    "node_template": {
+                        "k8s_version": "1.32",
+                        "os": cli_module.ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS,
+                        "gpu_stack_preset": (
+                            cli_module.ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_GPU_STACK_PRESET
+                        ),
+                    }
+                },
+                "allocatable": {"nvidia.com/gpu": "8"},
+            }
+        },
+        "helm_releases": [
+            {
+                "name": "soperator",
+                "namespace": "soperator",
+                "chart": "helm-slurm-cluster-1.23.3",
+                "app_version": "1.23.3",
+            }
+        ],
+        "storage": {"jail": {}, "controller-spool": {}, "accounting": {}},
+        "crds": ["slurmclusters.slurm.nebius.ai"],
+        "namespaces": ["soperator"],
+        "collection_errors": [],
+    }
+
+    monkeypatch.setattr(cli_module, "console", FakeConsole())
+    monkeypatch.setattr(
+        cli_module,
+        "_prompt_project_mk8s_cluster_choice",
+        lambda **_kwargs: cli_module.OptionChoice(
+            value="mk8scluster-external",
+            label="external-cluster  (mk8scluster-external)",
+            metadata={
+                "cluster_id": "mk8scluster-external",
+                "target_ref": "external-cluster",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_collect_soperator_snapshot_for_nebius_mk8s_cluster",
+        lambda *args, **kwargs: (snapshot, "external-context"),
+    )
+
+    def _prompt_scalar(
+        field_label: str,
+        current: object,
+        **kwargs: object,
+    ) -> tuple[object, bool]:
+        prompt_calls.append((field_label, current, dict(kwargs)))
+        return current, False
+
+    monkeypatch.setattr(cli_module, "_prompt_scalar_override", _prompt_scalar)
+
+    row = cli_module._prompt_soperator_onboarding_target_row(
+        payload={"client_info": {"nebius": {"project_id": "project-123"}}},
+        project_id="project-123",
+        storage_mode="keep-existing-storage",
+        compute_mode="keep-existing-compute",
+        to_chart_version=cli_module._soperator_upgrade_catalog_to_version_default(),
+        worker_rollout_strategy="zero-surge",
+        validate_sources=False,
+    )
+
+    assert prompt_calls == [
+        (
+            "deploy.targets[].soperator_onboarding.node_template_upgrade.target_k8s_version",
+            "1.33",
+            {
+                "prompt_hint": "next supported minor",
+                "type_hint": "string",
+                "required": True,
+            },
+        )
+    ]
+    onboarding = row["soperator_onboarding"]
+    assert onboarding["node_template_upgrade"]["target_k8s_version"] == "1.33"
+    assert "Detected Kubernetes version: 1.32" in "\n".join(printed)
+    assert "Target Kubernetes version: 1.33" in "\n".join(printed)
+
+
+def test_soperator_onboard_rejects_discovered_k8s_newer_than_supported_target() -> None:
+    snapshot = {
+        "provider": {
+            "mk8s_cluster": {
+                "id": "mk8scluster-external",
+                "name": "external-cluster",
+                "control_plane_version": "1.35",
+            }
+        }
+    }
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "Discovered external MK8s Kubernetes version 1.35 is newer than "
+            "the cxcli-supported external onboarding target"
+        ),
+    ):
+        cli_module._soperator_onboarding_target_k8s_version_default(snapshot)
+
+
 def test_soperator_onboard_option_path_rejects_invalid_compute_mode() -> None:
     with pytest.raises(RuntimeError, match="Invalid Soperator onboarding compute mode"):
         cli_module._soperator_onboarding_target_row_from_options(
@@ -6997,7 +7154,7 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     monkeypatch.setattr(
         cli_module,
         "collect_kubectl_soperator_snapshot",
-        lambda **_kwargs: _old_soperator_snapshot(),
+        lambda **_kwargs: _old_soperator_snapshot_with_provider(),
     )
 
     result = runner.invoke(
@@ -7017,6 +7174,9 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "Onboarding state: existing-soperator-supported" in result.output
     assert "Source version: 3.0.5" in result.output
     assert "Target version: 4.0.1-ps.1" in result.output
+    assert "Current Kubernetes version: 1.31" in result.output
+    assert "Target Kubernetes version: 1.32" in result.output
+    assert "Soperator support policy: status=supported" in result.output
     assert "Storage mode: create-aligned-sfs" in result.output
     assert "Compute mode: create-aligned-node-groups" in result.output
     assert "External upgrade required: yes" in result.output
@@ -8002,6 +8162,60 @@ def test_soperator_discover_command_routes_to_shared_bundle(
     assert f"Soperator discovery manifest: {bundle_path}" in result.output
 
 
+def test_soperator_discovery_result_prints_k8s_versions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    printed: list[str] = []
+    bundle_path = tmp_path / "manifest.json"
+    bundle_path.write_text("{}\n", encoding="utf-8")
+    summary_path = tmp_path / "summary.md"
+    summary_path.write_text("# Summary\n", encoding="utf-8")
+
+    class FakeConsole:
+        def print(self, *args: object, **_kwargs: object) -> None:
+            printed.append(" ".join(str(arg) for arg in args))
+
+    monkeypatch.setattr(cli_module, "console", FakeConsole())
+    monkeypatch.setattr(
+        cli_module,
+        "load_soperator_discovery_bundle",
+        lambda _path: {
+            "current_k8s_version": "1.32",
+            "target_k8s_version": "1.33",
+            "report": {
+                "findings": [
+                    {
+                        "layer": "soperator-upgrade-support",
+                        "status": "supported",
+                        "message": "This path is in the support matrix.",
+                        "evidence": {
+                            "rule_id": "k8s-1-33-soperator-4-supported",
+                            "source_version": "1.23.3",
+                            "target_version": "4.0.1-ps.1",
+                            "target_k8s_version": "1.33",
+                        },
+                    }
+                ]
+            },
+        },
+    )
+
+    cli_module._print_soperator_discovery_result(bundle_path)
+
+    assert printed == [
+        f"Soperator discovery manifest: {bundle_path}",
+        f"Soperator discovery summary: {summary_path}",
+        "Current Kubernetes version: 1.32",
+        "Target Kubernetes version: 1.33",
+        "- Soperator support policy: status=supported, rule=k8s-1-33-soperator-4-supported, "
+        "source Soperator=1.23.3, target Soperator=4.0.1-ps.1, target Kubernetes=1.33",
+        "  - This path is in the support matrix.",
+        "- Discovery is read-only; unsupported or not-validated paths are gated when accepting "
+        "onboarding or executing upgrade.",
+    ]
+
+
 def test_ext_soperator_discover_command_routes_to_shared_bundle(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -8359,6 +8573,7 @@ def test_soperator_onboard_prints_target_compatible_layout_decisions(
     assert "Storage layout decision: keep existing storage" in result.output
     assert "no aligned SFS creation or storage data migration is planned" in normalized_output
     assert "Compute layout decision: keep existing compute" in result.output
+    assert "Soperator support policy: status=supported" in result.output
     assert (
         "no replacement compute node groups or compute migration are planned" in normalized_output
     )
@@ -8394,6 +8609,9 @@ def test_soperator_onboard_prints_target_compatible_layout_decisions(
     assert manifest["target_versions"]["k8s_version"] == "1.34"
     assert manifest["target_versions"]["os"] == "ubuntu24.04"
     assert manifest["target_versions"]["gpu_stack_preset"] == "cuda13.0"
+    summary = (manifest_path.parent / "summary.md").read_text(encoding="utf-8")
+    assert "## Upgrade Guidance" in summary
+    assert "Soperator support policy: status=supported" in summary
 
 
 def test_soperator_onboard_noninteractive_cluster_id_generates_kube_access(

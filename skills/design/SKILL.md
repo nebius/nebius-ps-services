@@ -1,6 +1,6 @@
 ---
 name: design
-description: "Use for non-SDLC software design before implementation: understand requirements, inspect an existing codebase or greenfield context, research unfamiliar technologies against current official docs, choose components and architecture, compare alternatives, and create a Codex `/plan` handoff. Use for new features, major changes, architecture/design docs, ADR-like decisions, and new applications when the user needs a design and implementation plan rather than immediate coding; do not use for open-ended brainstorming, checklist-only review, Agentic SDLC-owned `docs/design.md`, or immediate implementation."
+description: "Use for non-SDLC software design before implementation: understand requirements, inspect an existing codebase or greenfield context, route topic, requirement, and technology due diligence through `research` when available, choose components and architecture, compare alternatives, and create a Codex `/plan` handoff. Use for new features, major changes, architecture/design docs, ADR-like decisions, and new applications when the user needs a design and implementation plan rather than immediate coding; do not use for open-ended brainstorming, checklist-only review, Agentic SDLC-owned `docs/design.md`, or immediate implementation."
 ---
 
 # Design
@@ -60,7 +60,7 @@ For brownfield work, read enough local context before designing:
 
 For greenfield work or empty repositories, skip codebase discovery after a
 quick confirmation that no relevant source exists, then start with requirements
-and technology research.
+and research-backed technology choices.
 
 Read `references/design-workflow.md` for medium or deep designs, greenfield
 applications, multiple unfamiliar technologies, unclear architecture choices,
@@ -88,19 +88,24 @@ evidence over memory.
 If no meaningful code exists, state that this is a greenfield path and move to
 Phase 3 without inventing local constraints.
 
-### Phase 3: Research Missing Knowledge
+### Phase 3: Use `research` For Missing Knowledge
 
 List every unfamiliar or version-sensitive technology, library, framework,
-SDK, API, CLI, cloud service, database, package manager, protocol, or standard
-that affects the design.
+SDK, API, CLI, cloud service, database, package manager, protocol, standard,
+problem statement, feature requirement, or topic that affects the design.
 
-Verify those items against current official vendor documentation. Prefer
-configured official-documentation tools and MCP servers when available, such as
-OpenAI docs for Codex/OpenAI topics, context7 for libraries and frameworks,
-Microsoft Learn for Microsoft/Azure topics, Terraform registry tools for
-Terraform, and vendor docs via web search as fallback. If a dedicated
-`research` skill is installed and relevant, use it as the research phase;
-otherwise perform the research directly.
+When the `research` skill is installed and relevant, use it for this phase.
+`design` owns the design synthesis and `/plan` handoff; `research` owns
+technical due diligence on topics, requirements, products, standards,
+architecture patterns, and technology choices.
+
+Only perform direct research inside `design` for tiny clarifications or when
+`research` is unavailable or not applicable. In that fallback path, verify
+items against current official vendor documentation. Prefer configured
+official-documentation tools and MCP servers when available, such as OpenAI docs
+for Codex/OpenAI topics, context7 for libraries and frameworks, Microsoft Learn
+for Microsoft/Azure topics, Terraform registry tools for Terraform, and vendor
+docs via web search as fallback.
 
 Record only design-relevant findings: constraints, supported patterns,
 version-specific APIs, limits, migration considerations, security implications,
@@ -208,6 +213,6 @@ short answer is explicitly requested:
 ## References
 
 - Read `references/design-workflow.md` for the detailed phase checklist,
-  brownfield and greenfield paths, technology research rubric, and `/plan`
+  brownfield and greenfield paths, `research` handoff guidance, and `/plan`
   handoff template.
 - Use `evals/trigger-prompts.md` when reviewing or tuning trigger readiness.

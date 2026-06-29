@@ -89,6 +89,18 @@ All notable changes to this project are tracked here. This changelog follows
   validation is enabled, and keeps
   `deploy.targets[].soperator_onboarding.target_version` aligned with the
   Soperator app chart row.
+- Fixed external Soperator onboarding Kubernetes target selection. Interactive
+  onboarding now prints the discovered live Kubernetes minor, defaults external
+  node-template work to the next supported minor hop instead of the global latest
+  minor, prints and stores current/target Kubernetes versions in discovery
+  output, fails fast when the discovered live minor is newer than cxcli's
+  supported external onboarding target, and keeps
+  `ext-soperator upgrade --dry-run` plan output aligned with those values.
+- Improved Soperator discovery and external onboarding guidance. Discovery
+  summaries now include an `Upgrade Guidance` section with the matched
+  Soperator/Kubernetes support-policy rule without blocking read-only
+  collection, while onboarding decision summaries and external upgrade dry runs
+  reuse the same support-policy wording before execute-time gates.
 - Clarified external Soperator safe-surge worker wave controls. Fixed
   `worker_wave_groups` now owns the exact concurrent worker-group count, while
   `max_parallel_worker_groups` is accepted only as an optional cap for

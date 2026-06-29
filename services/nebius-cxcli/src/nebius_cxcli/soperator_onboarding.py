@@ -3436,6 +3436,7 @@ def write_source_soperator_discovery_report(
     slurm_snapshot: Mapping[str, Any] | None = None,
     accounting_snapshot: Mapping[str, Any] | None = None,
     target_versions: Mapping[str, Any] | None = None,
+    guidance_lines: Sequence[str] | None = None,
     output_dir: Path | None = None,
     redaction: str = "support",
 ) -> Path:
@@ -3455,6 +3456,7 @@ def write_source_soperator_discovery_report(
         slurm_snapshot=slurm_snapshot,
         accounting_snapshot=accounting_snapshot,
         target_versions=target_versions,
+        guidance_lines=guidance_lines,
         output_dir=output_dir,
         redaction=redaction,
     )

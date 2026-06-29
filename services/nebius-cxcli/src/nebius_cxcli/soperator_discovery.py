@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 import tempfile
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
@@ -69,6 +70,95 @@ def _sequence_of_mappings(value: Any) -> tuple[Mapping[str, Any], ...]:
 
 def _normalized_token(value: Any, default: str = "") -> str:
     return normalize_component_token(value) or default
+
+
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def soperator_discovery_k8s_minor_text(value: Any) -> str:
+    text = _text(value).lstrip("v")
+    if not text:
+        return ""
+    match = re.fullmatch(r"(?P<major>[0-9]+)\.(?P<minor>[0-9]+)(?:[.+-].*)?", text)
+    if match is None:
+        return ""
+    return f"{match.group('major')}.{match.group('minor')}"
+
+
+def soperator_discovery_snapshot_control_plane_k8s_version(
+    snapshot: Mapping[str, Any] | None,
+) -> str:
+    if not isinstance(snapshot, Mapping):
+        return ""
+    provider = snapshot.get("provider")
+    if not isinstance(provider, Mapping):
+        return ""
+    cluster = provider.get("mk8s_cluster")
+    if not isinstance(cluster, Mapping):
+        return ""
+    for key in (
+        "control_plane_version",
+        "controlPlaneVersion",
+        "k8s_version",
+        "kubernetes_version",
+        "version",
+    ):
+        version = soperator_discovery_k8s_minor_text(cluster.get(key))
+        if version:
+            return version
+    return ""
+
+
+def _report_finding_value(finding: Any, key: str) -> Any:
+    if isinstance(finding, Mapping):
+        return finding.get(key)
+    return getattr(finding, key, None)
+
+
+def soperator_discovery_report_k8s_versions(report: Any) -> tuple[str, str]:
+    current_version = ""
+    target_version = ""
+    report_payload = report.to_dict() if hasattr(report, "to_dict") else report
+    findings = getattr(report_payload, "findings", ())
+    if isinstance(report_payload, Mapping):
+        findings = report_payload.get("findings", ())
+    if not isinstance(findings, Sequence) or isinstance(findings, (str, bytes, bytearray)):
+        return "", ""
+    for finding in findings:
+        layer = _text(_report_finding_value(finding, "layer"))
+        if layer not in {"mk8s-node-template", "soperator-upgrade-support"}:
+            continue
+        evidence = _report_finding_value(finding, "evidence")
+        if not isinstance(evidence, Mapping):
+            continue
+        control_plane = evidence.get("control_plane")
+        if isinstance(control_plane, Mapping):
+            current_version = current_version or soperator_discovery_k8s_minor_text(
+                control_plane.get("current_k8s_version")
+            )
+            target_version = target_version or soperator_discovery_k8s_minor_text(
+                control_plane.get("target_k8s_version")
+            )
+        current_version = current_version or soperator_discovery_k8s_minor_text(
+            evidence.get("current_k8s_version")
+        )
+        target_version = target_version or soperator_discovery_k8s_minor_text(
+            evidence.get("target_k8s_version")
+        )
+        if current_version and target_version:
+            break
+    return current_version, target_version
+
+
+def _target_versions_k8s_version(target_versions: Mapping[str, Any] | None) -> str:
+    if not isinstance(target_versions, Mapping):
+        return ""
+    for key in ("k8s_version", "kubernetes_version", "target_k8s_version"):
+        version = soperator_discovery_k8s_minor_text(target_versions.get(key))
+        if version:
+            return version
+    return ""
 
 
 def _redacted_key(key: Any) -> bool:
@@ -173,6 +263,7 @@ def _identity_section(
     source_kind: str,
     snapshot: Mapping[str, Any],
     report: Mapping[str, Any],
+    target_versions: Mapping[str, Any] | None,
     cluster_id: str,
     cluster_name: str,
     namespace: str,
@@ -186,6 +277,11 @@ def _identity_section(
     detected_app_version = str(
         release.get("app_version", "") or release.get("appVersion", "") or ""
     ).strip()
+    current_k8s_version, target_k8s_version = soperator_discovery_report_k8s_versions(report)
+    current_k8s_version = (
+        current_k8s_version or soperator_discovery_snapshot_control_plane_k8s_version(snapshot)
+    )
+    target_k8s_version = _target_versions_k8s_version(target_versions) or target_k8s_version
     return {
         "target_ref": _normalized_token(target_ref, "mk8s"),
         "source_kind": source_kind,
@@ -198,6 +294,8 @@ def _identity_section(
         "app_version": detected_app_version,
         "source_version": str(report.get("source_version", "") or "").strip(),
         "target_version": str(report.get("target_version", "") or "").strip(),
+        "current_k8s_version": current_k8s_version,
+        "target_k8s_version": target_k8s_version,
         "state": str(report.get("state", "") or "").strip(),
         "fingerprint": str(report.get("fingerprint", "") or "").strip(),
         "helm_release": _redact(release),
@@ -468,11 +566,14 @@ def _summary_markdown(
     identity: Mapping[str, Any],
     findings: Mapping[str, Any],
     bundle_dir: Path,
+    guidance_lines: Sequence[str] | None = None,
 ) -> str:
     target_ref = str(identity.get("target_ref", "") or "").strip()
     state = str(identity.get("state", "") or "").strip() or "unknown"
     source_version = str(identity.get("source_version", "") or "").strip() or "unknown"
     target_version = str(identity.get("target_version", "") or "").strip() or "unknown"
+    current_k8s_version = str(identity.get("current_k8s_version", "") or "").strip()
+    target_k8s_version = str(identity.get("target_k8s_version", "") or "").strip()
     namespace = str(identity.get("namespace", "") or "").strip() or "unknown"
     release_name = str(identity.get("release_name", "") or "").strip() or "unknown"
     lines = [
@@ -485,13 +586,24 @@ def _summary_markdown(
         f"- Release: `{release_name}`",
         f"- Source version: `{source_version}`",
         f"- Target version: `{target_version}`",
-        f"- Blocking findings: `{findings.get('blocking_count', 0)}`",
-        f"- Required findings: `{findings.get('required_count', 0)}`",
-        f"- Recommended findings: `{findings.get('recommended_count', 0)}`",
-        "",
-        "Discovery is not a backup. Raw Secret values, DB dumps, SQL, tokens, and cert material are not included.",
-        "",
     ]
+    if current_k8s_version:
+        lines.append(f"- Current Kubernetes version: `{current_k8s_version}`")
+    if target_k8s_version:
+        lines.append(f"- Target Kubernetes version: `{target_k8s_version}`")
+    lines.extend(
+        [
+            f"- Blocking findings: `{findings.get('blocking_count', 0)}`",
+            f"- Required findings: `{findings.get('required_count', 0)}`",
+            f"- Recommended findings: `{findings.get('recommended_count', 0)}`",
+            "",
+            "Discovery is not a backup. Raw Secret values, DB dumps, SQL, tokens, and cert material are not included.",
+            "",
+        ]
+    )
+    guidance = [str(line).rstrip() for line in guidance_lines or () if str(line).strip()]
+    if guidance:
+        lines.extend(["## Upgrade Guidance", "", *guidance, ""])
     return "\n".join(lines)
 
 
@@ -617,6 +729,7 @@ def write_soperator_discovery_bundle(
     slurm_snapshot: Mapping[str, Any] | None = None,
     accounting_snapshot: Mapping[str, Any] | None = None,
     target_versions: Mapping[str, Any] | None = None,
+    guidance_lines: Sequence[str] | None = None,
     output_dir: Path | None = None,
     redaction: str = "support",
 ) -> Path:
@@ -636,6 +749,7 @@ def write_soperator_discovery_bundle(
         source_kind=source_kind,
         snapshot=plain_snapshot,
         report=report_payload,
+        target_versions=target_versions,
         cluster_id=cluster_id,
         cluster_name=cluster_name,
         namespace=namespace,
@@ -679,6 +793,7 @@ def write_soperator_discovery_bundle(
         identity=identity,
         findings=findings,
         bundle_dir=bundle_dir,
+        guidance_lines=guidance_lines,
     )
     _write_text_if_changed(bundle_dir / "summary.md", summary_text)
     checksums = {
@@ -748,6 +863,8 @@ def load_soperator_discovery_bundle(path: Path) -> dict[str, Any]:
             "release_name",
             "chart_version",
             "app_version",
+            "current_k8s_version",
+            "target_k8s_version",
         ):
             payload[key] = identity.get(key, "")
     payload.update(

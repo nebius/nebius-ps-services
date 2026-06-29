@@ -1315,6 +1315,7 @@ def test_docs_define_component_selector_contract() -> None:
         "  --storage-mode keep-existing-storage \\\n"
         "  --compute-mode keep-existing-compute \\\n"
         "  --to-chart-version <soperator-chart-version> \\\n"
+        "  --to-k8s-version <major.minor> \\\n"
         "  --no-interactive"
     ) in readme
     assert (
@@ -1443,6 +1444,16 @@ def test_docs_define_component_selector_contract() -> None:
     )
     assert "`deploy.targets[].soperator_onboarding.target_version`" in readme_flat
     assert "`render` and `ext-soperator upgrade` target the same version" in readme_flat
+    assert "`--to-k8s-version`: target Kubernetes `major.minor` version" in readme
+    assert "defaults this field to the next provider-supported minor hop" in readme_flat
+    assert "does not jump straight to the latest supported minor" in readme_flat
+    assert "`summary.md` includes `Upgrade Guidance` without gating discovery" in readme_flat
+    assert "print the matched Soperator/Kubernetes support-policy rule during the decision summary" in (
+        readme_flat
+    )
+    assert "Unsupported accepted plans still require `--allow-unsupported-soperator-upgrade-path`" in (
+        readme_flat
+    )
     assert "discovered storage sizes are lower bounds" in readme_flat
     assert "Render/deploy must not request a smaller PVC/PV size" in readme_flat
     assert "from the live node-group ids" in readme_flat
@@ -1583,9 +1594,15 @@ def test_docs_define_component_selector_contract() -> None:
     assert "`deploy.targets[].inventory.node_groups`" in design
     assert "two independent layer choices" in design_flat
     assert "The discovery summary printed during onboarding is read-only" in design_flat
+    assert "includes the discovered/current and target Kubernetes minor versions" in design_flat
+    assert "plus `Upgrade Guidance`" in design_flat
+    assert "defaults to one provider-supported minor hop from the discovered control-plane version" in (
+        design_flat
+    )
     assert "does not present external upgrade phases as actions taken by the onboard command" in (
         design_flat
     )
+    assert "It also prints the matched Soperator/Kubernetes support-policy rule" in design_flat
     assert "onboarding prints the accepted layout decisions" in design_flat
     assert (
         "target-compatible storage means no aligned SFS creation or storage data migration is planned"
@@ -1737,6 +1754,7 @@ def test_docs_define_component_selector_contract() -> None:
     assert "rechecks completed action phases against live state before skipping them" in design_flat
     assert "Rerunning `ext-soperator onboard` remains read-only" in design_flat
     assert "refreshes the source discovery bundle with provider template evidence" in design_flat
+    assert "current/target Kubernetes version fields" in design_flat
     assert (
         "removes `upgrade-external-node-template` only when the live control plane and every discovered node-group template already match"
         in design_flat

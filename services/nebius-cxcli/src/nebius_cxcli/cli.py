@@ -398,7 +398,11 @@ from .soperator_child_charts import (
     materialize_soperator_child_chart_values,
     soperator_child_chart_warnings,
 )
-from .soperator_discovery import load_soperator_discovery_bundle
+from .soperator_discovery import (
+    load_soperator_discovery_bundle,
+    soperator_discovery_report_k8s_versions,
+    soperator_discovery_snapshot_control_plane_k8s_version,
+)
 from .soperator_gpu_driver_jail import ensure_soperator_gpu_driver_jail_values
 from .soperator_migration import (
     SOPERATOR_WORKER_ROLLOUT_DEFAULT_WAVE_PERCENT,
@@ -9637,6 +9641,7 @@ def _write_soperator_discovery_bundle_from_snapshot(
             "os": _non_empty_text(to_os),
             "gpu_stack_preset": _non_empty_text(to_gpu_stack_preset),
         },
+        guidance_lines=_soperator_discovery_upgrade_guidance_lines(report),
         output_dir=output_dir,
         redaction=normalized_redaction,
     )
@@ -9890,6 +9895,18 @@ def _print_soperator_discovery_result(path: Path) -> None:
     summary = path.parent / "summary.md"
     if summary.exists():
         console.print(f"Soperator discovery summary: {summary}", soft_wrap=True)
+    with suppress(Exception):
+        payload = load_soperator_discovery_bundle(path)
+        current_k8s_version = _non_empty_text(payload.get("current_k8s_version"))
+        target_k8s_version = _non_empty_text(payload.get("target_k8s_version"))
+        if current_k8s_version:
+            console.print(f"Current Kubernetes version: {current_k8s_version}")
+        if target_k8s_version:
+            console.print(f"Target Kubernetes version: {target_k8s_version}")
+        report = payload.get("report")
+        if isinstance(report, Mapping):
+            for line in _soperator_discovery_upgrade_guidance_lines(report):
+                console.print(line, soft_wrap=True)
 
 
 @soperator_app.command(
@@ -10242,7 +10259,8 @@ def soperator_upgrade_command(
             "--allow-unsupported-soperator-upgrade-path/--no-allow-unsupported-soperator-upgrade-path",
             help=(
                 "Allow execution of an unsupported or not-validated Soperator support-policy "
-                "path. This does not bypass Kubernetes minor-hop or safety checks."
+                "path. This does not bypass Kubernetes minor-hop, backup, quota, "
+                "protected-state, or other safety checks."
             ),
         ),
     ] = False,
@@ -14944,8 +14962,40 @@ def _validate_soperator_onboarding_target_k8s_version(value: object) -> str:
         raise RuntimeError(str(exc)) from exc
 
 
-def _soperator_onboarding_target_k8s_version_default() -> str:
-    return ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION
+def _soperator_onboarding_snapshot_control_plane_k8s_version(
+    snapshot: Mapping[str, Any] | None,
+) -> str:
+    return soperator_discovery_snapshot_control_plane_k8s_version(snapshot)
+
+
+def _soperator_onboarding_next_k8s_minor(current_version: str, max_version: str) -> str:
+    try:
+        current = parse_k8s_version(current_version)
+        maximum = parse_k8s_version(max_version)
+    except ValueError:
+        return ""
+    if (current.major, current.minor) > (maximum.major, maximum.minor):
+        raise RuntimeError(
+            "Discovered external MK8s Kubernetes version "
+            f"{current.minor_text} is newer than the cxcli-supported external "
+            f"onboarding target {maximum.minor_text}. Upgrade cxcli before running "
+            "external Soperator onboarding for this cluster; cxcli will not generate "
+            "an external node-template target that it cannot validate."
+        )
+    if current.major != maximum.major:
+        return ""
+    if current.minor >= maximum.minor:
+        return current.minor_text
+    return f"{current.major}.{current.minor + 1}"
+
+
+def _soperator_onboarding_target_k8s_version_default(
+    snapshot: Mapping[str, Any] | None = None,
+) -> str:
+    latest_supported = ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION
+    current_version = _soperator_onboarding_snapshot_control_plane_k8s_version(snapshot)
+    next_minor = _soperator_onboarding_next_k8s_minor(current_version, latest_supported)
+    return next_minor or latest_supported
 
 
 def _resolve_soperator_onboarding_target_k8s_version(
@@ -14953,14 +15003,17 @@ def _resolve_soperator_onboarding_target_k8s_version(
     to_k8s_version: str | None,
     interactive: bool,
     required: bool,
+    snapshot: Mapping[str, Any] | None = None,
 ) -> str:
-    default_version = _soperator_onboarding_target_k8s_version_default()
+    default_version = _soperator_onboarding_target_k8s_version_default(snapshot)
     raw_version = _non_empty_text(to_k8s_version)
     if not raw_version and interactive and required:
+        current_version = _soperator_onboarding_snapshot_control_plane_k8s_version(snapshot)
+        prompt_hint = "next supported minor" if current_version else "Nebius latest supported minor"
         raw_version, should_stop = _prompt_scalar_override(
             "deploy.targets[].soperator_onboarding.node_template_upgrade.target_k8s_version",
             default_version,
-            prompt_hint="Nebius latest supported minor",
+            prompt_hint=prompt_hint,
             type_hint="string",
             required=True,
         )
@@ -14971,7 +15024,7 @@ def _resolve_soperator_onboarding_target_k8s_version(
     if not raw_version and required:
         raise RuntimeError(
             "External Soperator onboarding selected an external MK8s node-template upgrade. "
-            "Pass --to-k8s-version with the next Kubernetes minor target, for example 1.32. "
+            f"Pass --to-k8s-version with the next Kubernetes minor target, for example {default_version}. "
             "cxcli will not silently choose a Kubernetes target for this accepted upgrade plan."
         )
     return _validate_soperator_onboarding_target_k8s_version(raw_version or default_version)
@@ -15069,7 +15122,11 @@ def _enforce_soperator_support_policy_for_report(
     )
 
 
-def _soperator_support_policy_plan_lines(report: Mapping[str, Any] | Any) -> tuple[str, ...]:
+def _soperator_support_policy_plan_lines(
+    report: Mapping[str, Any] | Any,
+    *,
+    reject_disposition: str = "execution blocked",
+) -> tuple[str, ...]:
     lines: list[str] = []
     for finding in soperator_upgrade_support_findings(report):
         message = _non_empty_text(finding.get("message"))
@@ -15077,7 +15134,7 @@ def _soperator_support_policy_plan_lines(report: Mapping[str, Any] | Any) -> tup
         if _non_empty_text(finding.get("status")) in SOPERATOR_UPGRADE_SUPPORT_REJECT_STATUSES:
             evidence = _soperator_support_finding_evidence(finding)
             override_used = evidence.get("override_used") is True
-            disposition = "override accepted" if override_used else "execution blocked"
+            disposition = "override accepted" if override_used else reject_disposition
             prefix = f"- Soperator support policy ({disposition}): "
         elif _non_empty_text(finding.get("status")) == "supported_with_warning":
             prefix = "- Soperator support policy warning: "
@@ -15088,8 +15145,26 @@ def _soperator_support_policy_plan_lines(report: Mapping[str, Any] | Any) -> tup
             lines.append(
                 "  - Override scope: --allow-unsupported-soperator-upgrade-path only "
                 "bypasses this Soperator support-policy rejection; Kubernetes minor-hop "
-                "validation and safety preflights still apply."
+                "validation, backup, quota, protected-state, and other safety preflights "
+                "still apply."
             )
+    return tuple(lines)
+
+
+def _soperator_discovery_upgrade_guidance_lines(
+    report: Mapping[str, Any] | Any,
+) -> tuple[str, ...]:
+    lines = list(
+        _soperator_support_policy_plan_lines(
+            report,
+            reject_disposition="execute requires override",
+        )
+    )
+    if lines:
+        lines.append(
+            "- Discovery is read-only; unsupported or not-validated paths are gated "
+            "when accepting onboarding or executing upgrade."
+        )
     return tuple(lines)
 
 
@@ -15351,6 +15426,11 @@ def _print_soperator_onboarding_report_summary(report: Any) -> None:
         console.print(f"[dim]Target Soperator version: {target_version}[/dim]")
     if source_version:
         console.print(f"[dim]Detected Soperator version: {source_version}[/dim]")
+    current_k8s_version, target_k8s_version = soperator_discovery_report_k8s_versions(report)
+    if current_k8s_version:
+        console.print(f"[dim]Detected Kubernetes version: {current_k8s_version}[/dim]")
+    if target_k8s_version:
+        console.print(f"[dim]Target Kubernetes version: {target_k8s_version}[/dim]")
     if migration_profile_id:
         console.print(f"[dim]Upgrade profile: {migration_profile_id}[/dim]")
     for finding in report.findings:
@@ -15500,6 +15580,11 @@ def _print_soperator_onboarding_decision_summary(target_row: Mapping[str, Any]) 
             "records compute remediation for the external upgrade plan; worker migration "
             "is guarded by ext-soperator upgrade.[/dim]"
         )
+    for line in _soperator_support_policy_plan_lines(
+        report,
+        reject_disposition="accepted plan requires override",
+    ):
+        console.print(f"[dim]{line}[/dim]", soft_wrap=True)
 
 
 def _soperator_onboarding_storage_mode_choices(default: str) -> list[OptionChoice]:
@@ -15529,6 +15614,7 @@ def _soperator_onboarding_compute_mode_choices(default: str) -> list[OptionChoic
 
 
 def _print_soperator_onboarding_mode_choice_guidance() -> None:
+    console.print()
     console.print(
         "[dim]If you are not sure, choose the Create aligned SFS and node-groups "
         "options. cxcli will keep existing storage or compute automatically when "
@@ -16016,7 +16102,7 @@ def _soperator_onboarding_target_defaults(
         target_row["soperator_onboarding"]["node_template_upgrade"] = {  # type: ignore[index]
             "target_k8s_version": (
                 _validate_soperator_onboarding_target_k8s_version(target_k8s_version)
-                or ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION
+                or _soperator_onboarding_target_k8s_version_default(snapshot)
             ),
             "target_os": ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS,
             "target_gpu_stack_preset": ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_GPU_STACK_PRESET,
@@ -16216,6 +16302,7 @@ def _write_soperator_source_discovery_report_from_target_row(
             report=report,
             onboarding=onboarding if isinstance(onboarding, Mapping) else None,
         ),
+        guidance_lines=_soperator_discovery_upgrade_guidance_lines(report),
     )
 
 
@@ -17138,14 +17225,14 @@ def _prompt_soperator_onboarding_target_row(
         validate_sources=validate_sources,
     )
     app_version = _soperator_onboarding_target_app_version_for_chart(chart_version)
+    default_target_k8s_version = _soperator_onboarding_target_k8s_version_default(snapshot)
     with _soperator_onboarding_status("Building Soperator upgrade profile diff..."):
         report = analyze_soperator_onboarding_snapshot(
             snapshot,
             target_ref=target_ref,
             pinned_chart_version=chart_version,
             pinned_app_version=app_version,
-            target_k8s_version=to_k8s_version
-            or _soperator_onboarding_target_k8s_version_default(),
+            target_k8s_version=to_k8s_version or default_target_k8s_version,
         )
     report = _soperator_onboarding_report_with_source_version(
         report,
@@ -17153,8 +17240,7 @@ def _prompt_soperator_onboarding_target_row(
         target_ref=target_ref,
         pinned_chart_version=chart_version,
         pinned_app_version=app_version,
-        target_k8s_version=to_k8s_version
-        or _soperator_onboarding_target_k8s_version_default(),
+        target_k8s_version=to_k8s_version or default_target_k8s_version,
         source_version=source_version,
         interactive=True,
     )
@@ -17164,10 +17250,9 @@ def _prompt_soperator_onboarding_target_row(
         to_k8s_version=to_k8s_version,
         interactive=True,
         required=ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE in selected_action_ids,
+        snapshot=snapshot,
     )
-    if target_k8s_version != (
-        to_k8s_version or _soperator_onboarding_target_k8s_version_default()
-    ):
+    if target_k8s_version != (to_k8s_version or default_target_k8s_version):
         report = analyze_soperator_onboarding_snapshot(
             snapshot,
             target_ref=target_ref,
@@ -17382,14 +17467,14 @@ def _soperator_onboarding_target_row_from_options(
         validate_sources=validate_sources,
     )
     app_version = _soperator_onboarding_target_app_version_for_chart(chart_version)
+    default_target_k8s_version = _soperator_onboarding_target_k8s_version_default(snapshot)
     with _soperator_onboarding_status("Building Soperator upgrade profile diff..."):
         report = analyze_soperator_onboarding_snapshot(
             snapshot,
             target_ref=normalized_target,
             pinned_chart_version=chart_version,
             pinned_app_version=app_version,
-            target_k8s_version=to_k8s_version
-            or _soperator_onboarding_target_k8s_version_default(),
+            target_k8s_version=to_k8s_version or default_target_k8s_version,
         )
     report = _soperator_onboarding_report_with_source_version(
         report,
@@ -17397,8 +17482,7 @@ def _soperator_onboarding_target_row_from_options(
         target_ref=normalized_target,
         pinned_chart_version=chart_version,
         pinned_app_version=app_version,
-        target_k8s_version=to_k8s_version
-        or _soperator_onboarding_target_k8s_version_default(),
+        target_k8s_version=to_k8s_version or default_target_k8s_version,
         source_version=source_version,
         interactive=interactive,
     )
@@ -17408,10 +17492,9 @@ def _soperator_onboarding_target_row_from_options(
         to_k8s_version=to_k8s_version,
         interactive=interactive,
         required=ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE in selected_action_ids,
+        snapshot=snapshot,
     )
-    if target_k8s_version != (
-        to_k8s_version or _soperator_onboarding_target_k8s_version_default()
-    ):
+    if target_k8s_version != (to_k8s_version or default_target_k8s_version):
         report = analyze_soperator_onboarding_snapshot(
             snapshot,
             target_ref=normalized_target,
@@ -46884,7 +46967,9 @@ def soperator_onboard_command(
             "--to-k8s-version",
             help=(
                 "Target Kubernetes major.minor version for external node-template upgrade "
-                "analysis. Required when onboarding selects external MK8s node-template work."
+                "analysis. Interactive onboarding defaults to the next discovered minor hop; "
+                "non-interactive runs must pass it when onboarding selects external MK8s "
+                "node-template work."
             ),
         ),
     ] = None,
@@ -46894,7 +46979,8 @@ def soperator_onboard_command(
             "--allow-unsupported-soperator-upgrade-path/--no-allow-unsupported-soperator-upgrade-path",
             help=(
                 "Allow accepted onboarding for an unsupported or not-validated Soperator "
-                "support-policy path. This does not bypass Kubernetes minor-hop or safety checks."
+                "support-policy path. This does not bypass Kubernetes minor-hop, backup, "
+                "quota, protected-state, or other safety checks."
             ),
         ),
     ] = False,
@@ -47737,6 +47823,7 @@ def _format_soperator_migration_plan_lines(
         phases=report.get("migration_plan"),
         onboarding=onboarding,
     )
+    current_k8s_version, target_k8s_version = soperator_discovery_report_k8s_versions(report)
     report_path = source_soperator_discovery_report_path(config_path.parent, target_ref)
     lines = [
         f"External Soperator upgrade target: {target_ref}",
@@ -47745,21 +47832,34 @@ def _format_soperator_migration_plan_lines(
         f"Onboarding state: {str(onboarding.get('state', '') or report.get('state', '') or 'unknown')}",
         f"Source version: {str(onboarding.get('source_version', '') or report.get('source_version', '') or 'not detected')}",
         f"Target version: {str(onboarding.get('target_version', '') or report.get('target_version', '') or 'unknown')}",
-        "Storage mode: "
-        + str(onboarding.get("storage_mode", "") or _SOPERATOR_ONBOARDING_DEFAULT_STORAGE_MODE),
-        "Compute mode: "
-        + str(onboarding.get("compute_mode", "") or _SOPERATOR_ONBOARDING_DEFAULT_COMPUTE_MODE),
-        "External upgrade required: " + ("yes" if flags["migration_required"] else "no"),
-        "Storage upgrade work required: "
-        + ("yes" if flags["storage_migration_required"] else "no"),
-        "Compute upgrade work required: "
-        + ("yes" if flags["compute_migration_required"] else "no"),
-        "Soperator upgrade required: " + ("yes" if flags["soperator_upgrade_required"] else "no"),
-        "External node-template upgrade required: "
-        + ("yes" if flags["external_node_template_upgrade_required"] else "no"),
-        "Target GPU stack reconciliation required: "
-        + ("yes" if flags["target_gpu_reconciliation_required"] else "no"),
     ]
+    if current_k8s_version:
+        lines.append(f"Current Kubernetes version: {current_k8s_version}")
+    if target_k8s_version:
+        lines.append(f"Target Kubernetes version: {target_k8s_version}")
+    lines.extend(
+        [
+            "Storage mode: "
+            + str(
+                onboarding.get("storage_mode", "") or _SOPERATOR_ONBOARDING_DEFAULT_STORAGE_MODE
+            ),
+            "Compute mode: "
+            + str(
+                onboarding.get("compute_mode", "") or _SOPERATOR_ONBOARDING_DEFAULT_COMPUTE_MODE
+            ),
+            "External upgrade required: " + ("yes" if flags["migration_required"] else "no"),
+            "Storage upgrade work required: "
+            + ("yes" if flags["storage_migration_required"] else "no"),
+            "Compute upgrade work required: "
+            + ("yes" if flags["compute_migration_required"] else "no"),
+            "Soperator upgrade required: "
+            + ("yes" if flags["soperator_upgrade_required"] else "no"),
+            "External node-template upgrade required: "
+            + ("yes" if flags["external_node_template_upgrade_required"] else "no"),
+            "Target GPU stack reconciliation required: "
+            + ("yes" if flags["target_gpu_reconciliation_required"] else "no"),
+        ]
+    )
     lines.extend(_soperator_support_policy_plan_lines(report))
     if flags["external_node_template_upgrade_required"]:
         rollout = resolve_external_node_template_rollout(
@@ -48150,7 +48250,8 @@ def soperator_external_upgrade_command(
             "--allow-unsupported-soperator-upgrade-path/--no-allow-unsupported-soperator-upgrade-path",
             help=(
                 "Allow execution of an unsupported or not-validated accepted Soperator "
-                "support-policy path. This does not bypass Kubernetes minor-hop or safety checks."
+                "support-policy path. This does not bypass Kubernetes minor-hop, backup, "
+                "quota, protected-state, or other safety checks."
             ),
         ),
     ] = False,

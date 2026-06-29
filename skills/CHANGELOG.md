@@ -47,15 +47,20 @@ All notable changes to the reusable Codex skills are tracked here.
   before implementation, with source priority across the current project
   folder, sibling repo folders, related skills, internal Confluence/Slack/Jira
   sources when available, and official vendor docs.
+- Added the `create-learning-course` Codex skill for creating public-safe
+  course workspaces, syllabi, lessons, exercises, glossaries, learning records,
+  reusable assets, and publication review checkpoints from a learner mission
+  and trusted sources, adapted from the public teach-skill pattern with
+  explicit redaction and sensitive-information guardrails.
 - Added the `research` Codex skill for senior-engineer technical due
   diligence on technologies, APIs, RFCs, protocols, architecture patterns,
   products, and feature requirements, with ranked sources, internals,
   operations, limitations, alternatives, and actionable recommendations.
 - Added the `design` Codex skill for general software design before
   implementation, covering brownfield and greenfield paths, requirement
-  understanding, code/docs inspection, official-doc technology research,
-  component and architecture design, alternatives evaluation, and Codex
-  `/plan` handoff.
+  understanding, code/docs inspection, `research`-backed topic and technology
+  due diligence, component and architecture design, alternatives evaluation,
+  and Codex `/plan` handoff.
 - Added the `code-review` Codex skill for strict implementation-quality audits
   of the current branch, local diff, changed files, or provided patches,
   focused on maintainability, abstraction quality, modularity, type boundaries,
@@ -128,6 +133,12 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Set `create-learning-course` to explicit-only invocation because course
+  creation can create or revise many local files.
+- Tightened the `design` skill so topic, feature-requirement, architecture,
+  product, standard, and technology due diligence routes through `research`
+  when that skill is available, leaving `design` focused on synthesis,
+  alternatives, and `/plan` handoff.
 - Simplified `install-skills.sh --install-all-hooks --register-hooks` output
   into a single per-source `Hooks status` report and only shows the restart and
   trust warning when hook files or registrations changed.
