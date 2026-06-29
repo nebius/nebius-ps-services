@@ -668,9 +668,11 @@ and chart source-family changes.
   Soperator SlurmCluster/NodeSet/
   ActiveCheck resources. It also records Helm values, Slurm CLI snapshots, and
   the chart-managed MariaDB accounting dump after quiescing accounting writes.
-  Restore is archive-driven and dry-run by default; `--execute --approve`
-  validates checksums, creates the target namespace when needed, rewrites
-  namespaced restore manifests to the selected namespace, applies the
+  Restore is archive-driven and dry-run by default, and it is DR/new-empty-target
+  only. It is not same-cluster rollback: operators must not point restore at
+  the original/source cluster or an existing Soperator namespace. `--execute
+  --approve` validates checksums, creates the target namespace when needed,
+  rewrites namespaced restore manifests to the selected namespace, applies the
   restore-ready manifests, quiesces accounting, imports the DB dump, and
   restores accounting replicas. The external commands reuse onboarding target
   resolution and the temporary kubeconfig handoff for `cluster_id` targets, but

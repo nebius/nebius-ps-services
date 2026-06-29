@@ -2022,8 +2022,8 @@ ext_soperator_app = typer.Typer(
         "discover writes a support-safe read-only Soperator discovery bundle; "
         "onboard registers/adopts one cluster into config.yaml without "
         "Terraform-owning it. backup/restore move restore-capable Soperator "
-        "state between clusters. upgrade is only for accepted onboarding plans "
-        "that contain external-upgrade-owned actions."
+        "state to new empty target clusters only. upgrade is only for accepted "
+        "onboarding plans that contain external-upgrade-owned actions."
     ),
     epilog=(
         "Workflow: nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root> "
@@ -2031,7 +2031,9 @@ ext_soperator_app = typer.Typer(
         "nebius-cxcli render <config.yaml>; "
         "nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run; "
         "nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --execute --approve. "
-        "Restore to a new empty compatible cluster with "
+        "Restore is DR/new-empty-target only, not same-cluster rollback; do not point it "
+        "at the original/source cluster or an existing Soperator namespace. Restore to a "
+        "new empty compatible cluster with "
         "nebius-cxcli ext-soperator restore <backup.tar.gz> --kube-context <new-context> "
         "--execute --approve. "
         "Onboarding stores a cxcli target id in deploy.targets[].instance_id; by default it is "
@@ -2052,10 +2054,10 @@ ext_soperator_app = typer.Typer(
 soperator_app = typer.Typer(
     help=(
         "Manage cxcli-managed Soperator deployments. backup/restore create or "
-        "apply restore-capable Soperator archives. discover writes a support-safe "
-        "read-only Soperator discovery bundle. Use upgrade for Soperator-aware "
-        "MK8s node-template plus chart upgrades with Slurm preflight and postflight "
-        "validation."
+        "apply restore-capable Soperator archives to new empty target clusters only. "
+        "discover writes a support-safe read-only Soperator discovery bundle. Use upgrade "
+        "for Soperator-aware MK8s node-template plus chart upgrades with Slurm preflight "
+        "and postflight validation."
     ),
     epilog=(
         "Examples: nebius-cxcli soperator upgrade <config.yaml> "
@@ -2065,6 +2067,8 @@ soperator_app = typer.Typer(
         "nebius-cxcli soperator backup <config.yaml> --target <target>; "
         "nebius-cxcli soperator discover <config.yaml> --target <target>; "
         "nebius-cxcli soperator restore <backup.tar.gz> --execute --approve. "
+        "Restore is DR/new-empty-target only, not same-cluster rollback; do not point it "
+        "at the original/source cluster or an existing Soperator namespace. "
         "The run without --dry-run creates a restore-capable backup, runs requested "
         "MK8s node-template changes, applies chart changes, verifies the static "
         "Soperator chart version, and runs required Soperator/Slurm validation. "
@@ -10536,10 +10540,12 @@ def soperator_backup_command(
 
 @soperator_app.command(
     "restore",
-    short_help="Restore a Soperator backup archive onto an empty compatible cluster.",
+    short_help="DR restore a Soperator archive onto a new empty compatible cluster only.",
     epilog=(
         "Example: nebius-cxcli soperator restore ./backups/soperator-backup-...tar.gz "
-        "--execute --approve. Restore is dry-run by default."
+        "--execute --approve. Restore is dry-run by default. Use it only for DR restore "
+        "to a new empty compatible target cluster. This is not an in-place rollback; "
+        "do not target the original/source cluster or an existing Soperator namespace."
     ),
 )
 def soperator_restore_command(
@@ -47420,10 +47426,13 @@ def ext_soperator_backup_command(
 
 @ext_soperator_app.command(
     "restore",
-    short_help="Restore a Soperator backup archive onto an empty external cluster.",
+    short_help="DR restore a Soperator archive onto a new empty external cluster only.",
     epilog=(
         "Example: nebius-cxcli ext-soperator restore ./backups/external-soperator-backup-...tar.gz "
-        "--kube-context new-cluster --execute --approve. Restore is dry-run by default."
+        "--kube-context new-cluster --execute --approve. Restore is dry-run by default. "
+        "Use it only for DR restore to a new empty external target cluster. This is "
+        "not an in-place rollback; do not target the original/source cluster or an "
+        "existing Soperator namespace."
     ),
 )
 def ext_soperator_restore_command(

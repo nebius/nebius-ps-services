@@ -52,6 +52,11 @@ def test_design_architecture_summary_matches_upgrade_surface() -> None:
     )
     assert "external-soperator-backup-" in design_flat
     assert "restore-ready YAML for namespaced in-cluster material" in design_flat
+    assert "Restore is archive-driven and dry-run by default, and it is DR/new-empty-target only" in (
+        design_flat
+    )
+    assert "It is not same-cluster rollback" in design_flat
+    assert "operators must not point restore at the original/source cluster" in design_flat
     assert (
         "fails fast for `apps:soperator@<target>` with the canonical `soperator upgrade` command"
         in (design_flat)
@@ -549,6 +554,11 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
         "`soperator backup` and `soperator restore` create or apply restore-capable archives"
         in (soperator_flat)
     )
+    assert "Restore is DR/new-empty-target only" in soperator_flat
+    assert "not same-cluster rollback" in soperator_flat
+    assert "must not target the original/source cluster or an existing Soperator namespace" in (
+        soperator_flat
+    )
     assert "`nebius-cxcli soperator upgrade`" in soperator
     assert "`nebius-cxcli ext-soperator` is for existing Nebius MK8s clusters" in (soperator_flat)
     assert "`ext-soperator backup` and `ext-soperator restore` use the same archive contract" in (
@@ -595,6 +605,8 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
         "`nebius-cxcli ext-soperator restore <backup.tar.gz> --kube-context <new-context> --execute --approve`"
         in soperator
     )
+    assert "Do not point restore at the original/source cluster" in soperator_flat
+    assert "restore is not an in-place rollback" in soperator_flat
     assert soperator.index("`nebius-cxcli soperator upgrade") < soperator.index(
         "`nebius-cxcli ext-soperator onboard"
     )

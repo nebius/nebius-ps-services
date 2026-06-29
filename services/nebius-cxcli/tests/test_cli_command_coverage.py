@@ -20512,6 +20512,13 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--approve" in normalized_managed_soperator_restore_help
     assert "--restore-accounting-db" in normalized_managed_soperator_restore_help
     assert "Restore is dry-run by default" in normalized_managed_soperator_restore_help
+    assert "DR restore to a new empty compatible target cluster" in (
+        normalized_managed_soperator_restore_help
+    )
+    assert "not an in-place rollback" in normalized_managed_soperator_restore_help
+    assert "original/source cluster or an existing Soperator namespace" in (
+        normalized_managed_soperator_restore_help
+    )
     assert "Standalone MK8s node-template upgrades" in normalized_managed_soperator_upgrade_help
     assert "upgrade [OPTIONS] CONFIG_YAML" in managed_soperator_upgrade_help
     assert "--target" in normalized_managed_soperator_upgrade_help
@@ -20586,6 +20593,16 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--approve" in normalized_ext_soperator_restore_help
     assert "--restore-accounting-db" in normalized_ext_soperator_restore_help
     assert "external-soperator-backup-" in normalized_ext_soperator_restore_help
+    assert "DR restore to a new empty external target cluster" in (
+        normalized_ext_soperator_restore_help
+    )
+    assert "not an in-place rollback" in normalized_ext_soperator_restore_help
+    assert "original/source cluster or an existing Soperator namespace" in (
+        normalized_ext_soperator_restore_help
+    )
+    assert "Restore is DR/new-empty-target only, not same-cluster rollback" in (
+        normalized_soperator_help
+    )
     assert "upgrade is only for accepted onboarding plans that contain external-upgrade-owned actions" in (
         normalized_soperator_help
     )

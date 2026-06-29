@@ -33,6 +33,9 @@ All notable changes to this project are tracked here. This changelog follows
   restore-ready Kubernetes in-cluster resources plus chart-managed MariaDB
   accounting DB material when live chart-managed accounting is present, while
   restore validates checksums and stays dry-run until `--execute --approve`.
+  Restore help and docs now explicitly state that restore is DR/new-empty-target
+  only, not same-cluster rollback, and must not target the original/source
+  cluster or an existing Soperator namespace.
   External backup can now also run before onboarding with
   `ext-soperator backup --project-id <project-id> --cluster-id
   <mk8scluster-id>` or a direct `--kube-context`; standalone `--cluster-id`
