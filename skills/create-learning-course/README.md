@@ -2,8 +2,8 @@
 
 `create-learning-course` creates public-safe course workspaces from a learner
 mission, trusted sources, lesson outcomes, exercises, and review checkpoints.
-It adapts the public `teach` skill pattern for course authoring rather than
-single-session tutoring, then adds explicit publication and security review.
+It is a course-authoring skill: mission-led, source-grounded, practice-heavy,
+and built around explicit publication and security review.
 
 ## Files
 

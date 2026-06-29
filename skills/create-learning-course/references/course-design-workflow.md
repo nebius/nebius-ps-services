@@ -3,17 +3,22 @@
 Use this reference when creating a new course workspace or substantially
 revising an existing one.
 
-## Source Pattern
+## Source Inspiration And Attribution
 
-This skill adapts the public `teach` skill pattern from:
+This skill is our course-authoring workflow. Its mission-led learning model was
+inspired by Matt Pocock's public `teach` skill pattern:
 
 - <https://github.com/mattpocock/skills/tree/main/skills/productivity/teach>
 
-The source pattern centers learning on a mission, curated resources, small
-lessons, reference documents, reusable assets, learning records, and learner
-notes. This skill keeps that shape but changes the output from a teaching
-session workspace into a course-creation workflow with explicit public-safety
-review.
+The upstream repository is MIT-licensed. If this skill ever copies substantial
+upstream text or implementation structure beyond the current high-level
+learning model, keep the upstream copyright and permission notice with the
+copied material.
+
+Keep the attribution here rather than making the runtime identity sound like a
+fork. This skill now owns different behavior: explicit invocation, course
+workspace creation, publication safety, redaction, citations, reusable course
+templates, and review checkpoints.
 
 ## Course Workspace
 

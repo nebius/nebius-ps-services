@@ -16,10 +16,10 @@ Invoke this skill explicitly with `$create-learning-course`. It disables
 implicit invocation because course creation can create or revise many local
 files.
 
-This skill adapts the public `teach` skill pattern: mission-led learning,
-curated resources, small lessons, reusable assets, reference documents, and
-learning records. It adds a stricter publication and security review so skills
-and generated courses do not expose sensitive material.
+The course model is mission-led: curated resources, small lessons, reusable
+assets, reference documents, and learning records. This skill is owned by this
+repository and adds a stricter publication and security review so skills and
+generated courses do not expose sensitive material.
 
 ## Invocation Policy
 
@@ -250,8 +250,7 @@ Return:
 ## References
 
 - `references/course-design-workflow.md`: course workspace design, lesson
-  sequence, learning records, and adaptation notes from the public teach-skill
-  pattern.
+  sequence, learning records, and source inspiration/attribution notes.
 - `references/publication-safety.md`: public-safe course creation rules,
   redaction guidance, secret handling, and final review checklist.
 - `assets/course-workspace-template/`: starter workspace files for new courses.

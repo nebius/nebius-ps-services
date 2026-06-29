@@ -251,10 +251,12 @@ or revises artifacts such as `MISSION.md`, `COURSE.md`, `SYLLABUS.md`,
 sheets, learning records, reusable assets, and `PUBLICATION-REVIEW.md`.
 Invoke it explicitly with `$create-learning-course`; implicit invocation is
 disabled because the workflow can create or revise many local files.
-The skill adapts the public `teach` skill pattern for course authoring while
-adding explicit redaction, source-citation, high-stakes-topic, and publication
-safety checks so generated courses avoid secrets, private endpoints, customer
-data, raw logs, and proprietary internal material.
+It is our course-authoring workflow: mission-led, source-grounded,
+practice-heavy, and backed by explicit redaction, source-citation,
+high-stakes-topic, and publication-safety checks so generated courses avoid
+secrets, private endpoints, customer data, raw logs, and proprietary internal
+material. Its detailed workflow reference keeps attribution for the public
+teaching-skill pattern that inspired the learning model.
 
 ### `research`
 

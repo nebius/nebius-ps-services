@@ -50,8 +50,9 @@ All notable changes to the reusable Codex skills are tracked here.
 - Added the `create-learning-course` Codex skill for creating public-safe
   course workspaces, syllabi, lessons, exercises, glossaries, learning records,
   reusable assets, and publication review checkpoints from a learner mission
-  and trusted sources, adapted from the public teach-skill pattern with
-  explicit redaction and sensitive-information guardrails.
+  and trusted sources, using a mission-led learning model inspired by the
+  public teach-skill pattern with explicit redaction and
+  sensitive-information guardrails.
 - Added the `research` Codex skill for senior-engineer technical due
   diligence on technologies, APIs, RFCs, protocols, architecture patterns,
   products, and feature requirements, with ranked sources, internals,
