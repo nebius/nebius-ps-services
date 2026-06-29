@@ -2256,7 +2256,7 @@ def test_source_discovery_report_writer_persists_full_snapshot(tmp_path) -> None
                 soperator_onboarding_module.ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION
             )
         },
-        guidance_lines=("- Soperator support policy: status=supported, rule=test-rule",),
+        guidance_lines=("- Soperator upgrade path: status=supported, rule=test-rule",),
     )
 
     assert path == (
@@ -2283,7 +2283,7 @@ def test_source_discovery_report_writer_persists_full_snapshot(tmp_path) -> None
     assert "- Current Kubernetes version:" in summary
     assert "- Target Kubernetes version:" in summary
     assert "## Upgrade Guidance" in summary
-    assert "- Soperator support policy: status=supported, rule=test-rule" in summary
+    assert "- Soperator upgrade path: status=supported, rule=test-rule" in summary
 
 
 def test_source_discovery_report_writer_omits_malformed_k8s_versions(tmp_path) -> None:

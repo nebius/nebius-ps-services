@@ -6,6 +6,7 @@ import re
 import shlex
 import subprocess
 from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -7176,7 +7177,7 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "Target version: 4.0.1-ps.1" in result.output
     assert "Current Kubernetes version: 1.31" in result.output
     assert "Target Kubernetes version: 1.32" in result.output
-    assert "Soperator support policy: status=supported" in result.output
+    assert "Soperator upgrade path: status=supported" in result.output
     assert "Storage mode: create-aligned-sfs" in result.output
     assert "Compute mode: create-aligned-node-groups" in result.output
     assert "External upgrade required: yes" in result.output
@@ -8175,6 +8176,91 @@ def test_soperator_discover_command_routes_to_shared_bundle(
     assert f"Soperator discovery manifest: {bundle_path}" in result.output
 
 
+class _RecordingTerminalStatus:
+    def __init__(self, events: list[object]) -> None:
+        self._events = events
+
+    def __enter__(self):
+        self._events.append("enter")
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
+        del exc_type, exc, tb
+        self._events.append("exit")
+        return False
+
+
+class _RecordingTerminalConsole:
+    is_terminal = True
+
+    def __init__(self, events: list[object]) -> None:
+        self._events = events
+
+    def status(self, status_message: str, *, spinner: str):
+        self._events.append(("status", status_message, spinner))
+        return _RecordingTerminalStatus(self._events)
+
+    def print(self, *args: object, **_kwargs: object) -> None:
+        self._events.append(("print", " ".join(str(arg) for arg in args)))
+
+
+def test_soperator_discover_command_uses_terminal_spinner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("{}\n", encoding="utf-8")
+    bundle_path = (
+        tmp_path / "generated" / "reports" / "soperator-discovery" / "mk8s" / "manifest.json"
+    )
+    bundle_path.parent.mkdir(parents=True)
+    bundle_path.write_text("{}\n", encoding="utf-8")
+    events: list[object] = []
+
+    def _fake_discover(**_kwargs):
+        events.append("discover-body")
+        return bundle_path
+
+    monkeypatch.setattr(cli_module, "console", _RecordingTerminalConsole(events))
+    monkeypatch.setattr(cli_module, "_run_managed_soperator_discovery_command", _fake_discover)
+
+    result = runner.invoke(app, ["soperator", "discover", str(config_path), "--target", "mk8s"])
+
+    assert result.exit_code == 0, result.output
+    assert events[:4] == [
+        ("status", "[cyan]Collecting Soperator discovery bundle...[/cyan]", "dots"),
+        "enter",
+        "discover-body",
+        "exit",
+    ]
+
+
+def test_soperator_backup_command_uses_terminal_spinner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("{}\n", encoding="utf-8")
+    events: list[object] = []
+
+    def _fake_backup(**_kwargs):
+        events.append("backup-body")
+        return None
+
+    monkeypatch.setattr(cli_module, "console", _RecordingTerminalConsole(events))
+    monkeypatch.setattr(cli_module, "_run_standalone_soperator_backup", _fake_backup)
+
+    result = runner.invoke(app, ["soperator", "backup", str(config_path), "--target", "mk8s"])
+
+    assert result.exit_code == 0, result.output
+    assert events == [
+        ("status", "[cyan]Creating restore-capable Soperator backup...[/cyan]", "dots"),
+        "enter",
+        "backup-body",
+        "exit",
+    ]
+
+
 def test_soperator_discovery_result_prints_k8s_versions(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -8203,7 +8289,7 @@ def test_soperator_discovery_result_prints_k8s_versions(
                         "status": "supported",
                         "message": (
                             "Soperator 4.x targeting Kubernetes 1.33+ matches "
-                            "the committed cxcli support policy."
+                            "the committed cxcli upgrade-path policy."
                         ),
                         "evidence": {
                             "rule_id": "k8s-1-33-soperator-4-supported",
@@ -8231,10 +8317,10 @@ def test_soperator_discovery_result_prints_k8s_versions(
         "  - Required gate: upgrade Soperator to at least 1.23.0 before moving Kubernetes to 1.33+.",
         "  - Recommended order: Soperator 1.22.3 -> 1.23.0 while Kubernetes stays "
         "1.32; Kubernetes 1.32 -> 1.33 -> 1.34; Soperator 1.23.0 -> 4.0.2.",
-        "- Soperator support policy: status=supported, rule=k8s-1-33-soperator-4-supported, "
+        "- Soperator upgrade path: status=supported, rule=k8s-1-33-soperator-4-supported, "
         "source Soperator=1.22.3, target Soperator=4.0.2, target Kubernetes=1.34",
-        "  - Soperator 4.x targeting Kubernetes 1.33+ matches the committed cxcli support "
-        "policy.",
+        "  - Soperator 4.x targeting Kubernetes 1.33+ matches the committed cxcli "
+        "upgrade-path policy.",
         "- Discovery is read-only; unsupported or not-validated paths are gated when accepting "
         "onboarding or executing upgrade.",
     ]
@@ -8407,6 +8493,89 @@ def test_ext_soperator_discover_command_accepts_standalone_project_cluster(
     assert f"Soperator discovery manifest: {bundle_path}" in result.output
 
 
+def test_soperator_discovery_command_args_preserve_non_default_access() -> None:
+    assert cli_module._soperator_discovery_command_args(
+        command_group="ext-soperator",
+        config_path=None,
+        client_name="client-a",
+        tenant_id=None,
+        project_id="project-456",
+        target_ref="external-cluster",
+        output_dir=None,
+        namespace=None,
+        release_name=None,
+        kube_context=None,
+        cluster_id="mk8scluster-123",
+        access="internal",
+        to_chart_version=None,
+        to_k8s_version=None,
+        to_os=None,
+        to_gpu_stack_preset=None,
+        redaction="support",
+    ) == (
+        "nebius-cxcli",
+        "ext-soperator",
+        "discover",
+        "--client-name",
+        "client-a",
+        "--project-id",
+        "project-456",
+        "--target",
+        "external-cluster",
+        "--cluster-id",
+        "mk8scluster-123",
+        "--access",
+        "internal",
+        "--redaction",
+        "support",
+    )
+
+
+def test_ext_soperator_discover_command_uses_terminal_spinner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle_path = (
+        tmp_path
+        / "generated"
+        / "reports"
+        / "soperator-discovery"
+        / "mk8scluster-123"
+        / "manifest.json"
+    )
+    bundle_path.parent.mkdir(parents=True)
+    bundle_path.write_text("{}\n", encoding="utf-8")
+    events: list[object] = []
+
+    def _fake_discover(**_kwargs):
+        events.append("discover-body")
+        return bundle_path
+
+    monkeypatch.setattr(cli_module, "console", _RecordingTerminalConsole(events))
+    monkeypatch.setattr(cli_module, "_discover_runtime_auth_profiles", lambda: [])
+    monkeypatch.setattr(cli_module, "_run_external_soperator_discovery_command", _fake_discover)
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "discover",
+            "--project-id",
+            "project-456",
+            "--cluster-id",
+            "mk8scluster-123",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert events[:4] == [
+        ("status", "[cyan]Collecting external Soperator discovery bundle...[/cyan]", "dots"),
+        "enter",
+        "discover-body",
+        "exit",
+    ]
+
+
 def test_ext_soperator_discover_standalone_cluster_requires_project_id() -> None:
     result = runner.invoke(
         app,
@@ -8421,6 +8590,278 @@ def test_ext_soperator_discover_standalone_cluster_requires_project_id() -> None
     assert result.exit_code != 0
     assert "requires" in result.output
     assert "--project-id" in result.output
+
+
+def test_ext_soperator_backup_command_accepts_standalone_project_cluster(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backup_dir = tmp_path / "deployments"
+    captured: dict[str, object] = {}
+
+    def _fake_backup(**kwargs):
+        captured.update(kwargs)
+        return None
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        cli_module,
+        "_discover_runtime_auth_profiles",
+        lambda: [("client-a", "project-456")],
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_run_standalone_external_soperator_backup",
+        _fake_backup,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "backup",
+            "--tenant-id",
+            "tenant-123",
+            "--project-id",
+            "project-456",
+            "--cluster-id",
+            "mk8scluster-123",
+            "--backup-dir",
+            str(backup_dir),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "client_name": "client-a",
+        "tenant_id": "tenant-123",
+        "project_id": "project-456",
+        "target_ref": None,
+        "backup_dir": backup_dir,
+        "namespace": None,
+        "release_name": None,
+        "kube_context": None,
+        "cluster_id": "mk8scluster-123",
+        "access": "external",
+        "dry_run": False,
+    }
+
+
+def test_ext_soperator_backup_command_uses_terminal_spinner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[object] = []
+
+    def _fake_backup(**_kwargs):
+        events.append("backup-body")
+        return None
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli_module, "console", _RecordingTerminalConsole(events))
+    monkeypatch.setattr(cli_module, "_discover_runtime_auth_profiles", lambda: [])
+    monkeypatch.setattr(
+        cli_module,
+        "_run_standalone_external_soperator_backup",
+        _fake_backup,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "backup",
+            "--project-id",
+            "project-456",
+            "--cluster-id",
+            "mk8scluster-123",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert events == [
+        (
+            "status",
+            "[cyan]Creating restore-capable external Soperator backup...[/cyan]",
+            "dots",
+        ),
+        "enter",
+        "backup-body",
+        "exit",
+    ]
+
+
+def test_ext_soperator_backup_standalone_cluster_requires_project_id() -> None:
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "backup",
+            "--cluster-id",
+            "mk8scluster-123",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "requires" in result.output
+    assert "--project-id" in result.output
+
+
+def test_standalone_external_soperator_backup_cluster_uses_temporary_handoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, object] = {}
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli_module, "_runtime_auth_env_available", lambda: False)
+
+    def _cache_load(**kwargs):
+        calls["cache_load"] = kwargs
+        return True
+
+    def _handoff_spec(**kwargs):
+        calls["handoff"] = kwargs
+        return cli_module._Mk8sKubeconfigSpec(
+            cluster_entry_name="cluster",
+            user_entry_name="user",
+            context_name="generated-context",
+            server="https://mk8s.example.test",
+            ca_pem="ca",
+            exec_command="nebius-cxcli",
+            exec_args=("mk8s-token",),
+        )
+
+    def _fake_backup(**kwargs):
+        calls["backup"] = kwargs
+        assert kwargs["config_path"].is_file()
+        config_payload = yaml.safe_load(kwargs["config_path"].read_text(encoding="utf-8"))
+        assert config_payload["apps"]["charts"][0]["version"] == "3.0.5"
+        assert config_payload["apps"]["charts"][0]["values"] == {
+            "slurmNodes": {"accounting": {"externalDB": {"enabled": False}}}
+        }
+        return None
+
+    monkeypatch.setattr(cli_module, "_runtime_auth_cache_load", _cache_load)
+    monkeypatch.setattr(cli_module, "_mk8s_cluster_handoff_spec_for_identity", _handoff_spec)
+    monkeypatch.setattr(
+        cli_module,
+        "collect_kubectl_soperator_snapshot",
+        lambda **_kwargs: _old_soperator_snapshot(),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_collect_soperator_discovery_helm_values",
+        lambda **_kwargs: {"slurmNodes": {"accounting": {"externalDB": {"enabled": False}}}},
+    )
+    monkeypatch.setattr(cli_module, "_run_standalone_soperator_backup", _fake_backup)
+
+    cli_module._run_standalone_external_soperator_backup(
+        client_name="client-a",
+        tenant_id=None,
+        project_id="project-456",
+        target_ref=None,
+        backup_dir=None,
+        namespace=None,
+        release_name=None,
+        kube_context=None,
+        cluster_id="mk8scluster-123",
+        access="external",
+        dry_run=False,
+    )
+
+    assert calls["cache_load"] == {"project_id": "project-456", "client_name": "client-a"}
+    assert calls["handoff"] == {
+        "project_id": "project-456",
+        "client_name": "client-a",
+        "cluster_id": "mk8scluster-123",
+        "access": "external",
+    }
+    backup_call = calls["backup"]
+    assert backup_call["target_ref"] == "mk8scluster-123"
+    assert backup_call["backup_dir"] == tmp_path / "backups"
+    assert backup_call["kube_context"] == "generated-context"
+    assert backup_call["source_kind"] == "external-soperator-backup"
+    assert backup_call["command_group"] == "ext-soperator"
+    payload = backup_call["source_payload"]
+    assert payload["client_info"]["nebius"]["project_id"] == "project-456"
+    assert payload["apps"]["charts"][0]["target_ref"] == "mk8scluster-123"
+    assert payload["apps"]["charts"][0]["release-name"] == "soperator"
+    assert payload["apps"]["charts"][0]["version"] == "3.0.5"
+    assert payload["apps"]["charts"][0]["values"] == {
+        "slurmNodes": {"accounting": {"externalDB": {"enabled": False}}}
+    }
+    _target, plan = cli_module._soperator_backup_plan_from_payload(
+        source_payload=payload,
+        target_ref="mk8scluster-123",
+        namespace=None,
+        release_name=None,
+        interactive=False,
+    )
+    assert plan.current_version == "3.0.5"
+    assert backup_call["command"] == (
+        "nebius-cxcli",
+        "ext-soperator",
+        "backup",
+        "--client-name",
+        "client-a",
+        "--project-id",
+        "project-456",
+        "--target",
+        "mk8scluster-123",
+        "--cluster-id",
+        "mk8scluster-123",
+    )
+
+
+def test_standalone_external_soperator_backup_external_db_fails_before_archive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    @contextmanager
+    def _cluster_context(*_args, **_kwargs):
+        yield "generated-context"
+
+    def _unexpected_kubernetes_collection(**_kwargs):
+        raise AssertionError("archive collection should not run for external DB")
+
+    monkeypatch.setattr(
+        cli_module,
+        "_standalone_external_soperator_backup_cluster_context",
+        _cluster_context,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_collect_soperator_discovery_helm_values",
+        lambda **_kwargs: {"slurmNodes": {"accounting": {"externalDB": {"enabled": True}}}},
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "collect_kubectl_soperator_snapshot",
+        lambda **_kwargs: _old_soperator_snapshot(),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_soperator_upgrade_collect_kubernetes_restore_material",
+        _unexpected_kubernetes_collection,
+    )
+
+    with pytest.raises(RuntimeError, match="external DB backup support"):
+        cli_module._run_standalone_external_soperator_backup(
+            client_name="client-a",
+            tenant_id=None,
+            project_id="project-456",
+            target_ref=None,
+            backup_dir=None,
+            namespace=None,
+            release_name=None,
+            kube_context=None,
+            cluster_id="mk8scluster-123",
+            access="external",
+            dry_run=False,
+        )
 
 
 def test_ext_soperator_discover_invalid_redaction_fails_before_cluster_collection(
@@ -8888,7 +9329,7 @@ def test_soperator_onboard_prints_target_compatible_layout_decisions(
     assert "Storage layout decision: keep existing storage" in result.output
     assert "no aligned SFS creation or storage data migration is planned" in normalized_output
     assert "Compute layout decision: keep existing compute" in result.output
-    assert "Soperator support policy: status=supported" in result.output
+    assert "Soperator upgrade path: status=supported" in result.output
     assert (
         "no replacement compute node groups or compute migration are planned" in normalized_output
     )
@@ -8929,7 +9370,7 @@ def test_soperator_onboard_prints_target_compatible_layout_decisions(
     assert "- Upgrade path evaluation:" in summary
     assert "  - Kubernetes: 1.34" in summary
     assert "  - Soperator: 1.23.3 ->" in summary
-    assert "Soperator support policy: status=supported" in summary
+    assert "Soperator upgrade path: status=supported" in summary
 
 
 def test_soperator_onboard_noninteractive_cluster_id_generates_kube_access(

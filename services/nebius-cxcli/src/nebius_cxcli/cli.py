@@ -3127,13 +3127,22 @@ def _upgrade_node_group_blank_prompt_text(path_prefix: str) -> str:
 
 
 @contextmanager
-def _upgrade_discovery_status(message: str) -> Iterator[None]:
+def _command_status(message: str, *, enabled: bool = True) -> Iterator[None]:
+    if not enabled:
+        yield
+        return
     if getattr(console, "is_terminal", False) and hasattr(console, "status"):
         with console.status(message, spinner="dots"):
             yield
         return
     console.print(f"[dim]{message}[/dim]", soft_wrap=True)
     yield
+
+
+@contextmanager
+def _upgrade_discovery_status(message: str) -> Iterator[None]:
+    with _command_status(message):
+        yield
 
 
 def _prompt_upgrade_disruption_options_if_guided(
@@ -4397,6 +4406,7 @@ def _soperator_upgrade_backup_filename(
     k8s_to: str | None,
     generated_at: datetime,
     prefix: str = "soperator-upgrade",
+    include_transitions: bool = True,
 ) -> str:
     timestamp = generated_at.strftime("%Y%m%dT%H%M%SZ")
     archive_prefix = _soperator_upgrade_archive_token(prefix, fallback="soperator-backup")
@@ -4405,6 +4415,11 @@ def _soperator_upgrade_backup_filename(
     chart_to_text = _soperator_upgrade_archive_token(chart_to, fallback=chart_from_text)
     k8s_from_text = _soperator_upgrade_archive_token(k8s_from, fallback="unknown")
     k8s_to_text = _soperator_upgrade_archive_token(k8s_to, fallback=k8s_from_text)
+    if not include_transitions:
+        suffix = f"chart-{chart_from_text}"
+        if _non_empty_text(k8s_from) or _non_empty_text(k8s_to):
+            suffix += f"-k8s-{_soperator_upgrade_archive_token(k8s_to or k8s_from, fallback='unknown')}"
+        return f"{archive_prefix}-{target}-{timestamp}-{suffix}.tar.gz"
     return (
         f"{archive_prefix}-{target}-{timestamp}-chart-{chart_from_text}-to-{chart_to_text}"
         f"-k8s-{k8s_from_text}-to-{k8s_to_text}.tar.gz"
@@ -5190,6 +5205,7 @@ def _create_restore_capable_soperator_upgrade_backup(
         k8s_to=target_k8s_version,
         generated_at=generated_at,
         prefix=archive_prefix,
+        include_transitions=not source_kind.endswith("-backup"),
     )
     accounting_state: dict[str, Any] | None = None
     try:
@@ -9142,15 +9158,28 @@ def _soperator_backup_sensitive_material_message(
 def _soperator_backup_command_args(
     *,
     command_group: str,
-    config_path: Path,
+    config_path: Path | None,
+    client_name: str | None = None,
+    tenant_id: str | None = None,
+    project_id: str | None = None,
     target_ref: str | None,
     backup_dir: Path | None,
     namespace: str | None,
     release_name: str | None,
     kube_context: str | None,
+    cluster_id: str | None = None,
+    access: str | None = None,
     dry_run: bool,
 ) -> tuple[str, ...]:
-    args = ["nebius-cxcli", command_group, "backup", str(config_path)]
+    args = ["nebius-cxcli", command_group, "backup"]
+    if config_path is not None:
+        args.append(str(config_path))
+    if _non_empty_text(client_name):
+        args.extend(["--client-name", str(client_name)])
+    if _non_empty_text(tenant_id):
+        args.extend(["--tenant-id", str(tenant_id)])
+    if _non_empty_text(project_id):
+        args.extend(["--project-id", str(project_id)])
     if _non_empty_text(target_ref):
         args.extend(["--target", str(target_ref)])
     if backup_dir is not None:
@@ -9161,6 +9190,10 @@ def _soperator_backup_command_args(
         args.extend(["--release-name", str(release_name)])
     if _non_empty_text(kube_context):
         args.extend(["--kube-context", str(kube_context)])
+    if _non_empty_text(cluster_id):
+        args.extend(["--cluster-id", str(cluster_id)])
+        if _non_empty_text(access) and _non_empty_text(access) != "external":
+            args.extend(["--access", str(access)])
     if dry_run:
         args.append("--dry-run")
     return tuple(args)
@@ -9330,6 +9363,7 @@ def _run_standalone_soperator_backup(
     interactive: bool,
     source_kind: str,
     command_group: str,
+    command: Sequence[str] | None = None,
 ) -> _SoperatorUpgradeBackupResult | None:
     target, plan = _soperator_backup_plan_from_payload(
         source_payload=source_payload,
@@ -9366,7 +9400,9 @@ def _run_standalone_soperator_backup(
         plan=plan,
         checkpoint_id=checkpoint_id,
         target_k8s_version=None,
-        command=_soperator_backup_command_args(
+        command=tuple(command)
+        if command is not None
+        else _soperator_backup_command_args(
             command_group=command_group,
             config_path=config_path,
             target_ref=target.target_ref,
@@ -9397,8 +9433,265 @@ def _external_soperator_backup_kube_context(
         return explicit
     target = soperator_onboarding_target(payload, target_ref=target_ref)
     if isinstance(target, Mapping):
-            return _non_empty_text(target.get("kube_context")) or None
+        return _non_empty_text(target.get("kube_context")) or None
     return None
+
+
+def _standalone_external_soperator_backup_payload(
+    *,
+    client_name: str | None,
+    tenant_id: str | None,
+    project_id: str | None,
+    target_ref: str,
+    namespace: str | None,
+    release_name: str | None,
+    cluster_id: str | None,
+    kube_context: str | None,
+    access: str,
+) -> dict[str, Any]:
+    payload = _standalone_external_soperator_discovery_payload(
+        client_name=client_name,
+        tenant_id=tenant_id,
+        project_id=project_id,
+    )
+    payload["apps"]["charts"].append(
+        {
+            "id": _SOPERATOR_APP_ID,
+            "instance_id": target_ref,
+            TARGET_REF_FIELD: target_ref,
+            "enabled": True,
+            "namespace": _non_empty_text(namespace) or "soperator",
+            "release-name": _non_empty_text(release_name) or "soperator",
+            "version": "unversioned",
+            "values": {},
+        }
+    )
+    target_row: dict[str, Any] = {
+        DEPLOY_TARGET_KIND_FIELD: EXTERNAL_MK8S_TARGET_KIND,
+        DEPLOY_TARGET_OWNERSHIP_FIELD: EXTERNAL_TARGET_OWNERSHIP,
+        "instance_id": target_ref,
+    }
+    if _non_empty_text(cluster_id):
+        target_row["cluster_id"] = _non_empty_text(cluster_id)
+        target_row["access"] = access
+    if _non_empty_text(kube_context):
+        target_row["kube_context"] = _non_empty_text(kube_context)
+    payload["deploy"]["targets"].append(target_row)
+    return payload
+
+
+def _soperator_live_release_version_from_snapshot(
+    snapshot: Mapping[str, Any],
+    *,
+    namespace: str | None,
+    release_name: str | None,
+) -> str:
+    release = _soperator_discovery_soperator_release(
+        snapshot,
+        namespace=namespace,
+        release_name=release_name,
+    )
+    for key in ("chart_version", "chart", "app_version", "appVersion", "version"):
+        normalized = normalize_soperator_release_version(str(release.get(key, "") or ""))
+        if normalized:
+            return normalized
+    return ""
+
+
+def _apply_standalone_external_soperator_backup_live_evidence(
+    payload: dict[str, Any],
+    *,
+    target_ref: str,
+    namespace: str | None,
+    release_name: str | None,
+    kube_context: str | None,
+) -> None:
+    snapshot = collect_kubectl_soperator_snapshot(kube_context=kube_context)
+    target = _parse_soperator_upgrade_target(target_ref)
+    chart_row = _source_helm_chart_row(payload, target)
+    live_version = _soperator_live_release_version_from_snapshot(
+        snapshot,
+        namespace=namespace,
+        release_name=release_name,
+    )
+    if live_version:
+        chart_row["version"] = live_version
+    release = _soperator_discovery_soperator_release(
+        snapshot,
+        namespace=namespace,
+        release_name=release_name,
+    )
+    live_namespace = _non_empty_text(release.get("namespace"))
+    live_release_name = _non_empty_text(release.get("name"))
+    if live_namespace and not _non_empty_text(namespace):
+        chart_row["namespace"] = live_namespace
+    if live_release_name and not _non_empty_text(release_name):
+        chart_row["release-name"] = live_release_name
+    values = _collect_soperator_discovery_helm_values(
+        namespace=_non_empty_text(chart_row.get("namespace")) or "soperator",
+        release_name=_non_empty_text(chart_row.get("release-name")) or "soperator",
+        kube_context=kube_context,
+    )
+    if not isinstance(values, dict) or values.get("status") == "not_collected":
+        return
+    chart_row["values"] = values
+
+
+@contextmanager
+def _standalone_external_soperator_backup_cluster_context(
+    payload: Mapping[str, Any],
+    *,
+    cluster_id: str,
+    access: str,
+) -> Iterator[str]:
+    client_name, _tenant_id, project_id, _region_id, _email = _identity_values_from_payload(payload)
+    if not project_id:
+        raise RuntimeError("Standalone ext-soperator backup with --cluster-id requires --project-id.")
+    if not _runtime_auth_env_available():
+        _runtime_auth_cache_load(project_id=project_id, client_name=client_name)
+    spec = _mk8s_cluster_handoff_spec_for_identity(
+        project_id=project_id,
+        client_name=client_name,
+        cluster_id=cluster_id,
+        access=access,
+    )
+    with ExitStack() as stack:
+        kube_root = Path(
+            stack.enter_context(tempfile.TemporaryDirectory(prefix="nebius-cxcli-kube-"))
+        )
+        kubeconfig_path = kube_root / "config"
+        _write_kubeconfig_file(kubeconfig_path, spec)
+        with _temporary_env({"KUBECONFIG": str(kubeconfig_path)}):
+            yield spec.context_name
+
+
+def _run_standalone_external_soperator_backup(
+    *,
+    client_name: str | None,
+    tenant_id: str | None,
+    project_id: str | None,
+    target_ref: str | None,
+    backup_dir: Path | None,
+    namespace: str | None,
+    release_name: str | None,
+    kube_context: str | None,
+    cluster_id: str | None,
+    access: str,
+    dry_run: bool,
+) -> _SoperatorUpgradeBackupResult | None:
+    base_payload = _standalone_external_soperator_discovery_payload(
+        client_name=client_name,
+        tenant_id=tenant_id,
+        project_id=project_id,
+    )
+    resolved_target_ref = _resolve_external_soperator_discovery_target_ref(
+        base_payload,
+        target_ref=target_ref,
+        cluster_id=cluster_id,
+        kube_context=kube_context,
+    )
+    resolved_access = _normalize_mk8s_handoff_access(access)
+    payload = _standalone_external_soperator_backup_payload(
+        client_name=client_name,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        target_ref=resolved_target_ref,
+        namespace=namespace,
+        release_name=release_name,
+        cluster_id=cluster_id,
+        kube_context=kube_context,
+        access=resolved_access,
+    )
+    backup_root = backup_dir or (Path.cwd() / "backups")
+    command = _soperator_backup_command_args(
+        command_group="ext-soperator",
+        config_path=None,
+        client_name=client_name,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        target_ref=resolved_target_ref,
+        backup_dir=backup_dir,
+        namespace=namespace,
+        release_name=release_name,
+        kube_context=kube_context,
+        cluster_id=cluster_id,
+        access=resolved_access,
+        dry_run=False,
+    )
+    with tempfile.TemporaryDirectory(prefix="nebius-cxcli-ext-soperator-backup-") as temp_dir:
+        config_path = Path(temp_dir) / "config.yaml"
+        config_path.write_text(render_updated_source_payload(payload), encoding="utf-8")
+        if dry_run:
+            return _run_standalone_soperator_backup(
+                config_path=config_path,
+                source_payload=payload,
+                target_ref=resolved_target_ref,
+                backup_dir=backup_root,
+                namespace=namespace,
+                release_name=release_name,
+                kube_context=kube_context,
+                dry_run=True,
+                interactive=False,
+                source_kind="external-soperator-backup",
+                command_group="ext-soperator",
+            )
+        explicit_context = _non_empty_text(kube_context)
+        resolved_cluster_id = _non_empty_text(cluster_id)
+        if resolved_cluster_id:
+            with _standalone_external_soperator_backup_cluster_context(
+                payload,
+                cluster_id=resolved_cluster_id,
+                access=resolved_access,
+            ) as generated_context:
+                _apply_standalone_external_soperator_backup_live_evidence(
+                    payload,
+                    target_ref=resolved_target_ref,
+                    namespace=namespace,
+                    release_name=release_name,
+                    kube_context=generated_context,
+                )
+                config_path.write_text(render_updated_source_payload(payload), encoding="utf-8")
+                return _run_standalone_soperator_backup(
+                    config_path=config_path,
+                    source_payload=payload,
+                    target_ref=resolved_target_ref,
+                    backup_dir=backup_root,
+                    namespace=namespace,
+                    release_name=release_name,
+                    kube_context=generated_context,
+                    dry_run=False,
+                    interactive=False,
+                    source_kind="external-soperator-backup",
+                    command_group="ext-soperator",
+                    command=command,
+                )
+        if not explicit_context:
+            raise RuntimeError(
+                "Standalone ext-soperator backup requires --cluster-id or --kube-context. "
+                "Pass CONFIG_YAML to back up an onboarded external target."
+            )
+        _apply_standalone_external_soperator_backup_live_evidence(
+            payload,
+            target_ref=resolved_target_ref,
+            namespace=namespace,
+            release_name=release_name,
+            kube_context=explicit_context,
+        )
+        config_path.write_text(render_updated_source_payload(payload), encoding="utf-8")
+        return _run_standalone_soperator_backup(
+            config_path=config_path,
+            source_payload=payload,
+            target_ref=resolved_target_ref,
+            backup_dir=backup_root,
+            namespace=namespace,
+            release_name=release_name,
+            kube_context=explicit_context,
+            dry_run=False,
+            interactive=False,
+            source_kind="external-soperator-backup",
+            command_group="ext-soperator",
+            command=command,
+        )
 
 
 def _normalize_soperator_discovery_redaction(raw_value: str | None) -> str:
@@ -9421,6 +9714,7 @@ def _soperator_discovery_command_args(
     release_name: str | None,
     kube_context: str | None,
     cluster_id: str | None = None,
+    access: str | None = None,
     to_chart_version: str | None,
     to_k8s_version: str | None,
     to_os: str | None,
@@ -9448,6 +9742,8 @@ def _soperator_discovery_command_args(
         args.extend(["--kube-context", str(kube_context)])
     if _non_empty_text(cluster_id):
         args.extend(["--cluster-id", str(cluster_id)])
+        if _non_empty_text(access) and _non_empty_text(access) != "external":
+            args.extend(["--access", str(access)])
     if _non_empty_text(to_chart_version):
         args.extend(["--to-chart-version", str(to_chart_version)])
     if _non_empty_text(to_k8s_version):
@@ -9613,6 +9909,7 @@ def _write_soperator_discovery_bundle_from_snapshot(
     release_name: str | None,
     kube_context: str | None,
     cluster_id: str = "",
+    access: str | None = None,
     cluster_name: str = "",
     to_chart_version: str | None = None,
     to_k8s_version: str | None = None,
@@ -9662,6 +9959,7 @@ def _write_soperator_discovery_bundle_from_snapshot(
         release_name=release_name,
         kube_context=kube_context,
         cluster_id=cluster_id,
+        access=access,
         to_chart_version=to_chart_version,
         to_k8s_version=to_k8s_version,
         to_os=to_os,
@@ -9695,16 +9993,44 @@ def _write_soperator_discovery_bundle_from_snapshot(
     )
 
 
-def _soperator_discovery_soperator_release(snapshot: Mapping[str, Any]) -> Mapping[str, Any]:
+def _soperator_discovery_soperator_release(
+    snapshot: Mapping[str, Any],
+    *,
+    namespace: str | None = None,
+    release_name: str | None = None,
+) -> Mapping[str, Any]:
     releases = snapshot.get("helm_releases")
     if not isinstance(releases, Sequence) or isinstance(releases, (str, bytes, bytearray)):
         return {}
+    requested_namespace = _non_empty_text(namespace).lower()
+    requested_release_name = _non_empty_text(release_name).lower()
+    if requested_namespace or requested_release_name:
+        for item in releases:
+            if not isinstance(item, Mapping):
+                continue
+            name = _non_empty_text(item.get("name")).lower()
+            release_namespace = _non_empty_text(item.get("namespace")).lower()
+            chart = _non_empty_text(item.get("chart") or item.get("chart_name")).lower()
+            if requested_release_name and name != requested_release_name:
+                continue
+            if requested_namespace and release_namespace != requested_namespace:
+                continue
+            if (
+                name in {"soperator", "slurm-operator", "soperator-controller"}
+                or "soperator" in chart
+                or "slurm-operator" in chart
+            ):
+                return item
     for item in releases:
         if not isinstance(item, Mapping):
             continue
         name = _non_empty_text(item.get("name")).lower()
         chart = _non_empty_text(item.get("chart") or item.get("chart_name")).lower()
-        if name in {"soperator", "slurm-operator", "soperator-controller"} or "soperator" in chart:
+        if (
+            name in {"soperator", "slurm-operator", "soperator-controller"}
+            or "soperator" in chart
+            or "slurm-operator" in chart
+        ):
             return item
     return {}
 
@@ -9965,6 +10291,7 @@ def _run_external_soperator_discovery_command(
             release_name=release_name,
             kube_context=collection_context,
             cluster_id=resolved_cluster_id,
+            access=resolved_access,
             cluster_name=resolved_target_ref,
             to_chart_version=to_chart_version,
             to_k8s_version=to_k8s_version,
@@ -9993,6 +10320,7 @@ def _run_external_soperator_discovery_command(
         release_name=release_name,
         kube_context=explicit_context,
         cluster_id=resolved_cluster_id,
+        access=resolved_access,
         cluster_name=resolved_target_ref,
         to_chart_version=to_chart_version,
         to_k8s_version=to_k8s_version,
@@ -10098,21 +10426,22 @@ def soperator_discover_command(
 ) -> None:
     try:
         source_payload = _load_source_payload(config_path)
-        path = _run_managed_soperator_discovery_command(
-            config_path=config_path,
-            source_payload=source_payload,
-            target_ref=target_ref,
-            output_dir=output_dir,
-            namespace=namespace,
-            release_name=release_name,
-            kube_context=kube_context,
-            to_chart_version=to_chart_version,
-            to_k8s_version=to_k8s_version,
-            to_os=to_os,
-            to_gpu_stack_preset=to_gpu_stack_preset,
-            redaction=redaction,
-            interactive=interactive,
-        )
+        with _command_status("[cyan]Collecting Soperator discovery bundle...[/cyan]"):
+            path = _run_managed_soperator_discovery_command(
+                config_path=config_path,
+                source_payload=source_payload,
+                target_ref=target_ref,
+                output_dir=output_dir,
+                namespace=namespace,
+                release_name=release_name,
+                kube_context=kube_context,
+                to_chart_version=to_chart_version,
+                to_k8s_version=to_k8s_version,
+                to_os=to_os,
+                to_gpu_stack_preset=to_gpu_stack_preset,
+                redaction=redaction,
+                interactive=interactive,
+            )
         _print_soperator_discovery_result(path)
     except typer.Exit:
         raise
@@ -10171,19 +10500,23 @@ def soperator_backup_command(
 ) -> None:
     try:
         source_payload = _load_source_payload(config_path)
-        _run_standalone_soperator_backup(
-            config_path=config_path,
-            source_payload=source_payload,
-            target_ref=target_ref,
-            backup_dir=backup_dir,
-            namespace=namespace,
-            release_name=release_name,
-            kube_context=kube_context,
-            dry_run=dry_run,
-            interactive=interactive,
-            source_kind="managed-backup",
-            command_group="soperator",
-        )
+        with _command_status(
+            "[cyan]Creating restore-capable Soperator backup...[/cyan]",
+            enabled=not dry_run,
+        ):
+            _run_standalone_soperator_backup(
+                config_path=config_path,
+                source_payload=source_payload,
+                target_ref=target_ref,
+                backup_dir=backup_dir,
+                namespace=namespace,
+                release_name=release_name,
+                kube_context=kube_context,
+                dry_run=dry_run,
+                interactive=interactive,
+                source_kind="managed-backup",
+                command_group="soperator",
+            )
     except typer.Exit:
         raise
     except Exception as exc:  # pragma: no cover - CLI surface
@@ -10370,7 +10703,7 @@ def soperator_upgrade_command(
         typer.Option(
             "--allow-unsupported-soperator-upgrade-path/--no-allow-unsupported-soperator-upgrade-path",
             help=(
-                "Allow execution of an unsupported or not-validated Soperator support-policy "
+                "Allow execution of an unsupported or not-validated Soperator upgrade "
                 "path. This does not bypass Kubernetes minor-hop, backup, quota, "
                 "protected-state, or other safety checks."
             ),
@@ -15177,7 +15510,7 @@ def _soperator_support_policy_failure_message(
         return (
             "Unsupported Soperator/Kubernetes upgrade path for "
             f"{command_name}: {_soperator_support_finding_label(finding)}. "
-            f"Reason: {message or 'the path is not in the committed cxcli support policy'}. "
+            f"Reason: {message or 'the path is not in the committed cxcli upgrade-path policy'}. "
             "Choose a supported intermediate Soperator or Kubernetes target, or rerun with "
             "--allow-unsupported-soperator-upgrade-path for an explicit advanced/testing "
             "override. This override does not bypass Kubernetes minor-version hop validation, "
@@ -15214,7 +15547,7 @@ def _soperator_support_override_report_mapping(report: Mapping[str, Any]) -> dic
         evidence["original_severity"] = finding.get("severity")
         finding["severity"] = "recommended"
         finding["message"] = (
-            "Override accepted for unsupported Soperator upgrade support policy. "
+            "Override accepted for unsupported Soperator upgrade path. "
             + _non_empty_text(finding.get("message"))
         )
     return next_report
@@ -15242,25 +15575,27 @@ def _soperator_support_policy_plan_lines(
     report: Mapping[str, Any] | Any,
     *,
     reject_disposition: str = "execution blocked",
+    label: str = "Soperator upgrade path",
+    rejection_subject: str = "Soperator upgrade-path rejection",
 ) -> tuple[str, ...]:
     lines: list[str] = []
     for finding in soperator_upgrade_support_findings(report):
         message = _non_empty_text(finding.get("message"))
-        prefix = "- Soperator support policy: "
+        prefix = f"- {label}: "
         if _non_empty_text(finding.get("status")) in SOPERATOR_UPGRADE_SUPPORT_REJECT_STATUSES:
             evidence = _soperator_support_finding_evidence(finding)
             override_used = evidence.get("override_used") is True
             disposition = "override accepted" if override_used else reject_disposition
-            prefix = f"- Soperator support policy ({disposition}): "
+            prefix = f"- {label} ({disposition}): "
         elif _non_empty_text(finding.get("status")) == "supported_with_warning":
-            prefix = "- Soperator support policy warning: "
+            prefix = f"- {label} warning: "
         lines.append(prefix + _soperator_support_finding_label(finding))
         if message:
             lines.append(f"  - {message}")
         if _non_empty_text(finding.get("status")) in SOPERATOR_UPGRADE_SUPPORT_REJECT_STATUSES:
             lines.append(
                 "  - Override scope: --allow-unsupported-soperator-upgrade-path only "
-                "bypasses this Soperator support-policy rejection; Kubernetes minor-hop "
+                f"bypasses this {rejection_subject}; Kubernetes minor-hop "
                 "validation, backup, quota, protected-state, and other safety preflights "
                 "still apply."
             )
@@ -15497,6 +15832,8 @@ def _soperator_discovery_upgrade_guidance_lines(
         _soperator_support_policy_plan_lines(
             report,
             reject_disposition="execute requires override",
+            label="Soperator upgrade path",
+            rejection_subject="Soperator upgrade-path rejection",
         )
     )
     if lines:
@@ -46865,28 +47202,71 @@ def component_add_command(
 
 @ext_soperator_app.command(
     "backup",
-    short_help="Create a restore-capable backup for an onboarded external Soperator cluster.",
+    short_help="Create a restore-capable backup for an external Soperator cluster.",
     epilog=(
-        "Example: nebius-cxcli ext-soperator backup <config.yaml> --target external-cluster. "
-        "The target must be onboarded and accepted. The archive includes raw Secrets and "
-        "the chart-managed MariaDB accounting DB dump when live accounting exists."
+        "Examples: nebius-cxcli ext-soperator backup <config.yaml> --target external-cluster; "
+        "nebius-cxcli ext-soperator backup --project-id PROJECT --cluster-id MK8SCLUSTER. "
+        "Use the config form for an onboarded and accepted target, or the standalone "
+        "--project-id plus --cluster-id/--kube-context form before onboarding. The archive "
+        "includes raw Secrets and the chart-managed MariaDB accounting DB dump when live "
+        "accounting exists."
     ),
 )
 def ext_soperator_backup_command(
     config_path: Annotated[
-        Path,
-        typer.Argument(metavar="CONFIG_YAML", help=_CONFIG_YAML_ARGUMENT_HELP),
-    ],
+        Path | None,
+        typer.Argument(
+            metavar="CONFIG_YAML",
+            help=(
+                _CONFIG_YAML_ARGUMENT_HELP
+                + " Omit for standalone --project-id plus --cluster-id/--kube-context backup."
+            ),
+        ),
+    ] = None,
+    client_name: Annotated[
+        str | None,
+        typer.Option(
+            "--client-name",
+            help=(
+                "Optional client name for standalone backup runtime-auth cache lookup. "
+                "When omitted, cxcli uses the unique cached profile for --project-id if one "
+                "exists, or falls back to the normal Nebius SDK auth order."
+            ),
+        ),
+    ] = None,
+    tenant_id: Annotated[
+        str | None,
+        typer.Option(
+            "--tenant-id",
+            help="Optional Nebius tenant identifier for standalone backup metadata.",
+        ),
+    ] = None,
+    project_id: Annotated[
+        str | None,
+        typer.Option(
+            "--project-id",
+            help=(
+                "Nebius project identifier for standalone --cluster-id backup when no "
+                "config path is supplied."
+            ),
+        ),
+    ] = None,
     target_ref_opt: Annotated[
         str | None,
         typer.Option(
             "--target",
-            help="cxcli target id of the onboarded external MK8s target.",
+            help=(
+                "cxcli target id of the onboarded external MK8s target, or archive target id "
+                "for standalone backup."
+            ),
         ),
     ] = None,
     backup_dir: Annotated[
         Path | None,
-        typer.Option("--backup-dir", help="Backup directory. Default: <config.yaml parent>/backups."),
+        typer.Option(
+            "--backup-dir",
+            help="Backup directory. Default: <config.yaml parent>/backups, or ./backups in standalone mode.",
+        ),
     ] = None,
     namespace: Annotated[
         str | None,
@@ -46900,6 +47280,20 @@ def ext_soperator_backup_command(
         str | None,
         typer.Option("--kube-context", help="kubectl/helm context to use for the backup."),
     ] = None,
+    cluster_id: Annotated[
+        str | None,
+        typer.Option(
+            "--cluster-id",
+            help="Nebius MK8s cluster id to back up through a temporary kubeconfig.",
+        ),
+    ] = None,
+    access: Annotated[
+        str,
+        typer.Option(
+            "--access",
+            help="MK8s API endpoint for --cluster-id temporary kubeconfig: external or internal.",
+        ),
+    ] = "external",
     dry_run: Annotated[
         bool,
         typer.Option(
@@ -46909,6 +47303,50 @@ def ext_soperator_backup_command(
     ] = False,
 ) -> None:
     try:
+        if config_path is None:
+            if not _non_empty_text(cluster_id) and not _non_empty_text(kube_context):
+                raise RuntimeError(
+                    "Standalone ext-soperator backup requires --cluster-id or --kube-context. "
+                    "Pass CONFIG_YAML to back up an onboarded external target."
+                )
+            if _non_empty_text(cluster_id) and not _non_empty_text(project_id):
+                raise RuntimeError(
+                    "Standalone ext-soperator backup with --cluster-id requires --project-id. "
+                    "--tenant-id is optional."
+                )
+            command_client_name = _standalone_external_soperator_discovery_client_name(
+                project_id=project_id,
+                client_name=client_name,
+            )
+            with _command_status(
+                "[cyan]Creating restore-capable external Soperator backup...[/cyan]",
+                enabled=not dry_run,
+            ):
+                _run_standalone_external_soperator_backup(
+                    client_name=command_client_name,
+                    tenant_id=tenant_id,
+                    project_id=project_id,
+                    target_ref=target_ref_opt,
+                    backup_dir=backup_dir,
+                    namespace=namespace,
+                    release_name=release_name,
+                    kube_context=kube_context,
+                    cluster_id=cluster_id,
+                    access=access,
+                    dry_run=dry_run,
+                )
+            return
+        if (
+            _non_empty_text(client_name)
+            or _non_empty_text(tenant_id)
+            or _non_empty_text(project_id)
+            or _non_empty_text(cluster_id)
+            or _non_empty_text(access) != "external"
+        ):
+            raise RuntimeError(
+                "Pass --client-name/--tenant-id/--project-id/--cluster-id/--access only "
+                "for standalone ext-soperator backup when CONFIG_YAML is omitted."
+            )
         payload = _load_source_payload(config_path)
         target_ref = _resolve_soperator_migration_target_ref(
             payload,
@@ -46926,11 +47364,17 @@ def ext_soperator_backup_command(
                 kube_context=kube_context,
                 dry_run=True,
                 interactive=False,
-                source_kind="external-backup",
+                source_kind="external-soperator-backup",
                 command_group="ext-soperator",
             )
             return
-        with _soperator_migration_execute_payload(payload, target_ref=target_ref) as execution_payload:
+        with (
+            _command_status("[cyan]Creating restore-capable external Soperator backup...[/cyan]"),
+            _soperator_migration_execute_payload(
+                payload,
+                target_ref=target_ref,
+            ) as execution_payload,
+        ):
             effective_kube_context = _external_soperator_backup_kube_context(
                 execution_payload,
                 target_ref=target_ref,
@@ -46946,7 +47390,7 @@ def ext_soperator_backup_command(
                 kube_context=effective_kube_context,
                 dry_run=False,
                 interactive=False,
-                source_kind="external-backup",
+                source_kind="external-soperator-backup",
                 command_group="ext-soperator",
             )
     except typer.Exit:
@@ -47189,26 +47633,27 @@ def ext_soperator_discover_command(
             )
             command_tenant_id = tenant_id
             command_project_id = project_id
-        path = _run_external_soperator_discovery_command(
-            project_dir=project_dir,
-            config_path=config_path,
-            payload=payload,
-            client_name=command_client_name,
-            tenant_id=command_tenant_id,
-            project_id=command_project_id,
-            target_ref=target_ref,
-            cluster_id=cluster_id,
-            kube_context=kube_context,
-            access=access,
-            output_dir=output_dir,
-            namespace=namespace,
-            release_name=release_name,
-            to_chart_version=to_chart_version,
-            to_k8s_version=to_k8s_version,
-            to_os=to_os,
-            to_gpu_stack_preset=to_gpu_stack_preset,
-            redaction=redaction,
-        )
+        with _command_status("[cyan]Collecting external Soperator discovery bundle...[/cyan]"):
+            path = _run_external_soperator_discovery_command(
+                project_dir=project_dir,
+                config_path=config_path,
+                payload=payload,
+                client_name=command_client_name,
+                tenant_id=command_tenant_id,
+                project_id=command_project_id,
+                target_ref=target_ref,
+                cluster_id=cluster_id,
+                kube_context=kube_context,
+                access=access,
+                output_dir=output_dir,
+                namespace=namespace,
+                release_name=release_name,
+                to_chart_version=to_chart_version,
+                to_k8s_version=to_k8s_version,
+                to_os=to_os,
+                to_gpu_stack_preset=to_gpu_stack_preset,
+                redaction=redaction,
+            )
         _print_soperator_discovery_result(path)
     except typer.Exit:
         raise
@@ -47402,7 +47847,7 @@ def soperator_onboard_command(
             "--allow-unsupported-soperator-upgrade-path/--no-allow-unsupported-soperator-upgrade-path",
             help=(
                 "Allow accepted onboarding for an unsupported or not-validated Soperator "
-                "support-policy path. This does not bypass Kubernetes minor-hop, backup, "
+                "upgrade path. This does not bypass Kubernetes minor-hop, backup, "
                 "quota, protected-state, or other safety checks."
             ),
         ),
@@ -48676,7 +49121,7 @@ def soperator_external_upgrade_command(
             "--allow-unsupported-soperator-upgrade-path/--no-allow-unsupported-soperator-upgrade-path",
             help=(
                 "Allow execution of an unsupported or not-validated accepted Soperator "
-                "support-policy path. This does not bypass Kubernetes minor-hop, backup, "
+                "upgrade path. This does not bypass Kubernetes minor-hop, backup, "
                 "quota, protected-state, or other safety checks."
             ),
         ),

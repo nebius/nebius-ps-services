@@ -488,7 +488,7 @@ def _support_rules() -> list[dict[str, Any]]:
             "target_k8s_max": "1.33",
             "message": (
                 "Soperator 1.22.0 through 4.x targeting Kubernetes versions "
-                "before 1.33 matches the committed cxcli support policy. "
+                "before 1.33 matches the committed cxcli upgrade-path policy. "
                 "Kubernetes minor-hop validation still applies."
             ),
             "references": [
@@ -546,7 +546,7 @@ def _support_rules() -> list[dict[str, Any]]:
             "target_version_range": ">=4.0.0,<5.0.0",
             "message": (
                 "Soperator 4.x targeting Kubernetes 1.33+ matches the committed "
-                "cxcli support policy, including ActiveChecks hostUsers handling."
+                "cxcli upgrade-path policy, including ActiveChecks hostUsers handling."
             ),
             "references": [
                 "https://github.com/nebius/soperator/pull/1980",

@@ -1129,7 +1129,7 @@ def _soperator_support_finding_with_override(
         finding,
         severity="recommended",
         message=(
-            "Override accepted for unsupported Soperator upgrade support policy. "
+            "Override accepted for unsupported Soperator upgrade path. "
             + finding.message
         ),
         evidence=evidence,

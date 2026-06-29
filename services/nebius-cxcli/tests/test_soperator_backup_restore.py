@@ -237,6 +237,9 @@ def test_soperator_backup_archive_contains_restore_material(
 
     assert os.stat(backup.path.parent).st_mode & 0o777 == 0o700
     assert os.stat(backup.path).st_mode & 0o777 == 0o600
+    assert "-chart-0.26.0.tar.gz" in backup.path.name
+    assert "-to-" not in backup.path.name
+    assert "unknown" not in backup.path.name
     with tarfile.open(backup.path, "r:gz") as archive:
         _assert_archive_has_unique_members(archive)
         names = set(archive.getnames())

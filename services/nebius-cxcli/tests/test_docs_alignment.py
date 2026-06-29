@@ -47,6 +47,9 @@ def test_design_architecture_summary_matches_upgrade_surface() -> None:
     )
     assert "managed `soperator upgrade`" in design_flat
     assert "Standalone `soperator backup` / `soperator restore`" in design_flat
+    assert "external backup can use an accepted onboarded target or run before onboarding" in (
+        design_flat
+    )
     assert "restore-ready YAML for namespaced in-cluster material" in design_flat
     assert (
         "fails fast for `apps:soperator@<target>` with the canonical `soperator upgrade` command"
@@ -401,8 +404,9 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
         "`--interactive/--no-interactive`"
     ) in common_flags_flat
     assert (
-        "- `ext-soperator backup`: `--target`, `--backup-dir`, `--namespace`, "
-        "`--release-name`, `--kube-context`, `--dry-run`"
+        "- `ext-soperator backup`: `--client-name`, `--tenant-id`, `--project-id`, "
+        "`--target`, `--backup-dir`, `--namespace`, `--release-name`, "
+        "`--kube-context`, `--cluster-id`, `--access`, `--dry-run`"
     ) in common_flags_flat
     assert (
         "- `ext-soperator restore`: `--target`, `--namespace`, `--kube-context`, "
@@ -576,7 +580,11 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     )
     assert "`nebius-cxcli soperator backup <config.yaml> --target <target>`" in soperator
     assert "`nebius-cxcli soperator restore <backup.tar.gz> --execute --approve`" in (soperator)
-    assert "`nebius-cxcli ext-soperator backup <config.yaml> --target <target>`" in (soperator)
+    assert "nebius-cxcli ext-soperator backup <config.yaml> --target <target>" in soperator
+    assert (
+        "nebius-cxcli ext-soperator backup \\ --project-id <project-id> \\ "
+        "--cluster-id <mk8scluster-id>"
+    ) in soperator_flat
     assert (
         "`nebius-cxcli ext-soperator restore <backup.tar.gz> --kube-context <new-context> --execute --approve`"
         in soperator
@@ -1463,7 +1471,7 @@ def test_docs_define_component_selector_contract() -> None:
     assert "`summary.md` includes `Upgrade Guidance` without gating discovery" in readme_flat
     assert "that section shows Kubernetes minor hops, Soperator version hops" in readme_flat
     assert "Soperator `1.23.0` before Kubernetes `1.33+`" in readme_flat
-    assert "print the matched Soperator/Kubernetes support-policy rule during the decision summary" in (
+    assert "print the matched Soperator/Kubernetes upgrade-path rule during the decision summary" in (
         readme_flat
     )
     assert "Unsupported accepted plans still require `--allow-unsupported-soperator-upgrade-path`" in (
@@ -1621,7 +1629,7 @@ def test_docs_define_component_selector_contract() -> None:
     assert "does not present external upgrade phases as actions taken by the onboard command" in (
         design_flat
     )
-    assert "It also prints the matched Soperator/Kubernetes support-policy rule" in design_flat
+    assert "It also prints the matched Soperator/Kubernetes upgrade-path rule" in design_flat
     assert "onboarding prints the accepted layout decisions" in design_flat
     assert (
         "target-compatible storage means no aligned SFS creation or storage data migration is planned"

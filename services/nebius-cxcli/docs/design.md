@@ -649,11 +649,16 @@ and chart source-family changes.
   maintenance flow.
 - Standalone `soperator backup` / `soperator restore` and
   `ext-soperator backup` / `ext-soperator restore` use the same
-  restore-capable archive contract outside the upgrade workflow. Backup writes
-  raw Kubernetes JSON plus restore-ready YAML for namespaced in-cluster
-  material: Secrets, ConfigMaps, service accounts, services, PVCs,
-  Deployments, StatefulSets, DaemonSets, CronJobs, RBAC, PodDisruptionBudgets,
-  NetworkPolicies, HPAs, Ingresses, and Soperator SlurmCluster/NodeSet/
+  restore-capable archive contract outside the upgrade workflow. Managed
+  backup remains config-based; external backup can use an accepted onboarded
+  target or run before onboarding with direct `--project-id` plus
+  `--cluster-id` or `--kube-context` access. Direct external backup collects
+  live Helm release evidence before planning so archive metadata records the
+  source Soperator version. Backup writes raw Kubernetes JSON plus
+  restore-ready YAML for namespaced in-cluster material: Secrets, ConfigMaps,
+  service accounts, services, PVCs, Deployments, StatefulSets, DaemonSets,
+  CronJobs, RBAC, PodDisruptionBudgets, NetworkPolicies, HPAs, Ingresses, and
+  Soperator SlurmCluster/NodeSet/
   ActiveCheck resources. It also records Helm values, Slurm CLI snapshots, and
   the chart-managed MariaDB accounting dump after quiescing accounting writes.
   Restore is archive-driven and dry-run by default; `--execute --approve`
@@ -905,7 +910,7 @@ instead of Terraform-owning the existing cluster or adding role-named host
 pools. The onboarding discovery summary includes the discovered Kubernetes
 control-plane version, target Kubernetes version, and an `Upgrade Guidance`
 section with Kubernetes minor hops, Soperator version hops, and the matched
-Soperator/Kubernetes support-policy rule; discovery stays read-only and does
+Soperator/Kubernetes upgrade-path rule; discovery stays read-only and does
 not gate unsupported paths by itself. When external
 node-template work is selected interactively, the Kubernetes target prompt
 defaults to the next supported minor hop from the discovered live version, not
@@ -936,7 +941,7 @@ normal Nebius SDK auth order when no cache is selected. The default bundle root
 is the current working directory unless `--output-dir` is supplied. Managed and
 external discovery share the same upgrade guidance formatter: when current and
 target versions are known, the console footer and `summary.md` show Kubernetes
-minor hops, Soperator version hops, the matched support-policy rule, and any
+minor hops, Soperator version hops, the matched upgrade-path rule, and any
 required ordering gate such as upgrading Soperator to `1.23.0` before moving a
 `1.22.x` source cluster to Kubernetes `1.33+`. The
 onboarding flow has
@@ -3089,7 +3094,7 @@ The command boundary is intentional:
   means no aligned SFS creation or storage data migration is planned, and
   target-compatible compute means no replacement compute node groups or compute
   migration are planned. It also prints the matched Soperator/Kubernetes
-  support-policy rule; unsupported accepted plans still require
+  upgrade-path rule; unsupported accepted plans still require
   `--allow-unsupported-soperator-upgrade-path`. `keep-existing-compute`
   preserves the discovered node groups and target-scoped
   `apps.charts[].placements.*` choices. `create-aligned-node-groups` creates or

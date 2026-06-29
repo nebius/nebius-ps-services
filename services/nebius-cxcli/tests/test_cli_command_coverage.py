@@ -20447,11 +20447,24 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "backup" in soperator_help
     assert "discover" in soperator_help
     assert "restore" in soperator_help
-    assert "backup [OPTIONS] CONFIG_YAML" in ext_soperator_backup_help
+    assert "backup [OPTIONS] [CONFIG_YAML]" in ext_soperator_backup_help
     assert "discover [OPTIONS] [CONFIG_OR_DEPLOYMENTS_ROOT]" in ext_soperator_discover_help
     assert "restore [OPTIONS] BACKUP_ARCHIVE" in ext_soperator_restore_help
     assert "--kube-context" in normalized_ext_soperator_backup_help
-    assert "must be onboarded and accepted" in normalized_ext_soperator_backup_help
+    assert "--client-name" in normalized_ext_soperator_backup_help
+    assert "--project-id" in normalized_ext_soperator_backup_help
+    assert "--tenant-id" in normalized_ext_soperator_backup_help
+    assert "--cluster-id" in normalized_ext_soperator_backup_help
+    assert "--access" in normalized_ext_soperator_backup_help
+    assert (
+        "Omit for standalone --project-id plus --cluster-id/--kube-context backup"
+        in normalized_ext_soperator_backup_help
+    )
+    assert (
+        "Use the config form for an onboarded and accepted target, or the standalone "
+        "--project-id plus --cluster-id/--kube-context form before onboarding"
+        in normalized_ext_soperator_backup_help
+    )
     assert "--cluster-id" in normalized_ext_soperator_discover_help
     assert "--client-name" in normalized_ext_soperator_discover_help
     assert "--project-id" in normalized_ext_soperator_discover_help

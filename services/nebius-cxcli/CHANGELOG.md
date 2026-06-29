@@ -33,6 +33,16 @@ All notable changes to this project are tracked here. This changelog follows
   restore-ready Kubernetes in-cluster resources plus chart-managed MariaDB
   accounting DB material when live chart-managed accounting is present, while
   restore validates checksums and stays dry-run until `--execute --approve`.
+  External backup can now also run before onboarding with
+  `ext-soperator backup --project-id <project-id> --cluster-id
+  <mk8scluster-id>` or a direct `--kube-context`.
+- Fixed standalone external Soperator backup planning to reuse live Helm
+  release evidence from the source cluster, report source kind
+  `external-soperator-backup`, and write plain backup archive names without
+  fake chart/Kubernetes upgrade transitions.
+- Added terminal spinners around Soperator backup and discovery collection so
+  managed and external `soperator` / `ext-soperator` backup and discover
+  commands show progress during quiet live-cluster work.
 - Fixed Soperator backup and discovery `wckey` snapshots to use Slurm-portable
   `Cluster,User,WCKey` fields, and made accounting DB dump/restore resolve the
   target-specific `*-acct-db-0` pod instead of assuming the old static pod name.
@@ -108,9 +118,9 @@ All notable changes to this project are tracked here. This changelog follows
   `ext-soperator upgrade --dry-run` plan output aligned with those values.
 - Improved Soperator discovery and external onboarding guidance. Discovery
   summaries now include an `Upgrade Guidance` section with the matched
-  Soperator/Kubernetes support-policy rule without blocking read-only
-  collection, while onboarding decision summaries and external upgrade dry runs
-  reuse the same support-policy wording before execute-time gates.
+  Soperator/Kubernetes upgrade-path rule without blocking read-only collection,
+  while onboarding decision summaries and external upgrade dry runs reuse the
+  same upgrade-path wording before execute-time gates.
 - Clarified external Soperator safe-surge worker wave controls. Fixed
   `worker_wave_groups` now owns the exact concurrent worker-group count, while
   `max_parallel_worker_groups` is accepted only as an optional cap for
