@@ -15846,6 +15846,7 @@ def _soperator_onboarding_target_defaults(
     snapshot: Mapping[str, Any] | None = None,
     pinned_chart_version: str = "",
     pinned_app_version: str = "",
+    target_k8s_version: str | None = None,
     rollout_manifest: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     normalized_target = normalize_component_token(target_ref) or "mk8s"
@@ -15863,6 +15864,7 @@ def _soperator_onboarding_target_defaults(
         pinned_chart_version=pinned_chart_version,
         pinned_app_version=pinned_app_version,
         source_version_override=source_version or "",
+        target_k8s_version=target_k8s_version,
     )
     required_storage_mode = _soperator_onboarding_required_storage_mode_for_report(report)
     requested_storage_mode = (
@@ -15910,7 +15912,10 @@ def _soperator_onboarding_target_defaults(
     selected_action_ids = {action.id for action in adjusted_report.actions if action.selected}
     if ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE in selected_action_ids:
         target_row["soperator_onboarding"]["node_template_upgrade"] = {  # type: ignore[index]
-            "target_k8s_version": ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION,
+            "target_k8s_version": (
+                _validate_soperator_onboarding_target_k8s_version(target_k8s_version)
+                or ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION
+            ),
             "target_os": ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS,
             "target_gpu_stack_preset": ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_GPU_STACK_PRESET,
             "rollout": copy.deepcopy(
@@ -15944,6 +15949,8 @@ def _soperator_onboard_bundle_command_args(
     compute_mode: str | None = None,
     source_version: str | None = None,
     to_chart_version: str | None = None,
+    to_k8s_version: str | None = None,
+    allow_unsupported_soperator_upgrade_path: bool | None = None,
     worker_rollout_strategy: str | None = None,
     worker_wave_groups: int | None = None,
     worker_wave_percent: int | None = None,
@@ -16000,6 +16007,19 @@ def _soperator_onboard_bundle_command_args(
         "--to-chart-version",
         to_chart_version if to_chart_version is not None else accepted_target_version,
     )
+    accepted_target_k8s_version = ""
+    if isinstance(onboarding, Mapping) and use_accepted_row:
+        node_template_upgrade = onboarding.get("node_template_upgrade")
+        if isinstance(node_template_upgrade, Mapping):
+            accepted_target_k8s_version = _non_empty_text(
+                node_template_upgrade.get("target_k8s_version")
+            )
+    _append_text_option(
+        "--to-k8s-version",
+        to_k8s_version if to_k8s_version is not None else accepted_target_k8s_version,
+    )
+    if allow_unsupported_soperator_upgrade_path is True:
+        args.append("--allow-unsupported-soperator-upgrade-path")
     _append_text_option("--worker-rollout-strategy", worker_rollout_strategy)
     if worker_wave_groups is not None:
         args.extend(["--worker-wave-groups", str(worker_wave_groups)])
@@ -16955,6 +16975,8 @@ def _prompt_soperator_onboarding_target_row(
     compute_mode: str | None = None,
     source_version: str | None = None,
     to_chart_version: str | None = None,
+    to_k8s_version: str | None = None,
+    allow_unsupported_soperator_upgrade_path: bool = False,
     validate_sources: bool = True,
     worker_rollout_strategy: str | None = None,
     worker_wave_groups: int | None = None,
@@ -17020,6 +17042,8 @@ def _prompt_soperator_onboarding_target_row(
             target_ref=target_ref,
             pinned_chart_version=chart_version,
             pinned_app_version=app_version,
+            target_k8s_version=to_k8s_version
+            or _soperator_onboarding_target_k8s_version_default(),
         )
     report = _soperator_onboarding_report_with_source_version(
         report,
@@ -17031,6 +17055,24 @@ def _prompt_soperator_onboarding_target_row(
         interactive=True,
     )
     _print_soperator_onboarding_report_summary(report)
+    selected_action_ids = {action.id for action in report.actions if action.selected}
+    target_k8s_version = _resolve_soperator_onboarding_target_k8s_version(
+        to_k8s_version=to_k8s_version,
+        interactive=True,
+        required=ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE in selected_action_ids,
+    )
+    if target_k8s_version != (
+        to_k8s_version or _soperator_onboarding_target_k8s_version_default()
+    ):
+        report = analyze_soperator_onboarding_snapshot(
+            snapshot,
+            target_ref=target_ref,
+            pinned_chart_version=chart_version,
+            pinned_app_version=app_version,
+            source_version_override=getattr(report, "source_version", ""),
+            target_k8s_version=target_k8s_version,
+        )
+        _print_soperator_onboarding_report_summary(report)
     required_storage_mode = _soperator_onboarding_required_storage_mode_for_report(report)
     if not explicit_storage_mode or not explicit_compute_mode:
         _print_soperator_onboarding_mode_choice_guidance()
@@ -17077,6 +17119,7 @@ def _prompt_soperator_onboarding_target_row(
         snapshot=snapshot,
         pinned_chart_version=chart_version,
         pinned_app_version=app_version,
+        target_k8s_version=target_k8s_version,
         rollout_manifest=_soperator_rollout_manifest_from_options(
             worker_rollout_strategy=worker_rollout_strategy,
             worker_wave_groups=worker_wave_groups,
@@ -17095,6 +17138,11 @@ def _prompt_soperator_onboarding_target_row(
             target_row,
             _prompt_soperator_onboarding_rollout_manifest(target_row),
         )
+    _apply_soperator_support_policy_to_target_row(
+        target_row,
+        allow_unsupported_soperator_upgrade_path=allow_unsupported_soperator_upgrade_path,
+        command_name="ext-soperator onboard",
+    )
     _print_soperator_onboarding_decision_summary(target_row)
     return target_row
 
@@ -17168,6 +17216,8 @@ def _soperator_onboarding_target_row_from_options(
     compute_mode: str | None = None,
     source_version: str | None = None,
     to_chart_version: str | None = None,
+    to_k8s_version: str | None = None,
+    allow_unsupported_soperator_upgrade_path: bool = False,
     interactive: bool = False,
     validate_sources: bool = True,
     worker_rollout_strategy: str | None = None,
@@ -17234,6 +17284,8 @@ def _soperator_onboarding_target_row_from_options(
             target_ref=normalized_target,
             pinned_chart_version=chart_version,
             pinned_app_version=app_version,
+            target_k8s_version=to_k8s_version
+            or _soperator_onboarding_target_k8s_version_default(),
         )
     report = _soperator_onboarding_report_with_source_version(
         report,
@@ -17245,6 +17297,24 @@ def _soperator_onboarding_target_row_from_options(
         interactive=interactive,
     )
     _print_soperator_onboarding_report_summary(report)
+    selected_action_ids = {action.id for action in report.actions if action.selected}
+    target_k8s_version = _resolve_soperator_onboarding_target_k8s_version(
+        to_k8s_version=to_k8s_version,
+        interactive=interactive,
+        required=ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE in selected_action_ids,
+    )
+    if target_k8s_version != (
+        to_k8s_version or _soperator_onboarding_target_k8s_version_default()
+    ):
+        report = analyze_soperator_onboarding_snapshot(
+            snapshot,
+            target_ref=normalized_target,
+            pinned_chart_version=chart_version,
+            pinned_app_version=app_version,
+            source_version_override=getattr(report, "source_version", ""),
+            target_k8s_version=target_k8s_version,
+        )
+        _print_soperator_onboarding_report_summary(report)
     required_storage_mode = _soperator_onboarding_required_storage_mode_for_report(report)
     if required_storage_mode and not explicit_storage_mode:
         normalized_storage_mode = required_storage_mode
@@ -17264,6 +17334,7 @@ def _soperator_onboarding_target_row_from_options(
         snapshot=snapshot,
         pinned_chart_version=chart_version,
         pinned_app_version=app_version,
+        target_k8s_version=target_k8s_version,
         rollout_manifest=_soperator_rollout_manifest_from_options(
             worker_rollout_strategy=worker_rollout_strategy,
             worker_wave_groups=worker_wave_groups,
@@ -17273,6 +17344,11 @@ def _soperator_onboarding_target_row_from_options(
             strategy_max_unavailable_count=strategy_max_unavailable_count,
             strategy_drain_timeout=strategy_drain_timeout,
         ),
+    )
+    _apply_soperator_support_policy_to_target_row(
+        target_row,
+        allow_unsupported_soperator_upgrade_path=allow_unsupported_soperator_upgrade_path,
+        command_name="ext-soperator onboard",
     )
     _print_soperator_onboarding_decision_summary(target_row)
     return target_row
