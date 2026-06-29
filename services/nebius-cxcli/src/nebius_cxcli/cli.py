@@ -435,9 +435,13 @@ from .soperator_onboarding import (
     ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS,
     ONBOARDING_STORAGE_MODE_KEEP_EXISTING,
     SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME,
+    SOPERATOR_UPGRADE_SUPPORT_LAYER,
+    SOPERATOR_UPGRADE_SUPPORT_REJECT_STATUSES,
     analyze_soperator_onboarding_snapshot,
     collect_kubectl_soperator_snapshot,
+    normalize_k8s_minor_version,
     normalize_soperator_release_version,
+    soperator_onboarding_report_with_support_override,
     soperator_migration_profile_for_version,
     soperator_migration_profile_versions,
     soperator_onboarding_effective_compute_mode,
@@ -446,6 +450,8 @@ from .soperator_onboarding import (
     soperator_onboarding_report_for_modes,
     soperator_onboarding_target,
     soperator_onboarding_target_refs,
+    soperator_upgrade_support_findings,
+    soperator_upgrade_support_requires_override,
     source_soperator_discovery_report_path,
     validate_soperator_onboarding_acceptance,
     write_soperator_onboarding_reports,
@@ -9533,6 +9539,7 @@ def _soperator_discovery_report_from_snapshot(
     *,
     target_ref: str,
     to_chart_version: str | None,
+    to_k8s_version: str | None,
 ) -> Any:
     chart_version = _non_empty_text(to_chart_version)
     pinned_chart_version = chart_version
@@ -9544,6 +9551,7 @@ def _soperator_discovery_report_from_snapshot(
         target_ref=target_ref,
         pinned_chart_version=pinned_chart_version,
         pinned_app_version=pinned_app_version,
+        target_k8s_version=to_k8s_version,
     )
 
 
@@ -9571,6 +9579,7 @@ def _write_soperator_discovery_bundle_from_snapshot(
         snapshot,
         target_ref=target_ref,
         to_chart_version=to_chart_version,
+        to_k8s_version=to_k8s_version,
     )
     namespace_value = _non_empty_text(namespace)
     release_value = _non_empty_text(release_name)
@@ -14830,6 +14839,193 @@ def _resolve_soperator_onboarding_target_chart_version(
         default_version=default_version,
     )
     return version
+
+
+def _validate_soperator_onboarding_target_k8s_version(value: object) -> str:
+    text = _non_empty_text(value)
+    if not text:
+        return ""
+    try:
+        return parse_k8s_version(text).minor_text
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+
+def _soperator_onboarding_target_k8s_version_default() -> str:
+    return ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION
+
+
+def _resolve_soperator_onboarding_target_k8s_version(
+    *,
+    to_k8s_version: str | None,
+    interactive: bool,
+    required: bool,
+) -> str:
+    default_version = _soperator_onboarding_target_k8s_version_default()
+    raw_version = _non_empty_text(to_k8s_version)
+    if not raw_version and interactive and required:
+        raw_version, should_stop = _prompt_scalar_override(
+            "deploy.targets[].soperator_onboarding.node_template_upgrade.target_k8s_version",
+            default_version,
+            prompt_hint="Nebius latest supported minor",
+            type_hint="string",
+            required=True,
+        )
+        if should_stop:
+            raise _WizardQuitRequested
+        if _wizard_backtrack_requested(raw_version):
+            raw_version = default_version
+    if not raw_version and required:
+        raise RuntimeError(
+            "External Soperator onboarding selected an external MK8s node-template upgrade. "
+            "Pass --to-k8s-version with the next Kubernetes minor target, for example 1.32. "
+            "cxcli will not silently choose a Kubernetes target for this accepted upgrade plan."
+        )
+    return _validate_soperator_onboarding_target_k8s_version(raw_version or default_version)
+
+
+def _soperator_support_finding_evidence(finding: Mapping[str, Any]) -> Mapping[str, Any]:
+    evidence = finding.get("evidence")
+    return evidence if isinstance(evidence, Mapping) else {}
+
+
+def _soperator_support_finding_label(finding: Mapping[str, Any]) -> str:
+    evidence = _soperator_support_finding_evidence(finding)
+    rule_id = _non_empty_text(evidence.get("rule_id")) or "unknown-rule"
+    status = _non_empty_text(finding.get("status")) or "unknown"
+    source_version = _non_empty_text(evidence.get("source_version")) or "unknown"
+    target_version = _non_empty_text(evidence.get("target_version")) or "unknown"
+    target_k8s = _non_empty_text(evidence.get("target_k8s_version")) or "unknown"
+    return (
+        f"status={status}, rule={rule_id}, source Soperator={source_version}, "
+        f"target Soperator={target_version}, target Kubernetes={target_k8s}"
+    )
+
+
+def _soperator_support_policy_failure_message(
+    report: Mapping[str, Any] | Any,
+    *,
+    command_name: str,
+) -> str:
+    for finding in soperator_upgrade_support_findings(report):
+        status = _non_empty_text(finding.get("status"))
+        if status not in SOPERATOR_UPGRADE_SUPPORT_REJECT_STATUSES:
+            continue
+        message = _non_empty_text(finding.get("message"))
+        return (
+            "Unsupported Soperator/Kubernetes upgrade path for "
+            f"{command_name}: {_soperator_support_finding_label(finding)}. "
+            f"Reason: {message or 'the path is not in the committed cxcli support policy'}. "
+            "Choose a supported intermediate Soperator or Kubernetes target, or rerun with "
+            "--allow-unsupported-soperator-upgrade-path for an explicit advanced/testing "
+            "override. This override does not bypass Kubernetes minor-version hop validation, "
+            "Nebius API validation, protected-state checks, backup checks, quota checks, or "
+            "other safety preflights."
+        )
+    return ""
+
+
+def _soperator_support_override_report_mapping(report: Mapping[str, Any]) -> dict[str, Any]:
+    next_report = copy.deepcopy(to_plain_data(report))
+    findings = next_report.get("findings")
+    if not isinstance(findings, list):
+        return next_report
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        if _non_empty_text(finding.get("layer")) != SOPERATOR_UPGRADE_SUPPORT_LAYER:
+            continue
+        if _non_empty_text(finding.get("status")) not in SOPERATOR_UPGRADE_SUPPORT_REJECT_STATUSES:
+            continue
+        evidence = finding.setdefault("evidence", {})
+        if not isinstance(evidence, dict):
+            evidence = {}
+            finding["evidence"] = evidence
+        evidence["override_used"] = True
+        evidence["original_severity"] = finding.get("severity")
+        finding["severity"] = "recommended"
+        finding["message"] = (
+            "Override accepted for unsupported Soperator upgrade support policy. "
+            + _non_empty_text(finding.get("message"))
+        )
+    return next_report
+
+
+def _enforce_soperator_support_policy_for_report(
+    report: Mapping[str, Any] | Any,
+    *,
+    allow_unsupported_soperator_upgrade_path: bool,
+    command_name: str,
+    dry_run: bool = False,
+) -> None:
+    if not soperator_upgrade_support_requires_override(report):
+        return
+    if allow_unsupported_soperator_upgrade_path:
+        return
+    if dry_run:
+        return
+    raise RuntimeError(
+        _soperator_support_policy_failure_message(report, command_name=command_name)
+    )
+
+
+def _soperator_support_policy_plan_lines(report: Mapping[str, Any] | Any) -> tuple[str, ...]:
+    lines: list[str] = []
+    for finding in soperator_upgrade_support_findings(report):
+        message = _non_empty_text(finding.get("message"))
+        prefix = "- Soperator support policy: "
+        if _non_empty_text(finding.get("status")) in SOPERATOR_UPGRADE_SUPPORT_REJECT_STATUSES:
+            evidence = _soperator_support_finding_evidence(finding)
+            override_used = evidence.get("override_used") is True
+            disposition = "override accepted" if override_used else "execution blocked"
+            prefix = f"- Soperator support policy ({disposition}): "
+        elif _non_empty_text(finding.get("status")) == "supported_with_warning":
+            prefix = "- Soperator support policy warning: "
+        lines.append(prefix + _soperator_support_finding_label(finding))
+        if message:
+            lines.append(f"  - {message}")
+        if _non_empty_text(finding.get("status")) in SOPERATOR_UPGRADE_SUPPORT_REJECT_STATUSES:
+            lines.append(
+                "  - Override scope: --allow-unsupported-soperator-upgrade-path only "
+                "bypasses this Soperator support-policy rejection; Kubernetes minor-hop "
+                "validation and safety preflights still apply."
+            )
+    return tuple(lines)
+
+
+def _apply_soperator_support_policy_to_target_row(
+    target_row: dict[str, Any],
+    *,
+    allow_unsupported_soperator_upgrade_path: bool,
+    command_name: str,
+) -> None:
+    report_material = target_row.get(_SOPERATOR_DISCOVERY_REPORT_PRIVATE_KEY)
+    if not isinstance(report_material, dict):
+        return
+    report = report_material.get("report")
+    if not isinstance(report, Mapping):
+        return
+    _enforce_soperator_support_policy_for_report(
+        report,
+        allow_unsupported_soperator_upgrade_path=allow_unsupported_soperator_upgrade_path,
+        command_name=command_name,
+    )
+    override_required = soperator_upgrade_support_requires_override(report)
+    if allow_unsupported_soperator_upgrade_path and override_required:
+        report = _soperator_support_override_report_mapping(report)
+        report_material["report"] = report
+    support_findings = soperator_upgrade_support_findings(report)
+    if not support_findings:
+        return
+    onboarding = target_row.get("soperator_onboarding")
+    if not isinstance(onboarding, dict):
+        return
+    selected = support_findings[0]
+    evidence = _soperator_support_finding_evidence(selected)
+    onboarding["support_status"] = _non_empty_text(selected.get("status"))
+    onboarding["support_rule_id"] = _non_empty_text(evidence.get("rule_id"))
+    onboarding["support_message"] = _non_empty_text(selected.get("message"))
+    onboarding["support_override_used"] = bool(evidence.get("override_used") is True)
 
 
 def _soperator_source_version_sort_key(version: str) -> tuple[int, ...]:

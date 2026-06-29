@@ -3,6 +3,43 @@ source: https://github.com/nebius/soperator/releases
 generated_from: github-releases-api-and-release-tarballs
 target_policy: component_sources.yaml pinned soperator chart version
 generator_scope: chart-tarball-crd-template-image-and-slurm-contract-fingerprints
+support_rules:
+- id: legacy-before-1-22-not-validated
+  status: not_validated
+  source_version_range: <1.22.0
+  message: Soperator source versions older than 1.22.x are not validated by cxcli
+    for this upgrade path. Run a smoke test or rerun with --allow-unsupported-soperator-upgrade-path
+    for an explicit testing override.
+  references:
+  - https://github.com/nebius/soperator/releases
+- id: k8s-1-33-requires-soperator-1-23
+  status: unsupported
+  target_k8s_min: '1.33'
+  target_version_range: <1.23.0
+  message: Kubernetes 1.33+ requires Soperator 1.23.0 or newer for this legacy
+    path to avoid worker procMount/hostUsers admission failures.
+  references:
+  - https://github.com/nebius/soperator/issues/1446
+  - https://github.com/nebius/soperator/pull/1482
+  - https://kubernetes.io/blog/2025/04/25/userns-enabled-by-default/
+- id: k8s-1-33-procmount-control-warning
+  status: supported_with_warning
+  target_k8s_min: '1.33'
+  target_version_range: '>=1.23.0,<2.0.0'
+  message: Soperator 1.23.x is allowed on Kubernetes 1.33+, but prefer Soperator
+    2.0.0 or newer when NFS, idmap, or explicit procMount control matters.
+  references:
+  - https://github.com/nebius/soperator/issues/1510
+  - https://github.com/nebius/soperator/pull/1512
+- id: k8s-1-33-activechecks-warning
+  status: supported_with_warning
+  target_k8s_min: '1.33'
+  target_version_range: '>=2.0.0,<4.0.0'
+  message: Soperator 2.x/3.x is allowed on Kubernetes 1.33+, but prefer Soperator
+    4.0.0 or newer when ActiveChecks behavior matters.
+  references:
+  - https://github.com/nebius/soperator/pull/1980
+  - https://github.com/nebius/soperator/pull/2364
 profile_groups:
   legacy-v1-to-target:
     title: Legacy v1 Soperator to pinned target

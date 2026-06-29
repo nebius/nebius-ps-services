@@ -76,6 +76,17 @@ ONBOARDING_EXTERNAL_UPGRADE_ACTION_IDS = frozenset(
 ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION = "1.34"
 ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS = "ubuntu24.04"
 ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_GPU_STACK_PRESET = "cuda13.0"
+SOPERATOR_UPGRADE_SUPPORT_LAYER = "soperator-upgrade-support"
+SOPERATOR_UPGRADE_SUPPORT_STATUS_SUPPORTED = "supported"
+SOPERATOR_UPGRADE_SUPPORT_STATUS_SUPPORTED_WITH_WARNING = "supported_with_warning"
+SOPERATOR_UPGRADE_SUPPORT_STATUS_UNSUPPORTED = "unsupported"
+SOPERATOR_UPGRADE_SUPPORT_STATUS_NOT_VALIDATED = "not_validated"
+SOPERATOR_UPGRADE_SUPPORT_REJECT_STATUSES = frozenset(
+    {
+        SOPERATOR_UPGRADE_SUPPORT_STATUS_UNSUPPORTED,
+        SOPERATOR_UPGRADE_SUPPORT_STATUS_NOT_VALIDATED,
+    }
+)
 ONBOARDING_STORAGE_MODE_KEEP_EXISTING = "keep-existing-storage"
 ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS = "create-aligned-sfs"
 ONBOARDING_COMPUTE_MODE_KEEP_EXISTING = "keep-existing-compute"
@@ -896,6 +907,247 @@ def soperator_migration_profile_for_version(
 
 def _soperator_migration_profile_is_generation_fallback(profile: Mapping[str, Any]) -> bool:
     return str(profile.get("profile_match", "") or "").strip() == "generation-fallback"
+
+
+def _version_tuple_for_support(version: str) -> tuple[int, int, int] | None:
+    normalized = normalize_soperator_release_version(version)
+    if not normalized:
+        return None
+    parts = [int(part) for part in normalized.split(".")[:3]]
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts[:3])
+
+
+def _k8s_minor_tuple_for_support(version: str) -> tuple[int, int] | None:
+    text = str(version or "").strip().lstrip("v")
+    match = re.search(r"(?P<major>[0-9]+)\.(?P<minor>[0-9]+)", text)
+    if match is None:
+        return None
+    return int(match.group("major")), int(match.group("minor"))
+
+
+def normalize_k8s_minor_version(version: str) -> str:
+    parsed = _k8s_minor_tuple_for_support(version)
+    if parsed is None:
+        return str(version or "").strip().lstrip("v")
+    return f"{parsed[0]}.{parsed[1]}"
+
+
+def _support_version_compare(left: str, right: str) -> int | None:
+    left_tuple = _version_tuple_for_support(left)
+    right_tuple = _version_tuple_for_support(right)
+    if left_tuple is None or right_tuple is None:
+        return None
+    if left_tuple < right_tuple:
+        return -1
+    if left_tuple > right_tuple:
+        return 1
+    return 0
+
+
+def _support_k8s_at_least(version: str, minimum: str) -> bool:
+    parsed = _k8s_minor_tuple_for_support(version)
+    parsed_minimum = _k8s_minor_tuple_for_support(minimum)
+    if parsed is None or parsed_minimum is None:
+        return False
+    return parsed >= parsed_minimum
+
+
+def _support_version_range_matches(version: str, range_text: str) -> bool:
+    normalized = normalize_soperator_release_version(version)
+    text = str(range_text or "").strip()
+    if not text:
+        return True
+    if not normalized:
+        return False
+    for raw_part in text.split(","):
+        part = raw_part.strip()
+        if not part:
+            continue
+        match = re.fullmatch(r"(<=|>=|<|>|==|=)?\s*v?([0-9]+(?:\.[0-9]+){0,3})", part)
+        if match is None:
+            return False
+        operator = match.group(1) or "=="
+        comparison = _support_version_compare(normalized, match.group(2))
+        if comparison is None:
+            return False
+        if operator in {"=", "=="} and comparison != 0:
+            return False
+        if operator == "<" and comparison >= 0:
+            return False
+        if operator == "<=" and comparison > 0:
+            return False
+        if operator == ">" and comparison <= 0:
+            return False
+        if operator == ">=" and comparison < 0:
+            return False
+    return True
+
+
+def _soperator_upgrade_support_rules() -> tuple[Mapping[str, Any], ...]:
+    payload = _load_soperator_migration_profile_data()
+    rules = payload.get("support_rules") if isinstance(payload, Mapping) else None
+    if not isinstance(rules, Sequence) or isinstance(rules, (str, bytes, bytearray)):
+        return ()
+    return tuple(rule for rule in rules if isinstance(rule, Mapping))
+
+
+def _soperator_upgrade_support_rule_matches(
+    rule: Mapping[str, Any],
+    *,
+    source_version: str,
+    target_version: str,
+    target_k8s_version: str,
+) -> bool:
+    source_range = str(rule.get("source_version_range", "") or "").strip()
+    target_range = str(rule.get("target_version_range", "") or "").strip()
+    target_k8s_min = str(rule.get("target_k8s_min", "") or "").strip()
+    target_k8s_max = str(rule.get("target_k8s_max", "") or "").strip()
+    if source_range and not _support_version_range_matches(source_version, source_range):
+        return False
+    if target_range and not _support_version_range_matches(target_version, target_range):
+        return False
+    if target_k8s_min and not _support_k8s_at_least(target_k8s_version, target_k8s_min):
+        return False
+    if target_k8s_max and _support_k8s_at_least(target_k8s_version, target_k8s_max):
+        return False
+    return True
+
+
+def _soperator_upgrade_support_status_finding(
+    *,
+    source_version: str,
+    target_version: str,
+    current_k8s_version: str,
+    target_k8s_version: str,
+) -> SoperatorOnboardingFinding | None:
+    source = normalize_soperator_release_version(source_version)
+    target = normalize_soperator_release_version(target_version)
+    target_k8s = normalize_k8s_minor_version(target_k8s_version)
+    current_k8s = normalize_k8s_minor_version(current_k8s_version)
+    if not source or not target:
+        return None
+    matched_rule: Mapping[str, Any] | None = None
+    for rule in _soperator_upgrade_support_rules():
+        if _soperator_upgrade_support_rule_matches(
+            rule,
+            source_version=source,
+            target_version=target,
+            target_k8s_version=target_k8s,
+        ):
+            matched_rule = rule
+            break
+    status = SOPERATOR_UPGRADE_SUPPORT_STATUS_SUPPORTED
+    rule_id = "default-supported"
+    message = (
+        "Soperator source, target, and Kubernetes target versions match the "
+        "committed cxcli support policy."
+    )
+    references: tuple[str, ...] = ()
+    if matched_rule is not None:
+        status = str(matched_rule.get("status", "") or "").strip() or status
+        rule_id = str(matched_rule.get("id", "") or "").strip() or rule_id
+        message = str(matched_rule.get("message", "") or "").strip() or message
+        raw_references = matched_rule.get("references")
+        if isinstance(raw_references, Sequence) and not isinstance(
+            raw_references,
+            (str, bytes, bytearray),
+        ):
+            references = tuple(str(item) for item in raw_references if str(item or "").strip())
+    severity = "info"
+    if status in SOPERATOR_UPGRADE_SUPPORT_REJECT_STATUSES:
+        severity = "required"
+    elif status == SOPERATOR_UPGRADE_SUPPORT_STATUS_SUPPORTED_WITH_WARNING:
+        severity = "recommended"
+    return SoperatorOnboardingFinding(
+        layer=SOPERATOR_UPGRADE_SUPPORT_LAYER,
+        status=status,
+        severity=severity,
+        message=message,
+        evidence={
+            "rule_id": rule_id,
+            "source_version": source,
+            "target_version": target,
+            "current_k8s_version": current_k8s,
+            "target_k8s_version": target_k8s,
+            "override_used": False,
+            "references": list(references),
+        },
+    )
+
+
+def soperator_upgrade_support_findings(
+    report: SoperatorOnboardingReport | Mapping[str, Any],
+) -> tuple[Mapping[str, Any], ...]:
+    raw_findings: Any
+    if isinstance(report, SoperatorOnboardingReport):
+        raw_findings = report.to_dict().get("findings")
+    else:
+        raw_findings = report.get("findings")
+    if not isinstance(raw_findings, Sequence) or isinstance(
+        raw_findings,
+        (str, bytes, bytearray),
+    ):
+        return ()
+    findings: list[Mapping[str, Any]] = []
+    for raw_finding in raw_findings:
+        if not isinstance(raw_finding, Mapping):
+            continue
+        if str(raw_finding.get("layer", "") or "").strip() == SOPERATOR_UPGRADE_SUPPORT_LAYER:
+            findings.append(raw_finding)
+    return tuple(findings)
+
+
+def soperator_upgrade_support_requires_override(
+    report: SoperatorOnboardingReport | Mapping[str, Any],
+) -> bool:
+    for finding in soperator_upgrade_support_findings(report):
+        if (
+            str(finding.get("status", "") or "").strip()
+            in SOPERATOR_UPGRADE_SUPPORT_REJECT_STATUSES
+        ):
+            evidence = finding.get("evidence")
+            if isinstance(evidence, Mapping) and evidence.get("override_used") is True:
+                continue
+            return True
+    return False
+
+
+def _soperator_support_finding_with_override(
+    finding: SoperatorOnboardingFinding,
+) -> SoperatorOnboardingFinding:
+    if finding.layer != SOPERATOR_UPGRADE_SUPPORT_LAYER:
+        return finding
+    if finding.status not in SOPERATOR_UPGRADE_SUPPORT_REJECT_STATUSES:
+        return finding
+    evidence = dict(finding.evidence or {})
+    evidence["override_used"] = True
+    evidence["original_severity"] = finding.severity
+    return replace(
+        finding,
+        severity="recommended",
+        message=(
+            "Override accepted for unsupported Soperator upgrade support policy. "
+            + finding.message
+        ),
+        evidence=evidence,
+    )
+
+
+def soperator_onboarding_report_with_support_override(
+    report: SoperatorOnboardingReport,
+    *,
+    override_used: bool,
+) -> SoperatorOnboardingReport:
+    if not override_used:
+        return report
+    return replace(
+        report,
+        findings=tuple(
+            _soperator_support_finding_with_override(finding) for finding in report.findings
+        ),
+    )
 
 
 def _soperator_migration_profile_match_finding(
@@ -1934,8 +2186,12 @@ def _node_template_inventory_analysis(
     snapshot: Mapping[str, Any],
     node_groups: Mapping[str, Any],
     gpu_groups: set[str],
+    target_k8s_version: str | None = None,
 ) -> dict[str, Any]:
-    target_k8s = ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION
+    target_k8s = (
+        normalize_k8s_minor_version(target_k8s_version or "")
+        or ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION
+    )
     target_os = ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS
     target_gpu = ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_GPU_STACK_PRESET
     control_plane_version = _provider_control_plane_version(snapshot)
@@ -2054,6 +2310,7 @@ def analyze_soperator_onboarding_snapshot(
     pinned_chart_version: str = "",
     pinned_app_version: str = "",
     source_version_override: str = "",
+    target_k8s_version: str | None = None,
 ) -> SoperatorOnboardingReport:
     node_groups = snapshot.get("node_groups")
     if not isinstance(node_groups, Mapping):
@@ -2082,9 +2339,11 @@ def analyze_soperator_onboarding_snapshot(
         snapshot=snapshot,
         node_groups=node_groups,
         gpu_groups=gpu_groups,
+        target_k8s_version=target_k8s_version,
     )
     manual_source_version = normalize_soperator_release_version(source_version_override)
     target_version = normalize_soperator_release_version(pinned_chart_version or pinned_app_version)
+    target_k8s = str(node_template_inventory.get("target_k8s_version", "") or "").strip()
 
     findings: list[SoperatorOnboardingFinding] = []
     actions: list[SoperatorOnboardingAction] = []
@@ -2669,6 +2928,20 @@ def analyze_soperator_onboarding_snapshot(
                     )
                 )
         if comparison == "older" or app_comparison == "older":
+            control_plane_inventory = node_template_inventory.get("control_plane")
+            current_k8s = (
+                str(control_plane_inventory.get("current_k8s_version", "") or "").strip()
+                if isinstance(control_plane_inventory, Mapping)
+                else ""
+            )
+            support_finding = _soperator_upgrade_support_status_finding(
+                source_version=source_version,
+                target_version=target_version,
+                current_k8s_version=current_k8s,
+                target_k8s_version=target_k8s,
+            )
+            if support_finding is not None:
+                findings.append(support_finding)
             if migration_profile is not None and not release_identity_needs_source_version:
                 state = ONBOARDING_STATE_EXISTING_SOPERATOR_SUPPORTED
                 remediation = _remediation_items_for_profile(
@@ -2884,6 +3157,24 @@ def analyze_soperator_onboarding_snapshot(
                 ),
             )
         )
+
+    if source_version and target_version and not any(
+        finding.layer == SOPERATOR_UPGRADE_SUPPORT_LAYER for finding in findings
+    ):
+        control_plane_inventory = node_template_inventory.get("control_plane")
+        current_k8s = (
+            str(control_plane_inventory.get("current_k8s_version", "") or "").strip()
+            if isinstance(control_plane_inventory, Mapping)
+            else ""
+        )
+        support_finding = _soperator_upgrade_support_status_finding(
+            source_version=source_version,
+            target_version=target_version,
+            current_k8s_version=current_k8s,
+            target_k8s_version=target_k8s,
+        )
+        if support_finding is not None:
+            findings.append(support_finding)
 
     return SoperatorOnboardingReport(
         schema=ONBOARDING_SCHEMA,
