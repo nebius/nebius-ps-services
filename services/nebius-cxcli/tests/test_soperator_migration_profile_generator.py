@@ -186,6 +186,22 @@ def test_generator_profile_payload_records_scope_contracts_and_compatibility_axe
         payload["generator_scope"]
         == "chart-tarball-crd-template-image-and-slurm-contract-fingerprints"
     )
+    support_rules = {rule["id"]: rule for rule in payload["support_rules"]}
+    assert support_rules["legacy-before-1-22-not-validated"]["status"] == "not_validated"
+    assert (
+        support_rules["k8s-before-1-33-soperator-1-22-plus-supported"]["target_k8s_max"]
+        == "1.33"
+    )
+    assert (
+        support_rules["k8s-1-33-requires-soperator-1-23"]["target_version_range"]
+        == "<1.23.0"
+    )
+    assert (
+        support_rules["k8s-1-33-procmount-control-warning"]["status"]
+        == "supported_with_warning"
+    )
+    assert support_rules["k8s-1-33-activechecks-warning"]["target_k8s_min"] == "1.33"
+    assert support_rules["k8s-1-33-soperator-4-supported"]["status"] == "supported"
     assert [release["version"] for release in payload["releases"]] == [
         "1.14.1",
         "3.0.5",

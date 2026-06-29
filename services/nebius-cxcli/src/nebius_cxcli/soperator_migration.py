@@ -48,8 +48,8 @@ from .mk8s_gpu import (
 )
 from .mk8s_upgrade import (
     DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
-    minor_version_hops,
     parse_k8s_version,
+    require_single_minor_hop,
     resolve_drain_timeout,
     terraform_node_group_strategy_for_policy,
     validate_node_template_field_value,
@@ -9660,7 +9660,10 @@ def _execute_external_node_template_upgrade_phase(
     control_plane["current_version"] = current_version
     control_plane["target_version"] = target.k8s_version
     _ensure_external_node_template_k8s_not_downgrade(current_version, target.k8s_version)
-    hops = minor_version_hops(current_version, target.k8s_version)
+    try:
+        hops = require_single_minor_hop(current_version, target.k8s_version)
+    except ValueError as exc:
+        raise RuntimeError(str(exc).replace("--to-version", "--to-k8s-version")) from exc
     hop_state = control_plane.setdefault("hops", {})
     if not isinstance(hop_state, dict):
         raise RuntimeError(

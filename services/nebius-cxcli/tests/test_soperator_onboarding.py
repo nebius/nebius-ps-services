@@ -22,6 +22,11 @@ from nebius_cxcli.soperator_onboarding import (
     ONBOARDING_COMPUTE_MODE_KEEP_EXISTING,
     ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS,
     ONBOARDING_STORAGE_MODE_KEEP_EXISTING,
+    SOPERATOR_UPGRADE_SUPPORT_LAYER,
+    SOPERATOR_UPGRADE_SUPPORT_STATUS_NOT_VALIDATED,
+    SOPERATOR_UPGRADE_SUPPORT_STATUS_SUPPORTED,
+    SOPERATOR_UPGRADE_SUPPORT_STATUS_SUPPORTED_WITH_WARNING,
+    SOPERATOR_UPGRADE_SUPPORT_STATUS_UNSUPPORTED,
     SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME,
     analyze_soperator_onboarding_snapshot,
     build_soperator_onboarding_report_from_config,
@@ -31,6 +36,9 @@ from nebius_cxcli.soperator_onboarding import (
     soperator_onboarding_fingerprint,
     soperator_onboarding_is_accepted,
     soperator_onboarding_report_for_modes,
+    soperator_onboarding_report_with_support_override,
+    soperator_upgrade_support_findings,
+    soperator_upgrade_support_requires_override,
     validate_soperator_onboarding_acceptance,
     write_soperator_onboarding_reports,
     write_source_soperator_discovery_report,
@@ -1241,6 +1249,177 @@ def test_soperator_onboarding_analyzer_accepts_exact_target_release() -> None:
     assert report.migration_profile_id == "v4-to-target"
     assert not report.migration_plan
     assert any(finding.status == "target-version" for finding in report.findings)
+
+
+def _single_support_finding(report: object) -> dict[str, object]:
+    findings = soperator_upgrade_support_findings(report)  # type: ignore[arg-type]
+    assert len(findings) == 1
+    return dict(findings[0])
+
+
+def test_soperator_support_policy_rejects_legacy_target_before_k8s_133() -> None:
+    report = analyze_soperator_onboarding_snapshot(
+        _snapshot(
+            release={
+                "name": "soperator-controller",
+                "namespace": "soperator-system",
+                "chart": "helm-soperator-1.22.4",
+                "app_version": "1.22.4",
+            }
+        ),
+        target_ref="cluster1",
+        pinned_chart_version="1.22.5",
+        pinned_app_version="1.22.5",
+        target_k8s_version="1.33",
+    )
+
+    finding = _single_support_finding(report)
+    assert finding["layer"] == SOPERATOR_UPGRADE_SUPPORT_LAYER
+    assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_UNSUPPORTED
+    assert finding["severity"] == "required"
+    assert finding["evidence"]["rule_id"] == "k8s-1-33-requires-soperator-1-23"
+    assert finding["evidence"]["target_k8s_version"] == "1.33"
+    assert soperator_upgrade_support_requires_override(report)
+
+
+def test_soperator_support_policy_marks_unmatched_legacy_source_not_validated() -> None:
+    report = analyze_soperator_onboarding_snapshot(
+        _snapshot(
+            release={
+                "name": "slurm-operator",
+                "namespace": "soperator",
+                "chart": "slurm-operator-1.14.1",
+                "app_version": "1.14.1",
+            }
+        ),
+        target_ref="cluster1",
+        pinned_chart_version="4.0.1-ps.1",
+        pinned_app_version="4.0.1",
+        target_k8s_version="1.34",
+    )
+
+    finding = _single_support_finding(report)
+    assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_NOT_VALIDATED
+    assert finding["evidence"]["rule_id"] == "legacy-before-1-22-not-validated"
+    assert soperator_upgrade_support_requires_override(report)
+
+
+def test_soperator_support_policy_supports_122_plus_before_k8s_133() -> None:
+    report = analyze_soperator_onboarding_snapshot(
+        _snapshot(
+            release={
+                "name": "soperator-controller",
+                "namespace": "soperator-system",
+                "chart": "helm-soperator-1.22.4",
+                "app_version": "1.22.4",
+            }
+        ),
+        target_ref="cluster1",
+        pinned_chart_version="4.0.1-ps.1",
+        pinned_app_version="4.0.1",
+        target_k8s_version="1.32",
+    )
+
+    finding = _single_support_finding(report)
+    assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_SUPPORTED
+    assert (
+        finding["evidence"]["rule_id"]
+        == "k8s-before-1-33-soperator-1-22-plus-supported"
+    )
+    assert not soperator_upgrade_support_requires_override(report)
+
+
+def test_soperator_support_policy_warns_for_123_target_on_k8s_133() -> None:
+    report = analyze_soperator_onboarding_snapshot(
+        _snapshot(
+            release={
+                "name": "soperator-controller",
+                "namespace": "soperator-system",
+                "chart": "helm-soperator-1.22.4",
+                "app_version": "1.22.4",
+            }
+        ),
+        target_ref="cluster1",
+        pinned_chart_version="1.23.3",
+        pinned_app_version="1.23.3",
+        target_k8s_version="1.33",
+    )
+
+    finding = _single_support_finding(report)
+    assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_SUPPORTED_WITH_WARNING
+    assert finding["severity"] == "recommended"
+    assert finding["evidence"]["rule_id"] == "k8s-1-33-procmount-control-warning"
+    assert not soperator_upgrade_support_requires_override(report)
+
+
+def test_soperator_support_policy_accepts_v4_target_on_k8s_133() -> None:
+    report = analyze_soperator_onboarding_snapshot(
+        _snapshot(
+            release={
+                "name": "soperator-controller",
+                "namespace": "soperator-system",
+                "chart": "helm-soperator-1.23.3",
+                "app_version": "1.23.3",
+            }
+        ),
+        target_ref="cluster1",
+        pinned_chart_version="4.0.1-ps.1",
+        pinned_app_version="4.0.1",
+        target_k8s_version="1.33",
+    )
+
+    finding = _single_support_finding(report)
+    assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_SUPPORTED
+    assert finding["evidence"]["rule_id"] == "k8s-1-33-soperator-4-supported"
+    assert not soperator_upgrade_support_requires_override(report)
+
+
+def test_soperator_support_policy_marks_unmatched_path_not_validated() -> None:
+    report = analyze_soperator_onboarding_snapshot(
+        _snapshot(
+            release={
+                "name": "soperator-controller",
+                "namespace": "soperator-system",
+                "chart": "helm-soperator-1.22.4",
+                "app_version": "1.22.4",
+            }
+        ),
+        target_ref="cluster1",
+        pinned_chart_version="5.0.0",
+        pinned_app_version="5.0.0",
+        target_k8s_version="1.33",
+    )
+
+    finding = _single_support_finding(report)
+    assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_NOT_VALIDATED
+    assert finding["evidence"]["rule_id"] == "default-not-validated"
+    assert soperator_upgrade_support_requires_override(report)
+
+
+def test_soperator_support_policy_override_records_marker() -> None:
+    report = analyze_soperator_onboarding_snapshot(
+        _snapshot(
+            release={
+                "name": "soperator-controller",
+                "namespace": "soperator-system",
+                "chart": "helm-soperator-1.22.4",
+                "app_version": "1.22.4",
+            }
+        ),
+        target_ref="cluster1",
+        pinned_chart_version="1.22.5",
+        pinned_app_version="1.22.5",
+        target_k8s_version="1.33",
+    )
+
+    overridden = soperator_onboarding_report_with_support_override(report, override_used=True)
+    finding = _single_support_finding(overridden)
+
+    assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_UNSUPPORTED
+    assert finding["severity"] == "recommended"
+    assert finding["evidence"]["override_used"] is True
+    assert finding["evidence"]["original_severity"] == "required"
+    assert not soperator_upgrade_support_requires_override(overridden)
 
 
 def test_soperator_onboarding_analyzer_ignores_shadowed_stale_source_record() -> None:

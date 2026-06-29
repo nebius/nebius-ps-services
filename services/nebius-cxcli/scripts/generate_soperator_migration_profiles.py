@@ -481,6 +481,21 @@ def _support_rules() -> list[dict[str, Any]]:
             ],
         },
         {
+            "id": "k8s-before-1-33-soperator-1-22-plus-supported",
+            "status": "supported",
+            "source_version_range": ">=1.22.0",
+            "target_version_range": ">=1.22.0,<5.0.0",
+            "target_k8s_max": "1.33",
+            "message": (
+                "Soperator 1.22.0 through 4.x targeting Kubernetes versions "
+                "before 1.33 matches the committed cxcli support policy. "
+                "Kubernetes minor-hop validation still applies."
+            ),
+            "references": [
+                "https://docs.nebius.com/kubernetes/versions",
+            ],
+        },
+        {
             "id": "k8s-1-33-requires-soperator-1-23",
             "status": "unsupported",
             "target_k8s_min": "1.33",
@@ -518,6 +533,20 @@ def _support_rules() -> list[dict[str, Any]]:
             "message": (
                 "Soperator 2.x/3.x is allowed on Kubernetes 1.33+, but prefer "
                 "Soperator 4.0.0 or newer when ActiveChecks behavior matters."
+            ),
+            "references": [
+                "https://github.com/nebius/soperator/pull/1980",
+                "https://github.com/nebius/soperator/pull/2364",
+            ],
+        },
+        {
+            "id": "k8s-1-33-soperator-4-supported",
+            "status": "supported",
+            "target_k8s_min": "1.33",
+            "target_version_range": ">=4.0.0,<5.0.0",
+            "message": (
+                "Soperator 4.x targeting Kubernetes 1.33+ matches the committed "
+                "cxcli support policy, including ActiveChecks hostUsers handling."
             ),
             "references": [
                 "https://github.com/nebius/soperator/pull/1980",

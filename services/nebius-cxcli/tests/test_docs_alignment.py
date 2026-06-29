@@ -397,6 +397,7 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
         "`--job-policy`, `--cancel-job`, `--requeue-job`, `--job-wait-timeout`, "
         "`--job-refresh-interval`, `--dry-run`, "
         "`--approve-remediation/--no-approve-remediation`, "
+        "`--allow-unsupported-soperator-upgrade-path`, "
         "`--interactive/--no-interactive`"
     ) in common_flags_flat
     assert (
@@ -418,7 +419,8 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
         "- `ext-soperator onboard`: `--client-name`, `--tenant-id`, `--project-id`, "
         "`--region-id`, `--email`, `--cluster-id`, `--target-id`, "
         "`--kube-context`, `--access`, `--storage-mode`, `--compute-mode`, "
-        "`--to-chart-version`, `--source-version`, `--worker-rollout-strategy`, "
+        "`--to-chart-version`, `--to-k8s-version`, `--source-version`, "
+        "`--allow-unsupported-soperator-upgrade-path`, `--worker-rollout-strategy`, "
         "`--worker-wave-groups`, `--worker-wave-percent`, `--max-parallel-worker-groups`, "
         "`--strategy-max-surge-count`, `--strategy-max-unavailable-count`, "
         "`--strategy-drain-timeout`, `--validate-sources/--no-validate-sources`, "
@@ -429,6 +431,7 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
         "`--cancel-job`, `--requeue-job`, `--job-wait-timeout`, `--job-refresh-interval`, "
         "`--dry-run/--execute`, `--approve/--no-approve`, "
         "`--approve-remediation/--no-approve-remediation`, "
+        "`--allow-unsupported-soperator-upgrade-path`, "
         "`--interactive/--no-interactive`, `--worker-rollout-strategy`, "
         "`--worker-wave-groups`, `--worker-wave-percent`, "
         "`--max-parallel-worker-groups`, `--strategy-max-surge-count`, "
@@ -660,7 +663,10 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
         soperator_flat
     )
     assert "For Kubernetes minor changes, run provider-supported hops" in soperator_flat
-    assert "upgrade a managed cluster from `1.32` to `1.34` as one" in soperator_flat
+    assert "upgrade a managed cluster from `1.31` to `1.34` as" in soperator_flat
+    assert "`1.31 -> 1.33` and `1.31 -> 1.34` requests" in soperator_flat
+    assert "unsupported` and `not_validated` paths fail fast unless" in soperator_flat
+    assert "`supported_with_warning` continue without the override" in soperator_flat
     assert "CXCLI-managed Soperator upgrade follows these stages:" in soperator_flat
     assert "Preflight and backup: validate the current bundle" in soperator_flat
     assert "Slurm and MK8s rollout: when MK8s target flags are supplied" in soperator_flat

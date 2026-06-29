@@ -178,13 +178,18 @@ def _source_worker_nodeset(name: str, *, gpu: bool) -> dict[str, Any]:
     }
 
 
-def _source_report(snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
+def _source_report(
+    snapshot: dict[str, Any] | None = None,
+    *,
+    target_k8s_version: str = "1.32",
+) -> dict[str, Any]:
     snapshot = snapshot or _snapshot()
     report = analyze_soperator_onboarding_snapshot(
         snapshot,
         target_ref="external-cluster",
         pinned_chart_version="4.0.1-ps.1",
         pinned_app_version="4.0.1",
+        target_k8s_version=target_k8s_version,
     ).to_dict()
     return {
         "schema": "nebius-cxcli-source-soperator-discovery/v1",
@@ -214,7 +219,11 @@ def test_node_group_rollout_timeout_uses_live_status_count() -> None:
     )
 
 
-def _payload(*, include_placements: bool = False) -> dict[str, Any]:
+def _payload(
+    *,
+    include_placements: bool = False,
+    target_k8s_version: str = "1.32",
+) -> dict[str, Any]:
     values: dict[str, Any] = {}
     soperator_row: dict[str, Any] = {
         "id": "soperator",
@@ -294,6 +303,11 @@ def _payload(*, include_placements: bool = False) -> dict[str, Any]:
                         "target_version": "4.0.1-ps.1",
                         "migration_profile_id": "v3-to-target",
                         "analysis_fingerprint": "",
+                        "node_template_upgrade": {
+                            "target_k8s_version": target_k8s_version,
+                            "target_os": "ubuntu24.04",
+                            "target_gpu_stack_preset": "cuda13.0",
+                        },
                     },
                 }
             ]
@@ -2142,6 +2156,22 @@ def test_external_node_template_k8s_version_checks_fail_closed_on_malformed_live
         migration._minor_version_at_least("garbage", "1.33")
 
 
+def test_execute_external_node_template_rejects_skipped_k8s_minor(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(RuntimeError, match="Run the next hop first with --to-k8s-version 1.32"):
+        execute_soperator_migration(
+            config_path=tmp_path / "config.yaml",
+            target_ref="external-cluster",
+            payload=_payload(target_k8s_version="1.34"),
+            source_report=_source_report(target_k8s_version="1.34"),
+            backup_metadata=_backup_metadata("skip-minor"),
+            snapshot_collector=lambda *, kube_context: _snapshot(),
+            approved=True,
+            command_runner=_FakeCommandRunner(),
+        )
+
+
 def test_sfs_attachment_uses_zero_surge_strategy_and_restores_original() -> None:
     runner = _FakeCommandRunner(
         existing_node_groups=[
@@ -3840,7 +3870,7 @@ def test_external_node_template_quiesces_one_node_service_roles(
     assert isinstance(onboarding, dict)
     onboarding["actions"] = ["upgrade-external-node-template"]
     onboarding["node_template_upgrade"] = {
-        "target_k8s_version": "1.34",
+        "target_k8s_version": "1.33",
         "target_os": "ubuntu24.04",
         "target_gpu_stack_preset": "cuda13.0",
     }
@@ -4033,7 +4063,7 @@ def test_execute_upgrades_external_node_template_with_safe_surge_strategy(
     ]
     assert [
         command[command.index("--control-plane-version") + 1] for command in cluster_updates
-    ] == ["1.32", "1.33", "1.34"]
+    ] == ["1.32"]
     node_template_updates = [
         call[0]
         for call in runner.calls
@@ -4043,7 +4073,7 @@ def test_execute_upgrades_external_node_template_with_safe_surge_strategy(
     ]
     assert node_template_updates
     update_command = node_template_updates[0]
-    assert update_command[update_command.index("--version") + 1] == "1.34"
+    assert update_command[update_command.index("--version") + 1] == "1.32"
     assert (
         update_command[update_command.index("--template-gpu-settings-drivers-preset") + 1]
         == "cuda13.0"
@@ -4112,7 +4142,7 @@ def test_execute_upgrades_external_node_template_with_safe_surge_strategy(
             "drain_timeout": "30m",
         },
     }
-    assert phase["control_plane"]["hops"]["1.34"]["status"] == "completed"
+    assert phase["control_plane"]["hops"]["1.32"]["status"] == "completed"
     assert phase["node_groups"]["login"]["strategy"] == "safe-surge"
     assert phase["node_groups"]["gpu-pool"]["strategy"] == "safe-surge"
     assert phase["node_groups"]["gpu-pool"]["strategy_restored"] is True
@@ -4215,7 +4245,7 @@ def test_execute_external_node_template_parallel_worker_failure_checkpoints_afte
     assert isinstance(onboarding, dict)
     onboarding["actions"] = ["upgrade-external-node-template"]
     onboarding["node_template_upgrade"] = {
-        "target_k8s_version": "1.34",
+        "target_k8s_version": "1.33",
         "target_os": "ubuntu24.04",
         "target_gpu_stack_preset": "cuda13.0",
         "rollout": {"strategy": "safe-surge", "worker_wave_percent": 100},
@@ -4225,6 +4255,10 @@ def test_execute_external_node_template_parallel_worker_failure_checkpoints_afte
             _live_worker_group("worker-gpu-a", "nodegroup-worker-a"),
             _live_worker_group("worker-gpu-b", "nodegroup-worker-b"),
         ],
+        cluster={
+            "metadata": {"id": "cluster-123", "name": "external-cluster"},
+            "spec": {"control_plane": {"version": "1.32"}},
+        },
         live_nodes=[
             {
                 "metadata": {
@@ -4276,6 +4310,10 @@ def test_execute_external_node_template_parallel_worker_failure_checkpoints_afte
 class _TimeoutAfterAcceptedNodeTemplateUpdateRunner(_FakeCommandRunner):
     def __init__(self, *, leave_rollout_in_progress: bool = False) -> None:
         super().__init__(
+            cluster={
+                "metadata": {"id": "cluster-123", "name": "external-cluster"},
+                "spec": {"control_plane": {"version": "1.32"}},
+            },
             existing_node_groups=[
                 {
                     "metadata": {
@@ -4332,11 +4370,12 @@ class _TimeoutAfterAcceptedNodeTemplateUpdateRunner(_FakeCommandRunner):
                 check=check,
             )
             if self.leave_rollout_in_progress:
+                target_version = command[command.index("--version") + 1]
                 for node_group in self.existing_node_groups:
                     metadata = node_group.get("metadata")
                     if isinstance(metadata, dict) and metadata.get("id") == "nodegroup-gpu-pool":
                         node_group["status"] = {
-                            "version": "1.32",
+                            "version": target_version,
                             "ready_node_count": 1,
                             "target_node_count": 2,
                             "node_count": 3,
@@ -4389,8 +4428,8 @@ def test_execute_external_node_template_reconciles_accepted_timeout_when_ready(
     result = execute_soperator_migration(
         config_path=config_path,
         target_ref="external-cluster",
-        payload=_payload(),
-        source_report=_source_report(),
+        payload=_payload(target_k8s_version="1.33"),
+        source_report=_source_report(target_k8s_version="1.33"),
         backup_metadata=_backup_metadata("waiting-rollout"),
         snapshot_collector=lambda *, kube_context: _snapshot(),
         approved=True,
@@ -4421,8 +4460,8 @@ def test_execute_external_node_template_resume_waiting_rollout_without_duplicate
     result = execute_soperator_migration(
         config_path=config_path,
         target_ref="external-cluster",
-        payload=_payload(),
-        source_report=_source_report(),
+        payload=_payload(target_k8s_version="1.33"),
+        source_report=_source_report(target_k8s_version="1.33"),
         backup_metadata=_backup_metadata("waiting-rollout"),
         snapshot_collector=lambda *, kube_context: _snapshot(),
         approved=True,
@@ -4452,13 +4491,13 @@ def test_execute_external_node_template_resume_waiting_rollout_without_duplicate
     for node_group in runner.existing_node_groups:
         metadata = node_group.get("metadata")
         if isinstance(metadata, dict) and metadata.get("id") == "nodegroup-gpu-pool":
-            node_group["status"] = _ready_node_group_status(version="1.34", nodes=2)
+            node_group["status"] = _ready_node_group_status(version="1.33", nodes=2)
 
     resumed = execute_soperator_migration(
         config_path=config_path,
         target_ref="external-cluster",
-        payload=_payload(),
-        source_report=_source_report(),
+        payload=_payload(target_k8s_version="1.33"),
+        source_report=_source_report(target_k8s_version="1.33"),
         snapshot_collector=lambda *, kube_context: _snapshot(),
         approved=True,
         command_runner=runner,
@@ -4518,8 +4557,8 @@ def test_execute_external_node_template_resumes_failed_timeout_from_live_state(
         execute_soperator_migration(
             config_path=config_path,
             target_ref="external-cluster",
-            payload=_payload(),
-            source_report=_source_report(),
+            payload=_payload(target_k8s_version="1.33"),
+            source_report=_source_report(target_k8s_version="1.33"),
             backup_metadata=_backup_metadata("failed-timeout"),
             snapshot_collector=lambda *, kube_context: _snapshot(),
             approved=True,
@@ -4542,7 +4581,7 @@ def test_execute_external_node_template_resumes_failed_timeout_from_live_state(
             continue
         spec = node_group.setdefault("spec", {})
         assert isinstance(spec, dict)
-        spec["version"] = "1.34"
+        spec["version"] = "1.33"
         template = spec.setdefault("template", {})
         assert isinstance(template, dict)
         template["os"] = "ubuntu24.04"
@@ -4554,13 +4593,13 @@ def test_execute_external_node_template_resumes_failed_timeout_from_live_state(
             "max_unavailable": {"count": 0},
             "drain_timeout": "30m",
         }
-        node_group["status"] = _ready_node_group_status(version="1.34", nodes=2)
+        node_group["status"] = _ready_node_group_status(version="1.33", nodes=2)
 
     resumed = execute_soperator_migration(
         config_path=config_path,
         target_ref="external-cluster",
-        payload=_payload(),
-        source_report=_source_report(),
+        payload=_payload(target_k8s_version="1.33"),
+        source_report=_source_report(target_k8s_version="1.33"),
         snapshot_collector=lambda *, kube_context: _snapshot(),
         approved=True,
         command_runner=runner,
@@ -5547,7 +5586,7 @@ def test_external_upgrade_requeue_policy_waits_for_slurm_transition(monkeypatch)
 
 
 def test_completed_migration_mk8s_check_fails_when_live_node_template_drifts() -> None:
-    source_report = _source_report()
+    source_report = _source_report(target_k8s_version="1.34")
     runner = _FakeCommandRunner(
         cluster={
             "metadata": {"id": "cluster-123", "name": "external-cluster"},
@@ -5577,7 +5616,7 @@ def test_completed_migration_mk8s_check_fails_when_live_node_template_drifts() -
 
     with pytest.raises(RuntimeError, match="live node template still needs update args"):
         migration._verify_completed_soperator_migration_mk8s_state(
-            payload=_payload(),
+            payload=_payload(target_k8s_version="1.34"),
             source_report=source_report,
             target_ref="external-cluster",
             worker_node_groups=("gpu-pool",),
@@ -5587,7 +5626,7 @@ def test_completed_migration_mk8s_check_fails_when_live_node_template_drifts() -
 
 
 def test_completed_migration_mk8s_check_fails_when_status_is_missing() -> None:
-    source_report = _source_report()
+    source_report = _source_report(target_k8s_version="1.34")
     runner = _FakeCommandRunner(
         cluster={
             "metadata": {"id": "cluster-123", "name": "external-cluster"},
@@ -5617,7 +5656,7 @@ def test_completed_migration_mk8s_check_fails_when_status_is_missing() -> None:
 
     with pytest.raises(RuntimeError, match="status not returned by Nebius CLI"):
         migration._verify_completed_soperator_migration_mk8s_state(
-            payload=_payload(),
+            payload=_payload(target_k8s_version="1.34"),
             source_report=source_report,
             target_ref="external-cluster",
             worker_node_groups=("gpu-pool",),
@@ -5627,7 +5666,7 @@ def test_completed_migration_mk8s_check_fails_when_status_is_missing() -> None:
 
 
 def test_completed_migration_mk8s_check_fails_when_status_counts_are_missing() -> None:
-    source_report = _source_report()
+    source_report = _source_report(target_k8s_version="1.34")
     runner = _FakeCommandRunner(
         cluster={
             "metadata": {"id": "cluster-123", "name": "external-cluster"},
@@ -5658,7 +5697,7 @@ def test_completed_migration_mk8s_check_fails_when_status_counts_are_missing() -
 
     with pytest.raises(RuntimeError, match="status missing ready_node_count"):
         migration._verify_completed_soperator_migration_mk8s_state(
-            payload=_payload(),
+            payload=_payload(target_k8s_version="1.34"),
             source_report=source_report,
             target_ref="external-cluster",
             worker_node_groups=("gpu-pool",),
@@ -5694,7 +5733,7 @@ def test_execute_rechecks_live_control_plane_before_skipping_completed_hop(
     assert isinstance(onboarding, dict)
     onboarding["actions"] = ["upgrade-external-node-template"]
     onboarding["node_template_upgrade"] = {
-        "target_k8s_version": "1.34",
+        "target_k8s_version": "1.32",
         "target_os": "ubuntu24.04",
         "target_gpu_stack_preset": "cuda13.0",
     }
@@ -5751,7 +5790,7 @@ def test_execute_rechecks_live_control_plane_before_skipping_completed_hop(
     ]
     assert [
         command[command.index("--control-plane-version") + 1] for command in cluster_updates
-    ] == ["1.32", "1.33", "1.34"]
+    ] == ["1.32"]
 
 
 def test_execute_auto_selects_console_worker_node_group_names_from_live_inventory(

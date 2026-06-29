@@ -6,6 +6,13 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Added Soperator/Kubernetes upgrade support-policy enforcement for managed and
+  external Soperator upgrade paths. cxcli now records matched support rule
+  status in onboarding, dry-run/execute reports, and managed checkpoints; fails
+  `unsupported` and `not_validated` paths before mutation; supports an explicit
+  `--allow-unsupported-soperator-upgrade-path` advanced/testing override for
+  Soperator policy rejections only; and continues to reject Kubernetes skipped
+  minor upgrades such as `1.31 -> 1.34`.
 - Added read-only Soperator discovery commands: `soperator discover` for
   cxcli-managed clusters and `ext-soperator discover` for external clusters.
   Both write the canonical support-safe

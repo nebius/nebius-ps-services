@@ -1010,9 +1010,9 @@ def _soperator_upgrade_support_rule_matches(
         return False
     if target_k8s_min and not _support_k8s_at_least(target_k8s_version, target_k8s_min):
         return False
-    if target_k8s_max and _support_k8s_at_least(target_k8s_version, target_k8s_max):
-        return False
-    return True
+    return not (
+        target_k8s_max and _support_k8s_at_least(target_k8s_version, target_k8s_max)
+    )
 
 
 def _soperator_upgrade_support_status_finding(
@@ -1038,11 +1038,12 @@ def _soperator_upgrade_support_status_finding(
         ):
             matched_rule = rule
             break
-    status = SOPERATOR_UPGRADE_SUPPORT_STATUS_SUPPORTED
-    rule_id = "default-supported"
+    status = SOPERATOR_UPGRADE_SUPPORT_STATUS_NOT_VALIDATED
+    rule_id = "default-not-validated"
     message = (
-        "Soperator source, target, and Kubernetes target versions match the "
-        "committed cxcli support policy."
+        "No committed cxcli Soperator/Kubernetes support rule matched this source, "
+        "target, and Kubernetes target version path. Run a smoke test or rerun with "
+        "--allow-unsupported-soperator-upgrade-path for an explicit testing override."
     )
     references: tuple[str, ...] = ()
     if matched_rule is not None:

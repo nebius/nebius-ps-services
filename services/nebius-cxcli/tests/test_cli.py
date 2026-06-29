@@ -983,6 +983,7 @@ def _write_old_soperator_migration_config(
         compute_mode=compute_mode,
         pinned_chart_version="4.0.1-ps.1",
         pinned_app_version="4.0.1",
+        target_k8s_version="1.32",
         snapshot=snapshot,
     )
     cli_module._write_soperator_source_discovery_report_from_target_row(
@@ -5501,6 +5502,8 @@ def test_soperator_onboard_noninteractive_uses_source_version_for_crds_only_clus
             "create-aligned-node-groups",
             "--source-version",
             "3.0.5",
+            "--to-k8s-version",
+            "1.32",
             "--no-interactive",
             "--no-validate-sources",
         ],
@@ -5514,6 +5517,7 @@ def test_soperator_onboard_noninteractive_uses_source_version_for_crds_only_clus
     assert onboarding["state"] == "existing-soperator-supported"
     assert onboarding["source_version"] == "3.0.5"
     assert onboarding["migration_profile_id"] == "v3-to-target"
+    assert onboarding["node_template_upgrade"]["target_k8s_version"] == "1.32"
 
 
 def test_soperator_onboard_noninteractive_uses_explicit_target_chart_version(
@@ -5566,6 +5570,8 @@ def test_soperator_onboard_noninteractive_uses_explicit_target_chart_version(
             "3.0.5",
             "--to-chart-version",
             target_chart_version,
+            "--to-k8s-version",
+            "1.32",
             "--no-interactive",
             "--no-validate-sources",
         ],
@@ -5577,6 +5583,7 @@ def test_soperator_onboard_noninteractive_uses_explicit_target_chart_version(
     target = payload["deploy"]["targets"][0]
     onboarding = target["soperator_onboarding"]
     assert onboarding["target_version"] == target_chart_version
+    assert onboarding["node_template_upgrade"]["target_k8s_version"] == "1.32"
     soperator = next(row for row in payload["apps"]["charts"] if row["id"] == "soperator")
     assert soperator["version"] == target_chart_version
 
@@ -5586,8 +5593,10 @@ def test_soperator_onboard_noninteractive_uses_explicit_target_chart_version(
         )
     )
     assert manifest["target_versions"]["chart_version"] == target_chart_version
+    assert manifest["target_versions"]["k8s_version"] == "1.32"
     command = manifest["command"]
     assert command[command.index("--to-chart-version") + 1] == target_chart_version
+    assert command[command.index("--to-k8s-version") + 1] == "1.32"
 
 
 def test_soperator_onboard_noninteractive_validates_explicit_target_chart_version(
@@ -5657,6 +5666,8 @@ def test_soperator_onboard_noninteractive_validates_explicit_target_chart_versio
             "3.0.5",
             "--to-chart-version",
             target_chart_version,
+            "--to-k8s-version",
+            "1.32",
             "--no-interactive",
         ],
     )
@@ -5673,6 +5684,7 @@ def test_soperator_onboard_noninteractive_validates_explicit_target_chart_versio
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]
     assert onboarding["target_version"] == target_chart_version
+    assert onboarding["node_template_upgrade"]["target_k8s_version"] == "1.32"
     soperator = next(row for row in payload["apps"]["charts"] if row["id"] == "soperator")
     assert soperator["version"] == target_chart_version
 
@@ -6867,6 +6879,7 @@ def test_soperator_onboard_option_path_uses_analyzer_for_compatible_layout(
         kube_context="training-context",
         storage_mode="create-aligned-sfs",
         compute_mode="create-aligned-node-groups",
+        to_k8s_version="1.32",
     )
 
     onboarding = target["soperator_onboarding"]
@@ -6876,6 +6889,104 @@ def test_soperator_onboard_option_path_uses_analyzer_for_compatible_layout(
     assert "plan-soperator-data-migration" not in onboarding["actions"]
     assert "plan-soperator-compute-migration" not in onboarding["actions"]
     assert "upgrade-soperator" in onboarding["actions"]
+
+
+def test_soperator_onboard_rejects_unsupported_support_policy_without_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _snapshot(*, kube_context: str) -> dict[str, object]:
+        assert kube_context == "legacy-context"
+        return {
+            "node_groups": {
+                "worker-gpu": {
+                    "gpu": True,
+                    "node_count": 2,
+                    "labels": {"nebius.com/node-group": "worker-gpu"},
+                    "allocatable": {"nvidia.com/gpu": "8"},
+                }
+            },
+            "helm_releases": [
+                {
+                    "name": "soperator-controller",
+                    "namespace": "soperator-system",
+                    "chart": "helm-soperator-1.22.4",
+                    "app_version": "1.22.4",
+                }
+            ],
+            "storage": {"jail": {}, "controller-spool": {}, "accounting": {}},
+            "crds": ["slurmclusters.slurm.nebius.ai"],
+            "namespaces": ["soperator", "soperator-system"],
+            "collection_errors": [],
+        }
+
+    monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _snapshot)
+
+    with pytest.raises(RuntimeError, match="Unsupported Soperator/Kubernetes upgrade path"):
+        cli_module._soperator_onboarding_target_row_from_options(
+            target_id="legacy-cluster",
+            cluster_id="mk8scluster-legacy",
+            kube_context="legacy-context",
+            storage_mode="keep-existing-storage",
+            compute_mode="keep-existing-compute",
+            to_chart_version="1.22.5",
+            to_k8s_version="1.33",
+            validate_sources=False,
+        )
+
+
+def test_soperator_onboard_override_persists_support_policy_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _snapshot(*, kube_context: str) -> dict[str, object]:
+        assert kube_context == "legacy-context"
+        return {
+            "node_groups": {
+                "worker-gpu": {
+                    "gpu": True,
+                    "node_count": 2,
+                    "labels": {"nebius.com/node-group": "worker-gpu"},
+                    "allocatable": {"nvidia.com/gpu": "8"},
+                }
+            },
+            "helm_releases": [
+                {
+                    "name": "soperator-controller",
+                    "namespace": "soperator-system",
+                    "chart": "helm-soperator-1.22.4",
+                    "app_version": "1.22.4",
+                }
+            ],
+            "storage": {"jail": {}, "controller-spool": {}, "accounting": {}},
+            "crds": ["slurmclusters.slurm.nebius.ai"],
+            "namespaces": ["soperator", "soperator-system"],
+            "collection_errors": [],
+        }
+
+    monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _snapshot)
+
+    target = cli_module._soperator_onboarding_target_row_from_options(
+        target_id="legacy-cluster",
+        cluster_id="mk8scluster-legacy",
+        kube_context="legacy-context",
+        storage_mode="keep-existing-storage",
+        compute_mode="keep-existing-compute",
+        to_chart_version="1.22.5",
+        to_k8s_version="1.33",
+        allow_unsupported_soperator_upgrade_path=True,
+        validate_sources=False,
+    )
+
+    onboarding = target["soperator_onboarding"]
+    assert onboarding["support_status"] == "unsupported"
+    assert onboarding["support_rule_id"] == "k8s-1-33-requires-soperator-1-23"
+    assert onboarding["support_override_used"] is True
+    report = target[cli_module._SOPERATOR_DISCOVERY_REPORT_PRIVATE_KEY]["report"]
+    support_finding = next(
+        finding
+        for finding in report["findings"]
+        if finding["layer"] == "soperator-upgrade-support"
+    )
+    assert support_finding["evidence"]["override_used"] is True
 
 
 def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
@@ -6958,6 +7069,57 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "active service or worker group capacity may be reduced by 3 nodes" in (
         custom_zero_surge.output
     )
+
+
+def test_ext_soperator_upgrade_execute_requires_override_for_unsupported_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = _write_old_soperator_migration_config(tmp_path)
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    target = payload["deploy"]["targets"][0]
+    onboarding = target["soperator_onboarding"]
+    onboarding["source_version"] = "1.22.4"
+    onboarding["target_version"] = "1.22.5"
+    onboarding["support_override_used"] = True
+    onboarding["node_template_upgrade"]["target_k8s_version"] = "1.33"
+    soperator = next(row for row in payload["apps"]["charts"] if row["id"] == "soperator")
+    soperator["version"] = "1.22.5"
+    cli_module._refresh_soperator_onboarding_fingerprints(payload)
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    monkeypatch.setattr(
+        cli_module,
+        "collect_kubectl_soperator_snapshot",
+        lambda **_kwargs: {
+            **_old_soperator_snapshot(),
+            "helm_releases": [
+                {
+                    "name": "soperator-controller",
+                    "namespace": "soperator-system",
+                    "chart": "helm-soperator-1.22.4",
+                    "app_version": "1.22.4",
+                }
+            ],
+        },
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "upgrade",
+            str(config_path),
+            "--target",
+            "external-cluster",
+            "--execute",
+            "--approve",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Unsupported Soperator/Kubernetes upgrade path" in result.output
+    assert "--allow-unsupported-soperator-upgrade-path" in result.output
 
 
 def test_ext_soperator_upgrade_dry_run_validates_worker_rollout_cli_overrides(
@@ -8182,6 +8344,8 @@ def test_soperator_onboard_prints_target_compatible_layout_decisions(
             "create-aligned-sfs",
             "--compute-mode",
             "create-aligned-node-groups",
+            "--to-k8s-version",
+            "1.34",
             "--no-interactive",
             "--no-validate-sources",
         ],
@@ -8376,6 +8540,8 @@ def test_soperator_onboard_heterogeneous_gpu_inventory_adds_network_operator(
             "keep-existing-storage",
             "--compute-mode",
             "create-aligned-node-groups",
+            "--to-k8s-version",
+            "1.32",
             "--no-interactive",
             "--no-validate-sources",
         ],

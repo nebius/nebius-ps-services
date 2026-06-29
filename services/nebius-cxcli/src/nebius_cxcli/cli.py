@@ -434,14 +434,12 @@ from .soperator_onboarding import (
     ONBOARDING_SERVICE_ROLES,
     ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS,
     ONBOARDING_STORAGE_MODE_KEEP_EXISTING,
-    SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME,
     SOPERATOR_UPGRADE_SUPPORT_LAYER,
     SOPERATOR_UPGRADE_SUPPORT_REJECT_STATUSES,
+    SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME,
     analyze_soperator_onboarding_snapshot,
     collect_kubectl_soperator_snapshot,
-    normalize_k8s_minor_version,
     normalize_soperator_release_version,
-    soperator_onboarding_report_with_support_override,
     soperator_migration_profile_for_version,
     soperator_migration_profile_versions,
     soperator_onboarding_effective_compute_mode,
@@ -9158,6 +9156,7 @@ def _external_soperator_upgrade_command_args(
     dry_run: bool,
     approve: bool,
     approve_remediation: bool,
+    allow_unsupported_soperator_upgrade_path: bool,
     interactive: bool,
 ) -> tuple[str, ...]:
     args = ["nebius-cxcli", "ext-soperator", "upgrade", str(config_path), "--target", target_ref]
@@ -9188,6 +9187,8 @@ def _external_soperator_upgrade_command_args(
     args.append("--dry-run" if dry_run else "--execute")
     args.append("--approve" if approve else "--no-approve")
     args.append("--approve-remediation" if approve_remediation else "--no-approve-remediation")
+    if allow_unsupported_soperator_upgrade_path:
+        args.append("--allow-unsupported-soperator-upgrade-path")
     return tuple(args)
 
 
@@ -10235,6 +10236,16 @@ def soperator_upgrade_command(
             ),
         ),
     ] = False,
+    allow_unsupported_soperator_upgrade_path: Annotated[
+        bool,
+        typer.Option(
+            "--allow-unsupported-soperator-upgrade-path/--no-allow-unsupported-soperator-upgrade-path",
+            help=(
+                "Allow execution of an unsupported or not-validated Soperator support-policy "
+                "path. This does not bypass Kubernetes minor-hop or safety checks."
+            ),
+        ),
+    ] = False,
     interactive: Annotated[
         bool,
         typer.Option(
@@ -10263,6 +10274,7 @@ def soperator_upgrade_command(
             job_refresh_interval=job_refresh_interval,
             dry_run=dry_run,
             approve_remediation=approve_remediation,
+            allow_unsupported_soperator_upgrade_path=allow_unsupported_soperator_upgrade_path,
             interactive=interactive,
         )
     except typer.Exit:
@@ -10291,6 +10303,7 @@ def _run_soperator_upgrade_command(
     job_refresh_interval: str,
     dry_run: bool,
     approve_remediation: bool = False,
+    allow_unsupported_soperator_upgrade_path: bool = False,
     interactive: bool = True,
 ) -> None:
     source_payload = _load_source_payload(config_path)
@@ -10349,6 +10362,7 @@ def _run_soperator_upgrade_command(
         job_refresh_interval=job_refresh_interval,
         dry_run=dry_run,
         approve_remediation=approve_remediation,
+        allow_unsupported_soperator_upgrade_path=allow_unsupported_soperator_upgrade_path,
         interactive=interactive,
     )
 
@@ -10373,6 +10387,7 @@ def _soperator_upgrade_command_args(
     job_refresh_interval: str,
     dry_run: bool,
     approve_remediation: bool = False,
+    allow_unsupported_soperator_upgrade_path: bool = False,
 ) -> tuple[str, ...]:
     args = [
         "nebius-cxcli",
@@ -10407,16 +10422,73 @@ def _soperator_upgrade_command_args(
     args.extend(["--job-wait-timeout", job_wait_timeout])
     args.extend(["--job-refresh-interval", job_refresh_interval])
     args.append("--approve-remediation" if approve_remediation else "--no-approve-remediation")
+    if allow_unsupported_soperator_upgrade_path:
+        args.append("--allow-unsupported-soperator-upgrade-path")
     args.append("--no-interactive")
     if dry_run:
         args.append("--dry-run")
     return tuple(args)
 
 
+def _source_config_k8s_version_for_target(
+    source_payload: Mapping[str, Any],
+    *,
+    target_ref: str,
+) -> str:
+    try:
+        mk8s_row = find_source_mk8s_component(source_payload, target_ref)
+    except ValueError:
+        return ""
+    inputs = mk8s_row.get("inputs")
+    if not isinstance(inputs, Mapping):
+        return ""
+    cluster = inputs.get("cluster")
+    if not isinstance(cluster, Mapping):
+        return ""
+    return _validate_soperator_onboarding_target_k8s_version(cluster.get("k8s_version"))
+
+
+def _managed_soperator_upgrade_support_report(
+    *,
+    source_payload: Mapping[str, Any],
+    plan: _HelmChartUpgradePlan,
+    target_k8s_version: str | None,
+) -> Mapping[str, Any]:
+    effective_target_k8s = _non_empty_text(target_k8s_version) or _source_config_k8s_version_for_target(
+        source_payload,
+        target_ref=plan.target.target_ref,
+    )
+    if not effective_target_k8s:
+        return {}
+    report = analyze_soperator_onboarding_snapshot(
+        {
+            "node_groups": {},
+            "helm_releases": [
+                {
+                    "name": _non_empty_text(plan.release_name) or "soperator",
+                    "namespace": _non_empty_text(plan.namespace) or "soperator",
+                    "chart": f"soperator-{plan.current_version}",
+                    "app_version": plan.current_version,
+                }
+            ],
+            "crds": [],
+            "namespaces": [_non_empty_text(plan.namespace) or "soperator"],
+            "collection_errors": [],
+            "storage": {},
+        },
+        target_ref=plan.target.target_ref,
+        pinned_chart_version=plan.target_version,
+        pinned_app_version=plan.target_version,
+        target_k8s_version=effective_target_k8s,
+    )
+    return report.to_dict()
+
+
 def _format_managed_soperator_cluster_upgrade_plan(
     *,
     plan: _HelmChartUpgradePlan,
     source_payload: dict[str, Any],
+    support_report: Mapping[str, Any],
     to_k8s_version: str | None,
     to_os: str | None,
     to_gpu_stack_preset: str | None,
@@ -10451,6 +10523,7 @@ def _format_managed_soperator_cluster_upgrade_plan(
             "does not run raw `kubectl drain`.",
         ]
     )
+    lines.extend(_soperator_support_policy_plan_lines(support_report))
     if dry_run:
         if repeat_dry_run_command:
             lines.append("- repeat dry-run command:")
@@ -10513,6 +10586,7 @@ def _run_managed_soperator_cluster_upgrade(
     job_refresh_interval: str,
     dry_run: bool,
     approve_remediation: bool = False,
+    allow_unsupported_soperator_upgrade_path: bool = False,
     interactive: bool = True,
 ) -> None:
     del interactive
@@ -10528,6 +10602,13 @@ def _run_managed_soperator_cluster_upgrade(
         target=target,
         target_version=to_chart_version,
     )
+    support_report = _managed_soperator_upgrade_support_report(
+        source_payload=source_payload,
+        plan=plan,
+        target_k8s_version=to_k8s_version,
+    )
+    if allow_unsupported_soperator_upgrade_path and support_report:
+        support_report = _soperator_support_override_report_mapping(support_report)
     requested_mk8s_change = any(
         _non_empty_text(value) for value in (to_k8s_version, to_os, to_gpu_stack_preset)
     )
@@ -10550,12 +10631,14 @@ def _run_managed_soperator_cluster_upgrade(
         job_refresh_interval=job_refresh_interval,
         dry_run=True,
         approve_remediation=approve_remediation,
+        allow_unsupported_soperator_upgrade_path=allow_unsupported_soperator_upgrade_path,
     )
     repeat_dry_run_command = shlex.join(command_args) if dry_run else None
     _print_upgrade_plan_lines(
         _format_managed_soperator_cluster_upgrade_plan(
             plan=plan,
             source_payload=source_payload,
+            support_report=support_report,
             to_k8s_version=to_k8s_version,
             to_os=to_os,
             to_gpu_stack_preset=to_gpu_stack_preset,
@@ -10567,6 +10650,11 @@ def _run_managed_soperator_cluster_upgrade(
     )
     if dry_run:
         return
+    _enforce_soperator_support_policy_for_report(
+        support_report,
+        allow_unsupported_soperator_upgrade_path=allow_unsupported_soperator_upgrade_path,
+        command_name="soperator upgrade",
+    )
 
     checkpoint_path = _soperator_upgrade_checkpoint_path(config_path, target.target_ref)
     resume_checkpoint, resume_lifecycle = _soperator_upgrade_resume_checkpoint(
@@ -10608,6 +10696,7 @@ def _run_managed_soperator_cluster_upgrade(
             job_refresh_interval=job_refresh_interval,
             dry_run=False,
             approve_remediation=approve_remediation,
+            allow_unsupported_soperator_upgrade_path=allow_unsupported_soperator_upgrade_path,
         )
     )
     checkpoint["mk8s"] = {
@@ -10618,6 +10707,10 @@ def _run_managed_soperator_cluster_upgrade(
         "node_group": _non_empty_text(node_group) or None,
         "status": "planned" if requested_mk8s_change else "not-requested",
     }
+    if support_report:
+        checkpoint["soperator_support_policy"] = {
+            "findings": list(soperator_upgrade_support_findings(support_report)),
+        }
     checkpoint["slurm"] = {
         "drained_nodes": [],
         "restore_manual_command": None,
@@ -14923,6 +15016,13 @@ def _soperator_support_policy_failure_message(
             "other safety preflights."
         )
     return ""
+
+
+def _soperator_support_policy_has_reject_status(report: Mapping[str, Any] | Any) -> bool:
+    return any(
+        _non_empty_text(finding.get("status")) in SOPERATOR_UPGRADE_SUPPORT_REJECT_STATUSES
+        for finding in soperator_upgrade_support_findings(report)
+    )
 
 
 def _soperator_support_override_report_mapping(report: Mapping[str, Any]) -> dict[str, Any]:
@@ -47660,6 +47760,7 @@ def _format_soperator_migration_plan_lines(
         "Target GPU stack reconciliation required: "
         + ("yes" if flags["target_gpu_reconciliation_required"] else "no"),
     ]
+    lines.extend(_soperator_support_policy_plan_lines(report))
     if flags["external_node_template_upgrade_required"]:
         rollout = resolve_external_node_template_rollout(
             onboarding,
@@ -48043,6 +48144,16 @@ def soperator_external_upgrade_command(
             ),
         ),
     ] = False,
+    allow_unsupported_soperator_upgrade_path: Annotated[
+        bool,
+        typer.Option(
+            "--allow-unsupported-soperator-upgrade-path/--no-allow-unsupported-soperator-upgrade-path",
+            help=(
+                "Allow execution of an unsupported or not-validated accepted Soperator "
+                "support-policy path. This does not bypass Kubernetes minor-hop or safety checks."
+            ),
+        ),
+    ] = False,
     interactive: Annotated[
         bool,
         typer.Option(
@@ -48181,6 +48292,22 @@ def soperator_external_upgrade_command(
             config_path=config_path,
             target_ref=target_ref,
         )
+        report = source_report.get("report")
+        if isinstance(report, Mapping):
+            has_reject_status = _soperator_support_policy_has_reject_status(report)
+            if not dry_run and has_reject_status and not allow_unsupported_soperator_upgrade_path:
+                raise RuntimeError(
+                    _soperator_support_policy_failure_message(
+                        report,
+                        command_name="ext-soperator upgrade --execute",
+                    )
+                )
+            if has_reject_status and (
+                allow_unsupported_soperator_upgrade_path
+                or bool(onboarding.get("support_override_used") is True)
+            ):
+                source_report = dict(source_report)
+                source_report["report"] = _soperator_support_override_report_mapping(report)
         _require_soperator_migration_actions(
             config_path=config_path,
             target_ref=target_ref,
@@ -48248,6 +48375,9 @@ def soperator_external_upgrade_command(
                     dry_run=False,
                     approve=approve,
                     approve_remediation=approve_remediation,
+                    allow_unsupported_soperator_upgrade_path=(
+                        allow_unsupported_soperator_upgrade_path
+                    ),
                     interactive=interactive,
                 )
                 backup_metadata: dict[str, Any] | None = None
