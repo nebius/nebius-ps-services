@@ -1,6 +1,6 @@
 ---
 name: brainstorm
-description: "Use for exploratory, chat-only brainstorming about an idea, proposal, design direction, architecture question, product/technical topic, or research question before implementation. Gather source-ranked context from the current project folder, sibling projects in the repo, related skills, internal Confluence/Slack via connectors or MCP when available, and official vendor docs; challenge assumptions and discuss options without making code changes."
+description: "Use for exploratory, chat-only brainstorming about an idea, proposal, design direction, architecture question, product/technical topic, or research question before implementation. Gather source-ranked context from the current project folder, sibling projects in the repo, related skills, internal Confluence/Slack via connectors or MCP when available, and official vendor docs; for major decisions, consult installed `design` and `system-design-rules` skills as advisory sources when accessible; challenge assumptions and discuss options without making code changes."
 ---
 
 # Brainstorm
@@ -19,6 +19,8 @@ starts.
 - Answering "what should we consider?", "is this a good idea?", "what are the
   tradeoffs?", "what context do we need?", or "help me think through this".
 - Gathering source-backed context on demand while the conversation evolves.
+- Consulting installed decision-advisory skills for major design or
+  architecture decisions without leaving the brainstorming conversation.
 - Comparing alternatives without editing code, docs, tickets, or external
   systems.
 
@@ -76,13 +78,22 @@ class, source conflicts appear, or the user asks for deeper research.
 5. If a related skill is relevant, read its `SKILL.md` and only the references
    needed for the current topic. Treat skills as context sources and workflow
    boundaries, not automatic permission to execute their mutating steps.
-6. If internal sources are needed, use available connectors before generic MCP
+6. For major design, architecture, platform, API, data, reliability, security,
+   observability, cost, or ownership decisions, consult the installed `design`
+   and `system-design-rules` skills as advisory context when they are
+   accessible. Use `design` to inform whether the brainstorm is converging on a
+   concrete design or `/plan` handoff. Use `system-design-rules` to stress-test
+   tradeoffs, boundaries, ownership, failure modes, and validation needs. If
+   either skill is unavailable, skip it and say so briefly. Stay under
+   `brainstorm` unless the user explicitly asks to switch to design, checklist
+   review, planning, documentation, or implementation.
+7. If internal sources are needed, use available connectors before generic MCP
    search. Search with the user's keywords plus project terms, summarize
    findings, and avoid copying sensitive or broad raw material into chat.
-7. If vendor behavior matters, verify it against current official vendor docs.
+8. If vendor behavior matters, verify it against current official vendor docs.
    If official docs are unavailable or inconclusive, mark that fact as
    unverified instead of guessing.
-8. Answer in the conversation with concise evidence, tradeoffs, assumptions,
+9. Answer in the conversation with concise evidence, tradeoffs, assumptions,
    challenges, and open questions. Keep source notes close to claims.
 
 ## Conversation Contract

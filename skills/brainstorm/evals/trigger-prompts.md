@@ -26,6 +26,10 @@ Challenge my assumption that we need a new workflow here. Check the repo context
 Use $brainstorm to explore whether this should become an SDLC feature or just a small docs update.
 ```
 
+```text
+Use $brainstorm to think through this major architecture decision. If $design and $system-design-rules are available, consult them as advisors but keep the discussion chat-only.
+```
+
 ## Should Not Trigger
 
 ```text
@@ -45,6 +49,13 @@ Review this PR and fix safe issues.
 ```
 
 Use `review-pr` or `align`, depending on the request.
+
+```text
+Use $design to produce the final design and /plan handoff now.
+```
+
+Use `design` because the user is asking for concrete design synthesis rather
+than open-ended brainstorming.
 
 ```text
 Create the Confluence page and send the Slack update.

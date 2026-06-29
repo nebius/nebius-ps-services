@@ -116,6 +116,25 @@ def _config_with_enabled_mk8s(*, charts: list[dict[str, Any]] | None = None) -> 
     }
 
 
+@pytest.mark.parametrize(
+    ("phase_id", "expected_stage"),
+    [
+        ("slurm-job-drain", "MK8s Node Upgrades"),
+        ("mk8s-node-template", "MK8s Node Upgrades"),
+        ("post-mk8s-validation", "MK8s Node Upgrades"),
+        ("backup", "Soperator Upgrade"),
+        ("soperator-chart", "Soperator Upgrade"),
+        ("shared-safety-verification", "Soperator Upgrade"),
+        ("completed", "Soperator Upgrade"),
+    ],
+)
+def test_soperator_upgrade_top_level_stage_groups_known_phases(
+    phase_id: str,
+    expected_stage: str,
+) -> None:
+    assert cli._soperator_upgrade_top_level_stage(phase_id) == expected_stage
+
+
 @pytest.fixture(autouse=True)
 def _reset_component_sources_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("NEBIUS_CXCLI_COMPONENT_SOURCES_FILE", raising=False)
@@ -3158,13 +3177,19 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
     assert stage_verification["mk8s-node-template"]["status"] == "not_run"
     assert stage_verification["post-mk8s-validation"]["status"] == "not_run"
     assert report["current_phase"]["id"] == "completed"
+    assert report["current_phase"]["top_level_stage"] == "Soperator Upgrade"
     assert report["current_phase"]["component"].startswith("apps:soperator")
     assert any(item["id"] == "backup" for item in report["phase_history"])
+    assert any(
+        item["id"] == "soperator-chart" and item["top_level_stage"] == "Soperator Upgrade"
+        for item in report["phase_history"]
+    )
     assert any(item["id"] == "shared-safety-verification" for item in report["phase_history"])
     markdown_report = (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_FILENAME).read_text(
         encoding="utf-8"
     )
     assert "- Current phase: `completed`" in markdown_report
+    assert "top-level stage: `Soperator Upgrade`" in markdown_report
     assert "for `apps:soperator" in markdown_report
     assert "## Phase History" in markdown_report
     assert "## Stage Fast Verification" in markdown_report
@@ -3400,6 +3425,16 @@ def test_soperator_upgrade_mk8s_only_runs_node_template_phase_without_raw_kubect
         paths.project_dir / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR / "mk8s" / "checkpoint.json"
     )
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert any(
+        item["id"] == "mk8s-node-template"
+        and item["top_level_stage"] == "MK8s Node Upgrades"
+        for item in checkpoint["phase_history"]
+    )
+    assert any(
+        item["id"] == "post-mk8s-validation"
+        and item["top_level_stage"] == "MK8s Node Upgrades"
+        for item in checkpoint["phase_history"]
+    )
     checkpoint_stage_verification = checkpoint["stage_verification"]
     assert checkpoint_stage_verification["mk8s-node-template"]["fast_verification"][
         "status"
@@ -3418,6 +3453,11 @@ def test_soperator_upgrade_mk8s_only_runs_node_template_phase_without_raw_kubect
     assert report_stage_verification["mk8s-node-template"]["status"] == "passed"
     assert report_stage_verification["post-mk8s-validation"]["status"] == "passed"
     assert report_stage_verification["soperator-chart"]["status"] == "passed"
+    markdown_report = (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_FILENAME).read_text(
+        encoding="utf-8"
+    )
+    assert "`mk8s-node-template` (top-level stage: `MK8s Node Upgrades`)" in markdown_report
+    assert "`soperator-chart` (top-level stage: `Soperator Upgrade`)" in markdown_report
 
 
 def test_soperator_upgrade_cancel_selected_policy_cancels_jobs(

@@ -39,7 +39,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | --- | --- | --- |
 | `align` | Implicit allowed | Project-wide alignment and review across code, wiring, tests, CI, CLI/help, config, documentation, workflows, and project skills. |
 | `align-skill` | Implicit allowed | Review, harden, validate, and improve existing or newly scaffolded Codex or Agent Skill folders after an initial scaffold or draft exists. |
-| `brainstorm` | Implicit allowed | Explore ideas in chat with source-ranked project, repo, skill, internal, and vendor context before implementation. |
+| `brainstorm` | Implicit allowed | Explore ideas in chat with source-ranked project, repo, skill, internal, vendor, and advisory design-skill context before implementation. |
 | `code-review` | Implicit allowed | Strict implementation-quality review of local diffs, current branches, changed files, or patches for maintainability and structural simplification. |
 | `create-learning-course` | Explicit only | Create public-safe learning courses, course workspaces, syllabi, lessons, exercises, glossaries, and publication review checkpoints. |
 | `global-context-management` | Implicit allowed | Keep complex Codex tasks focused with durable task state, concise parent-thread context, targeted read-only subagents when authorized, focused validation, and final risk review. |
@@ -237,8 +237,10 @@ It restates the topic, builds a compact source plan, gathers context from the
 current project folder first, then sibling repo folders, related skills,
 internal Confluence/Slack/Jira sources when available, and official vendor
 docs. It separates facts from hypotheses, challenges weak assumptions, compares
-options, and stops short of editing files, creating tickets, sending messages,
-or mutating external systems. If the user pivots to execution, it should
+options, consults `design` and `system-design-rules` for major decisions when
+those skills are installed and accessible, and stops short of editing files,
+creating tickets, sending messages, or mutating external systems. If the user
+pivots to execution, it should
 summarize the brainstorm and hand off to the appropriate implementation,
 alignment, SDLC, or communication skill.
 

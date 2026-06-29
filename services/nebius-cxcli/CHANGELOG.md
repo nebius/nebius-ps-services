@@ -82,6 +82,9 @@ All notable changes to this project are tracked here. This changelog follows
   `generated/reports/soperator-upgrade-report.md` and `.json`. Shared
   stage-verification payload/report helpers are reused by both managed and
   external Soperator upgrade paths.
+- Improved managed and external Soperator upgrade visibility so runtime phase
+  output and reports include the operator-facing top-level stage:
+  `MK8s Node Upgrades` or `Soperator Upgrade`.
 - Added external Soperator onboarding target chart selection. The
   `ext-soperator onboard` command now accepts `--to-chart-version`, prompts
   with the `component_sources.yaml` Soperator chart pin by default, validates

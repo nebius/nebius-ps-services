@@ -416,6 +416,7 @@ from .soperator_migration import (
     execute_soperator_migration,
     external_soperator_upgrade_protected_comparison_passed,
     external_soperator_upgrade_resume_backup_metadata,
+    external_soperator_upgrade_top_level_stage,
     legacy_soperator_migration_checkpoint_path,
     resolve_external_node_template_rollout,
 )
@@ -2479,6 +2480,15 @@ _SOPERATOR_FAST_STAGE_VERIFICATION_PHASE_IDS = (
     "slurm-restore",
     "shared-safety-verification",
 )
+_SOPERATOR_TOP_LEVEL_STAGE_MK8S = "MK8s Node Upgrades"
+_SOPERATOR_TOP_LEVEL_STAGE_CHART = "Soperator Upgrade"
+_SOPERATOR_MK8S_TOP_LEVEL_PHASE_IDS = frozenset(
+    {
+        "slurm-job-drain",
+        "mk8s-node-template",
+        "post-mk8s-validation",
+    }
+)
 _SOPERATOR_UPGRADE_JOB_POLICIES = frozenset(
     {
         "interactive",
@@ -4305,6 +4315,12 @@ def _soperator_upgrade_now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def _soperator_upgrade_top_level_stage(phase_id: str) -> str:
+    if phase_id in _SOPERATOR_MK8S_TOP_LEVEL_PHASE_IDS:
+        return _SOPERATOR_TOP_LEVEL_STAGE_MK8S
+    return _SOPERATOR_TOP_LEVEL_STAGE_CHART
+
+
 def _soperator_upgrade_phase_payload(
     phase_id: str,
     comment: str,
@@ -4314,6 +4330,7 @@ def _soperator_upgrade_phase_payload(
     payload = {
         "id": phase_id,
         "comment": comment,
+        "top_level_stage": _soperator_upgrade_top_level_stage(phase_id),
         "updated_at": _soperator_upgrade_now_iso(),
     }
     if component:
@@ -6921,6 +6938,11 @@ def _write_soperator_upgrade_report(
     current_phase_component_text = (
         f" for `{current_phase_component}`" if current_phase_component else ""
     )
+    current_phase_top_level_stage = str(
+        current_phase_map.get("top_level_stage")
+        or _soperator_upgrade_top_level_stage(current_phase_id)
+    )
+    current_phase_stage_text = f" (top-level stage: `{current_phase_top_level_stage}`)"
     phase_history = checkpoint.get("phase_history")
     phase_history_lines: list[str] = []
     if isinstance(phase_history, list):
@@ -6933,10 +6955,14 @@ def _write_soperator_upgrade_report(
             comment = str(item.get("comment") or "No phase comment recorded.")
             component = str(item.get("component") or "").strip()
             component_text = f" for `{component}`" if component else ""
+            top_level_stage = str(
+                item.get("top_level_stage") or _soperator_upgrade_top_level_stage(phase_id)
+            )
+            stage_text = f" (top-level stage: `{top_level_stage}`)"
             updated_at = str(item.get("updated_at") or "")
             timestamp = f" at `{updated_at}`" if updated_at else ""
             phase_history_lines.append(
-                f"- `{phase_id}`{component_text}{timestamp}: {comment}"
+                f"- `{phase_id}`{stage_text}{component_text}{timestamp}: {comment}"
             )
     if not phase_history_lines:
         phase_history_lines.append("- No phase history recorded.")
@@ -7013,7 +7039,7 @@ def _write_soperator_upgrade_report(
             f"- Chart version: `{checkpoint.get('current_version') or 'unset'}` -> `{checkpoint.get('target_version') or 'unset'}`",
             f"- Status: `{checkpoint.get('status', 'unknown')}`",
             f"- Current phase: `{current_phase_id}`"
-            f"{current_phase_component_text} - {current_phase_comment}",
+            f"{current_phase_stage_text}{current_phase_component_text} - {current_phase_comment}",
             f"- Checkpoint: `{checkpoint.get('checkpoint_path', '')}`",
             f"- JSON report: `{SOPERATOR_UPGRADE_REPORT_JSON_FILENAME}`",
             "",
@@ -10748,7 +10774,11 @@ def _run_managed_soperator_cluster_upgrade(
         _write_soperator_upgrade_checkpoint(checkpoint_path, checkpoint)
 
     def _phase_display(phase_id: str, comment: str) -> str:
-        return f"Soperator upgrade phase [{phase_id}] for {component_label}: {comment}"
+        return (
+            f"Soperator upgrade phase [{phase_id}] "
+            f"(top-level stage: {_soperator_upgrade_top_level_stage(phase_id)}) "
+            f"for {component_label}: {comment}"
+        )
 
     def _set_phase(phase_id: str, comment: str) -> None:
         phase = _soperator_upgrade_phase_payload(
@@ -47473,6 +47503,8 @@ def _style_soperator_migration_status_message(message: str) -> str:
     replacements = (
         ("External Soperator upgrade status", "[bold cyan]External Soperator upgrade status[/bold cyan]"),
         ("External Soperator upgrade phase", "[bold cyan]External Soperator upgrade phase[/bold cyan]"),
+        ("MK8s Node Upgrades", "[bold white]MK8s Node Upgrades[/bold white]"),
+        ("Soperator Upgrade", "[bold white]Soperator Upgrade[/bold white]"),
         ("MK8s Node Groups", "[bold white]MK8s Node Groups[/bold white]"),
         ("Slurm Workers", "[bold white]Slurm Workers[/bold white]"),
         ("Node groups:", "[bold cyan]Node groups:[/bold cyan]"),
@@ -47886,7 +47918,8 @@ def _format_soperator_migration_plan_lines(
             phase_id = str(raw_phase.get("id", "") or "phase").strip()
             title = str(raw_phase.get("title", "") or "").strip()
             status = str(raw_phase.get("status", "") or "planned").strip()
-            detail = f"- {phase_id}: {status}"
+            top_level_stage = external_soperator_upgrade_top_level_stage(phase_id)
+            detail = f"- {phase_id}: {status} (top-level stage: {top_level_stage})"
             if title:
                 detail += f" - {title}"
             if raw_phase.get("quiet_window") is True:
@@ -48484,7 +48517,9 @@ def soperator_external_upgrade_command(
                 backup_metadata: dict[str, Any] | None = None
                 if approve:
                     emit_status(
-                        "External Soperator upgrade phase backup: checking for reusable "
+                        "External Soperator upgrade phase backup "
+                        f"(top-level stage: {external_soperator_upgrade_top_level_stage('backup')}): "
+                        "checking for reusable "
                         "restore-capable backup metadata."
                     )
                     backup_metadata = external_soperator_upgrade_resume_backup_metadata(
@@ -48493,7 +48528,9 @@ def soperator_external_upgrade_command(
                     )
                     if backup_metadata is not None:
                         emit_status(
-                            "External Soperator upgrade phase backup: reusing existing "
+                            "External Soperator upgrade phase backup "
+                            f"(top-level stage: {external_soperator_upgrade_top_level_stage('backup')}): "
+                            "reusing existing "
                             "restore-capable backup metadata."
                         )
                         console.print(
@@ -48508,7 +48545,9 @@ def soperator_external_upgrade_command(
                             kube_context=None,
                         )
                         emit_status(
-                            "External Soperator upgrade phase backup: creating "
+                            "External Soperator upgrade phase backup "
+                            f"(top-level stage: {external_soperator_upgrade_top_level_stage('backup')}): "
+                            "creating "
                             "restore-capable backup archive before mutation."
                         )
                         backup_metadata = _create_external_soperator_upgrade_backup(

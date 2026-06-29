@@ -670,6 +670,9 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "CXCLI-managed Soperator upgrade follows these stages:" in soperator_flat
     assert "Preflight and backup: validate the current bundle" in soperator_flat
     assert "Slurm and MK8s rollout: when MK8s target flags are supplied" in soperator_flat
+    assert "operator-facing top-level stage (`MK8s Node Upgrades` or `Soperator Upgrade`)" in (
+        soperator_flat
+    )
     assert "Fast stage verification gates: after ActiveChecks suspension" in soperator_flat
     assert "post-MK8s validation, Soperator chart apply" in soperator_flat
     assert "final post-upgrade MK8s and Helm readiness checks" in soperator_flat
@@ -1821,8 +1824,14 @@ def test_docs_define_component_selector_contract() -> None:
     assert "`generated/reports/ext-soperator-upgrade-report.md`" in design
     assert "resume relies on phase checkpoints" in design_flat
     assert "interactive spinner backed by phase-aware status snapshots" in design_flat
-    assert "canonical phase id, human-readable phase label, and overall phase health" in readme_flat
-    assert "canonical phase id, human-readable phase label, and overall phase health" in design_flat
+    assert (
+        "canonical phase id, operator-facing top-level stage (`MK8s Node Upgrades` or `Soperator Upgrade`), human-readable phase label"
+        in readme_flat
+    )
+    assert (
+        "canonical phase id, operator-facing top-level stage (`MK8s Node Upgrades` or `Soperator Upgrade`), human-readable phase label"
+        in design_flat
+    )
     assert "Storage phases show aligned SFS/PVC copy progress" in readme_flat
     assert "separate `Node groups:` and `Nodes:` sections" in readme_flat
     assert "node-group readiness stays in the first section" in readme_flat

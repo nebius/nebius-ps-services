@@ -144,6 +144,15 @@ _SOPERATOR_COMPUTE_ROLES = (*_SOPERATOR_SERVICE_ROLES, "worker")
 _TARGET_GPU_STACK_PHASE_ID = "target-gpu-stack-remediation"
 _EXTERNAL_NODE_TEMPLATE_PHASE_ID = "external-node-template-upgrade"
 _POST_UPGRADE_CHECK_PHASE_IDS = ("post-upgrade-mk8s-check", "post-upgrade-helm-check")
+_EXTERNAL_UPGRADE_TOP_LEVEL_STAGE_MK8S = "MK8s Node Upgrades"
+_EXTERNAL_UPGRADE_TOP_LEVEL_STAGE_SOPERATOR = "Soperator Upgrade"
+_EXTERNAL_UPGRADE_MK8S_TOP_LEVEL_PHASE_IDS = frozenset(
+    {
+        _EXTERNAL_NODE_TEMPLATE_PHASE_ID,
+        _TARGET_GPU_STACK_PHASE_ID,
+        "post-upgrade-mk8s-check",
+    }
+)
 _FAST_STAGE_VERIFICATION_PHASE_IDS = frozenset(
     (*_MUTATING_PHASE_IDS, *_POST_UPGRADE_CHECK_PHASE_IDS)
 )
@@ -161,6 +170,14 @@ _STATUS_PHASE_LABELS = {
     "post-upgrade-mk8s-check": "Post-upgrade MK8s check",
     "post-upgrade-helm-check": "Post-upgrade Helm check",
 }
+
+
+def external_soperator_upgrade_top_level_stage(phase_id: str) -> str:
+    if phase_id in _EXTERNAL_UPGRADE_MK8S_TOP_LEVEL_PHASE_IDS:
+        return _EXTERNAL_UPGRADE_TOP_LEVEL_STAGE_MK8S
+    return _EXTERNAL_UPGRADE_TOP_LEVEL_STAGE_SOPERATOR
+
+
 _TARGET_GPU_STACK_APP_ORDER = ("nvidia-gpu-operator", "nvidia-network-operator")
 _SOPERATOR_ROLE_STORAGE_KEYS: Mapping[str, tuple[str, ...]] = {
     "system": ("jail",),
@@ -6487,8 +6504,10 @@ class SoperatorMigrationStatusReporter:
         )
         if not signal_text:
             signal_text = "no phase-specific status checks are planned"
+        top_level_stage = external_soperator_upgrade_top_level_stage(phase_id)
         summary = (
             f"External Soperator upgrade status [{elapsed}] phase {phase_id} "
+            f"(top-level stage: {top_level_stage}) "
             f"[{_status_phase_label(phase_id)}] ({state}): {signal_text}"
         )
         return SoperatorMigrationStatusSnapshot(
@@ -11837,11 +11856,13 @@ def _write_soperator_migrate_report(
         )
         phase = _mapping(phase_state.get(phase_id))
         fast_verification = stage_fast_verification_report(phase_id, phase)
+        top_level_stage = external_soperator_upgrade_top_level_stage(phase_id)
         if phase_id in _FAST_STAGE_VERIFICATION_PHASE_IDS:
             stage_verification_reports.append(fast_verification)
         phase_reports.append(
             {
                 "id": phase_id,
+                "top_level_stage": top_level_stage,
                 "status": status_label(status),
                 "summary": _phase_report_summary(phase_id, phase),
                 "fast_verification": fast_verification,
@@ -11849,6 +11870,7 @@ def _write_soperator_migrate_report(
             }
         )
         lines.extend([f"### {phase_id}", "", f"- Status: `{status_label(status)}`"])
+        lines.append(f"- Top-level stage: `{top_level_stage}`")
         lines.append(f"- Summary: {_phase_report_summary(phase_id, phase)}")
         if phase_id in _FAST_STAGE_VERIFICATION_PHASE_IDS:
             lines.append(
@@ -11866,9 +11888,11 @@ def _write_soperator_migrate_report(
         verification_summary = str(
             fast_verification.get("summary", "") or "No summary recorded."
         )
+        top_level_stage = external_soperator_upgrade_top_level_stage(phase_id)
         phase_reports.append(
             {
                 "id": phase_id,
+                "top_level_stage": top_level_stage,
                 "status": status_label(verification_status),
                 "summary": verification_summary,
                 "fast_verification": fast_verification,
@@ -11880,6 +11904,7 @@ def _write_soperator_migrate_report(
                 f"### {phase_id}",
                 "",
                 f"- Status: `{status_label(verification_status)}`",
+                f"- Top-level stage: `{top_level_stage}`",
                 f"- Summary: {verification_summary}",
                 "- Fast verification: `"
                 + status_label(verification_status)
@@ -14154,7 +14179,11 @@ def _execute_soperator_migration_unlocked(
     def _emit_phase_comment(phase_id: str, comment: str) -> None:
         if status_callback is None:
             return
-        status_callback(f"External Soperator upgrade phase {phase_id}: {comment}")
+        status_callback(
+            f"External Soperator upgrade phase {phase_id} "
+            f"(top-level stage: {external_soperator_upgrade_top_level_stage(phase_id)}): "
+            f"{comment}"
+        )
 
     _emit_phase_comment(
         "execute-preflight",

@@ -58,6 +58,14 @@ permission. Good candidates are explicitly named skills such as `$nebius`,
 skills whose description matches the topic, and repo-owned skills that define a
 workflow boundary.
 
+For major design or architecture decisions, treat `design` and
+`system-design-rules` as decision-advisory related skills when they are
+installed and accessible. Use `design` to understand whether the discussion is
+ready for a concrete design or `/plan` handoff, and use
+`system-design-rules` to test tradeoffs, boundaries, ownership, failure modes,
+and validation gaps. If either skill is unavailable, skip it and make the
+skipped consultation explicit in the brainstorm answer.
+
 Load only:
 
 - the related skill's `SKILL.md`

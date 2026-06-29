@@ -134,6 +134,10 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Updated `brainstorm` so major design or architecture decisions consult the
+  installed `design` and `system-design-rules` skills as advisory context when
+  accessible while keeping brainstorming chat-only until the user asks to
+  switch workflows.
 - Set `create-learning-course` to explicit-only invocation because course
   creation can create or revise many local files.
 - Tightened the `design` skill so topic, feature-requirement, architecture,

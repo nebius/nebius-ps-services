@@ -3369,9 +3369,10 @@ comments for preflight, backup metadata lookup/reuse, backup archive creation,
 protected-state capture, final post-upgrade checks, and report writing, and log
 phase-aware `External Soperator upgrade status` lines in non-interactive
 output. Every status line starts with the elapsed time, canonical phase id,
+operator-facing top-level stage (`MK8s Node Upgrades` or `Soperator Upgrade`),
 human-readable phase label, and overall phase health before component details,
-so a single
-copied line is enough to identify the active phase. Storage phases show aligned
+so a single copied line is enough to identify the active stage and phase.
+Storage phases show aligned
 SFS/PVC copy progress plus MK8s and Slurm serving/degradation signals. Compute
 and cutover phases show MK8s status as separate `Node groups:` and `Nodes:`
 sections: node-group readiness stays in the first section, while node-level
@@ -3503,13 +3504,14 @@ plus the Markdown `Stage Fast Verification` rollup and JSON `stage_verification`
 details in
 `generated/reports/soperator-upgrade-report.md` /
 `generated/reports/soperator-upgrade-report.json`.
-The command prints and checkpoints the current phase with the component label
+The command prints and checkpoints the current phase with the operator-facing
+top-level stage (`MK8s Node Upgrades` or `Soperator Upgrade`), component label,
 and a concise operator comment from preflight through backup, protected-state
 capture, rollout, postflight, shared safety verification, and final report
 writing. Quiet terminal phases such as discovery, backup, protected-state
 capture, live ActiveChecks patching, Slurm restore, shared safety verification,
 and report writing keep a spinner active. The Markdown and JSON reports include
-the final `current_phase` and phase history.
+the final `current_phase`, its top-level stage, and phase history.
 Use `--approve-remediation` only to record approval for
 `remediation_required` protected-state deltas; blocked data-loss or downtime
 deltas still stop the run.

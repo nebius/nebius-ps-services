@@ -55,6 +55,31 @@ def _snapshot(version: str = "3.0.5") -> dict[str, Any]:
 
 
 @pytest.mark.parametrize(
+    ("phase_id", "expected_stage"),
+    [
+        ("external-node-template-upgrade", "MK8s Node Upgrades"),
+        ("target-gpu-stack-remediation", "MK8s Node Upgrades"),
+        ("post-upgrade-mk8s-check", "MK8s Node Upgrades"),
+        ("discovery-and-plan", "Soperator Upgrade"),
+        ("customer-approval", "Soperator Upgrade"),
+        ("create-aligned-sfs", "Soperator Upgrade"),
+        ("online-bulk-data-sync", "Soperator Upgrade"),
+        ("rolling-compute-migration", "Soperator Upgrade"),
+        ("final-control-plane-cutover", "Soperator Upgrade"),
+        ("validation-and-rollback-hold", "Soperator Upgrade"),
+        ("retire-old-resources", "Soperator Upgrade"),
+        ("post-upgrade-helm-check", "Soperator Upgrade"),
+        ("backup", "Soperator Upgrade"),
+    ],
+)
+def test_external_soperator_upgrade_top_level_stage_groups_known_phases(
+    phase_id: str,
+    expected_stage: str,
+) -> None:
+    assert migration.external_soperator_upgrade_top_level_stage(phase_id) == expected_stage
+
+
+@pytest.mark.parametrize(
     "stderr",
     [
         "not found",
@@ -2415,8 +2440,17 @@ def test_execute_records_approval_and_runs_checkpointed_mutators(tmp_path: Path)
     assert stage_verification["post-upgrade-mk8s-check"]["status"] == "passed"
     assert stage_verification["post-upgrade-helm-check"]["status"] == "passed"
     phase_reports = {item["id"]: item for item in upgrade_json_report["phases"]}
+    assert phase_reports["external-node-template-upgrade"]["top_level_stage"] == (
+        "MK8s Node Upgrades"
+    )
+    assert phase_reports["post-upgrade-mk8s-check"]["top_level_stage"] == (
+        "MK8s Node Upgrades"
+    )
+    assert phase_reports["post-upgrade-helm-check"]["top_level_stage"] == "Soperator Upgrade"
     assert phase_reports["target-gpu-stack-remediation"]["fast_verification"]["status"] == "passed"
     assert phase_reports["post-upgrade-helm-check"]["fast_verification"]["status"] == "passed"
+    assert "- Top-level stage: `MK8s Node Upgrades`" in migrate_report
+    assert "- Top-level stage: `Soperator Upgrade`" in migrate_report
 
     runner.calls.clear()
     resumed = execute_soperator_migration(

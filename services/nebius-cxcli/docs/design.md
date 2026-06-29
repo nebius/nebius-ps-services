@@ -637,7 +637,8 @@ and chart source-family changes.
   `generated/reports/soperator-upgrade-report.json` with before/after protected
   customer-state hashes, deltas, fast safety results, zero-downtime eligibility,
   backup evidence, manual heavy follow-ups, the final `current_phase`, the
-  Markdown `Stage Fast Verification` rollup plus JSON `stage_verification`
+  operator-facing top-level stage (`MK8s Node Upgrades` or `Soperator Upgrade`),
+  the Markdown `Stage Fast Verification` rollup plus JSON `stage_verification`
   details, and the phase history with component-aware operator comments. Quiet terminal phases
   such as discovery, backup, protected-state capture, live ActiveChecks
   patching, Slurm restore, shared safety verification, and report writing keep
@@ -1201,6 +1202,7 @@ lookup/reuse, backup archive creation, protected-state capture, final
 post-upgrade checks, and report writing, plus an
 interactive spinner backed by phase-aware status snapshots. Storage phases emit
 `External Soperator upgrade status` with the elapsed time, canonical phase id,
+operator-facing top-level stage (`MK8s Node Upgrades` or `Soperator Upgrade`),
 human-readable phase label, and overall phase health before component details.
 Storage phases then show aligned SFS/PVC copy progress plus MK8s and Slurm
 continuity signals, while compute and cutover phases emit MK8s status as

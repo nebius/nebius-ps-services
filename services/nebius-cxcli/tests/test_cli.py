@@ -7186,8 +7186,13 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "External node-template upgrade required: yes" in result.output
     assert "Target GPU stack reconciliation required: yes" in result.output
     assert "external-node-template-upgrade" in result.output
+    assert (
+        "external-node-template-upgrade: planned (top-level stage: MK8s Node Upgrades)"
+        in result.output
+    )
     assert "target-gpu-stack-remediation" in result.output
     assert "create-aligned-sfs" in result.output
+    assert "create-aligned-sfs: planned (top-level stage: Soperator Upgrade)" in result.output
     assert "online-bulk-data-sync" in result.output
     assert "rolling-compute-migration" in result.output
     assert "final-control-plane-cutover" in result.output
@@ -7394,7 +7399,8 @@ def test_soperator_migration_plan_styles_topic_labels() -> None:
 def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.MonkeyPatch) -> None:
     styled = cli_module._style_soperator_migration_status_message(
         "External Soperator upgrade status [4s] phase external-node-template-upgrade "
-        "[External node-template upgrade] (degraded): MK8s Node Groups degraded: "
+        "(top-level stage: MK8s Node Upgrades) [External node-template upgrade] "
+        "(degraded): MK8s Node Groups degraded: "
         "Node groups: 4 group(s); gpu-pool:3/4 Ready || "
         "Nodes: 7/8 Ready; in transition gpu-node-a:replacing (down) | "
         "Slurm Workers draining: workers drained=1"
@@ -7402,6 +7408,8 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
 
     assert "[bold cyan]External Soperator upgrade status[/bold cyan]" in styled
     assert "phase external-node-template-upgrade" in styled
+    assert "top-level stage:" in styled
+    assert "MK8s Node Upgrades" in styled
     assert "External node-template upgrade" in styled
     assert "([bold yellow]degraded[/bold yellow]):" in styled
     assert "[bold white]MK8s Node Groups[/bold white]" in styled
@@ -7439,7 +7447,8 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
     with cli_module._soperator_migration_status_emitter() as emit:
         emit(
             "External Soperator upgrade status [4s] phase external-node-template-upgrade "
-            "[External node-template upgrade] (degraded): MK8s Node Groups degraded: "
+            "(top-level stage: MK8s Node Upgrades) [External node-template upgrade] "
+            "(degraded): MK8s Node Groups degraded: "
             "Node groups: 4 group(s); gpu-pool:3/4 Ready || Nodes: 7/8 Ready"
         )
 
@@ -7448,6 +7457,8 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
     assert updates
     assert "[bold cyan]External Soperator upgrade status[/bold cyan] [4s] phase " in updates[0]
     assert "external-node-template-upgrade" in updates[0]
+    assert "top-level stage:" in updates[0]
+    assert "MK8s Node Upgrades" in updates[0]
     assert "External node-template upgrade" in updates[0]
     assert "[bold white]MK8s Node Groups[/bold white]" in updates[0]
     assert "[bold cyan]Node groups:[/bold cyan]" in updates[0]
@@ -7948,6 +7959,8 @@ def test_ext_soperator_upgrade_execute_records_approval_and_worker_groups(
     assert "External Soperator upgrade status" in result.output
     assert "phase target-gpu-stack-remediation" in result.output
     assert "phase create-aligned-sfs" in result.output
+    assert "top-level stage: MK8s Node Upgrades" in result.output
+    assert "top-level stage: Soperator Upgrade" in result.output
     assert (
         "Completed execute phases: discovery-and-plan, customer-approval, "
         "external-node-template-upgrade, target-gpu-stack-remediation, "
