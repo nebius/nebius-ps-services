@@ -8,6 +8,8 @@ from io import StringIO
 from pathlib import Path
 from types import ModuleType
 
+import yaml
+
 
 def _load_generator() -> ModuleType:
     script_path = (
@@ -21,6 +23,18 @@ def _load_generator() -> ModuleType:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _committed_profile_payload() -> dict[str, object]:
+    profile_path = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "nebius_cxcli"
+        / "soperator_migration_profiles.yaml"
+    )
+    payload = yaml.safe_load(profile_path.read_text(encoding="utf-8"))
+    assert isinstance(payload, dict)
+    return payload
 
 
 class _JsonResponse(StringIO):
@@ -187,21 +201,79 @@ def test_generator_profile_payload_records_scope_contracts_and_compatibility_axe
         == "chart-tarball-crd-template-image-and-slurm-contract-fingerprints"
     )
     support_rules = {rule["id"]: rule for rule in payload["support_rules"]}
+    assert payload["support_rules"][0]["id"] == "k8s-1-33-requires-soperator-1-23"
     assert support_rules["legacy-before-1-22-not-validated"]["status"] == "not_validated"
     assert (
         support_rules["k8s-before-1-33-soperator-1-22-plus-supported"]["target_k8s_max"]
         == "1.33"
     )
     assert (
+        support_rules["k8s-before-1-33-soperator-1-22-plus-supported"][
+            "target_version_range"
+        ]
+        == "=4.0.2"
+    )
+    assert (
+        support_rules["k8s-before-1-33-soperator-1-22-plus-supported"][
+            "target_chart_version_policy"
+        ]
+        == "cxcli_pin"
+    )
+    assert support_rules["k8s-before-1-33-soperator-1-22-plus-supported"][
+        "recommended_order"
+    ] == {"soperator_after_k8s_min": "1.32"}
+    assert (
         support_rules["k8s-1-33-requires-soperator-1-23"]["target_version_range"]
         == "<1.23.0"
     )
     assert (
-        support_rules["k8s-1-33-procmount-control-warning"]["status"]
-        == "supported_with_warning"
+        support_rules["soperator-target-same-app-non-cxcli-pin-not-validated"][
+            "status"
+        ]
+        == "not_validated"
     )
-    assert support_rules["k8s-1-33-activechecks-warning"]["target_k8s_min"] == "1.33"
+    assert (
+        support_rules["soperator-target-same-app-non-cxcli-pin-not-validated"][
+            "target_version_range"
+        ]
+        == "=4.0.2"
+    )
+    assert (
+        support_rules["soperator-target-same-app-non-cxcli-pin-not-validated"][
+            "target_chart_version_policy"
+        ]
+        == "not_cxcli_pin"
+    )
+    assert (
+        support_rules["soperator-target-before-cxcli-pin-not-validated"]["status"]
+        == "not_validated"
+    )
+    assert (
+        support_rules["soperator-target-before-cxcli-pin-not-validated"][
+            "target_version_range"
+        ]
+        == ">=1.23.0,<4.0.2"
+    )
+    assert (
+        support_rules["soperator-target-newer-than-cxcli-pin-not-validated"][
+            "target_version_range"
+        ]
+        == ">4.0.2,<5.0.0"
+    )
     assert support_rules["k8s-1-33-soperator-4-supported"]["status"] == "supported"
+    assert (
+        support_rules["k8s-1-33-soperator-4-supported"]["target_version_range"]
+        == "=4.0.2"
+    )
+    assert (
+        support_rules["k8s-1-33-soperator-4-supported"][
+            "target_chart_version_policy"
+        ]
+        == "cxcli_pin"
+    )
+    assert support_rules["k8s-1-33-soperator-4-supported"]["recommended_order"] == {
+        "soperator_after_k8s_min": "1.32"
+    }
     assert [release["version"] for release in payload["releases"]] == [
         "1.14.1",
         "3.0.5",
@@ -298,3 +370,10 @@ def test_generator_profile_payload_records_scope_contracts_and_compatibility_axe
     assert release["app_version"] == "3.0.5"
     assert release["contract_fingerprint"] == contract["contract_fingerprint"]
     assert release["component_contracts"][0]["crds"]["file_count"] == 1
+
+
+def test_committed_support_rules_match_generator_policy() -> None:
+    generator = _load_generator()
+    payload = _committed_profile_payload()
+
+    assert payload["support_rules"] == generator._support_rules()

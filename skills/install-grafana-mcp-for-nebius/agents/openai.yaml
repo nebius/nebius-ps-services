@@ -1,6 +1,6 @@
 interface:
   display_name: "Install Grafana MCP for Nebius"
   short_description: "Install Grafana MCP for Nebius observability"
-  default_prompt: "Use $install-grafana-mcp-for-nebius to install Grafana MCP for Codex, refresh the Nebius-managed Grafana token file, and query available Grafana datasources."
+  default_prompt: "Use $install-grafana-mcp-for-nebius to install Grafana MCP for Codex, refresh the Nebius-managed Grafana token file, and query Nebius project/resource metrics or logs through discovered Grafana datasources."
 policy:
   allow_implicit_invocation: false

@@ -998,16 +998,28 @@ def _soperator_upgrade_support_rule_matches(
     *,
     source_version: str,
     target_version: str,
+    target_chart_version: str,
+    approved_target_chart_version: str,
     target_k8s_version: str,
 ) -> bool:
     source_range = str(rule.get("source_version_range", "") or "").strip()
     target_range = str(rule.get("target_version_range", "") or "").strip()
+    target_chart_policy = str(rule.get("target_chart_version_policy", "") or "").strip()
     target_k8s_min = str(rule.get("target_k8s_min", "") or "").strip()
     target_k8s_max = str(rule.get("target_k8s_max", "") or "").strip()
     if source_range and not _support_version_range_matches(source_version, source_range):
         return False
     if target_range and not _support_version_range_matches(target_version, target_range):
         return False
+    if target_chart_policy:
+        chart_comparison = compare_chart_versions(
+            target_chart_version,
+            approved_target_chart_version,
+        )
+        if target_chart_policy == "cxcli_pin" and chart_comparison != "equal":
+            return False
+        if target_chart_policy == "not_cxcli_pin" and chart_comparison == "equal":
+            return False
     if target_k8s_min and not _support_k8s_at_least(target_k8s_version, target_k8s_min):
         return False
     return not (
@@ -1019,11 +1031,14 @@ def _soperator_upgrade_support_status_finding(
     *,
     source_version: str,
     target_version: str,
+    approved_target_chart_version: str = "",
     current_k8s_version: str,
     target_k8s_version: str,
 ) -> SoperatorOnboardingFinding | None:
     source = normalize_soperator_release_version(source_version)
     target = normalize_soperator_release_version(target_version)
+    target_chart = str(target_version or "").strip()
+    approved_target_chart = str(approved_target_chart_version or target_chart).strip()
     target_k8s = normalize_k8s_minor_version(target_k8s_version)
     current_k8s = normalize_k8s_minor_version(current_k8s_version)
     if not source or not target:
@@ -1034,6 +1049,8 @@ def _soperator_upgrade_support_status_finding(
             rule,
             source_version=source,
             target_version=target,
+            target_chart_version=target_chart,
+            approved_target_chart_version=approved_target_chart,
             target_k8s_version=target_k8s,
         ):
             matched_rule = rule
@@ -1046,10 +1063,14 @@ def _soperator_upgrade_support_status_finding(
         "--allow-unsupported-soperator-upgrade-path for an explicit testing override."
     )
     references: tuple[str, ...] = ()
+    recommended_order: Mapping[str, Any] | None = None
     if matched_rule is not None:
         status = str(matched_rule.get("status", "") or "").strip() or status
         rule_id = str(matched_rule.get("id", "") or "").strip() or rule_id
         message = str(matched_rule.get("message", "") or "").strip() or message
+        raw_recommended_order = matched_rule.get("recommended_order")
+        if isinstance(raw_recommended_order, Mapping):
+            recommended_order = dict(raw_recommended_order)
         raw_references = matched_rule.get("references")
         if isinstance(raw_references, Sequence) and not isinstance(
             raw_references,
@@ -1061,20 +1082,26 @@ def _soperator_upgrade_support_status_finding(
         severity = "required"
     elif status == SOPERATOR_UPGRADE_SUPPORT_STATUS_SUPPORTED_WITH_WARNING:
         severity = "recommended"
+    evidence: dict[str, Any] = {
+        "rule_id": rule_id,
+        "source_version": source,
+        "target_version": target_chart or target,
+        "target_app_version": target,
+        "target_chart_version": target_chart,
+        "approved_target_chart_version": approved_target_chart,
+        "current_k8s_version": current_k8s,
+        "target_k8s_version": target_k8s,
+        "override_used": False,
+        "references": list(references),
+    }
+    if recommended_order:
+        evidence["recommended_order"] = dict(recommended_order)
     return SoperatorOnboardingFinding(
         layer=SOPERATOR_UPGRADE_SUPPORT_LAYER,
         status=status,
         severity=severity,
         message=message,
-        evidence={
-            "rule_id": rule_id,
-            "source_version": source,
-            "target_version": target,
-            "current_k8s_version": current_k8s,
-            "target_k8s_version": target_k8s,
-            "override_used": False,
-            "references": list(references),
-        },
+        evidence=evidence,
     )
 
 
@@ -2310,6 +2337,7 @@ def analyze_soperator_onboarding_snapshot(
     target_ref: str,
     pinned_chart_version: str = "",
     pinned_app_version: str = "",
+    approved_target_chart_version: str = "",
     source_version_override: str = "",
     target_k8s_version: str | None = None,
 ) -> SoperatorOnboardingReport:
@@ -2344,6 +2372,10 @@ def analyze_soperator_onboarding_snapshot(
     )
     manual_source_version = normalize_soperator_release_version(source_version_override)
     target_version = normalize_soperator_release_version(pinned_chart_version or pinned_app_version)
+    target_chart_version = str(pinned_chart_version or pinned_app_version or "").strip()
+    approved_target_chart = str(
+        approved_target_chart_version or target_chart_version
+    ).strip()
     target_k8s = str(node_template_inventory.get("target_k8s_version", "") or "").strip()
     external_node_template_required = not bool(node_template_inventory.get("complete"))
 
@@ -3000,7 +3032,8 @@ def analyze_soperator_onboarding_snapshot(
             )
             support_finding = _soperator_upgrade_support_status_finding(
                 source_version=source_version,
-                target_version=target_version,
+                target_version=target_chart_version or target_version,
+                approved_target_chart_version=approved_target_chart,
                 current_k8s_version=current_k8s,
                 target_k8s_version=target_k8s,
             )
@@ -3232,7 +3265,8 @@ def analyze_soperator_onboarding_snapshot(
         )
         support_finding = _soperator_upgrade_support_status_finding(
             source_version=source_version,
-            target_version=target_version,
+            target_version=target_chart_version or target_version,
+            approved_target_chart_version=approved_target_chart,
             current_k8s_version=current_k8s,
             target_k8s_version=target_k8s,
         )
@@ -3393,6 +3427,7 @@ def build_soperator_onboarding_report_from_config(
     target_ref: str,
     pinned_chart_version: str = "",
     pinned_app_version: str = "",
+    approved_target_chart_version: str = "",
     source_report_path: Path | None = None,
 ) -> dict[str, Any]:
     target = soperator_onboarding_target(payload_or_config, target_ref=target_ref)
@@ -3418,6 +3453,7 @@ def build_soperator_onboarding_report_from_config(
         target_ref=target_ref,
         pinned_chart_version=pinned_chart_version,
         pinned_app_version=pinned_app_version,
+        approved_target_chart_version=approved_target_chart_version,
     )
     if isinstance(onboarding, Mapping):
         storage_mode = str(onboarding.get("storage_mode", "") or "").strip()
@@ -3444,6 +3480,7 @@ def write_soperator_onboarding_reports(
     *,
     pinned_chart_version: str = "",
     pinned_app_version: str = "",
+    approved_target_chart_version: str = "",
 ) -> list[Path]:
     written: list[Path] = []
     reports_dir = generated_dir / ONBOARDING_REPORT_DIR
@@ -3453,6 +3490,7 @@ def write_soperator_onboarding_reports(
             target_ref=target_ref,
             pinned_chart_version=pinned_chart_version,
             pinned_app_version=pinned_app_version,
+            approved_target_chart_version=approved_target_chart_version,
             source_report_path=source_soperator_discovery_report_path(
                 generated_dir.parent,
                 target_ref,

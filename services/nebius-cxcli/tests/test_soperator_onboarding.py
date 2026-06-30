@@ -28,7 +28,6 @@ from nebius_cxcli.soperator_onboarding import (
     SOPERATOR_UPGRADE_SUPPORT_LAYER,
     SOPERATOR_UPGRADE_SUPPORT_STATUS_NOT_VALIDATED,
     SOPERATOR_UPGRADE_SUPPORT_STATUS_SUPPORTED,
-    SOPERATOR_UPGRADE_SUPPORT_STATUS_SUPPORTED_WITH_WARNING,
     SOPERATOR_UPGRADE_SUPPORT_STATUS_UNSUPPORTED,
     SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME,
     analyze_soperator_onboarding_snapshot,
@@ -1289,19 +1288,19 @@ def test_soperator_onboarding_analyzer_accepts_exact_target_release() -> None:
             release={
                 "name": "soperator",
                 "namespace": "soperator",
-                "chart": "soperator-4.0.1-ps.1",
-                "app_version": "4.0.1",
+                "chart": "soperator-4.0.2-ps.3",
+                "app_version": "4.0.2",
             }
         ),
         target_ref="cluster1",
-        pinned_chart_version="4.0.1-ps.1",
-        pinned_app_version="4.0.1",
+        pinned_chart_version="4.0.2-ps.3",
+        pinned_app_version="4.0.2",
     )
 
     assert report.state == "existing-soperator-target"
-    assert report.source_version == "4.0.1"
+    assert report.source_version == "4.0.2"
     assert report.migration_profile_id == "v4-to-target"
-    assert not report.migration_plan
+    assert ONBOARDING_ACTION_UPGRADE_SOPERATOR not in {action.id for action in report.actions}
     assert any(finding.status == "target-version" for finding in report.findings)
 
 
@@ -1336,6 +1335,28 @@ def test_soperator_support_policy_rejects_legacy_target_before_k8s_133() -> None
     assert soperator_upgrade_support_requires_override(report)
 
 
+def test_soperator_support_policy_rejects_pre_123_target_before_source_age_rule() -> None:
+    report = analyze_soperator_onboarding_snapshot(
+        _snapshot(
+            release={
+                "name": "slurm-operator",
+                "namespace": "soperator",
+                "chart": "slurm-operator-1.14.1",
+                "app_version": "1.14.1",
+            }
+        ),
+        target_ref="cluster1",
+        pinned_chart_version="1.22.5",
+        pinned_app_version="1.22.5",
+        target_k8s_version="1.33",
+    )
+
+    finding = _single_support_finding(report)
+    assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_UNSUPPORTED
+    assert finding["evidence"]["rule_id"] == "k8s-1-33-requires-soperator-1-23"
+    assert soperator_upgrade_support_requires_override(report)
+
+
 def test_soperator_support_policy_marks_unmatched_legacy_source_not_validated() -> None:
     report = analyze_soperator_onboarding_snapshot(
         _snapshot(
@@ -1364,13 +1385,13 @@ def test_soperator_support_policy_supports_122_plus_before_k8s_133() -> None:
             release={
                 "name": "soperator-controller",
                 "namespace": "soperator-system",
-                "chart": "helm-soperator-1.22.4",
-                "app_version": "1.22.4",
+                "chart": "helm-soperator-1.22.3",
+                "app_version": "1.22.3",
             }
         ),
         target_ref="cluster1",
-        pinned_chart_version="4.0.1-ps.1",
-        pinned_app_version="4.0.1",
+        pinned_chart_version="4.0.2-ps.3",
+        pinned_app_version="4.0.2",
         target_k8s_version="1.32",
     )
 
@@ -1380,10 +1401,17 @@ def test_soperator_support_policy_supports_122_plus_before_k8s_133() -> None:
         finding["evidence"]["rule_id"]
         == "k8s-before-1-33-soperator-1-22-plus-supported"
     )
+    assert finding["evidence"]["target_version"] == "4.0.2-ps.3"
+    assert finding["evidence"]["target_app_version"] == "4.0.2"
+    assert finding["evidence"]["target_chart_version"] == "4.0.2-ps.3"
+    assert finding["evidence"]["approved_target_chart_version"] == "4.0.2-ps.3"
+    assert finding["evidence"]["recommended_order"] == {
+        "soperator_after_k8s_min": "1.32"
+    }
     assert not soperator_upgrade_support_requires_override(report)
 
 
-def test_soperator_support_policy_warns_for_123_target_on_k8s_133() -> None:
+def test_soperator_support_policy_marks_intermediate_target_not_validated() -> None:
     report = analyze_soperator_onboarding_snapshot(
         _snapshot(
             release={
@@ -1400,10 +1428,10 @@ def test_soperator_support_policy_warns_for_123_target_on_k8s_133() -> None:
     )
 
     finding = _single_support_finding(report)
-    assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_SUPPORTED_WITH_WARNING
-    assert finding["severity"] == "recommended"
-    assert finding["evidence"]["rule_id"] == "k8s-1-33-procmount-control-warning"
-    assert not soperator_upgrade_support_requires_override(report)
+    assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_NOT_VALIDATED
+    assert finding["severity"] == "required"
+    assert finding["evidence"]["rule_id"] == "soperator-target-before-cxcli-pin-not-validated"
+    assert soperator_upgrade_support_requires_override(report)
 
 
 def test_soperator_support_policy_accepts_v4_target_on_k8s_133() -> None:
@@ -1417,15 +1445,76 @@ def test_soperator_support_policy_accepts_v4_target_on_k8s_133() -> None:
             }
         ),
         target_ref="cluster1",
-        pinned_chart_version="4.0.1-ps.1",
-        pinned_app_version="4.0.1",
+        pinned_chart_version="4.0.2-ps.3",
+        pinned_app_version="4.0.2",
         target_k8s_version="1.33",
     )
 
     finding = _single_support_finding(report)
     assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_SUPPORTED
     assert finding["evidence"]["rule_id"] == "k8s-1-33-soperator-4-supported"
+    assert finding["evidence"]["target_version"] == "4.0.2-ps.3"
+    assert finding["evidence"]["target_app_version"] == "4.0.2"
+    assert finding["evidence"]["recommended_order"] == {
+        "soperator_after_k8s_min": "1.32"
+    }
     assert not soperator_upgrade_support_requires_override(report)
+
+
+@pytest.mark.parametrize("target_chart_version", ["4.0.2", "4.0.2-ps.1", "4.0.2-ps.999"])
+def test_soperator_support_policy_marks_same_app_non_pin_target_not_validated(
+    target_chart_version: str,
+) -> None:
+    report = analyze_soperator_onboarding_snapshot(
+        _snapshot(
+            release={
+                "name": "soperator-controller",
+                "namespace": "soperator-system",
+                "chart": "helm-soperator-1.22.4",
+                "app_version": "1.22.4",
+            }
+        ),
+        target_ref="cluster1",
+        pinned_chart_version=target_chart_version,
+        pinned_app_version="4.0.2",
+        approved_target_chart_version="4.0.2-ps.3",
+        target_k8s_version="1.33",
+    )
+
+    finding = _single_support_finding(report)
+    assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_NOT_VALIDATED
+    assert finding["severity"] == "required"
+    assert (
+        finding["evidence"]["rule_id"]
+        == "soperator-target-same-app-non-cxcli-pin-not-validated"
+    )
+    assert finding["evidence"]["target_version"] == target_chart_version
+    assert finding["evidence"]["target_app_version"] == "4.0.2"
+    assert finding["evidence"]["approved_target_chart_version"] == "4.0.2-ps.3"
+    assert soperator_upgrade_support_requires_override(report)
+
+
+def test_soperator_support_policy_marks_newer_upstream_target_not_validated() -> None:
+    report = analyze_soperator_onboarding_snapshot(
+        _snapshot(
+            release={
+                "name": "soperator-controller",
+                "namespace": "soperator-system",
+                "chart": "helm-soperator-1.22.4",
+                "app_version": "1.22.4",
+            }
+        ),
+        target_ref="cluster1",
+        pinned_chart_version="4.1.1",
+        pinned_app_version="4.1.1",
+        target_k8s_version="1.33",
+    )
+
+    finding = _single_support_finding(report)
+    assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_NOT_VALIDATED
+    assert finding["severity"] == "required"
+    assert finding["evidence"]["rule_id"] == "soperator-target-newer-than-cxcli-pin-not-validated"
+    assert soperator_upgrade_support_requires_override(report)
 
 
 def test_soperator_support_policy_marks_unmatched_path_not_validated() -> None:

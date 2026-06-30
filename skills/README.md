@@ -534,7 +534,8 @@ templates, schema, and validation.
 MCP server for Codex, refreshes the Nebius-managed Grafana token file, keeps
 external Grafana service-account/static-key setup out of the default path, and
 guides agents through idempotent Codex MCP registration, datasource discovery,
-Prometheus, Loki, trace-tool checks, and read-only validation.
+PromQL-compatible monitoring, Loki, trace-tool checks, and read-only
+validation.
 
 ### `linter`
 

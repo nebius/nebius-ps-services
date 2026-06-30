@@ -888,7 +888,7 @@ def _external_mk8s_target_row(instance_id: str = "external-cluster") -> dict[str
             "actions": ["install-soperator"],
             "storage_mode": "keep-existing-storage",
             "compute_mode": "keep-existing-compute",
-            "target_version": "4.0.1-ps.1",
+            "target_version": _soperator_test_chart_version(),
             "source_version": "",
             "migration_profile_id": "",
         },
@@ -952,6 +952,8 @@ def _old_soperator_snapshot_with_provider() -> dict[str, object]:
 
 def _post_migration_soperator_snapshot() -> dict[str, object]:
     def _node_group(role: str, *, gpu: bool = False) -> dict[str, object]:
+        node_group_name = f"{role}-pool"
+        node_group_id = f"nodegroup-{node_group_name}"
         allocatable = {"cpu": "4"}
         if gpu:
             allocatable = {
@@ -962,14 +964,30 @@ def _post_migration_soperator_snapshot() -> dict[str, object]:
         return {
             "gpu": gpu,
             "node_count": 1,
+            "node_group_id": node_group_id,
+            "node_group_name": node_group_name,
             "labels": {
-                "nebius.com/node-group": f"{role}-pool",
+                "nebius.com/node-group": node_group_name,
+                "nebius.com/node-group-id": node_group_id,
                 "slurm.nebius.ai/nodeset": role,
             },
             "selector": {
                 "key": "nebius.com/node-group",
                 "operator": "In",
-                "values": [f"{role}-pool"],
+                "values": [node_group_name],
+            },
+            "provider": {
+                "node_group_id": node_group_id,
+                "node_group_name": node_group_name,
+                "node_template": {
+                    "k8s_version": "1.32",
+                    "os": cli_module.ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS,
+                    "gpu_stack_preset": (
+                        cli_module.ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_GPU_STACK_PRESET
+                        if gpu
+                        else ""
+                    ),
+                },
             },
             "allocatable": allocatable,
             "nodes": [f"{role}-node-1"],
@@ -982,6 +1000,13 @@ def _post_migration_soperator_snapshot() -> dict[str, object]:
             "login-pool": _node_group("login"),
             "accounting-pool": _node_group("accounting"),
             "worker-gpu-pool": _node_group("worker-gpu", gpu=True),
+        },
+        "provider": {
+            "mk8s_cluster": {
+                "id": "mk8scluster-external",
+                "name": "external-cluster",
+                "control_plane_version": "1.32",
+            }
         },
         "helm_releases": [
             {
@@ -1051,8 +1076,8 @@ def _write_old_soperator_migration_config(
         kube_context="external-context",
         storage_mode=storage_mode,
         compute_mode=compute_mode,
-        pinned_chart_version="4.0.1-ps.1",
-        pinned_app_version="4.0.1",
+        pinned_chart_version=_soperator_test_chart_version(),
+        pinned_app_version=_soperator_test_app_version(),
         target_k8s_version="1.32",
         snapshot=snapshot,
     )
@@ -1078,7 +1103,7 @@ def _write_old_soperator_migration_config(
                     "instance_id": "external-cluster",
                     "enabled": True,
                     "install_mode": "onboard-existing-cluster",
-                    "version": "4.0.1-ps.1",
+                    "version": _soperator_test_chart_version(),
                     "values": {},
                 },
                 {
@@ -1355,7 +1380,7 @@ def test_deploy_owned_soperator_adoption_retires_old_source_state(
                     "instance_id": "external-cluster",
                     "enabled": True,
                     "install_mode": "onboard-existing-cluster",
-                    "version": "4.0.1-ps.1",
+                    "version": _soperator_test_chart_version(),
                 }
             ]
         },
@@ -1398,7 +1423,7 @@ def test_deploy_owned_soperator_adoption_retires_old_source_state(
         extra_env={cli_module.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "ctx-external"},
     )
 
-    assert captured == [("ctx-external", "4.0.1-ps.1")]
+    assert captured == [("ctx-external", _soperator_test_chart_version())]
 
 
 def test_deploy_owned_soperator_adoption_cleanup_skips_migration_owned_work(
@@ -1412,7 +1437,7 @@ def test_deploy_owned_soperator_adoption_cleanup_skips_migration_owned_work(
                     "instance_id": "external-cluster",
                     "enabled": True,
                     "install_mode": "onboard-existing-cluster",
-                    "version": "4.0.1-ps.1",
+                    "version": _soperator_test_chart_version(),
                 }
             ]
         },
@@ -1484,8 +1509,8 @@ class _FakeSoperatorMigrationCommandRunner:
             {
                 "name": "soperator",
                 "namespace": "soperator",
-                "chart": "soperator-4.0.1-ps.1",
-                "app_version": "4.0.1",
+                "chart": f"soperator-{_soperator_test_chart_version()}",
+                "app_version": _soperator_test_app_version(),
                 "status": "deployed",
             }
         ]
@@ -1687,15 +1712,21 @@ spec:
             release_name = command[command.index("--install") + 1] if "--install" in command else ""
             namespace = command[command.index("-n") + 1] if "-n" in command else ""
             version = (
-                command[command.index("--version") + 1] if "--version" in command else "4.0.1-ps.1"
+                command[command.index("--version") + 1]
+                if "--version" in command
+                else _soperator_test_chart_version()
             )
             chart = (
                 command[command.index("--install") + 2] if "--install" in command else release_name
             )
             chart_name = Path(chart).name or release_name
-            app_version = "4.0.1" if release_name == "soperator" else version
+            app_version = (
+                cli_module.normalize_soperator_release_version(version)
+                if release_name == "soperator"
+                else version
+            )
             chart_version = (
-                "soperator-4.0.1-ps.1" if release_name == "soperator" else f"{chart_name}-{version}"
+                f"soperator-{version}" if release_name == "soperator" else f"{chart_name}-{version}"
             )
             self._upsert_helm_release(
                 namespace=namespace,
@@ -5424,7 +5455,7 @@ def test_soperator_onboard_uses_detected_profile_for_mixed_release_identity() ->
     report = cli_module.analyze_soperator_onboarding_snapshot(
         snapshot,
         target_ref="cluster1",
-        pinned_chart_version="4.0.2-ps.1",
+        pinned_chart_version="4.0.2-ps.3",
         pinned_app_version="4.0.2",
     )
 
@@ -6157,8 +6188,8 @@ def test_soperator_onboarding_defaults_require_aligned_sfs_for_old_layout() -> N
     target = cli_module._soperator_onboarding_target_defaults(
         "external-cluster",
         kube_context="",
-        pinned_chart_version="4.0.1-ps.1",
-        pinned_app_version="4.0.1",
+        pinned_chart_version=_soperator_test_chart_version(),
+        pinned_app_version=_soperator_test_app_version(),
         snapshot={
             "node_groups": {
                 "gpu-pool": {
@@ -6513,8 +6544,8 @@ def test_soperator_onboarding_preserves_live_adoption_values_after_materializati
         kube_context="external-context",
         storage_mode="keep-existing-storage",
         compute_mode="keep-existing-compute",
-        pinned_chart_version="4.0.1-ps.1",
-        pinned_app_version="4.0.1",
+        pinned_chart_version=_soperator_test_chart_version(),
+        pinned_app_version=_soperator_test_app_version(),
         snapshot=snapshot,
     )
     payload = {
@@ -7274,7 +7305,7 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "soperator-discovery/external-cluster/manifest.json" in result.output
     assert "Onboarding state: existing-soperator-supported" in result.output
     assert "Source version: 3.0.5" in result.output
-    assert "Target version: 4.0.1-ps.1" in result.output
+    assert f"Target version: {_soperator_test_chart_version()}" in result.output
     assert "Current Kubernetes version: 1.31" in result.output
     assert "Target Kubernetes version: 1.32" in result.output
     assert "Soperator upgrade path: status=supported" in result.output
@@ -7384,7 +7415,10 @@ def test_ext_soperator_upgrade_execute_requires_override_for_unsupported_policy(
     )
 
     assert result.exit_code == 1
+    normalized_output = " ".join(result.output.split())
     assert "Unsupported Soperator/Kubernetes upgrade path" in result.output
+    assert "Use the cxcli-pinned Soperator target" in normalized_output
+    assert "supported intermediate Soperator" not in normalized_output
     assert "--allow-unsupported-soperator-upgrade-path" in result.output
 
 
@@ -7765,7 +7799,7 @@ def test_ext_soperator_upgrade_execute_approved_pending_phase_exits_nonzero(
             pending_phase="validation-and-rollback-hold",
             pending_reason="Slurm NCCL benchmark failed",
             live_source_version="3.0.5",
-            target_version="4.0.1-ps.1",
+            target_version=_soperator_test_chart_version(),
             mutation_performed=True,
             lines=(
                 "Execute preflight checkpoint: checkpoint.json",
@@ -7902,7 +7936,7 @@ def test_ext_soperator_upgrade_execute_reuses_checkpoint_backup_after_mutation_s
             ),
             pending_phase="none",
             pending_reason="",
-            live_source_version="4.0.1",
+            live_source_version=_soperator_test_app_version(),
             target_version=_soperator_test_chart_version(),
             mutation_performed=True,
             lines=("resume completed",),
@@ -7985,7 +8019,7 @@ def test_ext_soperator_upgrade_execute_derives_kube_context_from_cluster_id(
             pending_phase="customer-approval",
             pending_reason="approval required",
             live_source_version="3.0.5",
-            target_version="4.0.1-ps.1",
+            target_version=_soperator_test_chart_version(),
             mutation_performed=False,
             lines=("cluster-id execute path used",),
         )
@@ -8111,7 +8145,7 @@ def test_ext_soperator_upgrade_execute_refreshes_config_after_completed_upgrade(
             ),
             pending_phase="none",
             pending_reason="",
-            live_source_version="4.0.1",
+            live_source_version=_soperator_test_app_version(),
             target_version=_soperator_test_chart_version(),
             mutation_performed=True,
             lines=("migration completed",),
@@ -8388,15 +8422,17 @@ def test_soperator_discovery_result_prints_k8s_versions(
                         "layer": "soperator-upgrade-support",
                         "status": "supported",
                         "message": (
-                            "Soperator 4.x targeting Kubernetes 1.33+ matches "
-                            "the committed cxcli upgrade-path policy."
+                            "The cxcli-pinned Soperator target on Kubernetes "
+                            "1.33+ matches the committed cxcli upgrade-path "
+                            "policy, including ActiveChecks hostUsers handling."
                         ),
                         "evidence": {
                             "rule_id": "k8s-1-33-soperator-4-supported",
                             "source_version": "1.22.3",
-                            "target_version": "4.0.2",
+                            "target_version": "4.0.2-ps.3",
                             "current_k8s_version": "1.32",
                             "target_k8s_version": "1.34",
+                            "recommended_order": {"soperator_after_k8s_min": "1.32"},
                         },
                     }
                 ]
@@ -8413,20 +8449,20 @@ def test_soperator_discovery_result_prints_k8s_versions(
         "Target Kubernetes version: 1.34",
         "- Upgrade path evaluation:",
         "  - Kubernetes: 1.32 -> 1.33 -> 1.34",
-        "  - Soperator: 1.22.3 -> 1.23.0 -> 4.0.2",
-        "  - Required gate: upgrade Soperator to at least 1.23.0 before moving Kubernetes to 1.33+.",
-        "  - Recommended order: Soperator 1.22.3 -> 1.23.0 while Kubernetes stays "
-        "1.32; Kubernetes 1.32 -> 1.33 -> 1.34; Soperator 1.23.0 -> 4.0.2.",
+        "  - Soperator: 1.22.3 -> 4.0.2-ps.3",
+        "  - Recommended order: Soperator 1.22.3 -> 4.0.2-ps.3 while Kubernetes stays "
+        "1.32; Kubernetes 1.32 -> 1.33 -> 1.34.",
         "- Soperator upgrade path: status=supported, rule=k8s-1-33-soperator-4-supported, "
-        "source Soperator=1.22.3, target Soperator=4.0.2, target Kubernetes=1.34",
-        "  - Soperator 4.x targeting Kubernetes 1.33+ matches the committed cxcli "
-        "upgrade-path policy.",
+        "source Soperator=1.22.3, target Soperator=4.0.2-ps.3, target Kubernetes=1.34",
+        "  - The cxcli-pinned Soperator target on Kubernetes 1.33+ matches the "
+        "committed cxcli upgrade-path policy, including ActiveChecks hostUsers "
+        "handling.",
         "- Discovery is read-only; unsupported or not-validated paths are gated when accepting "
         "onboarding or executing upgrade.",
     ]
 
 
-def test_soperator_discovery_upgrade_guidance_skips_123_gate_when_source_is_ready() -> None:
+def test_soperator_discovery_upgrade_guidance_uses_direct_soperator_hop() -> None:
     guidance = cli_module._soperator_discovery_upgrade_guidance_lines(
         {
             "findings": [
@@ -8437,9 +8473,10 @@ def test_soperator_discovery_upgrade_guidance_skips_123_gate_when_source_is_read
                     "evidence": {
                         "rule_id": "k8s-1-33-soperator-4-supported",
                         "source_version": "1.23.3",
-                        "target_version": "4.0.2",
+                        "target_version": "4.0.2-ps.3",
                         "current_k8s_version": "1.32",
                         "target_k8s_version": "1.34",
+                        "recommended_order": {"soperator_after_k8s_min": "1.32"},
                     },
                 }
             ]
@@ -8447,11 +8484,15 @@ def test_soperator_discovery_upgrade_guidance_skips_123_gate_when_source_is_read
     )
 
     assert "  - Kubernetes: 1.32 -> 1.33 -> 1.34" in guidance
-    assert "  - Soperator: 1.23.3 -> 4.0.2" in guidance
+    assert "  - Soperator: 1.23.3 -> 4.0.2-ps.3" in guidance
     assert not any("Required gate" in line for line in guidance)
+    assert (
+        "  - Recommended order: Soperator 1.23.3 -> 4.0.2-ps.3 while Kubernetes "
+        "stays 1.32; Kubernetes 1.32 -> 1.33 -> 1.34."
+    ) in guidance
 
 
-def test_soperator_discovery_upgrade_guidance_keeps_full_k8s_minor_path_before_gate() -> None:
+def test_soperator_discovery_upgrade_guidance_stages_after_pre_133_k8s_hop() -> None:
     guidance = cli_module._soperator_discovery_upgrade_guidance_lines(
         {
             "findings": [
@@ -8462,9 +8503,10 @@ def test_soperator_discovery_upgrade_guidance_keeps_full_k8s_minor_path_before_g
                     "evidence": {
                         "rule_id": "k8s-1-33-soperator-4-supported",
                         "source_version": "1.22.3",
-                        "target_version": "4.0.2",
+                        "target_version": "4.0.2-ps.3",
                         "current_k8s_version": "1.31",
                         "target_k8s_version": "1.34",
+                        "recommended_order": {"soperator_after_k8s_min": "1.32"},
                     },
                 }
             ]
@@ -8472,10 +8514,41 @@ def test_soperator_discovery_upgrade_guidance_keeps_full_k8s_minor_path_before_g
     )
 
     assert "  - Kubernetes: 1.31 -> 1.32 -> 1.33 -> 1.34" in guidance
+    assert "  - Soperator: 1.22.3 -> 4.0.2-ps.3" in guidance
+    assert not any("1.23.0" in line for line in guidance)
     assert (
-        "  - Recommended order: Soperator 1.22.3 -> 1.23.0 while Kubernetes "
-        "stays 1.31; Kubernetes 1.31 -> 1.32 -> 1.33 -> 1.34; "
-        "Soperator 1.23.0 -> 4.0.2."
+        "  - Recommended order: Kubernetes 1.31 -> 1.32; Soperator "
+        "1.22.3 -> 4.0.2-ps.3 while Kubernetes stays 1.32; Kubernetes "
+        "1.32 -> 1.33 -> 1.34."
+    ) in guidance
+
+
+def test_soperator_discovery_upgrade_guidance_runs_132_hop_before_soperator() -> None:
+    guidance = cli_module._soperator_discovery_upgrade_guidance_lines(
+        {
+            "findings": [
+                {
+                    "layer": "soperator-upgrade-support",
+                    "status": "supported",
+                    "message": "This path is in the support matrix.",
+                    "evidence": {
+                        "rule_id": "k8s-before-1-33-soperator-1-22-plus-supported",
+                        "source_version": "1.22.3",
+                        "target_version": "4.0.2-ps.3",
+                        "current_k8s_version": "1.31",
+                        "target_k8s_version": "1.32",
+                        "recommended_order": {"soperator_after_k8s_min": "1.32"},
+                    },
+                }
+            ]
+        }
+    )
+
+    assert "  - Kubernetes: 1.31 -> 1.32" in guidance
+    assert "  - Soperator: 1.22.3 -> 4.0.2-ps.3" in guidance
+    assert (
+        "  - Recommended order: Kubernetes 1.31 -> 1.32; Soperator "
+        "1.22.3 -> 4.0.2-ps.3 while Kubernetes stays 1.32."
     ) in guidance
 
 
@@ -9528,7 +9601,7 @@ def test_soperator_onboard_prints_target_compatible_layout_decisions(
     assert "## Upgrade Guidance" in summary
     assert "- Upgrade path evaluation:" in summary
     assert "  - Kubernetes: 1.34" in summary
-    assert "  - Soperator: 1.23.3 ->" in summary
+    assert "  - Soperator: 1.23.3 -> 4.0.2-ps.3" in summary
     assert "Soperator upgrade path: status=supported" in summary
 
 

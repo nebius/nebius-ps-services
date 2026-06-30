@@ -918,10 +918,10 @@ discovered live groups under
 instead of Terraform-owning the existing cluster or adding role-named host
 pools. The onboarding discovery summary includes the discovered Kubernetes
 control-plane version, target Kubernetes version, and an `Upgrade Guidance`
-section with Kubernetes minor hops, Soperator version hops, and the matched
-Soperator/Kubernetes upgrade-path rule; discovery stays read-only and does
-not gate unsupported paths by itself. When external
-node-template work is selected interactively, the Kubernetes target prompt
+section with Kubernetes minor hops, the one-shot Soperator hop to the
+cxcli-pinned target, and the matched Soperator/Kubernetes upgrade-path rule;
+discovery stays read-only and does not gate unsupported paths by itself. When
+external node-template work is selected interactively, the Kubernetes target prompt
 defaults to the next supported minor hop from the discovered live version, not
 the global latest supported minor. Operators can still edit the materialized
 placements in `config.yaml` before render; render compiles those placements into Soperator
@@ -950,9 +950,30 @@ normal Nebius SDK auth order when no cache is selected. The default bundle root
 is the current working directory unless `--output-dir` is supplied. Managed and
 external discovery share the same upgrade guidance formatter: when current and
 target versions are known, the console footer and `summary.md` show Kubernetes
-minor hops, Soperator version hops, the matched upgrade-path rule, and any
-required ordering gate such as upgrading Soperator to `1.23.0` before moving a
-`1.22.x` source cluster to Kubernetes `1.33+`. The
+minor hops, the one-shot Soperator hop to the cxcli-pinned target, the matched
+upgrade-path rule, and the canonical ordering across the Kubernetes `1.33+`
+boundary. For the tested old-source path, that renders Kubernetes
+`1.31 -> 1.32`, then Soperator `1.22.3 -> 4.0.2-ps.3`, then Kubernetes
+`1.32 -> 1.33 -> 1.34`. This ordering is intentional. The first Kubernetes hop
+gets the external MK8s control plane and node-template compatibility to the
+provider-supported `1.32` surface where the required Nebius GPU image/CUDA stack
+targets, including CUDA 13-era driver presets, can be selected. The Soperator
+cutover then removes the old `1.22.x` controller, CRDs, admission webhooks, and
+source-family runtime assumptions before the cluster reaches the Kubernetes
+`1.33+` boundary where legacy Soperator targets below `1.23.0` are unsupported.
+That one-shot chart cutover to the cxcli-pinned target is the validated way for
+cxcli to pass the known legacy compatibility issues as one profile-controlled
+takeover instead of trying to patch old releases in place: `procMount:
+Unmasked` admission now depends on `hostUsers: false`, user-namespace/idmap and
+NFS behavior must match the target chart contract, old source webhooks and
+controllers must stop reconciling target objects, and source ActiveChecks or
+stale Flux/Helm records must be retired before final validation. After the
+pinned target Soperator is reconciled, the remaining Kubernetes upgrades can
+continue as provider-supported one-minor hops with the target chart already in
+place. Upstream Soperator releases newer than the cxcli pin, such as `4.1.1`,
+are deliberately not advertised by this workflow; they remain `not_validated`
+until cxcli has an explicit tested policy rule and component-source pin for
+that target. The
 onboarding flow has
 an explicit source-version recovery path: when Soperator CRDs are present but
 no compatible Helm release version is detected, interactive onboarding asks the

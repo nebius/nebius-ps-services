@@ -38,8 +38,9 @@ All notable changes to this project are tracked here. This changelog follows
   metadata for that standalone cluster-id mode, and `--client-name` can select a
   runtime-auth cache profile when project-scoped cache selection is needed. The
   discovery footer and summary now include a Soperator/Kubernetes upgrade path
-  evaluation, including the Soperator `1.23.0` gate before Kubernetes `1.33+`
-  when a source `1.22.x` cluster is targeting Soperator `4.x`.
+  evaluation, including the canonical staged order of Kubernetes `1.31 -> 1.32`,
+  Soperator `1.22.3 -> 4.0.2-ps.3`, then Kubernetes `1.32 -> 1.33 -> 1.34`
+  for older external sources targeting the cxcli-pinned chart.
 - Added standalone restore-capable Soperator backup/restore commands:
   `soperator backup`, `soperator restore`, `ext-soperator backup`, and
   `ext-soperator restore`. The backup archive now includes raw and

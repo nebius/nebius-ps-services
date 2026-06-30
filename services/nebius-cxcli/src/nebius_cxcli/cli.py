@@ -9894,6 +9894,7 @@ def _soperator_discovery_report_from_snapshot(
     to_chart_version: str | None,
     to_k8s_version: str | None,
 ) -> Any:
+    approved_chart_version = _soperator_onboarding_target_version_default()
     chart_version = _non_empty_text(to_chart_version)
     pinned_chart_version = chart_version
     pinned_app_version = _soperator_onboarding_target_app_version_for_chart(chart_version)
@@ -9904,6 +9905,7 @@ def _soperator_discovery_report_from_snapshot(
         target_ref=target_ref,
         pinned_chart_version=pinned_chart_version,
         pinned_app_version=pinned_app_version,
+        approved_target_chart_version=approved_chart_version,
         target_k8s_version=to_k8s_version,
     )
 
@@ -10959,6 +10961,7 @@ def _managed_soperator_upgrade_support_report(
         target_ref=plan.target.target_ref,
         pinned_chart_version=plan.target_version,
         pinned_app_version=plan.target_version,
+        approved_target_chart_version=_soperator_onboarding_target_version_default(),
         target_k8s_version=effective_target_k8s,
     )
     return report.to_dict()
@@ -15528,11 +15531,12 @@ def _soperator_support_policy_failure_message(
             "Unsupported Soperator/Kubernetes upgrade path for "
             f"{command_name}: {_soperator_support_finding_label(finding)}. "
             f"Reason: {message or 'the path is not in the committed cxcli upgrade-path policy'}. "
-            "Choose a supported intermediate Soperator or Kubernetes target, or rerun with "
-            "--allow-unsupported-soperator-upgrade-path for an explicit advanced/testing "
-            "override. This override does not bypass Kubernetes minor-version hop validation, "
-            "Nebius API validation, protected-state checks, backup checks, quota checks, or "
-            "other safety preflights."
+            "Use the cxcli-pinned Soperator target with provider-supported Kubernetes "
+            "minor hops, or rerun with --allow-unsupported-soperator-upgrade-path for "
+            "an explicit advanced/testing override after validation. This override "
+            "does not bypass Kubernetes minor-version hop validation, Nebius API "
+            "validation, protected-state checks, backup checks, quota checks, or other "
+            "safety preflights."
         )
     return ""
 
@@ -15619,10 +15623,6 @@ def _soperator_support_policy_plan_lines(
     return tuple(lines)
 
 
-_SOPERATOR_K8S_133_GATE_VERSION = "1.33"
-_SOPERATOR_K8S_133_MIN_VERSION = "1.23.0"
-
-
 def _soperator_discovery_support_evidence(
     report: Mapping[str, Any] | Any,
 ) -> Mapping[str, Any]:
@@ -15633,6 +15633,15 @@ def _soperator_discovery_support_evidence(
     return {}
 
 
+def _soperator_discovery_support_recommended_order(
+    report: Mapping[str, Any] | Any,
+) -> Mapping[str, Any]:
+    recommended_order = _soperator_discovery_support_evidence(report).get(
+        "recommended_order"
+    )
+    return recommended_order if isinstance(recommended_order, Mapping) else {}
+
+
 def _soperator_discovery_report_value(
     report: Mapping[str, Any] | Any,
     key: str,
@@ -15640,31 +15649,6 @@ def _soperator_discovery_report_value(
     if isinstance(report, Mapping):
         return _non_empty_text(report.get(key))
     return _non_empty_text(getattr(report, key, ""))
-
-
-def _soperator_discovery_version_tuple(version: str) -> tuple[int, int, int] | None:
-    normalized = normalize_soperator_release_version(version)
-    match = re.fullmatch(r"([0-9]+)\.([0-9]+)(?:\.([0-9]+))?", normalized)
-    if match is None:
-        return None
-    patch = int(match.group(3)) if match.group(3) is not None else 0
-    return (int(match.group(1)), int(match.group(2)), patch)
-
-
-def _soperator_discovery_version_less_than(version: str, minimum: str) -> bool:
-    left = _soperator_discovery_version_tuple(version)
-    right = _soperator_discovery_version_tuple(minimum)
-    if left is None or right is None:
-        return False
-    return left < right
-
-
-def _soperator_discovery_version_at_least(version: str, minimum: str) -> bool:
-    left = _soperator_discovery_version_tuple(version)
-    right = _soperator_discovery_version_tuple(minimum)
-    if left is None or right is None:
-        return False
-    return left >= right
 
 
 def _soperator_discovery_k8s_version_tuple(version: str) -> tuple[int, int] | None:
@@ -15718,43 +15702,12 @@ def _soperator_discovery_support_path_values(
     return source_soperator, target_soperator, current_k8s, target_k8s
 
 
-def _soperator_discovery_requires_123_before_k8s_133(
-    *,
-    source_soperator: str,
-    target_soperator: str,
-    current_k8s: str,
-    target_k8s: str,
-) -> bool:
-    if not (
-        _soperator_discovery_k8s_at_least(target_k8s, _SOPERATOR_K8S_133_GATE_VERSION)
-        and not _soperator_discovery_k8s_at_least(
-            current_k8s,
-            _SOPERATOR_K8S_133_GATE_VERSION,
-        )
-    ):
-        return False
-    return (
-        _soperator_discovery_version_less_than(
-            source_soperator,
-            _SOPERATOR_K8S_133_MIN_VERSION,
-        )
-        and _soperator_discovery_version_at_least(
-            target_soperator,
-            _SOPERATOR_K8S_133_MIN_VERSION,
-        )
-    )
-
-
 def _soperator_discovery_soperator_hops(
     *,
     source_soperator: str,
     target_soperator: str,
-    include_k8s_133_gate: bool,
 ) -> tuple[str, ...]:
-    values = [_non_empty_text(source_soperator)]
-    if include_k8s_133_gate:
-        values.append(_SOPERATOR_K8S_133_MIN_VERSION)
-    values.append(_non_empty_text(target_soperator))
+    values = [_non_empty_text(source_soperator), _non_empty_text(target_soperator)]
     return tuple(dict.fromkeys(value for value in values if value))
 
 
@@ -15762,11 +15715,11 @@ def _soperator_discovery_upgrade_order_steps(
     *,
     k8s_hops: tuple[str, ...],
     soperator_hops: tuple[str, ...],
-    include_k8s_133_gate: bool,
+    soperator_after_k8s_min: str,
 ) -> tuple[str, ...]:
     if not k8s_hops and not soperator_hops:
         return ()
-    if not include_k8s_133_gate:
+    if not soperator_after_k8s_min or len(soperator_hops) < 2:
         steps: list[str] = []
         if len(soperator_hops) > 1:
             steps.append(f"Soperator {' -> '.join(soperator_hops)}")
@@ -15775,26 +15728,32 @@ def _soperator_discovery_upgrade_order_steps(
         if not steps:
             return ()
         return ("  - Recommended order: " + "; ".join(steps) + ".",)
-    k8s_from_gate = tuple(
-        hop
-        for hop in k8s_hops
-        if _soperator_discovery_k8s_at_least(hop, _SOPERATOR_K8S_133_GATE_VERSION)
+    staging_index = next(
+        (
+            index
+            for index, hop in enumerate(k8s_hops)
+            if _soperator_discovery_k8s_at_least(hop, soperator_after_k8s_min)
+        ),
+        None,
     )
-    steps = []
-    if len(soperator_hops) >= 2:
-        steps.append(
-            f"Soperator {soperator_hops[0]} -> {_SOPERATOR_K8S_133_MIN_VERSION} "
-            f"while Kubernetes stays {k8s_hops[0] if k8s_hops else 'below 1.33'}"
+    if staging_index is None:
+        return _soperator_discovery_upgrade_order_steps(
+            k8s_hops=k8s_hops,
+            soperator_hops=soperator_hops,
+            soperator_after_k8s_min="",
         )
-    if k8s_from_gate and len(k8s_hops) > 1:
-        steps.append(f"Kubernetes {' -> '.join(k8s_hops)}")
-    if (
-        len(soperator_hops) >= 3
-        and soperator_hops[-1] != _SOPERATOR_K8S_133_MIN_VERSION
-    ):
-        steps.append(
-            f"Soperator {_SOPERATOR_K8S_133_MIN_VERSION} -> {soperator_hops[-1]}"
-        )
+    k8s_before_soperator = k8s_hops[: staging_index + 1]
+    k8s_after_soperator = k8s_hops[staging_index:]
+    staging_k8s = k8s_hops[staging_index]
+    steps: list[str] = []
+    if len(k8s_before_soperator) > 1:
+        steps.append(f"Kubernetes {' -> '.join(k8s_before_soperator)}")
+    steps.append(
+        f"Soperator {' -> '.join(soperator_hops)} while Kubernetes stays "
+        f"{staging_k8s}"
+    )
+    if len(k8s_after_soperator) > 1:
+        steps.append(f"Kubernetes {' -> '.join(k8s_after_soperator)}")
     if not steps:
         return ()
     return ("  - Recommended order: " + "; ".join(steps) + ".",)
@@ -15807,16 +15766,13 @@ def _soperator_discovery_upgrade_path_lines(
         _soperator_discovery_support_path_values(report)
     )
     k8s_hops = _soperator_discovery_k8s_hops(current_k8s, target_k8s)
-    include_k8s_133_gate = _soperator_discovery_requires_123_before_k8s_133(
-        source_soperator=source_soperator,
-        target_soperator=target_soperator,
-        current_k8s=current_k8s,
-        target_k8s=target_k8s,
+    recommended_order = _soperator_discovery_support_recommended_order(report)
+    soperator_after_k8s_min = _non_empty_text(
+        recommended_order.get("soperator_after_k8s_min")
     )
     soperator_hops = _soperator_discovery_soperator_hops(
         source_soperator=source_soperator,
         target_soperator=target_soperator,
-        include_k8s_133_gate=include_k8s_133_gate,
     )
     if not k8s_hops and not soperator_hops:
         return ()
@@ -15825,17 +15781,11 @@ def _soperator_discovery_upgrade_path_lines(
         lines.append(f"  - Kubernetes: {' -> '.join(k8s_hops)}")
     if soperator_hops:
         lines.append(f"  - Soperator: {' -> '.join(soperator_hops)}")
-    if include_k8s_133_gate:
-        lines.append(
-            "  - Required gate: upgrade Soperator to at least "
-            f"{_SOPERATOR_K8S_133_MIN_VERSION} before moving Kubernetes to "
-            f"{_SOPERATOR_K8S_133_GATE_VERSION}+."
-        )
     lines.extend(
         _soperator_discovery_upgrade_order_steps(
             k8s_hops=k8s_hops,
             soperator_hops=soperator_hops,
-            include_k8s_133_gate=include_k8s_133_gate,
+            soperator_after_k8s_min=soperator_after_k8s_min,
         )
     )
     return tuple(lines)
@@ -16079,6 +16029,7 @@ def _soperator_onboarding_report_with_source_version(
     target_ref: str,
     pinned_chart_version: str,
     pinned_app_version: str,
+    approved_target_chart_version: str = "",
     target_k8s_version: str | None = None,
     source_version: str | None,
     interactive: bool,
@@ -16095,6 +16046,7 @@ def _soperator_onboarding_report_with_source_version(
         target_ref=target_ref,
         pinned_chart_version=pinned_chart_version,
         pinned_app_version=pinned_app_version,
+        approved_target_chart_version=approved_target_chart_version,
         source_version_override=source_version_override,
         target_k8s_version=target_k8s_version,
     )
@@ -16739,11 +16691,13 @@ def _soperator_onboarding_target_defaults(
         )
     if not pinned_chart_version and not pinned_app_version:
         pinned_chart_version, pinned_app_version = _soperator_catalog_pinned_versions()
+    approved_target_chart_version = _soperator_onboarding_target_version_default()
     report = analyze_soperator_onboarding_snapshot(
         snapshot,
         target_ref=normalized_target,
         pinned_chart_version=pinned_chart_version,
         pinned_app_version=pinned_app_version,
+        approved_target_chart_version=approved_target_chart_version,
         source_version_override=source_version or "",
         target_k8s_version=target_k8s_version,
     )
@@ -17917,6 +17871,7 @@ def _prompt_soperator_onboarding_target_row(
         interactive=True,
         validate_sources=validate_sources,
     )
+    approved_chart_version = _soperator_onboarding_target_version_default()
     app_version = _soperator_onboarding_target_app_version_for_chart(chart_version)
     default_target_k8s_version = _soperator_onboarding_target_k8s_version_default(snapshot)
     with _soperator_onboarding_status("Building Soperator upgrade profile diff..."):
@@ -17925,6 +17880,7 @@ def _prompt_soperator_onboarding_target_row(
             target_ref=target_ref,
             pinned_chart_version=chart_version,
             pinned_app_version=app_version,
+            approved_target_chart_version=approved_chart_version,
             target_k8s_version=to_k8s_version or default_target_k8s_version,
         )
     report = _soperator_onboarding_report_with_source_version(
@@ -17933,6 +17889,7 @@ def _prompt_soperator_onboarding_target_row(
         target_ref=target_ref,
         pinned_chart_version=chart_version,
         pinned_app_version=app_version,
+        approved_target_chart_version=approved_chart_version,
         target_k8s_version=to_k8s_version or default_target_k8s_version,
         source_version=source_version,
         interactive=True,
@@ -17951,6 +17908,7 @@ def _prompt_soperator_onboarding_target_row(
             target_ref=target_ref,
             pinned_chart_version=chart_version,
             pinned_app_version=app_version,
+            approved_target_chart_version=approved_chart_version,
             source_version_override=getattr(report, "source_version", ""),
             target_k8s_version=target_k8s_version,
         )
@@ -18159,6 +18117,7 @@ def _soperator_onboarding_target_row_from_options(
         interactive=interactive,
         validate_sources=validate_sources,
     )
+    approved_chart_version = _soperator_onboarding_target_version_default()
     app_version = _soperator_onboarding_target_app_version_for_chart(chart_version)
     default_target_k8s_version = _soperator_onboarding_target_k8s_version_default(snapshot)
     with _soperator_onboarding_status("Building Soperator upgrade profile diff..."):
@@ -18167,6 +18126,7 @@ def _soperator_onboarding_target_row_from_options(
             target_ref=normalized_target,
             pinned_chart_version=chart_version,
             pinned_app_version=app_version,
+            approved_target_chart_version=approved_chart_version,
             target_k8s_version=to_k8s_version or default_target_k8s_version,
         )
     report = _soperator_onboarding_report_with_source_version(
@@ -18175,6 +18135,7 @@ def _soperator_onboarding_target_row_from_options(
         target_ref=normalized_target,
         pinned_chart_version=chart_version,
         pinned_app_version=app_version,
+        approved_target_chart_version=approved_chart_version,
         target_k8s_version=to_k8s_version or default_target_k8s_version,
         source_version=source_version,
         interactive=interactive,
@@ -18193,6 +18154,7 @@ def _soperator_onboarding_target_row_from_options(
             target_ref=normalized_target,
             pinned_chart_version=chart_version,
             pinned_app_version=app_version,
+            approved_target_chart_version=approved_chart_version,
             source_version_override=getattr(report, "source_version", ""),
             target_k8s_version=target_k8s_version,
         )
@@ -48928,6 +48890,22 @@ def _soperator_post_migration_provider_snapshot(
     return provider_snapshot
 
 
+def _soperator_snapshot_has_provider_inventory(snapshot: Mapping[str, Any]) -> bool:
+    provider = snapshot.get("provider")
+    has_cluster = isinstance(provider, Mapping) and isinstance(
+        provider.get("mk8s_cluster"),
+        Mapping,
+    )
+    node_groups = snapshot.get("node_groups")
+    has_node_group_template = False
+    if isinstance(node_groups, Mapping):
+        has_node_group_template = any(
+            isinstance(raw_group, Mapping) and isinstance(raw_group.get("provider"), Mapping)
+            for raw_group in node_groups.values()
+        )
+    return has_cluster and has_node_group_template
+
+
 def _refresh_soperator_onboarding_after_completed_migration(
     *,
     config_path: Path,
@@ -48967,7 +48945,7 @@ def _refresh_soperator_onboarding_after_completed_migration(
                 )
             snapshot = collect_kubectl_soperator_snapshot(kube_context=collection_context)
             provider_snapshot = _soperator_post_migration_provider_snapshot(source_report)
-            if provider_snapshot:
+            if provider_snapshot and not _soperator_snapshot_has_provider_inventory(snapshot):
                 snapshot = _merge_provider_mk8s_template_snapshot(snapshot, provider_snapshot)
     except Exception as exc:
         return (
@@ -48976,6 +48954,19 @@ def _refresh_soperator_onboarding_after_completed_migration(
         )
 
     chart_version, app_version = _soperator_catalog_pinned_versions()
+    accepted_target_k8s_version = ""
+    for candidate_target in (execution_target, source_target):
+        candidate_onboarding = candidate_target.get("soperator_onboarding")
+        if not isinstance(candidate_onboarding, Mapping):
+            continue
+        node_template_upgrade = candidate_onboarding.get("node_template_upgrade")
+        if not isinstance(node_template_upgrade, Mapping):
+            continue
+        accepted_target_k8s_version = _non_empty_text(
+            node_template_upgrade.get("target_k8s_version")
+        )
+        if accepted_target_k8s_version:
+            break
     target_row = _soperator_onboarding_target_defaults(
         target_ref,
         kube_context=persisted_context,
@@ -48983,6 +48974,7 @@ def _refresh_soperator_onboarding_after_completed_migration(
         snapshot=snapshot,
         pinned_chart_version=chart_version,
         pinned_app_version=app_version,
+        target_k8s_version=accepted_target_k8s_version or None,
     )
     target_row["access"] = access
     onboarding = target_row.get("soperator_onboarding")

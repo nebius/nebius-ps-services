@@ -1487,8 +1487,11 @@ def test_docs_define_component_selector_contract() -> None:
     assert "defaults this field to the next provider-supported minor hop" in readme_flat
     assert "does not jump straight to the latest supported minor" in readme_flat
     assert "`summary.md` includes `Upgrade Guidance` without gating discovery" in readme_flat
-    assert "that section shows Kubernetes minor hops, Soperator version hops" in readme_flat
-    assert "Soperator `1.23.0` before Kubernetes `1.33+`" in readme_flat
+    assert (
+        "that section shows Kubernetes minor hops, the one-shot Soperator hop "
+        "to the cxcli-pinned target"
+    ) in readme_flat
+    assert "canonical ordering across the Kubernetes `1.33+` boundary" in readme_flat
     assert "print the matched Soperator/Kubernetes upgrade-path rule during the decision summary" in (
         readme_flat
     )
@@ -1637,8 +1640,26 @@ def test_docs_define_component_selector_contract() -> None:
     assert "The discovery summary printed during onboarding is read-only" in design_flat
     assert "includes the discovered/current and target Kubernetes minor versions" in design_flat
     assert "plus `Upgrade Guidance`" in design_flat
-    assert "Kubernetes minor hops, Soperator version hops" in design_flat
-    assert "upgrading Soperator to `1.23.0` before moving a `1.22.x` source cluster" in (
+    assert "Kubernetes minor hops, the one-shot Soperator hop" in design_flat
+    assert "canonical ordering across the Kubernetes `1.33+` boundary" in design_flat
+    assert "Soperator `1.22.3 -> 4.0.2-ps.3`" in design_flat
+    assert "This ordering is intentional" in design_flat
+    assert "where the required Nebius GPU image/CUDA stack targets" in design_flat
+    assert "before the cluster reaches the Kubernetes `1.33+` boundary" in design_flat
+    assert "`procMount: Unmasked` admission now depends on `hostUsers: false`" in (
+        design_flat
+    )
+    assert "user-namespace/idmap and NFS behavior must match the target chart contract" in (
+        design_flat
+    )
+    assert "old source webhooks and controllers must stop reconciling target objects" in (
+        design_flat
+    )
+    assert "stale Flux/Helm records must be retired before final validation" in design_flat
+    assert "releases newer than the cxcli pin, such as `4.1.1`, are deliberately not advertised" in (
+        design_flat
+    )
+    assert "remain `not_validated` until cxcli has an explicit tested policy rule" in (
         design_flat
     )
     assert "defaults to one provider-supported minor hop from the discovered control-plane version" in (

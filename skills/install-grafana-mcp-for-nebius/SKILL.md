@@ -1,6 +1,6 @@
 ---
 name: install-grafana-mcp-for-nebius
-description: "Install and configure the official Grafana MCP server for Codex against Nebius-managed Grafana. Use when Codex needs to set up mcp-grafana on macOS or Linux, wire Codex MCP config, refresh Nebius-managed Grafana IAM token files, query metrics/logs through Grafana Prometheus/Loki datasources, check whether trace tools are available, or troubleshoot Grafana MCP access to Nebius observability data. Only use Nebius static-key/data-source setup when the user explicitly asks to connect external Grafana to Nebius read endpoints."
+description: "Install and configure the official Grafana MCP server for Codex against Nebius-managed Grafana. Use when Codex needs to set up mcp-grafana on macOS or Linux, wire Codex MCP config, refresh Nebius-managed Grafana IAM token files, query metrics/logs through PromQL-compatible monitoring and Loki Grafana datasources, check whether trace tools are available, or troubleshoot Grafana MCP access to Nebius observability data. Only use Nebius static-key/data-source setup when the user explicitly asks to connect external Grafana to Nebius read endpoints."
 ---
 
 # Install Grafana MCP for Nebius
@@ -17,8 +17,9 @@ datasources that are already available in that Grafana instance.
   a configured `[mcp_servers.*]` entry or `codex mcp add`.
 - Do not point `GRAFANA_URL` at a Nebius read endpoint. It must be the Grafana
   base URL.
-- `mcp-grafana` talks to Grafana. It can query Prometheus and Loki through
-  Grafana datasources, but it is not a Nebius public-read-endpoint client.
+- `mcp-grafana` talks to Grafana. It can query PromQL-compatible monitoring
+  datasources, such as Prometheus or VictoriaMetrics, and Loki through Grafana
+  datasources, but it is not a Nebius public-read-endpoint client.
 - For Nebius-managed Grafana at `https://grafana.nebius.dev/`, use a refreshed
   Nebius IAM access token in `GRAFANA_TOKEN_FILE`. Prefer
   `GRAFANA_SERVICE_ACCOUNT_TOKEN_FILE` when the installed `mcp-grafana` binary
@@ -26,6 +27,10 @@ datasources that are already available in that Grafana instance.
   binaries that only support `GRAFANA_SERVICE_ACCOUNT_TOKEN`, the wrapper must
   export the refreshed token inline at startup; restart Codex before the
   12-hour Nebius token expires.
+- The Nebius token-refresh wrapper must only run with
+  `GRAFANA_URL=https://grafana.nebius.dev/`. Use the generic Grafana
+  service-account-token path for external Grafana instances so Nebius IAM tokens
+  cannot be sent to a non-Nebius Grafana URL.
 - For generic Grafana or Grafana Cloud, use a Grafana service-account token.
   Grafana token metadata can show expiration, but the token value cannot be
   recovered later; create a new token if the old value is missing or expired.
@@ -43,8 +48,9 @@ datasources that are already available in that Grafana instance.
   editing shell startup files, running Nebius IAM writes, issuing static keys,
   or changing Grafana data sources.
 - Never print, persist, commit, or paste real Grafana tokens, Nebius access
-  tokens, Nebius static keys, private endpoints, or customer data. Use
-  placeholders for tenant and project IDs in repo files.
+  tokens, Nebius static keys, private endpoints, project IDs, resource IDs, or
+  customer data. Use placeholders for tenant, project, and resource IDs in repo
+  files.
 
 ## Idempotency Contract
 
@@ -55,8 +61,9 @@ datasources that are already available in that Grafana instance.
 - Check `codex mcp get <server-name>` before registering Codex MCP config. If
   the server exists and matches the desired wrapper-based command, read-only
   args, and expected env keys, leave it in place. If it exists but points
-  somewhere else, report the mismatch and update only after the user confirms
-  replacement.
+  at a byte-identical source or installed copy of the wrapper, treat it as
+  matching state. If it exists but points somewhere else, report the mismatch
+  and update only after the user confirms replacement.
 - Use a managed shell-startup block for non-secret defaults. Replace that block
   when values change; do not append duplicate `GRAFANA_URL` or
   `GRAFANA_TOKEN_FILE` exports.
@@ -91,11 +98,14 @@ datasources that are already available in that Grafana instance.
    `codex mcp get <server-name>` already succeeds.
 5. Validate locally with `mcp-grafana --help`, `codex mcp list`, and
    `codex mcp get <server-name>`.
-6. Validate live access by listing Grafana datasources first. If Prometheus or
-   Loki datasources are present, run a small PromQL or LogQL query through
-   Grafana MCP. For traces, first list available MCP tools and do not promise
-   direct Tempo querying unless `tempo_*` proxied tools or an equivalent
-   supported panel-query path is available.
+6. Validate live access by listing Grafana datasources first. If
+   PromQL-compatible monitoring or Loki datasources are present, run a small,
+   bounded PromQL or LogQL query through Grafana MCP. For resource-specific
+   metrics, discover label names and label values first, then query with both a
+   project label and a resource label over a short time range. For traces, first
+   list available MCP tools and do not promise direct Tempo querying unless
+   `tempo_*` proxied tools or an equivalent supported panel-query path is
+   available.
 7. Use the external Grafana static-key flow only when the user explicitly asks
    to configure self-hosted Grafana or Grafana Cloud to call Nebius read
    endpoints directly.
@@ -168,6 +178,8 @@ codex mcp get <server-name>
 
 Live validation should list Grafana datasources first, then run a small
 PromQL/LogQL query only through a datasource available in the target Grafana.
+Avoid broad unfiltered queries; prefer short time ranges, low result limits,
+and discovered project/resource labels.
 
 ## Output Contract
 

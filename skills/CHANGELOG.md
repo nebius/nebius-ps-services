@@ -134,6 +134,22 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Hardened `install-grafana-mcp-for-nebius` local config checks so an existing
+  Codex MCP server that points at a byte-identical source or installed wrapper
+  copy is treated as matching state instead of a replacement-required
+  mismatch.
+- Hardened `install-grafana-mcp-for-nebius` token safety so the Nebius wrapper
+  refuses external Grafana URLs, config checks redact token-like MCP fields,
+  arbitrary byte-identical wrapper copies are not trusted, shell startup scans
+  block persisted token exports, and token refresh intervals must stay below
+  the Nebius token lifetime.
+- Aligned `install-grafana-mcp-for-nebius` metadata and trusted source-wrapper
+  checks so project/resource query prompts use PromQL-compatible datasource
+  wording and source checkouts are recognized by skill-relative path rather
+  than a user-specific repository path.
+- Expanded `install-grafana-mcp-for-nebius` usage docs with a bounded
+  datasource-discovery, label-discovery, and project/resource metric-query
+  workflow for Nebius-managed Grafana.
 - Updated `brainstorm` so major design or architecture decisions consult the
   installed `design` and `system-design-rules` skills as advisory context when
   accessible while keeping brainstorming chat-only until the user asks to

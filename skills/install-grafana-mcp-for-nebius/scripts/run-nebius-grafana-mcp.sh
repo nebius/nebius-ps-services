@@ -35,6 +35,18 @@ require_command() {
   fi
 }
 
+validate_nebius_grafana_url() {
+  case "$GRAFANA_URL" in
+    https://grafana.nebius.dev | https://grafana.nebius.dev/)
+      return
+      ;;
+  esac
+
+  printf 'error: this Nebius-managed wrapper only supports GRAFANA_URL=https://grafana.nebius.dev/\n' >&2
+  printf 'error: use a generic mcp-grafana service-account-token setup for external Grafana instances\n' >&2
+  exit 2
+}
+
 refresh_token() {
   local token_dir
   local tmp_file
@@ -82,6 +94,21 @@ mcp_supports_token_file() {
     | grep -Fqx "GRAFANA_SERVICE_ACCOUNT_TOKEN_FILE"
 }
 
+validate_refresh_interval() {
+  case "$NEBIUS_GRAFANA_TOKEN_REFRESH_SECONDS" in
+    '' | *[!0-9]*)
+      printf 'error: NEBIUS_GRAFANA_TOKEN_REFRESH_SECONDS must be a positive integer below 43200\n' >&2
+      exit 2
+      ;;
+  esac
+
+  if [ "$NEBIUS_GRAFANA_TOKEN_REFRESH_SECONDS" -le 0 ] \
+    || [ "$NEBIUS_GRAFANA_TOKEN_REFRESH_SECONDS" -ge 43200 ]; then
+    printf 'error: NEBIUS_GRAFANA_TOKEN_REFRESH_SECONDS must be below the 12-hour Nebius token lifetime\n' >&2
+    exit 2
+  fi
+}
+
 configure_token_environment() {
   local refreshed_token
 
@@ -121,6 +148,13 @@ case "${1:-}" in
     usage
     exit 0
     ;;
+esac
+
+validate_refresh_interval
+
+validate_nebius_grafana_url
+
+case "${1:-}" in
   --print-config)
     printf 'GRAFANA_URL=%s\n' "$GRAFANA_URL"
     printf 'GRAFANA_TOKEN_FILE=%s\n' "$GRAFANA_TOKEN_FILE"

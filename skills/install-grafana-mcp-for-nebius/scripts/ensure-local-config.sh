@@ -84,14 +84,61 @@ done
 
 managed_start="# >>> grafana-mcp-for-nebius >>>"
 managed_end="# <<< grafana-mcp-for-nebius <<<"
-shell_token_file="$grafana_token_file"
+validate_nebius_grafana_url() {
+  case "$grafana_url" in
+    https://grafana.nebius.dev | https://grafana.nebius.dev/)
+      return
+      ;;
+  esac
 
-if [[ "$shell_token_file" == "${HOME}/"* ]]; then
-  shell_token_file="\$HOME/${shell_token_file#"${HOME}/"}"
-fi
+  printf 'error: this helper only supports GRAFANA_URL=https://grafana.nebius.dev/ with the Nebius token-refresh wrapper\n' >&2
+  printf 'error: configure external Grafana with generic mcp-grafana service-account-token setup instead\n' >&2
+  exit 2
+}
 
-desired_url_line="export GRAFANA_URL=\"${grafana_url}\""
-desired_token_line="export GRAFANA_TOKEN_FILE=\"${shell_token_file}\""
+validate_nebius_grafana_url
+
+reject_shell_export_value() {
+  local name="$1"
+  local value="$2"
+
+  case "$value" in
+    *$'\n'* | *$'\r'*)
+      printf 'error: %s must not contain newlines\n' "$name" >&2
+      exit 2
+      ;;
+  esac
+}
+
+escape_double_quoted_value() {
+  local value="$1"
+
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//\`/\\\`}"
+  value="${value//\$/\\$}"
+  printf '%s' "$value"
+}
+
+shell_export_value() {
+  local home_literal
+  local value="$1"
+  local suffix
+
+  reject_shell_export_value "shell export value" "$value"
+
+  if [[ "$value" == "${HOME}/"* ]]; then
+    home_literal="\$HOME"
+    suffix="${value#"${HOME}/"}"
+    printf '"%s/%s"' "$home_literal" "$(escape_double_quoted_value "$suffix")"
+    return
+  fi
+
+  printf '"%s"' "$(escape_double_quoted_value "$value")"
+}
+
+desired_url_line="export GRAFANA_URL=$(shell_export_value "$grafana_url")"
+desired_token_line="export GRAFANA_TOKEN_FILE=$(shell_export_value "$grafana_token_file")"
 
 build_shell_block() {
   printf '%s\n' "$managed_start"
@@ -106,6 +153,14 @@ info() {
 
 warn() {
   printf 'warning: %s\n' "$*" >&2
+}
+
+redact_sensitive_text() {
+  printf '%s\n' "$1" \
+    | sed -E \
+      -e 's/([A-Za-z_]*(TOKEN|Token|token|SECRET|Secret|secret|PASSWORD|Password|password|STATIC_KEY|static_key|KEY|Key|key)[A-Za-z_]*=)[^[:space:]]+/\1*****/g' \
+      -e 's/([Aa]uthorization:[[:space:]]*[Bb]earer[[:space:]]+)[A-Za-z0-9._~+\/=-]+/\1*****/g' \
+      -e 's/([Bb]earer[[:space:]]+)[A-Za-z0-9._~+\/=-]+/\1*****/g'
 }
 
 check_conflicting_shell_exports() {
@@ -156,19 +211,98 @@ EOF
   return 1
 }
 
+check_secret_shell_exports() {
+  local findings
+  local line_number
+  local variable_name
+
+  if [ ! -f "$shell_file" ]; then
+    return 0
+  fi
+
+  findings="$(
+    awk \
+      -v start="$managed_start" \
+      -v end="$managed_end" '
+        $0 == start {
+          in_block = 1
+          next
+        }
+        in_block {
+          if ($0 == end) {
+            in_block = 0
+          }
+          next
+        }
+        $0 ~ /^export[[:space:]]+(GRAFANA_SERVICE_ACCOUNT_TOKEN|GRAFANA_TOKEN|NEBIUS_ACCESS_TOKEN|NEBIUS_IAM_TOKEN|NEBIUS_STATIC_KEY|NEBIUS_STATIC_TOKEN|NEBIUS_OBSERVABILITY_STATIC_TOKEN|AUTHORIZATION)[[:space:]]*=/ {
+          line = $0
+          sub(/^export[[:space:]]+/, "", line)
+          sub(/[[:space:]]*=.*/, "", line)
+          print FNR ":" line
+        }
+      ' "$shell_file"
+  )"
+
+  if [ -z "$findings" ]; then
+    return 0
+  fi
+
+  while IFS=: read -r line_number variable_name; do
+    [ -n "$line_number" ] || continue
+    warn "shell: secret-like $variable_name export at $shell_file:$line_number; remove it before applying Grafana MCP defaults"
+  done <<EOF
+$findings
+EOF
+  warn "shell: not printing secret-like export values"
+  return 1
+}
+
+managed_shell_block_matches() {
+  local existing_block
+  local expected_block
+
+  if [ ! -f "$shell_file" ]; then
+    return 1
+  fi
+
+  existing_block="$(
+    awk \
+      -v start="$managed_start" \
+      -v end="$managed_end" '
+        $0 == start {
+          in_block = 1
+        }
+        in_block {
+          print
+          if ($0 == end) {
+            exit
+          }
+        }
+      ' "$shell_file"
+  )"
+  expected_block="$(build_shell_block)"
+
+  [ "$existing_block" = "$expected_block" ]
+}
+
 ensure_shell_block() {
   local tmp_file
   local shell_dir
 
   shell_dir="$(dirname -- "$shell_file")"
+  check_secret_shell_exports
   check_conflicting_shell_exports
 
   if [ "$mode" = "check" ]; then
     if [ -f "$shell_file" ]; then
       local managed_count
       managed_count="$(grep -Fxc "$managed_start" "$shell_file" || true)"
-      if [ "$managed_count" -gt 0 ]; then
+      if [ "$managed_count" -gt 1 ]; then
+        info "shell: multiple managed Grafana MCP blocks found in $shell_file; --apply would consolidate them"
+      elif [ "$managed_count" -gt 0 ] && managed_shell_block_matches; then
         info "shell: managed Grafana MCP block present in $shell_file"
+      elif [ "$managed_count" -gt 0 ]; then
+        info "shell: managed Grafana MCP block differs in $shell_file; --apply would refresh it"
       elif grep -Fxq "$desired_url_line" "$shell_file" \
         && grep -Fxq "$desired_token_line" "$shell_file"; then
         info "shell: desired Grafana exports exist; --apply would normalize them into the managed block"
@@ -244,8 +378,76 @@ check_binary() {
   fi
 }
 
+file_mode() {
+  stat -f '%OLp' "$1" 2>/dev/null || stat -c '%a' "$1"
+}
+
+path_not_group_or_world_writable() {
+  local checked_path="$1"
+  local group_digit
+  local mode
+  local numeric_mode
+  local other_digit
+  local steps
+
+  steps=0
+  while [ -n "$checked_path" ] && [ "$checked_path" != "/" ] && [ "$steps" -lt 4 ]; do
+    [ -e "$checked_path" ] || return 1
+    mode="$(file_mode "$checked_path")"
+    numeric_mode=$((10#$mode))
+    group_digit=$(((numeric_mode / 10) % 10))
+    other_digit=$((numeric_mode % 10))
+
+    if [ $((group_digit & 2)) -ne 0 ] || [ $((other_digit & 2)) -ne 0 ]; then
+      return 1
+    fi
+
+    checked_path="$(dirname -- "$checked_path")"
+    steps=$((steps + 1))
+  done
+}
+
+trusted_equivalent_wrapper_path() {
+  local path="$1"
+  local repo_root
+  local relative_path
+
+  case "$path" in
+    "$HOME/.agents/skills/install-grafana-mcp-for-nebius/scripts/run-nebius-grafana-mcp.sh" | \
+      "$HOME/.codex/skills/install-grafana-mcp-for-nebius/scripts/run-nebius-grafana-mcp.sh")
+      path_not_group_or_world_writable "$path"
+      ;;
+    *)
+      case "$path" in
+        "$HOME"/*/skills/install-grafana-mcp-for-nebius/scripts/run-nebius-grafana-mcp.sh)
+          if ! command -v git >/dev/null 2>&1; then
+            return 1
+          fi
+          repo_root="$(git -C "$(dirname -- "$path")" rev-parse --show-toplevel 2>/dev/null)" || return 1
+          case "$repo_root" in
+            "$HOME"/*)
+              relative_path="${path#"${repo_root}/"}"
+              [ "$relative_path" = "skills/install-grafana-mcp-for-nebius/scripts/run-nebius-grafana-mcp.sh" ] \
+                && path_not_group_or_world_writable "$path"
+              ;;
+            *)
+              return 1
+              ;;
+          esac
+          ;;
+        *)
+          return 1
+          ;;
+      esac
+      ;;
+  esac
+}
+
 ensure_codex_mcp() {
+  local existing_args
+  local existing_command
   local existing_config
+  local existing_env
   local mismatch
 
   if ! command -v codex >/dev/null 2>&1; then
@@ -254,13 +456,45 @@ ensure_codex_mcp() {
   fi
 
   if existing_config="$(codex mcp get "$mcp_server_name" 2>/dev/null)"; then
-    info "codex: MCP server '$mcp_server_name' already exists; inspecting it"
-    printf '%s\n' "$existing_config"
-
     mismatch="false"
-    if ! printf '%s\n' "$existing_config" | grep -Fxq "  command: $wrapper_path"; then
-      warn "codex: existing MCP server '$mcp_server_name' does not use wrapper: $wrapper_path"
-      mismatch="true"
+    existing_command="$(
+      printf '%s\n' "$existing_config" \
+        | sed -n 's/^  command: //p' \
+        | head -n 1
+    )"
+    existing_args="$(
+      printf '%s\n' "$existing_config" \
+        | sed -n 's/^  args: //p' \
+        | head -n 1
+    )"
+    existing_env="$(
+      printf '%s\n' "$existing_config" \
+        | sed -n 's/^  env: //p' \
+        | head -n 1
+    )"
+
+    info "codex: MCP server '$mcp_server_name' already exists; inspecting sanitized fields"
+    info "codex: command: $(redact_sensitive_text "$existing_command")"
+    info "codex: args: $(redact_sensitive_text "$existing_args")"
+    info "codex: env: $(redact_sensitive_text "$existing_env")"
+
+    if [ "$existing_command" != "$wrapper_path" ]; then
+      if [ -n "$existing_command" ] \
+        && [ -f "$existing_command" ] \
+        && [ -f "$wrapper_path" ] \
+        && cmp -s "$existing_command" "$wrapper_path" \
+        && trusted_equivalent_wrapper_path "$existing_command"; then
+        info "codex: MCP server '$mcp_server_name' uses a byte-identical wrapper at $existing_command"
+      elif [ -n "$existing_command" ] \
+        && [ -f "$existing_command" ] \
+        && [ -f "$wrapper_path" ] \
+        && cmp -s "$existing_command" "$wrapper_path"; then
+        warn "codex: existing MCP server '$mcp_server_name' uses byte-identical wrapper content from an untrusted path: $existing_command"
+        mismatch="true"
+      else
+        warn "codex: existing MCP server '$mcp_server_name' does not use wrapper: $wrapper_path"
+        mismatch="true"
+      fi
     fi
     if ! printf '%s\n' "$existing_config" | grep -Fxq "  args: --disable-write" \
       && ! printf '%s\n' "$existing_config" | grep -Fxq "  args: -"; then
