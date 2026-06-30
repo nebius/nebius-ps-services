@@ -56,7 +56,11 @@ All notable changes to this project are tracked here. This changelog follows
   discovery footer and summary now include a Soperator/Kubernetes upgrade path
   evaluation, including the canonical staged order of Kubernetes `1.31 -> 1.32`,
   Soperator `1.22.3 -> 4.0.2-ps.3`, then Kubernetes `1.32 -> 1.33 -> 1.34`
-  for older external sources targeting the cxcli-pinned chart.
+  for older external sources targeting the cxcli-pinned chart. `--output-dir`
+  now selects the bundle root while preserving
+  `generated/reports/soperator-discovery/<target>/` below it, and discovery
+  output now prints Soperator install status plus the detected Soperator version
+  when Helm release metadata or live Soperator resource labels provide one.
 - Added standalone restore-capable Soperator backup/restore commands:
   `soperator backup`, `soperator restore`, `ext-soperator backup`, and
   `ext-soperator restore`. The backup archive now includes raw and

@@ -1797,6 +1797,72 @@ def _release_detected_version(release: Mapping[str, Any]) -> str:
     return ""
 
 
+def _resource_metadata(resource: Mapping[str, Any]) -> Mapping[str, Any]:
+    metadata = resource.get("metadata")
+    return metadata if isinstance(metadata, Mapping) else {}
+
+
+def _resource_labels(resource: Mapping[str, Any]) -> Mapping[str, Any]:
+    labels = _resource_metadata(resource).get("labels")
+    return labels if isinstance(labels, Mapping) else {}
+
+
+def _soperator_resource_release_candidate(
+    snapshot: Mapping[str, Any],
+    *,
+    namespace: str = "",
+    release_name: str = "",
+) -> Mapping[str, Any] | None:
+    resources = snapshot.get("soperator_resources")
+    if not isinstance(resources, Sequence) or isinstance(resources, (str, bytes, bytearray)):
+        return None
+    requested_namespace = str(namespace or "").strip().lower()
+    requested_release = str(release_name or "").strip().lower()
+    candidates: list[Mapping[str, Any]] = []
+    for resource in resources:
+        if not isinstance(resource, Mapping):
+            continue
+        labels = _resource_labels(resource)
+        chart = str(labels.get("helm.sh/chart", "") or "").strip()
+        app_version = str(labels.get("app.kubernetes.io/version", "") or "").strip()
+        instance_name = str(labels.get("app.kubernetes.io/instance", "") or "").strip()
+        app_name = str(labels.get("app.kubernetes.io/name", "") or "").strip()
+        metadata = _resource_metadata(resource)
+        resource_namespace = str(metadata.get("namespace", "") or "soperator").strip()
+        if not chart and not app_version:
+            continue
+        identity = " ".join((chart, app_version, instance_name, app_name)).lower()
+        if "soperator" not in identity and "slurm-operator" not in identity:
+            continue
+        if requested_namespace and resource_namespace.lower() != requested_namespace:
+            continue
+        if requested_release and instance_name.lower() != requested_release:
+            continue
+        candidates.append(
+            {
+                "name": instance_name or "soperator",
+                "namespace": resource_namespace,
+                "chart": chart,
+                "chart_version": _release_chart_version({"chart": chart}),
+                "app_version": app_version,
+                "status": "resource-labels",
+                "detected_from": "kubernetes-resource-labels",
+            }
+        )
+    if not candidates:
+        return None
+    return sorted(
+        candidates,
+        key=lambda item: (
+            str(item.get("namespace", "") or "").lower() != "soperator",
+            str(item.get("name", "") or "").lower() != "soperator",
+            str(item.get("namespace", "") or ""),
+            str(item.get("name", "") or ""),
+            str(item.get("chart", "") or ""),
+        ),
+    )[0]
+
+
 def _release_detected_summary(
     release: Mapping[str, Any],
     *,
@@ -2353,6 +2419,11 @@ def analyze_soperator_onboarding_snapshot(
         (release for release in soperator_candidates if _is_compatible_soperator_release(release)),
         None,
     )
+    resource_release = (
+        _soperator_resource_release_candidate(snapshot) if soperator_release is None else None
+    )
+    if soperator_release is None and resource_release is not None:
+        soperator_release = resource_release
     crd_names = _sequence_of_names(snapshot.get("crds"))
     has_soperator_crds = any(name in SOPERATOR_CRD_NAMES for name in crd_names)
     namespace_names = _sequence_of_names(snapshot.get("namespaces"))
@@ -2730,6 +2801,20 @@ def analyze_soperator_onboarding_snapshot(
                     "evidence and are not selected onboarding work."
                 ),
                 evidence={"releases": [dict(release) for release in shadowed_stale_releases]},
+            )
+        )
+
+    if resource_release is not None:
+        findings.append(
+            SoperatorOnboardingFinding(
+                layer="soperator",
+                status="resource-label-version-detected",
+                severity="info",
+                message=(
+                    "Detected Soperator version from Kubernetes resource labels because "
+                    "Helm release metadata was not available."
+                ),
+                evidence={"release": dict(resource_release)},
             )
         )
 

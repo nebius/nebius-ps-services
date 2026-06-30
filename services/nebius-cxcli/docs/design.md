@@ -947,12 +947,18 @@ provider inventory use project-scoped Nebius authentication. `--client-name`
 selects a specific runtime-auth cache profile when needed; otherwise cxcli
 infers the unique cached client name when one exists and continues through the
 normal Nebius SDK auth order when no cache is selected. The default bundle root
-is the current working directory unless `--output-dir` is supplied. Managed and
-external discovery share the same upgrade guidance formatter: when current and
-target versions are known, the console footer and `summary.md` show Kubernetes
-minor hops, the one-shot Soperator hop to the cxcli-pinned target, the matched
-upgrade-path rule, and the canonical ordering across the Kubernetes `1.33+`
-boundary. For the tested old-source path, that renders Kubernetes
+is the current working directory; `--output-dir` selects a different root while
+still preserving `generated/reports/soperator-discovery/<target>/` below that
+root. Managed and external discovery share the same status and upgrade guidance
+formatter: the console footer and `summary.md` show the discovered Kubernetes
+version, Soperator install status, detected Soperator version when available,
+and an explicit not-installed status when no Soperator installation is found.
+When Helm release metadata is unavailable but live Soperator resources carry
+chart/app labels, discovery uses those labels as version evidence. When current
+and target versions are known, the formatter also shows Kubernetes minor hops,
+the one-shot Soperator hop to the cxcli-pinned target, the matched upgrade-path
+rule, and the canonical ordering across the Kubernetes `1.33+` boundary. For
+the tested old-source path, that renders Kubernetes
 `1.31 -> 1.32`, then Soperator `1.22.3 -> 4.0.2-ps.3`, then Kubernetes
 `1.32 -> 1.33 -> 1.34`. This ordering is intentional. The first Kubernetes hop
 gets the external MK8s control plane and node-template compatibility to the

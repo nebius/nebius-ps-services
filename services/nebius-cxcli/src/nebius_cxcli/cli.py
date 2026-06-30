@@ -10360,6 +10360,20 @@ def _print_soperator_discovery_result(path: Path) -> None:
             console.print(f"Current Kubernetes version: {current_k8s_version}")
         if target_k8s_version:
             console.print(f"Target Kubernetes version: {target_k8s_version}")
+        soperator_status = _non_empty_text(payload.get("soperator_status"))
+        source_version = _non_empty_text(payload.get("source_version"))
+        chart_version = _non_empty_text(payload.get("chart_version"))
+        app_version = _non_empty_text(payload.get("app_version"))
+        if soperator_status:
+            console.print(f"Soperator status: {soperator_status}")
+        if source_version:
+            console.print(f"Soperator version: {source_version}")
+        elif soperator_status and soperator_status != "not installed":
+            console.print("Soperator version: unknown")
+        if chart_version and chart_version != source_version:
+            console.print(f"Soperator chart version: {chart_version}")
+        if app_version and app_version not in {source_version, chart_version}:
+            console.print(f"Soperator app version: {app_version}")
         report = payload.get("report")
         if isinstance(report, Mapping):
             for line in _soperator_discovery_upgrade_guidance_lines(report):
@@ -10390,8 +10404,8 @@ def soperator_discover_command(
         typer.Option(
             "--output-dir",
             help=(
-                "Exact output directory for the discovery bundle. Default: "
-                "<config.yaml parent>/generated/reports/soperator-discovery/<target>."
+                "Output root for generated/reports/soperator-discovery/<target>. "
+                "Default root: config.yaml parent."
             ),
         ),
     ] = None,
@@ -47525,8 +47539,8 @@ def ext_soperator_discover_command(
         typer.Option(
             "--output-dir",
             help=(
-                "Exact output directory for the discovery bundle. Default root: "
-                "config.yaml parent, or current working directory in standalone mode."
+                "Output root for generated/reports/soperator-discovery/<target>. "
+                "Default root: config.yaml parent, or current working directory in standalone mode."
             ),
         ),
     ] = None,

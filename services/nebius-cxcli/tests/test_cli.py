@@ -8484,6 +8484,10 @@ def test_soperator_discovery_result_prints_k8s_versions(
         lambda _path: {
             "current_k8s_version": "1.32",
             "target_k8s_version": "1.34",
+            "soperator_status": "installed",
+            "source_version": "1.22.3",
+            "chart_version": "1.22.3",
+            "app_version": "1.22.3",
             "report": {
                 "findings": [
                     {
@@ -8515,6 +8519,8 @@ def test_soperator_discovery_result_prints_k8s_versions(
         f"Soperator discovery summary: {summary_path}",
         "Current Kubernetes version: 1.32",
         "Target Kubernetes version: 1.34",
+        "Soperator status: installed",
+        "Soperator version: 1.22.3",
         "- Upgrade path evaluation:",
         "  - Kubernetes: 1.32 -> 1.33 -> 1.34",
         "  - Soperator: 1.22.3 -> 4.0.2-ps.3",
@@ -8527,6 +8533,38 @@ def test_soperator_discovery_result_prints_k8s_versions(
         "handling.",
         "- Discovery is read-only; unsupported or not-validated paths are gated when accepting "
         "onboarding or executing upgrade.",
+    ]
+
+
+def test_soperator_discovery_result_prints_soperator_not_installed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    printed: list[str] = []
+    bundle_path = tmp_path / "manifest.json"
+    bundle_path.write_text("{}\n", encoding="utf-8")
+
+    class FakeConsole:
+        def print(self, *args: object, **_kwargs: object) -> None:
+            printed.append(" ".join(str(arg) for arg in args))
+
+    monkeypatch.setattr(cli_module, "console", FakeConsole())
+    monkeypatch.setattr(
+        cli_module,
+        "load_soperator_discovery_bundle",
+        lambda _path: {
+            "current_k8s_version": "1.32",
+            "soperator_status": "not installed",
+            "report": {},
+        },
+    )
+
+    cli_module._print_soperator_discovery_result(bundle_path)
+
+    assert printed == [
+        f"Soperator discovery manifest: {bundle_path}",
+        "Current Kubernetes version: 1.32",
+        "Soperator status: not installed",
     ]
 
 
@@ -9259,6 +9297,61 @@ def test_external_soperator_discovery_without_onboarding_writes_cluster_bundle(
     assert "--project-id" in bundle["command"]
     assert "project-456" in bundle["command"]
     assert "--tenant-id" not in bundle["command"]
+
+
+def test_external_soperator_discovery_output_dir_is_bundle_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cli_module,
+        "_collect_soperator_snapshot_for_nebius_mk8s_cluster",
+        lambda *_args, **_kwargs: (_old_soperator_snapshot_with_provider(), "generated-context"),
+    )
+    monkeypatch.setattr(cli_module, "_collect_soperator_discovery_helm_values", lambda **_: {})
+    monkeypatch.setattr(cli_module, "_collect_soperator_discovery_slurm_snapshot", lambda **_: {})
+    monkeypatch.setattr(
+        cli_module,
+        "_collect_soperator_discovery_accounting_snapshot",
+        lambda **_: {},
+    )
+    payload = cli_module._standalone_external_soperator_discovery_payload(
+        client_name="client-a",
+        tenant_id=None,
+        project_id="project-456",
+    )
+    output_root = tmp_path / "deployments"
+
+    path = cli_module._run_external_soperator_discovery_command(
+        project_dir=tmp_path,
+        config_path=None,
+        payload=payload,
+        client_name="client-a",
+        tenant_id=None,
+        project_id="project-456",
+        target_ref=None,
+        cluster_id="mk8scluster-123",
+        kube_context=None,
+        access="external",
+        output_dir=output_root,
+        namespace=None,
+        release_name=None,
+        to_chart_version=None,
+        to_k8s_version=None,
+        to_os=None,
+        to_gpu_stack_preset=None,
+        redaction="support",
+    )
+
+    assert path == (
+        output_root
+        / "generated"
+        / "reports"
+        / "soperator-discovery"
+        / "mk8scluster-123"
+        / "manifest.json"
+    )
+    assert not (output_root / "manifest.json").exists()
 
 
 def test_external_soperator_discovery_cluster_snapshot_uses_cached_client_name(

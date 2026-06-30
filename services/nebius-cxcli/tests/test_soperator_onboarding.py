@@ -1709,6 +1709,89 @@ def test_soperator_onboarding_analyzer_uses_detected_version_for_nonstandard_rel
     assert "matched migration profile v3-to-target" in release_finding.message
 
 
+def test_soperator_onboarding_analyzer_uses_resource_labels_when_helm_release_missing() -> None:
+    snapshot = _snapshot()
+    snapshot["helm_releases"] = []
+    snapshot["crds"] = ["slurmclusters.slurm.nebius.ai", "nodesets.slurm.nebius.ai"]
+    snapshot["namespaces"] = ["soperator"]
+    snapshot["soperator_resources"] = [
+        {
+            "kind": "NodeSet",
+            "metadata": {
+                "name": "worker",
+                "namespace": "soperator",
+                "labels": {
+                    "app.kubernetes.io/instance": "soperator",
+                    "app.kubernetes.io/name": "soperator",
+                    "app.kubernetes.io/version": "4.0.2",
+                    "helm.sh/chart": "soperator-4.0.2-ps.3",
+                },
+            },
+        }
+    ]
+
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref="cluster1",
+        pinned_chart_version="4.0.2-ps.3",
+        pinned_app_version="4.0.2",
+    )
+
+    assert report.state == "existing-soperator-target"
+    assert report.source_version == "4.0.2"
+    assert not any(finding.status == "source-version-required" for finding in report.findings)
+    assert any(
+        finding.status == "resource-label-version-detected"
+        and finding.evidence["release"]["chart_version"] == "4.0.2-ps.3"
+        for finding in report.findings
+    )
+
+
+def test_soperator_onboarding_analyzer_prefers_canonical_resource_labels() -> None:
+    snapshot = _snapshot()
+    snapshot["helm_releases"] = []
+    snapshot["crds"] = ["slurmclusters.slurm.nebius.ai", "nodesets.slurm.nebius.ai"]
+    snapshot["namespaces"] = ["soperator", "custom"]
+    snapshot["soperator_resources"] = [
+        {
+            "kind": "NodeSet",
+            "metadata": {
+                "name": "custom-worker",
+                "namespace": "custom",
+                "labels": {
+                    "app.kubernetes.io/instance": "soperator",
+                    "app.kubernetes.io/name": "soperator",
+                    "app.kubernetes.io/version": "3.0.7",
+                    "helm.sh/chart": "soperator-3.0.7",
+                },
+            },
+        },
+        {
+            "kind": "NodeSet",
+            "metadata": {
+                "name": "worker",
+                "namespace": "soperator",
+                "labels": {
+                    "app.kubernetes.io/instance": "soperator",
+                    "app.kubernetes.io/name": "soperator",
+                    "app.kubernetes.io/version": "4.0.2",
+                    "helm.sh/chart": "soperator-4.0.2-ps.3",
+                },
+            },
+        },
+    ]
+
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref="cluster1",
+        pinned_chart_version="4.0.2-ps.3",
+        pinned_app_version="4.0.2",
+    )
+
+    assert report.state == "existing-soperator-target"
+    assert report.source_version == "4.0.2"
+
+
 def test_soperator_onboarding_analyzer_source_version_finding_names_profile_contract() -> None:
     snapshot = _snapshot()
     snapshot["crds"] = ["slurmclusters.slurm.nebius.ai"]
@@ -2424,6 +2507,118 @@ def test_source_discovery_report_writer_persists_full_snapshot(tmp_path) -> None
     assert "- Target Kubernetes version:" in summary
     assert "## Upgrade Guidance" in summary
     assert "- Soperator upgrade path: status=supported, rule=test-rule" in summary
+
+
+def test_source_discovery_report_writer_treats_output_dir_as_root(tmp_path) -> None:
+    output_root = tmp_path / "custom-root"
+    snapshot = _snapshot(
+        release={
+            "name": "soperator",
+            "namespace": "soperator",
+            "chart": "soperator-4.0.2-ps.3",
+            "app_version": "4.0.2",
+        }
+    )
+    snapshot["soperator_resources"] = [
+        {
+            "kind": "NodeSet",
+            "metadata": {
+                "name": "worker",
+                "namespace": "soperator",
+                "labels": {
+                    "app.kubernetes.io/instance": "soperator",
+                    "app.kubernetes.io/name": "soperator",
+                    "app.kubernetes.io/version": "4.0.2",
+                    "helm.sh/chart": "soperator-4.0.2-ps.3",
+                },
+            },
+        }
+    ]
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref="cluster1",
+        pinned_chart_version="4.0.2-ps.3",
+        pinned_app_version="4.0.2",
+    )
+
+    path = write_source_soperator_discovery_report(
+        tmp_path,
+        target_ref="cluster1",
+        snapshot=snapshot,
+        report=report,
+        output_dir=output_root,
+    )
+
+    assert path == (
+        output_root
+        / "generated"
+        / "reports"
+        / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
+        / "cluster1"
+        / "manifest.json"
+    )
+    assert not (output_root / "manifest.json").exists()
+    summary = (path.parent / "summary.md").read_text(encoding="utf-8")
+    assert "- Soperator status: `installed`" in summary
+    assert "- Source version: `4.0.2`" in summary
+    assert "- Soperator chart version: `4.0.2-ps.3`" in summary
+    kubernetes = json.loads((path.parent / "kubernetes.json").read_text(encoding="utf-8"))
+    assert [item["metadata"]["name"] for item in kubernetes["nodesets"]] == ["worker"]
+
+
+def test_source_discovery_report_writer_filters_resource_labels_by_namespace(tmp_path) -> None:
+    snapshot = _snapshot()
+    snapshot["helm_releases"] = []
+    snapshot["crds"] = ["slurmclusters.slurm.nebius.ai", "nodesets.slurm.nebius.ai"]
+    snapshot["soperator_resources"] = [
+        {
+            "kind": "NodeSet",
+            "metadata": {
+                "name": "worker",
+                "namespace": "soperator",
+                "labels": {
+                    "app.kubernetes.io/instance": "soperator",
+                    "app.kubernetes.io/name": "soperator",
+                    "app.kubernetes.io/version": "1.23.3",
+                    "helm.sh/chart": "soperator-1.23.3",
+                },
+            },
+        },
+        {
+            "kind": "NodeSet",
+            "metadata": {
+                "name": "custom-worker",
+                "namespace": "custom",
+                "labels": {
+                    "app.kubernetes.io/instance": "soperator",
+                    "app.kubernetes.io/name": "soperator",
+                    "app.kubernetes.io/version": "3.0.7",
+                    "helm.sh/chart": "soperator-3.0.7",
+                },
+            },
+        },
+    ]
+
+    path = write_source_soperator_discovery_report(
+        tmp_path,
+        target_ref="cluster1",
+        snapshot=snapshot,
+        report={
+            "state": "existing-soperator-unknown",
+            "source_version": "",
+            "target_version": "4.0.2-ps.3",
+            "fingerprint": "fingerprint",
+            "findings": [],
+            "actions": [],
+        },
+        namespace="custom",
+        release_name="soperator",
+    )
+
+    payload = load_soperator_discovery_bundle(path)
+    assert payload["namespace"] == "custom"
+    assert payload["source_version"] == "3.0.7"
+    assert payload["chart_version"] == "3.0.7"
 
 
 def test_source_discovery_report_writer_omits_malformed_k8s_versions(tmp_path) -> None:

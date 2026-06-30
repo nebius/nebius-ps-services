@@ -210,9 +210,73 @@ def _release_chart_version(release: Mapping[str, Any]) -> str:
     if explicit:
         return explicit
     chart = str(release.get("chart", "") or "").strip()
-    if "-" not in chart:
-        return ""
-    return chart.rsplit("-", 1)[-1]
+    match = re.match(r"^[A-Za-z0-9_.-]+-([0-9]+(?:\.[0-9]+){0,3}(?:[-+][A-Za-z0-9_.-]+)?)$", chart)
+    return match.group(1) if match else ""
+
+
+def _metadata(resource: Mapping[str, Any]) -> Mapping[str, Any]:
+    metadata = resource.get("metadata")
+    return metadata if isinstance(metadata, Mapping) else {}
+
+
+def _metadata_labels(resource: Mapping[str, Any]) -> Mapping[str, Any]:
+    labels = _metadata(resource).get("labels")
+    return labels if isinstance(labels, Mapping) else {}
+
+
+def _soperator_resource_release(
+    snapshot: Mapping[str, Any],
+    *,
+    namespace: str = "",
+    release_name: str = "",
+) -> Mapping[str, Any]:
+    resources = snapshot.get("soperator_resources")
+    if not isinstance(resources, Sequence) or isinstance(resources, (str, bytes, bytearray)):
+        return {}
+    requested_namespace = str(namespace or "").strip().lower()
+    requested_release = str(release_name or "").strip().lower()
+    candidates: list[Mapping[str, Any]] = []
+    for item in resources:
+        if not isinstance(item, Mapping):
+            continue
+        labels = _metadata_labels(item)
+        chart = str(labels.get("helm.sh/chart", "") or "").strip()
+        app_version = str(labels.get("app.kubernetes.io/version", "") or "").strip()
+        name = str(labels.get("app.kubernetes.io/instance", "") or "").strip()
+        app_name = str(labels.get("app.kubernetes.io/name", "") or "").strip()
+        metadata = _metadata(item)
+        resource_namespace = str(metadata.get("namespace", "") or "soperator").strip()
+        if not chart and not app_version:
+            continue
+        identity = " ".join((chart, name, app_name)).lower()
+        if "soperator" not in identity and "slurm-operator" not in identity:
+            continue
+        if requested_namespace and resource_namespace.lower() != requested_namespace:
+            continue
+        if requested_release and name.lower() != requested_release:
+            continue
+        candidates.append(
+            {
+                "name": name or "soperator",
+                "namespace": resource_namespace,
+                "chart": chart,
+                "chart_version": _release_chart_version({"chart": chart}),
+                "app_version": app_version,
+                "status": "resource-labels",
+            }
+        )
+    if not candidates:
+        return {}
+    return sorted(
+        candidates,
+        key=lambda item: (
+            str(item.get("namespace", "") or "").lower() != "soperator",
+            str(item.get("name", "") or "").lower() != "soperator",
+            str(item.get("namespace", "") or ""),
+            str(item.get("name", "") or ""),
+            str(item.get("chart", "") or ""),
+        ),
+    )[0]
 
 
 def _soperator_release(snapshot: Mapping[str, Any], *, namespace: str = "", release_name: str = "") -> Mapping[str, Any]:
@@ -236,18 +300,61 @@ def _soperator_release(snapshot: Mapping[str, Any], *, namespace: str = "", rele
     return {}
 
 
+def _soperator_status(identity: Mapping[str, Any]) -> str:
+    state = str(identity.get("state", "") or "").strip()
+    if state == "no-soperator-detected":
+        return "not installed"
+    source_version = str(identity.get("source_version", "") or "").strip()
+    chart_version = str(identity.get("chart_version", "") or "").strip()
+    app_version = str(identity.get("app_version", "") or "").strip()
+    release = identity.get("helm_release")
+    if source_version or chart_version or app_version or (
+        isinstance(release, Mapping) and bool(release)
+    ):
+        return "installed"
+    if state.startswith("existing-soperator"):
+        return "detected, version unknown"
+    return "unknown"
+
+
+_SOPERATOR_RESOURCE_KIND_BY_KEY = {
+    "activechecks": "ActiveCheck",
+    "nodeconfigurators": "NodeConfigurator",
+    "nodesets": "NodeSet",
+    "slurmclusters": "SlurmCluster",
+}
+
+
+def _filter_soperator_resource_items(
+    items: Any,
+    resource_key: str,
+) -> list[Mapping[str, Any]]:
+    expected_kind = _SOPERATOR_RESOURCE_KIND_BY_KEY.get(resource_key, "")
+    if not isinstance(items, Sequence) or isinstance(items, (str, bytes, bytearray)):
+        return []
+    result: list[Mapping[str, Any]] = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        if expected_kind and str(item.get("kind", "") or "") != expected_kind:
+            continue
+        result.append(item)
+    return result
+
+
 def _resource_items(snapshot: Mapping[str, Any], resource_key: str) -> list[Mapping[str, Any]]:
     resources = snapshot.get("soperator_resources")
+    if isinstance(resources, Sequence) and not isinstance(resources, (str, bytes, bytearray)):
+        return _filter_soperator_resource_items(resources, resource_key)
     if not isinstance(resources, Mapping):
         return []
+    if "items" in resources:
+        return _filter_soperator_resource_items(resources.get("items"), resource_key)
     raw = resources.get(resource_key)
     if isinstance(raw, Mapping):
         items = raw.get("items")
-        if isinstance(items, list):
-            return [item for item in items if isinstance(item, Mapping)]
-    if isinstance(raw, list):
-        return [item for item in raw if isinstance(item, Mapping)]
-    return []
+        return _filter_soperator_resource_items(items, resource_key)
+    return _filter_soperator_resource_items(raw, resource_key)
 
 
 def _object_name(item: Mapping[str, Any]) -> str:
@@ -271,18 +378,29 @@ def _identity_section(
     kube_context: str,
 ) -> dict[str, Any]:
     release = _soperator_release(snapshot, namespace=namespace, release_name=release_name)
+    if not release:
+        release = _soperator_resource_release(
+            snapshot,
+            namespace=namespace,
+            release_name=release_name,
+        )
     detected_namespace = str(release.get("namespace", "") or namespace or "").strip()
     detected_release_name = str(release.get("name", "") or release_name or "").strip()
     detected_chart_version = _release_chart_version(release)
     detected_app_version = str(
         release.get("app_version", "") or release.get("appVersion", "") or ""
     ).strip()
+    detected_source_version = (
+        str(report.get("source_version", "") or "").strip()
+        or detected_app_version
+        or detected_chart_version
+    )
     current_k8s_version, target_k8s_version = soperator_discovery_report_k8s_versions(report)
     current_k8s_version = (
         current_k8s_version or soperator_discovery_snapshot_control_plane_k8s_version(snapshot)
     )
     target_k8s_version = _target_versions_k8s_version(target_versions) or target_k8s_version
-    return {
+    identity = {
         "target_ref": _normalized_token(target_ref, "mk8s"),
         "source_kind": source_kind,
         "cluster_id": str(cluster_id or "").strip(),
@@ -292,7 +410,7 @@ def _identity_section(
         "release_name": detected_release_name,
         "chart_version": detected_chart_version,
         "app_version": detected_app_version,
-        "source_version": str(report.get("source_version", "") or "").strip(),
+        "source_version": detected_source_version,
         "target_version": str(report.get("target_version", "") or "").strip(),
         "current_k8s_version": current_k8s_version,
         "target_k8s_version": target_k8s_version,
@@ -301,6 +419,8 @@ def _identity_section(
         "helm_release": _redact(release),
         "crd_versions": _redact(snapshot.get("crds", [])),
     }
+    identity["soperator_status"] = _soperator_status(identity)
+    return identity
 
 
 def _kubernetes_section(snapshot: Mapping[str, Any], *, redaction: str) -> dict[str, Any]:
@@ -576,17 +696,25 @@ def _summary_markdown(
     target_k8s_version = str(identity.get("target_k8s_version", "") or "").strip()
     namespace = str(identity.get("namespace", "") or "").strip() or "unknown"
     release_name = str(identity.get("release_name", "") or "").strip() or "unknown"
+    soperator_status = str(identity.get("soperator_status", "") or "").strip() or "unknown"
+    chart_version = str(identity.get("chart_version", "") or "").strip()
+    app_version = str(identity.get("app_version", "") or "").strip()
     lines = [
         "# Soperator Discovery Summary",
         "",
         f"- Target: `{target_ref}`",
         f"- Bundle: `{bundle_dir}`",
         f"- State: `{state}`",
+        f"- Soperator status: `{soperator_status}`",
         f"- Namespace: `{namespace}`",
         f"- Release: `{release_name}`",
         f"- Source version: `{source_version}`",
         f"- Target version: `{target_version}`",
     ]
+    if chart_version:
+        lines.append(f"- Soperator chart version: `{chart_version}`")
+    if app_version:
+        lines.append(f"- Soperator app version: `{app_version}`")
     if current_k8s_version:
         lines.append(f"- Current Kubernetes version: `{current_k8s_version}`")
     if target_k8s_version:
@@ -693,10 +821,9 @@ def soperator_discovery_bundle_dir(
     *,
     output_dir: Path | None = None,
 ) -> Path:
-    if output_dir is not None:
-        return output_dir
     normalized = _normalized_token(target_ref, "mk8s")
-    return project_dir / "generated" / "reports" / SOPERATOR_DISCOVERY_DIR_NAME / normalized
+    root = output_dir if output_dir is not None else project_dir
+    return root / "generated" / "reports" / SOPERATOR_DISCOVERY_DIR_NAME / normalized
 
 
 def soperator_discovery_manifest_path(
@@ -863,8 +990,12 @@ def load_soperator_discovery_bundle(path: Path) -> dict[str, Any]:
             "release_name",
             "chart_version",
             "app_version",
+            "source_version",
+            "target_version",
             "current_k8s_version",
             "target_k8s_version",
+            "state",
+            "soperator_status",
         ):
             payload[key] = identity.get(key, "")
     payload.update(
