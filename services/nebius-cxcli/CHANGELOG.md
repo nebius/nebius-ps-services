@@ -6,6 +6,13 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Hardened external Soperator Kubernetes-hop upgrades. Completed prior-hop
+  checkpoints no longer reuse stale backup metadata for the next hop,
+  same-version Soperator onboarding now plans external node-template work for
+  Kubernetes minor upgrades, zero-surge service-node rollouts temporarily reduce
+  the security-profiles webhook by one replica and restore it after rollout, and
+  target completion now re-runs shared protected-state safety verification
+  before reporting success.
 - Hardened Soperator deploy smoke around jail startup. When the
   `populate-jail` Job is still active after the same-node `jail-mount` pod can
   see the jail `.populated` sentinel, cxcli now deletes only the stuck Job pod
@@ -967,8 +974,9 @@ All notable changes to this project are tracked here. This changelog follows
   quota preflight for the active safe-surge wave.
 - Fixed external node-template upgrade execution for legacy layouts by clearing
   stale GPU driver presets from CPU node groups before Kubernetes/OS rollout
-  and by checkpointing temporary quiesce/restore of one-node
-  controller/login/accounting workloads during zero-surge service-role updates.
+  and by checkpointing temporary quiesce/restore of login, one-node
+  controller/accounting, and known drain-blocking webhook workloads during
+  zero-surge service-role updates.
 - Hardened external Soperator chart takeover by suspending legacy Flux
   HelmReleases before applying the cxcli target chart, forcing server-side CRD
   conflict resolution, retrying transient target webhook startup failures, and

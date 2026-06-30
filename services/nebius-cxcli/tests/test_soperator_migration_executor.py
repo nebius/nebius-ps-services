@@ -122,6 +122,49 @@ def test_execution_source_contract_ignores_slurmcluster_secrets_redaction() -> N
     ) == migration._fingerprint(migration._execution_source_contract(live))
 
 
+def test_execution_source_contract_ignores_redacted_secret_like_keys() -> None:
+    redacted = _snapshot()
+    live = _snapshot()
+    redacted["soperator_resources"] = [
+        {
+            "apiVersion": "slurm.nebius.ai/v1",
+            "kind": "SlurmCluster",
+            "metadata": {"name": "soperator", "namespace": "soperator"},
+            "spec": {
+                "slurmNodes": {
+                    "accounting": {
+                        "mariadbOperator": {
+                            "enabled": True,
+                            "protectedSecret": "[redacted]",
+                        }
+                    }
+                }
+            },
+        }
+    ]
+    live["soperator_resources"] = [
+        {
+            "apiVersion": "slurm.nebius.ai/v1",
+            "kind": "SlurmCluster",
+            "metadata": {"name": "soperator", "namespace": "soperator"},
+            "spec": {
+                "slurmNodes": {
+                    "accounting": {
+                        "mariadbOperator": {
+                            "enabled": True,
+                            "protectedSecret": True,
+                        }
+                    }
+                }
+            },
+        }
+    ]
+
+    assert migration._fingerprint(
+        migration._execution_source_contract(redacted)
+    ) == migration._fingerprint(migration._execution_source_contract(live))
+
+
 @pytest.mark.parametrize(
     "stderr",
     [
@@ -1037,6 +1080,68 @@ spec:
                     json.dumps({"items": self.live_kubernetes_resources[resource_type]}),
                     "",
                 )
+        if (
+            len(command) >= 9
+            and command[:3] == ("kubectl", "--context", "external-context")
+            and command[3] == "-n"
+            and command[5] == "get"
+            and "/" in command[6]
+            and "-o" in command
+            and command[command.index("-o") + 1] == "json"
+        ):
+            namespace = command[4]
+            resource_type, name = command[6].split("/", 1)
+            if resource_type not in self.live_kubernetes_resources:
+                return SoperatorMigrationCommandResult(command, 0, "{}", "")
+            resources = self.live_kubernetes_resources.get(resource_type, [])
+            for item in resources:
+                metadata = item.get("metadata")
+                if not isinstance(metadata, dict):
+                    continue
+                if (
+                    str(metadata.get("namespace", "") or "") == namespace
+                    and str(metadata.get("name", "") or "") == name
+                ):
+                    return SoperatorMigrationCommandResult(
+                        command,
+                        0,
+                        json.dumps(item),
+                        "",
+                    )
+            if namespace == "soperator":
+                return SoperatorMigrationCommandResult(command, 0, "{}", "")
+            return SoperatorMigrationCommandResult(command, 1, "", "NotFound")
+        if (
+            len(command) >= 10
+            and command[:3] == ("kubectl", "--context", "external-context")
+            and command[3] == "-n"
+            and command[5] == "scale"
+            and "/" in command[6]
+            and "--replicas" in command
+        ):
+            namespace = command[4]
+            resource_type, name = command[6].split("/", 1)
+            replicas = int(command[command.index("--replicas") + 1])
+            for item in self.live_kubernetes_resources.get(resource_type, []):
+                metadata = item.get("metadata")
+                if not isinstance(metadata, dict):
+                    continue
+                if (
+                    str(metadata.get("namespace", "") or "") == namespace
+                    and str(metadata.get("name", "") or "") == name
+                ):
+                    spec = item.setdefault("spec", {})
+                    if not isinstance(spec, dict):
+                        spec = {}
+                        item["spec"] = spec
+                    spec["replicas"] = replicas
+                    status = item.setdefault("status", {})
+                    if not isinstance(status, dict):
+                        status = {}
+                        item["status"] = status
+                    status["availableReplicas"] = replicas
+                    status["readyReplicas"] = replicas
+            return SoperatorMigrationCommandResult(command, 0, "{}", "")
         if (
             len(command) >= 10
             and command[:3] == ("kubectl", "--context", "external-context")
@@ -2746,6 +2851,54 @@ def test_execute_preserves_original_backup_metadata_after_mutating_resume(
     assert upgrade_json_report["backup"] == original_backup
 
 
+def test_execute_uses_fresh_backup_after_completed_prior_hop(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    checkpoint_path = soperator_migration_checkpoint_path(config_path, "external-cluster")
+    checkpoint_path.parent.mkdir(parents=True)
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+                "target_ref": "external-cluster",
+                "source_report_fingerprint": "previous-hop",
+                "source_version": "3.0.5",
+                "target_version": "4.0.1-ps.1",
+                "pending_phase": "none",
+                "planned_phases": [
+                    "discovery-and-plan",
+                    "customer-approval",
+                    "external-node-template-upgrade",
+                ],
+                "completed_phases": [
+                    "discovery-and-plan",
+                    "customer-approval",
+                    "external-node-template-upgrade",
+                ],
+                "backup": _backup_metadata("previous-hop"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    fresh_backup = _backup_metadata("fresh-hop")
+
+    result = execute_soperator_migration(
+        config_path=config_path,
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=_source_report(),
+        backup_metadata=fresh_backup,
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        approved=True,
+        command_runner=_FakeCommandRunner(),
+        worker_rollout_strategy="safe-surge",
+    )
+
+    assert result.pending_phase == "none"
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["backup"] == fresh_backup
+    assert checkpoint["source_report_fingerprint"] != "previous-hop"
+
+
 def test_execute_clears_stale_pending_phase_after_successful_resume(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3834,7 +3987,7 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
     }
 
 
-def test_external_node_template_quiesces_one_node_service_roles(
+def test_external_node_template_quiesces_zero_surge_service_roles(
     tmp_path: Path,
 ) -> None:
     snapshot = _snapshot(version="3.0.5")
@@ -3851,13 +4004,13 @@ def test_external_node_template_quiesces_one_node_service_roles(
         },
         "login": {
             "gpu": False,
-            "node_count": 1,
+            "node_count": 2,
             "labels": {
                 "nebius.com/node-group": "login",
                 "nebius.com/node-group-id": "nodegroup-login",
                 "slurm.nebius.ai/nodeset": "login",
             },
-            "nodes": ["login-node-a"],
+            "nodes": ["login-node-a", "login-node-b"],
         },
         "accounting": {
             "gpu": False,
@@ -3918,9 +4071,9 @@ def test_external_node_template_quiesces_one_node_service_roles(
                 },
             },
             {
-                **_legacy_service_node_group("login"),
+                **_legacy_service_node_group("login", fixed_node_count=2),
                 "spec": {
-                    **_legacy_service_node_group("login")["spec"],
+                    **_legacy_service_node_group("login", fixed_node_count=2)["spec"],
                     "version": "1.32",
                 },
             },
@@ -3973,6 +4126,32 @@ def test_external_node_template_quiesces_one_node_service_roles(
             "metadata": {"id": "cluster-123", "name": "external-cluster"},
             "spec": {"control_plane": {"version": "1.32"}},
         },
+        live_kubernetes_resources={
+            "deployment": [
+                {
+                    "metadata": {
+                        "name": "security-profiles-operator-webhook",
+                        "namespace": "security-profiles-operator-system",
+                    },
+                    "spec": {"replicas": 3},
+                    "status": {"availableReplicas": 3, "readyReplicas": 3},
+                }
+            ]
+        },
+        live_slurmclusters=[
+            {
+                "kind": "SlurmCluster",
+                "metadata": {"name": "external-cluster", "namespace": "soperator"},
+                "spec": {"slurmNodes": {}},
+                "status": {"phase": "Available"},
+            },
+            {
+                "kind": "SlurmCluster",
+                "metadata": {"name": "soperator", "namespace": "soperator"},
+                "spec": {"slurmNodes": {"login": {"size": 2}}},
+                "status": {"phase": "Available"},
+            },
+        ],
     )
 
     result = execute_soperator_migration(
@@ -4014,11 +4193,59 @@ def test_external_node_template_quiesces_one_node_service_roles(
         "--context",
         "external-context",
         "-n",
+        "security-profiles-operator-system",
+        "scale",
+        "deployment/security-profiles-operator-webhook",
+        "--replicas",
+        "2",
+    ) in commands
+    assert (
+        "kubectl",
+        "--context",
+        "external-context",
+        "-n",
+        "security-profiles-operator-system",
+        "scale",
+        "deployment/security-profiles-operator-webhook",
+        "--replicas",
+        "3",
+    ) in commands
+    assert (
+        "kubectl",
+        "--context",
+        "external-context",
+        "-n",
+        "soperator",
+        "patch",
+        "slurmcluster/soperator",
+        "--type",
+        "merge",
+        "-p",
+        '{"spec": {"slurmNodes": {"login": {"size": 0}}}}',
+    ) in commands
+    assert (
+        "kubectl",
+        "--context",
+        "external-context",
+        "-n",
         "soperator",
         "scale",
         "statefulsets.apps.kruise.io/login",
         "--replicas",
         "0",
+    ) in commands
+    assert (
+        "kubectl",
+        "--context",
+        "external-context",
+        "-n",
+        "soperator",
+        "patch",
+        "slurmcluster/soperator",
+        "--type",
+        "merge",
+        "-p",
+        '{"spec": {"slurmNodes": {"login": {"size": 2}}}}',
     ) in commands
     assert (
         "kubectl",
@@ -6387,6 +6614,37 @@ def test_source_worker_nodeset_values_uses_single_mismatched_worker_group_capaci
     assert values[0]["customInitContainers"] == [{"name": "site-init", "image": "site/custom"}]
 
 
+def test_source_worker_nodeset_values_uses_single_group_allocatable_when_nodeset_label_differs() -> None:
+    nodeset = _source_worker_nodeset("worker", gpu=False)
+    spec = nodeset["spec"]
+    assert isinstance(spec, dict)
+    node_config = spec["nodeConfig"]
+    assert isinstance(node_config, dict)
+    node_config["static"] = (
+        "Boards=1 SocketsPerBoard=1 CoresPerSocket=32 ThreadsPerCore=1 Gres=gpu:1 Port=6818"
+    )
+    snapshot = _snapshot()
+    snapshot["soperator_resources"] = [nodeset]
+    snapshot["node_groups"] = {
+        "worker-0-0": {
+            "gpu": True,
+            "node_count": 2,
+            "labels": {
+                "nebius.com/node-group": "worker-0-0",
+                "nebius.com/node-group-id": "nodegroup-worker-0-0",
+                "slurm.nebius.ai/nodeset": "worker-0",
+                "nebius.com/resource-preset": "1gpu-16vcpu-200gb",
+            },
+            "allocatable": {"cpu": "15900m", "nvidia.com/gpu": "1"},
+            "nodes": ["old-node-a", "old-node-b"],
+        }
+    }
+
+    values = migration._source_worker_nodeset_values(_source_report(snapshot))  # noqa: SLF001
+
+    assert values[0]["nodeConfig"]["static"] == "CPUs=16 Gres=gpu:1"
+
+
 def test_live_source_slurmcluster_present_treats_timeout_as_absent() -> None:
     class _TimeoutSlurmClustersRunner(_FakeCommandRunner):
         def __call__(
@@ -7647,6 +7905,210 @@ def test_execute_refreshes_live_snapshot_after_mutating_phases(tmp_path: Path) -
     )
 
     assert len(calls) > 1
+
+
+def test_system_service_role_quiesces_webhook_drain_blocker() -> None:
+    assert (
+        migration._source_group_service_quiesce_role(  # noqa: SLF001
+            "system",
+            {"node_count": 3},
+        )
+        == "system"
+    )
+    assert (
+        "scale-down-one",
+        "deployment/security-profiles-operator-webhook",
+        "security-profiles-operator-system",
+    ) in migration._external_service_role_quiesce_resources("system")  # noqa: SLF001
+
+
+def test_system_service_role_webhook_quiesce_does_not_scale_up_zero_replicas() -> None:
+    runner = _FakeCommandRunner(
+        live_kubernetes_resources={
+            "deployment": [
+                {
+                    "metadata": {
+                        "name": "security-profiles-operator-webhook",
+                        "namespace": "security-profiles-operator-system",
+                    },
+                    "spec": {"replicas": 0},
+                    "status": {"availableReplicas": 0, "readyReplicas": 0},
+                }
+            ]
+        }
+    )
+    state: dict[str, Any] = {}
+
+    lines = migration._quiesce_external_service_role(  # noqa: SLF001
+        command_runner=runner,
+        kube_context="external-context",
+        role="system",
+        state=state,
+    )
+
+    assert lines == ["Quiesced Soperator system workloads before node-template rollout."]
+    assert state["resources"] == [
+        {
+            "action": "scale-down-one",
+            "namespace": "security-profiles-operator-system",
+            "resource": "deployment/security-profiles-operator-webhook",
+            "exists": True,
+            "replicas": 0,
+            "target_replicas": 0,
+        }
+    ]
+    assert not any(call[0][5] == "scale" for call in runner.calls if len(call[0]) > 5)
+
+
+def test_login_service_quiesce_skips_slurmcluster_without_login_role() -> None:
+    runner = _FakeCommandRunner(
+        live_slurmclusters=[
+            {
+                "kind": "SlurmCluster",
+                "metadata": {"name": "other", "namespace": "soperator"},
+                "spec": {"slurmNodes": {"controller": {"size": 1}}},
+                "status": {"phase": "Available"},
+            }
+        ]
+    )
+    state: dict[str, Any] = {}
+
+    migration._quiesce_external_service_role(  # noqa: SLF001
+        command_runner=runner,
+        kube_context="external-context",
+        role="login",
+        state=state,
+    )
+
+    slurm_items = [
+        item for item in state["resources"] if item["action"] == "slurm-node-size"
+    ]
+    assert slurm_items == [
+        {
+            "action": "slurm-node-size",
+            "resource": "slurmclusters",
+            "role": "login",
+            "exists": False,
+            "size": None,
+        }
+    ]
+    assert not any(
+        len(call[0]) > 7
+        and call[0][5] == "patch"
+        and call[0][6].startswith("slurmcluster")
+        for call in runner.calls
+    )
+
+
+def test_login_service_quiesce_skips_empty_slurmcluster_list() -> None:
+    runner = _FakeCommandRunner()
+    runner.live_slurmclusters = []
+
+    item = migration._quiesce_slurm_node_size_resource(  # noqa: SLF001
+        command_runner=runner,
+        kube_context="external-context",
+        resource="slurmclusters",
+        role="login",
+    )
+
+    assert item == {
+        "action": "slurm-node-size",
+        "resource": "slurmclusters",
+        "role": "login",
+        "exists": False,
+        "size": None,
+    }
+    assert not any(
+        len(call[0]) > 7
+        and call[0][5] == "patch"
+        and call[0][6].startswith("slurmcluster")
+        for call in runner.calls
+    )
+
+
+def test_login_service_quiesce_preserves_zero_slurmcluster_size() -> None:
+    runner = _FakeCommandRunner(
+        live_slurmclusters=[
+            {
+                "kind": "SlurmCluster",
+                "metadata": {"name": "soperator", "namespace": "soperator"},
+                "spec": {"slurmNodes": {"login": {"size": 0}}},
+                "status": {"phase": "Available"},
+            }
+        ]
+    )
+    state: dict[str, Any] = {}
+
+    migration._quiesce_external_service_role(  # noqa: SLF001
+        command_runner=runner,
+        kube_context="external-context",
+        role="login",
+        state=state,
+    )
+    migration._restore_external_service_role(  # noqa: SLF001
+        command_runner=runner,
+        kube_context="external-context",
+        state=state,
+    )
+
+    slurm_items = [
+        item for item in state["resources"] if item["action"] == "slurm-node-size"
+    ]
+    assert slurm_items[0]["size"] == 0
+    assert (
+        "kubectl",
+        "--context",
+        "external-context",
+        "-n",
+        "soperator",
+        "patch",
+        "slurmcluster/soperator",
+        "--type",
+        "merge",
+        "-p",
+        '{"spec": {"slurmNodes": {"login": {"size": 0}}}}',
+    ) in [call[0] for call in runner.calls]
+
+
+def test_execute_runs_completion_safety_when_plan_omits_validation_phase(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    phase_ids = (
+        "discovery-and-plan",
+        "customer-approval",
+        "external-node-template-upgrade",
+        "target-gpu-stack-remediation",
+        "rolling-compute-migration",
+    )
+    monkeypatch.setattr(
+        migration,
+        "_phase_ids_for_actions",
+        lambda *, report, onboarding: phase_ids,
+    )
+
+    result = execute_soperator_migration(
+        config_path=tmp_path / "config.yaml",
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=_source_report(),
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        approved=True,
+        command_runner=_FakeCommandRunner(),
+    )
+
+    assert result.pending_phase == "none"
+    assert (
+        "validation-and-rollback-hold: Shared Soperator upgrade safety verification completed: passed."
+        in "\n".join(result.lines)
+    )
+    checkpoint = json.loads(
+        soperator_migration_checkpoint_path(tmp_path / "config.yaml", "external-cluster").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert checkpoint["upgrade_safety"]["post_upgrade_verification"]["status"] == "passed"
+    assert checkpoint["upgrade_safety"]["protected_customer_state"]["after_hash"]
 
 
 def test_execute_rejects_incompatible_existing_aligned_sfs(tmp_path: Path) -> None:
@@ -9137,6 +9599,46 @@ def test_external_upgrade_resume_backup_metadata_rejects_mutating_checkpoint_wit
         )
 
 
+def test_external_upgrade_resume_backup_metadata_ignores_completed_checkpoint(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    checkpoint_path = soperator_migration_checkpoint_path(config_path, "external-cluster")
+    checkpoint_path.parent.mkdir(parents=True)
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+                "target_ref": "external-cluster",
+                "pending_phase": "none",
+                "planned_phases": [
+                    "discovery-and-plan",
+                    "customer-approval",
+                    "external-node-template-upgrade",
+                ],
+                "completed_phases": [
+                    "discovery-and-plan",
+                    "customer-approval",
+                    "external-node-template-upgrade",
+                ],
+                "backup": {
+                    "path": "backups/previous-hop.tar.gz",
+                    "sha256": "previous-hop-sha256",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        migration.external_soperator_upgrade_resume_backup_metadata(
+            config_path,
+            "external-cluster",
+        )
+        is None
+    )
+
+
 def test_external_upgrade_runtime_messages_do_not_use_retired_public_migrate_wording() -> None:
     source = Path(migration.__file__).read_text(encoding="utf-8")
     forbidden = (
@@ -9180,6 +9682,84 @@ def test_checkpoint_allows_same_plan_report_refresh_after_mutation_started() -> 
     assert checkpoint["source_report_fingerprint"] == "new"
     assert checkpoint["events"][-1]["event"] == "execute-checkpoint-source-report-refreshed"
     assert checkpoint["events"][-1]["previous_source_report_fingerprint"] == "old"
+
+
+def test_checkpoint_allows_report_refresh_when_resume_plan_omits_terminal_phases() -> None:
+    phase_ids = (
+        "discovery-and-plan",
+        "customer-approval",
+        "external-node-template-upgrade",
+        "target-gpu-stack-remediation",
+        "rolling-compute-migration",
+    )
+    checkpoint = migration._checkpoint_for_run(
+        existing={
+            "schema": "nebius-cxcli-soperator-migration-execution/v1",
+            "target_ref": "external-cluster",
+            "source_report_fingerprint": "old",
+            "source_version": "1.22.3",
+            "target_version": "4.0.2-ps.3",
+            "planned_phases": [
+                *phase_ids,
+                "final-control-plane-cutover",
+                "validation-and-rollback-hold",
+                "retire-old-resources",
+            ],
+            "completed_phases": ["rolling-compute-migration"],
+            "events": [],
+        },
+        target_ref="external-cluster",
+        source_report_fingerprint="new",
+        source_version="1.22.3",
+        target_version="4.0.2-ps.3",
+        phase_ids=phase_ids,
+        allow_source_report_refresh=True,
+    )
+
+    assert checkpoint["source_report_fingerprint"] == "new"
+    assert checkpoint["events"][-1]["event"] == "execute-checkpoint-source-report-refreshed"
+
+
+def test_checkpoint_starts_fresh_after_completed_prior_hop() -> None:
+    phase_ids = (
+        "discovery-and-plan",
+        "customer-approval",
+        "external-node-template-upgrade",
+        "target-gpu-stack-remediation",
+    )
+    checkpoint = migration._checkpoint_for_run(
+        existing={
+            "schema": "nebius-cxcli-soperator-migration-execution/v1",
+            "target_ref": "external-cluster",
+            "source_report_fingerprint": "old",
+            "source_version": "1.22.3",
+            "target_version": "4.0.2-ps.3",
+            "planned_phases": [
+                "discovery-and-plan",
+                "customer-approval",
+                "external-node-template-upgrade",
+            ],
+            "completed_phases": [
+                "discovery-and-plan",
+                "customer-approval",
+                "external-node-template-upgrade",
+            ],
+            "pending_phase": "none",
+            "events": [{"event": "old-hop"}],
+        },
+        target_ref="external-cluster",
+        source_report_fingerprint="new",
+        source_version="4.0.2",
+        target_version="4.0.2-ps.3",
+        phase_ids=phase_ids,
+        allow_source_report_refresh=True,
+    )
+
+    assert checkpoint["source_report_fingerprint"] == "new"
+    assert checkpoint["source_version"] == "4.0.2"
+    assert checkpoint["completed_phases"] == []
+    assert checkpoint["planned_phases"] == list(phase_ids)
+    assert checkpoint["events"] == []
 
 
 def test_checkpoint_rejects_report_refresh_when_plan_changed() -> None:

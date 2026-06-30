@@ -1820,7 +1820,10 @@ def test_docs_define_component_selector_contract() -> None:
         in design_flat
     )
     assert "does not create parallel worker node groups" in design_flat
-    assert "zero-surge quiesces one-node service workloads" in design_flat
+    assert (
+        "zero-surge quiesces login workloads, one-node service workloads, "
+        "and known drain-blocking webhook replicas"
+    ) in design_flat
     assert "worker groups default to zero-surge" in design_flat
     assert "worker_wave_percent: 1" in readme
     assert "worker_group_strategy:" in readme

@@ -1456,12 +1456,20 @@ def _capture_slurm_runtime(
     captured: dict[str, Any] = {"available": True, "login_pod": login_pod}
     for key, shell_command in commands.items():
         args = _kubectl_args(
-            ("exec", login_pod, "--", "bash", "-lc", shell_command),
+            ("exec", login_pod, "-c", "sshd", "--", "bash", "-lc", shell_command),
             namespace=namespace,
             kube_context=kube_context,
         )
         result = _run_readonly(command_runner, args, timeout_seconds=timeout_seconds)
         audit.append(_command_audit(result, section=f"slurm_runtime.{key}"))
+        if result.returncode != 0 and _kubectl_exec_container_missing(result, "sshd"):
+            args = _kubectl_args(
+                ("exec", login_pod, "--", "bash", "-lc", shell_command),
+                namespace=namespace,
+                kube_context=kube_context,
+            )
+            result = _run_readonly(command_runner, args, timeout_seconds=timeout_seconds)
+            audit.append(_command_audit(result, section=f"slurm_runtime.{key}"))
         if result.returncode != 0:
             warning = _command_failure_summary(f"slurm_runtime.{key}", result)
             warnings.append(warning)
@@ -1478,6 +1486,20 @@ def _capture_slurm_runtime(
                 dict(item) for item in _slurm_problem_nodes_from_scontrol(result.stdout)
             ]
     return captured
+
+
+def _kubectl_exec_container_missing(result: SafetyCommandResult, container: str) -> bool:
+    stderr = str(result.stderr or "").strip().lower()
+    normalized_container = container.strip().lower()
+    return (
+        normalized_container
+        and normalized_container in stderr
+        and (
+            "container not found" in stderr
+            or "container is not valid" in stderr
+            or "container not found in pod" in stderr
+        )
+    )
 
 
 def _slurm_problem_nodes_from_scontrol(output: str) -> tuple[Mapping[str, str], ...]:

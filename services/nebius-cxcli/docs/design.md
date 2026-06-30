@@ -1133,8 +1133,9 @@ exact fixed worker-group count or a percent-based wave with an optional cap,
 handles Slurm jobs on affected worker nodes through the `--job-policy` wait,
 cancel, requeue, or requeue-hold decision state,
 clears stale GPU driver presets
-from CPU node groups, temporarily quiesces one-node
-controller/login/accounting workloads only for zero-surge service rollouts, applies
+from CPU node groups, temporarily quiesces login workloads, one-node
+controller/accounting workloads, and known drain-blocking webhook replicas only
+for zero-surge service rollouts, applies
 target-scoped GPU Operator and Network Operator app rows plus the same
 catalog-owned post-render patches that Flux would apply,
 creates or reuses aligned jail, controller-spool, and accounting SFS
@@ -1373,8 +1374,9 @@ parallelism across worker groups plus the per-group Nebius strategy
 (`max_surge_count`, `max_unavailable_count`, and `drain_timeout`). Users can set
 `drain_timeout: none` to wait indefinitely instead of allowing provider drain
 fallback after a finite timeout. It clears invalid GPU driver presets from CPU
-templates when legacy groups carry them, quiesces and restores one-node
-controller/login/accounting workloads for zero-surge service-role rollouts, and
+templates when legacy groups carry them, quiesces and restores login workloads,
+one-node controller/accounting workloads, and known drain-blocking webhook
+replicas for zero-surge service-role rollouts, and
 requires spare surge capacity for active service groups or worker waves only
 when the operator explicitly chooses safe-surge.
 
@@ -3115,10 +3117,11 @@ The command boundary is intentional:
   not create parallel worker node groups; external-upgrade-owned external node-group
   template changes, including Kubernetes version, node OS image, Nebius-image
   GPU stack, and aligned SFS filesystem attachments, use direct Nebius
-  node-group updates. Service-role groups are serial, zero-surge quiesces
-  one-node service workloads, and safe-surge uses one temporary replacement
-  node per active service or worker group after quota/capacity, worker-health,
-  and Slurm queue preflights pass. Worker groups default to zero-surge and can
+  node-group updates. Service-role groups are serial, zero-surge quiesces login
+  workloads, one-node service workloads, and known drain-blocking webhook
+  replicas, and safe-surge uses one temporary replacement node per active
+  service or worker group after quota/capacity, worker-health, and Slurm queue
+  preflights pass. Worker groups default to zero-surge and can
   use safe-surge waves. cxcli restores each node group's original
   strategy after the active rollout. Render/deploy refuse
   onboarding mode until

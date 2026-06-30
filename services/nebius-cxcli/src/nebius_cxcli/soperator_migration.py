@@ -144,6 +144,13 @@ _SOPERATOR_COMPUTE_ROLES = (*_SOPERATOR_SERVICE_ROLES, "worker")
 _TARGET_GPU_STACK_PHASE_ID = "target-gpu-stack-remediation"
 _EXTERNAL_NODE_TEMPLATE_PHASE_ID = "external-node-template-upgrade"
 _POST_UPGRADE_CHECK_PHASE_IDS = ("post-upgrade-mk8s-check", "post-upgrade-helm-check")
+_RESUME_OPTIONAL_PLANNED_PHASE_IDS = frozenset(
+    {
+        "final-control-plane-cutover",
+        "validation-and-rollback-hold",
+        "retire-old-resources",
+    }
+)
 _EXTERNAL_UPGRADE_TOP_LEVEL_STAGE_MK8S = "MK8s Node Upgrades"
 _EXTERNAL_UPGRADE_TOP_LEVEL_STAGE_SOPERATOR = "Soperator Upgrade"
 _EXTERNAL_UPGRADE_MK8S_TOP_LEVEL_PHASE_IDS = frozenset(
@@ -244,6 +251,10 @@ _SOPERATOR_STORAGE_DEFAULTS: Mapping[str, Mapping[str, Any]] = {
     },
 }
 _SOPERATOR_NAMESPACE = "soperator"
+_SECURITY_PROFILES_OPERATOR_NAMESPACE = "security-profiles-operator-system"
+_SECURITY_PROFILES_OPERATOR_WEBHOOK_RESOURCE = (
+    "deployment/security-profiles-operator-webhook"
+)
 _SOPERATOR_TARGET_RELEASE_NAME = "soperator"
 _SOPERATOR_CONTROLLER_POD = "controller-0"
 _SOPERATOR_CONTROLLER_CONTAINER = "slurmctld"
@@ -317,7 +328,7 @@ _SOPERATOR_SOURCE_CHART_PREFIXES = (
     "helm-storageclasses",
     "slurm-operator",
 )
-_ROLLING_COMPUTE_VALUES_REVISION = 10
+_ROLLING_COMPUTE_VALUES_REVISION = 11
 _VALIDATION_HOLD_REVISION = 2
 _TARGET_SLURM_PLUGIN_DIR = "/usr/lib/x86_64-linux-gnu/slurm"
 _HELM_OWNERSHIP_CONFLICT_RE = re.compile(
@@ -1386,6 +1397,15 @@ _KUBERNETES_CONTRACT_METADATA_KEYS = frozenset({"labels", "name", "namespace"})
 _HELM_RELEASE_CONTRACT_KEYS = ("name", "namespace", "chart", "app_version")
 _NODE_GROUP_CONTRACT_KEYS = ("gpu", "node_count", "labels", "selector", "taints")
 _NODE_GROUP_CONTRACT_PROVIDER_ONLY_LABEL_KEYS = frozenset({"nebius.com/node-group"})
+_REDACTED_KUBERNETES_CONTRACT_VALUE = "[redacted]"
+_SENSITIVE_KUBERNETES_CONTRACT_KEY_PARTS = frozenset(
+    {
+        "password",
+        "privatekey",
+        "secret",
+        "token",
+    }
+)
 _EXECUTION_INVENTORY_STABLE_LABEL_KEYS = (
     *_SOPERATOR_NODESET_LABEL_KEYS,
     "slurm.nebius.ai/workload",
@@ -1408,6 +1428,12 @@ _SOPERATOR_DEFAULTED_SPEC_PATHS: Mapping[str, tuple[tuple[str, ...], ...]] = {
 }
 
 
+def _sensitive_kubernetes_contract_key(key: Any) -> bool:
+    normalized = str(key or "").strip().lower().replace("-", "_")
+    compact = normalized.replace("_", "")
+    return any(part in normalized or part in compact for part in _SENSITIVE_KUBERNETES_CONTRACT_KEY_PARTS)
+
+
 def _strip_volatile_kubernetes_contract(value: Any) -> Any:
     plain = to_plain_data(value)
     if isinstance(plain, Mapping):
@@ -1416,7 +1442,12 @@ def _strip_volatile_kubernetes_contract(value: Any) -> Any:
             text_key = str(key)
             if text_key in _VOLATILE_KUBERNETES_CONTRACT_KEYS:
                 continue
-            result[text_key] = _strip_volatile_kubernetes_contract(item)
+            if _sensitive_kubernetes_contract_key(text_key):
+                continue
+            stripped = _strip_volatile_kubernetes_contract(item)
+            if stripped == _REDACTED_KUBERNETES_CONTRACT_VALUE:
+                continue
+            result[text_key] = stripped
         return result
     if isinstance(plain, Sequence) and not isinstance(plain, (str, bytes, bytearray)):
         return [_strip_volatile_kubernetes_contract(item) for item in plain]
@@ -1820,9 +1851,20 @@ def _source_group_service_quiesce_role(
         _source_group_workload(source_group),
     ):
         normalized = normalize_component_token(candidate)
-        if normalized in {"accounting", "controller", "login"}:
+        if normalized in _SOPERATOR_SERVICE_ROLES:
             return normalized
     return ""
+
+
+def _zero_surge_service_quiesce_required(
+    role: str,
+    source_group: Mapping[str, Any],
+) -> bool:
+    if not role:
+        return False
+    if role in {"login", "system"}:
+        return True
+    return _positive_int(source_group.get("node_count"), fallback=1) <= 1
 
 
 def _infer_worker_node_groups(source_report: Mapping[str, Any]) -> tuple[str, ...]:
@@ -1881,6 +1923,14 @@ def _positive_int(value: Any, *, fallback: int) -> int:
     except (TypeError, ValueError):
         return fallback
     return parsed if parsed > 0 else fallback
+
+
+def _non_negative_int(value: Any, *, fallback: int) -> int:
+    try:
+        parsed = int(str(value))
+    except (TypeError, ValueError):
+        return fallback
+    return parsed if parsed >= 0 else fallback
 
 
 def _ceil_cpu_quantity(value: Any) -> int | None:
@@ -6651,6 +6701,7 @@ def _kubectl_get_namespace_resource(
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
     resource: str,
+    namespace: str = _SOPERATOR_NAMESPACE,
 ) -> tuple[bool, Mapping[str, Any]]:
     result = command_runner(
         [
@@ -6658,7 +6709,7 @@ def _kubectl_get_namespace_resource(
             "--context",
             kube_context,
             "-n",
-            _SOPERATOR_NAMESPACE,
+            namespace,
             "get",
             resource,
             "-o",
@@ -6687,6 +6738,7 @@ def _kubectl_scale_namespace_resource(
     kube_context: str,
     resource: str,
     replicas: int,
+    namespace: str = _SOPERATOR_NAMESPACE,
 ) -> None:
     command_runner(
         [
@@ -6694,7 +6746,7 @@ def _kubectl_scale_namespace_resource(
             "--context",
             kube_context,
             "-n",
-            _SOPERATOR_NAMESPACE,
+            namespace,
             "scale",
             resource,
             "--replicas",
@@ -6710,6 +6762,7 @@ def _kubectl_patch_namespace_resource(
     kube_context: str,
     resource: str,
     patch: Mapping[str, Any],
+    namespace: str = _SOPERATOR_NAMESPACE,
 ) -> None:
     command_runner(
         [
@@ -6717,7 +6770,7 @@ def _kubectl_patch_namespace_resource(
             "--context",
             kube_context,
             "-n",
-            _SOPERATOR_NAMESPACE,
+            namespace,
             "patch",
             resource,
             "--type",
@@ -6734,6 +6787,7 @@ def _kubectl_delete_namespace_resource(
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
     resource: str,
+    namespace: str = _SOPERATOR_NAMESPACE,
 ) -> None:
     command_runner(
         [
@@ -6741,7 +6795,7 @@ def _kubectl_delete_namespace_resource(
             "--context",
             kube_context,
             "-n",
-            _SOPERATOR_NAMESPACE,
+            namespace,
             "delete",
             resource,
             "--ignore-not-found=true",
@@ -6754,7 +6808,7 @@ def _kubectl_delete_namespace_resource(
 
 def _resource_replicas(payload: Mapping[str, Any], *, default: int = 1) -> int:
     spec = _mapping(payload.get("spec"))
-    return _positive_int(spec.get("replicas"), fallback=default)
+    return _non_negative_int(spec.get("replicas"), fallback=default)
 
 
 def _mariadb_suspend_value(payload: Mapping[str, Any]) -> bool:
@@ -6762,29 +6816,142 @@ def _mariadb_suspend_value(payload: Mapping[str, Any]) -> bool:
     return _bool_value(spec.get("suspend"), fallback=False)
 
 
+def _slurm_node_size(payload: Mapping[str, Any], *, role: str) -> int:
+    spec = _mapping(payload.get("spec"))
+    slurm_nodes = _mapping(spec.get("slurmNodes"))
+    role_spec = _mapping(slurm_nodes.get(role))
+    return _non_negative_int(role_spec.get("size"), fallback=1)
+
+
+def _select_slurmcluster_for_role(
+    payload: Mapping[str, Any],
+    *,
+    role: str,
+) -> Mapping[str, Any]:
+    def _has_role(item: Mapping[str, Any]) -> bool:
+        spec = _mapping(item.get("spec"))
+        slurm_nodes = _mapping(spec.get("slurmNodes"))
+        return role in slurm_nodes
+
+    items = _sequence_of_mappings(payload.get("items"))
+    if not items:
+        return payload if _has_role(payload) else {}
+    for item in items:
+        if _has_role(item):
+            return item
+    return {}
+
+
+def _namespace_resource_ref(payload: Mapping[str, Any], *, default: str) -> str:
+    metadata = _mapping(payload.get("metadata"))
+    name = str(metadata.get("name", "") or "").strip()
+    if not name:
+        return default
+    kind = str(payload.get("kind", "") or "").strip().lower()
+    if kind == "slurmcluster" or default.startswith("slurmcluster"):
+        return f"slurmcluster/{name}"
+    return default
+
+
 def _quiesce_scale_resource(
     *,
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
     resource: str,
+    namespace: str = _SOPERATOR_NAMESPACE,
+    replicas: int = 0,
+    action: str = "scale",
+) -> dict[str, Any]:
+    exists, payload = _kubectl_get_namespace_resource(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        resource=resource,
+        namespace=namespace,
+    )
+    original_replicas = _resource_replicas(payload)
+    item = {
+        "action": action,
+        "namespace": namespace,
+        "resource": resource,
+        "exists": exists,
+        "replicas": original_replicas,
+        "target_replicas": replicas,
+    }
+    if exists and original_replicas != replicas:
+        _kubectl_scale_namespace_resource(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            resource=resource,
+            namespace=namespace,
+            replicas=replicas,
+        )
+    return item
+
+
+def _quiesce_scale_down_one_resource(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    resource: str,
+    namespace: str,
+) -> dict[str, Any]:
+    exists, payload = _kubectl_get_namespace_resource(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        resource=resource,
+        namespace=namespace,
+    )
+    original_replicas = _resource_replicas(payload)
+    target_replicas = max(original_replicas - 1, 1) if original_replicas > 1 else original_replicas
+    item = {
+        "action": "scale-down-one",
+        "namespace": namespace,
+        "resource": resource,
+        "exists": exists,
+        "replicas": original_replicas,
+        "target_replicas": target_replicas,
+    }
+    if exists and original_replicas != target_replicas:
+        _kubectl_scale_namespace_resource(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            resource=resource,
+            namespace=namespace,
+            replicas=target_replicas,
+        )
+    return item
+
+
+def _quiesce_slurm_node_size_resource(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    resource: str,
+    role: str,
 ) -> dict[str, Any]:
     exists, payload = _kubectl_get_namespace_resource(
         command_runner=command_runner,
         kube_context=kube_context,
         resource=resource,
     )
+    selected = _select_slurmcluster_for_role(payload, role=role) if exists else {}
+    selected_exists = bool(selected)
+    selected_resource = (
+        _namespace_resource_ref(selected, default=resource) if selected_exists else resource
+    )
     item = {
-        "action": "scale",
-        "resource": resource,
-        "exists": exists,
-        "replicas": _resource_replicas(payload),
+        "action": "slurm-node-size",
+        "resource": selected_resource,
+        "role": role,
+        "exists": selected_exists,
+        "size": _slurm_node_size(selected, role=role) if selected_exists else None,
     }
-    if exists:
-        _kubectl_scale_namespace_resource(
+    if selected_exists:
+        _kubectl_patch_namespace_resource(
             command_runner=command_runner,
             kube_context=kube_context,
-            resource=resource,
-            replicas=0,
+            resource=selected_resource,
+            patch={"spec": {"slurmNodes": {role: {"size": 0}}}},
         )
     return item
 
@@ -6794,14 +6961,17 @@ def _quiesce_mariadb_resource(
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
     resource: str,
+    namespace: str = _SOPERATOR_NAMESPACE,
 ) -> dict[str, Any]:
     exists, payload = _kubectl_get_namespace_resource(
         command_runner=command_runner,
         kube_context=kube_context,
         resource=resource,
+        namespace=namespace,
     )
     item = {
         "action": "mariadb-suspend",
+        "namespace": namespace,
         "resource": resource,
         "exists": exists,
         "suspend": _mariadb_suspend_value(payload),
@@ -6811,22 +6981,44 @@ def _quiesce_mariadb_resource(
             command_runner=command_runner,
             kube_context=kube_context,
             resource=resource,
+            namespace=namespace,
             patch={"spec": {"suspend": True}},
         )
     return item
 
 
-def _external_service_role_quiesce_resources(role: str) -> tuple[tuple[str, str], ...]:
+def _external_service_role_quiesce_resources(role: str) -> tuple[tuple[str, str, str], ...]:
+    drain_blockers = (
+        (
+            "scale-down-one",
+            _SECURITY_PROFILES_OPERATOR_WEBHOOK_RESOURCE,
+            _SECURITY_PROFILES_OPERATOR_NAMESPACE,
+        ),
+    )
+    if role == "system":
+        return drain_blockers
     if role == "controller":
-        return (("scale", "statefulsets.apps.kruise.io/controller"),)
+        return (
+            ("scale", "statefulsets.apps.kruise.io/controller", _SOPERATOR_NAMESPACE),
+            *drain_blockers,
+        )
     if role == "login":
-        return (("scale", "statefulsets.apps.kruise.io/login"),)
+        return (
+            ("slurm-node-size", "slurmclusters", _SOPERATOR_NAMESPACE),
+            ("scale", "statefulsets.apps.kruise.io/login", _SOPERATOR_NAMESPACE),
+            *drain_blockers,
+        )
     if role == "accounting":
         return (
-            ("scale", "deployment/accounting"),
-            ("mariadb-suspend", "mariadb.k8s.mariadb.com/soperator-acct-db"),
-            ("scale", "statefulset.apps/soperator-acct-db"),
-            ("delete", "pod/soperator-acct-db-0"),
+            ("scale", "deployment/accounting", _SOPERATOR_NAMESPACE),
+            (
+                "mariadb-suspend",
+                "mariadb.k8s.mariadb.com/soperator-acct-db",
+                _SOPERATOR_NAMESPACE,
+            ),
+            ("scale", "statefulset.apps/soperator-acct-db", _SOPERATOR_NAMESPACE),
+            ("delete", "pod/soperator-acct-db-0", _SOPERATOR_NAMESPACE),
+            *drain_blockers,
         )
     return ()
 
@@ -6843,13 +7035,32 @@ def _quiesce_external_service_role(
     if state.get("status") == "quiesced":
         return []
     resources: list[dict[str, Any]] = []
-    for action, resource in _external_service_role_quiesce_resources(role):
+    for action, resource, namespace in _external_service_role_quiesce_resources(role):
         if action == "scale":
             resources.append(
                 _quiesce_scale_resource(
                     command_runner=command_runner,
                     kube_context=kube_context,
                     resource=resource,
+                    namespace=namespace,
+                )
+            )
+        elif action == "scale-down-one":
+            resources.append(
+                _quiesce_scale_down_one_resource(
+                    command_runner=command_runner,
+                    kube_context=kube_context,
+                    resource=resource,
+                    namespace=namespace,
+                )
+            )
+        elif action == "slurm-node-size":
+            resources.append(
+                _quiesce_slurm_node_size_resource(
+                    command_runner=command_runner,
+                    kube_context=kube_context,
+                    resource=resource,
+                    role=role,
                 )
             )
         elif action == "mariadb-suspend":
@@ -6858,6 +7069,7 @@ def _quiesce_external_service_role(
                     command_runner=command_runner,
                     kube_context=kube_context,
                     resource=resource,
+                    namespace=namespace,
                 )
             )
         elif action == "delete":
@@ -6865,8 +7077,16 @@ def _quiesce_external_service_role(
                 command_runner=command_runner,
                 kube_context=kube_context,
                 resource=resource,
+                namespace=namespace,
             )
-            resources.append({"action": "delete", "resource": resource, "exists": True})
+            resources.append(
+                {
+                    "action": "delete",
+                    "namespace": namespace,
+                    "resource": resource,
+                    "exists": True,
+                }
+            )
     if not resources:
         return []
     state.update(
@@ -6895,19 +7115,41 @@ def _restore_external_service_role(
         resource = str(item.get("resource", "") or "").strip()
         if not resource:
             continue
+        namespace = str(item.get("namespace", "") or "").strip() or _SOPERATOR_NAMESPACE
         action = str(item.get("action", "") or "").strip()
-        if action == "scale":
+        if action in {"scale", "scale-down-one"}:
             _kubectl_scale_namespace_resource(
                 command_runner=command_runner,
                 kube_context=kube_context,
                 resource=resource,
+                namespace=namespace,
                 replicas=_positive_int(item.get("replicas"), fallback=1),
+            )
+        elif action == "slurm-node-size":
+            restored_role = str(item.get("role", "") or "").strip()
+            if not restored_role:
+                continue
+            _kubectl_patch_namespace_resource(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                resource=resource,
+                namespace=namespace,
+                patch={
+                    "spec": {
+                        "slurmNodes": {
+                            restored_role: {
+                                "size": _non_negative_int(item.get("size"), fallback=1)
+                            }
+                        }
+                    }
+                },
             )
         elif action == "mariadb-suspend":
             _kubectl_patch_namespace_resource(
                 command_runner=command_runner,
                 kube_context=kube_context,
                 resource=resource,
+                namespace=namespace,
                 patch={"spec": {"suspend": _bool_value(item.get("suspend"), fallback=False)}},
             )
     state["status"] = "restored"
@@ -7294,12 +7536,13 @@ def _gpu_worker_static(
 ) -> str:
     topology = _mapping(topology)
     topology_cpu_count = _positive_int(topology.get("cpus"), fallback=0)
-    tokens = [
-        f"CPUs={topology_cpu_count or cpu_count}",
-        *_worker_topology_static_tokens(topology),
-        f"Gres=gpu:{gpu_count}",
-        *_static_without_normalized_keys(existing_static),
-    ]
+    tokens: list[str] = []
+    normalized_cpu_count = topology_cpu_count or _positive_int(cpu_count, fallback=0)
+    if normalized_cpu_count:
+        tokens.append(f"CPUs={normalized_cpu_count}")
+    tokens.extend(_worker_topology_static_tokens(topology))
+    tokens.append(f"Gres=gpu:{gpu_count}")
+    tokens.extend(_static_without_normalized_keys(existing_static))
     return " ".join(dict.fromkeys(token for token in tokens if token))
 
 
@@ -7321,14 +7564,13 @@ def _normalize_source_worker_node_config(
             source_group,
             live_snapshot=live_snapshot,
         ) or _nodeset_cpu_count(nodeset)
-        if cpu_count:
-            node_config["static"] = _gpu_worker_static(
-                cpu_count,
-                gpu_count,
-                existing_static,
-                topology=topology,
-            )
-            return
+        node_config["static"] = _gpu_worker_static(
+            cpu_count or 0,
+            gpu_count,
+            existing_static,
+            topology=topology,
+        )
+        return
     stripped = " ".join(_static_without_keys(existing_static, {"port"}))
     if stripped:
         node_config["static"] = stripped
@@ -10004,7 +10246,7 @@ def _execute_external_node_template_upgrade_phase(
         if (
             allow_service_quiesce
             and service_role
-            and _positive_int(raw_group.get("node_count"), fallback=1) <= 1
+            and _zero_surge_service_quiesce_required(service_role, raw_group)
         ):
             raw_quiesce_state = group_state.setdefault("service_quiesce", {})
             if not isinstance(raw_quiesce_state, dict):
@@ -11245,6 +11487,10 @@ def external_soperator_upgrade_protected_comparison_passed(
     checkpoint = _load_checkpoint(soperator_migration_checkpoint_path(config_path, target_ref))
     if checkpoint is None:
         return False
+    return _checkpoint_protected_comparison_passed(checkpoint)
+
+
+def _checkpoint_protected_comparison_passed(checkpoint: Mapping[str, Any]) -> bool:
     safety = checkpoint.get("upgrade_safety")
     safety_map = safety if isinstance(safety, Mapping) else {}
     verification = safety_map.get("post_upgrade_verification")
@@ -11258,6 +11504,64 @@ def external_soperator_upgrade_protected_comparison_passed(
         and int(comparison_map.get("blocked_count") or 0) == 0
         and str(protected_map.get("after_hash", "") or "").strip() != ""
     )
+
+
+def _failed_safety_check_names(safety_result: Any) -> list[str]:
+    return [
+        str(check.get("name") or "check")
+        for check in safety_result.checks
+        if isinstance(check, Mapping) and check.get("status") == "failed"
+    ]
+
+
+def _store_external_upgrade_safety_verification(
+    *,
+    checkpoint: dict[str, Any],
+    safety_result: Any,
+    approve_remediation: bool,
+) -> None:
+    checkpoint["upgrade_safety"] = update_safety_payload_with_verification(
+        checkpoint.get("upgrade_safety")
+        if isinstance(checkpoint.get("upgrade_safety"), Mapping)
+        else None,
+        safety_result,
+        remediation_approved=approve_remediation,
+    )
+    phase = _phase_state(checkpoint, "validation-and-rollback-hold")
+    phase["shared_safety_verification"] = safety_result.as_payload()
+
+
+def _ensure_external_upgrade_safety_verified(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    checkpoint: dict[str, Any],
+    payload: Mapping[str, Any],
+    target_ref: str,
+    kube_context: str,
+    approve_remediation: bool,
+) -> list[str]:
+    if _checkpoint_protected_comparison_passed(checkpoint):
+        return ["Shared Soperator upgrade safety verification already passed."]
+    safety_result = _run_external_upgrade_safety_verification(
+        command_runner=command_runner,
+        checkpoint=checkpoint,
+        payload=payload,
+        target_ref=target_ref,
+        kube_context=kube_context,
+        approve_remediation=approve_remediation,
+    )
+    _store_external_upgrade_safety_verification(
+        checkpoint=checkpoint,
+        safety_result=safety_result,
+        approve_remediation=approve_remediation,
+    )
+    if not safety_result.passed:
+        failed = _failed_safety_check_names(safety_result)
+        raise SoperatorMigrationPhasePending(
+            "Shared Soperator upgrade safety verification failed"
+            + (": " + ", ".join(failed) if failed else ".")
+        )
+    return ["Shared Soperator upgrade safety verification completed: passed."]
 
 
 def _run_migration_soperator_cluster_validation(
@@ -11479,7 +11783,7 @@ def _execute_validation_hold_phase(
         command_runner=command_runner,
         phase=phase,
     )
-    safety_result = _run_external_upgrade_safety_verification(
+    safety_lines = _ensure_external_upgrade_safety_verified(
         command_runner=command_runner,
         checkpoint=checkpoint,
         payload=payload,
@@ -11487,24 +11791,6 @@ def _execute_validation_hold_phase(
         kube_context=kube_context,
         approve_remediation=approve_remediation,
     )
-    checkpoint["upgrade_safety"] = update_safety_payload_with_verification(
-        checkpoint.get("upgrade_safety")
-        if isinstance(checkpoint.get("upgrade_safety"), Mapping)
-        else None,
-        safety_result,
-        remediation_approved=approve_remediation,
-    )
-    phase["shared_safety_verification"] = safety_result.as_payload()
-    if not safety_result.passed:
-        failed = [
-            str(check.get("name") or "check")
-            for check in safety_result.checks
-            if isinstance(check, Mapping) and check.get("status") == "failed"
-        ]
-        raise SoperatorMigrationPhasePending(
-            "Shared Soperator upgrade safety verification failed"
-            + (": " + ", ".join(failed) if failed else ".")
-        )
     phase["validation_contract_revision"] = _VALIDATION_HOLD_REVISION
     phase["validated_at"] = _utc_now()
     return bool(phase.get("mk8s_gpu_validations") or phase.get("soperator_cluster_validations")), [
@@ -11512,7 +11798,7 @@ def _execute_validation_hold_phase(
         *helm_state_lines,
         *validation_lines,
         *soperator_validation_lines,
-        "Shared Soperator upgrade safety verification completed: " + str(safety_result.status),
+        *safety_lines,
     ]
 
 
@@ -12026,6 +12312,13 @@ def _checkpoint_for_run(
             raise RuntimeError(
                 "External Soperator upgrade checkpoint belongs to a different target."
             )
+        if (
+            _checkpoint_run_complete(existing)
+            and str(existing.get("source_report_fingerprint", "") or "")
+            != source_report_fingerprint
+        ):
+            existing = None
+    if existing is not None:
         existing_source_version = str(existing.get("source_version", "") or "").strip()
         existing_target_version = str(existing.get("target_version", "") or "").strip()
         existing_planned_phases = tuple(
@@ -12036,7 +12329,7 @@ def _checkpoint_for_run(
         if str(existing.get("source_report_fingerprint", "") or "") != source_report_fingerprint:
             same_resume_contract = (
                 allow_source_report_refresh
-                and existing_planned_phases == tuple(phase_ids)
+                and _same_resume_checkpoint_plan(existing_planned_phases, phase_ids)
                 and (not existing_source_version or existing_source_version == source_version)
                 and (not existing_target_version or existing_target_version == target_version)
             )
@@ -12094,6 +12387,39 @@ def _checkpoint_for_run(
     return checkpoint
 
 
+def _checkpoint_run_complete(checkpoint: Mapping[str, Any]) -> bool:
+    if str(checkpoint.get("pending_phase", "") or "").strip() != "none":
+        return False
+    planned = {
+        str(phase or "").strip()
+        for phase in checkpoint.get("planned_phases", []) or []
+        if str(phase or "").strip()
+    }
+    completed = {
+        str(phase or "").strip()
+        for phase in checkpoint.get("completed_phases", []) or []
+        if str(phase or "").strip()
+    }
+    return bool(planned) and planned <= completed
+
+
+def _same_resume_checkpoint_plan(
+    existing_planned_phases: Sequence[str],
+    phase_ids: Sequence[str],
+) -> bool:
+    incoming = tuple(str(phase or "").strip() for phase in phase_ids if str(phase or "").strip())
+    existing = tuple(
+        str(phase or "").strip()
+        for phase in existing_planned_phases
+        if str(phase or "").strip()
+    )
+    if existing == incoming:
+        return True
+    if not incoming or existing[: len(incoming)] != incoming:
+        return False
+    return all(phase in _RESUME_OPTIONAL_PLANNED_PHASE_IDS for phase in existing[len(incoming) :])
+
+
 def _checkpoint_has_mutating_progress(checkpoint: Mapping[str, Any] | None) -> bool:
     phase_state = _mapping((checkpoint or {}).get("phase_state"))
     for phase_id in _MUTATING_PHASE_IDS:
@@ -12117,7 +12443,11 @@ def external_soperator_upgrade_resume_backup_metadata(
     target_ref: str,
 ) -> dict[str, Any] | None:
     checkpoint = _load_checkpoint(soperator_migration_checkpoint_path(config_path, target_ref))
-    if checkpoint is None or not _checkpoint_mutating_progress_started(checkpoint):
+    if (
+        checkpoint is None
+        or _checkpoint_run_complete(checkpoint)
+        or not _checkpoint_mutating_progress_started(checkpoint)
+    ):
         return None
     backup = dict(_mapping(checkpoint.get("backup")))
     if not backup:
@@ -14226,7 +14556,14 @@ def _execute_soperator_migration_unlocked(
     kube_context = _target_kube_context(payload, normalized_target)
     checkpoint_path = soperator_migration_checkpoint_path(config_path, normalized_target)
     existing_checkpoint = _load_checkpoint(checkpoint_path)
-    mutating_progress_started = _checkpoint_mutating_progress_started(existing_checkpoint)
+    completed_prior_run = (
+        existing_checkpoint is not None
+        and _checkpoint_run_complete(existing_checkpoint)
+        and str(existing_checkpoint.get("source_report_fingerprint", "") or "")
+        != source_report_fingerprint
+    )
+    resume_checkpoint = None if completed_prior_run else existing_checkpoint
+    mutating_progress_started = _checkpoint_mutating_progress_started(resume_checkpoint)
     strict_source_fingerprint = not mutating_progress_started
     live_snapshot = snapshot_collector(kube_context=kube_context)
     live_report = analyze_soperator_onboarding_snapshot(
@@ -14856,6 +15193,36 @@ def _execute_soperator_migration_unlocked(
                     f"post-upgrade-helm-check: {line}" for line in helm_state_lines
                 )
                 _checkpoint_progress()
+
+    if (
+        not pending_phase
+        and effective_approval
+        and not _checkpoint_protected_comparison_passed(checkpoint)
+    ):
+        _emit_phase_comment(
+            "validation-and-rollback-hold",
+            "verifying shared protected-state before config refresh.",
+        )
+        try:
+            safety_lines = _ensure_external_upgrade_safety_verified(
+                command_runner=active_command_runner,
+                checkpoint=checkpoint,
+                payload=payload,
+                target_ref=normalized_target,
+                kube_context=kube_context,
+                approve_remediation=approve_remediation,
+            )
+        except SoperatorMigrationPhasePending as exc:
+            pending_phase = "validation-and-rollback-hold"
+            pending_reason = str(exc)
+            checkpoint["pending_phase"] = pending_phase
+            checkpoint["pending_reason"] = pending_reason
+            _checkpoint_progress()
+        else:
+            phase_lines.extend(
+                f"validation-and-rollback-hold: {line}" for line in safety_lines
+            )
+            _checkpoint_progress()
 
     if pending_phase:
         checkpoint["pending_phase"] = pending_phase

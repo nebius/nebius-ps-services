@@ -883,6 +883,57 @@ def test_soperator_onboarding_skips_external_node_template_when_provider_invento
     assert finding.evidence["matched_node_group_count"] == 6
 
 
+def test_soperator_onboarding_plans_external_node_template_for_same_soperator_version_k8s_hop() -> None:
+    snapshot = _with_provider_node_template_inventory(
+        _target_compatible_legacy_snapshot()
+    )
+    snapshot["helm_releases"] = [
+        {
+            "name": "soperator",
+            "namespace": "soperator",
+            "chart": "soperator-4.0.2-ps.3",
+            "app_version": "4.0.2",
+        }
+    ]
+    provider = snapshot["provider"]
+    assert isinstance(provider, dict)
+    mk8s_cluster = provider["mk8s_cluster"]
+    assert isinstance(mk8s_cluster, dict)
+    mk8s_cluster["control_plane_version"] = "1.33"
+    node_groups = snapshot["node_groups"]
+    assert isinstance(node_groups, dict)
+    for raw_group in node_groups.values():
+        assert isinstance(raw_group, dict)
+        group_provider = raw_group["provider"]
+        assert isinstance(group_provider, dict)
+        template = group_provider["node_template"]
+        assert isinstance(template, dict)
+        template["k8s_version"] = "1.33"
+
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref="cluster1",
+        pinned_chart_version="4.0.2-ps.3",
+        pinned_app_version="4.0.2",
+        target_k8s_version="1.34",
+    )
+
+    selected_action_ids = {action.id for action in report.actions if action.selected}
+    assert report.state == "existing-soperator-target"
+    assert ONBOARDING_ACTION_UPGRADE_SOPERATOR not in selected_action_ids
+    assert ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE in selected_action_ids
+    assert ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE in selected_action_ids
+    assert "external-node-template-upgrade" in [phase.id for phase in report.migration_plan]
+    finding = next(
+        finding
+        for finding in report.findings
+        if finding.layer == "mk8s-node-template" and finding.status == "remediation-planned"
+    )
+    assert finding.evidence is not None
+    assert finding.evidence["control_plane"]["current_k8s_version"] == "1.33"
+    assert finding.evidence["control_plane"]["target_k8s_version"] == "1.34"
+
+
 def test_soperator_onboarding_keeps_external_node_template_when_provider_inventory_is_partial() -> (
     None
 ):

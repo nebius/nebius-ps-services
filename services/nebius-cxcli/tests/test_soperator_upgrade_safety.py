@@ -373,6 +373,16 @@ def _capture(runner: _Runner) -> ProtectedCustomerState:
     )
 
 
+def test_slurm_runtime_capture_uses_login_sshd_container() -> None:
+    runner = _Runner()
+
+    _capture(runner)
+
+    exec_calls = [call for call in runner.calls if "exec" in call]
+    assert exec_calls
+    assert all("-c" in call and call[call.index("-c") + 1] == "sshd" for call in exec_calls)
+
+
 def test_configmap_and_nodeset_drift_are_protected_deltas() -> None:
     before = _capture(_Runner(config_value="baseline", nodeset_script="mount-home"))
     after = _capture(_Runner(config_value="changed", nodeset_script="changed-mount-home"))

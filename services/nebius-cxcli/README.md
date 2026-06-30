@@ -3310,8 +3310,9 @@ The planned phases depend on the accepted storage and compute modes:
   external node-group template changes, including Kubernetes version, node OS
   image, Nebius-image GPU stack, and aligned SFS filesystem attachments, use
   direct Nebius node-group updates: service-role groups are serial, zero-surge
-  quiesces one-node service workloads, and safe-surge uses one temporary
-  replacement node per active service or worker group when selected. Worker
+  quiesces login workloads, one-node service workloads, and known drain-blocking
+  webhook replicas, and safe-surge uses one temporary replacement node per
+  active service or worker group when selected. Worker
   groups default to zero-surge and can use bounded safe-surge waves. cxcli
   restores each node group's original strategy after the active rollout.
 
@@ -3620,16 +3621,18 @@ Underlying MK8s upgrade ownership is different for managed and external targets:
   node-group strategy and restores it after that group finishes. Service-role
   groups use the selected temporary strategy one group at a time. zero-surge
   sets `max_surge=0`, `max_unavailable=1`, `drain_timeout=30m` and quiesces
-  one-node service workloads. Worker groups also default to zero-surge;
-  safe-surge (`max_surge=1`, `max_unavailable=0`, `drain_timeout=30m`) applies
-  to service groups and runs workers in bounded waves only when selected, after
+  login workloads, one-node service workloads, and known drain-blocking webhook
+  replicas. Worker groups also default to zero-surge; safe-surge
+  (`max_surge=1`, `max_unavailable=0`,
+  `drain_timeout=30m`) applies to service groups and runs workers in bounded
+  waves only when selected, after
   quota/capacity, worker-node health, and Slurm queue preflights pass. Set
   `drain_timeout: none` when
   waiting indefinitely is safer than provider drain fallback. CPU node groups
   that carry stale GPU driver presets are reset to the CPU-supported empty
-  preset before rollout, and one-node controller/login/accounting groups
-  temporarily quiesce their Soperator workloads and restore them after the
-  matching node-group update.
+  preset before rollout, and login plus one-node controller/accounting groups
+  temporarily quiesce their Soperator workloads and known drain-blocking webhook
+  replicas, then restore them after the matching node-group update.
 - After an external target has been onboarded and deployed under cxcli app
   management with no external-upgrade-owned work remaining, future Soperator chart
   upgrades can use `soperator upgrade --target <target>`; the external cluster

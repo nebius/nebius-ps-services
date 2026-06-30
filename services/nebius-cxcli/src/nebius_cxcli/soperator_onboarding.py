@@ -2345,6 +2345,7 @@ def analyze_soperator_onboarding_snapshot(
     manual_source_version = normalize_soperator_release_version(source_version_override)
     target_version = normalize_soperator_release_version(pinned_chart_version or pinned_app_version)
     target_k8s = str(node_template_inventory.get("target_k8s_version", "") or "").strip()
+    external_node_template_required = not bool(node_template_inventory.get("complete"))
 
     findings: list[SoperatorOnboardingFinding] = []
     actions: list[SoperatorOnboardingAction] = []
@@ -2899,6 +2900,68 @@ def analyze_soperator_onboarding_snapshot(
                     evidence={"live_chart": live_chart, "live_app": live_app},
                 )
             )
+            if external_node_template_required:
+                provider_inventory_available = bool(
+                    node_template_inventory.get("provider_inventory_available")
+                )
+                migration_plan = _default_soperator_migration_plan(
+                    include_target_gpu_reconciliation=any(
+                        action.id == ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK
+                        and action.selected
+                        for action in actions
+                    ),
+                    include_external_node_template_upgrade=True,
+                    include_soperator_upgrade=False,
+                    include_data_migration=False,
+                    include_compute_migration=False,
+                )
+                findings.append(
+                    SoperatorOnboardingFinding(
+                        layer="mk8s-node-template",
+                        status="remediation-planned",
+                        severity="required",
+                        message=(
+                            "External MK8s control plane and node templates will be "
+                            "upgraded during the external upgrade through direct Nebius updates "
+                            "because the target is not Terraform-owned by cxcli."
+                            if provider_inventory_available
+                            else (
+                                "External MK8s control plane and node-template provider "
+                                "inventory was not available during onboarding; cxcli will "
+                                "verify and align the external node templates during "
+                                "the external upgrade."
+                            )
+                        ),
+                        action_id=ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
+                        evidence=_node_template_inventory_finding_evidence(
+                            node_template_inventory
+                        ),
+                    )
+                )
+                actions.append(
+                    SoperatorOnboardingAction(
+                        id=ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
+                        title="Upgrade external MK8s control plane and node templates",
+                        layer="mk8s-node-template",
+                        selected=True,
+                        disruptive=True,
+                        reason=(
+                            "The Soperator chart is already current, but the external MK8s "
+                            "control plane or node-group templates do not match the requested "
+                            "Kubernetes/node-template target."
+                        ),
+                    )
+                )
+                actions.append(
+                    SoperatorOnboardingAction(
+                        id=ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
+                        title="Approve external MK8s node-template remediation",
+                        layer="external-upgrade",
+                        selected=True,
+                        disruptive=True,
+                        reason="External node-template changes require customer approval before execution.",
+                    )
+                )
         else:
             migration_profile = soperator_migration_profile_for_version(
                 source_version,
@@ -2950,7 +3013,6 @@ def analyze_soperator_onboarding_snapshot(
                     storage_present=storage_present,
                     target_version=pinned_chart_version or target_version,
                 )
-                external_node_template_required = not bool(node_template_inventory.get("complete"))
                 migration_plan = _default_soperator_migration_plan(
                     include_target_gpu_reconciliation=any(
                         action.id == ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK
