@@ -1084,6 +1084,7 @@ spec:
             len(command) >= 9
             and command[:3] == ("kubectl", "--context", "external-context")
             and command[3] == "-n"
+            and command[4] == "soperator"
             and command[5] == "get"
             and command[6].startswith("job/")
             and command[-2:] == ("-o", "json")
