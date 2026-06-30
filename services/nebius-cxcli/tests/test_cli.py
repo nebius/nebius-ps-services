@@ -5729,6 +5729,7 @@ def test_soperator_onboard_noninteractive_uses_explicit_target_chart_version(
             target_chart_version,
             "--to-k8s-version",
             "1.32",
+            "--allow-unsupported-soperator-upgrade-path",
             "--no-interactive",
             "--no-validate-sources",
         ],
@@ -5741,6 +5742,7 @@ def test_soperator_onboard_noninteractive_uses_explicit_target_chart_version(
     onboarding = target["soperator_onboarding"]
     assert onboarding["target_version"] == target_chart_version
     assert onboarding["node_template_upgrade"]["target_k8s_version"] == "1.32"
+    assert onboarding["support_override_used"] is True
     soperator = next(row for row in payload["apps"]["charts"] if row["id"] == "soperator")
     assert soperator["version"] == target_chart_version
 
@@ -5754,6 +5756,7 @@ def test_soperator_onboard_noninteractive_uses_explicit_target_chart_version(
     command = manifest["command"]
     assert command[command.index("--to-chart-version") + 1] == target_chart_version
     assert command[command.index("--to-k8s-version") + 1] == "1.32"
+    assert "--allow-unsupported-soperator-upgrade-path" in command
 
 
 def test_soperator_onboard_noninteractive_validates_explicit_target_chart_version(
@@ -5825,6 +5828,7 @@ def test_soperator_onboard_noninteractive_validates_explicit_target_chart_versio
             target_chart_version,
             "--to-k8s-version",
             "1.32",
+            "--allow-unsupported-soperator-upgrade-path",
             "--no-interactive",
         ],
     )
@@ -5842,6 +5846,7 @@ def test_soperator_onboard_noninteractive_validates_explicit_target_chart_versio
     onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]
     assert onboarding["target_version"] == target_chart_version
     assert onboarding["node_template_upgrade"]["target_k8s_version"] == "1.32"
+    assert onboarding["support_override_used"] is True
     soperator = next(row for row in payload["apps"]["charts"] if row["id"] == "soperator")
     assert soperator["version"] == target_chart_version
 

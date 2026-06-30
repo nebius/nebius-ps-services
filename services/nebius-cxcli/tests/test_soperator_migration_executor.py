@@ -1085,6 +1085,20 @@ spec:
             and command[:3] == ("kubectl", "--context", "external-context")
             and command[3] == "-n"
             and command[5] == "get"
+            and command[6].startswith("job/")
+            and command[-2:] == ("-o", "json")
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps({"status": {"conditions": [{"type": "Complete", "status": "True"}]}}),
+                "",
+            )
+        if (
+            len(command) >= 9
+            and command[:3] == ("kubectl", "--context", "external-context")
+            and command[3] == "-n"
+            and command[5] == "get"
             and "/" in command[6]
             and "-o" in command
             and command[command.index("-o") + 1] == "json"
@@ -1343,26 +1357,6 @@ spec:
                 command,
                 0,
                 json.dumps({"items": self.live_pvcs}),
-                "",
-            )
-        if (
-            len(command) >= 9
-            and command[:6]
-            == (
-                "kubectl",
-                "--context",
-                "external-context",
-                "-n",
-                "soperator",
-                "get",
-            )
-            and command[6].startswith("job/")
-            and command[-2:] == ("-o", "json")
-        ):
-            return SoperatorMigrationCommandResult(
-                command,
-                0,
-                json.dumps({"status": {"conditions": [{"type": "Complete", "status": "True"}]}}),
                 "",
             )
         if command[:7] == (
@@ -8602,7 +8596,17 @@ def test_execute_recovers_partial_cutover_without_login_pod(tmp_path: Path) -> N
         },
         {"id": "rolling-compute-migration", "status": "planned"},
     ]
-    runner = _FakeCommandRunner(live_pods=[])
+    runner = _FakeCommandRunner(
+        live_pods=[
+            {
+                "metadata": {
+                    "name": "worker-0",
+                    "labels": {"app.kubernetes.io/component": "worker"},
+                },
+                "status": {"phase": "Running"},
+            }
+        ]
+    )
     payload = _payload(include_placements=True)
     target = payload["deploy"]["targets"][0]  # type: ignore[index]
     onboarding = target["soperator_onboarding"]
