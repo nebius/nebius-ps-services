@@ -6,6 +6,12 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Hardened Soperator deploy smoke around jail startup. When the
+  `populate-jail` Job is still active after the same-node `jail-mount` pod can
+  see the jail `.populated` sentinel, cxcli now deletes only the stuck Job pod
+  and waits for the Job to complete. Deploy smoke also fails on failed or
+  crash-looping Soperator pods, so GPU driver-jail and local jail failures no
+  longer pass as a clean deployment snapshot.
 - Added Soperator/Kubernetes upgrade support-policy enforcement for managed and
   external Soperator upgrade paths. cxcli now records matched support rule
   status in onboarding, dry-run/execute reports, and managed checkpoints; fails
