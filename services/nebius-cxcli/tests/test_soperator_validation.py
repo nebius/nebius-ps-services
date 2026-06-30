@@ -1142,6 +1142,21 @@ def test_soperator_cluster_validation_recovers_stuck_populate_jail_job(
     assert recovery["sentinel_path"] == "/host/mnt/jail/.populated"
 
 
+def test_populate_jail_job_failed_detects_zero_backoff_limit() -> None:
+    assert (
+        soperator_validation._job_failed(  # noqa: SLF001
+            {"spec": {"backoffLimit": 0}, "status": {"failed": 1}}
+        )
+        is True
+    )
+    assert (
+        soperator_validation._job_failed(  # noqa: SLF001
+            {"spec": {}, "status": {"failed": 1}}
+        )
+        is False
+    )
+
+
 def test_soperator_cluster_validation_fails_on_crash_looping_soperator_pod(
     tmp_path: Path,
 ) -> None:

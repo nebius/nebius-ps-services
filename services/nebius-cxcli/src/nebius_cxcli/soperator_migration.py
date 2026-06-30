@@ -5305,12 +5305,22 @@ def _external_upgrade_slurm_node_filter(
     if not aliases:
         return selected_nodes
     resolved: list[str] = []
+    unresolved: list[str] = []
     for node in selected_nodes:
         slurm_node = aliases.get(node)
         if not slurm_node:
-            return ()
+            unresolved.append(node)
+            continue
         if slurm_node not in resolved:
             resolved.append(slurm_node)
+    if unresolved:
+        raise RuntimeError(
+            "External Soperator upgrade could not map Kubernetes node(s) to Slurm node "
+            "names for affected-node job inspection: "
+            + ", ".join(unresolved)
+            + ". Rerun discovery/onboarding after Slurm node aliases are visible, or "
+            "resolve the node identity mismatch before using --job-policy."
+        )
     return tuple(resolved)
 
 
@@ -5350,7 +5360,12 @@ def _external_upgrade_slurm_jobs(
         and selected_nodes
         and "invalid node name" in _command_detail(result).lower()
     ):
-        result = _squeue(())
+        raise RuntimeError(
+            "External Soperator upgrade could not inspect Slurm jobs for affected nodes "
+            "because Slurm rejected the scoped node filter "
+            f"{', '.join(selected_nodes)}: "
+            + _command_detail(result)
+        )
     if result.returncode != 0:
         raise RuntimeError(
             "External Soperator upgrade could not inspect Slurm jobs from a login pod: "
@@ -8839,7 +8854,7 @@ def _worker_nodeset_ready_state(nodeset: Mapping[str, Any]) -> tuple[bool, str]:
     status = _mapping(nodeset.get("status"))
     desired = _nonnegative_int(spec.get("replicas"), fallback=0)
     ready = _nonnegative_int(
-        status.get("replicas", status.get("readyReplicas")),
+        status.get("readyReplicas", status.get("replicas")),
         fallback=0,
     )
     phase = str(status.get("phase", "") or "").strip()
@@ -14078,13 +14093,16 @@ def _validation_hold_fast_verification_checks(
         for path in phase.get("soperator_cluster_validation_reports", []) or []
         if str(path).strip()
     ]
+    soperator_status = (
+        "passed" if soperator_count > 0 and len(soperator_reports) >= soperator_count else "failed"
+    )
+    if soperator_count == 0:
+        soperator_status = "skipped"
     checks.append(
         _fast_verification_check(
             "Soperator deployment snapshot report",
-            "passed"
-            if soperator_count > 0 and len(soperator_reports) >= soperator_count
-            else "failed",
-            f"reports={len(soperator_reports)}, expected={soperator_count or 1}",
+            soperator_status,
+            f"reports={len(soperator_reports)}, expected={soperator_count}",
         )
     )
     gpu_count = _positive_int(phase.get("mk8s_gpu_validation_count"), fallback=0)

@@ -246,6 +246,23 @@ def _source_worker_nodeset(name: str, *, gpu: bool) -> dict[str, Any]:
     }
 
 
+def test_worker_nodeset_ready_state_prefers_ready_replicas() -> None:
+    ready, detail = migration._worker_nodeset_ready_state(  # noqa: SLF001
+        {
+            "spec": {"replicas": 2},
+            "status": {
+                "phase": "Ready",
+                "replicas": 2,
+                "readyReplicas": 1,
+                "conditions": [{"type": "PodsReady", "status": "False"}],
+            },
+        }
+    )
+
+    assert ready is False
+    assert detail == "phase=Ready, ready=1/2"
+
+
 def _source_report(
     snapshot: dict[str, Any] | None = None,
     *,
@@ -2992,6 +3009,32 @@ def test_execute_clears_stale_pending_phase_after_successful_resume(
     )
 
 
+def test_validation_hold_fast_verification_skips_absent_soperator_smoke() -> None:
+    summary, checks = migration._validation_hold_fast_verification_checks(  # noqa: SLF001
+        checkpoint={
+            "phase_state": {
+                "validation-and-rollback-hold": {
+                    "validation_contract_revision": migration._VALIDATION_HOLD_REVISION,
+                    "shared_safety_verification": {
+                        "status": "passed",
+                        "passed": True,
+                        "checks": [],
+                    },
+                    "soperator_cluster_validation_count": 0,
+                    "soperator_cluster_validation_reports": [],
+                    "mk8s_gpu_validation_count": 0,
+                    "mk8s_gpu_validation_reports": [],
+                }
+            }
+        }
+    )
+
+    statuses = {check["name"]: check["status"] for check in checks}
+    assert summary == "validation hold artifacts and shared safety result are recorded."
+    assert statuses["Soperator deployment snapshot report"] == "skipped"
+    assert statuses["Configured MK8s GPU validation reports"] == "skipped"
+
+
 def test_execute_retires_stale_source_soperator_helm_releases_after_target_ready(
     tmp_path: Path,
 ) -> None:
@@ -5316,6 +5359,79 @@ def test_external_upgrade_slurm_jobs_translates_kubernetes_node_names() -> None:
     assert squeue_calls[0][-2:] == ("-w", "worker-3")
 
 
+def test_external_upgrade_slurm_jobs_fails_closed_for_unmapped_kubernetes_node() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {"items": [{"metadata": {"name": "login-0"}, "status": {"phase": "Running"}}]}
+                ),
+                "",
+            )
+        if command[8:] == ("scontrol", "show", "nodes"):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "\n".join(
+                    (
+                        "NodeName=worker-3 Arch=x86_64 CoresPerSocket=8",
+                        "   NodeAddr=10.1.18.140 NodeHostName=worker-3 Version=24.11.6",
+                        "   InstanceId=computeinstance-e00e8ctxvehgkyged0",
+                    )
+                ),
+                "",
+            )
+        if command[8:10] == ("squeue", "-h"):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "42|alice|RUNNING|gpu|worker-9|00:05|30:00|25:00|unrelated\n",
+                "",
+            )
+        if command[8:9] == ("scancel",):
+            return SoperatorMigrationCommandResult(command, 0, "cancelled\n", "")
+        return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
+
+    with pytest.raises(RuntimeError, match="could not map Kubernetes node"):
+        migration._handle_external_upgrade_slurm_jobs(  # noqa: SLF001
+            command_runner=runner,
+            kube_context="external-context",
+            node_names=("computeinstance-missing",),
+            policy="cancel-all",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            wait_timeout_seconds=0,
+            refresh_interval_seconds=1,
+        )
+
+    assert not any(call[8:10] == ("squeue", "-h") for call in calls)
+    assert not any(call[8:9] == ("scancel",) for call in calls)
+
+
 def test_external_upgrade_slurm_jobs_falls_back_to_controller_for_login_config_failure() -> None:
     calls: list[tuple[str, ...]] = []
 
@@ -5396,7 +5512,7 @@ def test_external_upgrade_slurm_jobs_falls_back_to_controller_for_login_config_f
     assert any(call[6:11] == ("controller-0", "-c", "slurmctld", "--", "squeue") for call in calls)
 
 
-def test_external_upgrade_slurm_jobs_retries_unfiltered_for_invalid_node_name() -> None:
+def test_external_upgrade_slurm_jobs_fails_closed_for_invalid_node_name() -> None:
     calls: list[tuple[str, ...]] = []
 
     def runner(
@@ -5439,17 +5555,16 @@ def test_external_upgrade_slurm_jobs_retries_unfiltered_for_invalid_node_name() 
             return SoperatorMigrationCommandResult(command, 0, "", "")
         return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
 
-    jobs = migration._external_upgrade_slurm_jobs(
-        command_runner=runner,
-        kube_context="external-context",
-        node_names=("computeinstance-1",),
-    )
+    with pytest.raises(RuntimeError, match="Slurm rejected the scoped node filter"):
+        migration._external_upgrade_slurm_jobs(  # noqa: SLF001
+            command_runner=runner,
+            kube_context="external-context",
+            node_names=("computeinstance-1",),
+        )
 
-    assert jobs == ()
     squeue_calls = [call for call in calls if call[8:10] == ("squeue", "-h")]
-    assert len(squeue_calls) == 2
+    assert len(squeue_calls) == 1
     assert squeue_calls[0][-2:] == ("-w", "computeinstance-1")
-    assert "-w" not in squeue_calls[1]
 
 
 def test_external_upgrade_cancel_selected_policy_cancels_jobs() -> None:

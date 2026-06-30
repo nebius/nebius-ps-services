@@ -150,6 +150,9 @@ All notable changes to the reusable Codex skills are tracked here.
 - Expanded `install-grafana-mcp-for-nebius` usage docs with a bounded
   datasource-discovery, label-discovery, and project/resource metric-query
   workflow for Nebius-managed Grafana.
+- Simplified `install-grafana-mcp-for-nebius` usage prompts around
+  user-facing Grafana questions, added a redacted MK8s GPU usage example, and
+  documented the Codex-to-MCP-to-Grafana query flow.
 - Updated `brainstorm` so major design or architecture decisions consult the
   installed `design` and `system-design-rules` skills as advisory context when
   accessible while keeping brainstorming chat-only until the user asks to

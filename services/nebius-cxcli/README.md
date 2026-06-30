@@ -3163,7 +3163,10 @@ Important external upgrade flags:
   `scancel`, the requeue policies call `scontrol requeue`, and the
   requeue-hold policies call `scontrol requeuehold`. Requeue and requeue-hold
   policies wait for the selected jobs to leave affected nodes before rollout
-  continues.
+  continues. If cxcli cannot map the affected Kubernetes nodes to Slurm node
+  names, or Slurm rejects the scoped node filter, the upgrade fails before any
+  job action instead of querying or mutating an unfiltered cluster-wide job
+  list.
 - `--cancel-job`: job id to cancel when `--job-policy cancel-selected` is used.
   Repeat the flag for multiple jobs.
 - `--requeue-job`: job id to requeue when `--job-policy requeue-selected` or

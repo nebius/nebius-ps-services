@@ -1528,6 +1528,8 @@ def test_docs_define_component_selector_contract() -> None:
     assert "checks the required spare quota and GPU capacity before mutation" in readme_flat
     assert "requires all selected worker nodes to start Ready and schedulable" in readme_flat
     assert "checks Slurm jobs only on affected worker nodes" in readme_flat
+    assert "Slurm rejects the scoped node filter" in readme_flat
+    assert "unfiltered cluster-wide job list" in readme_flat
     assert (
         "The selected `deploy.targets[].soperator_onboarding.actions` list is the desired external upgrade contract"
         in readme_flat
@@ -1806,6 +1808,7 @@ def test_docs_define_component_selector_contract() -> None:
         "handles Slurm jobs on affected worker nodes through the `--job-policy` "
         "wait, cancel, requeue, or requeue-hold decision state"
     ) in design_flat
+    assert "Slurm rejects the scoped node filter" in design_flat
     assert "`generated/reports/ext-soperator-upgrade-report.json`" in design_flat
     assert "auto-detects source worker node groups" in design_flat
     assert "`slurm.nebius.ai/nodeset` worker labels" in design_flat

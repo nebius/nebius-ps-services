@@ -1093,8 +1093,10 @@ The external stage model is explicit: dry-run planning reads `config.yaml` and
 the accepted discovery bundle; execute preflight refreshes live discovery,
 verifies source release/fingerprint, creates or reuses a restore-capable backup,
 captures protected state, checks quota/capacity and selected worker health, and
-applies the Slurm job policy before affected worker rollout; infrastructure
-remediation upgrades the external MK8s control plane first, then service-role
+applies the Slurm job policy before affected worker rollout while failing
+closed if affected Kubernetes nodes cannot be scoped to Slurm node names or if
+Slurm rejects the scoped node filter.
+Infrastructure remediation upgrades the external MK8s control plane first, then service-role
 node groups, worker waves, target GPU stack, aligned SFS, and guarded copy
 phases as selected; Soperator takeover applies CRDs/chart values, preserves
 discovered worker NodeSets and partition refs when source evidence exists,

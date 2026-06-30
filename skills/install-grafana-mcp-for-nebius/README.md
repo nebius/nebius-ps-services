@@ -64,58 +64,73 @@ validate by listing datasources. It keeps the wrapper bound to
 for any external Grafana instance.
 
 After Codex has restarted with the `grafana-nebius` server enabled, ask Codex
-to discover datasources before querying metrics:
+for the outcome you need. Natural-language prompts are fine when they include
+the scope, time window, and resource identifiers. Codex should use
+`grafana-nebius` to discover the datasource, labels, and metric names before it
+queries Grafana:
 
 ```text
-Use grafana-nebius to list Grafana datasources. Identify the PromQL-compatible
-monitoring datasource UID, the Loki datasource UID, and whether Tempo tools are
-available for project <PROJECT_ID>.
+Use grafana-nebius to query the GPU usage for the last 30 days for all the
+nodes of this MK8s cluster:
+<MK8S_CLUSTER_ID>
+in project:
+<PROJECT_ID>
 ```
 
-To check metrics for one Nebius project resource, start by discovering labels
-and metric names. Label names differ by datasource and service, so do not guess
-them:
+For this kind of request, Codex should report the GPU-reporting nodes it finds,
+the average and peak GPU utilization per node, the metric used, and whether the
+cluster has data for the whole requested window.
+
+Other useful prompts can stay just as direct:
 
 ```text
-Use grafana-nebius to list label names for monitoring datasource
-<MONITORING_DATASOURCE_UID> over the last 30 minutes. Identify labels that look
-like project, resource, cluster, instance, namespace, node, or service
-identifiers. Do not return raw series data.
+Use grafana-nebius to list the monitoring and logging datasources available in
+Grafana, and tell me which ones can be used for project <PROJECT_ID>.
 ```
 
 ```text
-Use grafana-nebius to list metric names in monitoring datasource
-<MONITORING_DATASOURCE_UID> matching <RESOURCE_OR_SERVICE_PREFIX> over the last
-30 minutes, limited to 20 names.
+Use grafana-nebius to show CPU and memory usage for the nodes in MK8s cluster
+<MK8S_CLUSTER_ID> in project <PROJECT_ID> over the last 24 hours. Summarize by
+node and call out missing data.
 ```
-
-Then run a bounded query with both project and resource filters:
 
 ```text
-Use grafana-nebius to run an instant PromQL query in datasource
-<MONITORING_DATASOURCE_UID> for <METRIC_NAME>, filtered by
-<PROJECT_LABEL>="<PROJECT_ID>" and <RESOURCE_LABEL>="<RESOURCE_ID>". Return a
-compact summary of the latest value for that resource only.
+Use grafana-nebius to check whether MK8s cluster <MK8S_CLUSTER_ID> in project
+<PROJECT_ID> had any GPU XID errors in the last 7 days. Return counts by node
+and GPU only.
 ```
-
-For a recent trend, keep the time range short:
 
 ```text
-Use grafana-nebius to run a PromQL range query in datasource
-<MONITORING_DATASOURCE_UID> over the last 15 minutes with a 60 second step:
-<METRIC_NAME>{<PROJECT_LABEL>="<PROJECT_ID>", <RESOURCE_LABEL>="<RESOURCE_ID>"}.
-Summarize min, max, and latest values instead of returning every sample.
+Use grafana-nebius to summarize recent error logs for MK8s cluster
+<MK8S_CLUSTER_ID> in project <PROJECT_ID> over the last hour. Return counts and
+the most relevant short examples only; do not dump raw logs.
 ```
 
-For logs tied to the same resource, discover Loki labels first, then use a small
-aggregate or low limit:
+When you already know the exact datasource UID, labels, or PromQL, include
+them. Otherwise, let Codex discover those details through Grafana MCP and ask
+for a compact result instead of raw series or logs.
+
+## How The MCP Flow Works
+
+`grafana-nebius` is the Codex MCP server entry for the Grafana MCP server. It is
+not Grafana itself, and Grafana does not reroute user prompts to it.
+
+The runtime flow is:
 
 ```text
-Use grafana-nebius to list Loki label names in datasource <LOKI_DATASOURCE_UID>
-over the last 30 minutes, then run a count_over_time query for
-<PROJECT_ID>/<RESOURCE_ID> over the last 15 minutes. Do not return raw log lines
-unless I explicitly ask.
+User prompt
+  -> Codex decides which grafana-nebius tool to call
+  -> Codex runtime sends an MCP tool call to grafana-nebius
+  -> grafana-nebius calls Grafana and its datasource APIs
+  -> Grafana returns datasource, Prometheus-compatible, Loki, or other results
+  -> grafana-nebius returns the tool result to Codex
+  -> Codex summarizes the answer for the user
 ```
+
+The Codex-to-MCP hop is an MCP tool/RPC call. Depending on the MCP server
+configuration, that hop can run over stdio to a local process or over an HTTP
+transport to a remote MCP endpoint. The MCP-to-Grafana hop is where Grafana API
+and datasource API calls happen.
 
 Use placeholders in reusable docs and prompts. Do not store real project IDs,
 resource IDs, raw logs, or query results in this skill source.

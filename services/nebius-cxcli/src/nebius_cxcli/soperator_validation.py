@@ -1772,8 +1772,8 @@ def _job_failed(payload: Mapping[str, Any]) -> bool:
     spec = _as_mapping(payload.get("spec"))
     status = _as_mapping(payload.get("status"))
     failed = _int_from_mapping(status.get("failed"))
-    backoff_limit = _int_from_mapping(spec.get("backoffLimit"))
-    return failed > 0 and backoff_limit > 0 and failed > backoff_limit
+    backoff_limit = _int_from_mapping(spec.get("backoffLimit", 6))
+    return failed > 0 and failed > backoff_limit
 
 
 def _pod_name(item: Mapping[str, Any]) -> str:

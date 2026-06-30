@@ -6,6 +6,15 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Hardened Soperator upgrade and deploy guardrails. External Soperator
+  affected-node Slurm job handling now fails closed when Kubernetes nodes cannot
+  be mapped to Slurm node names or Slurm rejects the scoped node filter, so
+  `--job-policy cancel-all` and requeue-all policies cannot act on an
+  unfiltered cluster-wide job list. External upgrade worker NodeSet readiness
+  now prefers `readyReplicas` over total replicas, validation-hold fast
+  verification records absent Soperator smoke validations as skipped, and
+  deploy smoke detects failed one-shot `populate-jail` Jobs with
+  `backoffLimit: 0`.
 - Hardened external Soperator Kubernetes-hop upgrades. Completed prior-hop
   checkpoints no longer reuse stale backup metadata for the next hop,
   same-version Soperator onboarding now plans external node-template work for
