@@ -2307,13 +2307,13 @@ def assess_live_quotas(
     tenant_id = _as_text(nebius.get("tenant_id") if isinstance(nebius, dict) else None)
     project_id = _as_text(nebius.get("project_id") if isinstance(nebius, dict) else None)
     region_id = _as_text(nebius.get("region_id") if isinstance(nebius, dict) else None)
-    if not tenant_id or not project_id:
+    if not project_id:
         return QuotaReport(
             tenant_id=tenant_id,
             project_id=project_id,
             region_id=region_id,
             checked_at=checked_at,
-            errors=("config is missing client_info.nebius.tenant_id or project_id",),
+            errors=("config is missing client_info.nebius.project_id",),
         )
 
     entry_by_id = {entry.id: entry for entry in component_entries("infra")}
@@ -2349,11 +2349,18 @@ def assess_live_quotas(
     gaps: list[QuotaCoverageGap] = []
     capacity_resource_advice: tuple[CapacityResourceAdvice, ...] | None = ()
     try:
-        try:
-            tenant_quotas = session.list_quotas(parent_id=tenant_id)
-        except Exception as exc:
+        if tenant_id:
+            try:
+                tenant_quotas = session.list_quotas(parent_id=tenant_id)
+            except Exception as exc:
+                tenant_quotas = {}
+                errors.append(f"tenant quota lookup failed for {tenant_id}: {exc}")
+        else:
             tenant_quotas = {}
-            errors.append(f"tenant quota lookup failed for {tenant_id}: {exc}")
+            errors.append(
+                "config is missing client_info.nebius.tenant_id; tenant quota and "
+                "Capacity Dashboard checks were skipped, but project quota checks still ran"
+            )
         try:
             project_quotas = session.list_quotas(parent_id=project_id)
         except Exception as exc:
@@ -2391,13 +2398,16 @@ def assess_live_quotas(
 
         aggregated_requirements = _aggregate_requirements(requirements)
         if any(item.gpu_capacity_shape is not None for item in aggregated_requirements):
-            try:
-                capacity_resource_advice = session.list_capacity_resource_advice(
-                    parent_id=tenant_id
-                )
-            except Exception as exc:
+            if tenant_id:
+                try:
+                    capacity_resource_advice = session.list_capacity_resource_advice(
+                        parent_id=tenant_id
+                    )
+                except Exception as exc:
+                    capacity_resource_advice = None
+                    errors.append(f"tenant Capacity Dashboard lookup failed for {tenant_id}: {exc}")
+            else:
                 capacity_resource_advice = None
-                errors.append(f"tenant Capacity Dashboard lookup failed for {tenant_id}: {exc}")
         checks = tuple(
             _evaluate_requirement(
                 item,
@@ -2466,13 +2476,13 @@ def assess_live_quota_requirements(
     tenant_id = _as_text(tenant_id)
     project_id = _as_text(project_id)
     region_id = _as_text(region_id)
-    if not tenant_id or not project_id:
+    if not project_id:
         return QuotaReport(
             tenant_id=tenant_id,
             project_id=project_id,
             region_id=region_id,
             checked_at=checked_at,
-            errors=("quota assessment is missing tenant_id or project_id",),
+            errors=("quota assessment is missing project_id",),
         )
 
     try:
@@ -2492,11 +2502,18 @@ def assess_live_quota_requirements(
     gaps = list(coverage_gaps)
     capacity_resource_advice: tuple[CapacityResourceAdvice, ...] | None = ()
     try:
-        try:
-            tenant_quotas = session.list_quotas(parent_id=tenant_id)
-        except Exception as exc:
+        if tenant_id:
+            try:
+                tenant_quotas = session.list_quotas(parent_id=tenant_id)
+            except Exception as exc:
+                tenant_quotas = {}
+                errors.append(f"tenant quota lookup failed for {tenant_id}: {exc}")
+        else:
             tenant_quotas = {}
-            errors.append(f"tenant quota lookup failed for {tenant_id}: {exc}")
+            errors.append(
+                "tenant_id was not provided; tenant quota and Capacity Dashboard checks were "
+                "skipped, but project quota checks still ran"
+            )
         try:
             project_quotas = session.list_quotas(parent_id=project_id)
         except Exception as exc:
@@ -2505,13 +2522,16 @@ def assess_live_quota_requirements(
 
         aggregated_requirements = _aggregate_requirements(list(requirements))
         if any(item.gpu_capacity_shape is not None for item in aggregated_requirements):
-            try:
-                capacity_resource_advice = session.list_capacity_resource_advice(
-                    parent_id=tenant_id
-                )
-            except Exception as exc:
+            if tenant_id:
+                try:
+                    capacity_resource_advice = session.list_capacity_resource_advice(
+                        parent_id=tenant_id
+                    )
+                except Exception as exc:
+                    capacity_resource_advice = None
+                    errors.append(f"tenant Capacity Dashboard lookup failed for {tenant_id}: {exc}")
+            else:
                 capacity_resource_advice = None
-                errors.append(f"tenant Capacity Dashboard lookup failed for {tenant_id}: {exc}")
         checks = tuple(
             _evaluate_requirement(
                 item,

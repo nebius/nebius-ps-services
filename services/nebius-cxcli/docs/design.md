@@ -166,8 +166,8 @@ Helm charts serve the same role for apps:
 
 The Nebius SDK still has an important role, but it is intentionally narrower:
 
-- validate tenant/project scope
-- discover dynamic provider-backed field options
+- validate tenant/project scope when creating or resolving a project scaffold
+- discover dynamic provider-backed field options, using project scope for most reads and tenant scope only for tenant quota, Capacity Dashboard, or reservation inventory
 - perform best-effort live quota checks and quota guard rails
 - perform readiness/status polling and other runtime checks
 - support auth/bootstrap and provider-specific guard rails

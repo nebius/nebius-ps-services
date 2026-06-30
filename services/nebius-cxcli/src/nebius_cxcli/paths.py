@@ -253,10 +253,7 @@ def resolve_email_config_paths(
 def validate_path_alignment(config: Any, paths: ProjectPaths) -> None:
     """Ensure project identity is present and the config path keeps the canonical shape."""
     errors: list[str] = []
-    config_tenant_id = str(getattr(config.client_info.nebius, "tenant_id", None) or "").strip()
     config_project_id = str(getattr(config.client_info.nebius, "project_id", None) or "").strip()
-    if not config_tenant_id:
-        errors.append("config is missing client_info.nebius.tenant_id")
     if not config_project_id:
         errors.append("config is missing client_info.nebius.project_id")
     if not paths.path_tenant_folder:

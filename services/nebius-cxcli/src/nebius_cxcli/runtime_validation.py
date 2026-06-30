@@ -510,7 +510,7 @@ def _validate_client_info(payload: Mapping[str, Any]) -> None:
         raise ValueError(
             "client_info.nebius has unsupported field(s): " + ", ".join(unknown_nebius)
         )
-    for field in ("tenant_id", "project_id", "region_id"):
+    for field in ("project_id", "region_id"):
         value = _as_text(nebius.get(field))
         if not value:
             raise ValueError(f"client_info.nebius.{field} is required")

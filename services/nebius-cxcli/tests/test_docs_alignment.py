@@ -1350,8 +1350,12 @@ def test_docs_define_component_selector_contract() -> None:
     ) in readme
     assert (
         "When the first argument is an existing project `config.yaml`, the "
-        "`--client-name`, `--tenant-id`, `--project-id`, and `--region-id` "
-        "values can come from that file instead"
+        "`--client-name`, `--project-id`, and `--region-id` values can come from "
+        "that file instead, and `tenant_id` is optional existing-config metadata"
+    ) in readme_flat
+    assert (
+        "When the first argument is a deployments root, pass `--client-name`, "
+        "`--tenant-id`, `--project-id`, and `--region-id` explicitly"
     ) in readme_flat
     assert "`--cluster-id`: Nebius MK8s cluster id to onboard" in readme_flat
     assert "saved under `deploy.targets[].cluster_id`" in readme_flat

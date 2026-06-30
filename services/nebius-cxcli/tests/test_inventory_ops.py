@@ -222,6 +222,27 @@ def test_write_inventory_handles_dynamic_component_model(tmp_path: Path) -> None
     assert len(headings) == len(set(headings))
 
 
+def test_inventory_payload_uses_project_scope_without_tenant_id(tmp_path: Path) -> None:
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra=set(), selected_apps=set())
+    payload["client_info"]["nebius"].pop("tenant_id")
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+
+    report_payload = inventory_ops._build_payload(config, paths)
+    assert report_payload["infra"]["project_scope"] == "project-456"
+
+    artifacts = write_inventory(config, paths)
+    markdown = artifacts.markdown.read_text(encoding="utf-8")
+    assert "- Tenant: ``" in markdown
+    assert "- Project: `project-456`" in markdown
+
+
 def test_write_inventory_lists_vpc_and_consumer_bindings(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -1209,10 +1209,10 @@ def _nebius_identity(payload: Mapping[str, Any]) -> tuple[str, str, str]:
     tenant_id = str(nebius.get("tenant_id", "") or "").strip()
     project_id = str(nebius.get("project_id", "") or "").strip()
     region_id = str(nebius.get("region_id", "") or "").strip()
-    if not tenant_id or not project_id or not region_id:
+    if not project_id or not region_id:
         raise RuntimeError(
             "External Soperator upgrade quota preflight requires "
-            "client_info.nebius.tenant_id, project_id, and region_id."
+            "client_info.nebius.project_id and region_id."
         )
     return tenant_id, project_id, region_id
 

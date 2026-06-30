@@ -139,6 +139,69 @@ def _stub_soperator_migration_quota(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+def test_node_group_migration_quota_report_uses_project_without_tenant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def _estimate(**kwargs: object):
+        captured["estimate"] = kwargs
+        return (
+            [
+                cli_module.QuotaRequirement(
+                    component_id="mk8s",
+                    instance_id="mk8s-prod-node-group-migration",
+                    component_label="node group migration",
+                    quota_name="compute.instance.count",
+                    region="eu-north1",
+                    required=1,
+                    reason="replacement node group",
+                )
+            ],
+            (),
+        )
+
+    def _assess(**kwargs: object) -> cli_module.QuotaReport:
+        captured["assess"] = kwargs
+        return cli_module.QuotaReport(
+            tenant_id=str(kwargs.get("tenant_id", "")),
+            project_id=str(kwargs.get("project_id", "")),
+            region_id=str(kwargs.get("region_id", "")),
+            checked_at="2026-04-10T00:00:00+00:00",
+        )
+
+    monkeypatch.setattr(cli_module, "estimate_mk8s_quota_requirements", _estimate)
+    monkeypatch.setattr(cli_module, "assess_live_quota_requirements", _assess)
+
+    report = cli_module._node_group_migration_quota_report(
+        source_payload={
+            "client_info": {
+                "nebius": {
+                    "project_id": "project-456",
+                    "region_id": "eu-north1",
+                }
+            }
+        },
+        generated_config=SimpleNamespace(client_info=SimpleNamespace(nebius=SimpleNamespace())),
+        instance_id="mk8s-prod",
+        group={},
+        target_platform="gpu-h100",
+        target_preset="8gpu-1280gb",
+        target_os="ubuntu24.04",
+        target_gpu_stack_preset="cuda12",
+        gpu_cluster_key="gpu",
+        effective_target_fabric="fabric-a",
+    )
+
+    assert report is not None
+    assert report.tenant_id == ""
+    assert report.project_id == "project-456"
+    assert captured["estimate"]["project_id"] == "project-456"
+    assert captured["estimate"]["region"] == "eu-north1"
+    assert captured["assess"]["tenant_id"] == ""
+    assert captured["assess"]["project_id"] == "project-456"
+
+
 def _stub_soperator_migration_gpu_validations(monkeypatch: pytest.MonkeyPatch) -> None:
     def _run_mk8s_gpu_validations(
         validations,

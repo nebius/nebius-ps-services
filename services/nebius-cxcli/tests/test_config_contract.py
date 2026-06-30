@@ -5,6 +5,7 @@ import yaml
 
 from nebius_cxcli.config_loader import validate_config
 from nebius_cxcli.config_template import starter_config_yaml
+from nebius_cxcli.paths import resolve_project_paths, validate_path_alignment
 from nebius_cxcli.runtime_validation import validate_dynamic_payload_structure
 
 
@@ -78,6 +79,33 @@ def test_starter_template_disables_email_when_recipient_is_blank() -> None:
     config = validate_config(payload)
     assert config.client_info.notifications.email_enabled is False
     assert config.client_info.notifications.email is None
+
+
+def test_existing_runtime_config_allows_missing_tenant_id(tmp_path) -> None:
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "project_id": "project-456",
+                "region_id": "eu-north1",
+            },
+            "notifications": {
+                "email_enabled": False,
+                "email": None,
+            },
+        },
+        "infra": {"components": []},
+        "apps": {"charts": []},
+    }
+
+    config = validate_config(payload)
+    assert config.client_info.nebius.tenant_id is None
+    assert config.client_info.nebius.project_id == "project-456"
+
+    config_path = tmp_path / "deployments" / "tenant-folder" / "project-folder" / "config.yaml"
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
 
 
 def test_runtime_payload_rejects_soperator_values_node_group_mapping() -> None:

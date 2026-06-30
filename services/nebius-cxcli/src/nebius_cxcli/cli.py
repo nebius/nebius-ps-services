@@ -3744,7 +3744,7 @@ def _node_group_migration_quota_report(
     tenant_id, project_id, region_id = _quota_identity_from_payload(
         source_payload, generated_config
     )
-    if not tenant_id or not project_id or not region_id:
+    if not project_id or not region_id:
         return None
     requirements, gaps = estimate_mk8s_quota_requirements(
         project_id=project_id,

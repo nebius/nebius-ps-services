@@ -1195,7 +1195,7 @@ the resolved Helm/OCI source before writing `config.yaml`.
 
 Runtime config shape:
 
-- `client_info`: `client_name`, `nebius.{tenant_id,project_id,region_id}`, `notifications.{email_enabled,email}`
+- `client_info`: `client_name`, `nebius.{project_id,region_id}` plus optional `nebius.tenant_id`, `notifications.{email_enabled,email}`
 - `client_info.notifications.email_enabled` is the single per-client gate for deploy-report email delivery across local runs and CI. Keep it `true` when this client should receive the deploy report email, and set it to `false` when this specific client should not receive mail.
 - In `create`, leaving the optional notifications email blank writes `client_info.notifications.email_enabled: false` and `client_info.notifications.email: null`.
 - `client_info` does not include legacy `env` or `cluster_name` fields.
@@ -1959,7 +1959,7 @@ Resolution model:
 
 `create --force` is intentionally narrow in scope: it targets the one resolved project folder only after `tenant_id` and `project_id` are known. It recreates that folder from scratch, including deleting existing generated artifacts and any other files already under that project path, but it does not delete the deployments root or unrelated projects.
 
-If those normalized tenant/project names would collide with an existing different project's folder, `create` fails fast instead of overwriting the wrong config. Other commands accept any existing `<tenant-folder>/<project-folder>/config.yaml`; GitHub environment names, generated manifests, deploy reports, and runtime operations still read `tenant_id` / `project_id` from `config.yaml`, not from the folder names.
+If those normalized tenant/project names would collide with an existing different project's folder, `create` fails fast instead of overwriting the wrong config. Other commands accept any existing `<tenant-folder>/<project-folder>/config.yaml`; GitHub environment names, generated manifests, deploy reports, and runtime operations read `project_id` from `config.yaml`, and read `tenant_id` from `config.yaml` only when tenant-scoped quota, Capacity Dashboard, or metadata context is needed. Folder names are not used as identity fallbacks.
 
 One deployments root owns one cxcli-managed `.gitignore` block for all tenant/project folders below it. Folder names remain flexible, but `create`, `render`, and `bootstrap-ci` reject targets inferred under another cxcli-managed deployments root instead of supporting nested root compatibility.
 
@@ -2737,10 +2737,12 @@ nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root> \
 ```
 
 When the first argument is an existing project `config.yaml`, the
-`--client-name`, `--tenant-id`, `--project-id`, and `--region-id` values can
-come from that file instead. When the first argument is a deployments root,
-pass them explicitly so cxcli can resolve the canonical tenant/project
-`config.yaml`.
+`--client-name`, `--project-id`, and `--region-id` values can come from that
+file instead, and `tenant_id` is optional existing-config metadata unless the
+run needs tenant-scoped quota or Capacity Dashboard checks. When the first
+argument is a deployments root, pass `--client-name`, `--tenant-id`,
+`--project-id`, and `--region-id` explicitly so cxcli can resolve or create the
+canonical tenant/project `config.yaml`.
 
 Important onboarding flags:
 

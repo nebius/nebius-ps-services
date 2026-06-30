@@ -6,6 +6,13 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Changed existing config-backed commands so `client_info.nebius.tenant_id` is
+  optional when the command can operate from `project_id` and `region_id`.
+  `create` and deployments-root `ext-soperator onboard` still require tenant
+  identity to validate scope, write `config.yaml`, and resolve the canonical
+  tenant/project folder path. Quota checks continue with project-scope quota
+  data when tenant id is absent and report a partial-coverage warning for
+  skipped tenant quota and Capacity Dashboard checks.
 - Hardened Soperator upgrade and deploy guardrails. External Soperator
   affected-node Slurm job handling now fails closed when Kubernetes nodes cannot
   be mapped to Slurm node names or Slurm rejects the scoped node filter, so
