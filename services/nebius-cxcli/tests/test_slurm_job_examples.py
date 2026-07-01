@@ -6,13 +6,13 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE_DIR = REPO_ROOT / "examples" / "slurm-jobs"
-SUBMITTER = EXAMPLE_DIR / "submit-soperator-smoke.sh"
-CPU_BATCH = EXAMPLE_DIR / "cpu-drain-smoke.sbatch"
-GPU_BATCH = EXAMPLE_DIR / "gpu-drain-smoke.sbatch"
+SUBMITTER = EXAMPLE_DIR / "submit-job-test.sh"
+CPU_BATCH = EXAMPLE_DIR / "cpu-job-test.sbatch"
+GPU_BATCH = EXAMPLE_DIR / "gpu-job-test.sbatch"
 
 
 PUBLIC_FLAGS = (
-    "--kind cpu|gpu",
+    "--part-type cpu|gpu",
     "--partition <name>",
     "--count <n>",
     "--run-minutes <n>",
@@ -67,6 +67,14 @@ def test_submitter_help_documents_public_flags() -> None:
         assert flag in result.stdout
 
 
+def test_example_readme_documents_login_node_copy_flow() -> None:
+    readme = (EXAMPLE_DIR / "README.md").read_text(encoding="utf-8")
+
+    assert "scp -r examples/slurm-jobs root@<login-external-ip>:/shared/slurm-jobs" in readme
+    assert "cd /shared/slurm-jobs" in readme
+    assert "login-node SSH session" in readme
+
+
 def test_submitter_rejects_unknown_options() -> None:
     result = run_submitter("--unknown-option")
 
@@ -74,22 +82,43 @@ def test_submitter_rejects_unknown_options() -> None:
     assert "Unknown option: --unknown-option" in result.stderr
 
 
+def test_submitter_rejects_removed_kind_option() -> None:
+    result = run_submitter("--kind", "gpu")
+
+    assert result.returncode != 0
+    assert "Unknown option: --kind" in result.stderr
+
+
+def test_cpu_dry_run_defaults_to_one_cpu_job_without_gpu_gres() -> None:
+    result = run_submitter("--dry-run", "--partition", "cpu")
+
+    assert result.returncode == 0, result.stderr
+    lines = sbatch_lines(result.stdout)
+    assert len(lines) == 1
+    assert "--partition cpu" in result.stdout
+    assert "--gres" not in result.stdout
+    assert "sop-cpu-job-test-01" in result.stdout
+    assert "cpu-job-test.sbatch" in result.stdout
+
+
 def test_cpu_dry_run_prints_one_sbatch_per_loop_job_without_gpu_gres() -> None:
-    result = run_submitter("--dry-run", "--kind", "cpu", "--count", "3")
+    result = run_submitter("--dry-run", "--partition", "cpu", "--count", "3")
 
     assert result.returncode == 0, result.stderr
     lines = sbatch_lines(result.stdout)
     assert len(lines) == 3
     assert "--gres" not in result.stdout
-    assert "sop-cpu-smoke-01" in result.stdout
-    assert "sop-cpu-smoke-02" in result.stdout
-    assert "sop-cpu-smoke-03" in result.stdout
+    assert "sop-cpu-job-test-01" in result.stdout
+    assert "sop-cpu-job-test-02" in result.stdout
+    assert "sop-cpu-job-test-03" in result.stdout
 
 
 def test_gpu_dry_run_prints_one_sbatch_per_loop_job_with_gpu_gres() -> None:
     result = run_submitter(
         "--dry-run",
-        "--kind",
+        "--part-type",
+        "gpu",
+        "--partition",
         "gpu",
         "--count",
         "3",
@@ -101,9 +130,10 @@ def test_gpu_dry_run_prints_one_sbatch_per_loop_job_with_gpu_gres() -> None:
     lines = sbatch_lines(result.stdout)
     assert len(lines) == 3
     assert result.stdout.count("--gres=gpu:1") == 3
-    assert "sop-gpu-smoke-01" in result.stdout
-    assert "sop-gpu-smoke-02" in result.stdout
-    assert "sop-gpu-smoke-03" in result.stdout
+    assert "sop-gpu-job-test-01" in result.stdout
+    assert "sop-gpu-job-test-02" in result.stdout
+    assert "sop-gpu-job-test-03" in result.stdout
+    assert "gpu-job-test.sbatch" in result.stdout
 
 
 def test_array_mode_dry_run_prints_one_sbatch_command() -> None:
@@ -116,8 +146,8 @@ def test_array_mode_dry_run_prints_one_sbatch_command() -> None:
 
 
 def test_exclusive_is_only_added_when_requested() -> None:
-    default_result = run_submitter("--dry-run", "--kind", "cpu")
-    exclusive_result = run_submitter("--dry-run", "--kind", "cpu", "--exclusive")
+    default_result = run_submitter("--dry-run", "--partition", "cpu")
+    exclusive_result = run_submitter("--dry-run", "--partition", "cpu", "--exclusive")
 
     assert default_result.returncode == 0, default_result.stderr
     assert exclusive_result.returncode == 0, exclusive_result.stderr

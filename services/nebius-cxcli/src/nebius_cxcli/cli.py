@@ -50143,7 +50143,7 @@ _SOPERATOR_MIGRATION_PLAN_TOPIC_STYLES = {
     "Execution mode": "bold green",
     "Slurm job policy": "bold green",
     "Backup": "bold yellow",
-    "Execution guarantees": "bold cyan",
+    "Execution contracts": "bold cyan",
 }
 _SOPERATOR_MIGRATION_REQUIRED_TOPICS = frozenset(
     {
@@ -50925,19 +50925,6 @@ def _locked_upgrade_path_plan_lines(
     recommended = upgrade_path.get("recommended_order")
     if isinstance(recommended, list) and recommended:
         lines.append("Recommended order: " + "; ".join(str(item) for item in recommended))
-    lines.append("Segments:")
-    for segment in segments:
-        segment_id = _non_empty_text(segment.get("id"))
-        if segment_id in completed:
-            status = "complete"
-        elif segment_id == current_segment_id:
-            status = "current"
-        else:
-            status = "remaining"
-        lines.append(
-            f"- {segment_id}: {status} - "
-            f"{_non_empty_text(segment.get('title')) or _non_empty_text(segment.get('kind'))}"
-        )
     completed_titles = [
         _non_empty_text(segment.get("title")) or _non_empty_text(segment.get("id"))
         for segment in segments
@@ -51040,17 +51027,18 @@ def _format_soperator_migration_plan_lines(
         f"Config: {config_path}",
         f"Source discovery bundle: {report_path}",
         f"Onboarding state: {str(onboarding.get('state', '') or report.get('state', '') or 'unknown')}",
-        "",
-        "Versions:",
-        f"Soperator version: {source_version} -> {target_version}",
     ]
-    if current_k8s_version or target_k8s_version:
-        lines.append(
-            "Kubernetes version: "
-            f"{current_k8s_version or 'unknown'} -> {target_k8s_version or 'unknown'}"
+    if not upgrade_path:
+        lines.extend(
+            ["", "Versions:", f"Soperator version: {source_version} -> {target_version}"]
         )
-    if accepted_k8s_hop:
-        lines.append(f"Accepted Kubernetes hop: {accepted_k8s_hop}.")
+        if current_k8s_version or target_k8s_version:
+            lines.append(
+                "Kubernetes version: "
+                f"{current_k8s_version or 'unknown'} -> {target_k8s_version or 'unknown'}"
+            )
+        if accepted_k8s_hop:
+            lines.append(f"Accepted Kubernetes hop: {accepted_k8s_hop}.")
     support_policy_lines = _soperator_support_policy_plan_lines(report)
     if support_policy_lines:
         lines.extend(["", "Support policy:"])
@@ -51145,7 +51133,7 @@ def _format_soperator_migration_plan_lines(
         "is required before approved mutation; restore from that archive is supported "
         "only into a new/replacement cluster, not back onto the original source cluster."
     )
-    lines.extend(["", "Execution guarantees:"])
+    lines.extend(["", "Execution contracts:"])
     lines.extend(_SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES)
     return lines
 

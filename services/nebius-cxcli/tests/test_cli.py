@@ -7567,13 +7567,13 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "Source discovery bundle:" in result.output
     assert "soperator-discovery/external-cluster/manifest.json" in result.output
     assert "Onboarding state: existing-soperator-supported" in result.output
-    assert "Versions:" in result.output
-    assert f"Soperator version: 3.0.5 -> {_soperator_test_chart_version()}" in result.output
-    assert "Kubernetes version: 1.31 -> 1.32" in result.output
+    assert "Versions:" not in result.output
     assert (
-        "Accepted Kubernetes hop: 1.31 -> 1.32; one Kubernetes minor per external "
-        "upgrade run."
-    ) in result.output
+        f"Soperator version: 3.0.5 -> {_soperator_test_chart_version()}"
+        not in result.output
+    )
+    assert "Kubernetes version: 1.31 -> 1.32" not in result.output
+    assert "Accepted Kubernetes hop:" not in result.output
     assert "Source version: 3.0.5" not in result.output
     assert "Current Kubernetes version: 1.31" not in result.output
     assert "Support policy:" in result.output
@@ -7626,7 +7626,7 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
         in result.output
     )
     assert "final-control-plane-cutover" in result.output
-    assert "Execution guarantees:" in result.output
+    assert "Execution contracts:" in result.output
     assert "Live executor contract:" in result.output
     assert "External node-template contract:" in result.output
     assert "Node-template quota contract:" in result.output
@@ -7695,16 +7695,17 @@ def test_ext_soperator_upgrade_dry_run_prints_full_locked_path(
     result = runner.invoke(app, ["ext-soperator", "upgrade", str(config_path), "--dry-run"])
 
     assert result.exit_code == 0, result.output
-    assert "Kubernetes version: 1.31 -> 1.32" in result.output
+    assert "Kubernetes version: 1.31 -> 1.32" not in result.output
     assert "Kubernetes path: 1.31 -> 1.34" in result.output
     assert (
         "Recommended order: Kubernetes 1.31 -> 1.32; "
         f"Soperator 1.22.3 -> {_soperator_test_chart_version()} while Kubernetes stays 1.32; "
         "Kubernetes 1.32 -> 1.33 -> 1.34"
     ) in result.output
-    assert "segment-1-kubernetes-1-31-1-32-soperator" in result.output
-    assert "segment-2-kubernetes-1-32-1-33: remaining" in result.output
-    assert "segment-3-kubernetes-1-33-1-34: remaining" in result.output
+    assert "segment-1-kubernetes-1-31-1-32-soperator" not in result.output
+    assert "segment-2-kubernetes-1-32-1-33: remaining" not in result.output
+    assert "segment-3-kubernetes-1-33-1-34: remaining" not in result.output
+    assert "Segments:" not in result.output
     assert "Completed segments: none" in result.output
     assert (
         "Current segment: Kubernetes 1.31 -> 1.32 plus "
@@ -7774,7 +7775,8 @@ def test_ext_soperator_upgrade_dry_run_advances_locked_path_from_checkpoint(
     assert second.exit_code == 0, second.output
     assert "Completed segments: Kubernetes 1.31 -> 1.32 plus Soperator" in second.output
     assert "Current segment: Kubernetes 1.32 -> 1.33" in second.output
-    assert "Kubernetes version: 1.32 -> 1.33" in second.output
+    assert "Versions:" not in second.output
+    assert "Kubernetes version: 1.32 -> 1.33" not in second.output
     assert (
         "[MK8s Node Upgrades] external-node-template-upgrade: planned - "
         "Kubernetes hop 1.32 -> 1.33: upgrade external MK8s control plane "

@@ -1,6 +1,6 @@
-# Soperator Slurm Upgrade Smoke Jobs
+# Soperator Slurm Upgrade Job Tests
 
-This folder contains public, generic Slurm jobs for testing Soperator upgrade
+This folder contains public, generic Slurm job tests for exercising Soperator upgrade
 behavior while jobs are running. They are intentionally hardware-neutral: the
 CPU job does not branch on AMD or Intel CPU models, and the GPU job only asks
 Slurm for GPUs and prints the visible NVIDIA devices when `nvidia-smi` exists.
@@ -9,69 +9,83 @@ These samples test scheduler allocation, job visibility, cancellation, requeue,
 wait, and interactive upgrade-policy behavior. They are not GPU benchmarks,
 NCCL tests, storage tests, or application performance tests.
 
+## Copy To The Login Node
+
+Copy this directory to the Slurm login node, then run the submitter from that
+login-node SSH session so `sbatch` can reach the cluster's Slurm controller:
+
+```bash
+# On your machine, from the local checkout.
+scp -r examples/slurm-jobs root@<login-external-ip>:/shared/slurm-jobs
+
+# On the Slurm login node.
+cd /shared/slurm-jobs
+```
+
 ## Submit CPU Jobs
 
 From this directory:
 
 ```bash
-./submit-soperator-smoke.sh --kind cpu --partition cpu --count 10
+./submit-job-test.sh --partition cpu --count 10
 ```
 
-By default, each job runs for 30 minutes and requests 35 minutes of Slurm wall
-time. Change the duration with:
+By default, the wrapper submits one CPU job, and each job runs for 30 minutes
+with 35 minutes of requested Slurm wall time. Change the count and duration
+with:
 
 ```bash
-./submit-soperator-smoke.sh --kind cpu --partition cpu --count 10 --run-minutes 60 --wall-minutes 65
+./submit-job-test.sh --partition cpu --count 10 --run-minutes 60 --wall-minutes 65
 ```
 
 ## Submit GPU Jobs
 
-GPU jobs are submitted through the same script. GPU mode defaults to the `gpu`
-partition and one GPU per job:
+GPU jobs are submitted through the same script. Select the GPU job template
+with `--part-type gpu`; it defaults to the `gpu` partition and one GPU per job:
 
 ```bash
-./submit-soperator-smoke.sh --kind gpu --partition gpu --count 10 --gpus-per-job 1
+./submit-job-test.sh --part-type gpu --partition gpu --count 10 --gpus-per-job 1
 ```
 
-Use `--gpus-per-job` to request more GPUs per job when the partition supports
-that shape. The job stays neutral across L40S, H100, H200, B200, B300, and
-other NVIDIA GPU generations because it does not depend on model-specific
-features.
+Use `--partition` when your Slurm partition has another name, and use
+`--gpus-per-job` to request more GPUs per job when the partition supports that
+shape. The job stays neutral across L40S, H100, H200, B200, B300, and other
+NVIDIA GPU generations because it does not depend on model-specific features.
 
 ## Repeated Jobs And Array Mode
 
 The default submit mode is `loop`, which sends one `sbatch` command per job and
-uses unique names such as `sop-cpu-smoke-01` or `sop-gpu-smoke-01`:
+uses unique names such as `sop-cpu-job-test-01` or `sop-gpu-job-test-01`:
 
 ```bash
-./submit-soperator-smoke.sh --kind cpu --partition cpu --count 10
+./submit-job-test.sh --partition cpu --count 10
 ```
 
 For compact bulk submission, use Slurm array mode:
 
 ```bash
-./submit-soperator-smoke.sh --kind gpu --partition gpu --count 10 --submit-mode array
+./submit-job-test.sh --part-type gpu --partition gpu --count 10 --submit-mode array
 ```
 
 Use `--dry-run` to inspect the generated `sbatch` commands without submitting
 anything:
 
 ```bash
-./submit-soperator-smoke.sh --kind gpu --count 3 --dry-run
+./submit-job-test.sh --part-type gpu --count 3 --dry-run
 ```
 
 ## Node Sharing And Exclusive Placement
 
-The default behavior allows Slurm to place multiple smoke jobs on the same node
-when the partition policy permits it. That is useful for upgrade-policy demos
-because you can cancel one job, wait for another, or select different policies
-for multiple running jobs on the same node.
+The default behavior allows Slurm to place multiple job-test workloads on the
+same node when the partition policy permits it. That is useful for
+upgrade-policy demos because you can cancel one job, wait for another, or
+select different policies for multiple running jobs on the same node.
 
 Use `--exclusive` when you want each job allocation to avoid sharing a node,
 subject to the cluster's Slurm policy:
 
 ```bash
-./submit-soperator-smoke.sh --kind cpu --partition cpu --count 10 --exclusive
+./submit-job-test.sh --partition cpu --count 10 --exclusive
 ```
 
 ## QOS, Account, Requeue, And Output
@@ -79,14 +93,14 @@ subject to the cluster's Slurm policy:
 Pass Slurm accounting options when your cluster requires them:
 
 ```bash
-./submit-soperator-smoke.sh --kind gpu --qos normal --account my-account --requeue
+./submit-job-test.sh --part-type gpu --qos normal --account my-account --requeue
 ```
 
 Slurm output files are written to `slurm-smoke-logs/` by default. Change that
 with `--output-dir`:
 
 ```bash
-./submit-soperator-smoke.sh --kind cpu --output-dir /shared/slurm-smoke-logs
+./submit-job-test.sh --output-dir /shared/slurm-smoke-logs
 ```
 
 ## Upgrade Policy Demo

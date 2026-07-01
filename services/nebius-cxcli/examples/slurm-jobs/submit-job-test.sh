@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-kind="cpu"
+part_type="cpu"
 partition=""
 count="1"
 run_minutes="30"
@@ -25,16 +25,16 @@ show_usage() {
 Submit public Soperator Slurm smoke jobs for upgrade-policy testing.
 
 Usage:
-  submit-soperator-smoke.sh [options]
+  submit-job-test.sh [options]
 
 Options:
-  --kind cpu|gpu             Job type to submit. Default: cpu.
-  --partition <name>         Slurm partition. Defaults to cpu or gpu by kind.
+  --part-type cpu|gpu        CPU/GPU job template to submit. Default: cpu.
+  --partition <name>         Slurm partition. Defaults to the part type value.
   --count <n>                Number of jobs to submit. Default: 1.
   --run-minutes <n>          In-job heartbeat duration. Default: 30.
   --wall-minutes <n>         Slurm wall time request. Default: 35.
   --submit-mode loop|array   Submit repeated sbatch jobs or one array. Default: loop.
-  --gpus-per-job <n>         GPUs per GPU job. Default: 1. Ignored for CPU jobs.
+  --gpus-per-job <n>         GPUs per GPU job. Default: 1. Used only with --part-type gpu.
   --nodes <n>                Nodes per job. Default: 1.
   --cpus-per-task <n>        CPUs per task. Default: 1.
   --exclusive                Request exclusive node allocation where policy permits.
@@ -46,9 +46,9 @@ Options:
   -h, --help                 Show this help text.
 
 Examples:
-  ./submit-soperator-smoke.sh --kind cpu --partition cpu --count 10
-  ./submit-soperator-smoke.sh --kind gpu --partition gpu --count 10 --gpus-per-job 1
-  ./submit-soperator-smoke.sh --kind gpu --count 10 --submit-mode array --dry-run
+  ./submit-job-test.sh --partition cpu --count 10
+  ./submit-job-test.sh --part-type gpu --partition gpu --count 10 --gpus-per-job 1
+  ./submit-job-test.sh --part-type gpu --partition gpu --count 10 --submit-mode array --dry-run
 EOF
 }
 
@@ -126,9 +126,9 @@ submit_command() {
 parse_args() {
   while (($# > 0)); do
     case "$1" in
-      --kind)
+      --part-type)
         require_value "$1" "${2:-}"
-        kind="$2"
+        part_type="$2"
         shift 2
         ;;
       --partition)
@@ -221,9 +221,9 @@ parse_args() {
 }
 
 validate_args() {
-  case "$kind" in
+  case "$part_type" in
     cpu | gpu) ;;
-    *) die "--kind must be cpu or gpu" ;;
+    *) die "--part-type must be cpu or gpu" ;;
   esac
 
   case "$submit_mode" in
@@ -243,14 +243,14 @@ validate_args() {
   fi
 
   if [[ -z "$partition" ]]; then
-    partition="$kind"
+    partition="$part_type"
   fi
 }
 
 batch_script_path() {
-  case "$kind" in
-    cpu) printf '%s\n' "${SCRIPT_DIR}/cpu-drain-smoke.sbatch" ;;
-    gpu) printf '%s\n' "${SCRIPT_DIR}/gpu-drain-smoke.sbatch" ;;
+  case "$part_type" in
+    cpu) printf '%s\n' "${SCRIPT_DIR}/cpu-job-test.sbatch" ;;
+    gpu) printf '%s\n' "${SCRIPT_DIR}/gpu-job-test.sbatch" ;;
   esac
 }
 
@@ -283,7 +283,7 @@ build_sbatch_command() {
     cmd+=("--array=${array_spec}")
   fi
 
-  if [[ "$kind" == "gpu" ]]; then
+  if [[ "$part_type" == "gpu" ]]; then
     cmd+=("--gres=gpu:${gpus_per_job}")
   fi
 
@@ -320,7 +320,7 @@ submit_loop_jobs() {
 
   for ((i = 1; i <= count; i += 1)); do
     printf -v index_label "%0${width}d" "$i"
-    job_name="sop-${kind}-smoke-${index_label}"
+    job_name="sop-${part_type}-job-test-${index_label}"
     build_sbatch_command "$job_name" "" "$batch_script"
   done
 }
@@ -328,7 +328,7 @@ submit_loop_jobs() {
 submit_array_job() {
   local batch_script="$1"
   local array_max=$((count - 1))
-  local job_name="sop-${kind}-smoke"
+  local job_name="sop-${part_type}-job-test"
 
   build_sbatch_command "$job_name" "0-${array_max}" "$batch_script"
 }

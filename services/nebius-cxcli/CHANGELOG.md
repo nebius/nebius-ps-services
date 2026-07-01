@@ -14,6 +14,11 @@ All notable changes to this project are tracked here. This changelog follows
   including scale-to-zero maintenance workflows; explicit non-ephemeral ordinal
   removal is tail-only until a tested controller-safe `reserveOrdinals` path is
   added.
+- Renamed the public Soperator Slurm job-test examples to
+  `submit-job-test.sh`, `cpu-job-test.sbatch`, and `gpu-job-test.sbatch`,
+  replaced the wrapper's `--kind` option with `--part-type`, and documented
+  copying the examples to the Slurm login node before submitting jobs with
+  `sbatch`.
 - Expanded `soperator --help` and `ext-soperator --help` examples so each
   managed and external Soperator subcommand shows copy-pasteable dry-run,
   execute, config-backed, or standalone command forms where applicable.
@@ -47,8 +52,8 @@ All notable changes to this project are tracked here. This changelog follows
   external node-template work is one accepted Kubernetes minor hop per upgrade
   run.
 - Organized `ext-soperator upgrade --dry-run` output into concise sections for
-  target discovery, versions, accepted onboarding actions, node-template
-  rollout, phases, execution controls, and execution guarantees.
+  target discovery, the locked upgrade path, accepted onboarding actions,
+  node-template rollout, phases, execution controls, and execution contracts.
 - Added spinner/status feedback while `ext-soperator upgrade --dry-run`
   refreshes external Soperator discovery and Nebius provider inventory before
   printing the plan.

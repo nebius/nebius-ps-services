@@ -2161,9 +2161,11 @@ def test_readme_guides_soperator_slurm_checks_through_login_service() -> None:
     )
     assert "srun -p cpu -N1 -n1 /bin/hostname" in section
     assert "examples/slurm-jobs/" in section
-    assert "./submit-soperator-smoke.sh --kind cpu --partition cpu --count 10" in section
+    assert "scp -r examples/slurm-jobs root@<login-external-ip>:/shared/slurm-jobs" in section
+    assert "cd /shared/slurm-jobs" in section
+    assert "bash ./submit-job-test.sh --partition cpu --count 10" in section
     assert (
-        "./submit-soperator-smoke.sh --kind gpu --partition gpu --count 10 --gpus-per-job 1"
+        "bash ./submit-job-test.sh --part-type gpu --partition gpu --count 10 --gpus-per-job 1"
         in section
     )
     assert "nebius-cxcli soperator upgrade CONFIG_YAML --target TARGET" in section_flat
