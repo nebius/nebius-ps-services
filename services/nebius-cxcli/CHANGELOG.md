@@ -6,6 +6,10 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Hardened external Soperator target Helm cutover so `ext-soperator upgrade`
+  forces target `kube-rbac-proxy` image values to
+  `registry.k8s.io/kubebuilder/kube-rbac-proxy:v0.15.0` for both the Soperator
+  manager and Soperator checks before applying the target chart.
 - Added a managed `soperator upgrade` order guard for old Soperator chart
   upgrades across the Kubernetes `1.33+` boundary. Managed upgrades still use
   per-run `config.yaml` plus live MK8s state instead of a locked path, but now

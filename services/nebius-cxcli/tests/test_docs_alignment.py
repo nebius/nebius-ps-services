@@ -1551,6 +1551,10 @@ def test_docs_define_component_selector_contract() -> None:
     assert "requires all selected worker nodes to start Ready and schedulable" in readme_flat
     assert "checks Slurm jobs on affected external node-template workers" in readme_flat
     assert "checks all live worker NodeSets before target Soperator chart reconciliation" in readme_flat
+    assert (
+        "normalizes target `kube-rbac-proxy` image values to "
+        "`registry.k8s.io/kubebuilder/kube-rbac-proxy:v0.15.0`"
+    ) in readme_flat
     assert "Slurm rejects the scoped node filter" in readme_flat
     assert "unfiltered cluster-wide job list" in readme_flat
     assert (
@@ -1864,6 +1868,10 @@ def test_docs_define_component_selector_contract() -> None:
     assert "discovered Nebius node-group provider readiness" in design_flat
     assert "before validation-and-rollback hold" in readme_flat
     assert "runs before validation hold and again before completion" in design_flat
+    assert (
+        "normalizes the Soperator manager and Soperator checks `kube-rbac-proxy` image values to "
+        "`registry.k8s.io/kubebuilder/kube-rbac-proxy:v0.15.0`"
+    ) in design_flat
     assert "deletes suspended old source-family Flux HelmRelease records" in readme_flat
     assert "deletes suspended old source Flux HelmRelease records" in design_flat
     assert "legacy source-family ActiveChecks CronJobs/jobs/pods" in readme_flat

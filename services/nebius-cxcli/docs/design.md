@@ -1101,7 +1101,11 @@ preflight because deploy only applies rendered desired state; the guard checks
 both the rendered manifest runtime config and the current source config so older
 bundles fail closed while external-upgrade-owned actions remain selected.
 `ext-soperator upgrade --execute` owns the ad hoc Nebius API calls,
-checkpointing, validation hold, and source retirement phases. Use upgrade for
+checkpointing, validation hold, source retirement phases, and target Helm
+cutover value remediation. During target Helm cutover, cxcli normalizes the
+Soperator manager and Soperator checks `kube-rbac-proxy` image values to
+`registry.k8s.io/kubebuilder/kube-rbac-proxy:v0.15.0` so stale source-family
+values do not override the current target chart defaults. Use upgrade for
 reruns/resume while those actions remain selected. After a segment completes
 with `Pending phase: none`, cxcli keeps accepted onboarding in place while any
 locked path segments remain and prints the next same-command invocation. After

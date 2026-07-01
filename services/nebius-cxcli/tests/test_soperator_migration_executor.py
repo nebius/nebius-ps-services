@@ -420,6 +420,73 @@ def execute_soperator_migration(*args: Any, **kwargs: Any):
     return _execute_soperator_migration(*args, **kwargs)
 
 
+_STALE_KUBE_RBAC_PROXY_REPOSITORY = "gcr.io/kubebuilder/kube-rbac-proxy"
+_TARGET_KUBE_RBAC_PROXY_REPOSITORY = "registry.k8s.io/kubebuilder/kube-rbac-proxy"
+_TARGET_KUBE_RBAC_PROXY_TAG = "v0.15.0"
+
+
+def _target_soperator_chart_values(payload: dict[str, Any]) -> dict[str, Any]:
+    charts = payload["apps"]["charts"]  # type: ignore[index]
+    assert isinstance(charts, list)
+    values = charts[0]["values"]
+    assert isinstance(values, dict)
+    return values
+
+
+def _seed_stale_kube_rbac_proxy_values(payload: dict[str, Any]) -> None:
+    values = _target_soperator_chart_values(payload)
+    values["controllerManager"] = {
+        "kubeRbacProxy": {
+            "image": {
+                "repository": _STALE_KUBE_RBAC_PROXY_REPOSITORY,
+                "tag": _TARGET_KUBE_RBAC_PROXY_TAG,
+                "pullPolicy": "Always",
+            }
+        }
+    }
+    values["soperator-checks"] = {
+        "checks": {
+            "kubeRbacProxy": {
+                "image": {
+                    "repository": _STALE_KUBE_RBAC_PROXY_REPOSITORY,
+                    "tag": _TARGET_KUBE_RBAC_PROXY_TAG,
+                    "pullPolicy": "IfNotPresent",
+                }
+            }
+        }
+    }
+
+
+def _assert_target_kube_rbac_proxy_values(helm_values: dict[str, Any]) -> None:
+    controller_image = helm_values["controllerManager"]["kubeRbacProxy"]["image"]
+    assert controller_image["repository"] == _TARGET_KUBE_RBAC_PROXY_REPOSITORY
+    assert controller_image["tag"] == _TARGET_KUBE_RBAC_PROXY_TAG
+    assert controller_image["pullPolicy"] == "Always"
+
+    checks_image = helm_values["soperator-checks"]["checks"]["kubeRbacProxy"]["image"]
+    assert checks_image["repository"] == _TARGET_KUBE_RBAC_PROXY_REPOSITORY
+    assert checks_image["tag"] == _TARGET_KUBE_RBAC_PROXY_TAG
+    assert checks_image["pullPolicy"] == "IfNotPresent"
+
+
+def test_patch_target_kube_rbac_proxy_images_repairs_missing_or_malformed_paths() -> None:
+    values: dict[str, Any] = {
+        "controllerManager": {"kubeRbacProxy": {"image": "stale"}},
+        "soperator-checks": "stale",
+    }
+
+    migration._patch_target_kube_rbac_proxy_images(values)  # noqa: SLF001
+
+    assert values["controllerManager"]["kubeRbacProxy"]["image"] == {
+        "repository": _TARGET_KUBE_RBAC_PROXY_REPOSITORY,
+        "tag": _TARGET_KUBE_RBAC_PROXY_TAG,
+    }
+    assert values["soperator-checks"]["checks"]["kubeRbacProxy"]["image"] == {
+        "repository": _TARGET_KUBE_RBAC_PROXY_REPOSITORY,
+        "tag": _TARGET_KUBE_RBAC_PROXY_TAG,
+    }
+
+
 def _add_external_gpu_cluster_inventory(payload: dict[str, Any]) -> None:
     target = payload["deploy"]["targets"][0]  # type: ignore[index]
     assert isinstance(target, dict)
@@ -6293,6 +6360,7 @@ def test_execute_auto_selects_console_worker_node_group_names_from_live_inventor
     ]
     source_report = _source_report(snapshot)
     payload = _payload(include_placements=True)
+    _seed_stale_kube_rbac_proxy_values(payload)
     target = payload["deploy"]["targets"][0]  # type: ignore[index]
     assert isinstance(target, dict)
     target["cluster_id"] = "cluster-123"
@@ -6517,6 +6585,7 @@ def test_execute_auto_selects_console_worker_node_group_names_from_live_inventor
     assert all(index < helm_upgrade_index for index, _call in legacy_nodeset_deletes)
     assert soperator_helm_upgrade[1] is not None
     helm_values = json.loads(soperator_helm_upgrade[1])
+    _assert_target_kube_rbac_proxy_values(helm_values)
     system_terms = [
         {
             "matchExpressions": [
@@ -9262,10 +9331,12 @@ def test_execute_reconciles_completed_compute_cutover_cleanup(tmp_path: Path) ->
     ]
     config_path = tmp_path / "config.yaml"
     source_report = _source_report(snapshot)
+    payload = _payload(include_placements=True)
+    _seed_stale_kube_rbac_proxy_values(payload)
     execute_soperator_migration(
         config_path=config_path,
         target_ref="external-cluster",
-        payload=_payload(include_placements=True),
+        payload=payload,
         source_report=source_report,
         backup_metadata=_backup_metadata("compute-cutover-cleanup"),
         snapshot_collector=lambda *, kube_context: snapshot,
@@ -9286,7 +9357,7 @@ def test_execute_reconciles_completed_compute_cutover_cleanup(tmp_path: Path) ->
     result = execute_soperator_migration(
         config_path=config_path,
         target_ref="external-cluster",
-        payload=_payload(include_placements=True),
+        payload=payload,
         source_report=source_report,
         snapshot_collector=lambda *, kube_context: snapshot,
         command_runner=runner,
@@ -9298,6 +9369,13 @@ def test_execute_reconciles_completed_compute_cutover_cleanup(tmp_path: Path) ->
     rolling = checkpoint["phase_state"]["rolling-compute-migration"]
     assert rolling["target_values_revision"] == migration._ROLLING_COMPUTE_VALUES_REVISION
     assert "controller_spool_clustername_cleared_at" in rolling
+    helm_upgrade = next(
+        call
+        for call in runner.calls
+        if call[0][0] == "helm" and "upgrade" in call[0] and call[0][5] == "soperator"
+    )
+    assert helm_upgrade[1] is not None
+    _assert_target_kube_rbac_proxy_values(json.loads(helm_upgrade[1]))
     assert any(
         call[0][:8]
         == (

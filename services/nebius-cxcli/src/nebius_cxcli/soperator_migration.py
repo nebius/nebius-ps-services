@@ -328,7 +328,9 @@ _SOPERATOR_SOURCE_CHART_PREFIXES = (
     "helm-storageclasses",
     "slurm-operator",
 )
-_ROLLING_COMPUTE_VALUES_REVISION = 11
+_TARGET_KUBE_RBAC_PROXY_REPOSITORY = "registry.k8s.io/kubebuilder/kube-rbac-proxy"
+_TARGET_KUBE_RBAC_PROXY_TAG = "v0.15.0"
+_ROLLING_COMPUTE_VALUES_REVISION = 12
 _VALIDATION_HOLD_REVISION = 2
 _TARGET_SLURM_PLUGIN_DIR = "/usr/lib/x86_64-linux-gnu/slurm"
 _HELM_OWNERSHIP_CONFLICT_RE = re.compile(
@@ -7357,6 +7359,27 @@ def _patch_target_operator_affinity(values: dict[str, Any]) -> None:
             checks["affinity"] = copy.deepcopy(system_affinity)
 
 
+def _ensure_child_mapping(parent: dict[str, Any], key: str) -> dict[str, Any]:
+    child = parent.get(key)
+    if not isinstance(child, dict):
+        child = {}
+        parent[key] = child
+    return child
+
+
+def _patch_target_kube_rbac_proxy_images(values: dict[str, Any]) -> None:
+    image_paths = (
+        ("controllerManager", "kubeRbacProxy", "image"),
+        ("soperator-checks", "checks", "kubeRbacProxy", "image"),
+    )
+    for path in image_paths:
+        node = values
+        for key in path:
+            node = _ensure_child_mapping(node, key)
+        node["repository"] = _TARGET_KUBE_RBAC_PROXY_REPOSITORY
+        node["tag"] = _TARGET_KUBE_RBAC_PROXY_TAG
+
+
 def _patch_target_values_for_compute(
     *,
     payload: Mapping[str, Any],
@@ -7374,6 +7397,7 @@ def _patch_target_values_for_compute(
     )
     values["k8sNodeFilters"] = _target_k8s_node_filters()
     _patch_target_operator_affinity(values)
+    _patch_target_kube_rbac_proxy_images(values)
     _patch_storage_mount_tolerations(values)
     if _has_live_storage_pvs(live_snapshot):
         _preserve_live_storage_pv_affinity(values, live_snapshot=live_snapshot)
@@ -8695,7 +8719,9 @@ def _helm_upgrade_target_soperator(
         else:
             command.extend(["--no-hooks", "--timeout", "30m"])
             timeout_seconds = 2100
-        values_text = json.dumps(to_plain_data(values), sort_keys=True)
+        effective_values = dict(copy.deepcopy(to_plain_data(values)))
+        _patch_target_kube_rbac_proxy_images(effective_values)
+        values_text = json.dumps(effective_values, sort_keys=True)
         adoption_attempts: dict[tuple[str, str, str], int] = {}
         pending_operation_cleared = False
         webhook_startup_retries = 0
