@@ -2045,16 +2045,26 @@ ext_soperator_app = typer.Typer(
         "onboarding plans that contain external-upgrade-owned actions."
     ),
     epilog=(
-        "Workflow: nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root> "
+        "Workflow: nebius-cxcli ext-soperator discover --project-id PROJECT "
+        "--cluster-id MK8SCLUSTER --output-dir ./support-bundles; "
+        "nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root> "
         "--cluster-id <mk8scluster-id>; nebius-cxcli validate <config.yaml>; "
         "nebius-cxcli render <config.yaml>; "
         "nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run; "
-        "nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --execute --approve. "
-        "Restore is DR/new-empty-target only, not same-cluster rollback; do not point it "
-        "at the original/source cluster or an existing Soperator namespace. Restore to a "
-        "new empty compatible cluster with "
+        "nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> "
+        "--execute --approve; "
+        "nebius-cxcli ext-soperator scale-down --project-id PROJECT "
+        "--cluster-id MK8SCLUSTER --kube-context CONTEXT --nodeset worker-gpu-0 "
+        "--to-workers 0 --job-policy wait --dry-run; "
+        "nebius-cxcli ext-soperator scale-up --project-id PROJECT "
+        "--cluster-id MK8SCLUSTER --kube-context CONTEXT --nodeset worker-gpu-0 "
+        "--to-workers 4 --execute --approve; "
+        "nebius-cxcli ext-soperator backup --project-id PROJECT --cluster-id MK8SCLUSTER "
+        "--access internal --dry-run; "
         "nebius-cxcli ext-soperator restore <backup.tar.gz> --kube-context <new-context> "
         "--execute --approve. "
+        "Restore is DR/new-empty-target only, not same-cluster rollback; do not point it "
+        "at the original/source cluster or an existing Soperator namespace. "
         "Onboarding stores a cxcli target id in deploy.targets[].instance_id; by default it is "
         "derived from the live MK8s cluster name, or it can be set with --target-id. "
         "After render, install/adopt-only targets use deploy instead of external upgrade. "
@@ -2086,11 +2096,17 @@ soperator_app = typer.Typer(
     epilog=(
         "Examples: nebius-cxcli soperator upgrade <config.yaml> "
         "--target <target> --to-k8s-version 1.33 --to-chart-version <chart-version> "
-        "--dry-run; nebius-cxcli soperator upgrade <config.yaml> --target <target> "
-        "--to-k8s-version 1.33 --to-chart-version <chart-version>; "
+        "--job-policy wait --dry-run; nebius-cxcli soperator upgrade <config.yaml> "
+        "--target <target> --to-chart-version <chart-version>; "
+        "nebius-cxcli soperator discover <config.yaml> --target <target> "
+        "--output-dir ./support-bundles; "
         "nebius-cxcli soperator backup <config.yaml> --target <target>; "
-        "nebius-cxcli soperator discover <config.yaml> --target <target>; "
-        "nebius-cxcli soperator restore <backup.tar.gz> --execute --approve. "
+        "nebius-cxcli soperator scale-down <config.yaml> --target <target> "
+        "--nodeset worker-gpu-0 --to-workers 0 --job-policy wait --dry-run; "
+        "nebius-cxcli soperator scale-up <config.yaml> --target <target> "
+        "--nodeset worker-gpu-0 --to-workers 4 --execute --approve; "
+        "nebius-cxcli soperator restore <backup.tar.gz> --kube-context <new-context> "
+        "--execute --approve. "
         "Restore is DR/new-empty-target only, not same-cluster rollback; do not point it "
         "at the original/source cluster or an existing Soperator namespace. "
         "The run without --dry-run creates a restore-capable backup, runs requested "
@@ -11125,9 +11141,14 @@ def _print_soperator_discovery_result(path: Path) -> None:
     "discover",
     short_help="Write a read-only discovery bundle for a cxcli-managed Soperator cluster.",
     epilog=(
-        "Example: nebius-cxcli soperator discover <config.yaml> --target mk8s. "
+        "Examples: nebius-cxcli soperator discover <config.yaml> --target mk8s; "
+        "nebius-cxcli soperator discover <config.yaml> --target mk8s "
+        "--output-dir ./support-bundles --redaction support; "
+        "nebius-cxcli soperator discover <config.yaml> --target mk8s "
+        "--to-chart-version <chart-version> --to-k8s-version 1.33. "
         "Discovery writes generated/reports/soperator-discovery/<target>/manifest.json "
-        "and section files for support review. It is not a backup and never writes "
+        "and section files for support review. Use target-version flags to preview "
+        "upgrade findings without changing config or the cluster. It is not a backup and never writes "
         "raw Secret values, SQL dumps, tokens, or cert material."
     ),
 )
@@ -11225,7 +11246,9 @@ def soperator_discover_command(
     "backup",
     short_help="Create a restore-capable backup for a cxcli-managed Soperator cluster.",
     epilog=(
-        "Example: nebius-cxcli soperator backup <config.yaml> --target mk8s. "
+        "Examples: nebius-cxcli soperator backup <config.yaml> --target mk8s --dry-run; "
+        "nebius-cxcli soperator backup <config.yaml> --target mk8s "
+        "--backup-dir ./backups/soperator. "
         "The archive includes raw Kubernetes Secrets and the chart-managed MariaDB "
         "accounting DB dump, so store it as sensitive material."
     ),
@@ -11299,8 +11322,11 @@ def soperator_backup_command(
     "restore",
     short_help="DR restore a Soperator archive onto a new empty compatible cluster only.",
     epilog=(
-        "Example: nebius-cxcli soperator restore ./backups/soperator-backup-...tar.gz "
-        "--execute --approve. Restore is dry-run by default. Use it only for DR restore "
+        "Examples: nebius-cxcli soperator restore ./backups/soperator-backup-...tar.gz "
+        "--kube-context replacement-cluster; "
+        "nebius-cxcli soperator restore ./backups/soperator-backup-...tar.gz "
+        "--kube-context replacement-cluster --execute --approve. "
+        "Restore is dry-run by default. Use it only for DR restore "
         "to a new empty compatible target cluster. This is not an in-place rollback; "
         "do not target the original/source cluster or an existing Soperator namespace."
     ),
@@ -11358,8 +11384,14 @@ def soperator_restore_command(
     "scale-down",
     short_help="Scale down a cxcli-managed Soperator worker NodeSet.",
     epilog=(
-        "Example: nebius-cxcli soperator scale-down <config.yaml> --target mk8s "
-        "--nodeset worker-gpu-0 --to-workers 0 --job-policy interactive --execute --approve. "
+        "Examples: nebius-cxcli soperator scale-down <config.yaml> --target mk8s "
+        "--nodeset worker-gpu-0 --to-workers 0 --job-policy wait --job-wait-timeout 2h "
+        "--dry-run; "
+        "nebius-cxcli soperator scale-down <config.yaml> --target mk8s "
+        "--nodeset worker-gpu-0 --to-workers 0 --job-policy wait --execute --approve; "
+        "nebius-cxcli soperator scale-down <config.yaml> --target mk8s "
+        "--nodeset worker-gpu-0 --worker-ordinal 3 --to-workers 3 "
+        "--job-policy interactive --execute --approve. "
         "Dry-run is the default. Ephemeral NodeSets use NodeSetPowerState; non-ephemeral "
         "NodeSets align config.yaml/rendered output for the managed deploy/apply path."
     ),
@@ -11464,8 +11496,11 @@ def soperator_scale_down_command(
     "scale-up",
     short_help="Scale up a cxcli-managed Soperator worker NodeSet.",
     epilog=(
-        "Example: nebius-cxcli soperator scale-up <config.yaml> --target mk8s "
-        "--nodeset worker-gpu-0 --to-workers 4 --execute --approve. Dry-run is "
+        "Examples: nebius-cxcli soperator scale-up <config.yaml> --target mk8s "
+        "--nodeset worker-gpu-0 --to-workers 4 --dry-run; "
+        "nebius-cxcli soperator scale-up <config.yaml> --target mk8s "
+        "--nodeset worker-gpu-0 --worker-ordinal 0 --worker-ordinal 1 "
+        "--to-workers 4 --execute --approve. Dry-run is "
         "the default. Ephemeral NodeSets use NodeSetPowerState; non-ephemeral "
         "NodeSets align config.yaml/rendered output for the managed deploy/apply path."
     ),
@@ -11540,9 +11575,16 @@ def soperator_scale_up_command(
     short_help="Upgrade a cxcli-managed Soperator cluster end to end.",
     epilog=(
         "Examples: nebius-cxcli soperator upgrade <config.yaml> --target mk8s "
-        "--to-k8s-version 1.33 --to-chart-version <chart-version> --dry-run. "
+        "--to-chart-version <chart-version> --dry-run; "
         "nebius-cxcli soperator upgrade <config.yaml> --target mk8s "
-        "--to-k8s-version 1.33 --to-chart-version <chart-version>. "
+        "--to-chart-version <chart-version>; "
+        "nebius-cxcli soperator upgrade <config.yaml> --target mk8s "
+        "--to-k8s-version 1.33 --to-os ubuntu24.04 --to-gpu-stack-preset cuda13.0 "
+        "--to-chart-version <chart-version> --job-policy wait --job-wait-timeout 2h "
+        "--dry-run; "
+        "nebius-cxcli soperator upgrade <config.yaml> --target mk8s "
+        "--to-k8s-version 1.33 --to-os ubuntu24.04 --to-gpu-stack-preset cuda13.0 "
+        "--to-chart-version <chart-version> --job-policy wait. "
         "The run without --dry-run creates the restore-capable backup and applies "
         "the requested Soperator-aware upgrade. Kubernetes minor hops stay one "
         "hop per run; if the support policy requires a chart-first step before "
@@ -48987,9 +49029,14 @@ def component_add_command(
     "backup",
     short_help="Create a restore-capable backup for an external Soperator cluster.",
     epilog=(
-        "Examples: nebius-cxcli ext-soperator backup <config.yaml> --target external-cluster; "
+        "Examples: nebius-cxcli ext-soperator backup <config.yaml> "
+        "--target external-cluster --dry-run; "
+        "nebius-cxcli ext-soperator backup <config.yaml> --target external-cluster "
+        "--backup-dir ./backups/external-soperator; "
         "nebius-cxcli ext-soperator backup --project-id PROJECT --cluster-id MK8SCLUSTER "
-        "[--access internal]. "
+        "--access internal --dry-run; "
+        "nebius-cxcli ext-soperator backup --project-id PROJECT --cluster-id MK8SCLUSTER "
+        "--access internal --backup-dir ./backups/external-soperator. "
         "Use the config form for an onboarded and accepted target, or the standalone "
         "--project-id plus --cluster-id/--kube-context form before onboarding. For standalone "
         "--cluster-id backup, --access external selects the public control-plane endpoint and "
@@ -49194,7 +49241,9 @@ def ext_soperator_backup_command(
     "restore",
     short_help="DR restore a Soperator archive onto a new empty external cluster only.",
     epilog=(
-        "Example: nebius-cxcli ext-soperator restore ./backups/external-soperator-backup-...tar.gz "
+        "Examples: nebius-cxcli ext-soperator restore "
+        "./backups/external-soperator-backup-...tar.gz --kube-context new-cluster; "
+        "nebius-cxcli ext-soperator restore ./backups/external-soperator-backup-...tar.gz "
         "--kube-context new-cluster --execute --approve. Restore is dry-run by default. "
         "Use it only for DR restore to a new empty external target cluster. This is "
         "not an in-place rollback; do not target the original/source cluster or an "
@@ -49261,7 +49310,12 @@ def ext_soperator_restore_command(
     epilog=(
         "Examples: "
         "nebius-cxcli ext-soperator discover <config.yaml> --target external-cluster; "
-        "nebius-cxcli ext-soperator discover --project-id PROJECT --cluster-id MK8SCLUSTER. "
+        "nebius-cxcli ext-soperator discover <config.yaml> --target external-cluster "
+        "--output-dir ./support-bundles --redaction support; "
+        "nebius-cxcli ext-soperator discover --project-id PROJECT --cluster-id MK8SCLUSTER "
+        "--access internal --output-dir ./support-bundles; "
+        "nebius-cxcli ext-soperator discover --project-id PROJECT --cluster-id MK8SCLUSTER "
+        "--to-chart-version <chart-version> --to-k8s-version 1.33. "
         "Use --cluster-id for direct Nebius MK8s access or --kube-context for local kubeconfig "
         "access. --tenant-id is optional for standalone discovery because cluster handoff "
         "uses project-scoped Nebius auth; pass --client-name only when you need a specific "
@@ -49460,19 +49514,20 @@ def ext_soperator_discover_command(
     short_help="Register/adopt an existing Nebius MK8s target for Soperator.",
     epilog=(
         "Examples: "
-        "nebius-cxcli ext-soperator onboard ./deployments/tenant/project/config.yaml "
-        "(update an existing project config); "
+        "nebius-cxcli ext-soperator onboard ./deployments/tenant/project/config.yaml; "
         "nebius-cxcli ext-soperator onboard ./deployments --client-name acme "
         "--tenant-id TENANT --project-id PROJECT --region-id eu-north1 "
-        "(create a project config under the deployments root, then choose one existing "
-        "Nebius MK8s cluster from the project); "
+        "--cluster-id mk8scluster-... --target-id external-cluster --no-interactive; "
         "nebius-cxcli ext-soperator onboard ./deployments --client-name acme "
         "--tenant-id TENANT --project-id PROJECT --region-id eu-north1 "
         "--cluster-id mk8scluster-... --target-id external-cluster "
         "--storage-mode keep-existing-storage --compute-mode keep-existing-compute "
         "--to-chart-version <chart-version> --to-k8s-version <major.minor> "
-        "--no-interactive; "
+        "--worker-rollout-strategy safe-surge --worker-wave-groups 1 --no-interactive; "
         "nebius-cxcli validate <config.yaml>; nebius-cxcli render <config.yaml>. "
+        "Pass a config path to update an existing project, or pass a deployments root "
+        "to create a project config under the deployments root, then choose one existing "
+        "Nebius MK8s cluster from the project. "
         "--cluster-id selects the Nebius MK8s cluster to adopt. --target-id is only "
         "the optional cxcli logical target id saved as deploy.targets[].instance_id; "
         "when omitted, cxcli derives it from the live cluster name. "
@@ -49480,7 +49535,7 @@ def ext_soperator_discover_command(
         f"generated/reports/{SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME}/<target>/manifest.json; "
         "reruns refresh read-only source discovery and Nebius provider node-template "
         "inventory by node group before deciding whether external node-template "
-        "upgrade is still needed, then lock the accepted full upgrade path under "
+        "upgrade is still needed, then locks the accepted full upgrade path under "
         "deploy.targets[].soperator_onboarding.upgrade_path. For install/adopt-only targets "
         "with no external-upgrade-owned actions, "
         "run nebius-cxcli deploy <config.yaml> to reconcile the generated desired "
@@ -51304,9 +51359,17 @@ def _refresh_soperator_onboarding_after_completed_migration(
     "scale-down",
     short_help="Scale down workers on an external Soperator cluster without onboarding.",
     epilog=(
-        "Example: nebius-cxcli ext-soperator scale-down --project-id PROJECT "
+        "Examples: nebius-cxcli ext-soperator scale-down --project-id PROJECT "
         "--cluster-id MK8SCLUSTER --kube-context CONTEXT --namespace soperator "
-        "--nodeset worker-gpu-0 --to-workers 0 --job-policy interactive --execute --approve. "
+        "--nodeset worker-gpu-0 --to-workers 0 --job-policy wait --job-wait-timeout 2h "
+        "--dry-run; "
+        "nebius-cxcli ext-soperator scale-down --project-id PROJECT "
+        "--cluster-id MK8SCLUSTER --kube-context CONTEXT --namespace soperator "
+        "--nodeset worker-gpu-0 --to-workers 0 --job-policy wait --execute --approve; "
+        "nebius-cxcli ext-soperator scale-down --project-id PROJECT "
+        "--cluster-id MK8SCLUSTER --kube-context CONTEXT --namespace soperator "
+        "--nodeset worker-gpu-0 --worker-ordinal 3 --to-workers 3 "
+        "--job-policy interactive --execute --approve. "
         "Dry-run is the default. --project-id/--cluster-id find Nebius node groups; "
         "--kube-context provides Kubernetes and Slurm access."
     ),
@@ -51416,9 +51479,13 @@ def ext_soperator_scale_down_command(
     "scale-up",
     short_help="Scale up workers on an external Soperator cluster without onboarding.",
     epilog=(
-        "Example: nebius-cxcli ext-soperator scale-up --project-id PROJECT "
+        "Examples: nebius-cxcli ext-soperator scale-up --project-id PROJECT "
         "--cluster-id MK8SCLUSTER --kube-context CONTEXT --namespace soperator "
-        "--nodeset worker-gpu-0 --to-workers 4 --execute --approve. Dry-run is "
+        "--nodeset worker-gpu-0 --to-workers 4 --dry-run; "
+        "nebius-cxcli ext-soperator scale-up --project-id PROJECT "
+        "--cluster-id MK8SCLUSTER --kube-context CONTEXT --namespace soperator "
+        "--nodeset worker-gpu-0 --worker-ordinal 0 --worker-ordinal 1 "
+        "--to-workers 4 --execute --approve. Dry-run is "
         "the default. Use after external node-group replacement or maintenance."
     ),
 )
@@ -51494,7 +51561,13 @@ def ext_soperator_scale_up_command(
         "Examples: nebius-cxcli ext-soperator upgrade "
         "./deployments/tenant/project/config.yaml --target external-cluster --dry-run; "
         "nebius-cxcli ext-soperator upgrade ./deployments/tenant/project/config.yaml "
-        "--target external-cluster --execute --approve. --target is the cxcli target "
+        "--target external-cluster --execute --approve; "
+        "nebius-cxcli ext-soperator upgrade ./deployments/tenant/project/config.yaml "
+        "--target external-cluster --job-policy wait --job-wait-timeout 2h --dry-run; "
+        "nebius-cxcli ext-soperator upgrade ./deployments/tenant/project/config.yaml "
+        "--target external-cluster --worker-rollout-strategy safe-surge "
+        "--worker-wave-groups 1 --job-policy wait --execute --approve. "
+        "--target is the cxcli target "
         "id saved as deploy.targets[].instance_id, not the Nebius cluster_id or "
         "display name. The target must already be onboarded and accepted through "
         "ext-soperator onboard. Dry-run refreshes discovery and prints the plan. "

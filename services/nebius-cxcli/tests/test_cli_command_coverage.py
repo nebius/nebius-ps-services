@@ -21448,6 +21448,22 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         normalized_managed_soperator_help
     )
     assert "soperator upgrade <config.yaml>" in normalized_managed_soperator_help
+    assert (
+        "nebius-cxcli soperator discover <config.yaml> --target <target> "
+        "--output-dir ./support-bundles"
+    ) in normalized_managed_soperator_help
+    assert (
+        "nebius-cxcli soperator scale-down <config.yaml> --target <target> "
+        "--nodeset worker-gpu-0 --to-workers 0 --job-policy wait --dry-run"
+    ) in normalized_managed_soperator_help
+    assert (
+        "nebius-cxcli soperator scale-up <config.yaml> --target <target> "
+        "--nodeset worker-gpu-0 --to-workers 4 --execute --approve"
+    ) in normalized_managed_soperator_help
+    assert (
+        "nebius-cxcli soperator restore <backup.tar.gz> "
+        "--kube-context <new-context> --execute --approve"
+    ) in normalized_managed_soperator_help
     assert "backup" in managed_soperator_help
     assert "discover" in managed_soperator_help
     assert "restore" in managed_soperator_help
@@ -21466,10 +21482,24 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "soperator-discovery/<target>/manifest.json" in (
         normalized_managed_soperator_discover_help
     )
+    assert "--output-dir ./support-bundles --redaction support" in (
+        normalized_managed_soperator_discover_help
+    )
+    assert "--to-chart-version <chart-version> --to-k8s-version 1.33" in (
+        normalized_managed_soperator_discover_help
+    )
+    assert "Use target-version flags to preview upgrade findings" in (
+        normalized_managed_soperator_discover_help
+    )
     assert "--execute" in normalized_managed_soperator_restore_help
     assert "--approve" in normalized_managed_soperator_restore_help
     assert "--restore-accounting-db" in normalized_managed_soperator_restore_help
     assert "Restore is dry-run by default" in normalized_managed_soperator_restore_help
+    assert "--kube-context replacement-cluster --execute --approve" in (
+        normalized_managed_soperator_restore_help
+    )
+    assert "--target mk8s --dry-run" in normalized_managed_soperator_backup_help
+    assert "--backup-dir ./backups/soperator" in normalized_managed_soperator_backup_help
     assert "DR restore to a new empty compatible target cluster" in (
         normalized_managed_soperator_restore_help
     )
@@ -21483,11 +21513,20 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--dry-run --execute" in normalized_managed_soperator_scale_down_help
     assert "--approve --no-approve" in normalized_managed_soperator_scale_down_help
     assert "--job-policy" in normalized_managed_soperator_scale_down_help
+    assert "--job-policy wait --job-wait-timeout 2h --dry-run" in (
+        normalized_managed_soperator_scale_down_help
+    )
+    assert "--worker-ordinal 3 --to-workers 3 --job-policy interactive" in (
+        normalized_managed_soperator_scale_down_help
+    )
     assert "Ephemeral NodeSets use NodeSetPowerState" in normalized_managed_soperator_scale_down_help
     assert "--nodeset" in normalized_managed_soperator_scale_up_help
     assert "--to-workers" in normalized_managed_soperator_scale_up_help
     assert "--dry-run --execute" in normalized_managed_soperator_scale_up_help
     assert "--approve --no-approve" in normalized_managed_soperator_scale_up_help
+    assert "--worker-ordinal 0 --worker-ordinal 1 --to-workers 4 --execute --approve" in (
+        normalized_managed_soperator_scale_up_help
+    )
     assert "Standalone MK8s node-template upgrades" in normalized_managed_soperator_upgrade_help
     assert "Kubernetes minor hops stay one hop per run" in (
         normalized_managed_soperator_upgrade_help
@@ -21508,6 +21547,14 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--dry-run" in normalized_managed_soperator_upgrade_help
     assert "--interactive --no-interactive" in normalized_managed_soperator_upgrade_help
     assert "Target Soperator chart/app version" in normalized_managed_soperator_upgrade_help
+    assert "--to-chart-version <chart-version> --dry-run" in (
+        normalized_managed_soperator_upgrade_help
+    )
+    assert (
+        "--to-k8s-version 1.33 --to-os ubuntu24.04 --to-gpu-stack-preset cuda13.0 "
+        "--to-chart-version <chart-version> --job-policy wait --job-wait-timeout 2h "
+        "--dry-run"
+    ) in normalized_managed_soperator_upgrade_help
     assert "does not bypass Kubernetes minor-hop, backup, quota, protected-state" in (
         normalized_managed_soperator_upgrade_help
     )
@@ -21520,6 +21567,19 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "restore" in soperator_help
     assert "scale-down" in soperator_help
     assert "scale-up" in soperator_help
+    assert (
+        "nebius-cxcli ext-soperator discover --project-id PROJECT "
+        "--cluster-id MK8SCLUSTER --output-dir ./support-bundles"
+    ) in normalized_soperator_help
+    assert (
+        "nebius-cxcli ext-soperator scale-down --project-id PROJECT "
+        "--cluster-id MK8SCLUSTER --kube-context CONTEXT --nodeset worker-gpu-0 "
+        "--to-workers 0 --job-policy wait --dry-run"
+    ) in normalized_soperator_help
+    assert (
+        "nebius-cxcli ext-soperator backup --project-id PROJECT --cluster-id MK8SCLUSTER "
+        "--access internal --dry-run"
+    ) in normalized_soperator_help
     assert "backup [OPTIONS] [CONFIG_YAML]" in ext_soperator_backup_help
     assert "discover [OPTIONS] [CONFIG_OR_DEPLOYMENTS_ROOT]" in ext_soperator_discover_help
     assert "restore [OPTIONS] BACKUP_ARCHIVE" in ext_soperator_restore_help
@@ -21541,6 +21601,9 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         in normalized_ext_soperator_backup_help
     )
     assert "--access internal" in normalized_ext_soperator_backup_help
+    assert "--target external-cluster --dry-run" in normalized_ext_soperator_backup_help
+    assert "--backup-dir ./backups/external-soperator" in normalized_ext_soperator_backup_help
+    assert "--access internal --dry-run" in normalized_ext_soperator_backup_help
     assert "external uses the public control-plane endpoint" in normalized_ext_soperator_backup_help
     assert "internal uses the private endpoint" in normalized_ext_soperator_backup_help
     assert "preexisting private network reachability" in normalized_ext_soperator_backup_help
@@ -21557,6 +21620,15 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "nebius-cxcli ext-soperator discover --project-id PROJECT --cluster-id MK8SCLUSTER" in (
         normalized_ext_soperator_discover_help
     )
+    assert "--output-dir ./support-bundles --redaction support" in (
+        normalized_ext_soperator_discover_help
+    )
+    assert "--access internal --output-dir ./support-bundles" in (
+        normalized_ext_soperator_discover_help
+    )
+    assert "--to-chart-version <chart-version> --to-k8s-version 1.33" in (
+        normalized_ext_soperator_discover_help
+    )
     assert "Default root: config.yaml parent, or current working directory in standalone mode" in (
         normalized_ext_soperator_discover_help
     )
@@ -21571,6 +21643,9 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--execute" in normalized_ext_soperator_restore_help
     assert "--approve" in normalized_ext_soperator_restore_help
     assert "--restore-accounting-db" in normalized_ext_soperator_restore_help
+    assert "--kube-context new-cluster --execute --approve" in (
+        normalized_ext_soperator_restore_help
+    )
     assert "external-soperator-backup-" in normalized_ext_soperator_restore_help
     assert "DR restore to a new empty external target cluster" in (
         normalized_ext_soperator_restore_help
@@ -21587,6 +21662,12 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--job-policy" in normalized_ext_soperator_scale_down_help
     assert "--dry-run --execute" in normalized_ext_soperator_scale_down_help
     assert "--approve --no-approve" in normalized_ext_soperator_scale_down_help
+    assert "--job-policy wait --job-wait-timeout 2h --dry-run" in (
+        normalized_ext_soperator_scale_down_help
+    )
+    assert "--worker-ordinal 3 --to-workers 3 --job-policy interactive" in (
+        normalized_ext_soperator_scale_down_help
+    )
     assert "--project-id/--cluster-id find Nebius node groups" in (
         normalized_ext_soperator_scale_down_help
     )
@@ -21597,6 +21678,9 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--to-workers" in normalized_ext_soperator_scale_up_help
     assert "--dry-run --execute" in normalized_ext_soperator_scale_up_help
     assert "--approve --no-approve" in normalized_ext_soperator_scale_up_help
+    assert "--worker-ordinal 0 --worker-ordinal 1 --to-workers 4 --execute --approve" in (
+        normalized_ext_soperator_scale_up_help
+    )
     assert "Restore is DR/new-empty-target only, not same-cluster rollback" in (
         normalized_soperator_help
     )
@@ -21697,6 +21781,10 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--storage-mode keep-existing-storage" in normalized_soperator_onboard_help
     assert "--compute-mode keep-existing-compute" in normalized_soperator_onboard_help
     assert "--to-chart-version <chart-version>" in normalized_soperator_onboard_help
+    assert "--worker-rollout-strategy safe-surge --worker-wave-groups 1" in (
+        normalized_soperator_onboard_help
+    )
+    assert "create a project config under the deployments root" in normalized_soperator_onboard_help
     assert "--worker-rollout-strategy" in normalized_soperator_onboard_help
     assert "--worker-wave-groups" in normalized_soperator_onboard_help
     assert "--worker-wave-percent" in normalized_soperator_onboard_help
@@ -21780,6 +21868,12 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         "nebius-cxcli ext-soperator upgrade ./deployments/tenant/project/config.yaml "
         "--target external-cluster --execute --approve"
     ) in normalized_ext_soperator_upgrade_help
+    assert "--job-policy wait --job-wait-timeout 2h --dry-run" in (
+        normalized_ext_soperator_upgrade_help
+    )
+    assert "--worker-rollout-strategy safe-surge --worker-wave-groups 1 --job-policy wait" in (
+        normalized_ext_soperator_upgrade_help
+    )
     assert "The target must already be onboarded and accepted through ext-soperator onboard" in (
         normalized_ext_soperator_upgrade_help
     )
