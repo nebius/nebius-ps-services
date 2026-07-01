@@ -50560,6 +50560,93 @@ def _soperator_migration_output_phases(
     return output_phases
 
 
+def _soperator_known_upgrade_version(value: Any) -> str:
+    text = _non_empty_text(value)
+    if text.lower() in {"unknown", "not detected", "none"}:
+        return ""
+    return text
+
+
+def _soperator_upgrade_hop_text(source: Any, target: Any) -> str:
+    source_text = _soperator_known_upgrade_version(source)
+    target_text = _soperator_known_upgrade_version(target)
+    if source_text and target_text and source_text != target_text:
+        return f"{source_text} -> {target_text}"
+    return target_text or source_text
+
+
+def _soperator_migration_phase_display_title(
+    *,
+    phase_id: str,
+    title: str,
+    flags: Mapping[str, bool],
+    current_segment: Mapping[str, Any] | None,
+    current_k8s_version: str,
+    target_k8s_version: str,
+    source_soperator_version: str,
+    target_soperator_version: str,
+) -> str:
+    segment = current_segment or {}
+    k8s_hop = _soperator_upgrade_hop_text(
+        _non_empty_text(segment.get("current_k8s_version")) or current_k8s_version,
+        _non_empty_text(segment.get("target_k8s_version")) or target_k8s_version,
+    )
+    target_k8s = _soperator_known_upgrade_version(
+        _non_empty_text(segment.get("target_k8s_version")) or target_k8s_version
+    )
+    soperator_hop = _soperator_upgrade_hop_text(
+        _non_empty_text(segment.get("source_soperator_version")) or source_soperator_version,
+        _non_empty_text(segment.get("target_soperator_version")) or target_soperator_version,
+    )
+    target_soperator = _soperator_known_upgrade_version(
+        _non_empty_text(segment.get("target_soperator_version")) or target_soperator_version
+    )
+
+    if phase_id == "customer-approval":
+        approval_hops = []
+        if flags.get("external_node_template_upgrade_required") and k8s_hop:
+            approval_hops.append(f"Kubernetes hop {k8s_hop}")
+        if flags.get("soperator_upgrade_required") and soperator_hop:
+            approval_hops.append(f"Soperator hop {soperator_hop}")
+        if approval_hops:
+            return "Customer approval for " + " and ".join(approval_hops)
+    if phase_id == _SOPERATOR_EXTERNAL_NODE_TEMPLATE_PHASE_ID and k8s_hop:
+        return (
+            f"Kubernetes hop {k8s_hop}: upgrade external MK8s control plane "
+            "and node templates"
+        )
+    if phase_id == _SOPERATOR_TARGET_GPU_STACK_PHASE_ID and target_k8s:
+        return f"Kubernetes {target_k8s} GPU stack: reconcile target MK8s GPU operator stack"
+    if (
+        phase_id == "rolling-compute-migration"
+        and flags.get("soperator_upgrade_required")
+        and soperator_hop
+    ):
+        if not flags.get("compute_migration_required"):
+            return f"Soperator hop {soperator_hop}: upgrade chart with existing compute layout"
+        if "existing compute layout" in title:
+            return f"Soperator hop {soperator_hop}: upgrade chart with existing compute layout"
+        if "preserved worker node groups" in title:
+            return (
+                f"Soperator hop {soperator_hop}: in-place compute remediation "
+                "with preserved worker node groups"
+            )
+        return f"Soperator hop {soperator_hop}: {title}"
+    if (
+        phase_id == "final-control-plane-cutover"
+        and flags.get("soperator_upgrade_required")
+        and target_soperator
+    ):
+        if (
+            not flags.get("storage_migration_required")
+            and not flags.get("compute_migration_required")
+        ):
+            return f"Soperator {target_soperator} cutover: final Soperator chart cutover"
+        if title.startswith("Final Soperator "):
+            return title.replace("Final Soperator ", f"Final Soperator {target_soperator} ", 1)
+    return title
+
+
 def _locked_upgrade_path_from_onboarding(onboarding: Mapping[str, Any]) -> dict[str, Any]:
     upgrade_path = onboarding.get("upgrade_path")
     if not isinstance(upgrade_path, Mapping):
@@ -51023,7 +51110,16 @@ def _format_soperator_migration_plan_lines(
                 continue
             phase_number += 1
             phase_id = str(raw_phase.get("id", "") or "phase").strip()
-            title = str(raw_phase.get("title", "") or "").strip()
+            title = _soperator_migration_phase_display_title(
+                phase_id=phase_id,
+                title=str(raw_phase.get("title", "") or "").strip(),
+                flags=flags,
+                current_segment=current_segment,
+                current_k8s_version=current_k8s_version,
+                target_k8s_version=target_k8s_version,
+                source_soperator_version=source_version,
+                target_soperator_version=target_version,
+            )
             status = str(raw_phase.get("status", "") or "planned").strip()
             top_level_stage = external_soperator_upgrade_top_level_stage(phase_id)
             detail = f"- {phase_number}. [{top_level_stage}] {phase_id}: {status}"

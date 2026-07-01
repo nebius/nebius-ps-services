@@ -7599,14 +7599,32 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "External node-template rollout:" in result.output
     assert "external-node-template-upgrade" in result.output
     assert (
-        "[MK8s Node Upgrades] external-node-template-upgrade: planned"
+        "[Soperator Upgrade] customer-approval: planned - Customer approval for "
+        f"Kubernetes hop 1.31 -> 1.32 and Soperator hop 3.0.5 -> {_soperator_test_chart_version()}"
+        in result.output
+    )
+    assert (
+        "[MK8s Node Upgrades] external-node-template-upgrade: planned - "
+        "Kubernetes hop 1.31 -> 1.32: upgrade external MK8s control plane "
+        "and node templates"
         in result.output
     )
     assert "target-gpu-stack-remediation" in result.output
+    assert (
+        "[MK8s Node Upgrades] target-gpu-stack-remediation: planned - "
+        "Kubernetes 1.32 GPU stack: reconcile target MK8s GPU operator stack"
+        in result.output
+    )
     assert "create-aligned-sfs" in result.output
     assert "[Soperator Upgrade] create-aligned-sfs: planned" in result.output
     assert "online-bulk-data-sync" in result.output
     assert "rolling-compute-migration" in result.output
+    assert (
+        "[Soperator Upgrade] rolling-compute-migration: planned - "
+        f"Soperator hop 3.0.5 -> {_soperator_test_chart_version()}: "
+        "in-place compute remediation with preserved worker node groups"
+        in result.output
+    )
     assert "final-control-plane-cutover" in result.output
     assert "Execution guarantees:" in result.output
     assert "Live executor contract:" in result.output
@@ -7692,6 +7710,16 @@ def test_ext_soperator_upgrade_dry_run_prints_full_locked_path(
         "Current segment: Kubernetes 1.31 -> 1.32 plus "
         f"Soperator 1.22.3 -> {_soperator_test_chart_version()}"
     ) in result.output
+    assert (
+        "[MK8s Node Upgrades] external-node-template-upgrade: planned - "
+        "Kubernetes hop 1.31 -> 1.32: upgrade external MK8s control plane "
+        "and node templates"
+    ) in result.output
+    assert (
+        "[Soperator Upgrade] rolling-compute-migration: planned - "
+        f"Soperator hop 1.22.3 -> {_soperator_test_chart_version()}: "
+        "in-place compute remediation with preserved worker node groups"
+    ) in result.output
     assert "Remaining segments: Kubernetes 1.32 -> 1.33, Kubernetes 1.33 -> 1.34" in (
         result.output
     )
@@ -7747,6 +7775,12 @@ def test_ext_soperator_upgrade_dry_run_advances_locked_path_from_checkpoint(
     assert "Completed segments: Kubernetes 1.31 -> 1.32 plus Soperator" in second.output
     assert "Current segment: Kubernetes 1.32 -> 1.33" in second.output
     assert "Kubernetes version: 1.32 -> 1.33" in second.output
+    assert (
+        "[MK8s Node Upgrades] external-node-template-upgrade: planned - "
+        "Kubernetes hop 1.32 -> 1.33: upgrade external MK8s control plane "
+        "and node templates"
+    ) in second.output
+    assert "Soperator hop" not in second.output
 
     checkpoint_path.write_text(
         json.dumps(
@@ -8046,6 +8080,23 @@ def test_ext_soperator_upgrade_dry_run_omits_k8s_hop_without_node_template_actio
     assert "External node-template upgrade required: no" in result.output
     assert "Accepted Kubernetes hop:" not in result.output
     assert "External node-template rollout:" not in result.output
+    assert (
+        "[Soperator Upgrade] customer-approval: planned - Customer approval for "
+        f"Soperator hop 3.0.5 -> {_soperator_test_chart_version()}"
+        in result.output
+    )
+    assert (
+        "[Soperator Upgrade] rolling-compute-migration: planned - "
+        f"Soperator hop 3.0.5 -> {_soperator_test_chart_version()}: "
+        "upgrade chart with existing compute layout"
+        in result.output
+    )
+    assert (
+        "[Soperator Upgrade] final-control-plane-cutover: planned - "
+        f"Soperator {_soperator_test_chart_version()} cutover: final Soperator chart cutover"
+        in result.output
+    )
+    assert "Kubernetes hop 1.31 -> 1.32" not in result.output
 
 
 def test_ext_soperator_upgrade_execute_requires_override_for_unsupported_policy(
@@ -8210,6 +8261,108 @@ def test_soperator_migration_plan_styles_topic_labels() -> None:
         "Config: /tmp/[customer]/config.yaml"
     )
     assert r"/tmp/\[customer]/config.yaml" in path_line
+
+
+@pytest.mark.parametrize(
+    (
+        "phase_id",
+        "title",
+        "flags",
+        "segment",
+        "expected",
+    ),
+    [
+        (
+            "customer-approval",
+            "Customer approval of external-upgrade-owned remediation",
+            {
+                "external_node_template_upgrade_required": True,
+                "soperator_upgrade_required": True,
+            },
+            {
+                "current_k8s_version": "1.31",
+                "target_k8s_version": "1.32",
+                "source_soperator_version": "1.22.3",
+                "target_soperator_version": "4.0.2-ps.3",
+            },
+            (
+                "Customer approval for Kubernetes hop 1.31 -> 1.32 and "
+                "Soperator hop 1.22.3 -> 4.0.2-ps.3"
+            ),
+        ),
+        (
+            "external-node-template-upgrade",
+            "Upgrade external MK8s control plane and node templates",
+            {"external_node_template_upgrade_required": True},
+            {
+                "current_k8s_version": "1.31",
+                "target_k8s_version": "1.32",
+            },
+            (
+                "Kubernetes hop 1.31 -> 1.32: upgrade external MK8s control plane "
+                "and node templates"
+            ),
+        ),
+        (
+            "target-gpu-stack-remediation",
+            "Reconcile target MK8s GPU operator stack",
+            {"target_gpu_reconciliation_required": True},
+            {"target_k8s_version": "1.32"},
+            "Kubernetes 1.32 GPU stack: reconcile target MK8s GPU operator stack",
+        ),
+        (
+            "rolling-compute-migration",
+            "In-place compute remediation with preserved worker node groups",
+            {
+                "compute_migration_required": False,
+                "soperator_upgrade_required": True,
+            },
+            {
+                "source_soperator_version": "1.22.3",
+                "target_soperator_version": "4.0.2-ps.3",
+            },
+            "Soperator hop 1.22.3 -> 4.0.2-ps.3: upgrade chart with existing compute layout",
+        ),
+        (
+            "final-control-plane-cutover",
+            "Final Slurm controller, accounting, login, and storage-reference cutover",
+            {
+                "storage_migration_required": False,
+                "compute_migration_required": False,
+                "soperator_upgrade_required": True,
+            },
+            {"target_soperator_version": "4.0.2-ps.3"},
+            "Soperator 4.0.2-ps.3 cutover: final Soperator chart cutover",
+        ),
+        (
+            "validation-and-rollback-hold",
+            "Validation and rollback hold",
+            {},
+            {},
+            "Validation and rollback hold",
+        ),
+    ],
+)
+def test_soperator_migration_phase_display_title_is_path_aware(
+    phase_id: str,
+    title: str,
+    flags: dict[str, bool],
+    segment: dict[str, str],
+    expected: str,
+) -> None:
+    assert (
+        cli_module._soperator_migration_phase_display_title(
+            phase_id=phase_id,
+            title=title,
+            flags=flags,
+            current_segment=segment,
+            current_k8s_version="",
+            target_k8s_version="",
+            source_soperator_version="",
+            target_soperator_version="",
+        )
+        == expected
+    )
 
 
 def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.MonkeyPatch) -> None:

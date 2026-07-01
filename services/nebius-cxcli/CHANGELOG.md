@@ -35,6 +35,10 @@ All notable changes to this project are tracked here. This changelog follows
   progress, print the next same-command invocation, keep onboarding in place
   while segments remain, and hand back to deploy-owned reconciliation only
   after the final locked segment completes.
+- Clarified `ext-soperator upgrade` plan phase rows so the approval, MK8s
+  node-template, target GPU stack, Soperator chart, and final cutover phase
+  descriptions show the current locked segment's Kubernetes and Soperator hops
+  instead of only generic lifecycle titles.
 - Clarified `ext-soperator upgrade --dry-run` output for preserved storage and
   compute layouts, restore target scope, and external Kubernetes hop scope. The
   plan now labels keep-existing modes as layout preservation, uses migration
