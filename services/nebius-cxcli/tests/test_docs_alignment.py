@@ -584,10 +584,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert ".nebius-cxcli/ext-soperator-upgrades/<target>/checkpoint.json" in soperator
     assert ".nebius-cxcli/soperator-upgrades/<target>/checkpoint.json" in soperator
     assert "these checkpoints stay local" in soperator_flat
-    assert (
-        "After a completed external upgrade refreshes the target into the deploy-owned shape"
-        in (soperator_flat)
-    )
+    assert "After the final locked segment completes" in soperator_flat
     assert "`nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>`" in soperator
     assert (
         "`nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run`"
@@ -691,12 +688,20 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "Validation hold: verify external MK8s control-plane and node-group readiness" in (
         soperator_flat
     )
-    assert "Completion and handoff: write `ext-soperator-upgrade-report.md` and JSON" in (
+    assert "Segment completion: write `ext-soperator-upgrade-report.md` and JSON" in (
+        soperator_flat
+    )
+    assert "Final handoff: after the last locked segment reports `Pending phase: none`" in (
         soperator_flat
     )
     assert "For Kubernetes minor changes, run provider-supported hops" in soperator_flat
     assert "upgrade a managed cluster from `1.31` to `1.34` as" in soperator_flat
     assert "`1.31 -> 1.33` and `1.31 -> 1.34` requests" in soperator_flat
+    assert "Managed upgrades do not persist a locked multi-run path" in soperator_flat
+    assert "blocks the combined run and prints a chart-first command" in soperator_flat
+    assert "Run the Soperator chart upgrade while Kubernetes stays at `1.32`" in (
+        soperator_flat
+    )
     assert "unsupported` and `not_validated` paths fail fast unless" in soperator_flat
     assert "`supported_with_warning` continue without the override" in soperator_flat
     assert "CXCLI-managed Soperator upgrade follows these stages:" in soperator_flat
@@ -1404,7 +1409,7 @@ def test_docs_define_component_selector_contract() -> None:
     )
     assert "Each executed stage runs a fast stage-scoped verification" in readme_flat
     assert "leaves that same phase pending" in readme_flat
-    assert "After a full successful `ext-soperator upgrade --execute`" in readme_flat
+    assert "After the final locked segment completes" in readme_flat
     assert (
         "`generated/reports/ext-soperator-upgrade-report.md` reports `Pending phase: none`"
         in readme_flat
@@ -1446,15 +1451,18 @@ def test_docs_define_component_selector_contract() -> None:
     assert "If the report still shows any pending phase other than `none`" in readme_flat
     assert "rerun the same `ext-soperator upgrade ... --execute --approve` command" in readme_flat
     assert (
-        "If the report shows `Pending phase: none` but the post-upgrade config refresh was skipped"
+        "If the final report shows `Pending phase: none` but the post-upgrade config refresh was skipped"
         in readme_flat
     )
-    assert "`ext-soperator onboard`, rerun `render`, then use `deploy` only" in readme_flat
+    assert "`ext-soperator onboard` only as an intentional repair path" in readme_flat
     assert "The external Soperator steady-state handoff is:" in readme_flat
     assert (
         "decides whether the accepted `deploy.targets[].soperator_onboarding.actions` list contains external-upgrade-owned work"
         in readme_flat
     )
+    assert "`deploy.targets[].soperator_onboarding.upgrade_path`" in readme_flat
+    assert "Each `ext-soperator upgrade --execute --approve` run advances one locked segment" in readme_flat
+    assert "keeps onboarding in place and prints the next same-command invocation" in readme_flat
     assert (
         "`generated/reports/ext-soperator-upgrade-report.md` shows `Pending phase: none`"
         in readme_flat
@@ -1476,6 +1484,7 @@ def test_docs_define_component_selector_contract() -> None:
         "`nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run`" in readme
     )
     assert "color-highlighted sectioned plan covering target discovery" in readme_flat
+    assert "the full locked path, completed/current/remaining segments" in readme_flat
     assert "accepted onboarding actions, node-template rollout, phases, execution controls" in (
         readme_flat
     )
@@ -1712,7 +1721,7 @@ def test_docs_define_component_selector_contract() -> None:
         in design_flat
     )
     assert "skip normal deploy and continue with" in design_flat
-    assert "After a full successful `ext-soperator upgrade --execute`" in design_flat
+    assert "After the final locked segment completes" in design_flat
     assert (
         "`generated/reports/ext-soperator-upgrade-report.md` shows `Pending phase: none`"
         in design_flat
@@ -1743,20 +1752,22 @@ def test_docs_define_component_selector_contract() -> None:
     assert "If the report still shows any pending phase other than `none`" in design_flat
     assert "rerun the same `ext-soperator upgrade ... --execute --approve` command" in design_flat
     assert (
-        "If the report shows `Pending phase: none` but the post-upgrade config refresh was skipped"
+        "If the final report shows `Pending phase: none` but the post-upgrade config refresh was skipped"
         in design_flat
     )
     assert (
         "`nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run`" in design
     )
-    assert "dry-run plan groups target discovery, versions, support policy" in design_flat
+    assert (
+        "dry-run plan groups target discovery, versions, the full locked path, completed/current/remaining segments"
+    ) in design_flat
     assert "external node-template rollout, phases, execution controls" in design_flat
     assert (
         "`--execute --approve` refreshes discovery, validates the accepted onboarding analysis"
         in design_flat
     )
     assert (
-        "rechecks the live source release and full discovery fingerprint, creates a restore-capable backup before the first mutation"
+        "rechecks the live source release and full discovery fingerprint, creates a restore-capable backup before the first mutation for new/replacement-cluster restore only"
         in design_flat
     )
     assert "The external stage model is explicit" in design_flat
@@ -1779,8 +1790,11 @@ def test_docs_define_component_selector_contract() -> None:
         in design_flat
     )
     assert (
-        "advances supported external MK8s control-plane/node-template, target GPU stack reconciliation phase when paired with external upgrade work, storage, copy, compute"
+        "advances the selected accepted external MK8s control-plane/node-template hop, target GPU stack reconciliation phase when paired with external upgrade work, storage, copy, compute"
         in design_flat
+    )
+    assert "External node-template work is one Kubernetes minor hop per `ext-soperator upgrade` run" in (
+        design_flat
     )
     assert "discovered PVC/PV sizes as lower bounds" in design_flat
     assert "does not attempt a storage shrink" in design_flat

@@ -3472,6 +3472,367 @@ def test_soperator_upgrade_mk8s_only_runs_node_template_phase_without_raw_kubect
     assert "`soperator-chart` (top-level stage: `Soperator Upgrade`)" in markdown_report
 
 
+def test_soperator_upgrade_dry_run_blocks_skipped_k8s_minor_before_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    paths.infra_dir.mkdir(parents=True)
+    paths.flux_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
+    paths.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "infra": {
+                    "components": [
+                        {
+                            "id": "mk8s",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "inputs": {"cluster": {"k8s_version": "1.31"}},
+                        }
+                    ]
+                },
+                "apps": {
+                    "charts": [
+                        {
+                            "id": "soperator",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "namespace": "soperator",
+                            "release-name": "soperator",
+                            "target_ref": "mk8s",
+                            "version": cli._soperator_onboarding_target_version_default(),
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    generated_config = SimpleNamespace()
+    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    rich_console = cli.Console(record=True, width=300)
+    calls: list[object] = []
+
+    monkeypatch.setattr(cli, "console", rich_console)
+    monkeypatch.setattr(
+        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli,
+        "_raise_if_soperator_upgrade_would_bypass_migration",
+        lambda *_args, **_kwargs: calls.append("migration-guard"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_soperator_mk8s_node_template_phase",
+        lambda **_kwargs: calls.append("unexpected-mk8s-mutation"),
+    )
+
+    _run_soperator_upgrade_for_test(
+        config_path=paths.config_path,
+        to_chart_version=None,
+        to_k8s_version="1.33",
+        dry_run=True,
+    )
+
+    rendered = " ".join(rich_console.export_text().split())
+    assert "Managed Kubernetes hop (execution blocked)" in rendered
+    assert "Current Kubernetes version: `1.31`" in rendered
+    assert "Requested Kubernetes target: `1.33`" in rendered
+    assert "Requested path would skip multiple live operations: 1.31 -> 1.32 -> 1.33" in (
+        rendered
+    )
+    assert "Run the next hop first with --to-k8s-version 1.32" in rendered
+    assert calls == ["migration-guard"]
+
+
+def test_soperator_upgrade_execute_blocks_skipped_k8s_minor_before_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    paths.infra_dir.mkdir(parents=True)
+    paths.flux_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
+    paths.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "infra": {
+                    "components": [
+                        {
+                            "id": "mk8s",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "inputs": {"cluster": {"k8s_version": "1.31"}},
+                        }
+                    ]
+                },
+                "apps": {
+                    "charts": [
+                        {
+                            "id": "soperator",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "namespace": "soperator",
+                            "release-name": "soperator",
+                            "target_ref": "mk8s",
+                            "version": cli._soperator_onboarding_target_version_default(),
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    generated_config = SimpleNamespace()
+    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    calls: list[object] = []
+
+    monkeypatch.setattr(
+        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli,
+        "_raise_if_soperator_upgrade_would_bypass_migration",
+        lambda *_args, **_kwargs: calls.append("migration-guard"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_soperator_mk8s_node_template_phase",
+        lambda **_kwargs: calls.append("unexpected-mk8s-mutation"),
+    )
+
+    with pytest.raises(RuntimeError, match="Run the next hop first with --to-k8s-version 1.32"):
+        _run_soperator_upgrade_for_test(
+            config_path=paths.config_path,
+            to_chart_version=None,
+            to_k8s_version="1.33",
+        )
+
+    assert calls == ["migration-guard"]
+    checkpoint_path = (
+        paths.project_dir / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR / "mk8s" / "checkpoint.json"
+    )
+    assert not checkpoint_path.exists()
+
+
+def test_soperator_upgrade_dry_run_blocks_k8s_boundary_before_chart_upgrade(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    paths.infra_dir.mkdir(parents=True)
+    paths.flux_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
+    target_chart_version = cli._soperator_onboarding_target_version_default()
+    paths.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "infra": {
+                    "components": [
+                        {
+                            "id": "mk8s",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "inputs": {"cluster": {"k8s_version": "1.32"}},
+                        }
+                    ]
+                },
+                "apps": {
+                    "charts": [
+                        {
+                            "id": "soperator",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "namespace": "soperator",
+                            "release-name": "soperator",
+                            "target_ref": "mk8s",
+                            "version": "1.22.3",
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    generated_config = SimpleNamespace()
+    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    rich_console = cli.Console(record=True, width=300)
+    calls: list[object] = []
+
+    monkeypatch.setattr(cli, "console", rich_console)
+    monkeypatch.setattr(
+        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli,
+        "_raise_if_soperator_upgrade_would_bypass_migration",
+        lambda *_args, **_kwargs: calls.append("migration-guard"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_soperator_mk8s_node_template_phase",
+        lambda **_kwargs: calls.append("unexpected-mk8s-mutation"),
+    )
+
+    _run_soperator_upgrade_for_test(
+        config_path=paths.config_path,
+        to_chart_version=target_chart_version,
+        to_k8s_version="1.33",
+        dry_run=True,
+    )
+
+    rendered = " ".join(rich_console.export_text().split())
+    assert "Managed upgrade order (execution blocked)" in rendered
+    assert "Current Kubernetes version: `1.32`" in rendered
+    assert "Requested Kubernetes target: `1.33`" in rendered
+    assert "Soperator chart: `1.22.3` -> `4.0.2-ps.3`" in rendered
+    assert (
+        f"nebius-cxcli soperator upgrade {paths.config_path} --target mk8s "
+        f"--to-chart-version {target_chart_version}"
+    ) in rendered
+    assert "--to-k8s-version 1.33" in rendered
+    assert calls == ["migration-guard"]
+
+
+def test_soperator_upgrade_execute_blocks_k8s_boundary_before_chart_upgrade(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    paths.infra_dir.mkdir(parents=True)
+    paths.flux_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
+    target_chart_version = cli._soperator_onboarding_target_version_default()
+    paths.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "infra": {
+                    "components": [
+                        {
+                            "id": "mk8s",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "inputs": {"cluster": {"k8s_version": "1.32"}},
+                        }
+                    ]
+                },
+                "apps": {
+                    "charts": [
+                        {
+                            "id": "soperator",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "namespace": "soperator",
+                            "release-name": "soperator",
+                            "target_ref": "mk8s",
+                            "version": "1.22.3",
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    generated_config = SimpleNamespace()
+    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    calls: list[object] = []
+
+    monkeypatch.setattr(
+        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli,
+        "_raise_if_soperator_upgrade_would_bypass_migration",
+        lambda *_args, **_kwargs: calls.append("migration-guard"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_soperator_mk8s_node_template_phase",
+        lambda **_kwargs: calls.append("unexpected-mk8s-mutation"),
+    )
+
+    with pytest.raises(RuntimeError, match="chart-first run"):
+        _run_soperator_upgrade_for_test(
+            config_path=paths.config_path,
+            to_chart_version=target_chart_version,
+            to_k8s_version="1.33",
+        )
+
+    assert calls == ["migration-guard"]
+    checkpoint_path = (
+        paths.project_dir / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR / "mk8s" / "checkpoint.json"
+    )
+    assert not checkpoint_path.exists()
+
+
+def test_soperator_upgrade_allows_k8s_to_order_boundary_before_chart_upgrade(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    paths.infra_dir.mkdir(parents=True)
+    paths.flux_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
+    target_chart_version = cli._soperator_onboarding_target_version_default()
+    paths.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "infra": {
+                    "components": [
+                        {
+                            "id": "mk8s",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "inputs": {"cluster": {"k8s_version": "1.31"}},
+                        }
+                    ]
+                },
+                "apps": {
+                    "charts": [
+                        {
+                            "id": "soperator",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "namespace": "soperator",
+                            "release-name": "soperator",
+                            "target_ref": "mk8s",
+                            "version": "1.22.3",
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    generated_config = SimpleNamespace()
+    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    rich_console = cli.Console(record=True, width=300)
+
+    monkeypatch.setattr(cli, "console", rich_console)
+    monkeypatch.setattr(
+        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli,
+        "_raise_if_soperator_upgrade_would_bypass_migration",
+        lambda *_args, **_kwargs: None,
+    )
+
+    _run_soperator_upgrade_for_test(
+        config_path=paths.config_path,
+        to_chart_version=target_chart_version,
+        to_k8s_version="1.32",
+        dry_run=True,
+    )
+
+    rendered = " ".join(rich_console.export_text().split())
+    assert "Managed upgrade order (execution blocked)" not in rendered
+    assert "Soperator upgrade path: status=supported" in rendered
+
+
 def test_soperator_upgrade_chart_only_job_policy_fail_blocks_before_chart_apply(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -20901,6 +21262,12 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         normalized_managed_soperator_restore_help
     )
     assert "Standalone MK8s node-template upgrades" in normalized_managed_soperator_upgrade_help
+    assert "Kubernetes minor hops stay one hop per run" in (
+        normalized_managed_soperator_upgrade_help
+    )
+    assert "run the Soperator chart upgrade first" in (
+        normalized_managed_soperator_upgrade_help
+    )
     assert "upgrade [OPTIONS] CONFIG_YAML" in managed_soperator_upgrade_help
     assert "--target" in normalized_managed_soperator_upgrade_help
     assert "--to-chart-version" in normalized_managed_soperator_upgrade_help
@@ -21171,10 +21538,13 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert (
         "--execute --approve refreshes discovery, creates a restore-capable backup"
     ) in normalized_ext_soperator_upgrade_help
-    assert "checkpointed external MK8s control-plane/node-template rollout" in (
+    assert "runs exactly one locked upgrade-path segment" in (
         normalized_ext_soperator_upgrade_help
     )
-    assert "Soperator Helm cutover, validation, and reports" in (
+    assert "Later Kubernetes minor hops use the same ext-soperator upgrade --execute --approve command" in (
+        normalized_ext_soperator_upgrade_help
+    )
+    assert "cxcli advances from the locked path and checkpoint progress" in (
         normalized_ext_soperator_upgrade_help
     )
     assert "--worker-rollout-strategy" in normalized_ext_soperator_upgrade_help

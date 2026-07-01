@@ -12346,6 +12346,7 @@ def _write_soperator_migrate_report(
         "phases": phase_reports,
         "stage_verification": stage_verification_reports,
         "backup": to_plain_data(_mapping(checkpoint.get("backup"))),
+        "upgrade_path": to_plain_data(_mapping(checkpoint.get("upgrade_path"))),
         "slurm": to_plain_data(_mapping(checkpoint.get("slurm"))),
         "mk8s": to_plain_data(
             _mapping(_mapping(phase_state).get(_EXTERNAL_NODE_TEMPLATE_PHASE_ID))
@@ -12392,19 +12393,38 @@ def _checkpoint_for_run(
     target_version: str,
     phase_ids: Sequence[str],
     allow_source_report_refresh: bool = False,
+    upgrade_path_fingerprint: str = "",
+    upgrade_path_segment_id: str = "",
 ) -> dict[str, Any]:
     source_report_refreshed = False
     previous_source_report_fingerprint = ""
+    preserved_upgrade_path: dict[str, Any] | None = None
     if existing is not None:
         if str(existing.get("target_ref", "") or "") != target_ref:
             raise RuntimeError(
                 "External Soperator upgrade checkpoint belongs to a different target."
+            )
+        path_state = _mapping(existing.get("upgrade_path"))
+        existing_path_fingerprint = str(
+            existing.get("upgrade_path_fingerprint", "") or path_state.get("fingerprint", "") or ""
+        ).strip()
+        if (
+            upgrade_path_fingerprint
+            and existing_path_fingerprint
+            and existing_path_fingerprint != upgrade_path_fingerprint
+        ):
+            raise RuntimeError(
+                "External Soperator upgrade checkpoint was started with a different locked "
+                "upgrade path. Review the checkpoint and accepted onboarding path before "
+                "executing."
             )
         if (
             _checkpoint_run_complete(existing)
             and str(existing.get("source_report_fingerprint", "") or "")
             != source_report_fingerprint
         ):
+            if upgrade_path_fingerprint and existing_path_fingerprint == upgrade_path_fingerprint:
+                preserved_upgrade_path = copy.deepcopy(to_plain_data(dict(path_state)))
             existing = None
     if existing is not None:
         existing_source_version = str(existing.get("source_version", "") or "").strip()
@@ -12458,7 +12478,35 @@ def _checkpoint_for_run(
             "events": [],
             "upgrade_safety": upgrade_safety_checkpoint_payload(),
         }
+        if preserved_upgrade_path is not None:
+            checkpoint["upgrade_path"] = preserved_upgrade_path
+            checkpoint["upgrade_path_fingerprint"] = upgrade_path_fingerprint
+            completed_segment_ids = preserved_upgrade_path.get("completed_segment_ids")
+            if isinstance(completed_segment_ids, list):
+                checkpoint["completed_segment_ids"] = list(completed_segment_ids)
     checkpoint.setdefault("upgrade_safety", upgrade_safety_checkpoint_payload())
+    if upgrade_path_fingerprint:
+        path_state = dict(_mapping(checkpoint.get("upgrade_path")))
+        path_state["fingerprint"] = upgrade_path_fingerprint
+        if upgrade_path_segment_id:
+            path_state["current_segment_id"] = upgrade_path_segment_id
+            segment_state = path_state.setdefault("segment_state", {})
+            if not isinstance(segment_state, dict):
+                segment_state = {}
+                path_state["segment_state"] = segment_state
+            segment_entry = segment_state.setdefault(upgrade_path_segment_id, {})
+            if isinstance(segment_entry, dict):
+                segment_entry.setdefault("started_at", _utc_now())
+                segment_entry["source_report_fingerprint"] = source_report_fingerprint
+                segment_entry["planned_phases"] = list(phase_ids)
+        completed_segment_ids = path_state.get("completed_segment_ids")
+        if not isinstance(completed_segment_ids, list):
+            completed_segment_ids = []
+            path_state["completed_segment_ids"] = completed_segment_ids
+        checkpoint["upgrade_path"] = path_state
+        checkpoint["upgrade_path_fingerprint"] = upgrade_path_fingerprint
+        checkpoint["current_segment_id"] = upgrade_path_segment_id
+        checkpoint["completed_segment_ids"] = list(completed_segment_ids)
     checkpoint["updated_at"] = _utc_now()
     checkpoint["planned_phases"] = list(phase_ids)
     if source_report_refreshed:
@@ -14520,6 +14568,8 @@ def execute_soperator_migration(
     strategy_max_surge_count: int | None = None,
     strategy_max_unavailable_count: int | None = None,
     strategy_drain_timeout: str | None = None,
+    upgrade_path_fingerprint: str = "",
+    upgrade_path_segment_id: str = "",
 ) -> SoperatorMigrationExecutionResult:
     """Run checkpointed live external Soperator upgrade phases."""
 
@@ -14563,6 +14613,8 @@ def execute_soperator_migration(
             strategy_max_surge_count=strategy_max_surge_count,
             strategy_max_unavailable_count=strategy_max_unavailable_count,
             strategy_drain_timeout=strategy_drain_timeout,
+            upgrade_path_fingerprint=upgrade_path_fingerprint,
+            upgrade_path_segment_id=upgrade_path_segment_id,
         )
 
 
@@ -14591,6 +14643,8 @@ def _execute_soperator_migration_unlocked(
     strategy_max_surge_count: int | None = None,
     strategy_max_unavailable_count: int | None = None,
     strategy_drain_timeout: str | None = None,
+    upgrade_path_fingerprint: str = "",
+    upgrade_path_segment_id: str = "",
 ) -> SoperatorMigrationExecutionResult:
     normalized_target = normalize_component_token(target_ref)
     if not normalized_target:
@@ -14716,6 +14770,8 @@ def _execute_soperator_migration_unlocked(
         target_version=target_version,
         phase_ids=phase_ids,
         allow_source_report_refresh=mutating_progress_started,
+        upgrade_path_fingerprint=upgrade_path_fingerprint,
+        upgrade_path_segment_id=upgrade_path_segment_id,
     )
     resolved_job_policy = str(job_policy or "fail").strip() or "fail"
     if resolved_job_policy not in _EXTERNAL_UPGRADE_JOB_POLICIES:
@@ -15327,6 +15383,36 @@ def _execute_soperator_migration_unlocked(
     json_report_path = _upgrade_report_json_path(config_path)
     checkpoint["upgrade_report"] = str(report_path)
     checkpoint["upgrade_report_json"] = str(json_report_path)
+    if upgrade_path_fingerprint and upgrade_path_segment_id:
+        path_state = dict(_mapping(checkpoint.get("upgrade_path")))
+        path_state["fingerprint"] = upgrade_path_fingerprint
+        path_state["current_segment_id"] = upgrade_path_segment_id
+        completed_segment_ids = [
+            str(segment_id or "").strip()
+            for segment_id in path_state.get("completed_segment_ids", []) or []
+            if str(segment_id or "").strip()
+        ]
+        segment_state = path_state.setdefault("segment_state", {})
+        if not isinstance(segment_state, dict):
+            segment_state = {}
+            path_state["segment_state"] = segment_state
+        segment_entry = segment_state.setdefault(upgrade_path_segment_id, {})
+        if isinstance(segment_entry, dict):
+            segment_entry["live_source_version"] = live_source_version
+            segment_entry["target_version"] = target_version
+            segment_entry["completed_phases"] = _ordered_phase_list(completed_phases, phase_ids)
+            segment_entry["report_path"] = str(report_path)
+            segment_entry["json_report_path"] = str(json_report_path)
+            if str(checkpoint.get("pending_phase", "") or "") == "none":
+                segment_entry["completed_at"] = _utc_now()
+        if str(checkpoint.get("pending_phase", "") or "") == "none":
+            if upgrade_path_segment_id not in completed_segment_ids:
+                completed_segment_ids.append(upgrade_path_segment_id)
+            path_state["completed_segment_ids"] = completed_segment_ids
+            checkpoint["completed_segment_ids"] = list(completed_segment_ids)
+        checkpoint["upgrade_path"] = path_state
+        checkpoint["upgrade_path_fingerprint"] = upgrade_path_fingerprint
+        checkpoint["current_segment_id"] = upgrade_path_segment_id
     _emit_phase_comment(
         "report",
         "writing external Soperator upgrade checkpoint and reports.",

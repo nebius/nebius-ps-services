@@ -308,6 +308,7 @@ def soperator_onboarding_fingerprint(
                     onboarding.get("migration_profile_id", "") or ""
                 ).strip(),
                 "node_template_upgrade": to_plain_data(onboarding.get("node_template_upgrade", {})),
+                "upgrade_path": to_plain_data(onboarding.get("upgrade_path", {})),
                 "collection_errors": list(onboarding.get("collection_errors", []) or []),
             },
         },
@@ -3451,6 +3452,10 @@ def _matching_source_discovery_report(
         actual = str(report.get(key, "") or "").strip()
         if expected and actual != expected:
             return None
+    upgrade_path = onboarding.get("upgrade_path")
+    if isinstance(upgrade_path, Mapping):
+        report = dict(report)
+        report["upgrade_path"] = copy.deepcopy(to_plain_data(upgrade_path))
     return copy.deepcopy(dict(report))
 
 
@@ -3552,6 +3557,10 @@ def build_soperator_onboarding_report_from_config(
         if onboarding.get("accepted") is True:
             report = _report_with_accepted_onboarding_contract(report, onboarding)
     report_payload = report.to_dict()
+    if isinstance(onboarding, Mapping):
+        upgrade_path = onboarding.get("upgrade_path")
+        if isinstance(upgrade_path, Mapping):
+            report_payload["upgrade_path"] = copy.deepcopy(to_plain_data(upgrade_path))
     report_payload["accepted_fingerprint"] = soperator_onboarding_fingerprint(
         payload_or_config,
         target_ref=target_ref,

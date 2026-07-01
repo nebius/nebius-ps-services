@@ -961,7 +961,7 @@ def _external_mk8s_target_row(instance_id: str = "external-cluster") -> dict[str
     }
 
 
-def _old_soperator_snapshot() -> dict[str, object]:
+def _old_soperator_snapshot(*, soperator_version: str = "3.0.5") -> dict[str, object]:
     return {
         "node_groups": {
             "gpu-pool": {
@@ -979,8 +979,8 @@ def _old_soperator_snapshot() -> dict[str, object]:
             {
                 "name": "soperator",
                 "namespace": "soperator",
-                "chart": "soperator-3.0.5",
-                "app_version": "3.0.5",
+                "chart": f"soperator-{soperator_version}",
+                "app_version": soperator_version,
             }
         ],
         "crds": [],
@@ -991,13 +991,17 @@ def _old_soperator_snapshot() -> dict[str, object]:
     }
 
 
-def _old_soperator_snapshot_with_provider() -> dict[str, object]:
-    snapshot = _old_soperator_snapshot()
+def _old_soperator_snapshot_with_provider(
+    *,
+    soperator_version: str = "3.0.5",
+    current_k8s_version: str = "1.31",
+) -> dict[str, object]:
+    snapshot = _old_soperator_snapshot(soperator_version=soperator_version)
     snapshot["provider"] = {
         "mk8s_cluster": {
             "id": "mk8scluster-external",
             "name": "external-cluster",
-            "control_plane_version": "1.31",
+            "control_plane_version": current_k8s_version,
         }
     }
     node_groups = snapshot["node_groups"]
@@ -1006,7 +1010,7 @@ def _old_soperator_snapshot_with_provider() -> dict[str, object]:
     assert isinstance(gpu_pool, dict)
     gpu_pool["provider"] = {
         "node_template": {
-            "k8s_version": "1.31",
+            "k8s_version": current_k8s_version,
             "os": cli_module.ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS,
             "gpu_stack_preset": (
                 cli_module.ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_GPU_STACK_PRESET
@@ -1134,9 +1138,15 @@ def _write_old_soperator_migration_config(
     *,
     storage_mode: str | None = None,
     compute_mode: str | None = None,
+    source_soperator_version: str = "3.0.5",
+    current_k8s_version: str = "1.31",
+    target_k8s_version: str = "1.32",
 ) -> Path:
     config_path = tmp_path / "config.yaml"
-    snapshot = _old_soperator_snapshot_with_provider()
+    snapshot = _old_soperator_snapshot_with_provider(
+        soperator_version=source_soperator_version,
+        current_k8s_version=current_k8s_version,
+    )
     target = cli_module._soperator_onboarding_target_defaults(
         "external-cluster",
         kube_context="external-context",
@@ -1144,7 +1154,7 @@ def _write_old_soperator_migration_config(
         compute_mode=compute_mode,
         pinned_chart_version=_soperator_test_chart_version(),
         pinned_app_version=_soperator_test_app_version(),
-        target_k8s_version="1.32",
+        target_k8s_version=target_k8s_version,
         snapshot=snapshot,
     )
     cli_module._write_soperator_source_discovery_report_from_target_row(
@@ -1222,6 +1232,148 @@ def _stub_external_soperator_upgrade_backup(monkeypatch: pytest.MonkeyPatch) -> 
             "report_redacted": True,
         },
     )
+
+
+def _locked_upgrade_path_from_config(config_path: Path) -> dict[str, object]:
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    return payload["deploy"]["targets"][0]["soperator_onboarding"]["upgrade_path"]
+
+
+def test_locked_ext_soperator_upgrade_path_generates_three_segments_for_131_to_134(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_old_soperator_migration_config(
+        tmp_path,
+        source_soperator_version="1.22.3",
+        current_k8s_version="1.31",
+        target_k8s_version="1.34",
+    )
+
+    upgrade_path = _locked_upgrade_path_from_config(config_path)
+    segments = upgrade_path["segments"]
+
+    assert upgrade_path["schema"] == cli_module._SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA
+    assert upgrade_path["locked"] is True
+    assert upgrade_path["support_rule_id"] == "k8s-1-33-soperator-4-supported"
+    assert [segment["target_k8s_version"] for segment in segments] == [
+        "1.32",
+        "1.33",
+        "1.34",
+    ]
+    assert set(segments[0]["actions"]) >= {
+        "approve-external-soperator-upgrade",
+        "upgrade-external-node-template",
+        "reconcile-target-gpu-stack",
+        "create-aligned-sfs",
+        "plan-soperator-data-migration",
+        "plan-soperator-compute-migration",
+        "upgrade-soperator",
+    }
+    assert segments[0]["source_soperator_version"] == "1.22.3"
+    assert segments[0]["target_soperator_version"] == _soperator_test_chart_version()
+    assert segments[1]["actions"] == [
+        "approve-external-soperator-upgrade",
+        "upgrade-external-node-template",
+    ]
+    assert segments[1]["source_soperator_version"] == _soperator_test_chart_version()
+    assert segments[2]["current_k8s_version"] == "1.33"
+
+
+def test_locked_ext_soperator_upgrade_path_generates_two_node_hops_for_pinned_soperator(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_old_soperator_migration_config(
+        tmp_path,
+        source_soperator_version=_soperator_test_chart_version(),
+        current_k8s_version="1.32",
+        target_k8s_version="1.34",
+        storage_mode="keep-existing-storage",
+        compute_mode="keep-existing-compute",
+    )
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]
+    onboarding["actions"] = [
+        "approve-external-soperator-upgrade",
+        "upgrade-external-node-template",
+    ]
+    report = cli_module.load_soperator_discovery_bundle(
+        _soperator_discovery_manifest_path(config_path)
+    )
+    report_payload = report["report"]
+    onboarding["upgrade_path"] = cli_module._locked_upgrade_path_from_report(
+        report=report_payload,
+        onboarding=onboarding,
+    )
+
+    segments = onboarding["upgrade_path"]["segments"]
+
+    assert [segment["target_k8s_version"] for segment in segments] == ["1.33", "1.34"]
+    assert all(
+        segment["actions"]
+        == ["approve-external-soperator-upgrade", "upgrade-external-node-template"]
+        for segment in segments
+    )
+    assert all(segment["soperator_upgrade_required"] is False for segment in segments)
+
+
+def test_locked_ext_soperator_upgrade_path_generates_soperator_only_segment(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_old_soperator_migration_config(
+        tmp_path,
+        source_soperator_version="1.22.3",
+        current_k8s_version="1.32",
+        target_k8s_version="1.32",
+        storage_mode="keep-existing-storage",
+        compute_mode="keep-existing-compute",
+    )
+
+    upgrade_path = _locked_upgrade_path_from_config(config_path)
+    segments = upgrade_path["segments"]
+
+    assert len(segments) == 1
+    assert segments[0]["current_k8s_version"] == "1.32"
+    assert segments[0]["target_k8s_version"] == "1.32"
+    assert set(segments[0]["actions"]) >= {
+        "approve-external-soperator-upgrade",
+        "reconcile-target-gpu-stack",
+        "upgrade-soperator",
+    }
+    assert "upgrade-external-node-template" not in segments[0]["actions"]
+    assert segments[0]["soperator_upgrade_required"] is True
+    assert segments[0]["k8s_upgrade_required"] is False
+
+
+def test_locked_ext_soperator_upgrade_path_soperator_first_segment_keeps_current_k8s(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_old_soperator_migration_config(
+        tmp_path,
+        source_soperator_version="1.22.3",
+        current_k8s_version="1.32",
+        target_k8s_version="1.34",
+        storage_mode="keep-existing-storage",
+        compute_mode="keep-existing-compute",
+    )
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    upgrade_path = _locked_upgrade_path_from_config(config_path)
+    first_segment = upgrade_path["segments"][0]
+
+    assert first_segment["target_k8s_version"] == "1.32"
+    assert first_segment["soperator_upgrade_required"] is True
+    assert first_segment["k8s_upgrade_required"] is False
+    assert "upgrade-external-node-template" not in first_segment["actions"]
+
+    effective_payload = cli_module._soperator_effective_upgrade_payload_for_segment(
+        payload=payload,
+        target_ref="external-cluster",
+        upgrade_path=upgrade_path,
+        segment=first_segment,
+    )
+    onboarding = effective_payload["deploy"]["targets"][0]["soperator_onboarding"]
+
+    assert onboarding["node_template_upgrade"]["target_k8s_version"] == "1.32"
+    assert "upgrade-external-node-template" not in onboarding["actions"]
 
 
 def _soperator_discovery_manifest_path(
@@ -1414,9 +1566,14 @@ def test_deploy_blocks_migration_required_soperator_onboarding_target(
     assert "nebius-cxcli ext-soperator upgrade" in message
     assert "--dry-run" in message
     assert "--execute --approve" in message
-    assert "Use upgrade for reruns/resume while these actions remain selected" in message
-    assert "fully completed `ext-soperator upgrade --execute` refreshes config.yaml" in message
-    assert "rerun `ext-soperator onboard`, rerun render" in message
+    assert "Use `ext-soperator upgrade` for reruns/resume while these actions remain selected" in message
+    assert "locked path still has remaining segments" in message
+    assert "repeat the same `ext-soperator upgrade --execute --approve` command" in message
+    assert "until the final locked segment completes" in message
+    assert (
+        "if that final refresh was skipped, rerun `ext-soperator onboard` only as "
+        "an intentional repair path"
+    ) in message
 
 
 def test_deploy_migration_block_is_limited_to_selected_target(tmp_path: Path) -> None:
@@ -7413,16 +7570,29 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "Versions:" in result.output
     assert f"Soperator version: 3.0.5 -> {_soperator_test_chart_version()}" in result.output
     assert "Kubernetes version: 1.31 -> 1.32" in result.output
+    assert (
+        "Accepted Kubernetes hop: 1.31 -> 1.32; one Kubernetes minor per external "
+        "upgrade run."
+    ) in result.output
     assert "Source version: 3.0.5" not in result.output
     assert "Current Kubernetes version: 1.31" not in result.output
     assert "Support policy:" in result.output
     assert "Soperator upgrade path: status=supported" in result.output
+    assert "Locked upgrade path:" in result.output
+    assert "Path locked: yes" in result.output
+    assert "Kubernetes path: 1.31 -> 1.32" in result.output
+    assert "Completed segments: none" in result.output
+    assert "Current segment: Kubernetes 1.31 -> 1.32 plus Soperator" in result.output
+    assert "Remaining segments: none" in result.output
+    assert "Next command: nebius-cxcli ext-soperator upgrade" in result.output
     assert "Accepted onboarding actions:" in result.output
     assert "Storage mode: create-aligned-sfs" in result.output
     assert "Compute mode: create-aligned-node-groups" in result.output
     assert "External upgrade required: yes" in result.output
-    assert "Storage upgrade work required: yes" in result.output
-    assert "Compute upgrade work required: yes" in result.output
+    assert "Storage migrate work required: yes" in result.output
+    assert "Compute migrate work required: yes" in result.output
+    assert "Storage upgrade work required" not in result.output
+    assert "Compute upgrade work required" not in result.output
     assert "Soperator upgrade required: yes" in result.output
     assert "External node-template upgrade required: yes" in result.output
     assert "Target GPU stack reconciliation required: yes" in result.output
@@ -7454,6 +7624,7 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "active service or worker group capacity may be reduced by 1 node" in result.output
     assert "Planned worker waves: wave 1: gpu-pool." in result.output
     assert "zero-surge uses max_surge=0" in result.output
+    assert "one Kubernetes minor hop per external upgrade run" in result.output
     assert "safe-surge requires max_surge_count temporary surge node(s)" in result.output
     assert "Failure handling contract:" in result.output
     assert "Resume contract:" in result.output
@@ -7461,6 +7632,8 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "Execution mode: dry-run; no cluster changes were made." in result.output
     assert "Slurm job policy: interactive" in result.output
     assert "Backup: restore-capable archive" in result.output
+    assert "only into a new/replacement cluster" in result.output
+    assert "not back onto the original source cluster" in result.output
     assert result.output.count("Slurm job policy:") == 1
     assert result.output.count("Backup: restore-capable archive") == 1
 
@@ -7480,6 +7653,317 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "active service or worker group capacity may be reduced by 3 nodes" in (
         custom_zero_surge.output
     )
+
+
+def test_ext_soperator_upgrade_dry_run_prints_full_locked_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = _write_old_soperator_migration_config(
+        tmp_path,
+        source_soperator_version="1.22.3",
+        current_k8s_version="1.31",
+        target_k8s_version="1.34",
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "collect_kubectl_soperator_snapshot",
+        lambda **_kwargs: _old_soperator_snapshot_with_provider(
+            soperator_version="1.22.3",
+            current_k8s_version="1.31",
+        ),
+    )
+
+    result = runner.invoke(app, ["ext-soperator", "upgrade", str(config_path), "--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert "Kubernetes version: 1.31 -> 1.32" in result.output
+    assert "Kubernetes path: 1.31 -> 1.34" in result.output
+    assert (
+        "Recommended order: Kubernetes 1.31 -> 1.32; "
+        f"Soperator 1.22.3 -> {_soperator_test_chart_version()} while Kubernetes stays 1.32; "
+        "Kubernetes 1.32 -> 1.33 -> 1.34"
+    ) in result.output
+    assert "segment-1-kubernetes-1-31-1-32-soperator" in result.output
+    assert "segment-2-kubernetes-1-32-1-33: remaining" in result.output
+    assert "segment-3-kubernetes-1-33-1-34: remaining" in result.output
+    assert "Completed segments: none" in result.output
+    assert (
+        "Current segment: Kubernetes 1.31 -> 1.32 plus "
+        f"Soperator 1.22.3 -> {_soperator_test_chart_version()}"
+    ) in result.output
+    assert "Remaining segments: Kubernetes 1.32 -> 1.33, Kubernetes 1.33 -> 1.34" in (
+        result.output
+    )
+    assert "ext-soperator onboard" not in result.output
+
+
+def test_ext_soperator_upgrade_dry_run_advances_locked_path_from_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = _write_old_soperator_migration_config(
+        tmp_path,
+        source_soperator_version="1.22.3",
+        current_k8s_version="1.31",
+        target_k8s_version="1.34",
+    )
+    upgrade_path = _locked_upgrade_path_from_config(config_path)
+    segments = upgrade_path["segments"]
+    checkpoint_path = soperator_migration_module.soperator_migration_checkpoint_path(
+        config_path,
+        "external-cluster",
+    )
+    checkpoint_path.parent.mkdir(parents=True)
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "schema": soperator_migration_module.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+                "target_ref": "external-cluster",
+                "upgrade_path_fingerprint": cli_module._locked_upgrade_path_fingerprint(
+                    upgrade_path
+                ),
+                "current_segment_id": segments[0]["id"],
+                "completed_segment_ids": [segments[0]["id"]],
+                "pending_phase": "none",
+                "planned_phases": ["discovery-and-plan"],
+                "completed_phases": ["discovery-and-plan"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "collect_kubectl_soperator_snapshot",
+        lambda **_kwargs: _old_soperator_snapshot_with_provider(
+            soperator_version=_soperator_test_chart_version(),
+            current_k8s_version="1.32",
+        ),
+    )
+
+    second = runner.invoke(app, ["ext-soperator", "upgrade", str(config_path), "--dry-run"])
+
+    assert second.exit_code == 0, second.output
+    assert "Completed segments: Kubernetes 1.31 -> 1.32 plus Soperator" in second.output
+    assert "Current segment: Kubernetes 1.32 -> 1.33" in second.output
+    assert "Kubernetes version: 1.32 -> 1.33" in second.output
+
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "schema": soperator_migration_module.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+                "target_ref": "external-cluster",
+                "upgrade_path_fingerprint": cli_module._locked_upgrade_path_fingerprint(
+                    upgrade_path
+                ),
+                "current_segment_id": segments[1]["id"],
+                "completed_segment_ids": [segments[0]["id"], segments[1]["id"]],
+                "pending_phase": "none",
+                "planned_phases": ["discovery-and-plan"],
+                "completed_phases": ["discovery-and-plan"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "collect_kubectl_soperator_snapshot",
+        lambda **_kwargs: _old_soperator_snapshot_with_provider(
+            soperator_version=_soperator_test_chart_version(),
+            current_k8s_version="1.33",
+        ),
+    )
+
+    third = runner.invoke(app, ["ext-soperator", "upgrade", str(config_path), "--dry-run"])
+
+    assert third.exit_code == 0, third.output
+    assert "Current segment: Kubernetes 1.33 -> 1.34" in third.output
+    assert "Remaining segments: none" in third.output
+
+
+def test_ext_soperator_upgrade_execute_advances_locked_path_segments(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = _write_old_soperator_migration_config(
+        tmp_path,
+        source_soperator_version="1.22.3",
+        current_k8s_version="1.31",
+        target_k8s_version="1.34",
+    )
+    upgrade_path = _locked_upgrade_path_from_config(config_path)
+    checkpoint_path = soperator_migration_module.soperator_migration_checkpoint_path(
+        config_path,
+        "external-cluster",
+    )
+    current_snapshot = {
+        "value": _old_soperator_snapshot_with_provider(
+            soperator_version="1.22.3",
+            current_k8s_version="1.31",
+        )
+    }
+    observed: list[tuple[str, str, tuple[str, ...], str, str]] = []
+
+    def _collect_snapshot(**_kwargs):
+        return current_snapshot["value"]
+
+    def _execute(**kwargs):
+        segment_id = kwargs["upgrade_path_segment_id"]
+        onboarding = kwargs["payload"]["deploy"]["targets"][0]["soperator_onboarding"]
+        node_template = onboarding.get("node_template_upgrade", {})
+        target_k8s_version = node_template.get("target_k8s_version", "")
+        observed.append(
+            (
+                segment_id,
+                target_k8s_version,
+                tuple(onboarding.get("actions", [])),
+                onboarding.get("source_version", ""),
+                onboarding.get("target_version", ""),
+            )
+        )
+        if target_k8s_version:
+            current_snapshot["value"] = _old_soperator_snapshot_with_provider(
+                soperator_version=onboarding.get("target_version", ""),
+                current_k8s_version=target_k8s_version,
+            )
+        completed_segment_ids: list[str] = []
+        if checkpoint_path.exists():
+            existing = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+            completed_segment_ids = list(existing.get("completed_segment_ids", []))
+        completed_segment_ids.append(segment_id)
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint_path.write_text(
+            json.dumps(
+                {
+                    "schema": soperator_migration_module.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+                    "target_ref": "external-cluster",
+                    "upgrade_path_fingerprint": kwargs["upgrade_path_fingerprint"],
+                    "current_segment_id": segment_id,
+                    "completed_segment_ids": completed_segment_ids,
+                    "pending_phase": "none",
+                    "planned_phases": ["discovery-and-plan"],
+                    "completed_phases": ["discovery-and-plan"],
+                    "upgrade_path": {
+                        "fingerprint": kwargs["upgrade_path_fingerprint"],
+                        "current_segment_id": segment_id,
+                        "completed_segment_ids": completed_segment_ids,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        return SoperatorMigrationExecutionResult(
+            checkpoint_path=checkpoint_path,
+            completed_phases=("discovery-and-plan",),
+            pending_phase="none",
+            pending_reason="",
+            live_source_version=onboarding.get("source_version", ""),
+            target_version=onboarding.get("target_version", ""),
+            mutation_performed=True,
+            lines=(f"completed {segment_id}",),
+        )
+
+    _stub_external_soperator_upgrade_backup(monkeypatch)
+    monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _collect_snapshot)
+    monkeypatch.setattr(cli_module, "execute_soperator_migration", _execute)
+    monkeypatch.setattr(
+        cli_module,
+        "external_soperator_upgrade_protected_comparison_passed",
+        lambda **_kwargs: True,
+    )
+
+    first = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "upgrade",
+            str(config_path),
+            "--target",
+            "external-cluster",
+            "--execute",
+            "--approve",
+        ],
+    )
+
+    assert first.exit_code == 0, first.output
+    assert observed[0][0] == upgrade_path["segments"][0]["id"]
+    assert observed[0][1] == "1.32"
+    assert "upgrade-soperator" in observed[0][2]
+    assert observed[0][3] == "1.22.3"
+    assert observed[0][4] == _soperator_test_chart_version()
+    assert "Next locked upgrade segment: Kubernetes 1.32 -> 1.33" in first.output
+
+    current_snapshot["value"] = _old_soperator_snapshot_with_provider(
+        soperator_version=_soperator_test_chart_version(),
+        current_k8s_version="1.32",
+    )
+    second = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "upgrade",
+            str(config_path),
+            "--target",
+            "external-cluster",
+            "--execute",
+            "--approve",
+        ],
+    )
+
+    assert second.exit_code == 0, second.output
+    assert observed[1][0] == upgrade_path["segments"][1]["id"]
+    assert observed[1][1] == "1.33"
+    assert observed[1][2] == (
+        "approve-external-soperator-upgrade",
+        "upgrade-external-node-template",
+    )
+    assert observed[1][3] == _soperator_test_chart_version()
+    assert observed[1][4] == _soperator_test_chart_version()
+    assert "Next locked upgrade segment: Kubernetes 1.33 -> 1.34" in second.output
+
+    third = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "upgrade",
+            str(config_path),
+            "--target",
+            "external-cluster",
+            "--execute",
+            "--approve",
+        ],
+    )
+
+    assert third.exit_code == 0, third.output
+    assert observed[2][0] == upgrade_path["segments"][2]["id"]
+    assert observed[2][1] == "1.34"
+    assert observed[2][2] == (
+        "approve-external-soperator-upgrade",
+        "upgrade-external-node-template",
+    )
+    assert "Post-upgrade config refresh" in third.output
+
+
+def test_ext_soperator_upgrade_rejects_edited_locked_path_fingerprint(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_old_soperator_migration_config(
+        tmp_path,
+        source_soperator_version="1.22.3",
+        current_k8s_version="1.31",
+        target_k8s_version="1.34",
+    )
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]
+    onboarding["upgrade_path"]["segments"][0]["target_k8s_version"] = "1.33"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    result = runner.invoke(app, ["ext-soperator", "upgrade", str(config_path), "--dry-run"])
+
+    assert result.exit_code == 1
+    normalized_output = " ".join(result.output.split())
+    assert "does not have a current accepted" in normalized_output
+    assert "soperator_onboarding analysis" in normalized_output
 
 
 def test_ext_soperator_upgrade_dry_run_uses_discovery_spinner(
@@ -7522,6 +8006,48 @@ def test_ext_soperator_upgrade_dry_run_uses_discovery_spinner(
     )
 
 
+def test_ext_soperator_upgrade_dry_run_omits_k8s_hop_without_node_template_action(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = _write_old_soperator_migration_config(
+        tmp_path,
+        storage_mode="keep-existing-storage",
+        compute_mode="keep-existing-compute",
+    )
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    target = payload["deploy"]["targets"][0]
+    onboarding = target["soperator_onboarding"]
+    onboarding["actions"] = [
+        "approve-external-soperator-upgrade",
+        "upgrade-soperator",
+    ]
+    onboarding.pop("upgrade_path", None)
+    cli_module._refresh_soperator_onboarding_fingerprints(payload)
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    monkeypatch.setattr(
+        cli_module,
+        "collect_kubectl_soperator_snapshot",
+        lambda **_kwargs: _old_soperator_snapshot_with_provider(),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "upgrade",
+            str(config_path),
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Soperator upgrade required: yes" in result.output
+    assert "External node-template upgrade required: no" in result.output
+    assert "Accepted Kubernetes hop:" not in result.output
+    assert "External node-template rollout:" not in result.output
+
+
 def test_ext_soperator_upgrade_execute_requires_override_for_unsupported_policy(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -7534,6 +8060,7 @@ def test_ext_soperator_upgrade_execute_requires_override_for_unsupported_policy(
     onboarding["target_version"] = "1.22.5"
     onboarding["support_override_used"] = True
     onboarding["node_template_upgrade"]["target_k8s_version"] = "1.33"
+    onboarding.pop("upgrade_path", None)
     soperator = next(row for row in payload["apps"]["charts"] if row["id"] == "soperator")
     soperator["version"] = "1.22.5"
     cli_module._refresh_soperator_onboarding_fingerprints(payload)
@@ -7768,6 +8295,7 @@ def test_ext_soperator_upgrade_dry_run_rejects_gpu_reconciliation_only_deploy_ro
     onboarding = target["soperator_onboarding"]
     onboarding["actions"] = ["reconcile-target-gpu-stack"]
     onboarding["node_template_upgrade"] = {}
+    onboarding.pop("upgrade_path", None)
     cli_module._refresh_soperator_onboarding_fingerprints(payload)
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     findings_path = _soperator_discovery_section_path(config_path, "findings.json")
@@ -7890,8 +8418,22 @@ def test_ext_soperator_upgrade_dry_run_respects_storage_compute_mode_matrix(
     result = runner.invoke(app, ["ext-soperator", "upgrade", str(config_path), "--dry-run"])
 
     assert result.exit_code == 0, result.output
-    assert f"Storage mode: {storage_mode}" in result.output
-    assert f"Compute mode: {compute_mode}" in result.output
+    expected_storage_mode = (
+        "keep-existing-storage-layout"
+        if storage_mode == "keep-existing-storage"
+        else storage_mode
+    )
+    expected_compute_mode = (
+        "keep-existing-compute-layout"
+        if compute_mode == "keep-existing-compute"
+        else compute_mode
+    )
+    assert f"Storage mode: {expected_storage_mode}" in result.output
+    assert f"Compute mode: {expected_compute_mode}" in result.output
+    expected_storage_work = "no" if storage_mode == "keep-existing-storage" else "yes"
+    expected_compute_work = "no" if compute_mode == "keep-existing-compute" else "yes"
+    assert f"Storage migrate work required: {expected_storage_work}" in result.output
+    assert f"Compute migrate work required: {expected_compute_work}" in result.output
     for phase_id in present:
         assert phase_id in result.output
     for phase_id in absent:
@@ -8284,11 +8826,33 @@ def test_ext_soperator_upgrade_execute_refreshes_config_after_completed_upgrade(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config_path = _write_old_soperator_migration_config(tmp_path)
+    upgrade_path = _locked_upgrade_path_from_config(config_path)
+    checkpoint_path = soperator_migration_module.soperator_migration_checkpoint_path(
+        config_path,
+        "external-cluster",
+    )
     _stub_external_soperator_upgrade_backup(monkeypatch)
 
-    def _execute(**_kwargs):
+    def _execute(**kwargs):
+        segment_ids = [segment["id"] for segment in upgrade_path["segments"]]
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint_path.write_text(
+            json.dumps(
+                {
+                    "schema": soperator_migration_module.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+                    "target_ref": "external-cluster",
+                    "upgrade_path_fingerprint": kwargs["upgrade_path_fingerprint"],
+                    "current_segment_id": kwargs["upgrade_path_segment_id"],
+                    "completed_segment_ids": segment_ids,
+                    "pending_phase": "none",
+                    "planned_phases": ["discovery-and-plan"],
+                    "completed_phases": ["discovery-and-plan"],
+                }
+            ),
+            encoding="utf-8",
+        )
         return SoperatorMigrationExecutionResult(
-            checkpoint_path=tmp_path / "checkpoint.json",
+            checkpoint_path=checkpoint_path,
             completed_phases=(
                 "discovery-and-plan",
                 "customer-approval",

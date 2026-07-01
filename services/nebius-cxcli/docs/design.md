@@ -619,6 +619,15 @@ and chart source-family changes.
   `generated/reports/soperator-upgrade-report.md` and JSON. Kubernetes minor
   upgrades must follow provider-supported hops, so a managed `1.32` to `1.34`
   maintenance path is modeled as a `1.33` run followed by a `1.34` run.
+  Managed upgrades do not persist a locked multi-run path because `config.yaml`
+  plus live MK8s state are the source of truth for each requested run. cxcli
+  does still enforce the committed Soperator/Kubernetes recommended order: if a
+  cluster is already at the Soperator staging Kubernetes minor, for example
+  `1.32`, and the next requested hop would cross to `1.33` while the Soperator
+  chart is still old, `soperator upgrade` blocks the combined run and prints a
+  chart-first command. Run the Soperator chart upgrade while Kubernetes stays at
+  `1.32`, then rerun `soperator upgrade --to-k8s-version 1.33`, and later
+  `--to-k8s-version 1.34` as separate provider-supported hops.
   If `--to-chart-version` is omitted in an interactive run, the
   `soperator.upgrade.to_chart_version` prompt shows the selected row's current
   chart version and uses the active `component_sources.yaml` Soperator chart pin
@@ -1070,31 +1079,41 @@ reconciles the generated desired state across every target; `deploy --target
 If the accepted onboarding report says external-upgrade-owned work is required, skip
 normal deploy and continue with
 `nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run` to
-inspect the explicit external-upgrade-owned actions. In interactive terminals, the
-dry-run plan groups target discovery, versions, support policy, accepted
-onboarding actions, external node-template rollout, phases, execution controls,
-and execution guarantees so operators can scan the plan before accepting live work. The route
+inspect the explicit external-upgrade-owned actions. Onboarding locks the full
+discovery-guided path under
+`deploy.targets[].soperator_onboarding.upgrade_path`; each
+`ext-soperator upgrade --execute --approve` run executes exactly one locked
+segment, and checkpoint progress selects the next segment on rerun. In
+interactive terminals, the dry-run plan groups target discovery, versions, the
+full locked path, completed/current/remaining segments, the accepted one-minor
+Kubernetes hop for the current segment, support policy, accepted onboarding
+actions, external node-template rollout, phases, execution controls, and
+execution guarantees so operators can scan the plan before accepting live work.
+The route
 is driven by
 `deploy.targets[].soperator_onboarding.actions`, not by storage and compute
-modes alone: a target that resolved to `keep-existing-storage` and
-`keep-existing-compute` can still require upgrade for Soperator chart upgrade
-or external MK8s control-plane/node-template upgrade. `deploy` refuses selected
+modes alone: a target that resolved to `keep-existing-storage-layout` and
+`keep-existing-compute-layout` in the plan can still require upgrade for
+Soperator chart upgrade or external MK8s control-plane/node-template upgrade.
+`deploy` refuses selected
 external-upgrade-required external Soperator onboarding targets before Terraform/Flux
 preflight because deploy only applies rendered desired state; the guard checks
 both the rendered manifest runtime config and the current source config so older
 bundles fail closed while external-upgrade-owned actions remain selected.
 `ext-soperator upgrade --execute` owns the ad hoc Nebius API calls,
 checkpointing, validation hold, and source retirement phases. Use upgrade for
-reruns/resume while those actions remain selected. After a full successful
-`ext-soperator upgrade --execute`, `generated/reports/ext-soperator-upgrade-report.md` shows
-`Pending phase: none` and cxcli refreshes the source config from live
-post-upgrade discovery when it can, so external-upgrade-owned actions are no longer
-selected and future normal reconciliation can use render/deploy. If the report
-still shows any pending phase other than `none`, rerun the same
-`ext-soperator upgrade ... --execute --approve` command. If the report shows
-`Pending phase: none` but the post-upgrade config refresh was skipped, rerun
-`ext-soperator onboard`, rerender, then deploy only for normal rendered
-reconciliation if needed.
+reruns/resume while those actions remain selected. After a segment completes
+with `Pending phase: none`, cxcli keeps accepted onboarding in place while any
+locked path segments remain and prints the next same-command invocation. After
+the final locked segment completes, `generated/reports/ext-soperator-upgrade-report.md`
+shows `Pending phase: none` and cxcli refreshes the source config from live
+post-upgrade discovery when it can, so external-upgrade-owned actions are no
+longer selected and future normal reconciliation can use render/deploy. If the
+report still shows any pending phase other than `none`, rerun the same
+`ext-soperator upgrade ... --execute --approve` command. If the final report
+shows `Pending phase: none` but the post-upgrade config refresh was skipped,
+rerun `ext-soperator onboard` only as an intentional repair path, rerender,
+then deploy for normal rendered reconciliation if needed.
 The external stage model is explicit: dry-run planning reads `config.yaml` and
 the accepted discovery bundle; execute preflight refreshes live discovery,
 verifies source release/fingerprint, creates or reuses a restore-capable backup,
@@ -1145,17 +1164,22 @@ is the separate execution surface for live orchestration. `--execute --approve`
 refreshes discovery, validates the accepted onboarding analysis, reads
 `generated/reports/soperator-discovery/<target>/manifest.json`, rechecks the live source
 release and full discovery fingerprint, creates a restore-capable backup before
-the first mutation, writes a local `.nebius-cxcli/ext-soperator-upgrades/`
-timeout-guarded checkpoint, and
-advances supported external MK8s control-plane/node-template, target GPU stack
-reconciliation phase when paired with external upgrade work, storage,
-copy, compute, cutover, validation, and retirement phases in order.
+the first mutation for new/replacement-cluster restore only, writes a local
+`.nebius-cxcli/ext-soperator-upgrades/` timeout-guarded checkpoint, and
+advances the selected accepted external MK8s control-plane/node-template hop,
+target GPU stack reconciliation phase when paired with external upgrade work,
+storage, copy, compute, cutover, validation, and retirement phases in order.
+External node-template work is one Kubernetes minor hop per `ext-soperator
+upgrade` run; later Kubernetes hops from the locked path use later invocations
+of the same `ext-soperator upgrade --execute --approve` command without normal
+discovery/onboarding reruns.
 The executor then auto-detects source
 worker node groups from live Nebius MK8s node-group names and Kubernetes
 `slurm.nebius.ai/nodeset` worker labels, such as `worker-gpu` and `worker-cpu`,
 and records the resolved groups in the checkpoint. The
-executor upgrades the external MK8s control plane first, updates service-role
-node groups serially with the selected temporary strategy and original-strategy
+executor upgrades the external MK8s control plane first to the accepted
+Kubernetes target for this run, updates service-role node groups serially with
+the selected temporary strategy and original-strategy
 restore, updates worker node groups with zero-surge by default or safe-surge
 waves when selected, using an
 exact fixed worker-group count or a percent-based wave with an optional cap,

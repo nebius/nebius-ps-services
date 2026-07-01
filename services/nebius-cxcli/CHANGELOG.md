@@ -6,6 +6,27 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Added a managed `soperator upgrade` order guard for old Soperator chart
+  upgrades across the Kubernetes `1.33+` boundary. Managed upgrades still use
+  per-run `config.yaml` plus live MK8s state instead of a locked path, but now
+  block a combined `1.32 -> 1.33` Kubernetes hop plus Soperator chart upgrade
+  when the chart must be upgraded first while Kubernetes stays at the staging
+  minor.
+- Added locked external Soperator upgrade paths. `ext-soperator onboard` now
+  stores the full accepted discovery-guided path under
+  `deploy.targets[].soperator_onboarding.upgrade_path` and includes it in the
+  accepted onboarding fingerprint. Repeated `ext-soperator upgrade --execute
+  --approve` runs now advance one locked segment at a time from checkpoint
+  progress, print the next same-command invocation, keep onboarding in place
+  while segments remain, and hand back to deploy-owned reconciliation only
+  after the final locked segment completes.
+- Clarified `ext-soperator upgrade --dry-run` output for preserved storage and
+  compute layouts, restore target scope, and external Kubernetes hop scope. The
+  plan now labels keep-existing modes as layout preservation, uses migration
+  work labels for storage/compute remediation, states that restore-capable
+  backups restore only to a new/replacement cluster, and makes clear that
+  external node-template work is one accepted Kubernetes minor hop per upgrade
+  run.
 - Organized `ext-soperator upgrade --dry-run` output into concise sections for
   target discovery, versions, accepted onboarding actions, node-template
   rollout, phases, execution controls, and execution guarantees.

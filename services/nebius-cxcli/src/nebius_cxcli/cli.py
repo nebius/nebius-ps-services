@@ -26,7 +26,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import deque
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, MutableMapping, Sequence
 from contextlib import ExitStack, contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
@@ -293,6 +293,7 @@ from .mk8s_upgrade import (
     parse_upgrade_selector,
     plan_node_template_upgrade,
     render_updated_source_payload,
+    require_single_minor_hop,
     resolve_drain_timeout,
     resolve_strategy_max_surge_count,
     select_live_node_groups_for_node_template,
@@ -424,6 +425,7 @@ from .soperator_migration import (
     external_soperator_upgrade_top_level_stage,
     legacy_soperator_migration_checkpoint_path,
     resolve_external_node_template_rollout,
+    soperator_migration_checkpoint_path,
 )
 from .soperator_onboarding import (
     ONBOARDING_ACCEPTABLE_STATES,
@@ -1822,6 +1824,7 @@ _SOPERATOR_ONBOARDING_COMPUTE_MODES = (
 )
 _SOPERATOR_ONBOARDING_DEFAULT_COMPUTE_MODE = _SOPERATOR_ONBOARDING_COMPUTE_MODES[0]
 _SOPERATOR_DISCOVERY_REPORT_PRIVATE_KEY = "__soperator_source_discovery_report"
+_SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA = "nebius-cxcli-ext-soperator-upgrade-path/v1"
 _SOPERATOR_SOURCE_VERSION_MANUAL_CHOICE = "__manual_soperator_source_version__"
 _SOPERATOR_REQUIRED_INFRA_COMPONENT_IDS = ("mk8s", "sfs")
 _SOPERATOR_REQUIRED_APP_COMPONENT_IDS = ("cert-manager",)
@@ -2053,7 +2056,12 @@ ext_soperator_app = typer.Typer(
         "upgrades use upgrade node-template. Use the separate discover command only when you "
         "need a support-safe discovery bundle, and the separate backup command only when you "
         "need an operator-requested archive outside the upgrade run; upgrade --execute --approve "
-        "refreshes discovery and creates its restore-capable backup before mutation."
+        "refreshes discovery and creates its restore-capable backup before mutation. "
+        "Onboarding locks the full discovery-guided external upgrade path in config.yaml. "
+        "External Kubernetes node-template work advances one Kubernetes minor hop per "
+        "upgrade run; repeat the same ext-soperator upgrade --execute --approve command "
+        "until all locked path segments are complete instead of rerunning discovery or "
+        "onboarding between normal Kubernetes hops."
     ),
 )
 soperator_app = typer.Typer(
@@ -10936,8 +10944,10 @@ def soperator_restore_command(
         "nebius-cxcli soperator upgrade <config.yaml> --target mk8s "
         "--to-k8s-version 1.33 --to-chart-version <chart-version>. "
         "The run without --dry-run creates the restore-capable backup and applies "
-        "the requested Soperator-aware upgrade. Standalone MK8s node-template "
-        "upgrades still use upgrade node-template."
+        "the requested Soperator-aware upgrade. Kubernetes minor hops stay one "
+        "hop per run; if the support policy requires a chart-first step before "
+        "crossing a Kubernetes boundary, run the Soperator chart upgrade first. "
+        "Standalone MK8s node-template upgrades still use upgrade node-template."
     ),
 )
 def soperator_upgrade_command(
@@ -11295,6 +11305,244 @@ def _managed_soperator_upgrade_support_report(
     return report.to_dict()
 
 
+def _managed_soperator_k8s_minor_compare(left: str, right: str) -> int | None:
+    try:
+        left_version = parse_k8s_version(left)
+        right_version = parse_k8s_version(right)
+    except ValueError:
+        return None
+    left_minor = (left_version.major, left_version.minor)
+    right_minor = (right_version.major, right_version.minor)
+    if left_minor < right_minor:
+        return -1
+    if left_minor > right_minor:
+        return 1
+    return 0
+
+
+def _managed_soperator_k8s_hop_issue(
+    *,
+    source_payload: Mapping[str, Any],
+    target_ref: str,
+    to_k8s_version: str | None,
+) -> Mapping[str, str] | None:
+    target_k8s = _non_empty_text(to_k8s_version)
+    if not target_k8s:
+        return None
+    current_k8s = _source_config_k8s_version_for_target(
+        source_payload,
+        target_ref=target_ref,
+    )
+    if not current_k8s:
+        return None
+    try:
+        require_single_minor_hop(current_k8s, target_k8s)
+    except ValueError as exc:
+        message = str(exc).replace("--to-version", "--to-k8s-version")
+        return {
+            "current_k8s_version": current_k8s,
+            "target_k8s_version": target_k8s,
+            "message": message,
+        }
+    return None
+
+
+def _managed_soperator_k8s_hop_issue_lines(
+    hop_issue: Mapping[str, str] | None,
+) -> tuple[str, ...]:
+    if not hop_issue:
+        return ()
+    current_k8s = _non_empty_text(hop_issue.get("current_k8s_version")) or "unknown"
+    target_k8s = _non_empty_text(hop_issue.get("target_k8s_version")) or "unknown"
+    message = _non_empty_text(hop_issue.get("message"))
+    lines = [
+        "- Managed Kubernetes hop (execution blocked): cxcli upgrades one "
+        "Kubernetes minor at a time.",
+        f"  - Current Kubernetes version: `{current_k8s}`",
+        f"  - Requested Kubernetes target: `{target_k8s}`",
+    ]
+    if message:
+        lines.append(f"  - {message}")
+    return tuple(lines)
+
+
+def _managed_soperator_k8s_hop_failure_message(
+    hop_issue: Mapping[str, str],
+) -> str:
+    message = _non_empty_text(hop_issue.get("message"))
+    if message:
+        return f"Invalid managed Soperator Kubernetes hop: {message}"
+    current_k8s = _non_empty_text(hop_issue.get("current_k8s_version")) or "unknown"
+    target_k8s = _non_empty_text(hop_issue.get("target_k8s_version")) or "unknown"
+    return (
+        "Invalid managed Soperator Kubernetes hop: cxcli upgrades one Kubernetes "
+        f"minor at a time. Current {current_k8s}, target {target_k8s}."
+    )
+
+
+def _managed_soperator_upgrade_order_issue(
+    *,
+    source_payload: Mapping[str, Any],
+    plan: _HelmChartUpgradePlan,
+    support_report: Mapping[str, Any],
+    to_k8s_version: str | None,
+    config_path: Path,
+    node_group: str,
+    disruption_policy: str,
+    drain_timeout: str,
+    strategy_max_surge_count: int | None,
+    backup_dir: Path | None,
+    job_policy: str,
+    cancel_job: Sequence[str],
+    requeue_job: Sequence[str],
+    job_wait_timeout: str,
+    job_refresh_interval: str,
+    approve_remediation: bool,
+    allow_unsupported_soperator_upgrade_path: bool,
+) -> Mapping[str, str] | None:
+    target_k8s = _non_empty_text(to_k8s_version)
+    if not target_k8s:
+        return None
+    if _non_empty_text(plan.current_version) == _non_empty_text(plan.target_version):
+        return None
+    recommended_order = _soperator_discovery_support_recommended_order(support_report)
+    soperator_after_k8s_min = _non_empty_text(
+        recommended_order.get("soperator_after_k8s_min")
+    )
+    if not soperator_after_k8s_min:
+        return None
+    current_k8s = _source_config_k8s_version_for_target(
+        source_payload,
+        target_ref=plan.target.target_ref,
+    )
+    if not current_k8s:
+        return None
+    target_after_current = _managed_soperator_k8s_minor_compare(target_k8s, current_k8s)
+    current_at_boundary = _managed_soperator_k8s_minor_compare(
+        current_k8s,
+        soperator_after_k8s_min,
+    )
+    if target_after_current is None or current_at_boundary is None:
+        return None
+    if target_after_current <= 0 or current_at_boundary < 0:
+        return None
+    first_command = shlex.join(
+        _soperator_upgrade_command_args(
+            config_path=config_path,
+            target_ref=plan.target.target_ref,
+            to_chart_version=plan.target_version,
+            to_k8s_version=None,
+            to_os=None,
+            to_gpu_stack_preset=None,
+            node_group=node_group,
+            disruption_policy=disruption_policy,
+            drain_timeout=drain_timeout,
+            strategy_max_surge_count=strategy_max_surge_count,
+            backup_dir=backup_dir,
+            job_policy=job_policy,
+            cancel_job=cancel_job,
+            requeue_job=requeue_job,
+            job_wait_timeout=job_wait_timeout,
+            job_refresh_interval=job_refresh_interval,
+            dry_run=False,
+            approve_remediation=approve_remediation,
+            allow_unsupported_soperator_upgrade_path=allow_unsupported_soperator_upgrade_path,
+        )
+    )
+    later_command = shlex.join(
+        _soperator_upgrade_command_args(
+            config_path=config_path,
+            target_ref=plan.target.target_ref,
+            to_chart_version=None,
+            to_k8s_version=target_k8s,
+            to_os=None,
+            to_gpu_stack_preset=None,
+            node_group=node_group,
+            disruption_policy=disruption_policy,
+            drain_timeout=drain_timeout,
+            strategy_max_surge_count=strategy_max_surge_count,
+            backup_dir=backup_dir,
+            job_policy=job_policy,
+            cancel_job=cancel_job,
+            requeue_job=requeue_job,
+            job_wait_timeout=job_wait_timeout,
+            job_refresh_interval=job_refresh_interval,
+            dry_run=False,
+            approve_remediation=approve_remediation,
+            allow_unsupported_soperator_upgrade_path=allow_unsupported_soperator_upgrade_path,
+        )
+    )
+    return {
+        "current_k8s_version": current_k8s,
+        "target_k8s_version": target_k8s,
+        "current_soperator_version": plan.current_version,
+        "target_soperator_version": plan.target_version,
+        "soperator_after_k8s_min": soperator_after_k8s_min,
+        "first_command": first_command,
+        "later_command": later_command,
+    }
+
+
+def _managed_soperator_upgrade_order_lines(
+    order_issue: Mapping[str, str] | None,
+) -> tuple[str, ...]:
+    if not order_issue:
+        return ()
+    current_k8s = _non_empty_text(order_issue.get("current_k8s_version")) or "unknown"
+    target_k8s = _non_empty_text(order_issue.get("target_k8s_version")) or "unknown"
+    source_soperator = (
+        _non_empty_text(order_issue.get("current_soperator_version")) or "unknown"
+    )
+    target_soperator = (
+        _non_empty_text(order_issue.get("target_soperator_version")) or "unknown"
+    )
+    boundary = _non_empty_text(order_issue.get("soperator_after_k8s_min")) or current_k8s
+    first_command = _non_empty_text(order_issue.get("first_command"))
+    later_command = _non_empty_text(order_issue.get("later_command"))
+    lines = [
+        "- Managed upgrade order (execution blocked): Soperator must be upgraded "
+        "before the requested Kubernetes hop.",
+        f"  - Current Kubernetes version: `{current_k8s}`",
+        f"  - Requested Kubernetes target: `{target_k8s}`",
+        f"  - Soperator chart: `{source_soperator}` -> `{target_soperator}`",
+        "  - Required order: upgrade Soperator while Kubernetes stays "
+        f"`{current_k8s}` after the cluster has reached `{boundary}`, then rerun "
+        "the Kubernetes hop.",
+    ]
+    if first_command:
+        lines.extend(["  - Run first:", f"    {first_command}"])
+    if later_command:
+        lines.extend(["  - Then run:", f"    {later_command}"])
+    return tuple(lines)
+
+
+def _managed_soperator_upgrade_order_failure_message(
+    order_issue: Mapping[str, str],
+) -> str:
+    current_k8s = _non_empty_text(order_issue.get("current_k8s_version")) or "unknown"
+    target_k8s = _non_empty_text(order_issue.get("target_k8s_version")) or "unknown"
+    source_soperator = (
+        _non_empty_text(order_issue.get("current_soperator_version")) or "unknown"
+    )
+    target_soperator = (
+        _non_empty_text(order_issue.get("target_soperator_version")) or "unknown"
+    )
+    first_command = _non_empty_text(order_issue.get("first_command"))
+    later_command = _non_empty_text(order_issue.get("later_command"))
+    message = (
+        "Managed Soperator upgrade order requires a chart-first run before this "
+        f"Kubernetes hop. Current Kubernetes is {current_k8s}, requested target "
+        f"is {target_k8s}, and Soperator would change from {source_soperator} "
+        f"to {target_soperator}. Run the Soperator chart upgrade while Kubernetes "
+        f"stays {current_k8s}, then rerun the Kubernetes hop."
+    )
+    if first_command:
+        message += f" Run first: {first_command}."
+    if later_command:
+        message += f" Then run: {later_command}."
+    return message
+
+
 def _format_managed_soperator_cluster_upgrade_plan(
     *,
     plan: _HelmChartUpgradePlan,
@@ -11307,6 +11555,8 @@ def _format_managed_soperator_cluster_upgrade_plan(
     job_policy: str,
     dry_run: bool,
     repeat_dry_run_command: str | None,
+    k8s_hop_issue: Mapping[str, str] | None = None,
+    order_issue: Mapping[str, str] | None = None,
 ) -> tuple[str, ...]:
     lines = list(
         _format_soperator_upgrade_plan(
@@ -11335,6 +11585,8 @@ def _format_managed_soperator_cluster_upgrade_plan(
         ]
     )
     lines.extend(_soperator_support_policy_plan_lines(support_report))
+    lines.extend(_managed_soperator_k8s_hop_issue_lines(k8s_hop_issue))
+    lines.extend(_managed_soperator_upgrade_order_lines(order_issue))
     if dry_run:
         if repeat_dry_run_command:
             lines.append("- repeat dry-run command:")
@@ -11423,6 +11675,30 @@ def _run_managed_soperator_cluster_upgrade(
     requested_mk8s_change = any(
         _non_empty_text(value) for value in (to_k8s_version, to_os, to_gpu_stack_preset)
     )
+    k8s_hop_issue = _managed_soperator_k8s_hop_issue(
+        source_payload=source_payload,
+        target_ref=target.target_ref,
+        to_k8s_version=to_k8s_version,
+    )
+    order_issue = _managed_soperator_upgrade_order_issue(
+        source_payload=source_payload,
+        plan=plan,
+        support_report=support_report,
+        to_k8s_version=to_k8s_version,
+        config_path=config_path,
+        node_group=node_group,
+        disruption_policy=disruption_policy,
+        drain_timeout=drain_timeout,
+        strategy_max_surge_count=strategy_max_surge_count,
+        backup_dir=backup_dir,
+        job_policy=job_policy,
+        cancel_job=cancel_job,
+        requeue_job=requeue_job,
+        job_wait_timeout=job_wait_timeout,
+        job_refresh_interval=job_refresh_interval,
+        approve_remediation=approve_remediation,
+        allow_unsupported_soperator_upgrade_path=allow_unsupported_soperator_upgrade_path,
+    )
     command_args = _soperator_upgrade_command_args(
         config_path=config_path,
         target_ref=target.target_ref,
@@ -11457,10 +11733,16 @@ def _run_managed_soperator_cluster_upgrade(
             job_policy=job_policy,
             dry_run=dry_run,
             repeat_dry_run_command=repeat_dry_run_command,
+            k8s_hop_issue=k8s_hop_issue,
+            order_issue=order_issue,
         )
     )
     if dry_run:
         return
+    if k8s_hop_issue:
+        raise RuntimeError(_managed_soperator_k8s_hop_failure_message(k8s_hop_issue))
+    if order_issue:
+        raise RuntimeError(_managed_soperator_upgrade_order_failure_message(order_issue))
     _enforce_soperator_support_policy_for_report(
         support_report,
         allow_unsupported_soperator_upgrade_path=allow_unsupported_soperator_upgrade_path,
@@ -16120,6 +16402,277 @@ def _soperator_discovery_upgrade_order_steps(
     return ("  - Recommended order: " + "; ".join(steps) + ".",)
 
 
+def _locked_upgrade_path_stable_json(value: Any) -> str:
+    return json.dumps(to_plain_data(value), sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _locked_upgrade_path_fingerprint(upgrade_path: Mapping[str, Any]) -> str:
+    return hashlib.sha256(_locked_upgrade_path_stable_json(upgrade_path).encode("utf-8")).hexdigest()
+
+
+def _locked_upgrade_path_segment_slug(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", str(value or "").lower()).strip("-") or "segment"
+
+
+def _locked_upgrade_path_action_ids(
+    action_ids: Sequence[str],
+    *,
+    include_one_time_actions: bool,
+    include_node_template: bool,
+) -> tuple[str, ...]:
+    base_actions = tuple(
+        dict.fromkeys(str(action or "").strip() for action in action_ids if str(action or "").strip())
+    )
+    one_time_exclusions = {
+        ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
+        ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
+    }
+    if include_one_time_actions:
+        selected = list(base_actions)
+        if not include_node_template:
+            selected = [
+                action
+                for action in selected
+                if action != ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE
+            ]
+    else:
+        selected = []
+        if ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE in base_actions:
+            selected.append(ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE)
+        if include_node_template:
+            selected.append(ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE)
+    if not include_one_time_actions and not selected and include_node_template:
+        selected = [
+            ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
+            ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
+        ]
+    if include_one_time_actions:
+        has_one_time = any(action not in one_time_exclusions for action in selected)
+        if not has_one_time and not include_node_template:
+            return ()
+    return tuple(dict.fromkeys(action for action in selected if action))
+
+
+def _locked_upgrade_path_segment(
+    *,
+    index: int,
+    current_k8s_version: str,
+    target_k8s_version: str,
+    source_soperator_version: str,
+    target_soperator_version: str,
+    action_ids: Sequence[str],
+    include_soperator_change: bool,
+    include_k8s_change: bool,
+) -> dict[str, Any]:
+    title_parts: list[str] = []
+    if include_k8s_change and current_k8s_version and target_k8s_version:
+        title_parts.append(f"Kubernetes {current_k8s_version} -> {target_k8s_version}")
+    if include_soperator_change and source_soperator_version and target_soperator_version:
+        title_parts.append(
+            f"Soperator {source_soperator_version} -> {target_soperator_version}"
+        )
+    if not title_parts:
+        title_parts.append("Soperator external upgrade work")
+    kind = "external-upgrade"
+    if include_k8s_change and not include_soperator_change:
+        kind = "external-node-template-hop"
+    elif include_soperator_change and not include_k8s_change:
+        kind = "soperator-upgrade"
+    descriptor = "-".join(title_parts)
+    return {
+        "id": f"segment-{index}-{_locked_upgrade_path_segment_slug(descriptor)}",
+        "index": index,
+        "kind": kind,
+        "title": " plus ".join(title_parts),
+        "current_k8s_version": current_k8s_version,
+        "target_k8s_version": target_k8s_version,
+        "source_soperator_version": source_soperator_version,
+        "target_soperator_version": target_soperator_version,
+        "k8s_upgrade_required": bool(include_k8s_change),
+        "soperator_upgrade_required": bool(include_soperator_change),
+        "actions": list(action_ids),
+    }
+
+
+def _locked_upgrade_path_from_report(
+    *,
+    report: Mapping[str, Any] | Any,
+    onboarding: Mapping[str, Any],
+) -> dict[str, Any]:
+    action_ids = tuple(
+        str(action or "").strip()
+        for action in onboarding.get("actions", []) or []
+        if str(action or "").strip()
+    )
+    if not (set(action_ids) & _SOPERATOR_MIGRATION_ACTIONS):
+        return {}
+    source_soperator, target_soperator, current_k8s, target_k8s = (
+        _soperator_discovery_support_path_values(report)
+    )
+    source_soperator = _non_empty_text(onboarding.get("source_version")) or source_soperator
+    target_soperator = _non_empty_text(onboarding.get("target_version")) or target_soperator
+    node_template = onboarding.get("node_template_upgrade")
+    if isinstance(node_template, Mapping):
+        target_k8s = _non_empty_text(node_template.get("target_k8s_version")) or target_k8s
+    support_evidence = _soperator_discovery_support_evidence(report)
+    support_finding = next(iter(soperator_upgrade_support_findings(report)), {})
+    support_rule_id = _non_empty_text(support_evidence.get("rule_id"))
+    support_status = _non_empty_text(support_finding.get("status"))
+    recommended_order = _soperator_discovery_support_recommended_order(report)
+    soperator_after_k8s_min = _non_empty_text(recommended_order.get("soperator_after_k8s_min"))
+    k8s_hops = _soperator_discovery_k8s_hops(current_k8s, target_k8s)
+    k8s_pairs = tuple(zip(k8s_hops, k8s_hops[1:], strict=False))
+    soperator_change_required = ONBOARDING_ACTION_UPGRADE_SOPERATOR in set(action_ids)
+    one_time_actions = set(action_ids) - {
+        ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
+        ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
+    }
+    one_time_required = bool(one_time_actions)
+    one_time_hop_index = 0
+    if one_time_required and k8s_hops:
+        if soperator_change_required and soperator_after_k8s_min:
+            staging_index = next(
+                (
+                    index
+                    for index, hop in enumerate(k8s_hops)
+                    if _soperator_discovery_k8s_at_least(hop, soperator_after_k8s_min)
+                ),
+                0,
+            )
+            one_time_hop_index = max(0, min(staging_index, len(k8s_hops) - 1))
+        elif len(k8s_hops) > 1:
+            one_time_hop_index = 1
+    segments: list[dict[str, Any]] = []
+    segment_index = 1
+
+    def _append_segment(
+        *,
+        current_k8s_version: str,
+        target_k8s_version: str,
+        source_version: str,
+        target_version: str,
+        include_one_time_actions: bool,
+        include_node_template: bool,
+        include_soperator_change: bool,
+        include_k8s_change: bool,
+    ) -> None:
+        nonlocal segment_index
+        segment_actions = _locked_upgrade_path_action_ids(
+            action_ids,
+            include_one_time_actions=include_one_time_actions,
+            include_node_template=include_node_template,
+        )
+        if not segment_actions:
+            return
+        segments.append(
+            _locked_upgrade_path_segment(
+                index=segment_index,
+                current_k8s_version=current_k8s_version,
+                target_k8s_version=target_k8s_version,
+                source_soperator_version=source_version,
+                target_soperator_version=target_version,
+                action_ids=segment_actions,
+                include_soperator_change=include_soperator_change,
+                include_k8s_change=include_k8s_change,
+            )
+        )
+        segment_index += 1
+
+    if k8s_pairs:
+        if one_time_required and one_time_hop_index == 0:
+            staging_k8s = k8s_hops[0]
+            _append_segment(
+                current_k8s_version=staging_k8s,
+                target_k8s_version=staging_k8s,
+                source_version=source_soperator,
+                target_version=target_soperator,
+                include_one_time_actions=True,
+                include_node_template=False,
+                include_soperator_change=soperator_change_required,
+                include_k8s_change=False,
+            )
+        for pair_index, (hop_current, hop_target) in enumerate(k8s_pairs):
+            is_one_time_hop = (
+                one_time_required
+                and one_time_hop_index > 0
+                and pair_index == one_time_hop_index - 1
+            )
+            before_one_time = (
+                one_time_required
+                and one_time_hop_index > 0
+                and pair_index < one_time_hop_index - 1
+            )
+            if before_one_time:
+                source_version = source_soperator
+                target_version = source_soperator
+            elif is_one_time_hop:
+                source_version = source_soperator
+                target_version = target_soperator
+            else:
+                source_version = target_soperator
+                target_version = target_soperator
+            _append_segment(
+                current_k8s_version=hop_current,
+                target_k8s_version=hop_target,
+                source_version=source_version,
+                target_version=target_version,
+                include_one_time_actions=is_one_time_hop,
+                include_node_template=True,
+                include_soperator_change=is_one_time_hop and soperator_change_required,
+                include_k8s_change=hop_current != hop_target,
+            )
+        if one_time_required and one_time_hop_index > len(k8s_pairs):
+            _append_segment(
+                current_k8s_version=k8s_hops[-1],
+                target_k8s_version=k8s_hops[-1],
+                source_version=source_soperator,
+                target_version=target_soperator,
+                include_one_time_actions=True,
+                include_node_template=False,
+                include_soperator_change=soperator_change_required,
+                include_k8s_change=False,
+            )
+    elif one_time_required or action_ids:
+        current_version = current_k8s or target_k8s
+        include_node_template = ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE in set(action_ids)
+        _append_segment(
+            current_k8s_version=current_version,
+            target_k8s_version=target_k8s or current_version,
+            source_version=source_soperator,
+            target_version=target_soperator,
+            include_one_time_actions=one_time_required,
+            include_node_template=include_node_template,
+            include_soperator_change=soperator_change_required,
+            include_k8s_change=bool(include_node_template and current_version != target_k8s),
+        )
+    if not segments:
+        return {}
+    recommended_steps = tuple(
+        line.removeprefix("  - Recommended order: ").removesuffix(".")
+        for line in _soperator_discovery_upgrade_order_steps(
+            k8s_hops=k8s_hops,
+            soperator_hops=_soperator_discovery_soperator_hops(
+                source_soperator=source_soperator,
+                target_soperator=target_soperator,
+            ),
+            soperator_after_k8s_min=soperator_after_k8s_min,
+        )
+    )
+    return {
+        "schema": _SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA,
+        "locked": True,
+        "source_k8s_version": current_k8s,
+        "target_k8s_version": target_k8s,
+        "source_soperator_version": source_soperator,
+        "target_soperator_version": target_soperator,
+        "support_status": support_status,
+        "support_rule_id": support_rule_id,
+        "recommended_order": list(recommended_steps),
+        "recommended_order_policy": copy.deepcopy(to_plain_data(recommended_order)),
+        "segments": segments,
+    }
+
+
 def _soperator_discovery_upgrade_path_lines(
     report: Mapping[str, Any] | Any,
 ) -> tuple[str, ...]:
@@ -17145,6 +17698,19 @@ def _soperator_onboarding_target_defaults(
                 else _soperator_rollout_manifest_from_options()
             ),
         }
+    onboarding = target_row["soperator_onboarding"]
+    if isinstance(onboarding, dict):
+        locked_upgrade_path = _locked_upgrade_path_from_report(
+            report=adjusted_report.to_dict(),
+            onboarding=onboarding,
+        )
+        if locked_upgrade_path:
+            onboarding["upgrade_path"] = locked_upgrade_path
+            report_material = target_row.get(_SOPERATOR_DISCOVERY_REPORT_PRIVATE_KEY)
+            if isinstance(report_material, dict):
+                report_payload = report_material.get("report")
+                if isinstance(report_payload, dict):
+                    report_payload["upgrade_path"] = copy.deepcopy(locked_upgrade_path)
     context = _non_empty_text(kube_context)
     if context:
         target_row["kube_context"] = context
@@ -17312,7 +17878,12 @@ def _write_soperator_source_discovery_report_from_target_row(
     report = report_material.get("report")
     if not isinstance(snapshot, Mapping) or not isinstance(report, Mapping):
         return None
+    report = dict(report)
     onboarding = target_row.get("soperator_onboarding")
+    if isinstance(onboarding, Mapping):
+        upgrade_path = onboarding.get("upgrade_path")
+        if isinstance(upgrade_path, Mapping):
+            report["upgrade_path"] = copy.deepcopy(to_plain_data(upgrade_path))
     cluster_id = _non_empty_text(target_row.get("cluster_id"))
     cluster_name = component_instance_id(target_row)
     if isinstance(onboarding, Mapping):
@@ -42601,11 +43172,14 @@ def _raise_if_deploy_would_bypass_soperator_migration(
             ]
         )
     lines.append(
-        "Use upgrade for reruns/resume while these actions remain selected. A "
-        "fully completed `ext-soperator upgrade --execute` refreshes config.yaml "
-        "from live post-upgrade discovery when possible; if refresh was skipped, "
-        "rerun `ext-soperator onboard`, rerun render, then deploy only for normal "
-        "rendered reconciliation if needed."
+        "Use `ext-soperator upgrade` for reruns/resume while these actions remain "
+        "selected. If the locked path still has remaining segments, repeat the same "
+        "`ext-soperator upgrade --execute --approve` command; cxcli keeps accepted "
+        "onboarding in place until the final locked segment completes. After the "
+        "final locked segment, cxcli refreshes config.yaml from live post-upgrade "
+        "discovery when possible; if that final refresh was skipped, rerun "
+        "`ext-soperator onboard` only as an intentional repair path, rerun render, "
+        "then deploy only for normal rendered reconciliation if needed."
     )
     raise RuntimeError("\n".join(lines))
 
@@ -48306,7 +48880,9 @@ def ext_soperator_discover_command(
         f"generated/reports/{SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME}/<target>/manifest.json; "
         "reruns refresh read-only source discovery and Nebius provider node-template "
         "inventory by node group before deciding whether external node-template "
-        "upgrade is still needed. For install/adopt-only targets with no external-upgrade-owned actions, "
+        "upgrade is still needed, then lock the accepted full upgrade path under "
+        "deploy.targets[].soperator_onboarding.upgrade_path. For install/adopt-only targets "
+        "with no external-upgrade-owned actions, "
         "run nebius-cxcli deploy <config.yaml> to reconcile the generated desired "
         "state and produce deploy-report.md; use deploy --target <target-id> only "
         "to narrow a run. For external-upgrade-required targets, "
@@ -48816,19 +49392,22 @@ _SOPERATOR_TARGET_GPU_STACK_PHASE_ID = "target-gpu-stack-remediation"
 _SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES = (
     "Live executor contract: --execute rechecks the pre-mutation source "
     "release and discovery fingerprint, checks net-new external upgrade quota before "
-    "approved mutations, then runs checkpointed external MK8s control-plane "
-    "upgrade, node-template upgrade, target GPU stack, SFS, copy, compute, "
-    "cutover, validation, and retirement phases in order.",
+    "approved mutations, then runs the selected checkpointed external MK8s "
+    "control-plane/node-template, target GPU stack, SFS, copy, compute, cutover, "
+    "validation, and retirement phases for this accepted plan in order.",
     "External node-template contract: onboarded external targets are not "
     "Terraform-owned, so --execute uses direct Nebius updates for Kubernetes "
-    "version, node OS image, and Nebius GPU driver preset. Control plane goes "
-    "first, then service-role node groups and bounded worker waves. zero-surge "
-    "uses max_surge=0, max_unavailable=1, drain_timeout=30m and may quiesce "
-    "login, one-node controller/accounting, and known drain-blocking webhook "
-    "workloads. safe-surge uses max_surge=1, max_unavailable=0, "
-    "drain_timeout=30m when spare quota/capacity is available. Set "
-    "worker_group_strategy.drain_timeout to none to wait indefinitely; cxcli "
-    "restores each node group's original strategy.",
+    "version, node OS image, and Nebius GPU driver preset. The Kubernetes target "
+    "is the accepted onboarding target for this run; cxcli enforces one "
+    "Kubernetes minor hop per external upgrade run instead of silently continuing "
+    "to later discovery-guidance hops. Control plane goes first, then "
+    "service-role node groups and bounded worker waves. zero-surge uses "
+    "max_surge=0, max_unavailable=1, drain_timeout=30m and may quiesce login, "
+    "one-node controller/accounting, and known drain-blocking webhook workloads. "
+    "safe-surge uses max_surge=1, max_unavailable=0, drain_timeout=30m when "
+    "spare quota/capacity is available. Set worker_group_strategy.drain_timeout "
+    "to none to wait indefinitely; cxcli restores each node group's original "
+    "strategy.",
     "Node-template quota contract: zero-surge requires no spare quota but can "
     "reduce active capacity by max_unavailable_count node(s) during rollout. "
     "safe-surge requires max_surge_count temporary surge node(s) for each active "
@@ -48880,9 +49459,10 @@ _SOPERATOR_MIGRATION_PLAN_TOPIC_STYLES = {
     "Accepted onboarding actions": "bold cyan",
     "Storage mode": "bold magenta",
     "Compute mode": "bold magenta",
+    "Accepted Kubernetes hop": "bold blue",
     "External upgrade required": "bold yellow",
-    "Storage upgrade work required": "yellow",
-    "Compute upgrade work required": "yellow",
+    "Storage migrate work required": "yellow",
+    "Compute migrate work required": "yellow",
     "Soperator upgrade required": "yellow",
     "External node-template upgrade required": "yellow",
     "Target GPU stack reconciliation required": "yellow",
@@ -48913,8 +49493,8 @@ _SOPERATOR_MIGRATION_PLAN_TOPIC_STYLES = {
 _SOPERATOR_MIGRATION_REQUIRED_TOPICS = frozenset(
     {
         "External upgrade required",
-        "Storage upgrade work required",
-        "Compute upgrade work required",
+        "Storage migrate work required",
+        "Compute migrate work required",
         "Soperator upgrade required",
         "External node-template upgrade required",
         "Target GPU stack reconciliation required",
@@ -48981,6 +49561,18 @@ def _style_soperator_migration_plan_line(line: str) -> str:
         else escape(rest)
     )
     return _rich_markup(label + separator, style) + styled_rest
+
+
+def _soperator_migration_storage_mode_label(mode: str) -> str:
+    if mode == "keep-existing-storage":
+        return "keep-existing-storage-layout"
+    return mode
+
+
+def _soperator_migration_compute_mode_label(mode: str) -> str:
+    if mode == "keep-existing-compute":
+        return "keep-existing-compute-layout"
+    return mode
 
 
 def _style_soperator_migration_status_message(message: str) -> str:
@@ -49313,6 +49905,335 @@ def _soperator_migration_output_phases(
     return output_phases
 
 
+def _locked_upgrade_path_from_onboarding(onboarding: Mapping[str, Any]) -> dict[str, Any]:
+    upgrade_path = onboarding.get("upgrade_path")
+    if not isinstance(upgrade_path, Mapping):
+        return {}
+    if _non_empty_text(upgrade_path.get("schema")) != _SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA:
+        return {}
+    if upgrade_path.get("locked") is not True:
+        return {}
+    segments = upgrade_path.get("segments")
+    if not isinstance(segments, list) or not segments:
+        return {}
+    return copy.deepcopy(to_plain_data(dict(upgrade_path)))
+
+
+def _locked_upgrade_path_segments(upgrade_path: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
+    segments = upgrade_path.get("segments")
+    if not isinstance(segments, list):
+        return ()
+    return tuple(segment for segment in segments if isinstance(segment, Mapping))
+
+
+def _locked_upgrade_path_progress(
+    *,
+    config_path: Path,
+    target_ref: str,
+    upgrade_path: Mapping[str, Any],
+) -> dict[str, Any]:
+    fingerprint = _locked_upgrade_path_fingerprint(upgrade_path)
+    checkpoint_path = soperator_migration_checkpoint_path(config_path, target_ref)
+    progress: dict[str, Any] = {
+        "fingerprint": fingerprint,
+        "completed_segment_ids": [],
+        "current_segment_id": "",
+        "checkpoint_path": str(checkpoint_path),
+        "pending_phase": "",
+    }
+    if not checkpoint_path.exists():
+        return progress
+    try:
+        checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"External Soperator upgrade checkpoint is invalid: {checkpoint_path}: {exc}"
+        ) from exc
+    if not isinstance(checkpoint, Mapping):
+        raise RuntimeError(f"External Soperator upgrade checkpoint must be a JSON object: {checkpoint_path}")
+    path_state = checkpoint.get("upgrade_path")
+    if not isinstance(path_state, Mapping):
+        path_state = {}
+    checkpoint_fingerprint = (
+        _non_empty_text(checkpoint.get("upgrade_path_fingerprint"))
+        or _non_empty_text(path_state.get("fingerprint"))
+    )
+    if checkpoint_fingerprint and checkpoint_fingerprint != fingerprint:
+        raise RuntimeError(
+            "External Soperator upgrade checkpoint was started with a different locked "
+            "upgrade path. Live/config state has diverged from the accepted path; rerun "
+            "`nebius-cxcli ext-soperator onboard` only as an intentional repair path, "
+            "or review and remove the checkpoint before restarting."
+        )
+    completed = checkpoint.get("completed_segment_ids")
+    if not isinstance(completed, list):
+        completed = path_state.get("completed_segment_ids")
+    progress["completed_segment_ids"] = [
+        str(segment_id or "").strip()
+        for segment_id in (completed if isinstance(completed, list) else [])
+        if str(segment_id or "").strip()
+    ]
+    progress["current_segment_id"] = (
+        _non_empty_text(checkpoint.get("current_segment_id"))
+        or _non_empty_text(path_state.get("current_segment_id"))
+    )
+    progress["pending_phase"] = _non_empty_text(checkpoint.get("pending_phase"))
+    segment_state = path_state.get("segment_state")
+    if isinstance(segment_state, Mapping):
+        progress["segment_state"] = copy.deepcopy(to_plain_data(segment_state))
+    return progress
+
+
+def _locked_upgrade_path_current_segment(
+    *,
+    upgrade_path: Mapping[str, Any],
+    progress: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    segments = _locked_upgrade_path_segments(upgrade_path)
+    by_id = {
+        _non_empty_text(segment.get("id")): segment
+        for segment in segments
+        if _non_empty_text(segment.get("id"))
+    }
+    completed = {
+        str(segment_id or "").strip()
+        for segment_id in progress.get("completed_segment_ids", []) or []
+        if str(segment_id or "").strip()
+    }
+    current_segment_id = _non_empty_text(progress.get("current_segment_id"))
+    pending_phase = _non_empty_text(progress.get("pending_phase"))
+    if pending_phase and pending_phase != "none" and current_segment_id in by_id:
+        return by_id[current_segment_id]
+    for segment in segments:
+        segment_id = _non_empty_text(segment.get("id"))
+        if segment_id and segment_id not in completed:
+            return segment
+    return None
+
+
+def _locked_upgrade_path_segment_actions(segment: Mapping[str, Any]) -> tuple[str, ...]:
+    actions = segment.get("actions")
+    if not isinstance(actions, list):
+        return ()
+    return tuple(
+        str(action or "").strip() for action in actions if str(action or "").strip()
+    )
+
+
+def _mutable_payload_target(
+    payload: MutableMapping[str, Any],
+    *,
+    target_ref: str,
+) -> MutableMapping[str, Any] | None:
+    deploy = payload.get("deploy")
+    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    if not isinstance(targets, list):
+        return None
+    normalized = normalize_component_token(target_ref)
+    for row in targets:
+        if isinstance(row, MutableMapping) and normalize_component_token(
+            row.get("instance_id")
+        ) == normalized:
+            return row
+    return None
+
+
+def _soperator_effective_upgrade_payload_for_segment(
+    *,
+    payload: Mapping[str, Any],
+    target_ref: str,
+    upgrade_path: Mapping[str, Any],
+    segment: Mapping[str, Any],
+) -> dict[str, Any]:
+    effective_payload = copy.deepcopy(to_plain_data(payload))
+    if not isinstance(effective_payload, MutableMapping):
+        return {}
+    target = _mutable_payload_target(effective_payload, target_ref=target_ref)
+    if target is None:
+        return dict(effective_payload)
+    onboarding = target.get("soperator_onboarding")
+    if not isinstance(onboarding, MutableMapping):
+        onboarding = {}
+        target["soperator_onboarding"] = onboarding
+    segment_actions = _locked_upgrade_path_segment_actions(segment)
+    onboarding["actions"] = list(segment_actions)
+    onboarding["upgrade_path"] = copy.deepcopy(to_plain_data(upgrade_path))
+    onboarding["upgrade_path_current_segment_id"] = _non_empty_text(segment.get("id"))
+    source_soperator = _non_empty_text(segment.get("source_soperator_version"))
+    target_soperator = _non_empty_text(segment.get("target_soperator_version"))
+    if source_soperator:
+        onboarding["source_version"] = source_soperator
+    if target_soperator:
+        onboarding["target_version"] = target_soperator
+    node_template = onboarding.get("node_template_upgrade")
+    if not isinstance(node_template, MutableMapping):
+        node_template = {}
+    if ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE in segment_actions:
+        node_template = dict(node_template)
+        node_template["target_k8s_version"] = _non_empty_text(segment.get("target_k8s_version"))
+        node_template.setdefault("target_os", ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS)
+        node_template.setdefault(
+            "target_gpu_stack_preset",
+            ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_GPU_STACK_PRESET,
+        )
+        onboarding["node_template_upgrade"] = node_template
+    elif isinstance(node_template, MutableMapping):
+        node_template = dict(node_template)
+        segment_k8s = _non_empty_text(segment.get("target_k8s_version")) or _non_empty_text(
+            segment.get("current_k8s_version")
+        )
+        if segment_k8s:
+            node_template["target_k8s_version"] = segment_k8s
+        onboarding["node_template_upgrade"] = node_template
+    return dict(effective_payload)
+
+
+def _source_report_for_locked_upgrade_segment(
+    *,
+    source_report: Mapping[str, Any],
+    upgrade_path: Mapping[str, Any],
+    segment: Mapping[str, Any],
+) -> dict[str, Any]:
+    effective = copy.deepcopy(to_plain_data(source_report))
+    if not isinstance(effective, dict):
+        effective = {}
+    report = effective.get("report")
+    if not isinstance(report, dict):
+        return effective
+    report["upgrade_path"] = copy.deepcopy(to_plain_data(upgrade_path))
+    report["upgrade_path_current_segment_id"] = _non_empty_text(segment.get("id"))
+    source_soperator = _non_empty_text(segment.get("source_soperator_version"))
+    target_soperator = _non_empty_text(segment.get("target_soperator_version"))
+    current_k8s = _non_empty_text(segment.get("current_k8s_version"))
+    target_k8s = _non_empty_text(segment.get("target_k8s_version"))
+    if source_soperator:
+        report["source_version"] = source_soperator
+    if target_soperator:
+        report["target_version"] = target_soperator
+    findings = report.get("findings")
+    if isinstance(findings, list):
+        for finding in findings:
+            if not isinstance(finding, dict):
+                continue
+            layer = _non_empty_text(finding.get("layer"))
+            if layer not in {"mk8s-node-template", SOPERATOR_UPGRADE_SUPPORT_LAYER}:
+                continue
+            evidence = finding.setdefault("evidence", {})
+            if not isinstance(evidence, dict):
+                evidence = {}
+                finding["evidence"] = evidence
+            if layer == SOPERATOR_UPGRADE_SUPPORT_LAYER:
+                evidence["current_k8s_version"] = current_k8s
+                evidence["target_k8s_version"] = target_k8s
+                if source_soperator:
+                    evidence["source_version"] = source_soperator
+                if target_soperator:
+                    evidence["target_version"] = target_soperator
+            control_plane = evidence.get("control_plane")
+            if isinstance(control_plane, dict):
+                control_plane["current_k8s_version"] = current_k8s
+                control_plane["target_k8s_version"] = target_k8s
+            else:
+                evidence["control_plane"] = {
+                    "current_k8s_version": current_k8s,
+                    "target_k8s_version": target_k8s,
+                }
+    return effective
+
+
+def _locked_upgrade_path_plan_lines(
+    *,
+    config_path: Path,
+    target_ref: str,
+    upgrade_path: Mapping[str, Any],
+    progress: Mapping[str, Any],
+    current_segment: Mapping[str, Any] | None,
+) -> list[str]:
+    segments = _locked_upgrade_path_segments(upgrade_path)
+    completed = {
+        str(segment_id or "").strip()
+        for segment_id in progress.get("completed_segment_ids", []) or []
+        if str(segment_id or "").strip()
+    }
+    current_segment_id = _non_empty_text((current_segment or {}).get("id"))
+    fingerprint = _non_empty_text(progress.get("fingerprint")) or _locked_upgrade_path_fingerprint(
+        upgrade_path
+    )
+    lines = [
+        "",
+        "Locked upgrade path:",
+        f"Path schema: {_non_empty_text(upgrade_path.get('schema')) or 'unknown'}",
+        "Path locked: yes",
+        f"Path fingerprint: {fingerprint}",
+        "Kubernetes path: "
+        f"{_non_empty_text(upgrade_path.get('source_k8s_version')) or 'unknown'} -> "
+        f"{_non_empty_text(upgrade_path.get('target_k8s_version')) or 'unknown'}",
+        "Soperator path: "
+        f"{_non_empty_text(upgrade_path.get('source_soperator_version')) or 'unknown'} -> "
+        f"{_non_empty_text(upgrade_path.get('target_soperator_version')) or 'unknown'}",
+    ]
+    support_rule = _non_empty_text(upgrade_path.get("support_rule_id"))
+    support_status = _non_empty_text(upgrade_path.get("support_status"))
+    if support_rule or support_status:
+        lines.append(
+            "Matched support rule: "
+            f"{support_rule or 'unknown'}"
+            + (f" ({support_status})" if support_status else "")
+        )
+    recommended = upgrade_path.get("recommended_order")
+    if isinstance(recommended, list) and recommended:
+        lines.append("Recommended order: " + "; ".join(str(item) for item in recommended))
+    lines.append("Segments:")
+    for segment in segments:
+        segment_id = _non_empty_text(segment.get("id"))
+        if segment_id in completed:
+            status = "complete"
+        elif segment_id == current_segment_id:
+            status = "current"
+        else:
+            status = "remaining"
+        lines.append(
+            f"- {segment_id}: {status} - "
+            f"{_non_empty_text(segment.get('title')) or _non_empty_text(segment.get('kind'))}"
+        )
+    completed_titles = [
+        _non_empty_text(segment.get("title")) or _non_empty_text(segment.get("id"))
+        for segment in segments
+        if _non_empty_text(segment.get("id")) in completed
+    ]
+    remaining_titles = [
+        _non_empty_text(segment.get("title")) or _non_empty_text(segment.get("id"))
+        for segment in segments
+        if _non_empty_text(segment.get("id")) not in completed
+        and _non_empty_text(segment.get("id")) != current_segment_id
+    ]
+    lines.append(
+        "Completed segments: "
+        + (", ".join(completed_titles) if completed_titles else "none")
+    )
+    if current_segment is None:
+        lines.append("Current segment: none; locked upgrade path is complete.")
+    else:
+        lines.append(
+            "Current segment: "
+            + (
+                _non_empty_text(current_segment.get("title"))
+                or _non_empty_text(current_segment.get("id"))
+            )
+        )
+    lines.append(
+        "Remaining segments: " + (", ".join(remaining_titles) if remaining_titles else "none")
+    )
+    if current_segment is not None:
+        next_command = (
+            "nebius-cxcli ext-soperator upgrade "
+            f"{shlex.quote(str(config_path))} --target {shlex.quote(target_ref)} "
+            "--execute --approve"
+        )
+        lines.append(f"Next command: {next_command}")
+    return lines
+
+
 def _format_soperator_migration_plan_lines(
     *,
     config_path: Path,
@@ -49328,6 +50249,9 @@ def _format_soperator_migration_plan_lines(
     strategy_max_unavailable_count: int | None = None,
     strategy_drain_timeout: str | None = None,
     job_policy: str | None = None,
+    upgrade_path: Mapping[str, Any] | None = None,
+    upgrade_path_progress: Mapping[str, Any] | None = None,
+    current_segment: Mapping[str, Any] | None = None,
 ) -> list[str]:
     target = soperator_onboarding_target(payload, target_ref=target_ref)
     onboarding = target.get("soperator_onboarding") if isinstance(target, Mapping) else {}
@@ -49355,6 +50279,17 @@ def _format_soperator_migration_plan_lines(
     compute_mode = str(
         onboarding.get("compute_mode", "") or _SOPERATOR_ONBOARDING_DEFAULT_COMPUTE_MODE
     )
+    accepted_k8s_hop = ""
+    if (
+        flags["external_node_template_upgrade_required"]
+        and current_k8s_version
+        and target_k8s_version
+        and current_k8s_version != target_k8s_version
+    ):
+        accepted_k8s_hop = (
+            f"{current_k8s_version} -> {target_k8s_version}; one Kubernetes minor "
+            "per external upgrade run"
+        )
     lines = [
         "External Soperator upgrade plan:",
         "",
@@ -49372,20 +50307,32 @@ def _format_soperator_migration_plan_lines(
             "Kubernetes version: "
             f"{current_k8s_version or 'unknown'} -> {target_k8s_version or 'unknown'}"
         )
+    if accepted_k8s_hop:
+        lines.append(f"Accepted Kubernetes hop: {accepted_k8s_hop}.")
     support_policy_lines = _soperator_support_policy_plan_lines(report)
     if support_policy_lines:
         lines.extend(["", "Support policy:"])
         lines.extend(support_policy_lines)
+    if upgrade_path:
+        lines.extend(
+            _locked_upgrade_path_plan_lines(
+                config_path=config_path,
+                target_ref=target_ref,
+                upgrade_path=upgrade_path,
+                progress=upgrade_path_progress or {},
+                current_segment=current_segment,
+            )
+        )
     lines.extend(
         [
             "",
             "Accepted onboarding actions:",
             "External upgrade required: " + ("yes" if flags["migration_required"] else "no"),
-            "Storage mode: " + storage_mode,
-            "Storage upgrade work required: "
+            "Storage mode: " + _soperator_migration_storage_mode_label(storage_mode),
+            "Storage migrate work required: "
             + ("yes" if flags["storage_migration_required"] else "no"),
-            "Compute mode: " + compute_mode,
-            "Compute upgrade work required: "
+            "Compute mode: " + _soperator_migration_compute_mode_label(compute_mode),
+            "Compute migrate work required: "
             + ("yes" if flags["compute_migration_required"] else "no"),
             "Soperator upgrade required: "
             + ("yes" if flags["soperator_upgrade_required"] else "no"),
@@ -49444,7 +50391,8 @@ def _format_soperator_migration_plan_lines(
         lines.append(f"Slurm job policy: {job_policy}")
     lines.append(
         "Backup: restore-capable archive with raw Secrets and optional accounting DB dump "
-        "is required before approved mutation."
+        "is required before approved mutation; restore from that archive is supported "
+        "only into a new/replacement cluster, not back onto the original source cluster."
     )
     lines.extend(["", "Execution guarantees:"])
     lines.extend(_SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES)
@@ -49597,7 +50545,41 @@ def _refresh_soperator_onboarding_after_completed_migration(
     execution_payload: Mapping[str, Any],
     source_report: Mapping[str, Any],
     target_ref: str,
+    upgrade_path: Mapping[str, Any] | None = None,
 ) -> tuple[str, ...]:
+    if upgrade_path:
+        progress = _locked_upgrade_path_progress(
+            config_path=config_path,
+            target_ref=target_ref,
+            upgrade_path=upgrade_path,
+        )
+        next_segment = _locked_upgrade_path_current_segment(
+            upgrade_path=upgrade_path,
+            progress=progress,
+        )
+        if next_segment is not None:
+            next_command = (
+                "nebius-cxcli ext-soperator upgrade "
+                f"{shlex.quote(str(config_path))} --target {shlex.quote(target_ref)} "
+                "--execute --approve"
+            )
+            remaining = [
+                _non_empty_text(segment.get("title")) or _non_empty_text(segment.get("id"))
+                for segment in _locked_upgrade_path_segments(upgrade_path)
+                if _non_empty_text(segment.get("id"))
+                not in set(progress.get("completed_segment_ids", []) or [])
+            ]
+            return (
+                "Post-upgrade config refresh: kept accepted external Soperator onboarding "
+                "because the locked upgrade path still has remaining segment(s).",
+                "Next locked upgrade segment: "
+                + (
+                    _non_empty_text(next_segment.get("title"))
+                    or _non_empty_text(next_segment.get("id"))
+                ),
+                "Remaining locked upgrade path: " + ", ".join(remaining),
+                f"Next command: {next_command}",
+            )
     source_target = soperator_onboarding_target(payload, target_ref=target_ref)
     execution_target = soperator_onboarding_target(execution_payload, target_ref=target_ref)
     if not isinstance(source_target, Mapping):
@@ -49678,7 +50660,7 @@ def _refresh_soperator_onboarding_after_completed_migration(
             "Post-upgrade config refresh skipped: live rediscovery still reports "
             f"external-upgrade-owned action(s): {actions or 'unknown'}. Keep using "
             "`ext-soperator upgrade` for resume/rerun or rerun `ext-soperator onboard` "
-            "after verifying the live cluster.",
+            "only as an intentional repair path after verifying the live cluster.",
         )
 
     next_payload = copy.deepcopy(to_plain_data(payload))
@@ -49730,8 +50712,11 @@ def _refresh_soperator_onboarding_after_completed_migration(
         "display name. The target must already be onboarded and accepted through "
         "ext-soperator onboard. Dry-run refreshes discovery and prints the plan. "
         "--execute --approve refreshes discovery, creates a restore-capable backup, "
-        "then runs checkpointed external MK8s control-plane/node-template rollout, "
-        "Soperator Helm cutover, validation, and reports."
+        "then runs exactly one locked upgrade-path segment: one external MK8s "
+        "control-plane/node-template hop plus any Soperator/storage/compute/GPU-stack "
+        "work assigned to that segment, validation, and reports. Later Kubernetes "
+        "minor hops use the same ext-soperator upgrade --execute --approve command; "
+        "cxcli advances from the locked path and checkpoint progress."
     ),
 )
 def soperator_external_upgrade_command(
@@ -49794,9 +50779,10 @@ def soperator_external_upgrade_command(
             help=(
                 "Use --dry-run for discovery refresh and the read-only plan. Use "
                 "--execute only after accepting that plan; it performs checkpointed live preflight and "
-                "advances supported external MK8s control-plane/node-template, "
+                "advances the accepted external MK8s control-plane/node-template hop, "
                 "target GPU stack, storage, copy, compute, cutover, validation, "
-                "and retirement phases with guarded resume checkpoints."
+                "and retirement phases with guarded resume checkpoints. Kubernetes "
+                "node-template work is one minor hop per external upgrade run."
             ),
         ),
     ] = True,
@@ -49935,7 +50921,49 @@ def soperator_external_upgrade_command(
         onboarding = target.get("soperator_onboarding") if isinstance(target, Mapping) else {}
         if not isinstance(onboarding, Mapping):
             onboarding = {}
-        node_template_target = onboarding.get("node_template_upgrade")
+        locked_upgrade_path = _locked_upgrade_path_from_onboarding(onboarding)
+        upgrade_path_progress: dict[str, Any] = {}
+        current_segment: Mapping[str, Any] | None = None
+        effective_payload: Mapping[str, Any] = payload
+        effective_onboarding: Mapping[str, Any] = onboarding
+        if locked_upgrade_path:
+            upgrade_path_progress = _locked_upgrade_path_progress(
+                config_path=config_path,
+                target_ref=target_ref,
+                upgrade_path=locked_upgrade_path,
+            )
+            current_segment = _locked_upgrade_path_current_segment(
+                upgrade_path=locked_upgrade_path,
+                progress=upgrade_path_progress,
+            )
+            if current_segment is None:
+                for line in _locked_upgrade_path_plan_lines(
+                    config_path=config_path,
+                    target_ref=target_ref,
+                    upgrade_path=locked_upgrade_path,
+                    progress=upgrade_path_progress,
+                    current_segment=None,
+                ):
+                    console.print(_style_soperator_migration_plan_line(line), soft_wrap=True)
+                return
+            effective_payload = _soperator_effective_upgrade_payload_for_segment(
+                payload=payload,
+                target_ref=target_ref,
+                upgrade_path=locked_upgrade_path,
+                segment=current_segment,
+            )
+            effective_target = soperator_onboarding_target(
+                effective_payload,
+                target_ref=target_ref,
+            )
+            effective_onboarding = (
+                effective_target.get("soperator_onboarding")
+                if isinstance(effective_target, Mapping)
+                else {}
+            )
+            if not isinstance(effective_onboarding, Mapping):
+                effective_onboarding = {}
+        node_template_target = effective_onboarding.get("node_template_upgrade")
         if not isinstance(node_template_target, Mapping):
             node_template_target = {}
         with _command_status(
@@ -49944,7 +50972,7 @@ def soperator_external_upgrade_command(
         ):
             discovery_path = _run_external_soperator_discovery_command(
                 config_path=config_path,
-                payload=payload,
+                payload=effective_payload,
                 target_ref=target_ref,
                 cluster_id=None,
                 kube_context=None,
@@ -49952,7 +50980,7 @@ def soperator_external_upgrade_command(
                 output_dir=None,
                 namespace=None,
                 release_name=None,
-                to_chart_version=_non_empty_text(onboarding.get("target_version")),
+                to_chart_version=_non_empty_text(effective_onboarding.get("target_version")),
                 to_k8s_version=(
                     _non_empty_text(node_template_target.get("target_k8s_version"))
                     or _non_empty_text(node_template_target.get("k8s_version"))
@@ -49973,6 +51001,12 @@ def soperator_external_upgrade_command(
             config_path=config_path,
             target_ref=target_ref,
         )
+        if locked_upgrade_path and current_segment is not None:
+            source_report = _source_report_for_locked_upgrade_segment(
+                source_report=source_report,
+                upgrade_path=locked_upgrade_path,
+                segment=current_segment,
+            )
         report = source_report.get("report")
         if isinstance(report, Mapping):
             has_reject_status = _soperator_support_policy_has_reject_status(report)
@@ -49985,14 +51019,14 @@ def soperator_external_upgrade_command(
                 )
             if has_reject_status and (
                 allow_unsupported_soperator_upgrade_path
-                or bool(onboarding.get("support_override_used") is True)
+                or bool(effective_onboarding.get("support_override_used") is True)
             ):
                 source_report = dict(source_report)
                 source_report["report"] = _soperator_support_override_report_mapping(report)
         _require_soperator_migration_actions(
             config_path=config_path,
             target_ref=target_ref,
-            onboarding=onboarding,
+            onboarding=effective_onboarding,
         )
         resolved_job_policy = _soperator_upgrade_job_policy(
             policy=job_policy,
@@ -50011,7 +51045,7 @@ def soperator_external_upgrade_command(
         for line in _format_soperator_migration_plan_lines(
             config_path=config_path,
             target_ref=target_ref,
-            payload=payload,
+            payload=effective_payload,
             source_report=source_report,
             dry_run=dry_run,
             worker_rollout_strategy=worker_rollout_strategy,
@@ -50022,6 +51056,9 @@ def soperator_external_upgrade_command(
             strategy_max_unavailable_count=strategy_max_unavailable_count,
             strategy_drain_timeout=strategy_drain_timeout,
             job_policy=resolved_job_policy,
+            upgrade_path=locked_upgrade_path or None,
+            upgrade_path_progress=upgrade_path_progress,
+            current_segment=current_segment,
         ):
             console.print(_style_soperator_migration_plan_line(line), soft_wrap=True)
         if not dry_run:
@@ -50029,7 +51066,7 @@ def soperator_external_upgrade_command(
             with (
                 _soperator_migration_status_emitter() as emit_status,
                 _soperator_migration_execute_payload(
-                    payload, target_ref=target_ref
+                    effective_payload, target_ref=target_ref
                 ) as execution_payload,
             ):
                 command_args = _external_soperator_upgrade_command_args(
@@ -50125,6 +51162,16 @@ def soperator_external_upgrade_command(
                     strategy_max_surge_count=strategy_max_surge_count,
                     strategy_max_unavailable_count=strategy_max_unavailable_count,
                     strategy_drain_timeout=strategy_drain_timeout,
+                    upgrade_path_fingerprint=(
+                        _locked_upgrade_path_fingerprint(locked_upgrade_path)
+                        if locked_upgrade_path
+                        else ""
+                    ),
+                    upgrade_path_segment_id=(
+                        _non_empty_text(current_segment.get("id"))
+                        if isinstance(current_segment, Mapping)
+                        else ""
+                    ),
                 )
                 if execution_result.pending_phase == "none":
                     if not external_soperator_upgrade_protected_comparison_passed(
@@ -50143,6 +51190,7 @@ def soperator_external_upgrade_command(
                             execution_payload=execution_payload,
                             source_report=source_report,
                             target_ref=target_ref,
+                            upgrade_path=locked_upgrade_path or None,
                         )
                     )
             for line in execution_result.lines:
@@ -53325,11 +54373,14 @@ def deploy_command(
     control-plane/node-template upgrade, storage remediation, or compute
     replacement, deploy refuses before preflight and directs the operator to
     `ext-soperator upgrade`; deploy cannot perform those ad hoc Nebius API
-    upgrade phases. Use upgrade for reruns/resume while those actions remain
-    selected. A fully completed `ext-soperator upgrade --execute` refreshes
-    config.yaml from live post-upgrade discovery when possible; if refresh was
-    skipped, rerun `ext-soperator onboard`, rerender, and deploy only for normal
-    rendered reconciliation if needed.
+    upgrade phases. Use `ext-soperator upgrade` for reruns/resume while those
+    actions remain selected. If the locked path still has remaining segments,
+    repeat the same `ext-soperator upgrade --execute --approve` command; cxcli
+    keeps accepted onboarding in place until the final locked segment completes.
+    After that final segment, cxcli refreshes config.yaml from live post-upgrade
+    discovery when possible; if that final refresh was skipped, rerun
+    `ext-soperator onboard` only as an intentional repair path, then rerender
+    and deploy for normal rendered reconciliation if needed.
     When more than one built-in cluster target is present, deploy reconciles
     every target by default. Use `--target <target-id>` to narrow Flux/app work
     and deploy-time validations to one target, or `--all-targets` to spell out
