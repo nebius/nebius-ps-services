@@ -1071,9 +1071,9 @@ If the accepted onboarding report says external-upgrade-owned work is required, 
 normal deploy and continue with
 `nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run` to
 inspect the explicit external-upgrade-owned actions. In interactive terminals, the
-dry-run plan highlights the target/source topics, storage/compute modes,
-required-action statuses, upgrade phases, executor contracts, and execution
-mode so operators can scan the plan before accepting live work. The route
+dry-run plan groups target discovery, versions, support policy, accepted
+onboarding actions, external node-template rollout, phases, execution controls,
+and execution guarantees so operators can scan the plan before accepting live work. The route
 is driven by
 `deploy.targets[].soperator_onboarding.actions`, not by storage and compute
 modes alone: a target that resolved to `keep-existing-storage` and

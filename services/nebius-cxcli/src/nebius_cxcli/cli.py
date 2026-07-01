@@ -13534,55 +13534,29 @@ def _config_cli_arg(config_path: Path) -> str:
 
 def _soperator_migration_reason_labels(onboarding: Mapping[str, Any]) -> tuple[str, ...]:
     flags = _soperator_migration_action_flags(onboarding)
+    actions = {
+        str(action or "").strip()
+        for action in onboarding.get("actions", []) or []
+        if str(action or "").strip()
+    }
     reasons: list[str] = []
     if flags["soperator_upgrade_required"]:
         reasons.append("Soperator chart upgrade")
     if flags["external_node_template_upgrade_required"]:
-        reasons.append("external MK8s control-plane/node-template upgrade via Nebius API")
+        reasons.append("external MK8s control-plane/node-template upgrade")
     if flags["storage_migration_required"]:
         reasons.append("aligned SFS/data migration")
     if flags["compute_migration_required"]:
         reasons.append("Soperator compute layout migration")
     if flags["target_gpu_reconciliation_required"] and flags["migration_required"]:
-        reasons.append("target GPU/RDMA stack remediation selected with external upgrade work")
+        reasons.append("target GPU/RDMA stack remediation")
+    if not reasons and ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE in actions:
+        reasons.append("external Soperator upgrade approval")
     return tuple(reasons)
 
 
 def _soperator_migration_reason_text(onboarding: Mapping[str, Any]) -> str:
     return "; ".join(_soperator_migration_reason_labels(onboarding)) or "external-upgrade-owned action"
-
-
-def _soperator_storage_compute_route_note(onboarding: Mapping[str, Any]) -> str:
-    storage_mode = (
-        str(onboarding.get("storage_mode", "") or _SOPERATOR_ONBOARDING_DEFAULT_STORAGE_MODE)
-        .strip()
-        .lower()
-    )
-    compute_mode = (
-        str(onboarding.get("compute_mode", "") or _SOPERATOR_ONBOARDING_DEFAULT_COMPUTE_MODE)
-        .strip()
-        .lower()
-    )
-    if (
-        storage_mode == ONBOARDING_STORAGE_MODE_KEEP_EXISTING
-        and compute_mode == ONBOARDING_COMPUTE_MODE_KEEP_EXISTING
-    ):
-        return (
-            "Existing storage and compute layout were accepted; upgrade will not create "
-            "aligned SFS filesystems or replacement compute node groups unless those "
-            "actions are present."
-        )
-    if storage_mode == ONBOARDING_STORAGE_MODE_KEEP_EXISTING:
-        return (
-            "Existing storage was accepted; upgrade will not create aligned SFS "
-            "filesystems unless a storage remediation action is present."
-        )
-    if compute_mode == ONBOARDING_COMPUTE_MODE_KEEP_EXISTING:
-        return (
-            "Existing compute layout was accepted; upgrade will not create replacement "
-            "compute node groups unless a compute replacement action is present."
-        )
-    return ""
 
 
 def _soperator_route_guidance_lines(
@@ -13591,21 +13565,10 @@ def _soperator_route_guidance_lines(
     migration_required: bool,
 ) -> tuple[str, ...]:
     if migration_required:
-        lines = [
-            "Route: render -> ext-soperator upgrade, not render -> deploy.",
-            "Reason: accepted onboarding actions require "
-            + _soperator_migration_reason_text(onboarding)
-            + ".",
-            (
-                "deploy only reconciles the rendered Terraform/Flux desired state; "
-                "upgrade performs the required ad hoc Nebius API and guarded "
-                "external Soperator upgrade phases."
-            ),
-        ]
-        mode_note = _soperator_storage_compute_route_note(onboarding)
-        if mode_note:
-            lines.append(mode_note)
-        return tuple(lines)
+        labels = _soperator_migration_reason_labels(onboarding) or (
+            "external-upgrade-owned action",
+        )
+        return ("Accepted onboarding actions:", *(f"  - {label}" for label in labels))
 
     if ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK in {
         str(action or "").strip() for action in onboarding.get("actions", []) or ()
@@ -13661,10 +13624,10 @@ def _print_render_deploy_hint(config_path: Path) -> None:
                 f"{config_arg} --target {target_arg} --execute --approve"
             )
         else:
-            console.print("Route: render -> ext-soperator upgrade, not render -> deploy.")
+            console.print("Accepted onboarding actions:")
             for target_ref, onboarding in migration_targets:
                 console.print(
-                    f"Soperator target {target_ref}: "
+                    f"  - {target_ref}: "
                     + _soperator_migration_reason_text(onboarding),
                     soft_wrap=True,
                 )
@@ -13682,10 +13645,6 @@ def _print_render_deploy_hint(config_path: Path) -> None:
                     "nebius-cxcli ext-soperator upgrade "
                     f"{config_arg} --target {target_arg} --execute --approve"
                 )
-        console.print(
-            "Do not run `nebius-cxcli deploy` before `ext-soperator upgrade` for external-upgrade-required Soperator targets.",
-            soft_wrap=True,
-        )
         return
     if install_targets:
         if len(install_targets) == 1:
@@ -13758,12 +13717,17 @@ def _print_soperator_onboard_next_steps(
 ) -> None:
     config_arg = _config_cli_arg(config_path)
     target_arg = shlex.quote(normalize_component_token(target_ref) or target_ref)
-    console.print("Soperator onboarding route:")
-    for line in _soperator_route_guidance_lines(
+    guidance_lines = _soperator_route_guidance_lines(
         onboarding=onboarding,
         migration_required=migration_required,
-    ):
-        console.print(f"  {line}", soft_wrap=True)
+    )
+    if migration_required:
+        for line in guidance_lines:
+            console.print(line, soft_wrap=True)
+    else:
+        console.print("Soperator onboarding route:")
+        for line in guidance_lines:
+            console.print(f"  {line}", soft_wrap=True)
     console.print("Next steps:")
     commands: list[tuple[str, str]] = [
         (f"nebius-cxcli validate {config_arg}", ""),
@@ -13789,14 +13753,7 @@ def _print_soperator_onboard_next_steps(
         if suffix:
             console.print(suffix.strip())
         _print_copy_paste_command(command)
-    if migration_required:
-        console.print(
-            "Do not run `nebius-cxcli deploy` before `ext-soperator upgrade` for this target; "
-            "deploy applies the rendered Soperator resources, while upgrade must verify "
-            "the live source release first.",
-            soft_wrap=True,
-        )
-    else:
+    if not migration_required:
         console.print(
             f"Use `--target {target_arg}` only when you intentionally want to narrow "
             "deploy to this generated target.",
@@ -17072,6 +17029,31 @@ def _soperator_rollout_options_provided(
     )
 
 
+def _soperator_rollout_command_options_from_target_row(
+    target_row: Mapping[str, Any],
+) -> dict[str, object]:
+    if not _soperator_target_row_requires_external_node_template_rollout(target_row):
+        return {}
+    onboarding = target_row.get("soperator_onboarding")
+    if not isinstance(onboarding, Mapping):
+        return {}
+    rollout = resolve_external_node_template_rollout(onboarding)
+    options: dict[str, object] = {
+        "worker_rollout_strategy": rollout.strategy,
+        "strategy_max_surge_count": rollout.strategy_max_surge_count,
+        "strategy_max_unavailable_count": rollout.strategy_max_unavailable_count,
+        "strategy_drain_timeout": rollout.strategy_drain_timeout,
+    }
+    if rollout.strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE:
+        if rollout.worker_wave_groups is not None:
+            options["worker_wave_groups"] = rollout.worker_wave_groups
+        elif rollout.worker_wave_percent is not None:
+            options["worker_wave_percent"] = rollout.worker_wave_percent
+        if rollout.max_parallel_worker_groups is not None:
+            options["max_parallel_worker_groups"] = rollout.max_parallel_worker_groups
+    return options
+
+
 def _soperator_onboarding_target_defaults(
     target_ref: str,
     *,
@@ -18474,6 +18456,15 @@ def _soperator_onboarding_target_row_from_options(
 ) -> dict[str, Any]:
     explicit_storage_mode = storage_mode is not None
     explicit_compute_mode = compute_mode is not None
+    explicit_rollout_options = _soperator_rollout_options_provided(
+        worker_rollout_strategy=worker_rollout_strategy,
+        worker_wave_groups=worker_wave_groups,
+        worker_wave_percent=worker_wave_percent,
+        max_parallel_worker_groups=max_parallel_worker_groups,
+        strategy_max_surge_count=strategy_max_surge_count,
+        strategy_max_unavailable_count=strategy_max_unavailable_count,
+        strategy_drain_timeout=strategy_drain_timeout,
+    )
     normalized_cluster_id = _non_empty_text(cluster_id)
     if not normalized_cluster_id:
         raise RuntimeError(
@@ -18564,13 +18555,44 @@ def _soperator_onboarding_target_row_from_options(
         )
         _print_soperator_onboarding_report_summary(report)
     required_storage_mode = _soperator_onboarding_required_storage_mode_for_report(report)
-    if required_storage_mode and not explicit_storage_mode:
+    if interactive and (not explicit_storage_mode or not explicit_compute_mode):
+        _print_soperator_onboarding_mode_choice_guidance()
+    if interactive and not explicit_storage_mode:
+        storage_mode, should_stop = _prompt_scalar_override(
+            "deploy.targets[].soperator_onboarding.storage_mode",
+            required_storage_mode or _SOPERATOR_ONBOARDING_DEFAULT_STORAGE_MODE,
+            choices=_soperator_onboarding_storage_mode_choices(
+                required_storage_mode or _SOPERATOR_ONBOARDING_DEFAULT_STORAGE_MODE
+            ),
+            type_hint="string",
+            required=True,
+        )
+        if should_stop:
+            raise _WizardQuitRequested
+        if _wizard_backtrack_requested(storage_mode):
+            storage_mode = required_storage_mode or _SOPERATOR_ONBOARDING_DEFAULT_STORAGE_MODE
+        normalized_storage_mode = _normalize_soperator_onboarding_storage_mode(storage_mode)
+    elif required_storage_mode and not explicit_storage_mode:
         normalized_storage_mode = required_storage_mode
     normalized_storage_mode = _validate_soperator_onboarding_storage_mode_for_report(
         storage_mode=normalized_storage_mode,
         report=report,
     )
-    if not explicit_compute_mode:
+    if interactive and not explicit_compute_mode:
+        default_compute_mode = _soperator_onboarding_default_compute_mode_for_report(report)
+        compute_mode, should_stop = _prompt_scalar_override(
+            "deploy.targets[].soperator_onboarding.compute_mode",
+            default_compute_mode,
+            choices=_soperator_onboarding_compute_mode_choices(default_compute_mode),
+            type_hint="string",
+            required=True,
+        )
+        if should_stop:
+            raise _WizardQuitRequested
+        if _wizard_backtrack_requested(compute_mode):
+            compute_mode = default_compute_mode
+        normalized_compute_mode = _normalize_soperator_onboarding_compute_mode(compute_mode)
+    elif not explicit_compute_mode:
         normalized_compute_mode = _soperator_onboarding_default_compute_mode_for_report(report)
     target_row = _soperator_onboarding_target_defaults(
         normalized_target,
@@ -18593,6 +18615,15 @@ def _soperator_onboarding_target_row_from_options(
             strategy_drain_timeout=strategy_drain_timeout,
         ),
     )
+    if (
+        interactive
+        and _soperator_target_row_requires_external_node_template_rollout(target_row)
+        and not explicit_rollout_options
+    ):
+        _apply_soperator_rollout_manifest_to_target_row(
+            target_row,
+            _prompt_soperator_onboarding_rollout_manifest(target_row),
+        )
     _apply_soperator_support_policy_to_target_row(
         target_row,
         allow_unsupported_soperator_upgrade_path=allow_unsupported_soperator_upgrade_path,
@@ -48633,9 +48664,13 @@ def soperator_onboard_command(
             )
 
         accepted_onboarding = target_row.get("soperator_onboarding")
+        accepted_storage_mode = ""
+        accepted_compute_mode = ""
         accepted_to_chart_version = ""
         accepted_to_k8s_version = ""
         if isinstance(accepted_onboarding, Mapping):
+            accepted_storage_mode = _non_empty_text(accepted_onboarding.get("storage_mode"))
+            accepted_compute_mode = _non_empty_text(accepted_onboarding.get("compute_mode"))
             accepted_to_chart_version = _non_empty_text(
                 accepted_onboarding.get("target_version")
             )
@@ -48644,6 +48679,7 @@ def soperator_onboard_command(
                 accepted_to_k8s_version = _non_empty_text(
                     accepted_node_template.get("target_k8s_version")
                 )
+        accepted_rollout_options = _soperator_rollout_command_options_from_target_row(target_row)
         onboard_command_args = _soperator_onboard_bundle_command_args(
             config_path=config_path,
             target_row=target_row,
@@ -48651,19 +48687,32 @@ def soperator_onboard_command(
             cluster_id=cluster_id_opt,
             kube_context=kube_context_opt,
             access=access_opt,
-            storage_mode=storage_mode_opt,
-            compute_mode=compute_mode_opt,
+            storage_mode=_non_empty_text(storage_mode_opt) or accepted_storage_mode,
+            compute_mode=_non_empty_text(compute_mode_opt) or accepted_compute_mode,
             source_version=source_version_opt,
             to_chart_version=_non_empty_text(to_chart_version) or accepted_to_chart_version,
             to_k8s_version=_non_empty_text(to_k8s_version) or accepted_to_k8s_version,
             allow_unsupported_soperator_upgrade_path=allow_unsupported_soperator_upgrade_path,
-            worker_rollout_strategy=worker_rollout_strategy,
-            worker_wave_groups=worker_wave_groups,
-            worker_wave_percent=worker_wave_percent,
-            max_parallel_worker_groups=max_parallel_worker_groups,
-            strategy_max_surge_count=strategy_max_surge_count,
-            strategy_max_unavailable_count=strategy_max_unavailable_count,
-            strategy_drain_timeout=strategy_drain_timeout,
+            worker_rollout_strategy=worker_rollout_strategy
+            if worker_rollout_strategy is not None
+            else cast(str | None, accepted_rollout_options.get("worker_rollout_strategy")),
+            worker_wave_groups=worker_wave_groups
+            if worker_wave_groups is not None
+            else cast(int | None, accepted_rollout_options.get("worker_wave_groups")),
+            worker_wave_percent=worker_wave_percent
+            if worker_wave_percent is not None
+            else cast(int | None, accepted_rollout_options.get("worker_wave_percent")),
+            max_parallel_worker_groups=max_parallel_worker_groups
+            if max_parallel_worker_groups is not None
+            else cast(int | None, accepted_rollout_options.get("max_parallel_worker_groups")),
+            strategy_max_surge_count=strategy_max_surge_count
+            if strategy_max_surge_count is not None
+            else cast(int | None, accepted_rollout_options.get("strategy_max_surge_count")),
+            strategy_max_unavailable_count=strategy_max_unavailable_count
+            if strategy_max_unavailable_count is not None
+            else cast(int | None, accepted_rollout_options.get("strategy_max_unavailable_count")),
+            strategy_drain_timeout=_non_empty_text(strategy_drain_timeout)
+            or cast(str | None, accepted_rollout_options.get("strategy_drain_timeout")),
             validate_sources=validate_sources,
             no_interactive=no_interactive,
             use_accepted_row=False,
@@ -48772,23 +48821,19 @@ _SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES = (
     "cutover, validation, and retirement phases in order.",
     "External node-template contract: onboarded external targets are not "
     "Terraform-owned, so --execute uses direct Nebius updates for Kubernetes "
-    "version, node OS image, and Nebius GPU driver preset. Control plane is "
-    "upgraded first; service-role node groups are then updated one group at a "
-    "time. zero-surge uses temporary max_surge=0, max_unavailable=1, "
-    "drain_timeout=30m and quiesces login, one-node controller/accounting, "
-    "and known drain-blocking webhook workloads; worker node groups also "
-    "default to zero-surge. "
-    "Operators can select safe-surge (max_surge=1, max_unavailable=0, "
-    "drain_timeout=30m) for service groups and bounded worker waves when spare "
-    "quota/capacity is available. Set worker_group_strategy.drain_timeout to none to wait "
-    "indefinitely instead of allowing provider drain fallback. cxcli restores "
-    "each node group's original strategy.",
+    "version, node OS image, and Nebius GPU driver preset. Control plane goes "
+    "first, then service-role node groups and bounded worker waves. zero-surge "
+    "uses max_surge=0, max_unavailable=1, drain_timeout=30m and may quiesce "
+    "login, one-node controller/accounting, and known drain-blocking webhook "
+    "workloads. safe-surge uses max_surge=1, max_unavailable=0, "
+    "drain_timeout=30m when spare quota/capacity is available. Set "
+    "worker_group_strategy.drain_timeout to none to wait indefinitely; cxcli "
+    "restores each node group's original strategy.",
     "Node-template quota contract: zero-surge requires no spare quota but can "
-    "reduce active capacity by max_unavailable_count node(s) per group during "
-    "rollout. With safe-surge, active service groups and preserved worker groups "
-    "require max_surge_count temporary surge node(s) for each active group; "
-    "cxcli checks the required spare quota and GPU capacity and requires selected "
-    "worker nodes to start Ready and schedulable before mutation.",
+    "reduce active capacity by max_unavailable_count node(s) during rollout. "
+    "safe-surge requires max_surge_count temporary surge node(s) for each active "
+    "service group or worker wave; cxcli checks spare quota, GPU capacity, and "
+    "selected worker nodes are Ready and schedulable before mutation.",
     "Status contract: approved --execute prints phase-aware external Soperator "
     "upgrade status; target remediation phases report MK8s health, storage "
     "phases report SFS/PVC progress and continuity, while compute and cutover "
@@ -48820,12 +48865,19 @@ _SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES = (
     "stale source-family releases remain afterward.",
 )
 _SOPERATOR_MIGRATION_PLAN_TOPIC_STYLES = {
+    "External Soperator upgrade plan": "bold cyan",
+    "Target and discovery": "bold cyan",
     "External Soperator upgrade target": "bold cyan",
     "Config": "cyan",
     "Source discovery bundle": "cyan",
     "Onboarding state": "bold blue",
+    "Versions": "bold cyan",
     "Source version": "blue",
     "Target version": "blue",
+    "Soperator version": "blue",
+    "Kubernetes version": "blue",
+    "Support policy": "bold cyan",
+    "Accepted onboarding actions": "bold cyan",
     "Storage mode": "bold magenta",
     "Compute mode": "bold magenta",
     "External upgrade required": "bold yellow",
@@ -48834,6 +48886,7 @@ _SOPERATOR_MIGRATION_PLAN_TOPIC_STYLES = {
     "Soperator upgrade required": "yellow",
     "External node-template upgrade required": "yellow",
     "Target GPU stack reconciliation required": "yellow",
+    "External node-template rollout": "bold cyan",
     "Node-template rollout strategy": "bold cyan",
     "Worker wave parallelism": "bold cyan",
     "Node-group per-group strategy": "bold cyan",
@@ -48843,6 +48896,7 @@ _SOPERATOR_MIGRATION_PLAN_TOPIC_STYLES = {
     "Service-role rollout": "cyan",
     "Planned worker waves": "cyan",
     "Upgrade phases": "bold magenta",
+    "Execution controls": "bold cyan",
     "Live executor contract": "bold blue",
     "External node-template contract": "bold blue",
     "Node-template quota contract": "bold blue",
@@ -48852,6 +48906,9 @@ _SOPERATOR_MIGRATION_PLAN_TOPIC_STYLES = {
     "Resume contract": "bold blue",
     "Completion contract": "bold blue",
     "Execution mode": "bold green",
+    "Slurm job policy": "bold green",
+    "Backup": "bold yellow",
+    "Execution guarantees": "bold cyan",
 }
 _SOPERATOR_MIGRATION_REQUIRED_TOPICS = frozenset(
     {
@@ -49270,6 +49327,7 @@ def _format_soperator_migration_plan_lines(
     strategy_max_surge_count: int | None = None,
     strategy_max_unavailable_count: int | None = None,
     strategy_drain_timeout: str | None = None,
+    job_policy: str | None = None,
 ) -> list[str]:
     target = soperator_onboarding_target(payload, target_ref=target_ref)
     onboarding = target.get("soperator_onboarding") if isinstance(target, Mapping) else {}
@@ -49285,31 +49343,48 @@ def _format_soperator_migration_plan_lines(
     )
     current_k8s_version, target_k8s_version = soperator_discovery_report_k8s_versions(report)
     report_path = source_soperator_discovery_report_path(config_path.parent, target_ref)
+    source_version = str(
+        onboarding.get("source_version", "") or report.get("source_version", "") or "not detected"
+    )
+    target_version = str(
+        onboarding.get("target_version", "") or report.get("target_version", "") or "unknown"
+    )
+    storage_mode = str(
+        onboarding.get("storage_mode", "") or _SOPERATOR_ONBOARDING_DEFAULT_STORAGE_MODE
+    )
+    compute_mode = str(
+        onboarding.get("compute_mode", "") or _SOPERATOR_ONBOARDING_DEFAULT_COMPUTE_MODE
+    )
     lines = [
+        "External Soperator upgrade plan:",
+        "",
+        "Target and discovery:",
         f"External Soperator upgrade target: {target_ref}",
         f"Config: {config_path}",
         f"Source discovery bundle: {report_path}",
         f"Onboarding state: {str(onboarding.get('state', '') or report.get('state', '') or 'unknown')}",
-        f"Source version: {str(onboarding.get('source_version', '') or report.get('source_version', '') or 'not detected')}",
-        f"Target version: {str(onboarding.get('target_version', '') or report.get('target_version', '') or 'unknown')}",
+        "",
+        "Versions:",
+        f"Soperator version: {source_version} -> {target_version}",
     ]
-    if current_k8s_version:
-        lines.append(f"Current Kubernetes version: {current_k8s_version}")
-    if target_k8s_version:
-        lines.append(f"Target Kubernetes version: {target_k8s_version}")
+    if current_k8s_version or target_k8s_version:
+        lines.append(
+            "Kubernetes version: "
+            f"{current_k8s_version or 'unknown'} -> {target_k8s_version or 'unknown'}"
+        )
+    support_policy_lines = _soperator_support_policy_plan_lines(report)
+    if support_policy_lines:
+        lines.extend(["", "Support policy:"])
+        lines.extend(support_policy_lines)
     lines.extend(
         [
-            "Storage mode: "
-            + str(
-                onboarding.get("storage_mode", "") or _SOPERATOR_ONBOARDING_DEFAULT_STORAGE_MODE
-            ),
-            "Compute mode: "
-            + str(
-                onboarding.get("compute_mode", "") or _SOPERATOR_ONBOARDING_DEFAULT_COMPUTE_MODE
-            ),
+            "",
+            "Accepted onboarding actions:",
             "External upgrade required: " + ("yes" if flags["migration_required"] else "no"),
+            "Storage mode: " + storage_mode,
             "Storage upgrade work required: "
             + ("yes" if flags["storage_migration_required"] else "no"),
+            "Compute mode: " + compute_mode,
             "Compute upgrade work required: "
             + ("yes" if flags["compute_migration_required"] else "no"),
             "Soperator upgrade required: "
@@ -49320,7 +49395,6 @@ def _format_soperator_migration_plan_lines(
             + ("yes" if flags["target_gpu_reconciliation_required"] else "no"),
         ]
     )
-    lines.extend(_soperator_support_policy_plan_lines(report))
     if flags["external_node_template_upgrade_required"]:
         rollout = resolve_external_node_template_rollout(
             onboarding,
@@ -49332,6 +49406,7 @@ def _format_soperator_migration_plan_lines(
             strategy_max_unavailable_count=strategy_max_unavailable_count,
             strategy_drain_timeout=strategy_drain_timeout,
         )
+        lines.extend(["", "External node-template rollout:"])
         lines.extend(
             _external_node_template_rollout_plan_lines(
                 rollout=rollout,
@@ -49339,15 +49414,17 @@ def _format_soperator_migration_plan_lines(
             )
         )
     if phases:
-        lines.append("Upgrade phases:")
+        lines.extend(["", "Upgrade phases:"])
+        phase_number = 0
         for raw_phase in phases:
             if not isinstance(raw_phase, Mapping):
                 continue
+            phase_number += 1
             phase_id = str(raw_phase.get("id", "") or "phase").strip()
             title = str(raw_phase.get("title", "") or "").strip()
             status = str(raw_phase.get("status", "") or "planned").strip()
             top_level_stage = external_soperator_upgrade_top_level_stage(phase_id)
-            detail = f"- {phase_id}: {status} (top-level stage: {top_level_stage})"
+            detail = f"- {phase_number}. [{top_level_stage}] {phase_id}: {status}"
             if title:
                 detail += f" - {title}"
             if raw_phase.get("quiet_window") is True:
@@ -49356,13 +49433,21 @@ def _format_soperator_migration_plan_lines(
                 detail += " (approval required)"
             lines.append(detail)
     else:
+        lines.extend(["", "Upgrade phases:"])
         lines.append(
-            "Upgrade phases: none in the source discovery bundle; use render/deploy for install "
+            "No upgrade phases in the source discovery bundle; use render/deploy for install "
             "or adopt-only reconciliation."
         )
-    lines.extend(_SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES)
     mode = "dry-run; no cluster changes were made" if dry_run else "execute"
-    lines.append(f"Execution mode: {mode}.")
+    lines.extend(["", "Execution controls:", f"Execution mode: {mode}."])
+    if job_policy:
+        lines.append(f"Slurm job policy: {job_policy}")
+    lines.append(
+        "Backup: restore-capable archive with raw Secrets and optional accounting DB dump "
+        "is required before approved mutation."
+    )
+    lines.extend(["", "Execution guarantees:"])
+    lines.extend(_SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES)
     return lines
 
 
@@ -49853,32 +49938,36 @@ def soperator_external_upgrade_command(
         node_template_target = onboarding.get("node_template_upgrade")
         if not isinstance(node_template_target, Mapping):
             node_template_target = {}
-        discovery_path = _run_external_soperator_discovery_command(
-            config_path=config_path,
-            payload=payload,
-            target_ref=target_ref,
-            cluster_id=None,
-            kube_context=None,
-            access="external",
-            output_dir=None,
-            namespace=None,
-            release_name=None,
-            to_chart_version=_non_empty_text(onboarding.get("target_version")),
-            to_k8s_version=(
-                _non_empty_text(node_template_target.get("target_k8s_version"))
-                or _non_empty_text(node_template_target.get("k8s_version"))
-                or _non_empty_text(node_template_target.get("version"))
-            ),
-            to_os=(
-                _non_empty_text(node_template_target.get("target_os"))
-                or _non_empty_text(node_template_target.get("os"))
-            ),
-            to_gpu_stack_preset=(
-                _non_empty_text(node_template_target.get("target_gpu_stack_preset"))
-                or _non_empty_text(node_template_target.get("gpu_stack_preset"))
-            ),
-            redaction="local",
-        )
+        with _command_status(
+            "[cyan]Refreshing external Soperator discovery and Nebius provider "
+            f"inventory for {target_ref}...[/cyan]"
+        ):
+            discovery_path = _run_external_soperator_discovery_command(
+                config_path=config_path,
+                payload=payload,
+                target_ref=target_ref,
+                cluster_id=None,
+                kube_context=None,
+                access="external",
+                output_dir=None,
+                namespace=None,
+                release_name=None,
+                to_chart_version=_non_empty_text(onboarding.get("target_version")),
+                to_k8s_version=(
+                    _non_empty_text(node_template_target.get("target_k8s_version"))
+                    or _non_empty_text(node_template_target.get("k8s_version"))
+                    or _non_empty_text(node_template_target.get("version"))
+                ),
+                to_os=(
+                    _non_empty_text(node_template_target.get("target_os"))
+                    or _non_empty_text(node_template_target.get("os"))
+                ),
+                to_gpu_stack_preset=(
+                    _non_empty_text(node_template_target.get("target_gpu_stack_preset"))
+                    or _non_empty_text(node_template_target.get("gpu_stack_preset"))
+                ),
+                redaction="local",
+            )
         console.print(f"External Soperator discovery refreshed: {discovery_path}", soft_wrap=True)
         source_report = _load_soperator_source_discovery_report(
             config_path=config_path,
@@ -49932,14 +50021,9 @@ def soperator_external_upgrade_command(
             strategy_max_surge_count=strategy_max_surge_count,
             strategy_max_unavailable_count=strategy_max_unavailable_count,
             strategy_drain_timeout=strategy_drain_timeout,
+            job_policy=resolved_job_policy,
         ):
             console.print(_style_soperator_migration_plan_line(line), soft_wrap=True)
-        console.print(f"Slurm job policy: {resolved_job_policy}", soft_wrap=True)
-        console.print(
-            "Backup: restore-capable archive with raw Secrets and optional accounting DB dump "
-            "is required before approved mutation.",
-            soft_wrap=True,
-        )
         if not dry_run:
             post_migration_config_lines: tuple[str, ...] = ()
             with (

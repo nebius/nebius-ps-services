@@ -6,6 +6,19 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Organized `ext-soperator upgrade --dry-run` output into concise sections for
+  target discovery, versions, accepted onboarding actions, node-template
+  rollout, phases, execution controls, and execution guarantees.
+- Added spinner/status feedback while `ext-soperator upgrade --dry-run`
+  refreshes external Soperator discovery and Nebius provider inventory before
+  printing the plan.
+- Fixed `ext-soperator onboard --cluster-id` interactive runs so `--cluster-id`
+  only preselects the cluster; storage, compute, and external node-template
+  rollout prompts still run unless `--no-interactive` or explicit rollout flags
+  are supplied.
+- Simplified external Soperator render/onboard guidance so accepted upgrade work
+  is listed under `Accepted onboarding actions:` without extra route/deploy
+  rationale before the next-step commands.
 - Fixed `render` overwrite confirmation so first render does not warn or require
   `--force` when the only existing generated files are command-owned lifecycle
   reports such as `generated/reports/soperator-discovery/<target>/manifest.json`;

@@ -7211,7 +7211,14 @@ def test_render_command_points_migration_required_soperator_to_migrate(
         f"nebius-cxcli ext-soperator upgrade {config_arg} "
         "--target external-cluster --execute --approve"
     ) in lines
-    assert "Do not run `nebius-cxcli deploy` before `ext-soperator upgrade`" in (normalized_output)
+    assert "Accepted onboarding actions:" in plain_output
+    if "upgrade-soperator" in actions:
+        assert "Soperator chart upgrade" in plain_output
+    else:
+        assert "external Soperator upgrade approval" in plain_output
+    assert "Do not run `nebius-cxcli deploy` before `ext-soperator upgrade`" not in (
+        normalized_output
+    )
     assert f"nebius-cxcli deploy {config_arg}" not in lines
 
 

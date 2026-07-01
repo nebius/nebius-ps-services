@@ -623,7 +623,9 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "`--worker-rollout-strategy`, `--worker-wave-groups`" in soperator
     assert "non-interactive onboarding" in soperator
     assert "verifies the needed quota and capacity during `--execute` preflight" in (soperator_flat)
-    assert "prints a color-highlighted phase plan in interactive terminals" in soperator
+    assert "prints a color-highlighted sectioned plan covering target discovery" in (
+        soperator_flat
+    )
     assert "refuses deploy-owned/no-upgrade action sets with render/deploy guidance" in (soperator)
     assert (
         "`nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --execute --approve`"
@@ -1473,6 +1475,10 @@ def test_docs_define_component_selector_contract() -> None:
     assert (
         "`nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run`" in readme
     )
+    assert "color-highlighted sectioned plan covering target discovery" in readme_flat
+    assert "accepted onboarding actions, node-template rollout, phases, execution controls" in (
+        readme_flat
+    )
     assert "`ext-soperator onboard` is read-only against live cluster state" in readme_flat
     assert "The initial discovery summary is read-only" in readme_flat
     assert "does not list future upgrade phases as live onboarding actions" in readme_flat
@@ -1743,7 +1749,8 @@ def test_docs_define_component_selector_contract() -> None:
     assert (
         "`nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run`" in design
     )
-    assert "dry-run plan highlights the target/source topics" in design_flat
+    assert "dry-run plan groups target discovery, versions, support policy" in design_flat
+    assert "external node-template rollout, phases, execution controls" in design_flat
     assert (
         "`--execute --approve` refreshes discovery, validates the accepted onboarding analysis"
         in design_flat
