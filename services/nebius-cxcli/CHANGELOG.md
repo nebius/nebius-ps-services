@@ -6,6 +6,15 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Added public Soperator Slurm upgrade smoke job examples with a configurable
+  submitter for repeated CPU/GPU `sbatch` submissions, array mode, optional
+  exclusive placement, and interactive job-policy demonstrations.
+- Extended Soperator Slurm job-policy coverage to chart-driven worker
+  reconciliation. Managed `soperator upgrade`, external `ext-soperator
+  upgrade`, local `deploy`, and `flux apply` now gate disruptive Soperator
+  worker-pod reconciliation on all live worker NodeSets when a live
+  SlurmCluster exists, while first installs with no live SlurmCluster skip the
+  interactive job gate.
 - Changed existing config-backed commands so `client_info.nebius.tenant_id` is
   optional when the command can operate from `project_id` and `region_id`.
   `create` and deployments-root `ext-soperator onboard` still require tenant

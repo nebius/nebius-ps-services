@@ -1159,8 +1159,9 @@ node groups serially with the selected temporary strategy and original-strategy
 restore, updates worker node groups with zero-surge by default or safe-surge
 waves when selected, using an
 exact fixed worker-group count or a percent-based wave with an optional cap,
-handles Slurm jobs on affected worker nodes through the `--job-policy` wait,
-cancel, requeue, or requeue-hold decision state,
+handles Slurm jobs on affected external node-template workers and all live
+worker NodeSets before target chart reconciliation through the `--job-policy`
+wait, cancel, requeue, or requeue-hold decision state,
 clears stale GPU driver presets
 from CPU node groups, temporarily quiesces login workloads, one-node
 controller/accounting workloads, and known drain-blocking webhook replicas only

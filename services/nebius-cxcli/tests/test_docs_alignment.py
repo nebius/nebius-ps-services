@@ -356,8 +356,10 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
     ) in common_flags
     assert (
         "- `deploy`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, "
-        "`--skip-validations`, `--skip-validation`, `--target`, `--all-targets`"
-    ) in common_flags
+        "`--skip-validations`, `--skip-validation`, `--target`, `--all-targets`, "
+        "`--job-policy`, `--cancel-job`, `--requeue-job`, `--job-wait-timeout`, "
+        "`--job-refresh-interval`"
+    ) in common_flags_flat
     assert (
         "- `acceptance-test smoke`: `--target`, `--all-targets`, `--suite`,\n"
         "  `--batch-size`, `--concurrency`,\n"
@@ -464,8 +466,9 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
     ) in common_flags
     assert (
         "- `flux apply`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, "
-        "`--target`, `--all-targets`"
-    ) in common_flags
+        "`--target`, `--all-targets`, `--job-policy`, `--cancel-job`, "
+        "`--requeue-job`, `--job-wait-timeout`, `--job-refresh-interval`"
+    ) in common_flags_flat
     assert (
         "- `flux destroy`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, "
         "`--yes`, `--target`, `--all-targets`"
@@ -1531,7 +1534,8 @@ def test_docs_define_component_selector_contract() -> None:
     assert "Existing worker node groups are preserved in place" in readme_flat
     assert "checks the required spare quota and GPU capacity before mutation" in readme_flat
     assert "requires all selected worker nodes to start Ready and schedulable" in readme_flat
-    assert "checks Slurm jobs only on affected worker nodes" in readme_flat
+    assert "checks Slurm jobs on affected external node-template workers" in readme_flat
+    assert "checks all live worker NodeSets before target Soperator chart reconciliation" in readme_flat
     assert "Slurm rejects the scoped node filter" in readme_flat
     assert "unfiltered cluster-wide job list" in readme_flat
     assert (
@@ -1809,7 +1813,8 @@ def test_docs_define_component_selector_contract() -> None:
     )
     assert "normal `validate`, `render`, and `deploy` can run from any workstation" in design_flat
     assert (
-        "handles Slurm jobs on affected worker nodes through the `--job-policy` "
+        "handles Slurm jobs on affected external node-template workers and all live "
+        "worker NodeSets before target chart reconciliation through the `--job-policy` "
         "wait, cancel, requeue, or requeue-hold decision state"
     ) in design_flat
     assert "Slurm rejects the scoped node filter" in design_flat
@@ -2070,6 +2075,15 @@ def test_readme_guides_soperator_slurm_checks_through_login_service() -> None:
         section_flat
     )
     assert "srun -p cpu -N1 -n1 /bin/hostname" in section
+    assert "examples/slurm-jobs/" in section
+    assert "./submit-soperator-smoke.sh --kind cpu --partition cpu --count 10" in section
+    assert (
+        "./submit-soperator-smoke.sh --kind gpu --partition gpu --count 10 --gpus-per-job 1"
+        in section
+    )
+    assert "nebius-cxcli soperator upgrade CONFIG_YAML --target TARGET" in section_flat
+    assert "--to-chart-version TARGET_VERSION" in section_flat
+    assert "--job-policy interactive" in section_flat
     assert "Do not prefix normal SSH-session commands with chroot" not in section
     assert "kubectl exec into the sshd container" not in section
     assert "chroot /mnt/jail srun" not in section

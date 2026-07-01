@@ -5359,6 +5359,97 @@ def test_external_upgrade_slurm_jobs_translates_kubernetes_node_names() -> None:
     assert squeue_calls[0][-2:] == ("-w", "worker-3")
 
 
+def test_external_upgrade_worker_nodeset_slurm_nodes_maps_running_worker_pods() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "login-0"},
+                                "status": {"phase": "Running"},
+                            },
+                            {
+                                "metadata": {
+                                    "name": "controller-0",
+                                    "labels": {"slurm.nebius.ai/nodeset-name": "controller"},
+                                },
+                                "status": {"phase": "Running"},
+                            },
+                            {
+                                "metadata": {
+                                    "name": "worker-gpu-0",
+                                    "labels": {"slurm.nebius.ai/nodeset-name": "worker-gpu"},
+                                },
+                                "status": {"phase": "Running"},
+                            },
+                            {
+                                "metadata": {
+                                    "name": "worker-cpu-0",
+                                    "labels": {"slurm.nebius.ai/nodeset": "worker-cpu"},
+                                },
+                                "status": {"phase": "Running"},
+                            },
+                            {
+                                "metadata": {
+                                    "name": "worker-gpu-pending",
+                                    "labels": {"slurm.nebius.ai/nodeset-name": "worker-gpu"},
+                                },
+                                "status": {"phase": "Pending"},
+                            },
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[8:] == ("scontrol", "show", "nodes"):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "\n".join(
+                    (
+                        "NodeName=worker-gpu-0-0 NodeHostName=worker-gpu-0",
+                        "NodeName=worker-cpu-0-0 NodeHostName=worker-cpu-0",
+                    )
+                ),
+                "",
+            )
+        return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
+
+    nodes = migration._external_upgrade_worker_nodeset_slurm_nodes(  # noqa: SLF001
+        command_runner=runner,
+        kube_context="external-context",
+    )
+
+    assert nodes == ("worker-gpu-0-0", "worker-cpu-0-0")
+    assert any(call[8:] == ("scontrol", "show", "nodes") for call in calls)
+
+
 def test_external_upgrade_slurm_jobs_fails_closed_for_unmapped_kubernetes_node() -> None:
     calls: list[tuple[str, ...]] = []
 

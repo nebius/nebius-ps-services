@@ -2478,6 +2478,7 @@ _SOPERATOR_FAST_STAGE_VERIFICATION_PHASE_IDS = (
     "slurm-job-drain",
     "mk8s-node-template",
     "post-mk8s-validation",
+    "soperator-worker-job-policy",
     "soperator-chart",
     "postflight-validation",
     "activechecks-restore",
@@ -2517,6 +2518,10 @@ _SOPERATOR_UPGRADE_CONTROLLER_POD = "controller-0"
 _SOPERATOR_UPGRADE_CONTROLLER_CONTAINER = "slurmctld"
 _SOPERATOR_UPGRADE_ACCOUNTING_DEPLOYMENT = "accounting"
 _SOPERATOR_UPGRADE_DEFAULT_MARIADB_POD = "soperator-acct-db-0"
+_SOPERATOR_NODESET_LABEL_KEYS = (
+    "slurm.nebius.ai/nodeset-name",
+    "slurm.nebius.ai/nodeset",
+)
 _SOPERATOR_BACKUP_REQUIRED_KUBERNETES_RESOURCES = frozenset(
     {"slurmclusters", "configmaps", "secrets"}
 )
@@ -4452,10 +4457,15 @@ def _run_soperator_upgrade_process(
     input_text: str | None = None,
     timeout_seconds: int = 120,
     check: bool = True,
+    extra_env: Mapping[str, str] | None = None,
 ) -> _SoperatorUpgradeCommandResult:
+    env = os.environ.copy()
+    if extra_env:
+        env.update(dict(extra_env))
     result = subprocess.run(
         list(args),
         input=input_text,
+        env=env,
         text=True,
         capture_output=True,
         timeout=timeout_seconds,
@@ -4484,6 +4494,7 @@ def _run_soperator_upgrade_kubectl(
     input_text: str | None = None,
     timeout_seconds: int = 120,
     check: bool = True,
+    extra_env: Mapping[str, str] | None = None,
 ) -> _SoperatorUpgradeCommandResult:
     base_args = ["kubectl"]
     context = _non_empty_text(kube_context)
@@ -4494,6 +4505,7 @@ def _run_soperator_upgrade_kubectl(
         input_text=input_text,
         timeout_seconds=timeout_seconds,
         check=check,
+        extra_env=extra_env,
     )
 
 
@@ -4504,6 +4516,7 @@ def _run_soperator_upgrade_kubectl_cluster(
     input_text: str | None = None,
     timeout_seconds: int = 120,
     check: bool = True,
+    extra_env: Mapping[str, str] | None = None,
 ) -> _SoperatorUpgradeCommandResult:
     base_args = ["kubectl"]
     context = _non_empty_text(kube_context)
@@ -4514,6 +4527,7 @@ def _run_soperator_upgrade_kubectl_cluster(
         input_text=input_text,
         timeout_seconds=timeout_seconds,
         check=check,
+        extra_env=extra_env,
     )
 
 
@@ -4599,6 +4613,7 @@ def _run_soperator_upgrade_login_command(
     input_text: str | None = None,
     timeout_seconds: int = 120,
     check: bool = True,
+    extra_env: Mapping[str, str] | None = None,
 ) -> _SoperatorUpgradeCommandResult:
     result = _run_soperator_upgrade_kubectl(
         namespace,
@@ -4607,6 +4622,7 @@ def _run_soperator_upgrade_login_command(
         input_text=input_text,
         timeout_seconds=timeout_seconds,
         check=False,
+        extra_env=extra_env,
     )
     if _soperator_upgrade_needs_controller_slurm_fallback(result):
         controller_result = _run_soperator_upgrade_kubectl(
@@ -4625,6 +4641,7 @@ def _run_soperator_upgrade_login_command(
             input_text=input_text,
             timeout_seconds=timeout_seconds,
             check=False,
+            extra_env=extra_env,
         )
         if controller_result.returncode == 0:
             return controller_result
@@ -5866,6 +5883,25 @@ def _soperator_upgrade_job_policy(*, policy: str | None, interactive: bool) -> s
     return resolved
 
 
+def _soperator_runtime_job_policy(policy: str | None) -> str:
+    interactive = _console_is_terminal()
+    resolved = _non_empty_text(policy)
+    if not resolved:
+        resolved = "interactive" if interactive else "fail"
+    if resolved not in _SOPERATOR_UPGRADE_JOB_POLICIES:
+        raise RuntimeError(
+            "--job-policy must be one of: "
+            + ", ".join(sorted(_SOPERATOR_UPGRADE_JOB_POLICIES))
+        )
+    if resolved == "interactive" and not interactive:
+        raise RuntimeError(
+            "--job-policy interactive requires an interactive terminal. Use wait, fail, "
+            "cancel-selected, cancel-all, requeue-selected, requeue-all, "
+            "requeue-hold-selected, or requeue-hold-all."
+        )
+    return resolved
+
+
 def _soperator_upgrade_parse_jobs(output: str) -> tuple[_SoperatorUpgradeSlurmJob, ...]:
     jobs: list[_SoperatorUpgradeSlurmJob] = []
     for raw_line in output.splitlines():
@@ -5891,16 +5927,197 @@ def _soperator_upgrade_parse_jobs(output: str) -> tuple[_SoperatorUpgradeSlurmJo
     return tuple(jobs)
 
 
+def _soperator_upgrade_parse_slurm_node_aliases(output: str) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    current_node = ""
+    for raw_line in output.splitlines():
+        tokens = str(raw_line or "").strip().split()
+        if not tokens:
+            continue
+        for token in tokens:
+            if "=" not in token:
+                continue
+            key, value = token.split("=", 1)
+            key = key.strip()
+            value = value.strip()
+            if not value or value in {"(null)", "N/A"}:
+                continue
+            if key == "NodeName":
+                current_node = value
+                aliases[value] = value
+                continue
+            if key in {"NodeHostName", "NodeAddr", "InstanceId"} and current_node:
+                aliases[value] = current_node
+    return aliases
+
+
+def _soperator_upgrade_slurm_node_filter(
+    *,
+    namespace: str,
+    node_names: Sequence[str],
+    kube_context: str | None = None,
+    extra_env: Mapping[str, str] | None = None,
+) -> tuple[str, ...]:
+    selected_nodes = tuple(
+        str(node or "").strip() for node in node_names if str(node or "").strip()
+    )
+    if not selected_nodes:
+        return ()
+    result = _run_soperator_upgrade_login_command(
+        namespace,
+        "scontrol show nodes",
+        kube_context=kube_context,
+        extra_env=extra_env,
+        timeout_seconds=120,
+        check=False,
+    )
+    if result.returncode != 0:
+        return selected_nodes
+    aliases = _soperator_upgrade_parse_slurm_node_aliases(result.stdout)
+    if not aliases:
+        return selected_nodes
+    resolved: list[str] = []
+    unresolved: list[str] = []
+    for node in selected_nodes:
+        slurm_node = aliases.get(node)
+        if not slurm_node:
+            unresolved.append(node)
+            continue
+        if slurm_node not in resolved:
+            resolved.append(slurm_node)
+    if unresolved:
+        raise RuntimeError(
+            "Soperator upgrade could not map Kubernetes node or worker pod name(s) to "
+            "Slurm node names for job inspection: "
+            + ", ".join(unresolved)
+            + ". Rerun discovery/onboarding after Slurm node aliases are visible, or "
+            "resolve the node identity mismatch before using --job-policy."
+        )
+    return tuple(resolved)
+
+
+def _soperator_upgrade_worker_nodeset_pod_candidates(
+    *,
+    namespace: str,
+    kube_context: str | None = None,
+    extra_env: Mapping[str, str] | None = None,
+) -> tuple[str, ...]:
+    result = _run_soperator_upgrade_kubectl(
+        namespace,
+        ["get", "pods", "-o", "json", "--request-timeout=20s"],
+        kube_context=kube_context,
+        extra_env=extra_env,
+        timeout_seconds=60,
+        check=False,
+    )
+    if result.returncode != 0:
+        return ()
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return ()
+    items = payload.get("items")
+    if not isinstance(items, list):
+        return ()
+    selected: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        status = item.get("status")
+        if not isinstance(status, Mapping) or str(status.get("phase", "") or "") != "Running":
+            continue
+        metadata = item.get("metadata")
+        if not isinstance(metadata, Mapping):
+            continue
+        labels = metadata.get("labels")
+        if not isinstance(labels, Mapping):
+            continue
+        nodeset_name = ""
+        for label_key in _SOPERATOR_NODESET_LABEL_KEYS:
+            nodeset_name = str(labels.get(label_key, "") or "").strip()
+            if nodeset_name:
+                break
+        if not normalize_component_token(nodeset_name).startswith("worker"):
+            continue
+        pod_name = str(metadata.get("name", "") or "").strip()
+        if pod_name and pod_name not in seen:
+            seen.add(pod_name)
+            selected.append(pod_name)
+    return tuple(selected)
+
+
+def _soperator_upgrade_slurm_nodes_for_worker_nodesets(
+    *,
+    namespace: str,
+    kube_context: str | None = None,
+    extra_env: Mapping[str, str] | None = None,
+) -> tuple[str, ...]:
+    pod_names = _soperator_upgrade_worker_nodeset_pod_candidates(
+        namespace=namespace,
+        kube_context=kube_context,
+        extra_env=extra_env,
+    )
+    return _soperator_upgrade_slurm_node_filter(
+        namespace=namespace,
+        node_names=pod_names,
+        kube_context=kube_context,
+        extra_env=extra_env,
+    )
+
+
+def _soperator_upgrade_live_slurmcluster_exists(
+    *,
+    namespace: str,
+    kube_context: str | None = None,
+    extra_env: Mapping[str, str] | None = None,
+) -> bool:
+    result = _run_soperator_upgrade_kubectl(
+        namespace,
+        ["get", "slurmclusters", "-o", "name", "--request-timeout=20s"],
+        kube_context=kube_context,
+        extra_env=extra_env,
+        timeout_seconds=60,
+        check=False,
+    )
+    return result.returncode == 0 and any(line.strip() for line in result.stdout.splitlines())
+
+
+def _soperator_upgrade_login_path_available(
+    *,
+    namespace: str,
+    kube_context: str | None = None,
+    extra_env: Mapping[str, str] | None = None,
+) -> bool:
+    result = _run_soperator_upgrade_login_command(
+        namespace,
+        "true",
+        kube_context=kube_context,
+        extra_env=extra_env,
+        timeout_seconds=60,
+        check=False,
+    )
+    return result.returncode == 0
+
+
 def _soperator_upgrade_running_jobs(
     *,
     namespace: str,
     node_names: Sequence[str],
+    kube_context: str | None = None,
+    extra_env: Mapping[str, str] | None = None,
 ) -> tuple[_SoperatorUpgradeSlurmJob, ...]:
     node_filter = ",".join(name for name in node_names if name)
     command = "squeue -h -o '%i|%u|%T|%P|%N|%M|%l|%L|%j'"
     if node_filter:
         command += f" -w {shlex.quote(node_filter)}"
-    result = _run_soperator_upgrade_login_command(namespace, command, timeout_seconds=120)
+    result = _run_soperator_upgrade_login_command(
+        namespace,
+        command,
+        kube_context=kube_context,
+        extra_env=extra_env,
+        timeout_seconds=120,
+    )
     return _soperator_upgrade_parse_jobs(result.stdout)
 
 
@@ -5923,13 +6140,21 @@ def _print_soperator_upgrade_jobs_table(jobs: Sequence[_SoperatorUpgradeSlurmJob
     console.print(table)
 
 
-def _soperator_upgrade_cancel_jobs(namespace: str, job_ids: Sequence[str]) -> None:
+def _soperator_upgrade_cancel_jobs(
+    namespace: str,
+    job_ids: Sequence[str],
+    *,
+    kube_context: str | None = None,
+    extra_env: Mapping[str, str] | None = None,
+) -> None:
     selected = tuple(_non_empty_text(job_id) for job_id in job_ids if _non_empty_text(job_id))
     if not selected:
         return
     _run_soperator_upgrade_login_command(
         namespace,
         "scancel " + " ".join(shlex.quote(job_id) for job_id in selected),
+        kube_context=kube_context,
+        extra_env=extra_env,
         timeout_seconds=120,
     )
 
@@ -5939,6 +6164,8 @@ def _soperator_upgrade_requeue_jobs(
     job_ids: Sequence[str],
     *,
     hold: bool = False,
+    kube_context: str | None = None,
+    extra_env: Mapping[str, str] | None = None,
 ) -> None:
     selected = tuple(_non_empty_text(job_id) for job_id in job_ids if _non_empty_text(job_id))
     if not selected:
@@ -5947,6 +6174,8 @@ def _soperator_upgrade_requeue_jobs(
     _run_soperator_upgrade_login_command(
         namespace,
         f"scontrol {action} " + " ".join(shlex.quote(job_id) for job_id in selected),
+        kube_context=kube_context,
+        extra_env=extra_env,
         timeout_seconds=120,
     )
 
@@ -5958,6 +6187,8 @@ def _soperator_upgrade_wait_for_requeued_jobs_to_leave_nodes(
     job_ids: Sequence[str],
     timeout_seconds: int,
     refresh_interval_seconds: int,
+    kube_context: str | None = None,
+    extra_env: Mapping[str, str] | None = None,
 ) -> None:
     selected = frozenset(_non_empty_text(job_id) for job_id in job_ids if _non_empty_text(job_id))
     if not selected:
@@ -5967,7 +6198,12 @@ def _soperator_upgrade_wait_for_requeued_jobs_to_leave_nodes(
     while True:
         remaining = [
             job
-            for job in _soperator_upgrade_running_jobs(namespace=namespace, node_names=node_names)
+            for job in _soperator_upgrade_running_jobs(
+                namespace=namespace,
+                node_names=node_names,
+                kube_context=kube_context,
+                extra_env=extra_env,
+            )
             if job.job_id in selected
         ]
         if not remaining:
@@ -5986,6 +6222,8 @@ def _soperator_upgrade_wait_for_jobs(
     node_names: Sequence[str],
     timeout_seconds: int,
     refresh_interval_seconds: int,
+    kube_context: str | None = None,
+    extra_env: Mapping[str, str] | None = None,
 ) -> None:
     started = time.monotonic()
     deadline = started + timeout_seconds if timeout_seconds > 0 else None
@@ -5999,7 +6237,12 @@ def _soperator_upgrade_wait_for_jobs(
     ) as progress:
         task_id = progress.add_task("Waiting for running Slurm jobs to finish", total=None)
         while True:
-            jobs = _soperator_upgrade_running_jobs(namespace=namespace, node_names=node_names)
+            jobs = _soperator_upgrade_running_jobs(
+                namespace=namespace,
+                node_names=node_names,
+                kube_context=kube_context,
+                extra_env=extra_env,
+            )
             if not jobs:
                 progress.update(task_id, description="No blocking Slurm jobs remain")
                 return
@@ -6025,6 +6268,8 @@ def _soperator_upgrade_slurm_nodes_for_rollout(
     *,
     namespace: str,
     node_group: str,
+    kube_context: str | None = None,
+    extra_env: Mapping[str, str] | None = None,
 ) -> tuple[str, ...]:
     selected_node_group = _non_empty_text(node_group)
     if selected_node_group:
@@ -6037,30 +6282,49 @@ def _soperator_upgrade_slurm_nodes_for_rollout(
                 "-o",
                 "jsonpath={range .items[*]}{.metadata.name}{'\\n'}{end}",
             ],
+            kube_context=kube_context,
+            extra_env=extra_env,
             timeout_seconds=120,
             check=False,
         )
         nodes = tuple(line.strip() for line in result.stdout.splitlines() if line.strip())
         if nodes:
-            return nodes
+            return _soperator_upgrade_slurm_node_filter(
+                namespace=namespace,
+                node_names=nodes,
+                kube_context=kube_context,
+                extra_env=extra_env,
+            )
     result = _run_soperator_upgrade_login_command(
         namespace,
         "sinfo -h -N -o '%N'",
+        kube_context=kube_context,
+        extra_env=extra_env,
         timeout_seconds=120,
     )
-    return tuple(line.strip() for line in result.stdout.splitlines() if line.strip())
+    nodes = tuple(line.strip() for line in result.stdout.splitlines() if line.strip())
+    return _soperator_upgrade_slurm_node_filter(
+        namespace=namespace,
+        node_names=nodes,
+        kube_context=kube_context,
+        extra_env=extra_env,
+    )
 
 
 def _soperator_upgrade_node_state_snapshot(
     *,
     namespace: str,
     node_names: Sequence[str],
+    kube_context: str | None = None,
+    extra_env: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     if not node_names:
         return {}
     result = _run_soperator_upgrade_login_command(
         namespace,
         "scontrol show node " + ",".join(shlex.quote(node) for node in node_names) + " -o",
+        kube_context=kube_context,
+        extra_env=extra_env,
         timeout_seconds=120,
         check=False,
     )
@@ -6078,11 +6342,18 @@ def _soperator_upgrade_drain_slurm_nodes(
     namespace: str,
     node_names: Sequence[str],
     checkpoint_id: str,
+    kube_context: str | None = None,
+    extra_env: Mapping[str, str] | None = None,
 ) -> tuple[str, ...]:
     nodes = tuple(_non_empty_text(node) for node in node_names if _non_empty_text(node))
     if not nodes:
         return ()
-    before = _soperator_upgrade_node_state_snapshot(namespace=namespace, node_names=nodes)
+    before = _soperator_upgrade_node_state_snapshot(
+        namespace=namespace,
+        node_names=nodes,
+        kube_context=kube_context,
+        extra_env=extra_env,
+    )
     owned = tuple(node for node in nodes if "DRAIN" not in before.get(node, ""))
     if not owned:
         return ()
@@ -6092,6 +6363,8 @@ def _soperator_upgrade_drain_slurm_nodes(
         + ",".join(shlex.quote(node) for node in owned)
         + " State=DRAIN Reason="
         + shlex.quote(f"cxcli-soperator-upgrade:{checkpoint_id}"),
+        kube_context=kube_context,
+        extra_env=extra_env,
         timeout_seconds=120,
     )
     return owned
@@ -6101,6 +6374,8 @@ def _soperator_upgrade_restore_slurm_nodes(
     *,
     namespace: str,
     node_names: Sequence[str],
+    kube_context: str | None = None,
+    extra_env: Mapping[str, str] | None = None,
 ) -> None:
     nodes = tuple(_non_empty_text(node) for node in node_names if _non_empty_text(node))
     if not nodes:
@@ -6110,6 +6385,8 @@ def _soperator_upgrade_restore_slurm_nodes(
         "scontrol update NodeName="
         + ",".join(shlex.quote(node) for node in nodes)
         + " State=RESUME",
+        kube_context=kube_context,
+        extra_env=extra_env,
         timeout_seconds=120,
     )
 
@@ -6117,26 +6394,116 @@ def _soperator_upgrade_restore_slurm_nodes(
 def _handle_soperator_upgrade_running_jobs(
     *,
     namespace: str,
-    node_group: str,
+    node_group: str = "",
+    node_names: Sequence[str] | None = None,
     policy: str,
     cancel_job_ids: Sequence[str],
     requeue_job_ids: Sequence[str],
     wait_timeout_seconds: int,
     refresh_interval_seconds: int,
     checkpoint_id: str,
+    kube_context: str | None = None,
+    extra_env: Mapping[str, str] | None = None,
+    drain_nodes: bool = True,
 ) -> tuple[str, ...]:
-    node_names = _soperator_upgrade_slurm_nodes_for_rollout(
-        namespace=namespace,
-        node_group=node_group,
+    selected_node_names = (
+        tuple(_non_empty_text(node) for node in node_names if _non_empty_text(node))
+        if node_names is not None
+        else _soperator_upgrade_slurm_nodes_for_rollout(
+            namespace=namespace,
+            node_group=node_group,
+            kube_context=kube_context,
+            extra_env=extra_env,
+        )
     )
-    owned_drained_nodes = _soperator_upgrade_drain_slurm_nodes(
-        namespace=namespace,
-        node_names=node_names,
-        checkpoint_id=checkpoint_id,
-    )
-    jobs = _soperator_upgrade_running_jobs(namespace=namespace, node_names=node_names)
+    if not selected_node_names:
+        return ()
+
+    def _jobs() -> tuple[_SoperatorUpgradeSlurmJob, ...]:
+        return _soperator_upgrade_running_jobs(
+            namespace=namespace,
+            node_names=selected_node_names,
+            kube_context=kube_context,
+            extra_env=extra_env,
+        )
+
+    def _cancel(job_ids: Sequence[str]) -> None:
+        _soperator_upgrade_cancel_jobs(
+            namespace,
+            job_ids,
+            kube_context=kube_context,
+            extra_env=extra_env,
+        )
+
+    def _requeue(job_ids: Sequence[str], *, hold: bool = False) -> None:
+        _soperator_upgrade_requeue_jobs(
+            namespace,
+            job_ids,
+            hold=hold,
+            kube_context=kube_context,
+            extra_env=extra_env,
+        )
+
+    def _wait_for_requeued(job_ids: Sequence[str]) -> None:
+        _soperator_upgrade_wait_for_requeued_jobs_to_leave_nodes(
+            namespace=namespace,
+            node_names=selected_node_names,
+            job_ids=job_ids,
+            timeout_seconds=wait_timeout_seconds,
+            refresh_interval_seconds=refresh_interval_seconds,
+            kube_context=kube_context,
+            extra_env=extra_env,
+        )
+
+    def _wait_for_all() -> None:
+        _soperator_upgrade_wait_for_jobs(
+            namespace=namespace,
+            node_names=selected_node_names,
+            timeout_seconds=wait_timeout_seconds,
+            refresh_interval_seconds=refresh_interval_seconds,
+            kube_context=kube_context,
+            extra_env=extra_env,
+        )
+
+    def _drain_after_jobs_clear() -> tuple[str, ...]:
+        if not drain_nodes:
+            return ()
+        drained_nodes = _soperator_upgrade_drain_slurm_nodes(
+            namespace=namespace,
+            node_names=selected_node_names,
+            checkpoint_id=checkpoint_id,
+            kube_context=kube_context,
+            extra_env=extra_env,
+        )
+        try:
+            remaining_after_drain = _jobs()
+        except Exception:
+            if drained_nodes:
+                _soperator_upgrade_restore_slurm_nodes(
+                    namespace=namespace,
+                    node_names=drained_nodes,
+                    kube_context=kube_context,
+                    extra_env=extra_env,
+                )
+            raise
+        if remaining_after_drain:
+            if drained_nodes:
+                _soperator_upgrade_restore_slurm_nodes(
+                    namespace=namespace,
+                    node_names=drained_nodes,
+                    kube_context=kube_context,
+                    extra_env=extra_env,
+                )
+            raise RuntimeError(
+                f"{len(remaining_after_drain)} Slurm job(s) started or remained on affected "
+                "nodes after the job policy completed. Rerun after they finish or cancel them "
+                "explicitly."
+            )
+        return drained_nodes
+
+    jobs = _jobs()
     if not jobs:
-        return owned_drained_nodes
+        return _drain_after_jobs_clear()
     if policy == "interactive":
         while True:
             _print_soperator_upgrade_jobs_table(jobs)
@@ -6146,95 +6513,66 @@ def _handle_soperator_upgrade_running_jobs(
                 default="refresh",
             ).strip()
             if action == "refresh":
-                jobs = _soperator_upgrade_running_jobs(namespace=namespace, node_names=node_names)
+                jobs = _jobs()
                 if not jobs:
-                    return owned_drained_nodes
+                    return _drain_after_jobs_clear()
                 continue
             if action == "wait":
-                _soperator_upgrade_wait_for_jobs(
-                    namespace=namespace,
-                    node_names=node_names,
-                    timeout_seconds=wait_timeout_seconds,
-                    refresh_interval_seconds=refresh_interval_seconds,
-                )
-                return owned_drained_nodes
+                _wait_for_all()
+                return _drain_after_jobs_clear()
             if action == "cancel-selected":
                 raw_ids = typer.prompt("Job IDs to cancel, comma separated", default="")
                 selected = tuple(
                     item.strip() for item in raw_ids.split(",") if item.strip()
                 )
-                _soperator_upgrade_cancel_jobs(namespace, selected)
-                jobs = _soperator_upgrade_running_jobs(namespace=namespace, node_names=node_names)
+                _cancel(selected)
+                jobs = _jobs()
                 if not jobs:
-                    return owned_drained_nodes
+                    return _drain_after_jobs_clear()
                 continue
             if action == "cancel-all":
-                _soperator_upgrade_cancel_jobs(namespace, [job.job_id for job in jobs])
-                jobs = _soperator_upgrade_running_jobs(namespace=namespace, node_names=node_names)
+                _cancel([job.job_id for job in jobs])
+                jobs = _jobs()
                 if not jobs:
-                    return owned_drained_nodes
+                    return _drain_after_jobs_clear()
                 continue
             if action == "requeue-selected":
                 raw_ids = typer.prompt("Job IDs to requeue, comma separated", default="")
                 selected = tuple(
                     item.strip() for item in raw_ids.split(",") if item.strip()
                 )
-                _soperator_upgrade_requeue_jobs(namespace, selected)
-                _soperator_upgrade_wait_for_requeued_jobs_to_leave_nodes(
-                    namespace=namespace,
-                    node_names=node_names,
-                    job_ids=selected,
-                    timeout_seconds=wait_timeout_seconds,
-                    refresh_interval_seconds=refresh_interval_seconds,
-                )
-                jobs = _soperator_upgrade_running_jobs(namespace=namespace, node_names=node_names)
+                _requeue(selected)
+                _wait_for_requeued(selected)
+                jobs = _jobs()
                 if not jobs:
-                    return owned_drained_nodes
+                    return _drain_after_jobs_clear()
                 continue
             if action == "requeue-all":
                 selected = tuple(job.job_id for job in jobs)
-                _soperator_upgrade_requeue_jobs(namespace, selected)
-                _soperator_upgrade_wait_for_requeued_jobs_to_leave_nodes(
-                    namespace=namespace,
-                    node_names=node_names,
-                    job_ids=selected,
-                    timeout_seconds=wait_timeout_seconds,
-                    refresh_interval_seconds=refresh_interval_seconds,
-                )
-                jobs = _soperator_upgrade_running_jobs(namespace=namespace, node_names=node_names)
+                _requeue(selected)
+                _wait_for_requeued(selected)
+                jobs = _jobs()
                 if not jobs:
-                    return owned_drained_nodes
+                    return _drain_after_jobs_clear()
                 continue
             if action == "requeue-hold-selected":
                 raw_ids = typer.prompt("Job IDs to requeue and hold, comma separated", default="")
                 selected = tuple(
                     item.strip() for item in raw_ids.split(",") if item.strip()
                 )
-                _soperator_upgrade_requeue_jobs(namespace, selected, hold=True)
-                _soperator_upgrade_wait_for_requeued_jobs_to_leave_nodes(
-                    namespace=namespace,
-                    node_names=node_names,
-                    job_ids=selected,
-                    timeout_seconds=wait_timeout_seconds,
-                    refresh_interval_seconds=refresh_interval_seconds,
-                )
-                jobs = _soperator_upgrade_running_jobs(namespace=namespace, node_names=node_names)
+                _requeue(selected, hold=True)
+                _wait_for_requeued(selected)
+                jobs = _jobs()
                 if not jobs:
-                    return owned_drained_nodes
+                    return _drain_after_jobs_clear()
                 continue
             if action == "requeue-hold-all":
                 selected = tuple(job.job_id for job in jobs)
-                _soperator_upgrade_requeue_jobs(namespace, selected, hold=True)
-                _soperator_upgrade_wait_for_requeued_jobs_to_leave_nodes(
-                    namespace=namespace,
-                    node_names=node_names,
-                    job_ids=selected,
-                    timeout_seconds=wait_timeout_seconds,
-                    refresh_interval_seconds=refresh_interval_seconds,
-                )
-                jobs = _soperator_upgrade_running_jobs(namespace=namespace, node_names=node_names)
+                _requeue(selected, hold=True)
+                _wait_for_requeued(selected)
+                jobs = _jobs()
                 if not jobs:
-                    return owned_drained_nodes
+                    return _drain_after_jobs_clear()
                 continue
             if action == "abort":
                 raise RuntimeError("Soperator upgrade aborted while Slurm jobs are still running.")
@@ -6255,68 +6593,39 @@ def _handle_soperator_upgrade_running_jobs(
         selected = tuple(_non_empty_text(job_id) for job_id in cancel_job_ids if _non_empty_text(job_id))
         if not selected:
             raise RuntimeError("--job-policy cancel-selected requires at least one --cancel-job.")
-        _soperator_upgrade_cancel_jobs(namespace, selected)
+        _cancel(selected)
     elif policy == "cancel-all":
-        _soperator_upgrade_cancel_jobs(namespace, [job.job_id for job in jobs])
+        _cancel([job.job_id for job in jobs])
     elif policy == "requeue-selected":
         selected = tuple(_non_empty_text(job_id) for job_id in requeue_job_ids if _non_empty_text(job_id))
         if not selected:
             raise RuntimeError("--job-policy requeue-selected requires at least one --requeue-job.")
-        _soperator_upgrade_requeue_jobs(namespace, selected)
-        _soperator_upgrade_wait_for_requeued_jobs_to_leave_nodes(
-            namespace=namespace,
-            node_names=node_names,
-            job_ids=selected,
-            timeout_seconds=wait_timeout_seconds,
-            refresh_interval_seconds=refresh_interval_seconds,
-        )
+        _requeue(selected)
+        _wait_for_requeued(selected)
     elif policy == "requeue-all":
         selected = tuple(job.job_id for job in jobs)
-        _soperator_upgrade_requeue_jobs(namespace, selected)
-        _soperator_upgrade_wait_for_requeued_jobs_to_leave_nodes(
-            namespace=namespace,
-            node_names=node_names,
-            job_ids=selected,
-            timeout_seconds=wait_timeout_seconds,
-            refresh_interval_seconds=refresh_interval_seconds,
-        )
+        _requeue(selected)
+        _wait_for_requeued(selected)
     elif policy == "requeue-hold-selected":
         selected = tuple(_non_empty_text(job_id) for job_id in requeue_job_ids if _non_empty_text(job_id))
         if not selected:
             raise RuntimeError("--job-policy requeue-hold-selected requires at least one --requeue-job.")
-        _soperator_upgrade_requeue_jobs(namespace, selected, hold=True)
-        _soperator_upgrade_wait_for_requeued_jobs_to_leave_nodes(
-            namespace=namespace,
-            node_names=node_names,
-            job_ids=selected,
-            timeout_seconds=wait_timeout_seconds,
-            refresh_interval_seconds=refresh_interval_seconds,
-        )
+        _requeue(selected, hold=True)
+        _wait_for_requeued(selected)
     elif policy == "requeue-hold-all":
         selected = tuple(job.job_id for job in jobs)
-        _soperator_upgrade_requeue_jobs(namespace, selected, hold=True)
-        _soperator_upgrade_wait_for_requeued_jobs_to_leave_nodes(
-            namespace=namespace,
-            node_names=node_names,
-            job_ids=selected,
-            timeout_seconds=wait_timeout_seconds,
-            refresh_interval_seconds=refresh_interval_seconds,
-        )
+        _requeue(selected, hold=True)
+        _wait_for_requeued(selected)
     elif policy == "wait":
-        _soperator_upgrade_wait_for_jobs(
-            namespace=namespace,
-            node_names=node_names,
-            timeout_seconds=wait_timeout_seconds,
-            refresh_interval_seconds=refresh_interval_seconds,
-        )
-        return owned_drained_nodes
-    remaining = _soperator_upgrade_running_jobs(namespace=namespace, node_names=node_names)
+        _wait_for_all()
+        return _drain_after_jobs_clear()
+    remaining = _jobs()
     if remaining:
         raise RuntimeError(
             f"{len(remaining)} Slurm job(s) still run on affected nodes after job policy "
             f"{policy!r}. Rerun after they finish or cancel them explicitly."
         )
-    return owned_drained_nodes
+    return _drain_after_jobs_clear()
 
 
 def _validation_report_payload(
@@ -11360,8 +11669,51 @@ def _run_managed_soperator_cluster_upgrade(
             raise RuntimeError(
                 f"Soperator upgrade fast stage verification failed after {phase_id}"
                 + (": " + ", ".join(failed) if failed else ".")
-            )
+        )
         return payload
+
+    job_wait_timeout_seconds = _soperator_upgrade_duration_seconds(
+        job_wait_timeout,
+        option_name="--job-wait-timeout",
+    )
+    job_refresh_interval_seconds = _soperator_upgrade_duration_seconds(
+        job_refresh_interval,
+        option_name="--job-refresh-interval",
+    )
+
+    def _record_slurm_restore_nodes(
+        drained_nodes: Sequence[str],
+        *,
+        scope: str,
+        worker_nodes: Sequence[str] = (),
+    ) -> None:
+        nonlocal slurm_restore_nodes
+        merged: list[str] = []
+        for node in (*slurm_restore_nodes, *drained_nodes):
+            text = _non_empty_text(node)
+            if text and text not in merged:
+                merged.append(text)
+        slurm_restore_nodes = tuple(merged)
+        slurm_state = checkpoint.setdefault("slurm", {})
+        if not isinstance(slurm_state, dict):
+            slurm_state = {}
+            checkpoint["slurm"] = slurm_state
+        slurm_state["drained_nodes"] = list(slurm_restore_nodes)
+        slurm_state["restore_manual_command"] = (
+            "scontrol update NodeName=" + ",".join(slurm_restore_nodes) + " State=RESUME"
+            if slurm_restore_nodes
+            else None
+        )
+        slurm_state["job_policy"] = job_policy
+        scopes = slurm_state.setdefault("scopes", [])
+        if isinstance(scopes, list):
+            scopes.append(
+                {
+                    "scope": scope,
+                    "worker_nodes": list(worker_nodes),
+                    "drained_nodes": list(drained_nodes),
+                }
+            )
 
     try:
         _set_phase(
@@ -11538,27 +11890,11 @@ def _run_managed_soperator_cluster_upgrade(
                 policy=job_policy,
                 cancel_job_ids=cancel_job,
                 requeue_job_ids=requeue_job,
-                wait_timeout_seconds=_soperator_upgrade_duration_seconds(
-                    job_wait_timeout,
-                    option_name="--job-wait-timeout",
-                ),
-                refresh_interval_seconds=_soperator_upgrade_duration_seconds(
-                    job_refresh_interval,
-                    option_name="--job-refresh-interval",
-                ),
+                wait_timeout_seconds=job_wait_timeout_seconds,
+                refresh_interval_seconds=job_refresh_interval_seconds,
                 checkpoint_id=checkpoint_id,
             )
-            checkpoint["slurm"] = {
-                "drained_nodes": list(slurm_restore_nodes),
-                "restore_manual_command": (
-                    "scontrol update NodeName="
-                    + ",".join(slurm_restore_nodes)
-                    + " State=RESUME"
-                    if slurm_restore_nodes
-                    else None
-                ),
-                "job_policy": job_policy,
-            }
+            _record_slurm_restore_nodes(slurm_restore_nodes, scope="mk8s-node-template")
             _checkpoint("slurm-jobs-cleared")
             slurm_state = checkpoint.get("slurm")
             slurm_map = slurm_state if isinstance(slurm_state, Mapping) else {}
@@ -11705,6 +12041,58 @@ def _run_managed_soperator_cluster_upgrade(
             staged_config, staged_paths, staged_manifest = generated_config, paths, manifest
             _checkpoint("chart-applied", reason="already-current")
         else:
+            _set_phase(
+                "soperator-worker-job-policy",
+                "Applying the configured Slurm running-job policy before Soperator chart reconciliation.",
+            )
+            worker_slurm_nodes = _soperator_upgrade_slurm_nodes_for_worker_nodesets(
+                namespace=plan.namespace or "default",
+            )
+            if worker_slurm_nodes:
+                chart_drained_nodes = _handle_soperator_upgrade_running_jobs(
+                    namespace=plan.namespace or "default",
+                    node_names=worker_slurm_nodes,
+                    policy=job_policy,
+                    cancel_job_ids=cancel_job,
+                    requeue_job_ids=requeue_job,
+                    wait_timeout_seconds=job_wait_timeout_seconds,
+                    refresh_interval_seconds=job_refresh_interval_seconds,
+                    checkpoint_id=checkpoint_id,
+                )
+                _record_slurm_restore_nodes(
+                    chart_drained_nodes,
+                    scope="soperator-chart",
+                    worker_nodes=worker_slurm_nodes,
+                )
+                _checkpoint("soperator-worker-jobs-cleared")
+            else:
+                _record_slurm_restore_nodes((), scope="soperator-chart", worker_nodes=())
+                _checkpoint(
+                    "soperator-worker-job-policy-skipped",
+                    reason="no live running worker NodeSet pods were found",
+                )
+            slurm_state = checkpoint.get("slurm")
+            slurm_map = slurm_state if isinstance(slurm_state, Mapping) else {}
+            _run_stage_fast_verification(
+                phase_id="soperator-worker-job-policy",
+                summary="Slurm job policy completed before Soperator chart reconciliation.",
+                checks=[
+                    stage_fast_verification_check(
+                        "Slurm job policy",
+                        "passed" if slurm_map.get("job_policy") == job_policy else "failed",
+                        f"recorded={slurm_map.get('job_policy') or 'unset'}, expected={job_policy}",
+                    ),
+                    stage_fast_verification_check(
+                        "Worker NodeSet scope",
+                        "passed",
+                        f"nodes={len(worker_slurm_nodes)}",
+                    ),
+                ],
+            )
+            _set_phase(
+                "soperator-chart",
+                "Applying the target Soperator Helm chart version.",
+            )
             staged_config, staged_paths, staged_manifest = _render_validate_apply_soperator_stage(
                 update_message=f"Soperator chart {target.selector} upgrade to {to_chart_version}",
                 validation_title=f"Validate rendered Soperator upgrade to {to_chart_version}",
@@ -39667,6 +40055,33 @@ def _enabled_soperator_release_refs_for_target(
     return tuple(refs)
 
 
+def _enabled_soperator_release_refs(config: Any) -> tuple[_SoperatorReleaseRef, ...]:
+    payload = to_plain_data(config)
+    if not isinstance(payload, Mapping):
+        return ()
+    apps = payload.get("apps")
+    charts = apps.get("charts") if isinstance(apps, Mapping) else []
+    if not isinstance(charts, list):
+        return ()
+    refs: list[_SoperatorReleaseRef] = []
+    seen: set[tuple[str, str]] = set()
+    for row in charts:
+        if not (
+            isinstance(row, Mapping)
+            and bool(row.get("enabled", False))
+            and component_type_id(row) == "soperator"
+        ):
+            continue
+        namespace = str(row.get("namespace") or "soperator").strip() or "soperator"
+        release_name = str(row.get("release-name") or "soperator").strip() or "soperator"
+        key = (namespace, release_name)
+        if key in seen:
+            continue
+        seen.add(key)
+        refs.append(_SoperatorReleaseRef(namespace=namespace, release_name=release_name))
+    return tuple(refs)
+
+
 def _yaml_docs(path: Path) -> tuple[Mapping[str, Any], ...]:
     try:
         return tuple(
@@ -42493,6 +42908,147 @@ def _ensure_soperator_gpu_ephemeral_bootstrap_power_state(
             )
 
 
+def _soperator_release_refs_for_job_policy(
+    config: Any,
+    *,
+    target_ref: str,
+) -> tuple[_SoperatorReleaseRef, ...]:
+    if normalize_component_token(target_ref):
+        return _enabled_soperator_release_refs_for_target(config, target_ref=target_ref)
+    return _enabled_soperator_release_refs(config)
+
+
+def _soperator_deploy_job_gate_checkpoint_id(
+    *,
+    command_name: str,
+    target_ref: str,
+    namespace: str,
+) -> str:
+    raw = f"{command_name}:{target_ref}:{namespace}:{time.time_ns()}"
+    return _soperator_upgrade_sha256_text(raw)[:16]
+
+
+def _soperator_flux_apply_slurm_job_gate(
+    config: Any,
+    *,
+    command_name: str,
+    target_ref: str,
+    extra_env: Mapping[str, str] | None,
+    job_policy: str,
+    cancel_job_ids: Sequence[str],
+    requeue_job_ids: Sequence[str],
+    job_wait_timeout_seconds: int,
+    job_refresh_interval_seconds: int,
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    drained_by_namespace: list[tuple[str, tuple[str, ...]]] = []
+    release_refs = _soperator_release_refs_for_job_policy(config, target_ref=target_ref)
+    if not release_refs:
+        return ()
+    for release_ref in release_refs:
+        namespace = release_ref.namespace
+        if not _soperator_upgrade_live_slurmcluster_exists(
+            namespace=namespace,
+            extra_env=extra_env,
+        ):
+            console.print(
+                f"Soperator Slurm job policy skipped for {namespace}: no live SlurmCluster exists."
+            )
+            continue
+        worker_pods = _soperator_upgrade_worker_nodeset_pod_candidates(
+            namespace=namespace,
+            extra_env=extra_env,
+        )
+        if not worker_pods:
+            console.print(
+                f"Soperator Slurm job policy skipped for {namespace}: no live worker NodeSet pods exist."
+            )
+            continue
+        if not _soperator_upgrade_login_path_available(
+            namespace=namespace,
+            extra_env=extra_env,
+        ):
+            raise RuntimeError(
+                f"Cannot apply {command_name} safely for Soperator namespace {namespace}: "
+                "live worker NodeSet pods exist, but no Slurm login/controller exec path is available "
+                "to inspect running jobs."
+            )
+        worker_slurm_nodes = _soperator_upgrade_slurm_node_filter(
+            namespace=namespace,
+            node_names=worker_pods,
+            extra_env=extra_env,
+        )
+        checkpoint_id = _soperator_deploy_job_gate_checkpoint_id(
+            command_name=command_name,
+            target_ref=target_ref,
+            namespace=namespace,
+        )
+        _handle_soperator_upgrade_running_jobs(
+            namespace=namespace,
+            node_names=worker_slurm_nodes,
+            policy=job_policy,
+            cancel_job_ids=cancel_job_ids,
+            requeue_job_ids=requeue_job_ids,
+            wait_timeout_seconds=job_wait_timeout_seconds,
+            refresh_interval_seconds=job_refresh_interval_seconds,
+            checkpoint_id=checkpoint_id,
+            extra_env=extra_env,
+            drain_nodes=False,
+        )
+        drained_nodes = _soperator_upgrade_drain_slurm_nodes(
+            namespace=namespace,
+            node_names=worker_slurm_nodes,
+            checkpoint_id=checkpoint_id,
+            extra_env=extra_env,
+        )
+        if drained_nodes:
+            drained_by_namespace.append((namespace, tuple(drained_nodes)))
+    return tuple(drained_by_namespace)
+
+
+def _restore_soperator_flux_apply_slurm_nodes(
+    drained_by_namespace: Sequence[tuple[str, Sequence[str]]],
+    *,
+    extra_env: Mapping[str, str] | None,
+) -> None:
+    for namespace, nodes in drained_by_namespace:
+        _soperator_upgrade_restore_slurm_nodes(
+            namespace=namespace,
+            node_names=nodes,
+            extra_env=extra_env,
+        )
+
+
+def _apply_rendered_flux_with_soperator_job_policy(
+    config: Any,
+    paths: ProjectPaths,
+    *,
+    command_name: str,
+    target_ref: str,
+    extra_env: dict[str, str] | None,
+    job_policy: str,
+    cancel_job_ids: Sequence[str],
+    requeue_job_ids: Sequence[str],
+    job_wait_timeout_seconds: int,
+    job_refresh_interval_seconds: int,
+) -> None:
+    drained: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    try:
+        drained = _soperator_flux_apply_slurm_job_gate(
+            config,
+            command_name=command_name,
+            target_ref=target_ref,
+            extra_env=extra_env,
+            job_policy=job_policy,
+            cancel_job_ids=cancel_job_ids,
+            requeue_job_ids=requeue_job_ids,
+            job_wait_timeout_seconds=job_wait_timeout_seconds,
+            job_refresh_interval_seconds=job_refresh_interval_seconds,
+        )
+        _apply_rendered_flux(paths, extra_env=extra_env)
+    finally:
+        _restore_soperator_flux_apply_slurm_nodes(drained, extra_env=extra_env)
+
+
 def _deploy_generated_artifacts(
     config: Any,
     paths: ProjectPaths,
@@ -42503,6 +43059,11 @@ def _deploy_generated_artifacts(
     skip_validation_kinds: set[str],
     requested_target_ref: str | None = None,
     all_targets: bool = False,
+    job_policy: str = "fail",
+    cancel_job_ids: Sequence[str] = (),
+    requeue_job_ids: Sequence[str] = (),
+    job_wait_timeout_seconds: int = 0,
+    job_refresh_interval_seconds: int = 30,
 ) -> DeployRunSummary:
     """Deploy an existing generated artifact bundle without rerendering it."""
     if _manifest_missing_deploy_validations(manifest):
@@ -42734,7 +43295,18 @@ def _deploy_generated_artifacts(
                         target_ref=target_ref,
                         extra_env=kube_env,
                     )
-                    _apply_rendered_flux(target_paths, extra_env=kube_env)
+                    _apply_rendered_flux_with_soperator_job_policy(
+                        config,
+                        target_paths,
+                        command_name="deploy",
+                        target_ref=target_ref,
+                        extra_env=kube_env,
+                        job_policy=job_policy,
+                        cancel_job_ids=cancel_job_ids,
+                        requeue_job_ids=requeue_job_ids,
+                        job_wait_timeout_seconds=job_wait_timeout_seconds,
+                        job_refresh_interval_seconds=job_refresh_interval_seconds,
+                    )
                     _retire_deploy_owned_soperator_source_state(
                         config,
                         selected_targets=selected_targets,
@@ -42795,7 +43367,18 @@ def _deploy_generated_artifacts(
                 selected_targets=selected_targets,
                 extra_env=None,
             )
-            _apply_rendered_flux(paths, extra_env=None)
+            _apply_rendered_flux_with_soperator_job_policy(
+                config,
+                paths,
+                command_name="deploy",
+                target_ref="",
+                extra_env=None,
+                job_policy=job_policy,
+                cancel_job_ids=cancel_job_ids,
+                requeue_job_ids=requeue_job_ids,
+                job_wait_timeout_seconds=job_wait_timeout_seconds,
+                job_refresh_interval_seconds=job_refresh_interval_seconds,
+            )
             _retire_deploy_owned_soperator_source_state(
                 config,
                 selected_targets=selected_targets,
@@ -52597,6 +53180,38 @@ def deploy_command(
             ),
         ),
     ] = False,
+    job_policy: Annotated[
+        str | None,
+        typer.Option(
+            "--job-policy",
+            help=_SOPERATOR_UPGRADE_JOB_POLICY_HELP,
+        ),
+    ] = None,
+    cancel_job: Annotated[
+        list[str] | None,
+        typer.Option("--cancel-job", help="Slurm job id to cancel with --job-policy cancel-selected."),
+    ] = None,
+    requeue_job: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--requeue-job",
+            help=(
+                "Slurm job id to requeue with --job-policy requeue-selected "
+                "or requeue-hold-selected."
+            ),
+        ),
+    ] = None,
+    job_wait_timeout: Annotated[
+        str,
+        typer.Option(
+            "--job-wait-timeout",
+            help="Maximum wait for Slurm jobs, for example 2h; 0s means unlimited.",
+        ),
+    ] = _SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
+    job_refresh_interval: Annotated[
+        str,
+        typer.Option("--job-refresh-interval", help="Refresh interval while waiting for Slurm jobs."),
+    ] = _SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
 ) -> None:
     """Deploy an existing generated artifact bundle locally from config.yaml.
 
@@ -52669,6 +53284,17 @@ def deploy_command(
             skip_validation_kinds=skip_validation_kinds,
             requested_target_ref=target_ref,
             all_targets=all_targets,
+            job_policy=_soperator_runtime_job_policy(job_policy),
+            cancel_job_ids=tuple(cancel_job or ()),
+            requeue_job_ids=tuple(requeue_job or ()),
+            job_wait_timeout_seconds=_soperator_upgrade_duration_seconds(
+                job_wait_timeout,
+                option_name="--job-wait-timeout",
+            ),
+            job_refresh_interval_seconds=_soperator_upgrade_duration_seconds(
+                job_refresh_interval,
+                option_name="--job-refresh-interval",
+            ),
         )
         _print_deploy_command_footer(config, paths, summary, succeeded=True)
     except Exception as exc:  # pragma: no cover - CLI surface
@@ -53272,6 +53898,38 @@ def flux_apply_command(
             help="Apply rendered Flux resources to every built-in cluster target in the bundle.",
         ),
     ] = False,
+    job_policy: Annotated[
+        str | None,
+        typer.Option(
+            "--job-policy",
+            help=_SOPERATOR_UPGRADE_JOB_POLICY_HELP,
+        ),
+    ] = None,
+    cancel_job: Annotated[
+        list[str] | None,
+        typer.Option("--cancel-job", help="Slurm job id to cancel with --job-policy cancel-selected."),
+    ] = None,
+    requeue_job: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--requeue-job",
+            help=(
+                "Slurm job id to requeue with --job-policy requeue-selected "
+                "or requeue-hold-selected."
+            ),
+        ),
+    ] = None,
+    job_wait_timeout: Annotated[
+        str,
+        typer.Option(
+            "--job-wait-timeout",
+            help="Maximum wait for Slurm jobs, for example 2h; 0s means unlimited.",
+        ),
+    ] = _SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
+    job_refresh_interval: Annotated[
+        str,
+        typer.Option("--job-refresh-interval", help="Refresh interval while waiting for Slurm jobs."),
+    ] = _SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
 ) -> None:
     """Refresh the deploy report and apply an existing generated/flux bundle directly."""
     try:
@@ -53284,6 +53942,17 @@ def flux_apply_command(
         write_inventory(config, paths, validations=_manifest_deploy_validations(manifest))
         manifest_targets = _manifest_deploy_targets(manifest)
         grafana_statuses: list[dict[str, Any]] = []
+        resolved_job_policy = _soperator_runtime_job_policy(job_policy)
+        selected_cancel_job_ids = tuple(cancel_job or ())
+        selected_requeue_job_ids = tuple(requeue_job or ())
+        job_wait_timeout_seconds = _soperator_upgrade_duration_seconds(
+            job_wait_timeout,
+            option_name="--job-wait-timeout",
+        )
+        job_refresh_interval_seconds = _soperator_upgrade_duration_seconds(
+            job_refresh_interval,
+            option_name="--job-refresh-interval",
+        )
         if manifest_targets:
             selected_targets = _resolve_selected_deploy_targets(
                 manifest,
@@ -53333,7 +54002,18 @@ def flux_apply_command(
                         extra_env=kube_env,
                         target_ref=target_ref_value,
                     )
-                    _apply_rendered_flux(target_paths, extra_env=kube_env)
+                    _apply_rendered_flux_with_soperator_job_policy(
+                        config,
+                        target_paths,
+                        command_name="flux apply",
+                        target_ref=target_ref_value,
+                        extra_env=kube_env,
+                        job_policy=resolved_job_policy,
+                        cancel_job_ids=selected_cancel_job_ids,
+                        requeue_job_ids=selected_requeue_job_ids,
+                        job_wait_timeout_seconds=job_wait_timeout_seconds,
+                        job_refresh_interval_seconds=job_refresh_interval_seconds,
+                    )
                     grafana_statuses.extend(
                         _collect_grafana_status_after_flux(
                             config,
@@ -53364,7 +54044,18 @@ def flux_apply_command(
                 externally_managed_secret_keys=_mysterybox_eso_rendered_secret_keys(paths),
             )
             _ensure_soperator_backup_runtime_before_flux(config, extra_env=None)
-            _apply_rendered_flux(paths, extra_env=None)
+            _apply_rendered_flux_with_soperator_job_policy(
+                config,
+                paths,
+                command_name="flux apply",
+                target_ref="",
+                extra_env=None,
+                job_policy=resolved_job_policy,
+                cancel_job_ids=selected_cancel_job_ids,
+                requeue_job_ids=selected_requeue_job_ids,
+                job_wait_timeout_seconds=job_wait_timeout_seconds,
+                job_refresh_interval_seconds=job_refresh_interval_seconds,
+            )
             grafana_statuses.extend(_collect_grafana_status_after_flux(config, extra_env=None))
             _warn_if_flux_gitops_not_bootstrapped(
                 config,

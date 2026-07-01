@@ -5324,6 +5324,70 @@ def _external_upgrade_slurm_node_filter(
     return tuple(resolved)
 
 
+def _external_upgrade_worker_nodeset_pod_candidates(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+) -> tuple[str, ...]:
+    payload = _json_from_command(
+        command_runner,
+        [
+            "kubectl",
+            "--context",
+            kube_context,
+            "-n",
+            _SOPERATOR_NAMESPACE,
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ],
+        timeout_seconds=60,
+        check=False,
+    )
+    items = payload.get("items")
+    if not isinstance(items, list):
+        return ()
+    selected: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        status = _mapping(item.get("status"))
+        if str(status.get("phase", "") or "") != "Running":
+            continue
+        metadata = _mapping(item.get("metadata"))
+        labels = _mapping(metadata.get("labels"))
+        nodeset_name = ""
+        for label_key in _SOPERATOR_NODESET_LABEL_KEYS:
+            nodeset_name = str(labels.get(label_key, "") or "").strip()
+            if nodeset_name:
+                break
+        if not normalize_component_token(nodeset_name).startswith(_SOURCE_WORKER_NODESET_PREFIX):
+            continue
+        pod_name = str(metadata.get("name", "") or "").strip()
+        if pod_name and pod_name not in seen:
+            seen.add(pod_name)
+            selected.append(pod_name)
+    return tuple(selected)
+
+
+def _external_upgrade_worker_nodeset_slurm_nodes(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+) -> tuple[str, ...]:
+    return _external_upgrade_slurm_node_filter(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        node_names=_external_upgrade_worker_nodeset_pod_candidates(
+            command_runner=command_runner,
+            kube_context=kube_context,
+        ),
+    )
+
+
 def _external_upgrade_slurm_jobs(
     *,
     command_runner: SoperatorMigrationCommandRunner,
@@ -10755,10 +10819,19 @@ def _execute_rolling_compute_migration_phase(
         source_report=source_report,
         target_ref=target_ref,
     )
+    live_worker_slurm_nodes = _external_upgrade_worker_nodeset_slurm_nodes(
+        command_runner=command_runner,
+        kube_context=kube_context,
+    )
+    quiet_nodes = live_worker_slurm_nodes or nodes
+    phase["slurm_job_scope_nodes"] = list(quiet_nodes)
+    phase["slurm_job_scope"] = (
+        "live-worker-nodesets" if live_worker_slurm_nodes else "source-worker-node-groups"
+    )
     quiet_lines = _ensure_slurm_quiet(
         command_runner=command_runner,
         kube_context=kube_context,
-        node_names=nodes,
+        node_names=quiet_nodes,
         job_policy=job_policy,
         cancel_job_ids=cancel_job_ids,
         requeue_job_ids=requeue_job_ids,

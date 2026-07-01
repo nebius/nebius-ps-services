@@ -6,7 +6,7 @@ import re
 import subprocess
 import sys
 import types
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -288,6 +288,11 @@ def _stub_soperator_upgrade_runtime(
         )
 
     monkeypatch.setattr(cli, "_managed_soperator_upgrade_run_post_verification", _post_verification)
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_slurm_nodes_for_worker_nodesets",
+        lambda **_kwargs: (),
+    )
 
 
 def test_soperator_upgrade_config_fingerprint_ignores_transient_node_state(
@@ -3461,6 +3466,196 @@ def test_soperator_upgrade_mk8s_only_runs_node_template_phase_without_raw_kubect
     assert "`soperator-chart` (top-level stage: `Soperator Upgrade`)" in markdown_report
 
 
+def test_soperator_upgrade_chart_only_job_policy_fail_blocks_before_chart_apply(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    paths.infra_dir.mkdir(parents=True)
+    paths.flux_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
+    paths.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "infra": {
+                    "components": [
+                        {
+                            "id": "mk8s",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "inputs": {},
+                        }
+                    ]
+                },
+                "apps": {
+                    "charts": [
+                        {
+                            "id": "soperator",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "namespace": "soperator",
+                            "release-name": "soperator",
+                            "target_ref": "mk8s",
+                            "version": "0.25.0",
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    generated_config = SimpleNamespace()
+    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    calls: list[object] = []
+
+    monkeypatch.setattr(
+        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_generated_bundle_validation",
+        lambda *_args, **kwargs: calls.append(("validate", kwargs["title"])) or {},
+    )
+    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: calls.append("render"))
+    monkeypatch.setattr(
+        cli,
+        "flux_apply_command",
+        lambda *args, **kwargs: calls.append(("flux-apply", args, kwargs)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_verify_soperator_static_upgrade_ready",
+        lambda *_args, **_kwargs: calls.append("soperator-static-ready"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_raise_if_soperator_upgrade_would_bypass_migration",
+        lambda *_args, **_kwargs: calls.append("migration-guard"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_soperator_upgrade_validation_phase",
+        lambda *_args, **kwargs: (
+            calls.append(("soperator-validation", kwargs["phase_label"])) or ()
+        ),
+    )
+    monkeypatch.setattr(cli, "_update_source_helm_chart_version", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_slurm_nodes_for_worker_nodesets",
+        lambda **_kwargs: ("worker-gpu-0-0",),
+    )
+
+    def _job_gate(**kwargs: Any) -> tuple[str, ...]:
+        calls.append(("slurm-gate", kwargs["node_names"], kwargs["policy"]))
+        raise RuntimeError("Running Slurm jobs exist on affected nodes.")
+
+    monkeypatch.setattr(cli, "_handle_soperator_upgrade_running_jobs", _job_gate)
+    _stub_soperator_upgrade_runtime(monkeypatch, paths, calls)
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_slurm_nodes_for_worker_nodesets",
+        lambda **_kwargs: ("worker-gpu-0-0",),
+    )
+
+    with pytest.raises(RuntimeError, match="Running Slurm jobs exist"):
+        _run_soperator_upgrade_for_test(
+            config_path=paths.config_path,
+            to_chart_version="0.26.0",
+            job_policy="fail",
+        )
+
+    assert ("slurm-gate", ("worker-gpu-0-0",), "fail") in calls
+    assert "render" not in calls
+    assert not any(isinstance(call, tuple) and call[0] == "flux-apply" for call in calls)
+
+
+def test_soperator_upgrade_slurm_node_filter_maps_worker_pod_and_instance_aliases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[str] = []
+
+    def _login_command(
+        _namespace: str,
+        command: str,
+        **_kwargs: Any,
+    ) -> cli._SoperatorUpgradeCommandResult:
+        commands.append(command)
+        assert command == "scontrol show nodes"
+        return cli._SoperatorUpgradeCommandResult(
+            args=("kubectl", "exec"),
+            returncode=0,
+            stdout="\n".join(
+                (
+                    "NodeName=worker-3 NodeHostName=worker-gpu-0-0 NodeAddr=10.1.18.140",
+                    "   InstanceId=computeinstance-e00e8ctxvehgkyged0",
+                    "NodeName=worker-4 NodeHostName=worker-gpu-0-1 NodeAddr=10.1.18.141",
+                )
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_login_command", _login_command)
+
+    nodes = cli._soperator_upgrade_slurm_node_filter(
+        namespace="soperator",
+        node_names=("worker-gpu-0-0", "computeinstance-e00e8ctxvehgkyged0", "worker-4"),
+    )
+
+    assert nodes == ("worker-3", "worker-4")
+    assert commands == ["scontrol show nodes"]
+
+
+def test_soperator_upgrade_fail_policy_does_not_drain_when_jobs_exist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = cli._SoperatorUpgradeSlurmJob(
+        job_id="42",
+        user="alice",
+        state="RUNNING",
+        partition="gpu",
+        nodes="worker-gpu-0-0",
+        elapsed="00:05",
+        limit="30:00",
+        remaining="25:00",
+        name="restartable-train",
+    )
+    drained: list[str] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_slurm_nodes_for_rollout",
+        lambda **_kwargs: ("worker-gpu-0-0",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_drain_slurm_nodes",
+        lambda **_kwargs: drained.append("drain") or ("worker-gpu-0-0",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_running_jobs",
+        lambda **_kwargs: (job,),
+    )
+
+    with pytest.raises(RuntimeError, match="Running Slurm jobs exist"):
+        cli._handle_soperator_upgrade_running_jobs(
+            namespace="soperator",
+            node_group="",
+            policy="fail",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            wait_timeout_seconds=0,
+            refresh_interval_seconds=1,
+            checkpoint_id="checkpoint",
+        )
+
+    assert drained == []
+
+
 def test_soperator_upgrade_cancel_selected_policy_cancels_jobs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3479,6 +3674,7 @@ def test_soperator_upgrade_cancel_selected_policy_cancels_jobs(
                 name="restartable-train",
             ),
         ),
+        (),
         (),
     ]
 
@@ -3549,6 +3745,7 @@ def test_soperator_upgrade_cancel_all_policy_cancels_all_jobs(
             ),
         ),
         (),
+        (),
     ]
 
     monkeypatch.setattr(
@@ -3602,7 +3799,7 @@ def test_soperator_upgrade_wait_policy_waits_until_jobs_clear(
         remaining="25:00",
         name="restartable-train",
     )
-    queue_results = [(job,), (job,), ()]
+    queue_results = [(job,), (job,), (), ()]
     sleeps: list[int] = []
 
     monkeypatch.setattr(
@@ -3656,6 +3853,7 @@ def test_soperator_upgrade_requeue_selected_policy_requeues_jobs(
                 name="restartable-train",
             ),
         ),
+        (),
         (),
         (),
     ]
@@ -3715,6 +3913,7 @@ def test_soperator_upgrade_requeue_hold_selected_policy_holds_jobs(
                 name="restartable-train",
             ),
         ),
+        (),
         (),
         (),
     ]
@@ -3787,6 +3986,7 @@ def test_soperator_upgrade_requeue_hold_all_policy_holds_all_jobs(
         ),
         (),
         (),
+        (),
     ]
 
     monkeypatch.setattr(
@@ -3844,6 +4044,7 @@ def test_soperator_upgrade_requeue_policy_waits_for_slurm_transition(
     queue_results = [
         (job,),
         (job,),
+        (),
         (),
         (),
     ]
@@ -4045,6 +4246,8 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
         "activechecks-suspended",
         "stage-fast-verification-passed",
         "preflight-soperator-validation-completed",
+        "soperator-worker-job-policy-skipped",
+        "stage-fast-verification-passed",
         "chart-applied",
         "stage-fast-verification-passed",
         "postflight-completed",
@@ -8747,6 +8950,11 @@ def test_deploy_command_passes_auto_auth_flag(
         skip_validation_kinds: set[str],
         requested_target_ref: str | None = None,
         all_targets: bool = False,
+        job_policy: str = "fail",
+        cancel_job_ids: Sequence[str] = (),
+        requeue_job_ids: Sequence[str] = (),
+        job_wait_timeout_seconds: int = 0,
+        job_refresh_interval_seconds: int = 30,
     ) -> cli.DeployRunSummary:
         captured["config"] = config
         captured["paths"] = paths
@@ -8756,6 +8964,11 @@ def test_deploy_command_passes_auto_auth_flag(
         captured["skip_validation_kinds"] = skip_validation_kinds
         captured["requested_target_ref"] = requested_target_ref
         captured["all_targets"] = all_targets
+        captured["job_policy"] = job_policy
+        captured["cancel_job_ids"] = cancel_job_ids
+        captured["requeue_job_ids"] = requeue_job_ids
+        captured["job_wait_timeout_seconds"] = job_wait_timeout_seconds
+        captured["job_refresh_interval_seconds"] = job_refresh_interval_seconds
         return cli.DeployRunSummary()
 
     monkeypatch.setattr(cli, "_deploy_generated_artifacts", _fake_deploy_generated_artifacts)
@@ -8785,6 +8998,11 @@ def test_deploy_command_passes_auto_auth_flag(
         "skip_validation_kinds": set(),
         "requested_target_ref": None,
         "all_targets": False,
+        "job_policy": "fail",
+        "cancel_job_ids": (),
+        "requeue_job_ids": (),
+        "job_wait_timeout_seconds": 0,
+        "job_refresh_interval_seconds": 30,
     }
 
 
@@ -11949,6 +12167,129 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
             "mk8s",
         ),
     ]
+
+
+def test_apply_rendered_flux_with_soperator_job_policy_blocks_existing_worker_jobs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    config = {
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "enabled": True,
+                    "instance_id": "mk8s",
+                    "target_ref": "mk8s",
+                    "namespace": "soperator",
+                    "release-name": "soperator",
+                }
+            ]
+        }
+    }
+    calls: list[tuple[str, Any]] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_live_slurmcluster_exists",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_worker_nodeset_pod_candidates",
+        lambda **_kwargs: ("worker-gpu-0",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_login_path_available",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_slurm_node_filter",
+        lambda **_kwargs: ("worker-0",),
+    )
+
+    def _job_gate(**kwargs: Any) -> tuple[str, ...]:
+        calls.append(("job-gate", kwargs["node_names"]))
+        raise RuntimeError("Running Slurm jobs exist on affected nodes.")
+
+    monkeypatch.setattr(cli, "_handle_soperator_upgrade_running_jobs", _job_gate)
+    monkeypatch.setattr(
+        cli,
+        "_apply_rendered_flux",
+        lambda paths, *, extra_env=None: calls.append(("flux", paths)),
+    )
+
+    with pytest.raises(RuntimeError, match="Running Slurm jobs exist"):
+        cli._apply_rendered_flux_with_soperator_job_policy(
+            config,
+            fake_paths,
+            command_name="deploy",
+            target_ref="mk8s",
+            extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
+            job_policy="fail",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            job_wait_timeout_seconds=0,
+            job_refresh_interval_seconds=30,
+        )
+
+    assert calls == [("job-gate", ("worker-0",))]
+
+
+def test_apply_rendered_flux_with_soperator_job_policy_skips_first_install_without_slurmcluster(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    config = {
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "enabled": True,
+                    "instance_id": "mk8s",
+                    "target_ref": "mk8s",
+                    "namespace": "soperator",
+                    "release-name": "soperator",
+                }
+            ]
+        }
+    }
+    calls: list[tuple[str, Any]] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_live_slurmcluster_exists",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_handle_soperator_upgrade_running_jobs",
+        lambda **_kwargs: calls.append(("job-gate", None)) or (),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_apply_rendered_flux",
+        lambda paths, *, extra_env=None: calls.append(("flux", paths)),
+    )
+
+    cli._apply_rendered_flux_with_soperator_job_policy(
+        config,
+        fake_paths,
+        command_name="flux apply",
+        target_ref="mk8s",
+        extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
+        job_policy="fail",
+        cancel_job_ids=(),
+        requeue_job_ids=(),
+        job_wait_timeout_seconds=0,
+        job_refresh_interval_seconds=30,
+    )
+
+    assert calls == [("flux", fake_paths)]
 
 
 def test_deploy_generated_artifacts_external_target_skips_terraform_apply(
@@ -19988,6 +20329,15 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert "terraform destroy" in tf_destroy_help
     assert "--yes" in tf_destroy_help
     assert "refresh the deploy report" in flux_apply_help
+    for option in (
+        "--job-policy",
+        "--cancel-job",
+        "--requeue-job",
+        "--job-wait-timeout",
+        "--job-refresh-interval",
+    ):
+        assert option in deploy_help
+        assert option in flux_apply_help
     assert "delete rendered flux resources" in flux_destroy_help
     assert "--yes" in flux_destroy_help
     assert "refresh the deploy report" in flux_bootstrap_help
@@ -20968,6 +21318,14 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "eso mysterybox connectivity" in normalized_deploy_help
     assert "one-run override" in normalized_deploy_help
     assert "when omitted, deploy reconciles every built-in cluster target" in normalized_deploy_help
+    for option in (
+        "--job-policy",
+        "--cancel-job",
+        "--requeue-job",
+        "--job-wait-timeout",
+        "--job-refresh-interval",
+    ):
+        assert option in deploy_help
     assert "quota-request [OPTIONS] CONFIG_YAML" in quota_request_help
     normalized_quota_request_help = " ".join(quota_request_help.split()).lower()
     assert "already sufficient" in normalized_quota_request_help

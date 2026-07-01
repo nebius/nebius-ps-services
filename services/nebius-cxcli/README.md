@@ -2651,6 +2651,37 @@ sbatch -p long --requeue --time=7-00:00:00 --wrap 'hostname; sleep 60'
 sbatch -p train --qos=train --requeue --time=04:00:00 --wrap 'hostname; sleep 60'
 ```
 
+For longer upgrade-policy demonstrations, use the public sample jobs in
+[`examples/slurm-jobs/`](examples/slurm-jobs/). These examples are generic:
+they test Slurm allocation, job visibility, interruption, wait, cancellation,
+and requeue behavior rather than CPU or GPU performance.
+
+```bash
+cd examples/slurm-jobs
+
+# Submit 10 CPU jobs to the cpu partition. Defaults to 30 minutes of runtime.
+./submit-soperator-smoke.sh --kind cpu --partition cpu --count 10
+
+# Submit 10 GPU jobs to the gpu partition, requesting one GPU per job.
+./submit-soperator-smoke.sh --kind gpu --partition gpu --count 10 --gpus-per-job 1
+```
+
+By default, Slurm may place multiple sample jobs on one node when the partition
+policy permits it. Add `--exclusive` to request one exclusive node allocation
+per job where the cluster policy allows that. Use `--run-minutes` and
+`--wall-minutes` to change the job duration, `--submit-mode array` for compact
+bulk submission, and `--dry-run` to inspect the generated `sbatch` commands.
+
+During Soperator upgrades, use the interactive job policy when you want the
+operator to select wait, cancellation, requeue, or other available handling for
+each affected running job:
+
+```bash
+nebius-cxcli soperator upgrade CONFIG_YAML --target TARGET \
+  --to-chart-version TARGET_VERSION \
+  --job-policy interactive
+```
+
 How to read the common outputs:
 
 - `shape-default` should show only the selected worker-shape partitions:
@@ -3157,9 +3188,16 @@ Important external upgrade flags:
   rejection; Kubernetes skipped-minor validation and all existing safety
   preflights still fail closed.
 - `--job-policy interactive|wait|fail|cancel-selected|cancel-all|requeue-selected|requeue-all|requeue-hold-selected|requeue-hold-all`:
-  decide how to handle Slurm jobs running on nodes affected by an external MK8s
-  rollout. Managed `soperator upgrade` uses the same policy names when MK8s
-  node groups are upgraded.
+  decide how to handle Slurm jobs before cxcli mutates Soperator worker pods.
+  Managed `soperator upgrade` checks selected underlying MK8s nodes before
+  node-template rollouts and checks all live worker NodeSets before Soperator
+  chart reconciliation, including chart-only upgrades. External
+  `ext-soperator upgrade` checks affected external node-template nodes and all
+  live worker NodeSets before target chart reconciliation or worker NodeSet
+  recreation. Local `deploy` and `flux apply` use the same policy flags before
+  applying rendered Soperator Flux resources for a target that already has a
+  live SlurmCluster, and skip the gate only for first install when no live
+  SlurmCluster exists yet.
   `interactive` shows the affected jobs and asks the operator, `wait` polls
   until jobs finish, `fail` stops before mutation, the cancel policies call
   `scancel`, the requeue policies call `scontrol requeue`, and the
@@ -3270,7 +3308,9 @@ worker capacity during the rollout. When operators choose safe-surge, cxcli
 counts `max_surge_count` temporary surge node(s) for each active service group
 or worker group in the active wave, checks the required spare quota and GPU
 capacity before mutation, requires all selected worker nodes to start Ready and
-schedulable, and checks Slurm jobs only on affected worker nodes.
+schedulable, checks Slurm jobs on affected external node-template workers, and
+checks all live worker NodeSets before target Soperator chart reconciliation or
+worker NodeSet recreation.
 Confirmed shortages, unresolved live limits, coverage gaps, or quota lookup
 errors stop upgrade before mutation. The local `.nebius-cxcli/ext-soperator-upgrades/`
 timeout-guarded checkpoint records the resolved source worker groups and quota
@@ -4701,7 +4741,10 @@ Common command flags:
 - Global source-selection for config-based commands: `--source-profile`, `NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE`
 - `validate-generated`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--portable`
 - `render`: `--force`
-- `deploy`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--skip-validations`, `--skip-validation`, `--target`, `--all-targets`
+- `deploy`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`,
+  `--skip-validations`, `--skip-validation`, `--target`, `--all-targets`,
+  `--job-policy`, `--cancel-job`, `--requeue-job`, `--job-wait-timeout`,
+  `--job-refresh-interval`
 - `acceptance-test smoke`: `--target`, `--all-targets`, `--suite`,
   `--batch-size`, `--concurrency`,
   `--continue-on-failure/--fail-fast`
@@ -4773,7 +4816,9 @@ Common command flags:
 - `terraform apply`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`
 - `terraform destroy`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--yes`
 - `terraform unlock`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--force`
-- `flux apply`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--target`, `--all-targets`
+- `flux apply`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--target`,
+  `--all-targets`, `--job-policy`, `--cancel-job`, `--requeue-job`,
+  `--job-wait-timeout`, `--job-refresh-interval`
 - `flux destroy`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--yes`, `--target`, `--all-targets`
 - `flux bootstrap`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--target`, `--all-targets`
 - `auth`:
