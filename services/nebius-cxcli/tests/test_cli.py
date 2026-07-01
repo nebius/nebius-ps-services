@@ -3726,6 +3726,34 @@ def test_first_render_from_create_scaffold_does_not_require_force(tmp_path: Path
     assert "Continue and replace the existing generated artifacts?" not in normalized
 
 
+def test_first_render_with_only_lifecycle_reports_does_not_require_force(tmp_path: Path) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    create_result = _create_non_interactive(deployments_root)
+    assert create_result.exit_code == 0, create_result.output
+
+    config_path = _project_config_path(deployments_root)
+    discovery_manifest = (
+        config_path.parent
+        / "generated"
+        / "reports"
+        / "soperator-discovery"
+        / "external-cluster"
+        / "manifest.json"
+    )
+    discovery_manifest.parent.mkdir(parents=True, exist_ok=True)
+    discovery_manifest.write_text('{"schema": "discovery"}\n', encoding="utf-8")
+
+    result = runner.invoke(app, ["render", str(config_path)])
+
+    assert result.exit_code == 0, result.output
+    normalized = " ".join(result.output.split())
+    assert "Render will replace existing generated artifacts under" not in normalized
+    assert "Continue and replace the existing generated artifacts?" not in normalized
+    assert discovery_manifest.read_text(encoding="utf-8") == '{"schema": "discovery"}\n'
+
+
 def test_render_overwrite_warning_mentions_preserved_lifecycle_reports(tmp_path: Path) -> None:
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)

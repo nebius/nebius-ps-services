@@ -374,7 +374,12 @@ from .quota_checks import (
     plan_quota_request_changes,
     request_quota_changes,
 )
-from .render import promote_staged_generated_paths, reset_generated_bundle, staged_generated_paths
+from .render import (
+    promote_staged_generated_paths,
+    render_replaceable_generated_files,
+    reset_generated_bundle,
+    staged_generated_paths,
+)
 from .runtime_config import read_path_with_catalog, to_plain_data
 from .runtime_introspection import (
     helm_chart_default_values,
@@ -12840,10 +12845,7 @@ def _materialize_generated_terraform_tfvars(
 
 
 def _render_overwrite_warning(paths: ProjectPaths) -> str | None:
-    if not paths.generated_dir.exists():
-        return None
-    existing_files = sorted(path for path in paths.generated_dir.rglob("*") if path.is_file())
-    if not existing_files:
+    if not render_replaceable_generated_files(paths):
         return None
     return (
         "Render will replace existing generated artifacts under "
@@ -52685,9 +52687,9 @@ def auth_command(
     epilog=(
         "Examples: "
         "nebius-cxcli render ./deployments/tenant/project/config.yaml "
-        "(re-renders generated/infra and generated/flux; transactional swap, prompts on existing artifacts); "
+        "(re-renders generated/infra and generated/flux; transactional swap, prompts on existing render-owned artifacts); "
         "nebius-cxcli render ./deployments/tenant/project/config.yaml --force "
-        "(replaces without prompting); "
+        "(replaces render-owned artifacts without prompting); "
         "nebius-cxcli --source-profile local render ./deployments/tenant/project/config.yaml "
         "(uses source.local Terraform/Helm paths from component_sources.yaml during development). "
         "Soperator render materializes catalog defaults: schedulingConfig + partitionConfiguration.partitions[].policy, "
@@ -52707,11 +52709,11 @@ def render_command(
         bool,
         typer.Option(
             "--force",
-            help="Replace an existing generated bundle without interactive confirmation.",
+            help="Replace existing render-owned generated artifacts without interactive confirmation.",
         ),
     ] = False,
 ) -> None:
-    """Render and transactionally replace generated artifacts from one project config.yaml, prompting before replacement unless --force is provided."""
+    """Render and transactionally replace generated artifacts from one project config.yaml, prompting only before replacing existing render-owned artifacts unless --force is provided."""
     try:
         config, paths = _load_runtime_context(config_path)
         if isinstance(config, dict):

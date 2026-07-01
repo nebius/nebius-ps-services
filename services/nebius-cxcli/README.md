@@ -1965,14 +1965,14 @@ One deployments root owns one cxcli-managed `.gitignore` block for all tenant/pr
 
 `create` owns project identity (`client_name`, `tenant_id`, `project_id`, `region_id`) and initial scaffold creation from the deployments root. Once `config.yaml` already exists, use `component list/add/remove --config <config.yaml>` for day-2 component selection changes. Those commands keep the current identity and existing values intact, and `render` remains the full reconcile step back into `generated/`.
 
-The first `render` after `create` should not require overwrite confirmation just because the project already has an empty `generated/` scaffold. The overwrite prompt is intended for rerendering over a previously rendered bundle with meaningful generated content.
+The first `render` after `create` should not require overwrite confirmation just because the project already has an empty `generated/` scaffold or command-owned lifecycle reports under `generated/reports/`. The overwrite prompt is intended for rerendering over a previously rendered bundle with meaningful render-owned generated content.
 
 In the customer private repo, keep both:
 
 - `config.yaml` as the original render/replace contract
 - `generated/` as the deploy contract used by day-2 operations and CI
 
-Rerendering from `config.yaml` is still supported, but it is a manual replace action. The CLI now renders into a hidden sibling staging directory and only swaps it into `generated/` after the new bundle is complete, so a failed rerender leaves the current bundle untouched. The replacement still removes stale or legacy content under `generated/`, including an old `generated/flux/flux-system` subtree. In an interactive terminal, `render` prompts for confirmation before replacement. In non-interactive contexts, rerender requires `--force`.
+Rerendering from `config.yaml` is still supported, but it is a manual replace action. The CLI now renders into a hidden sibling staging directory and only swaps it into `generated/` after the new bundle is complete, so a failed rerender leaves the current bundle untouched. The replacement still removes stale or legacy content under `generated/`, including an old `generated/flux/flux-system` subtree. In an interactive terminal, `render` prompts for confirmation before replacing render-owned generated artifacts. In non-interactive contexts, rerendering over those artifacts requires `--force`.
 
 Lifecycle reports under `generated/reports/` are carried forward during that
 bundle replacement: `deploy-report.md`,
@@ -4203,8 +4203,8 @@ nebius-cxcli render /path/to/config.yaml
   - Defaults to the global source profile `portable`, which rewrites active local module sources to their portable Git equivalents when available.
   - Use `--source-profile local` only for workstation testing against checked-out local Terraform modules; those generated artifacts are intentionally non-portable.
   - Use `--component-sources-file` or `NEBIUS_CXCLI_COMPONENT_SOURCES_FILE` only when you need to select a non-default catalog file.
-  - If `generated/` already contains files, `render` prompts before replacement in an interactive terminal.
-  - In non-interactive contexts, use `nebius-cxcli render --force <config.yaml>` to confirm the replacement explicitly.
+  - If `generated/` already contains render-owned artifacts, `render` prompts before replacement in an interactive terminal.
+  - In non-interactive contexts, use `nebius-cxcli render --force <config.yaml>` to confirm replacing those artifacts explicitly.
   - On successful render, terminal output prints the copy-paste deploy helper as `Next step: deploy the rendered bundle:` followed by a colored `nebius-cxcli deploy <config.yaml>` command line.
   - Example: `nebius-cxcli render ~/deployments/tenant-name-example/project-name-example/config.yaml`
 

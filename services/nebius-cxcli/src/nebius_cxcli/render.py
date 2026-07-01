@@ -92,6 +92,27 @@ def _lifecycle_report_artifact_dirnames(reports_dir: Path) -> tuple[str, ...]:
     )
 
 
+def _lifecycle_report_artifact_paths(reports_dir: Path) -> tuple[Path, ...]:
+    paths = {reports_dir / name for name in _lifecycle_report_artifact_names(reports_dir)}
+    for dirname in _lifecycle_report_artifact_dirnames(reports_dir):
+        paths.update(path for path in (reports_dir / dirname).rglob("*") if path.is_file())
+    return tuple(sorted(path for path in paths if path.is_file()))
+
+
+def render_replaceable_generated_files(paths: ProjectPaths) -> tuple[Path, ...]:
+    """Return existing generated files that render will replace or remove."""
+    if not paths.generated_dir.exists():
+        return ()
+    preserved_reports = set(_lifecycle_report_artifact_paths(paths.reports_dir))
+    return tuple(
+        sorted(
+            path
+            for path in paths.generated_dir.rglob("*")
+            if path.is_file() and path not in preserved_reports
+        )
+    )
+
+
 def _preserve_lifecycle_report_artifacts(
     staged_paths: ProjectPaths,
     final_paths: ProjectPaths,

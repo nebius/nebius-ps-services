@@ -6,6 +6,10 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Fixed `render` overwrite confirmation so first render does not warn or require
+  `--force` when the only existing generated files are command-owned lifecycle
+  reports such as `generated/reports/soperator-discovery/<target>/manifest.json`;
+  rerenders over render-owned artifacts still prompt or require `--force`.
 - Added public Soperator Slurm upgrade smoke job examples with a configurable
   submitter for repeated CPU/GPU `sbatch` submissions, array mode, optional
   exclusive placement, and interactive job-policy demonstrations.
