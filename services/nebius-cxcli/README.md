@@ -2587,7 +2587,12 @@ soperator-cluster1-login-svc    LoadBalancer   10.100.46.154   203.0.113.10   22
 
 Then SSH to the login node with the private key that matches the configured
 `slurmNodes.login.sshRootPublicKeys` value. Add `-i <path-to-private-key>` if
-that key is not the default key loaded by your SSH agent:
+that key is not the default key loaded by your SSH agent. When cxcli creates or
+adds a Soperator target, it seeds this value from the configured MK8s node-group
+SSH public key for the same target, preferring the node group mapped to the
+Soperator `login` role. If no MK8s node-group public key is configured, set
+`apps.charts[].values.slurmNodes.login.sshRootPublicKeys` in `config.yaml`
+before rendering so the chart does not rely on upstream defaults:
 
 ```bash
 ssh root@<login-external-ip>
@@ -4658,6 +4663,12 @@ nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
     select `infra:mk8s` first and then `apps:soperator`; non-interactive
     `--app soperator` still expands to the production MK8s+SFS+Soperator
     bundle.
+  - When `create` or `component add` enables a new Soperator target, it seeds
+    `apps.charts[].values.slurmNodes.login.sshRootPublicKeys` from the
+    configured MK8s node-group SSH public key for the same target, preferring
+    the node group mapped to the Soperator `login` role. The saved config
+    stores the inline public key text so rendered login nodes can authorize
+    `root` SSH with the matching private key.
   - Non-interactive subnet-attached infra can receive VPC IDs with
     `--network-id` and `--subnet-id`. A bare value is valid only when exactly
     one applicable infra row is selected. With multiple applicable rows, scope

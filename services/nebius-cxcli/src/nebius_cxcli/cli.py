@@ -24566,6 +24566,140 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
     return changed
 
 
+def _mk8s_inputs_by_target(payload: dict[str, Any]) -> dict[str, Mapping[str, Any]]:
+    inputs_by_target: dict[str, Mapping[str, Any]] = _external_mk8s_inputs_by_target(payload)
+    for row in _scope_rows(payload, scope="infra"):
+        if not isinstance(row, dict) or not bool(row.get("enabled", False)):
+            continue
+        if component_type_id(row) != "mk8s":
+            continue
+        inputs = row.get("inputs")
+        if isinstance(inputs, Mapping):
+            inputs_by_target[component_instance_id(row)] = inputs
+    return inputs_by_target
+
+
+def _first_node_group_ssh_public_key(group: object) -> str:
+    if not isinstance(group, Mapping):
+        return ""
+    ssh = group.get("ssh")
+    if not isinstance(ssh, Mapping):
+        return ""
+    public_keys = ssh.get("public_keys")
+    if not isinstance(public_keys, list):
+        return ""
+    return next((_non_empty_text(key) for key in public_keys if _non_empty_text(key)), "")
+
+
+def _soperator_login_ssh_public_key_from_mk8s_inputs(
+    inputs: Mapping[str, Any],
+    *,
+    placements: Mapping[str, list[str]],
+) -> str:
+    node_groups = inputs.get("node_groups")
+    if not isinstance(node_groups, Mapping):
+        return ""
+
+    candidate_group_keys: list[str] = []
+    for group_key in placements.get("login", []):
+        if group_key and group_key not in candidate_group_keys:
+            candidate_group_keys.append(group_key)
+    if "login" not in candidate_group_keys:
+        candidate_group_keys.append("login")
+    candidate_group_keys.extend(
+        str(group_key)
+        for group_key in node_groups
+        if str(group_key) not in candidate_group_keys
+    )
+
+    for group_key in candidate_group_keys:
+        public_key = _first_node_group_ssh_public_key(node_groups.get(group_key))
+        if public_key:
+            return public_key
+    return ""
+
+
+def _seed_soperator_login_ssh_root_public_keys(
+    payload: dict[str, Any],
+    *,
+    app_identities: set[tuple[str, str]] | None = None,
+) -> bool:
+    mk8s_inputs_by_target = _mk8s_inputs_by_target(payload)
+    changed = False
+    for row in _scope_rows(payload, scope="apps"):
+        if not isinstance(row, dict) or not bool(row.get("enabled", False)):
+            continue
+        if component_type_id(row) != _SOPERATOR_APP_ID:
+            continue
+        identity = (component_type_id(row), component_instance_id(row))
+        if app_identities is not None and identity not in app_identities:
+            continue
+        values = row.setdefault("values", {})
+        if not isinstance(values, dict):
+            continue
+        slurm_nodes = values.setdefault("slurmNodes", {})
+        if not isinstance(slurm_nodes, dict):
+            continue
+        login = slurm_nodes.setdefault("login", {})
+        if not isinstance(login, dict):
+            continue
+        existing_keys = login.get("sshRootPublicKeys")
+        if isinstance(existing_keys, list) and any(_non_empty_text(key) for key in existing_keys):
+            continue
+        if existing_keys not in (None, [], ""):
+            continue
+        target_ref = app_chart_target_ref(row) or component_instance_id(row)
+        public_key = _soperator_login_ssh_public_key_from_mk8s_inputs(
+            mk8s_inputs_by_target.get(target_ref, {}),
+            placements=_soperator_row_placements(row),
+        )
+        if not public_key:
+            continue
+        login["sshRootPublicKeys"] = [public_key]
+        changed = True
+    return changed
+
+
+def _soperator_app_identities_added_since(
+    payload: dict[str, Any],
+    previous_app_identities: set[tuple[str, str]],
+) -> set[tuple[str, str]]:
+    identities: set[tuple[str, str]] = set()
+    for row in _scope_rows(payload, scope="apps"):
+        if not isinstance(row, dict) or not bool(row.get("enabled", False)):
+            continue
+        identity = (component_type_id(row), component_instance_id(row))
+        if identity[0] != _SOPERATOR_APP_ID or identity in previous_app_identities:
+            continue
+        identities.add(identity)
+    return identities
+
+
+def _materialize_create_soperator_component_defaults(payload: dict[str, Any]) -> bool:
+    changed = _materialize_soperator_component_defaults(payload)
+    if _seed_soperator_login_ssh_root_public_keys(payload):
+        changed = True
+    return changed
+
+
+def _materialize_component_add_soperator_component_defaults(
+    payload: dict[str, Any],
+    *,
+    previous_app_identities: set[tuple[str, str]],
+) -> bool:
+    changed = _materialize_soperator_component_defaults(payload)
+    added_soperator_identities = _soperator_app_identities_added_since(
+        payload,
+        previous_app_identities,
+    )
+    if added_soperator_identities and _seed_soperator_login_ssh_root_public_keys(
+        payload,
+        app_identities=added_soperator_identities,
+    ):
+        changed = True
+    return changed
+
+
 def _scope_rows(payload: dict[str, Any], *, scope: ComponentScope) -> list[dict[str, Any]]:
     if scope == "infra":
         infra_node = payload.setdefault("infra", {})
@@ -37039,6 +37173,14 @@ def _enabled_app_row_identities_from_payload(payload: dict[str, Any]) -> set[tup
     }
 
 
+def _enabled_app_row_identities_after_single_target_bindings(
+    payload: dict[str, Any],
+) -> set[tuple[str, str]]:
+    normalized_payload = copy.deepcopy(payload)
+    _materialize_single_target_app_bindings(normalized_payload)
+    return _enabled_app_row_identities_from_payload(normalized_payload)
+
+
 def _enabled_app_ids_for_new_rows(
     *,
     payload: dict[str, Any],
@@ -47485,7 +47627,7 @@ def create_command(
             final_payload,
             provider_lookup=provider_lookup,
         )
-        _materialize_soperator_component_defaults(final_payload)
+        _materialize_create_soperator_component_defaults(final_payload)
         _refresh_soperator_onboarding_fingerprints(final_payload)
         selected_apps, mysterybox_eso_app_labels = _ensure_mysterybox_eso_app_dependency_selection(
             final_payload,
@@ -47527,7 +47669,7 @@ def create_command(
                 entries=app_entries,
             )
 
-        _materialize_soperator_component_defaults(final_payload)
+        _materialize_create_soperator_component_defaults(final_payload)
         selected_apps, mysterybox_eso_app_labels = (
             _materialize_soperator_child_chart_secret_dependencies(
                 final_payload,
@@ -47644,7 +47786,7 @@ def create_command(
                 + " because the selected observability configuration requires them."
             )
         _align_new_infra_instance_ids_with_resource_names(final_payload)
-        _materialize_soperator_component_defaults(final_payload)
+        _materialize_create_soperator_component_defaults(final_payload)
         materialize_compute_boot_disk_defaults(
             final_payload,
             provider_lookup=provider_lookup,
@@ -48152,7 +48294,9 @@ def component_add_command(
         app_entries = component_entries("apps")
         enabled_infra = _enabled_ids_from_runtime_payload(payload=payload, entries=infra_entries)
         enabled_apps = _enabled_ids_from_runtime_payload(payload=payload, entries=app_entries)
-        initially_enabled_app_rows = _enabled_app_row_identities_from_payload(payload)
+        initially_enabled_app_rows = _enabled_app_row_identities_after_single_target_bindings(
+            payload
+        )
         source_validated_app_ids: set[str] = set()
 
         raw_tokens = _split_multi_value_tokens(component_ids)
@@ -48600,7 +48744,10 @@ def component_add_command(
             next_payload,
             provider_lookup=provider_lookup,
         )
-        _materialize_soperator_component_defaults(next_payload)
+        _materialize_component_add_soperator_component_defaults(
+            next_payload,
+            previous_app_identities=initially_enabled_app_rows,
+        )
         selected_apps, mysterybox_eso_app_labels = _ensure_mysterybox_eso_app_dependency_selection(
             next_payload,
             selected_apps=selected_apps,
@@ -48692,7 +48839,10 @@ def component_add_command(
                 entries=app_entries,
             )
 
-        _materialize_soperator_component_defaults(next_payload)
+        _materialize_component_add_soperator_component_defaults(
+            next_payload,
+            previous_app_identities=initially_enabled_app_rows,
+        )
         selected_apps, mysterybox_eso_app_labels = (
             _materialize_soperator_child_chart_secret_dependencies(
                 next_payload,
@@ -48886,7 +49036,10 @@ def component_add_command(
                 if isinstance(row, dict) and component_instance_id(row) in added_infra_instances
             ]
         _materialize_single_target_app_bindings(next_payload)
-        _materialize_soperator_component_defaults(next_payload)
+        _materialize_component_add_soperator_component_defaults(
+            next_payload,
+            previous_app_identities=initially_enabled_app_rows,
+        )
         materialize_compute_boot_disk_defaults(
             next_payload,
             provider_lookup=provider_lookup,

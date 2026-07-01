@@ -6,6 +6,11 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Changed Soperator `create` and `component add` scaffolding to seed
+  `slurmNodes.login.sshRootPublicKeys` from the configured MK8s node-group SSH
+  public key for newly created Soperator targets so rendered login nodes
+  authorize `root` SSH with the matching private key instead of relying on
+  chart defaults.
 - Added Soperator worker scale commands. Managed `soperator scale-up` /
   `scale-down` keep cxcli config/render state aligned, use `NodeSetPowerState`
   for ephemeral workers, and gate scale-down with the existing Slurm job-policy

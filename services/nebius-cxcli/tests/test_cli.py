@@ -51,6 +51,10 @@ runner = CliRunner()
 _VALID_ED25519_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f demo@example"
 )
+_OTHER_VALID_ED25519_PUBLIC_KEY = _VALID_ED25519_PUBLIC_KEY.replace(
+    "demo@example",
+    "other@example",
+)
 
 
 def _portable_chart_source(*, repo: str, chart: str, version: str = "") -> dict[str, object]:
@@ -4313,6 +4317,15 @@ def test_create_explains_soperator_required_component_selection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    home_dir = tmp_path / "home"
+    ssh_dir = home_dir / ".ssh"
+    ssh_dir.mkdir(parents=True)
+    (ssh_dir / "id_ed25519.pub").write_text(
+        _OTHER_VALID_ED25519_PUBLIC_KEY + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(home_dir))
+
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
 
@@ -4390,12 +4403,27 @@ def test_create_explains_soperator_required_component_selection(
     assert mk8s_inputs["gpu_clusters"] == {"workers": {"infiniband_fabric": "fabric-1"}}
     assert mk8s_inputs["node_groups"]["worker"]["gpu_cluster_key"] == "workers"
     assert mk8s_inputs["node_groups"]["worker"]["reservation"] == {"policy": "AUTO"}
+    soperator = next(
+        row
+        for row in payload["apps"]["charts"]
+        if isinstance(row, dict) and row.get("id") == "soperator"
+    )
+    assert soperator["values"]["slurmNodes"]["login"]["sshRootPublicKeys"] == []
 
 
 def test_create_prompts_soperator_profile_before_field_wizard(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    home_dir = tmp_path / "home"
+    ssh_dir = home_dir / ".ssh"
+    ssh_dir.mkdir(parents=True)
+    (ssh_dir / "id_ed25519.pub").write_text(
+        _OTHER_VALID_ED25519_PUBLIC_KEY + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(home_dir))
+
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
     events: list[str] = []
@@ -4417,7 +4445,18 @@ def test_create_prompts_soperator_profile_before_field_wizard(
         )
         assert soperator["install_mode"] == "production-cluster"
         assert soperator["profile"] == "nebius-cpu-v1"
-        return kwargs["config_yaml"], True
+        mk8s = next(
+            row
+            for row in payload["infra"]["components"]
+            if isinstance(row, dict) and row.get("id") == "mk8s"
+        )
+        login = (
+            mk8s.setdefault("inputs", {})
+            .setdefault("node_groups", {})
+            .setdefault("login", {})
+        )
+        login["ssh"] = {"username": "ubuntu", "public_keys": [_VALID_ED25519_PUBLIC_KEY]}
+        return yaml.safe_dump(payload, sort_keys=False), True
 
     monkeypatch.setattr(
         cli_module,
@@ -4465,6 +4504,9 @@ def test_create_prompts_soperator_profile_before_field_wizard(
         ("cert-manager", "mk8s"),
     ]
     assert app_rows[0]["profile"] == "nebius-cpu-v1"
+    assert app_rows[0]["values"]["slurmNodes"]["login"]["sshRootPublicKeys"] == [
+        _VALID_ED25519_PUBLIC_KEY
+    ]
     assert "Enabled apps components: cert-manager, soperator" in result.output
     assert "Enabled apps components: cert-manager, nvidia-gpu-operator, soperator" not in (
         result.output
@@ -14434,7 +14476,17 @@ def test_component_add_auto_enables_nfs_csi_driver_when_nfs_meets_mk8s(
 
 def test_component_add_explains_soperator_required_component_selection(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    home_dir = tmp_path / "home"
+    ssh_dir = home_dir / ".ssh"
+    ssh_dir.mkdir(parents=True)
+    (ssh_dir / "id_ed25519.pub").write_text(
+        _OTHER_VALID_ED25519_PUBLIC_KEY + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(home_dir))
+
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
 
@@ -14449,6 +14501,25 @@ def test_component_add_explains_soperator_required_component_selection(
     assert created.exit_code == 0, created.output
 
     config_path = _project_config_path(deployments_root)
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    mk8s = next(
+        row
+        for row in payload["infra"]["components"]
+        if isinstance(row, dict) and row.get("id") == "mk8s"
+    )
+    mk8s_inputs = mk8s.setdefault("inputs", {})
+    mk8s_inputs["node_groups"] = {
+        role: {
+            "node_count": 1,
+            "gpu": False,
+            "platform": "cpu-d3",
+            "preset": "4vcpu-16gb",
+            "ssh": {"username": "ubuntu", "public_keys": [_VALID_ED25519_PUBLIC_KEY]},
+        }
+        for role in ("system", "controller", "login", "accounting")
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
     result = _component_add(config_path, "soperator", "--no-interactive")
 
     assert result.exit_code == 0, result.output
@@ -14467,6 +14538,102 @@ def test_component_add_explains_soperator_required_component_selection(
     assert infra_enabled["sfs"] is True
     assert apps_enabled["soperator"] is True
     assert apps_enabled["cert-manager"] is True
+    soperator = next(
+        row
+        for row in payload["apps"]["charts"]
+        if isinstance(row, dict) and row.get("id") == "soperator"
+    )
+    assert soperator["values"]["slurmNodes"]["login"]["sshRootPublicKeys"] == [
+        _VALID_ED25519_PUBLIC_KEY
+    ]
+
+
+def test_component_add_soperator_login_key_seed_only_new_rows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home_dir = tmp_path / "home"
+    ssh_dir = home_dir / ".ssh"
+    ssh_dir.mkdir(parents=True)
+    (ssh_dir / "id_ed25519.pub").write_text(
+        _OTHER_VALID_ED25519_PUBLIC_KEY + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(home_dir))
+
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "inputs": {
+                        "node_groups": {
+                            role: {
+                                "ssh": {
+                                    "username": "ubuntu",
+                                    "public_keys": [_VALID_ED25519_PUBLIC_KEY],
+                                },
+                            }
+                            for role in ("system", "controller", "login", "accounting")
+                        }
+                    },
+                }
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "soperator",
+                    "enabled": True,
+                    "values": {"slurmNodes": {"login": {"sshRootPublicKeys": []}}},
+                }
+            ]
+        }
+    }
+    previous_app_identities = cli_module._enabled_app_row_identities_after_single_target_bindings(
+        payload
+    )
+
+    assert previous_app_identities == {("soperator", "mk8s")}
+    cli_module._materialize_single_target_app_bindings(payload)
+
+    cli_module._materialize_component_add_soperator_component_defaults(
+        payload,
+        previous_app_identities=previous_app_identities,
+    )
+
+    assert payload["apps"]["charts"][0]["values"]["slurmNodes"]["login"][
+        "sshRootPublicKeys"
+    ] == []
+
+
+def test_soperator_login_key_prefers_login_placement_node_group() -> None:
+    inputs = {
+        "node_groups": {
+            "system": {
+                "ssh": {
+                    "username": "ubuntu",
+                    "public_keys": [_OTHER_VALID_ED25519_PUBLIC_KEY],
+                }
+            },
+            "login-custom": {
+                "ssh": {
+                    "username": "ubuntu",
+                    "public_keys": [_VALID_ED25519_PUBLIC_KEY],
+                }
+            },
+        }
+    }
+
+    public_key = cli_module._soperator_login_ssh_public_key_from_mk8s_inputs(
+        inputs,
+        placements={"login": ["login-custom"]},
+    )
+
+    assert public_key == _VALID_ED25519_PUBLIC_KEY
 
 
 def test_component_add_rejects_soperator_on_managed_mk8s_without_service_roles(
