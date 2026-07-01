@@ -6,6 +6,14 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Added Soperator worker scale commands. Managed `soperator scale-up` /
+  `scale-down` keep cxcli config/render state aligned, use `NodeSetPowerState`
+  for ephemeral workers, and gate scale-down with the existing Slurm job-policy
+  choices. Ad hoc `ext-soperator scale-up` / `scale-down` operate on external
+  clusters with explicit `--project-id`, `--cluster-id`, and `--kube-context`,
+  including scale-to-zero maintenance workflows; explicit non-ephemeral ordinal
+  removal is tail-only until a tested controller-safe `reserveOrdinals` path is
+  added.
 - Hardened external Soperator target Helm cutover so `ext-soperator upgrade`
   forces target `kube-rbac-proxy` image values to
   `registry.k8s.io/kubebuilder/kube-rbac-proxy:v0.15.0` for both the Soperator

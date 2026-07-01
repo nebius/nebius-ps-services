@@ -386,6 +386,180 @@ def test_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path) -> 
     ]
 
 
+def test_ext_soperator_scale_execute_requires_approve_before_discovery() -> None:
+    result = runner.invoke(
+        cli.app,
+        [
+            "ext-soperator",
+            "scale-up",
+            "--project-id",
+            "project",
+            "--cluster-id",
+            "mk8scluster",
+            "--kube-context",
+            "ctx",
+            "--nodeset",
+            "worker",
+            "--to-workers",
+            "1",
+            "--execute",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "ext-soperator scale-up --execute requires --approve" in result.output
+
+
+def test_managed_non_ephemeral_scale_aligns_desired_state_without_live_patch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    source_payload: dict[str, Any] = {}
+    plan = cli.SoperatorWorkerScalePlan(
+        request=cli.SoperatorWorkerScaleRequest(
+            ownership=cli.SOPERATOR_SCALE_OWNERSHIP_MANAGED,
+            direction=cli.SOPERATOR_SCALE_DOWN,
+            target_ref="mk8s",
+            namespace="soperator",
+            nodeset="worker",
+            to_workers=2,
+        ),
+        current_replicas=4,
+        desired_replicas=2,
+        ephemeral=False,
+        current_active_ordinals=(0, 1, 2, 3),
+        desired_active_ordinals=(0, 1),
+        affected_ordinals=(2, 3),
+        affected_pods=("worker-2", "worker-3"),
+        node_group=None,
+        warnings=(),
+    )
+    writes: list[Path] = []
+    renders: list[tuple[Path, bool]] = []
+
+    monkeypatch.setattr(cli, "_load_source_payload", lambda _path: source_payload)
+    monkeypatch.setattr(
+        cli,
+        "_prompt_soperator_upgrade_target_if_needed",
+        lambda **_kwargs: "mk8s",
+    )
+    monkeypatch.setattr(cli, "_soperator_scale_namespace", lambda *_args, **_kwargs: "soperator")
+    monkeypatch.setattr(cli, "_soperator_scale_command_runner", lambda: object())
+    monkeypatch.setattr(cli, "build_worker_scale_plan", lambda *_args, **_kwargs: plan)
+    monkeypatch.setattr(cli, "_soperator_scale_print_plan", lambda *_args, **_kwargs: None)
+    job_gate_calls: list[dict[str, Any]] = []
+
+    def _slurm_node_filter(**kwargs: Any) -> tuple[str, ...]:
+        assert kwargs["node_names"] == ("worker-2", "worker-3")
+        return ("slurm-worker-2", "slurm-worker-3")
+
+    def _handle_running_jobs(**kwargs: Any) -> tuple[str, ...]:
+        job_gate_calls.append(kwargs)
+        return ()
+
+    monkeypatch.setattr(cli, "_soperator_upgrade_slurm_node_filter", _slurm_node_filter)
+    monkeypatch.setattr(cli, "_handle_soperator_upgrade_running_jobs", _handle_running_jobs)
+    monkeypatch.setattr(
+        cli,
+        "_managed_soperator_update_worker_config",
+        lambda **_kwargs: ("inputs.node_groups.worker.node_count -> 2",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_write_runtime_payload_config",
+        lambda path, _payload: writes.append(path),
+    )
+    monkeypatch.setattr(cli, "render_command", lambda path, *, force: renders.append((path, force)))
+
+    def _unexpected_live_patch(*_args: object, **_kwargs: object) -> tuple[str, ...]:
+        raise AssertionError("managed non-ephemeral scale must not live-patch NodeSet")
+
+    monkeypatch.setattr(cli, "execute_worker_scale_plan", _unexpected_live_patch)
+    monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
+
+    cli._run_managed_soperator_worker_scale(
+        config_path=config_path,
+        target_ref="mk8s",
+        namespace=None,
+        kube_context=None,
+        nodeset="worker",
+        to_workers=2,
+        worker_ordinals=(),
+        direction=cli.SOPERATOR_SCALE_DOWN,
+        dry_run=False,
+        approve=True,
+        interactive=False,
+    )
+
+    assert writes == [config_path.resolve()]
+    assert renders == [(config_path.resolve(), True)]
+    assert job_gate_calls
+    assert job_gate_calls[0]["node_names"] == ("slurm-worker-2", "slurm-worker-3")
+    assert job_gate_calls[0]["drain_nodes"] is False
+
+
+def test_managed_ephemeral_scale_lower_autoscaling_min_preserves_max() -> None:
+    source_payload: dict[str, Any] = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "inputs": {
+                        "node_groups": {
+                            "worker": {
+                                "nodeset_name": "worker",
+                                "autoscaling": {
+                                    "enabled": True,
+                                    "min_node_count": 3,
+                                    "max_node_count": 5,
+                                },
+                            }
+                        },
+                        "soperator": {
+                            "worker_node_groups": {
+                                "worker": {
+                                    "autoscaling": {
+                                        "enabled": True,
+                                        "min_node_count": 3,
+                                        "max_node_count": 5,
+                                    },
+                                    "ephemeral_nodes": {"enabled": True},
+                                }
+                            }
+                        },
+                    },
+                }
+            ]
+        }
+    }
+
+    changes = cli._managed_soperator_lower_ephemeral_worker_autoscaling_min(
+        source_payload=source_payload,
+        target_ref="mk8s",
+        nodeset="worker",
+        to_workers=1,
+    )
+    inputs = source_payload["infra"]["components"][0]["inputs"]
+
+    assert changes == (
+        "inputs.node_groups.worker.autoscaling.min_node_count -> 1",
+        "inputs.soperator.worker_node_groups.worker.autoscaling.min_node_count -> 1",
+    )
+    assert inputs["node_groups"]["worker"]["autoscaling"] == {
+        "enabled": True,
+        "min_node_count": 1,
+        "max_node_count": 5,
+    }
+    assert inputs["soperator"]["worker_node_groups"]["worker"]["autoscaling"] == {
+        "enabled": True,
+        "min_node_count": 1,
+        "max_node_count": 5,
+    }
+
+
 def test_ext_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path) -> None:
     args = cli._external_soperator_upgrade_command_args(
         config_path=tmp_path / "config.yaml",
@@ -20950,6 +21124,18 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         env={"COLUMNS": "240"},
         terminal_width=240,
     )
+    managed_soperator_scale_down_result = runner.invoke(
+        cli.app,
+        ["soperator", "scale-down", "--help"],
+        env={"COLUMNS": "240"},
+        terminal_width=240,
+    )
+    managed_soperator_scale_up_result = runner.invoke(
+        cli.app,
+        ["soperator", "scale-up", "--help"],
+        env={"COLUMNS": "240"},
+        terminal_width=240,
+    )
     soperator_result = runner.invoke(cli.app, ["ext-soperator", "--help"])
     ext_soperator_backup_result = runner.invoke(
         cli.app,
@@ -20966,6 +21152,18 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     ext_soperator_restore_result = runner.invoke(
         cli.app,
         ["ext-soperator", "restore", "--help"],
+        env={"COLUMNS": "240"},
+        terminal_width=240,
+    )
+    ext_soperator_scale_down_result = runner.invoke(
+        cli.app,
+        ["ext-soperator", "scale-down", "--help"],
+        env={"COLUMNS": "240"},
+        terminal_width=240,
+    )
+    ext_soperator_scale_up_result = runner.invoke(
+        cli.app,
+        ["ext-soperator", "scale-up", "--help"],
         env={"COLUMNS": "240"},
         terminal_width=240,
     )
@@ -21008,10 +21206,14 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         managed_soperator_discover_result.exit_code == 0
     ), managed_soperator_discover_result.output
     assert managed_soperator_restore_result.exit_code == 0, managed_soperator_restore_result.output
+    assert managed_soperator_scale_down_result.exit_code == 0, managed_soperator_scale_down_result.output
+    assert managed_soperator_scale_up_result.exit_code == 0, managed_soperator_scale_up_result.output
     assert soperator_result.exit_code == 0, soperator_result.output
     assert ext_soperator_backup_result.exit_code == 0, ext_soperator_backup_result.output
     assert ext_soperator_discover_result.exit_code == 0, ext_soperator_discover_result.output
     assert ext_soperator_restore_result.exit_code == 0, ext_soperator_restore_result.output
+    assert ext_soperator_scale_down_result.exit_code == 0, ext_soperator_scale_down_result.output
+    assert ext_soperator_scale_up_result.exit_code == 0, ext_soperator_scale_up_result.output
     assert soperator_onboard_result.exit_code == 0, soperator_onboard_result.output
     assert ext_soperator_upgrade_result.exit_code == 0, ext_soperator_upgrade_result.output
     assert email_result.exit_code == 0, email_result.output
@@ -21039,10 +21241,14 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     managed_soperator_backup_help = _plain_output(managed_soperator_backup_result.output)
     managed_soperator_discover_help = _plain_output(managed_soperator_discover_result.output)
     managed_soperator_restore_help = _plain_output(managed_soperator_restore_result.output)
+    managed_soperator_scale_down_help = _plain_output(managed_soperator_scale_down_result.output)
+    managed_soperator_scale_up_help = _plain_output(managed_soperator_scale_up_result.output)
     soperator_help = _plain_output(soperator_result.output)
     ext_soperator_backup_help = _plain_output(ext_soperator_backup_result.output)
     ext_soperator_discover_help = _plain_output(ext_soperator_discover_result.output)
     ext_soperator_restore_help = _plain_output(ext_soperator_restore_result.output)
+    ext_soperator_scale_down_help = _plain_output(ext_soperator_scale_down_result.output)
+    ext_soperator_scale_up_help = _plain_output(ext_soperator_scale_up_result.output)
     soperator_onboard_help = _plain_output(soperator_onboard_result.output)
     ext_soperator_upgrade_help = _plain_output(ext_soperator_upgrade_result.output)
     email_help = _plain_output(email_result.output)
@@ -21058,10 +21264,16 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         managed_soperator_discover_help.split()
     )
     normalized_managed_soperator_restore_help = " ".join(managed_soperator_restore_help.split())
+    normalized_managed_soperator_scale_down_help = " ".join(
+        managed_soperator_scale_down_help.split()
+    )
+    normalized_managed_soperator_scale_up_help = " ".join(managed_soperator_scale_up_help.split())
     normalized_soperator_onboard_help = " ".join(soperator_onboard_help.split())
     normalized_ext_soperator_backup_help = " ".join(ext_soperator_backup_help.split())
     normalized_ext_soperator_discover_help = " ".join(ext_soperator_discover_help.split())
     normalized_ext_soperator_restore_help = " ".join(ext_soperator_restore_help.split())
+    normalized_ext_soperator_scale_down_help = " ".join(ext_soperator_scale_down_help.split())
+    normalized_ext_soperator_scale_up_help = " ".join(ext_soperator_scale_up_help.split())
     normalized_ext_soperator_upgrade_help = " ".join(ext_soperator_upgrade_help.split())
     normalized_wireguard_help = " ".join(wireguard_help.split())
     normalized_ssh_jumphost_help = " ".join(ssh_jumphost_help.split())
@@ -21239,9 +21451,13 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "backup" in managed_soperator_help
     assert "discover" in managed_soperator_help
     assert "restore" in managed_soperator_help
+    assert "scale-down" in managed_soperator_help
+    assert "scale-up" in managed_soperator_help
     assert "backup [OPTIONS] CONFIG_YAML" in managed_soperator_backup_help
     assert "discover [OPTIONS] CONFIG_YAML" in managed_soperator_discover_help
     assert "restore [OPTIONS] BACKUP_ARCHIVE" in managed_soperator_restore_help
+    assert "scale-down [OPTIONS] CONFIG_YAML" in managed_soperator_scale_down_help
+    assert "scale-up [OPTIONS] CONFIG_YAML" in managed_soperator_scale_up_help
     assert "--backup-dir" in normalized_managed_soperator_backup_help
     assert "--kube-context" in normalized_managed_soperator_backup_help
     assert "raw Kubernetes Secrets" in normalized_managed_soperator_backup_help
@@ -21261,6 +21477,17 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "original/source cluster or an existing Soperator namespace" in (
         normalized_managed_soperator_restore_help
     )
+    assert "--nodeset" in normalized_managed_soperator_scale_down_help
+    assert "--to-workers" in normalized_managed_soperator_scale_down_help
+    assert "--worker-ordinal" in normalized_managed_soperator_scale_down_help
+    assert "--dry-run --execute" in normalized_managed_soperator_scale_down_help
+    assert "--approve --no-approve" in normalized_managed_soperator_scale_down_help
+    assert "--job-policy" in normalized_managed_soperator_scale_down_help
+    assert "Ephemeral NodeSets use NodeSetPowerState" in normalized_managed_soperator_scale_down_help
+    assert "--nodeset" in normalized_managed_soperator_scale_up_help
+    assert "--to-workers" in normalized_managed_soperator_scale_up_help
+    assert "--dry-run --execute" in normalized_managed_soperator_scale_up_help
+    assert "--approve --no-approve" in normalized_managed_soperator_scale_up_help
     assert "Standalone MK8s node-template upgrades" in normalized_managed_soperator_upgrade_help
     assert "Kubernetes minor hops stay one hop per run" in (
         normalized_managed_soperator_upgrade_help
@@ -21291,9 +21518,13 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "backup" in soperator_help
     assert "discover" in soperator_help
     assert "restore" in soperator_help
+    assert "scale-down" in soperator_help
+    assert "scale-up" in soperator_help
     assert "backup [OPTIONS] [CONFIG_YAML]" in ext_soperator_backup_help
     assert "discover [OPTIONS] [CONFIG_OR_DEPLOYMENTS_ROOT]" in ext_soperator_discover_help
     assert "restore [OPTIONS] BACKUP_ARCHIVE" in ext_soperator_restore_help
+    assert "scale-down [OPTIONS]" in ext_soperator_scale_down_help
+    assert "scale-up [OPTIONS]" in ext_soperator_scale_up_help
     assert "--kube-context" in normalized_ext_soperator_backup_help
     assert "--client-name" in normalized_ext_soperator_backup_help
     assert "--project-id" in normalized_ext_soperator_backup_help
@@ -21348,6 +21579,24 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "original/source cluster or an existing Soperator namespace" in (
         normalized_ext_soperator_restore_help
     )
+    assert "--project-id" in normalized_ext_soperator_scale_down_help
+    assert "--cluster-id" in normalized_ext_soperator_scale_down_help
+    assert "--kube-context" in normalized_ext_soperator_scale_down_help
+    assert "--nodeset" in normalized_ext_soperator_scale_down_help
+    assert "--to-workers" in normalized_ext_soperator_scale_down_help
+    assert "--job-policy" in normalized_ext_soperator_scale_down_help
+    assert "--dry-run --execute" in normalized_ext_soperator_scale_down_help
+    assert "--approve --no-approve" in normalized_ext_soperator_scale_down_help
+    assert "--project-id/--cluster-id find Nebius node groups" in (
+        normalized_ext_soperator_scale_down_help
+    )
+    assert "--project-id" in normalized_ext_soperator_scale_up_help
+    assert "--cluster-id" in normalized_ext_soperator_scale_up_help
+    assert "--kube-context" in normalized_ext_soperator_scale_up_help
+    assert "--nodeset" in normalized_ext_soperator_scale_up_help
+    assert "--to-workers" in normalized_ext_soperator_scale_up_help
+    assert "--dry-run --execute" in normalized_ext_soperator_scale_up_help
+    assert "--approve --no-approve" in normalized_ext_soperator_scale_up_help
     assert "Restore is DR/new-empty-target only, not same-cluster rollback" in (
         normalized_soperator_help
     )

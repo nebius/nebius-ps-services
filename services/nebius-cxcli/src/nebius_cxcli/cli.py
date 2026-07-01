@@ -467,6 +467,17 @@ from .soperator_onboarding import (
     write_soperator_onboarding_reports,
     write_source_soperator_discovery_report,
 )
+from .soperator_scaling import (
+    SOPERATOR_SCALE_DOWN,
+    SOPERATOR_SCALE_OWNERSHIP_EXTERNAL,
+    SOPERATOR_SCALE_OWNERSHIP_MANAGED,
+    SOPERATOR_SCALE_UP,
+    SoperatorWorkerScalePlan,
+    SoperatorWorkerScaleRequest,
+    build_worker_scale_plan,
+    execute_worker_scale_plan,
+    worker_scale_plan_lines,
+)
 from .soperator_upgrade_safety import (
     ProtectedCustomerState,
     build_stage_fast_verification_payload,
@@ -6641,6 +6652,414 @@ def _handle_soperator_upgrade_running_jobs(
     return _drain_after_jobs_clear()
 
 
+def _soperator_scale_command_runner(
+    extra_env: Mapping[str, str] | None = None,
+) -> Callable[..., _SoperatorUpgradeCommandResult]:
+    def _run(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 120,
+        check: bool = True,
+    ) -> _SoperatorUpgradeCommandResult:
+        return _run_soperator_upgrade_process(
+            args,
+            input_text=input_text,
+            timeout_seconds=timeout_seconds,
+            check=check,
+            extra_env=extra_env,
+        )
+
+    return _run
+
+
+def _soperator_scale_namespace(
+    source_payload: Mapping[str, Any],
+    *,
+    target_ref: str,
+    namespace: str | None,
+) -> str:
+    explicit = _non_empty_text(namespace)
+    if explicit:
+        return explicit
+    refs = _enabled_soperator_release_refs_for_target(source_payload, target_ref=target_ref)
+    if len(refs) == 1:
+        return refs[0].namespace
+    return "soperator"
+
+
+def _soperator_scale_require_execute_approval(
+    *,
+    dry_run: bool,
+    approve: bool,
+    command_name: str,
+) -> None:
+    if dry_run:
+        return
+    if not approve:
+        raise RuntimeError(f"{command_name} --execute requires --approve.")
+
+
+def _soperator_scale_print_plan(plan: SoperatorWorkerScalePlan, *, dry_run: bool) -> None:
+    for line in worker_scale_plan_lines(plan):
+        console.print(line, soft_wrap=True)
+    if dry_run:
+        console.print("Dry-run only; rerun with --execute --approve to mutate.", soft_wrap=True)
+
+
+def _soperator_scale_job_gate(
+    plan: SoperatorWorkerScalePlan,
+    *,
+    job_policy: str | None,
+    cancel_job: Sequence[str],
+    requeue_job: Sequence[str],
+    job_wait_timeout: str,
+    job_refresh_interval: str,
+    interactive: bool,
+    drain_non_ephemeral: bool = True,
+) -> None:
+    if plan.request.direction != SOPERATOR_SCALE_DOWN or not plan.affected_pods:
+        return
+    slurm_nodes = _soperator_upgrade_slurm_node_filter(
+        namespace=plan.request.namespace,
+        node_names=plan.affected_pods,
+        kube_context=plan.request.kube_context,
+    )
+    policy = _soperator_upgrade_job_policy(policy=job_policy, interactive=interactive)
+    wait_timeout_seconds = _soperator_upgrade_duration_seconds(
+        job_wait_timeout,
+        option_name="--job-wait-timeout",
+    )
+    refresh_interval_seconds = _soperator_upgrade_duration_seconds(
+        job_refresh_interval,
+        option_name="--job-refresh-interval",
+    )
+    _handle_soperator_upgrade_running_jobs(
+        namespace=plan.request.namespace,
+        node_names=slurm_nodes,
+        policy=policy,
+        cancel_job_ids=cancel_job,
+        requeue_job_ids=requeue_job,
+        wait_timeout_seconds=wait_timeout_seconds,
+        refresh_interval_seconds=refresh_interval_seconds,
+        checkpoint_id=f"soperator-worker-scale-{plan.request.nodeset}",
+        kube_context=plan.request.kube_context,
+        drain_nodes=drain_non_ephemeral and not plan.ephemeral,
+    )
+
+
+def _managed_soperator_worker_group_key(
+    inputs: Mapping[str, Any],
+    *,
+    nodeset: str,
+) -> str:
+    raw_groups = _state_mapping(inputs.get("node_groups"))
+    normalized_nodeset = normalize_component_token(nodeset)
+    for key, raw_group in raw_groups.items():
+        if not isinstance(raw_group, Mapping):
+            continue
+        if normalize_component_token(str(key)) == normalized_nodeset:
+            return str(key)
+        if normalize_component_token(str(raw_group.get("name", "") or "")) == normalized_nodeset:
+            return str(key)
+        if normalize_component_token(str(raw_group.get("nodeset_name", "") or "")) == normalized_nodeset:
+            return str(key)
+    raise RuntimeError(
+        f"Could not find managed MK8s node group for worker NodeSet {nodeset!r}. "
+        "For profile-generated multi-shard workers, edit the shape-specific "
+        "worker total/count inputs and rerender, or target the concrete worker shard."
+    )
+
+
+def _managed_soperator_update_worker_config(
+    *,
+    source_payload: dict[str, Any],
+    target_ref: str,
+    nodeset: str,
+    to_workers: int,
+) -> tuple[str, ...]:
+    mk8s_row = find_source_mk8s_component(source_payload, target_ref)
+    inputs = mk8s_row.setdefault("inputs", {})
+    if not isinstance(inputs, dict):
+        raise RuntimeError(f"infra:mk8s@{target_ref} inputs must be a mapping.")
+    group_key = _managed_soperator_worker_group_key(inputs, nodeset=nodeset)
+    node_groups = inputs.setdefault("node_groups", {})
+    if not isinstance(node_groups, dict):
+        raise RuntimeError(f"infra:mk8s@{target_ref}.inputs.node_groups must be a mapping.")
+    group = node_groups.get(group_key)
+    if not isinstance(group, dict):
+        raise RuntimeError(f"infra:mk8s@{target_ref}.inputs.node_groups.{group_key} must be a mapping.")
+    changes: list[str] = []
+    autoscaling = group.get("autoscaling")
+    if isinstance(autoscaling, dict) and _config_bool(autoscaling.get("enabled"), default=True):
+        before = (autoscaling.get("min_node_count"), autoscaling.get("max_node_count"))
+        autoscaling["min_node_count"] = int(to_workers)
+        autoscaling["max_node_count"] = int(to_workers)
+        after = (autoscaling.get("min_node_count"), autoscaling.get("max_node_count"))
+        if before != after:
+            changes.append(
+                f"inputs.node_groups.{group_key}.autoscaling min/max -> {to_workers}/{to_workers}"
+            )
+    else:
+        before_count = group.get("node_count")
+        group["node_count"] = int(to_workers)
+        group.pop("autoscaling", None)
+        if before_count != to_workers:
+            changes.append(f"inputs.node_groups.{group_key}.node_count -> {to_workers}")
+    soperator_inputs = inputs.setdefault("soperator", {})
+    if isinstance(soperator_inputs, dict):
+        worker_groups = soperator_inputs.setdefault("worker_node_groups", {})
+        if isinstance(worker_groups, dict):
+            control = worker_groups.get(group_key)
+            if isinstance(control, dict):
+                control_autoscaling = control.get("autoscaling")
+                if isinstance(control_autoscaling, dict) and _config_bool(
+                    control_autoscaling.get("enabled"),
+                    default=False,
+                ):
+                    control_autoscaling["min_node_count"] = int(to_workers)
+                    control_autoscaling["max_node_count"] = int(to_workers)
+                    changes.append(
+                        f"inputs.soperator.worker_node_groups.{group_key}.autoscaling min/max "
+                        f"-> {to_workers}/{to_workers}"
+                    )
+        gpu_worker = _config_bool(group.get("gpu"), default=False)
+        total_key = "worker_gpu_total_nodes" if gpu_worker else "worker_cpu_total_nodes"
+        if total_key in soperator_inputs and soperator_inputs.get(total_key) != to_workers:
+            soperator_inputs[total_key] = int(to_workers)
+            changes.append(f"inputs.soperator.{total_key} -> {to_workers}")
+    _refresh_soperator_onboarding_fingerprints(source_payload)
+    return tuple(changes)
+
+
+def _managed_soperator_lower_ephemeral_worker_autoscaling_min(
+    *,
+    source_payload: dict[str, Any],
+    target_ref: str,
+    nodeset: str,
+    to_workers: int,
+) -> tuple[str, ...]:
+    mk8s_row = find_source_mk8s_component(source_payload, target_ref)
+    inputs = mk8s_row.setdefault("inputs", {})
+    if not isinstance(inputs, dict):
+        raise RuntimeError(f"infra:mk8s@{target_ref} inputs must be a mapping.")
+    group_key = _managed_soperator_worker_group_key(inputs, nodeset=nodeset)
+    changes: list[str] = []
+
+    def _lower_min(
+        autoscaling: Any,
+        *,
+        label: str,
+        default_enabled: bool,
+    ) -> None:
+        if not isinstance(autoscaling, dict):
+            return
+        if not _config_bool(autoscaling.get("enabled"), default=default_enabled):
+            return
+        if "min_node_count" not in autoscaling:
+            return
+        before = _required_nonnegative_int(
+            autoscaling.get("min_node_count"),
+            field=f"{label}.min_node_count",
+        )
+        if before <= to_workers:
+            return
+        autoscaling["min_node_count"] = int(to_workers)
+        changes.append(f"{label}.min_node_count -> {to_workers}")
+
+    node_groups = inputs.get("node_groups")
+    if isinstance(node_groups, dict):
+        group = node_groups.get(group_key)
+        if isinstance(group, dict):
+            _lower_min(
+                group.get("autoscaling"),
+                label=f"inputs.node_groups.{group_key}.autoscaling",
+                default_enabled=True,
+            )
+    soperator_inputs = inputs.get("soperator")
+    if isinstance(soperator_inputs, dict):
+        worker_groups = soperator_inputs.get("worker_node_groups")
+        if isinstance(worker_groups, dict):
+            control = worker_groups.get(group_key)
+            if isinstance(control, dict):
+                _lower_min(
+                    control.get("autoscaling"),
+                    label=f"inputs.soperator.worker_node_groups.{group_key}.autoscaling",
+                    default_enabled=False,
+                )
+    if changes:
+        _refresh_soperator_onboarding_fingerprints(source_payload)
+    return tuple(changes)
+
+
+def _run_managed_soperator_worker_scale(
+    *,
+    config_path: Path,
+    target_ref: str | None,
+    namespace: str | None,
+    kube_context: str | None,
+    nodeset: str,
+    to_workers: int,
+    worker_ordinals: Sequence[int],
+    direction: str,
+    dry_run: bool,
+    approve: bool,
+    job_policy: str | None = None,
+    cancel_job: Sequence[str] = (),
+    requeue_job: Sequence[str] = (),
+    job_wait_timeout: str = _SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
+    job_refresh_interval: str = _SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
+    interactive: bool = True,
+) -> None:
+    _soperator_scale_require_execute_approval(
+        dry_run=dry_run,
+        approve=approve,
+        command_name=f"soperator {direction}",
+    )
+    source_payload = _load_source_payload(config_path)
+    target = _prompt_soperator_upgrade_target_if_needed(
+        source_payload=source_payload,
+        target_ref=target_ref,
+        interactive=interactive,
+    )
+    effective_namespace = _soperator_scale_namespace(
+        source_payload,
+        target_ref=target,
+        namespace=namespace,
+    )
+    plan = build_worker_scale_plan(
+        _soperator_scale_command_runner(),
+        SoperatorWorkerScaleRequest(
+            ownership=SOPERATOR_SCALE_OWNERSHIP_MANAGED,
+            direction=direction,
+            target_ref=target,
+            namespace=effective_namespace,
+            nodeset=nodeset,
+            to_workers=to_workers,
+            kube_context=kube_context,
+            worker_ordinals=tuple(int(item) for item in worker_ordinals),
+        ),
+    )
+    _soperator_scale_print_plan(plan, dry_run=dry_run)
+    if dry_run:
+        return
+    _soperator_scale_job_gate(
+        plan,
+        job_policy=job_policy,
+        cancel_job=cancel_job,
+        requeue_job=requeue_job,
+        job_wait_timeout=job_wait_timeout,
+        job_refresh_interval=job_refresh_interval,
+        interactive=interactive,
+        drain_non_ephemeral=False,
+    )
+    if not plan.ephemeral:
+        changes = _managed_soperator_update_worker_config(
+            source_payload=source_payload,
+            target_ref=target,
+            nodeset=plan.request.nodeset,
+            to_workers=to_workers,
+        )
+        _write_runtime_payload_config(config_path.resolve(), source_payload)
+        for change in changes:
+            console.print(f"Updated config: {change}", soft_wrap=True)
+        render_command(config_path.resolve(), force=True)
+        console.print(
+            "Managed worker config and render output are aligned. Run deploy or the "
+            "project Terraform/Flux apply path to reconcile the live NodeSet and "
+            "managed MK8s host capacity.",
+            soft_wrap=True,
+        )
+        return
+    changes = _managed_soperator_lower_ephemeral_worker_autoscaling_min(
+        source_payload=source_payload,
+        target_ref=target,
+        nodeset=plan.request.nodeset,
+        to_workers=to_workers,
+    )
+    if changes:
+        _write_runtime_payload_config(config_path.resolve(), source_payload)
+        for change in changes:
+            console.print(f"Updated config: {change}", soft_wrap=True)
+        render_command(config_path.resolve(), force=True)
+    actions = execute_worker_scale_plan(
+        _soperator_scale_command_runner(),
+        plan,
+        adjust_node_group=False,
+    )
+    for action in actions:
+        console.print(action, soft_wrap=True)
+
+
+def _run_external_soperator_worker_scale(
+    *,
+    project_id: str | None,
+    cluster_id: str | None,
+    target_ref: str | None,
+    namespace: str | None,
+    kube_context: str | None,
+    nodeset: str,
+    to_workers: int,
+    worker_ordinals: Sequence[int],
+    direction: str,
+    dry_run: bool,
+    approve: bool,
+    job_policy: str | None = None,
+    cancel_job: Sequence[str] = (),
+    requeue_job: Sequence[str] = (),
+    job_wait_timeout: str = _SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
+    job_refresh_interval: str = _SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
+    interactive: bool = True,
+) -> None:
+    if not _non_empty_text(project_id):
+        raise RuntimeError(f"ext-soperator {direction} requires --project-id.")
+    if not _non_empty_text(cluster_id):
+        raise RuntimeError(f"ext-soperator {direction} requires --cluster-id.")
+    if not _non_empty_text(kube_context):
+        raise RuntimeError(
+            f"ext-soperator {direction} requires --kube-context; --project-id and "
+            "--cluster-id identify Nebius node groups but do not provide Kubernetes access."
+        )
+    _soperator_scale_require_execute_approval(
+        dry_run=dry_run,
+        approve=approve,
+        command_name=f"ext-soperator {direction}",
+    )
+    effective_namespace = _non_empty_text(namespace) or "soperator"
+    target = normalize_component_token(target_ref) or normalize_component_token(cluster_id) or "external"
+    runner = _soperator_scale_command_runner()
+    plan = build_worker_scale_plan(
+        runner,
+        SoperatorWorkerScaleRequest(
+            ownership=SOPERATOR_SCALE_OWNERSHIP_EXTERNAL,
+            direction=direction,
+            target_ref=target,
+            namespace=effective_namespace,
+            nodeset=nodeset,
+            to_workers=to_workers,
+            kube_context=kube_context,
+            cluster_id=cluster_id,
+            project_id=project_id,
+            worker_ordinals=tuple(int(item) for item in worker_ordinals),
+        ),
+    )
+    _soperator_scale_print_plan(plan, dry_run=dry_run)
+    if dry_run:
+        return
+    _soperator_scale_job_gate(
+        plan,
+        job_policy=job_policy,
+        cancel_job=cancel_job,
+        requeue_job=requeue_job,
+        job_wait_timeout=job_wait_timeout,
+        job_refresh_interval=job_refresh_interval,
+        interactive=interactive,
+    )
+    actions = execute_worker_scale_plan(runner, plan, adjust_node_group=True)
+    for action in actions:
+        console.print(action, soft_wrap=True)
+
+
 def _validation_report_payload(
     validations: Sequence[Mapping[str, Any]],
     *,
@@ -10928,6 +11347,187 @@ def soperator_restore_command(
             dry_run=dry_run,
             approve=approve,
             restore_accounting_db=restore_accounting_db,
+        )
+    except typer.Exit:
+        raise
+    except Exception as exc:  # pragma: no cover - CLI surface
+        _exit_with_error(exc)
+
+
+@soperator_app.command(
+    "scale-down",
+    short_help="Scale down a cxcli-managed Soperator worker NodeSet.",
+    epilog=(
+        "Example: nebius-cxcli soperator scale-down <config.yaml> --target mk8s "
+        "--nodeset worker-gpu-0 --to-workers 0 --job-policy interactive --execute --approve. "
+        "Dry-run is the default. Ephemeral NodeSets use NodeSetPowerState; non-ephemeral "
+        "NodeSets align config.yaml/rendered output for the managed deploy/apply path."
+    ),
+)
+def soperator_scale_down_command(
+    config_path: Annotated[
+        Path,
+        typer.Argument(metavar="CONFIG_YAML", help=_CONFIG_YAML_ARGUMENT_HELP),
+    ],
+    target_ref: Annotated[
+        str | None,
+        typer.Option("--target", help="cxcli Soperator target ref."),
+    ] = None,
+    nodeset: Annotated[
+        str,
+        typer.Option("--nodeset", help="Worker NodeSet name, for example worker or worker-gpu-0."),
+    ] = "",
+    to_workers: Annotated[
+        int,
+        typer.Option("--to-workers", help="Desired worker count for the selected NodeSet."),
+    ] = 0,
+    worker_ordinal: Annotated[
+        list[int] | None,
+        typer.Option(
+            "--worker-ordinal",
+            help=(
+                "Specific worker ordinal to remove; repeatable. Non-ephemeral "
+                "scale-down currently requires tail ordinals."
+            ),
+        ),
+    ] = None,
+    namespace: Annotated[
+        str | None,
+        typer.Option("--namespace", help="Override the Soperator namespace."),
+    ] = None,
+    kube_context: Annotated[
+        str | None,
+        typer.Option("--kube-context", help="kubectl context override."),
+    ] = None,
+    job_policy: Annotated[
+        str | None,
+        typer.Option("--job-policy", help=_SOPERATOR_UPGRADE_JOB_POLICY_HELP),
+    ] = None,
+    cancel_job: Annotated[
+        list[str] | None,
+        typer.Option("--cancel-job", help="Slurm job id to cancel with --job-policy cancel-selected."),
+    ] = None,
+    requeue_job: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--requeue-job",
+            help="Slurm job id to requeue with --job-policy requeue-selected or requeue-hold-selected.",
+        ),
+    ] = None,
+    job_wait_timeout: Annotated[
+        str,
+        typer.Option("--job-wait-timeout", help="Maximum wait for Slurm jobs, for example 2h; 0s means unlimited."),
+    ] = _SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
+    job_refresh_interval: Annotated[
+        str,
+        typer.Option("--job-refresh-interval", help="Refresh interval while waiting for Slurm jobs."),
+    ] = _SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run/--execute", help="Use --execute --approve to apply the scale-down plan."),
+    ] = True,
+    approve: Annotated[
+        bool,
+        typer.Option("--approve/--no-approve", help="Required with --execute for worker scale mutation."),
+    ] = False,
+    interactive: Annotated[
+        bool,
+        typer.Option("--interactive/--no-interactive", help="Prompt for Slurm job decisions when interactive."),
+    ] = True,
+) -> None:
+    try:
+        _run_managed_soperator_worker_scale(
+            config_path=config_path,
+            target_ref=target_ref,
+            namespace=namespace,
+            kube_context=kube_context,
+            nodeset=nodeset,
+            to_workers=to_workers,
+            worker_ordinals=tuple(worker_ordinal or ()),
+            direction=SOPERATOR_SCALE_DOWN,
+            dry_run=dry_run,
+            approve=approve,
+            job_policy=job_policy,
+            cancel_job=tuple(cancel_job or ()),
+            requeue_job=tuple(requeue_job or ()),
+            job_wait_timeout=job_wait_timeout,
+            job_refresh_interval=job_refresh_interval,
+            interactive=interactive,
+        )
+    except typer.Exit:
+        raise
+    except Exception as exc:  # pragma: no cover - CLI surface
+        _exit_with_error(exc)
+
+
+@soperator_app.command(
+    "scale-up",
+    short_help="Scale up a cxcli-managed Soperator worker NodeSet.",
+    epilog=(
+        "Example: nebius-cxcli soperator scale-up <config.yaml> --target mk8s "
+        "--nodeset worker-gpu-0 --to-workers 4 --execute --approve. Dry-run is "
+        "the default. Ephemeral NodeSets use NodeSetPowerState; non-ephemeral "
+        "NodeSets align config.yaml/rendered output for the managed deploy/apply path."
+    ),
+)
+def soperator_scale_up_command(
+    config_path: Annotated[
+        Path,
+        typer.Argument(metavar="CONFIG_YAML", help=_CONFIG_YAML_ARGUMENT_HELP),
+    ],
+    target_ref: Annotated[
+        str | None,
+        typer.Option("--target", help="cxcli Soperator target ref."),
+    ] = None,
+    nodeset: Annotated[
+        str,
+        typer.Option("--nodeset", help="Worker NodeSet name, for example worker or worker-gpu-0."),
+    ] = "",
+    to_workers: Annotated[
+        int,
+        typer.Option("--to-workers", help="Desired worker count for the selected NodeSet."),
+    ] = 1,
+    worker_ordinal: Annotated[
+        list[int] | None,
+        typer.Option(
+            "--worker-ordinal",
+            help="Ephemeral worker ordinal to activate; repeatable.",
+        ),
+    ] = None,
+    namespace: Annotated[
+        str | None,
+        typer.Option("--namespace", help="Override the Soperator namespace."),
+    ] = None,
+    kube_context: Annotated[
+        str | None,
+        typer.Option("--kube-context", help="kubectl context override."),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run/--execute", help="Use --execute --approve to apply the scale-up plan."),
+    ] = True,
+    approve: Annotated[
+        bool,
+        typer.Option("--approve/--no-approve", help="Required with --execute for worker scale mutation."),
+    ] = False,
+    interactive: Annotated[
+        bool,
+        typer.Option("--interactive/--no-interactive", help="Prompt when the config has multiple targets."),
+    ] = True,
+) -> None:
+    try:
+        _run_managed_soperator_worker_scale(
+            config_path=config_path,
+            target_ref=target_ref,
+            namespace=namespace,
+            kube_context=kube_context,
+            nodeset=nodeset,
+            to_workers=to_workers,
+            worker_ordinals=tuple(worker_ordinal or ()),
+            direction=SOPERATOR_SCALE_UP,
+            dry_run=dry_run,
+            approve=approve,
+            interactive=interactive,
         )
     except typer.Exit:
         raise
@@ -50698,6 +51298,193 @@ def _refresh_soperator_onboarding_after_completed_migration(
     if source_report_path is not None:
         lines.append(f"Post-upgrade Soperator discovery bundle: {source_report_path.parent}")
     return tuple(lines)
+
+
+@ext_soperator_app.command(
+    "scale-down",
+    short_help="Scale down workers on an external Soperator cluster without onboarding.",
+    epilog=(
+        "Example: nebius-cxcli ext-soperator scale-down --project-id PROJECT "
+        "--cluster-id MK8SCLUSTER --kube-context CONTEXT --namespace soperator "
+        "--nodeset worker-gpu-0 --to-workers 0 --job-policy interactive --execute --approve. "
+        "Dry-run is the default. --project-id/--cluster-id find Nebius node groups; "
+        "--kube-context provides Kubernetes and Slurm access."
+    ),
+)
+def ext_soperator_scale_down_command(
+    project_id: Annotated[
+        str | None,
+        typer.Option("--project-id", help="Nebius project identifier for node-group lookup."),
+    ] = None,
+    cluster_id: Annotated[
+        str | None,
+        typer.Option("--cluster-id", help="Nebius MK8s cluster id containing the external Soperator."),
+    ] = None,
+    target_ref: Annotated[
+        str | None,
+        typer.Option("--target", help="Optional display target id for reports/output."),
+    ] = None,
+    namespace: Annotated[
+        str | None,
+        typer.Option("--namespace", help="Soperator namespace. Default: soperator."),
+    ] = None,
+    kube_context: Annotated[
+        str | None,
+        typer.Option("--kube-context", help="kubectl context for the external cluster."),
+    ] = None,
+    nodeset: Annotated[
+        str,
+        typer.Option("--nodeset", help="Worker NodeSet name, for example worker or worker-gpu-0."),
+    ] = "",
+    to_workers: Annotated[
+        int,
+        typer.Option("--to-workers", help="Desired worker count for the selected NodeSet."),
+    ] = 0,
+    worker_ordinal: Annotated[
+        list[int] | None,
+        typer.Option(
+            "--worker-ordinal",
+            help=(
+                "Specific worker ordinal to remove; repeatable. Non-ephemeral "
+                "scale-down currently requires tail ordinals."
+            ),
+        ),
+    ] = None,
+    job_policy: Annotated[
+        str | None,
+        typer.Option("--job-policy", help=_SOPERATOR_UPGRADE_JOB_POLICY_HELP),
+    ] = None,
+    cancel_job: Annotated[
+        list[str] | None,
+        typer.Option("--cancel-job", help="Slurm job id to cancel with --job-policy cancel-selected."),
+    ] = None,
+    requeue_job: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--requeue-job",
+            help="Slurm job id to requeue with --job-policy requeue-selected or requeue-hold-selected.",
+        ),
+    ] = None,
+    job_wait_timeout: Annotated[
+        str,
+        typer.Option("--job-wait-timeout", help="Maximum wait for Slurm jobs, for example 2h; 0s means unlimited."),
+    ] = _SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
+    job_refresh_interval: Annotated[
+        str,
+        typer.Option("--job-refresh-interval", help="Refresh interval while waiting for Slurm jobs."),
+    ] = _SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run/--execute", help="Use --execute --approve to apply the scale-down plan."),
+    ] = True,
+    approve: Annotated[
+        bool,
+        typer.Option("--approve/--no-approve", help="Required with --execute for worker scale mutation."),
+    ] = False,
+    interactive: Annotated[
+        bool,
+        typer.Option("--interactive/--no-interactive", help="Prompt for Slurm job decisions when interactive."),
+    ] = True,
+) -> None:
+    try:
+        _run_external_soperator_worker_scale(
+            project_id=project_id,
+            cluster_id=cluster_id,
+            target_ref=target_ref,
+            namespace=namespace,
+            kube_context=kube_context,
+            nodeset=nodeset,
+            to_workers=to_workers,
+            worker_ordinals=tuple(worker_ordinal or ()),
+            direction=SOPERATOR_SCALE_DOWN,
+            dry_run=dry_run,
+            approve=approve,
+            job_policy=job_policy,
+            cancel_job=tuple(cancel_job or ()),
+            requeue_job=tuple(requeue_job or ()),
+            job_wait_timeout=job_wait_timeout,
+            job_refresh_interval=job_refresh_interval,
+            interactive=interactive,
+        )
+    except typer.Exit:
+        raise
+    except Exception as exc:  # pragma: no cover - CLI surface
+        _exit_with_error(exc)
+
+
+@ext_soperator_app.command(
+    "scale-up",
+    short_help="Scale up workers on an external Soperator cluster without onboarding.",
+    epilog=(
+        "Example: nebius-cxcli ext-soperator scale-up --project-id PROJECT "
+        "--cluster-id MK8SCLUSTER --kube-context CONTEXT --namespace soperator "
+        "--nodeset worker-gpu-0 --to-workers 4 --execute --approve. Dry-run is "
+        "the default. Use after external node-group replacement or maintenance."
+    ),
+)
+def ext_soperator_scale_up_command(
+    project_id: Annotated[
+        str | None,
+        typer.Option("--project-id", help="Nebius project identifier for node-group lookup."),
+    ] = None,
+    cluster_id: Annotated[
+        str | None,
+        typer.Option("--cluster-id", help="Nebius MK8s cluster id containing the external Soperator."),
+    ] = None,
+    target_ref: Annotated[
+        str | None,
+        typer.Option("--target", help="Optional display target id for reports/output."),
+    ] = None,
+    namespace: Annotated[
+        str | None,
+        typer.Option("--namespace", help="Soperator namespace. Default: soperator."),
+    ] = None,
+    kube_context: Annotated[
+        str | None,
+        typer.Option("--kube-context", help="kubectl context for the external cluster."),
+    ] = None,
+    nodeset: Annotated[
+        str,
+        typer.Option("--nodeset", help="Worker NodeSet name, for example worker or worker-gpu-0."),
+    ] = "",
+    to_workers: Annotated[
+        int,
+        typer.Option("--to-workers", help="Desired worker count for the selected NodeSet."),
+    ] = 1,
+    worker_ordinal: Annotated[
+        list[int] | None,
+        typer.Option(
+            "--worker-ordinal",
+            help="Ephemeral worker ordinal to activate; repeatable.",
+        ),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run/--execute", help="Use --execute --approve to apply the scale-up plan."),
+    ] = True,
+    approve: Annotated[
+        bool,
+        typer.Option("--approve/--no-approve", help="Required with --execute for worker scale mutation."),
+    ] = False,
+) -> None:
+    try:
+        _run_external_soperator_worker_scale(
+            project_id=project_id,
+            cluster_id=cluster_id,
+            target_ref=target_ref,
+            namespace=namespace,
+            kube_context=kube_context,
+            nodeset=nodeset,
+            to_workers=to_workers,
+            worker_ordinals=tuple(worker_ordinal or ()),
+            direction=SOPERATOR_SCALE_UP,
+            dry_run=dry_run,
+            approve=approve,
+        )
+    except typer.Exit:
+        raise
+    except Exception as exc:  # pragma: no cover - CLI surface
+        _exit_with_error(exc)
 
 
 @ext_soperator_app.command(

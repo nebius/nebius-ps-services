@@ -605,6 +605,16 @@ and chart source-family changes.
   drain state plus Nebius replacement instance churn while still checking
   Slurm partition/config, accounting policy, desired values, and stable
   node-to-partition/features/GRES mapping.
+  Managed `soperator scale-up` and `soperator scale-down` are narrower worker
+  capacity commands. Ephemeral worker NodeSets change active ordinals through
+  `NodeSetPowerState`; non-ephemeral worker scale updates the cxcli-owned
+  worker node-group inputs, rerenders, gates scale-down with the same Slurm
+  job-policy helper without leaving live Slurm nodes drained, and leaves live
+  reconciliation to the managed deploy/apply path. The command does not bypass
+  Terraform/Flux ownership for the live NodeSet or managed MK8s host capacity;
+  the normal deploy or infra apply path reconciles host counts.
+  Explicit non-ephemeral ordinal removal is tail-only until a tested
+  controller-safe `reserveOrdinals` path is added.
   The managed stage model is explicit: planning/dry-run resolves chart and MK8s
   target intent; preflight validates the generated bundle, live Soperator/Slurm
   state, backup, protected-state capture, and ActiveChecks checkpoint; MK8s
@@ -1190,6 +1200,10 @@ exact fixed worker-group count or a percent-based wave with an optional cap,
 handles Slurm jobs on affected external node-template workers and all live
 worker NodeSets before target chart reconciliation through the `--job-policy`
 wait, cancel, requeue, or requeue-hold decision state,
+provides ad hoc `ext-soperator scale-up` and `ext-soperator scale-down`
+commands for external maintenance without onboarding, requiring both Nebius
+`--project-id`/`--cluster-id` for node-group lookup and `--kube-context` for
+Kubernetes/Slurm access,
 clears stale GPU driver presets
 from CPU node groups, temporarily quiesces login workloads, one-node
 controller/accounting workloads, and known drain-blocking webhook replicas only
@@ -2976,7 +2990,13 @@ Profile concepts:
   Soperator can seed GPU libraries into the jail, writes finite non-negative
   `slurmConfig.suspendTime` from global
   `inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds`, and keeps the
-  same one-worker-pod to one-Kubernetes-worker-VM resource shape. Service-role
+  same one-worker-pod to one-Kubernetes-worker-VM resource shape. Day-2 worker
+  scale commands preserve this split: ephemeral workers patch
+  `NodeSetPowerState.activeNodes`, while non-ephemeral scale changes NodeSet
+  replicas and matching worker host capacity. Scale-to-zero on non-ephemeral
+  workers is maintenance mode, not workload availability. Explicit
+  non-ephemeral ordinal removal is tail-only until a tested controller-safe
+  `reserveOrdinals` path is added. Service-role
   autoscaling must keep `max_node_count` at least `1` because those groups back
   required Soperator placement.
   Profile-owned NodeSet values leave worker `slurmd` and `munge` image

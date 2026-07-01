@@ -398,6 +398,19 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
         "`--dry-run/--execute`, `--approve/--no-approve`, "
         "`--restore-accounting-db/--no-restore-accounting-db`"
     ) in common_flags_flat
+    assert (
+        "- `soperator scale-down`: `--target`, `--nodeset`, `--to-workers`, "
+        "`--worker-ordinal`, `--namespace`, `--kube-context`, `--job-policy`, "
+        "`--cancel-job`, `--requeue-job`, `--job-wait-timeout`, "
+        "`--job-refresh-interval`, `--dry-run/--execute`, `--approve/--no-approve`, "
+        "`--interactive/--no-interactive`"
+    ) in common_flags_flat
+    assert (
+        "- `soperator scale-up`: `--target`, `--nodeset`, `--to-workers`, "
+        "`--worker-ordinal`, `--namespace`, `--kube-context`, "
+        "`--dry-run/--execute`, `--approve/--no-approve`, "
+        "`--interactive/--no-interactive`"
+    ) in common_flags_flat
     assert "Node-layer upgrades" not in common_flags
     assert "--disruption-policy" not in supporting
     assert "allow-unavailable" not in supporting
@@ -420,6 +433,18 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
         "- `ext-soperator restore`: `--target`, `--namespace`, `--kube-context`, "
         "`--dry-run/--execute`, `--approve/--no-approve`, "
         "`--restore-accounting-db/--no-restore-accounting-db`"
+    ) in common_flags_flat
+    assert (
+        "- `ext-soperator scale-down`: `--project-id`, `--cluster-id`, `--target`, "
+        "`--namespace`, `--kube-context`, `--nodeset`, `--to-workers`, "
+        "`--worker-ordinal`, `--job-policy`, `--cancel-job`, `--requeue-job`, "
+        "`--job-wait-timeout`, `--job-refresh-interval`, `--dry-run/--execute`, "
+        "`--approve/--no-approve`, `--interactive/--no-interactive`"
+    ) in common_flags_flat
+    assert (
+        "- `ext-soperator scale-up`: `--project-id`, `--cluster-id`, `--target`, "
+        "`--namespace`, `--kube-context`, `--nodeset`, `--to-workers`, "
+        "`--worker-ordinal`, `--dry-run/--execute`, `--approve/--no-approve`"
     ) in common_flags_flat
     assert (
         "- `ext-soperator discover`: `--client-name`, `--tenant-id`, `--project-id`, "
@@ -592,7 +617,20 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     )
     assert "`nebius-cxcli soperator backup <config.yaml> --target <target>`" in soperator
     assert "`nebius-cxcli soperator restore <backup.tar.gz> --execute --approve`" in (soperator)
+    assert "nebius-cxcli soperator scale-down <config.yaml> --target <target>" in soperator
+    assert "Ephemeral NodeSets change active worker ordinals through `NodeSetPowerState`" in (
+        soperator_flat
+    )
+    assert "without leaving live Slurm nodes drained" in soperator_flat
+    assert "they do not live-patch around Flux/Terraform ownership" in soperator_flat
+    assert "reconcile the live NodeSet and managed MK8s host capacity" in soperator_flat
+    assert "Explicit non-ephemeral ordinal removal is tail-only" in soperator_flat
     assert "nebius-cxcli ext-soperator backup <config.yaml> --target <target>" in soperator
+    assert "nebius-cxcli ext-soperator scale-down --project-id <project-id>" in soperator
+    assert "`--kube-context` is still required for Kubernetes and Slurm access" in (
+        soperator_flat
+    )
+    assert "replace worker node groups externally, scale back up" in soperator_flat
     assert (
         "nebius-cxcli ext-soperator backup \\ --project-id <project-id> \\ "
         "--cluster-id <mk8scluster-id> \\ --access internal"
@@ -1136,6 +1174,13 @@ def test_soperator_docs_define_worker_autoscaling_boundary() -> None:
     assert "only after at least one shard has autoscaling-backed ephemeral nodes" in design_flat
     assert "raises GPU worker shards to at least one initial active worker" in design_flat
     assert "seed GPU libraries into the jail" in design_flat
+    assert "Day-2 worker scale commands preserve this split" in design_flat
+    assert "ephemeral workers patch `NodeSetPowerState.activeNodes`" in design_flat
+    assert "non-ephemeral scale changes NodeSet replicas and matching worker host capacity" in (
+        design_flat
+    )
+    assert "Scale-to-zero on non-ephemeral workers is maintenance mode" in design_flat
+    assert "Explicit non-ephemeral ordinal removal is tail-only" in design_flat
     assert "not total GPU count and not an aggregate CPU/GPU split" in design_flat
     assert "5 x `1gpu-*` hosts means five Slurm worker replicas with `gpu: 1`" in (design_flat)
     assert "5 x `8gpu-*` hosts means five replicas with `gpu: 8` and 40 total GPUs" in (design_flat)
@@ -1786,6 +1831,11 @@ def test_docs_define_component_selector_contract() -> None:
     assert "`phase_state[<stage>].fast_verification`" in design_flat
     assert "JSON `stage_verification` array" in design_flat
     assert "completion writes the external upgrade reports" in design_flat
+    assert "Managed `soperator scale-up` and `soperator scale-down`" in design_flat
+    assert "without leaving live Slurm nodes drained" in design_flat
+    assert "leaves live reconciliation to the managed deploy/apply path" in design_flat
+    assert "does not bypass Terraform/Flux ownership for the live NodeSet" in design_flat
+    assert "controller-safe `reserveOrdinals` path" in design_flat
     assert "The managed stage model is explicit" in design_flat
     assert "planning/dry-run resolves chart and MK8s target intent" in design_flat
     assert "Kubernetes minor upgrades must follow provider-supported hops" in design_flat
@@ -1842,6 +1892,12 @@ def test_docs_define_component_selector_contract() -> None:
         "worker NodeSets before target chart reconciliation through the `--job-policy` "
         "wait, cancel, requeue, or requeue-hold decision state"
     ) in design_flat
+    assert "provides ad hoc `ext-soperator scale-up` and `ext-soperator scale-down`" in (
+        design_flat
+    )
+    assert "`--project-id`/`--cluster-id` for node-group lookup and `--kube-context`" in (
+        design_flat
+    )
     assert "Slurm rejects the scoped node filter" in design_flat
     assert "`generated/reports/ext-soperator-upgrade-report.json`" in design_flat
     assert "auto-detects source worker node groups" in design_flat
