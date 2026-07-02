@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-part_type="cpu"
+part_type="auto"
 partition=""
 count="1"
 run_minutes="30"
@@ -31,13 +31,13 @@ Usage:
   submit-job-test.sh login <login-external-ip> [--dry-run]
 
 Options:
-  --part-type cpu|gpu        CPU/GPU job template to submit. Default: cpu.
-  --partition <name>         Slurm partition. Defaults to the part type value.
+  --part-type auto|cpu|gpu   CPU/GPU job template to submit. Default: auto.
+  --partition <name>         Slurm partition. Defaults to Slurm's default partition.
   --count <n>                Number of jobs to submit. Default: 1.
   --run-minutes <n>          In-job heartbeat duration. Default: 30.
   --wall-minutes <n>         Slurm wall time request. Default: 35.
   --submit-mode loop|array   Submit repeated sbatch jobs or one array. Default: loop.
-  --gpus-per-job <n>         GPUs per GPU job. Default: 1. Used only with --part-type gpu.
+  --gpus-per-job <n>         GPUs per GPU job. Default: 1. Used with the GPU template.
   --nodes <n>                Nodes per job. Default: 1.
   --cpus-per-task <n>        CPUs per task. Default: 1.
   --exclusive                Request exclusive node allocation where policy permits.
@@ -53,10 +53,12 @@ Login mode:
   an SSH session in /root/testjobs. Copying is part of login mode.
 
 Examples:
+  ./submit-job-test.sh
   ./submit-job-test.sh login <login-external-ip>
-  ./submit-job-test.sh --partition cpu --count 10
-  ./submit-job-test.sh --part-type gpu --partition gpu --count 10 --gpus-per-job 1
-  ./submit-job-test.sh --part-type gpu --partition gpu --count 10 --submit-mode array --dry-run
+  ./submit-job-test.sh --count 10
+  ./submit-job-test.sh --partition main --count 10 --gpus-per-job 1
+  ./submit-job-test.sh --part-type cpu --partition cpu --count 10
+  ./submit-job-test.sh --partition main --count 10 --submit-mode array --dry-run
 EOF
 }
 
@@ -281,8 +283,8 @@ parse_args() {
 
 validate_args() {
   case "$part_type" in
-    cpu | gpu) ;;
-    *) die "--part-type must be cpu or gpu" ;;
+    auto | cpu | gpu) ;;
+    *) die "--part-type must be auto, cpu, or gpu" ;;
   esac
 
   case "$submit_mode" in
@@ -301,8 +303,11 @@ validate_args() {
     die "--wall-minutes must be greater than or equal to --run-minutes"
   fi
 
-  if [[ -z "$partition" ]]; then
-    partition="$part_type"
+  if [[ "$part_type" == "auto" ]]; then
+    case "$partition" in
+      cpu) part_type="cpu" ;;
+      *) part_type="gpu" ;;
+    esac
   fi
 }
 
@@ -328,7 +333,6 @@ build_sbatch_command() {
 
   local -a cmd=(
     sbatch
-    --partition "$partition"
     --nodes "$nodes"
     --ntasks "1"
     --cpus-per-task "$cpus_per_task"
@@ -337,6 +341,10 @@ build_sbatch_command() {
     --output "$output_pattern"
     --export "ALL,RUN_SECONDS=${run_seconds},HEARTBEAT_SECONDS=${heartbeat_seconds}"
   )
+
+  if [[ -n "$partition" ]]; then
+    cmd+=(--partition "$partition")
+  fi
 
   if [[ -n "$array_spec" ]]; then
     cmd+=("--array=${array_spec}")

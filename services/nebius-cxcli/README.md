@@ -2675,11 +2675,11 @@ can reach the cluster's Slurm controller:
 ./examples/slurm-jobs/submit-job-test.sh login <login-external-ip>
 
 # In the SSH session opened by the helper.
-# Submit 10 CPU jobs to the cpu partition. Omit --count to submit one job.
-bash ./submit-job-test.sh --partition cpu --count 10
+# Submit one GPU job to the default Nebius main* partition.
+bash ./submit-job-test.sh
 
-# Submit 10 GPU jobs to the gpu partition, requesting one GPU per job.
-bash ./submit-job-test.sh --part-type gpu --partition gpu --count 10 --gpus-per-job 1
+# Submit 10 CPU jobs to a cpu partition.
+bash ./submit-job-test.sh --part-type cpu --partition cpu --count 10
 ```
 
 By default, Slurm may place multiple sample jobs on one node when the partition

@@ -12,7 +12,7 @@ GPU_BATCH = EXAMPLE_DIR / "gpu-job-test.sbatch"
 
 
 PUBLIC_FLAGS = (
-    "--part-type cpu|gpu",
+    "--part-type auto|cpu|gpu",
     "--partition <name>",
     "--count <n>",
     "--run-minutes <n>",
@@ -65,6 +65,8 @@ def test_submitter_help_documents_public_flags() -> None:
     assert result.returncode == 0
     assert "submit-job-test.sh login <login-external-ip>" in result.stdout
     assert "Copying is part of login mode" in result.stdout
+    assert "Default: auto" in result.stdout
+    assert "Examples:\n  ./submit-job-test.sh\n" in result.stdout
     for flag in PUBLIC_FLAGS:
         assert flag in result.stdout
 
@@ -77,6 +79,14 @@ def test_example_readme_documents_login_node_copy_flow() -> None:
     assert "/root/testjobs" in readme
     assert "scp -r examples/slurm-jobs" not in readme
     assert "cd /shared/slurm-jobs" not in readme
+
+
+def test_example_readme_starts_submit_examples_with_bare_command() -> None:
+    readme = (EXAMPLE_DIR / "README.md").read_text(encoding="utf-8")
+    gpu_section = readme.split("## Submit GPU Jobs", 1)[1]
+    first_example = gpu_section.split("```bash\n", 1)[1].split("\n```", 1)[0]
+
+    assert first_example == "./submit-job-test.sh"
 
 
 def test_login_dry_run_prints_copy_and_remote_shell_commands() -> None:
@@ -110,7 +120,32 @@ def test_submitter_rejects_removed_kind_option() -> None:
     assert "Unknown option: --kind" in result.stderr
 
 
-def test_cpu_dry_run_defaults_to_one_cpu_job_without_gpu_gres() -> None:
+def test_default_dry_run_uses_gpu_template_on_slurm_default_partition() -> None:
+    result = run_submitter("--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    lines = sbatch_lines(result.stdout)
+    assert len(lines) == 1
+    assert "--partition" not in result.stdout
+    assert "--gres=gpu:1" in result.stdout
+    assert "sop-gpu-job-test-01" in result.stdout
+    assert "gpu-job-test.sbatch" in result.stdout
+
+
+def test_main_partition_dry_run_defaults_to_gpu_template_without_part_type() -> None:
+    result = run_submitter("--dry-run", "--partition", "main", "--count", "2")
+
+    assert result.returncode == 0, result.stderr
+    lines = sbatch_lines(result.stdout)
+    assert len(lines) == 2
+    assert result.stdout.count("--partition main") == 2
+    assert result.stdout.count("--gres=gpu:1") == 2
+    assert "sop-gpu-job-test-01" in result.stdout
+    assert "sop-gpu-job-test-02" in result.stdout
+    assert "gpu-job-test.sbatch" in result.stdout
+
+
+def test_cpu_partition_dry_run_uses_cpu_template_without_gpu_gres() -> None:
     result = run_submitter("--dry-run", "--partition", "cpu")
 
     assert result.returncode == 0, result.stderr

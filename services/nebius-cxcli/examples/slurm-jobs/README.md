@@ -22,35 +22,52 @@ directory:
 Run the submit commands below from that login-node SSH session so `sbatch` can
 reach the cluster's Slurm controller.
 
-## Submit CPU Jobs
-
-From this directory:
-
-```bash
-./submit-job-test.sh --partition cpu --count 10
-```
-
-By default, the wrapper submits one CPU job, and each job runs for 30 minutes
-with 35 minutes of requested Slurm wall time. Change the count and duration
-with:
-
-```bash
-./submit-job-test.sh --partition cpu --count 10 --run-minutes 60 --wall-minutes 65
-```
-
 ## Submit GPU Jobs
 
-GPU jobs are submitted through the same script. Select the GPU job template
-with `--part-type gpu`; it defaults to the `gpu` partition and one GPU per job:
+GPU jobs are the default because the normal Nebius Slurm partition is
+`main*`, which is a GPU partition. The smallest default submission is:
 
 ```bash
-./submit-job-test.sh --part-type gpu --partition gpu --count 10 --gpus-per-job 1
+./submit-job-test.sh
 ```
 
-Use `--partition` when your Slurm partition has another name, and use
-`--gpus-per-job` to request more GPUs per job when the partition supports that
-shape. The job stays neutral across L40S, H100, H200, B200, B300, and other
-NVIDIA GPU generations because it does not depend on model-specific features.
+By default, the wrapper submits one GPU job, requests one GPU, and lets Slurm
+use its default partition. Change the count with:
+
+```bash
+./submit-job-test.sh --count 10
+```
+
+The GPU template is also selected automatically for `--partition main`:
+
+```bash
+./submit-job-test.sh --partition main --count 10
+```
+
+Use `--gpus-per-job` to request more GPUs per job when the partition supports
+that shape:
+
+```bash
+./submit-job-test.sh --count 10 --gpus-per-job 2
+```
+
+The job stays neutral across L40S, H100, H200, B200, B300, and other NVIDIA GPU
+generations because it does not depend on model-specific features.
+
+## Submit CPU Jobs
+
+For a CPU partition, choose the CPU job template explicitly:
+
+```bash
+./submit-job-test.sh --part-type cpu --partition cpu --count 10
+```
+
+Each job runs for 30 minutes with 35 minutes of requested Slurm wall time by
+default. Change the count and duration with:
+
+```bash
+./submit-job-test.sh --part-type cpu --partition cpu --count 10 --run-minutes 60 --wall-minutes 65
+```
 
 ## Repeated Jobs And Array Mode
 
@@ -58,20 +75,20 @@ The default submit mode is `loop`, which sends one `sbatch` command per job and
 uses unique names such as `sop-cpu-job-test-01` or `sop-gpu-job-test-01`:
 
 ```bash
-./submit-job-test.sh --partition cpu --count 10
+./submit-job-test.sh --count 10
 ```
 
 For compact bulk submission, use Slurm array mode:
 
 ```bash
-./submit-job-test.sh --part-type gpu --partition gpu --count 10 --submit-mode array
+./submit-job-test.sh --partition main --count 10 --submit-mode array
 ```
 
 Use `--dry-run` to inspect the generated `sbatch` commands without submitting
 anything:
 
 ```bash
-./submit-job-test.sh --part-type gpu --count 3 --dry-run
+./submit-job-test.sh --count 3 --dry-run
 ```
 
 ## Node Sharing And Exclusive Placement
@@ -85,7 +102,7 @@ Use `--exclusive` when you want each job allocation to avoid sharing a node,
 subject to the cluster's Slurm policy:
 
 ```bash
-./submit-job-test.sh --partition cpu --count 10 --exclusive
+./submit-job-test.sh --part-type cpu --partition cpu --count 10 --exclusive
 ```
 
 ## QOS, Account, Requeue, And Output
@@ -93,7 +110,7 @@ subject to the cluster's Slurm policy:
 Pass Slurm accounting options when your cluster requires them:
 
 ```bash
-./submit-job-test.sh --part-type gpu --qos normal --account my-account --requeue
+./submit-job-test.sh --qos normal --account my-account --requeue
 ```
 
 Slurm output files are written to `slurm-smoke-logs/` by default. Change that

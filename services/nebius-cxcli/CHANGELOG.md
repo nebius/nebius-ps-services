@@ -77,7 +77,9 @@ All notable changes to this project are tracked here. This changelog follows
   submitter for repeated CPU/GPU `sbatch` submissions, array mode, optional
   exclusive placement, interactive job-policy demonstrations, and a `login`
   subcommand that stages the examples under `/root/testjobs` before opening a
-  login-node SSH session there.
+  login-node SSH session there. The submitter now defaults to the GPU job
+  template for the standard Nebius `main*` partition without requiring
+  `--part-type`.
 - Extended Soperator Slurm job-policy coverage to chart-driven worker
   reconciliation. Managed `soperator upgrade`, external `ext-soperator
   upgrade`, local `deploy`, and `flux apply` now gate disruptive Soperator
