@@ -80,6 +80,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `helmchart` | Implicit allowed | Create, review, harden, refactor, lint, template, or standardize Helm charts and chart CI. |
 | `linter` | Implicit allowed | Lint and conservatively auto-fix shell, Markdown, and Python files with tools such as `shellcheck`, `markdownlint`, and Ruff. |
 | `nebius` | Implicit allowed | Automate Nebius SDK/cloud workflows for IAM, object storage, VPC, quota, MK8s readiness, GPU/operator decisions, and observability wiring. |
+| `nebius-audit-log` | Explicit only | Query Nebius Control Plane Audit Logs by resource or current subject with bounded, sanitized read-only CLI output. |
 | `python-project` | Implicit allowed | Scaffold or harden Python projects with modern packaging, `src/` layout, Ruff, pytest, Typer, Pydantic, services, APIs, and CI. |
 | `shell-scripting` | Implicit allowed | Create, refactor, or review Bash automation with strict mode, safe argument parsing, idempotency, and readable CLI output. |
 | `system-design-rules` | Implicit allowed | Evaluate system designs, ADRs, architecture options, APIs, data ownership, reliability, security, observability, scale, cost, and team boundaries with a practical design checklist. |
@@ -555,6 +556,13 @@ Python. Use it when you want syntax checks, `shellcheck`, `markdownlint`, or
 `nebius` is the cloud automation skill for Nebius SDK-based workflows,
 including IAM bootstrap, object storage, VPC inspection, route analysis, quota
 checks, observability, and MK8s GPU/operator decisions.
+
+### `nebius-audit-log`
+
+`nebius-audit-log` is an explicit-only read-only workflow for Nebius Control
+Plane Audit Logs queries. It resolves tenant, region, time window, resource or
+current subject filters, keeps page size bounded by default, and sanitizes
+output unless raw output is explicitly requested.
 
 ### `publish-helm`
 

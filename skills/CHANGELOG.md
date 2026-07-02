@@ -121,6 +121,10 @@ All notable changes to the reusable Codex skills are tracked here.
   official Grafana MCP server, wiring it into Codex, refreshing a
   Nebius-managed Grafana token file, discovering Grafana datasources, and
   keeping external Grafana static-key setup guarded and optional.
+- Added the explicit-only `nebius-audit-log` Codex skill for bounded,
+  read-only Nebius Control Plane Audit Logs queries by resource or current
+  subject, with a sanitized CLI helper, official Nebius reference notes, and
+  fake-CLI unit tests.
 - Added skill-local `README.md` files across reusable skills so each skill
   folder has human-facing architecture, workflow, core concept, and file
   responsibility documentation.
