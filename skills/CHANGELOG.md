@@ -134,6 +134,11 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Enhanced `align` into a changed-scope post-change quality gate that
+  coordinates mandatory cross-code validation, `code-review`, `linter`,
+  `apply-security`, and focused test/build lanes while keeping safe-only
+  remediation, incremental scope expansion, and explicit approval for risky
+  security or public-contract changes.
 - Extended `agent-nebius-auth` runtime injection for long-running Bash commands
   by exporting `NEBIUS_AUTH_CREDENTIALS_FILE`, defining a
   `nebius_refresh_token` Bash helper through a restricted temporary `BASH_ENV`

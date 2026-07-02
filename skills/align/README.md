@@ -1,8 +1,9 @@
 # Align
 
-`align` is the repository consistency skill. Use it when a project needs a
-senior review-and-repair pass across implementation, wiring, tests, CI,
-configuration, CLI behavior, help text, documentation, and changelog entries.
+`align` is the repository consistency and post-change quality-gate skill. Use
+it when a project needs a senior review-and-repair pass across implementation,
+wiring, tests, CI, configuration, CLI behavior, help text, documentation, and
+changelog entries.
 
 ## What It Does
 
@@ -10,6 +11,8 @@ configuration, CLI behavior, help text, documentation, and changelog entries.
 - Synthesizes the active thread, relevant Agent Memory, and task-state context
   before deciding what to align.
 - Finds mismatches between code, tests, workflows, docs, and examples.
+- Runs mandatory changed-scope code-review, lint/syntax, security, cross-code,
+  and focused test/build validation lanes before completion.
 - Applies small, evidence-backed fixes instead of broad rewrites.
 - Keeps behavior changes aligned with tests and user-facing documentation.
 - Reports remaining uncertainty instead of guessing.
@@ -32,6 +35,9 @@ Compare code, tests, docs, workflows, and config
 Patch confirmed inconsistencies
   |
   v
+Run code-review, lint/syntax, security, cross-code, and focused test/build gates
+  |
+  v
 Run focused validation and report residual risk
 ```
 
@@ -46,7 +52,11 @@ Run focused validation and report residual risk
 5. Patch the smallest responsible surface.
 6. Update tests, docs, examples, help text, and changelog entries when they are
    affected.
-7. Validate with focused commands first, then broader checks when appropriate.
+7. Validate with mandatory changed-scope gates: cross-code wiring checks,
+   `code-review`, `linter`, `apply-security`, and focused repository-native
+   tests or builds.
+8. Broaden only when shared contracts, security-sensitive surfaces, or unclear
+   dependency boundaries require it.
 
 ## Core Concepts
 
@@ -55,6 +65,10 @@ Run focused validation and report residual risk
   current repository or runtime evidence.
 - Preserve intended behavior unless a bug or stale contract is proven.
 - Prefer one canonical path over compatibility shims unless requested.
+- Keep validation incremental and changed-scope first; do not default to a
+  full-repo scan.
+- Use safe-only remediation: fix low-risk confirmed issues and report risky
+  security, public-contract, or architecture changes for explicit approval.
 - Keep edits easy to review.
 
 ## Files

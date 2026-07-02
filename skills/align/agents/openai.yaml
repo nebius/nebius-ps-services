@@ -1,6 +1,6 @@
 interface:
   display_name: "Align"
-  short_description: "Safe end-to-end code review and alignment"
-  default_prompt: "Use $align to perform a cautious senior code-review style alignment pass: synthesize the current thread, relevant Agent Memory, and task-state context; understand the project contract; fix only clear low-risk issues across code, tests, CI, CLI, docs, and workflows; and report validation plus unresolved risks."
+  short_description: "Changed-scope quality gate and alignment"
+  default_prompt: "Use $align to perform a cautious changed-scope quality gate: synthesize the current thread, relevant Agent Memory, and task-state context; understand the project contract; fix only clear low-risk issues; run code-review, lint/syntax, security, cross-code, and focused test/build validation lanes; and report blockers plus unresolved risks."
 policy:
   allow_implicit_invocation: true

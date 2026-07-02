@@ -37,7 +37,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 
 | Skill | Invocation | Description |
 | --- | --- | --- |
-| `align` | Implicit allowed | Project-wide alignment and review across code, wiring, tests, CI, CLI/help, config, documentation, workflows, and project skills. |
+| `align` | Implicit allowed | Project-wide alignment and changed-scope quality gates across code, wiring, tests, CI, CLI/help, config, documentation, workflows, project skills, code review, lint/syntax, and security. |
 | `align-skill` | Implicit allowed | Review, harden, validate, and improve existing or newly scaffolded Codex or Agent Skill folders after an initial scaffold or draft exists. |
 | `brainstorm` | Implicit allowed | Explore ideas in chat with source-ranked project, repo, skill, internal, vendor, and advisory design-skill context before implementation. |
 | `code-review` | Implicit allowed | Strict implementation-quality review of local diffs, current branches, changed files, or patches for maintainability and structural simplification. |
@@ -212,13 +212,17 @@ together so the workflow reads as one lifecycle.
 
 ### `align`
 
-`align` is the end-to-end repair and consistency skill. Use it when a project
-needs code, module wiring, tests, CI, CLI behavior, config, examples, help
-output, README/design docs, workflows, and applicable project skills reviewed
-together as a cautious senior code-review style alignment pass. It first
-synthesizes the current thread, relevant Agent Memory, and durable task-state
-context, then verifies that context against current repository or runtime
-evidence before making safe fixes.
+`align` is the end-to-end repair, consistency, and post-change quality-gate
+skill. Use it when a project needs code, module wiring, tests, CI, CLI
+behavior, config, examples, help output, README/design docs, workflows, and
+applicable project skills reviewed together as a cautious senior code-review
+style alignment pass. It first synthesizes the current thread, relevant Agent
+Memory, and durable task-state context, then verifies that context against
+current repository or runtime evidence before making safe fixes. Before
+completion, it runs mandatory changed-scope lanes for cross-code validation,
+`code-review`, `linter`, `apply-security`, and focused repository-native tests
+or builds, using safe-only remediation and reporting risky blockers for
+explicit approval.
 
 ### `align-skill`
 

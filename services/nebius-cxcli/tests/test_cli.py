@@ -7690,7 +7690,8 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "Resume contract:" in result.output
     assert "Execution controls:" in result.output
     assert "Execution mode: dry-run; no cluster changes were made." in result.output
-    assert "Slurm job policy: interactive" in result.output
+    assert "Slurm job policy: wait-then-cancel" in result.output
+    assert "Slurm job policy: interactive" not in result.output
     assert "Backup: restore-capable archive" in result.output
     assert "only into a new/replacement cluster" in result.output
     assert "not back onto the original source cluster" in result.output
