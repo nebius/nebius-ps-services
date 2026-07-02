@@ -337,7 +337,10 @@ Codex Agent Nebius authentication. It uses a service account, tenant group,
 project-level access permit, authorized-key credential file, CLI profile, and a
 Codex `PreToolUse` hook that injects short-lived Nebius token environment
 variables into matching Bash commands without returning token material as model
-context. Install or refresh the hook through the root installer, for example
+context. The hook also exports the agent credential file path and wires a Bash
+`nebius_refresh_token` helper through a restricted temporary `BASH_ENV` file
+for long-running raw API scripts. Install or refresh the hook through the root
+installer, for example
 `./install-skills.sh --install-hooks agent-nebius-auth/assets/hooks --register-hooks`;
 the setup script does not patch `$CODEX_HOME/config.toml` and instead records
 the selected project under `~/.nebius` for the hook to read locally.
@@ -761,11 +764,11 @@ CODEX_HOME=~/custom-codex ./install-skills.sh --install-all-hooks --register-hoo
   create or preserve multiple registrations for the same hook event and Python
   hook filename, such as two `Stop` entries pointing at
   `stop_sdlc_continue.py`.
-- When registering `agent-nebius-auth`, the installer also removes the old
-  marked inline `agent-nebius-auth` block from
-  `${CODEX_HOME:-$HOME/.codex}/config.toml`, backs that file up, and migrates
-  the legacy project selector to `~/.nebius/codex-agent-default-project-id`
-  without printing the project ID.
+- `agent-nebius-auth` keeps hook installation canonical: setup writes the
+  project selector under `~/.nebius`, while the root installer syncs hook files
+  and `hooks.json` only. It does not migrate inline `config.toml` hook entries;
+  it rejects stale inline agent-nebius-auth entries before copying hooks or
+  writing `hooks.json`.
 - `--replace-hooks-json` can be combined with `--register-hooks` to replace
   `${CODEX_HOME:-$HOME/.codex}/hooks.json` with a clean file built from the
   selected source manifest or manifests. This removes hand-written and stale

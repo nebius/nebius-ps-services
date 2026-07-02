@@ -374,7 +374,7 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
             PROJECT,
         )
 
-    def test_legacy_install_hook_flag_fails_fast(self) -> None:
+    def test_unsupported_install_hook_flag_fails_fast(self) -> None:
         self.write_state()
         self.write_credential()
 

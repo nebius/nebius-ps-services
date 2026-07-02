@@ -6,6 +6,12 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Changed Nebius SDK operator-auth precedence so the matching Codex agent
+  `NEBIUS_AUTH_CREDENTIALS_FILE`/`NEBIUS_PROFILE` pair with an existing
+  credential file wins over a static `NEBIUS_IAM_TOKEN`, keeping long-running
+  agent clients on renewable service-account credentials while preserving
+  IAM-token fallback for short commands, stale credential paths, and generic
+  runtime credential files.
 - Changed Soperator `create` and `component add` scaffolding to seed
   `slurmNodes.login.sshRootPublicKeys` from the configured MK8s node-group SSH
   public key for newly created Soperator targets so rendered login nodes
@@ -86,6 +92,19 @@ All notable changes to this project are tracked here. This changelog follows
   worker-pod reconciliation on all live worker NodeSets when a live
   SlurmCluster exists, while first installs with no live SlurmCluster skip the
   interactive job gate.
+- Extended managed `soperator upgrade` and external `ext-soperator upgrade`
+  Slurm job gates from running allocations to affected Slurm jobs, including
+  pending jobs in affected partitions or requested/scheduled on affected nodes.
+  Interactive job control now uses selectable affected jobs plus an action
+  selector, pauses the external upgrade status spinner while prompts are active,
+  and shows a per-second countdown dashboard between `squeue` polls. Requeue
+  policies reject pending jobs with guidance to cancel, wait, choose another
+  displayed job, or abort.
+- Changed default Soperator Slurm job-policy handling so TTY runs default to
+  `interactive`, while non-TTY and `--no-interactive` runs default to
+  `wait-then-cancel`. The default `--job-wait-timeout` is now `1h`; after that
+  timeout cxcli cancels only the still-displayed affected jobs and proceeds only
+  after they clear.
 - Changed existing config-backed commands so `client_info.nebius.tenant_id` is
   optional when the command can operate from `project_id` and `region_id`.
   `create` and deployments-root `ext-soperator onboard` still require tenant
@@ -194,7 +213,7 @@ All notable changes to this project are tracked here. This changelog follows
   observations before advancing to the next staged node group.
 - Changed managed `soperator upgrade` into the canonical cxcli-managed
   Soperator cluster upgrade command. It now accepts `--to-chart-version`,
-  optional MK8s node-template target flags, Slurm running-job policy flags, and
+  optional MK8s node-template target flags, Slurm affected-job policy flags, and
   `--backup-dir`; creates a restore-capable local backup with raw Kubernetes
   Secret material plus optional chart-managed MariaDB accounting DB dump before mutation;
   and writes the combined checkpoint/report without requiring a separate
@@ -206,7 +225,7 @@ All notable changes to this project are tracked here. This changelog follows
   create a restore-capable backup before mutation, use
   `.nebius-cxcli/ext-soperator-upgrades/<target>/checkpoint.json`, write
   `generated/reports/ext-soperator-upgrade-report.md` and `.json`, and handle
-  affected-node Slurm jobs with `--job-policy` before MK8s rollout work.
+  affected Slurm jobs with `--job-policy` before MK8s rollout work.
 - Added fast stage-scoped verification after every executed
   `ext-soperator upgrade --execute` stage, including the final post-upgrade
   MK8s and Helm readiness checks. Failed stage verification keeps the same

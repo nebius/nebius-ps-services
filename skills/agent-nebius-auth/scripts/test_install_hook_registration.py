@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fixture tests for installer-managed agent-nebius-auth hook migration."""
+"""Fixture tests for installer-managed agent-nebius-auth hook registration."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ def find_repo_root() -> Path | None:
     return None
 
 
-class AgentNebiusAuthHookInstallMigrationTest(unittest.TestCase):
+class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
     def setUp(self) -> None:
         self.repo_root = find_repo_root()
         if self.repo_root is None:
@@ -88,6 +88,38 @@ class AgentNebiusAuthHookInstallMigrationTest(unittest.TestCase):
             check=False,
         )
 
+    def run_installer_copy_only(self) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                "bash",
+                str(self.installer),
+                "--install-hooks",
+                HOOK_SOURCE,
+            ],
+            cwd=str(self.repo_root),
+            env=self.env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    def run_installer_replace_hooks(self) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                "bash",
+                str(self.installer),
+                "--install-hooks",
+                HOOK_SOURCE,
+                "--register-hooks",
+                "--replace-hooks-json",
+            ],
+            cwd=str(self.repo_root),
+            env=self.env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
     def run_all_hooks_installer(self) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [
@@ -103,7 +135,21 @@ class AgentNebiusAuthHookInstallMigrationTest(unittest.TestCase):
             check=False,
         )
 
-    def write_legacy_config_block(self) -> None:
+    def run_all_hooks_installer_copy_only(self) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                "bash",
+                str(self.installer),
+                "--install-all-hooks",
+            ],
+            cwd=str(self.repo_root),
+            env=self.env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    def write_inline_config_block(self) -> None:
         self.config_path().write_text(
             textwrap.dedent(
                 f"""\
@@ -124,74 +170,87 @@ class AgentNebiusAuthHookInstallMigrationTest(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def test_register_hooks_removes_legacy_inline_config_block(self) -> None:
-        self.write_legacy_config_block()
+    def write_unmarked_inline_config_entry(self) -> None:
+        self.config_path().write_text(
+            textwrap.dedent(
+                f"""\
+                model = "gpt-test"
+
+                [[hooks.PreToolUse]]
+                matcher = "^Bash$"
+
+                [[hooks.PreToolUse.hooks]]
+                type = "command"
+                command = 'CODEX_NEBIUS_PROJECT_ID={PROJECT} python3 /tmp/pre_tool_use_nebius_auth.py'
+                timeout = 30
+                """
+            ),
+            encoding="utf-8",
+        )
+
+    def assert_failed_before_mutation(
+        self,
+        result: subprocess.CompletedProcess[str],
+        original_config: str,
+    ) -> None:
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.config_path().read_text(encoding="utf-8"), original_config)
+        self.assertFalse(self.selector_path().exists())
+        self.assertEqual(list(self.codex_home.glob("config.toml.bak.agent-nebius-auth.*")), [])
+        self.assertFalse((self.codex_home / "hooks.json").exists())
+        self.assertFalse(self.installed_hook_path().exists())
+        self.assertIn("inline config.toml hook entry detected", result.stderr)
+        self.assertIn("Remove the inline agent-nebius-auth hook entry", result.stdout)
+        self.assertNotIn(PROJECT, result.stdout)
+        self.assertNotIn(PROJECT, result.stderr)
+
+    def test_register_hooks_fails_when_marked_inline_config_toml_hook_exists(self) -> None:
+        self.write_inline_config_block()
+        original_config = self.config_path().read_text(encoding="utf-8")
 
         result = self.run_installer()
 
-        self.assertEqual(
-            result.returncode,
-            0,
-            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}",
-        )
-        config_text = self.config_path().read_text(encoding="utf-8")
-        self.assertIn('model = "gpt-test"', config_text)
-        self.assertNotIn("agent-nebius-auth managed block", config_text)
-        self.assertNotIn("pre_tool_use_nebius_auth.py", config_text)
-        self.assertEqual(
-            self.selector_path().read_text(encoding="utf-8").strip(),
-            PROJECT,
-        )
-        self.assertEqual(oct(self.selector_path().stat().st_mode & 0o777), "0o600")
-        backups = list(self.codex_home.glob("config.toml.bak.agent-nebius-auth.*"))
-        self.assertEqual(len(backups), 1)
-        self.assertEqual(len(self.hook_registrations()), 1)
-        self.assertIn(
-            "Removed legacy agent-nebius-auth inline config hook block(s): 1",
-            result.stdout,
-        )
-        self.assertNotIn(PROJECT, result.stdout)
-        self.assertNotIn(PROJECT, result.stderr)
+        self.assert_failed_before_mutation(result, original_config)
 
-    def test_install_all_hooks_registers_and_migrates_legacy_inline_config(self) -> None:
-        self.write_legacy_config_block()
+    def test_copy_only_install_fails_when_inline_config_toml_hook_exists(self) -> None:
+        self.write_inline_config_block()
+        original_config = self.config_path().read_text(encoding="utf-8")
+
+        result = self.run_installer_copy_only()
+
+        self.assert_failed_before_mutation(result, original_config)
+
+    def test_register_hooks_fails_when_unmarked_inline_config_toml_hook_exists(self) -> None:
+        self.write_unmarked_inline_config_entry()
+        original_config = self.config_path().read_text(encoding="utf-8")
+
+        result = self.run_installer()
+
+        self.assert_failed_before_mutation(result, original_config)
+
+    def test_replace_hooks_fails_when_inline_config_toml_hook_exists(self) -> None:
+        self.write_inline_config_block()
+        original_config = self.config_path().read_text(encoding="utf-8")
+
+        result = self.run_installer_replace_hooks()
+
+        self.assert_failed_before_mutation(result, original_config)
+
+    def test_install_all_hooks_fails_when_inline_config_toml_hook_exists(self) -> None:
+        self.write_inline_config_block()
+        original_config = self.config_path().read_text(encoding="utf-8")
 
         result = self.run_all_hooks_installer()
 
-        self.assertEqual(
-            result.returncode,
-            0,
-            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}",
-        )
-        config_text = self.config_path().read_text(encoding="utf-8")
-        self.assertIn('model = "gpt-test"', config_text)
-        self.assertNotIn("agent-nebius-auth managed block", config_text)
-        self.assertNotIn("pre_tool_use_nebius_auth.py", config_text)
-        self.assertEqual(
-            self.selector_path().read_text(encoding="utf-8").strip(),
-            PROJECT,
-        )
-        self.assertEqual(oct(self.selector_path().stat().st_mode & 0o777), "0o600")
-        self.assertEqual(len(self.hook_registrations()), 1)
-        self.assertIn(
-            "Removed legacy agent-nebius-auth inline config hook block(s): 1",
-            result.stdout,
-        )
-        self.assertIn("Hooks status:", result.stdout)
-        self.assertIn("changed agent-nebius-auth/assets/hooks", result.stdout)
-        self.assertIn("changed config-codex/assets/hooks", result.stdout)
-        self.assertIn("changed sdlc-start/assets/hooks", result.stdout)
-        self.assertIn("files: updated 1", result.stdout)
-        self.assertIn("registrations: added 1", result.stdout)
-        self.assertIn("registrations: added 2", result.stdout)
-        self.assertIn("Summary: files updated 10, unchanged 0; registrations added 5", result.stdout)
-        self.assertNotIn("Discovered hook source directories", result.stdout)
-        self.assertNotIn("Hook files:", result.stdout)
-        self.assertNotIn("Hook registrations:", result.stdout)
-        self.assertNotIn("This did not modify hooks.json", result.stdout)
-        self.assertIn("Action required: hook files or registrations changed", result.stderr)
-        self.assertNotIn(PROJECT, result.stdout)
-        self.assertNotIn(PROJECT, result.stderr)
+        self.assert_failed_before_mutation(result, original_config)
+
+    def test_copy_only_install_all_fails_when_inline_config_toml_hook_exists(self) -> None:
+        self.write_inline_config_block()
+        original_config = self.config_path().read_text(encoding="utf-8")
+
+        result = self.run_all_hooks_installer_copy_only()
+
+        self.assert_failed_before_mutation(result, original_config)
 
     def test_repeated_install_all_hooks_reports_unchanged_by_source(self) -> None:
         first = self.run_all_hooks_installer()
@@ -220,35 +279,7 @@ class AgentNebiusAuthHookInstallMigrationTest(unittest.TestCase):
         self.assertNotIn("This did not modify hooks.json", second.stdout)
         self.assertNotIn("Action required: hook files or registrations changed", second.stderr)
 
-    def test_selector_conflict_fails_before_registering_hooks(self) -> None:
-        self.write_legacy_config_block()
-        self.selector_path().write_text("project-other\n", encoding="utf-8")
-        self.selector_path().chmod(0o600)
-
-        result = self.run_installer()
-
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("already selects a different project", result.stderr)
-        self.assertNotIn(PROJECT, result.stdout)
-        self.assertNotIn(PROJECT, result.stderr)
-        self.assertIn(
-            "agent-nebius-auth managed block",
-            self.config_path().read_text(encoding="utf-8"),
-        )
-        self.assertEqual(
-            self.selector_path().read_text(encoding="utf-8").strip(),
-            "project-other",
-        )
-        self.assertFalse((self.codex_home / "hooks.json").exists())
-        self.assertFalse(self.installed_hook_path().exists())
-        self.assertEqual(
-            list(self.codex_home.glob("config.toml.bak.agent-nebius-auth.*")),
-            [],
-        )
-
     def test_repeated_register_hooks_is_idempotent_and_hook_runs(self) -> None:
-        self.write_legacy_config_block()
-
         first = self.run_installer()
         second = self.run_installer()
 
@@ -261,28 +292,18 @@ class AgentNebiusAuthHookInstallMigrationTest(unittest.TestCase):
             self.assertNotIn(PROJECT, result.stdout)
             self.assertNotIn(PROJECT, result.stderr)
 
-        config_text = self.config_path().read_text(encoding="utf-8")
-        self.assertIn('model = "gpt-test"', config_text)
-        self.assertNotIn("agent-nebius-auth managed block", config_text)
-        self.assertNotIn("pre_tool_use_nebius_auth.py", config_text)
-        self.assertEqual(
-            self.selector_path().read_text(encoding="utf-8").strip(),
-            PROJECT,
-        )
-        self.assertEqual(oct(self.selector_path().stat().st_mode & 0o777), "0o600")
-        self.assertEqual(
-            len(list(self.codex_home.glob("config.toml.bak.agent-nebius-auth.*"))),
-            1,
-        )
+        self.assertFalse(self.config_path().exists())
+        self.assertFalse(self.selector_path().exists())
         self.assertEqual(len(self.hook_registrations()), 1)
         self.assertTrue(self.installed_hook_path().is_file())
         self.assertIn("registrations: unchanged 1", second.stdout)
         self.assertIn("Summary: files updated 0, unchanged 1; registrations unchanged 1", second.stdout)
         self.assertNotIn("Action required: hook files or registrations changed", second.stderr)
-        self.assertNotIn("Removed legacy agent-nebius-auth inline config hook", second.stdout)
 
         credential = self.home / ".nebius" / f"codex-agent-authkey.{PROJECT}.json"
         credential.write_text("{}", encoding="utf-8")
+        self.selector_path().write_text(f"{PROJECT}\n", encoding="utf-8")
+        self.selector_path().chmod(0o600)
         call_log = self.root / "nebius-calls.log"
         bin_dir = self.root / "bin"
         bin_dir.mkdir()
@@ -291,9 +312,17 @@ class AgentNebiusAuthHookInstallMigrationTest(unittest.TestCase):
             textwrap.dedent(
                 """\
                 #!/bin/sh
+                call_count=1
+                if [ -f "$FAKE_NEBIUS_CALL_LOG" ]; then
+                  call_count=$(($(wc -l < "$FAKE_NEBIUS_CALL_LOG") + 1))
+                fi
                 printf '%s\n' "$*" >> "$FAKE_NEBIUS_CALL_LOG"
                 if [ "$1" = "iam" ] && [ "$2" = "get-access-token" ]; then
-                  printf '%s\n' fake-token
+                  if [ -n "${NEBIUS_IAM_TOKEN:-}" ] || [ -n "${TOKEN:-}" ]; then
+                    printf 'stale token env reached token mint\n' >&2
+                    exit 65
+                  fi
+                  printf 'fake-token-%s\n' "$call_count"
                   exit 0
                 fi
                 exit 64
@@ -304,20 +333,28 @@ class AgentNebiusAuthHookInstallMigrationTest(unittest.TestCase):
         fake_nebius.chmod(0o700)
         exec_env = self.env.copy()
         exec_env["PATH"] = f"{bin_dir}{os.pathsep}{exec_env['PATH']}"
-        exec_env["EXPECTED_TEST_TOKEN"] = "fake-token"
+        exec_env["EXPECTED_TEST_TOKEN"] = "fake-token-1"
+        exec_env["EXPECTED_CHILD_TOKEN"] = "fake-token-2"
+        exec_env["EXPECTED_CREDENTIALS_FILE"] = str(credential)
         exec_env["FAKE_NEBIUS_CALL_LOG"] = str(call_log)
+        exec_env["NEBIUS_IAM_TOKEN"] = "stale-parent-token"
+        exec_env["TOKEN"] = "stale-parent-token"
 
         payload = {
             "hook_event_name": "PreToolUse",
             "tool_name": "Bash",
             "tool_input": {
                 "command": (
+                    "bash -c 'nebius_refresh_token; "
+                    "test \"$NEBIUS_IAM_TOKEN\" = \"$EXPECTED_CHILD_TOKEN\"' && "
                     "python3 -c 'import os; "
                     "expected = os.environ[\"EXPECTED_TEST_TOKEN\"]; "
                     "assert os.environ[\"NEBIUS_IAM_TOKEN\"] == expected; "
                     "assert os.environ[\"TOKEN\"] == expected; "
                     f"assert os.environ[\"NEBIUS_PROFILE\"] == \"codex-agent-{PROJECT}\"; "
-                    f"assert os.environ[\"NEBIUS_PROJECT_ID\"] == \"{PROJECT}\"' "
+                    f"assert os.environ[\"NEBIUS_PROJECT_ID\"] == \"{PROJECT}\"; "
+                    "assert os.environ[\"NEBIUS_AUTH_CREDENTIALS_FILE\"] == "
+                    "os.environ[\"EXPECTED_CREDENTIALS_FILE\"]' "
                     "# api.nebius.cloud"
                 ),
             },
@@ -341,6 +378,13 @@ class AgentNebiusAuthHookInstallMigrationTest(unittest.TestCase):
         hook_output = json.loads(hook_result.stdout)
         updated_command = hook_output["hookSpecificOutput"]["updatedInput"]["command"]
         self.assertIn("nebius iam get-access-token", updated_command)
+        self.assertIn("nebius_refresh_token() {", updated_command)
+        self.assertIn("export BASH_ENV=\"$NEBIUS_REFRESH_BASH_ENV\"", updated_command)
+        self.assertNotIn("NEBIUS_REFRESH_PREVIOUS_BASH_ENV", updated_command)
+        self.assertIn("mktemp", updated_command)
+        self.assertIn('if [ -n "${BASH_VERSION:-}" ]; then', updated_command)
+        self.assertIn("export -f nebius_refresh_token", updated_command)
+        self.assertIn("export NEBIUS_AUTH_CREDENTIALS_FILE=", updated_command)
         self.assertNotIn("fake-token", hook_result.stdout)
         self.assertNotIn("fake-token", hook_result.stderr)
         self.assertNotIn("fake-token", updated_command)
@@ -357,7 +401,10 @@ class AgentNebiusAuthHookInstallMigrationTest(unittest.TestCase):
 
         self.assertEqual(
             call_log.read_text(encoding="utf-8").splitlines(),
-            [f"iam get-access-token --profile codex-agent-{PROJECT}"],
+            [
+                f"iam get-access-token --profile codex-agent-{PROJECT}",
+                f"iam get-access-token --profile codex-agent-{PROJECT}",
+            ],
         )
 
         self.assertEqual(

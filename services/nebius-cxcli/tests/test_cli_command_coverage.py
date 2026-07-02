@@ -322,10 +322,7 @@ def test_soperator_upgrade_config_fingerprint_ignores_transient_node_state(
         assert "scontrol show nodes" not in command
         if command.startswith("sinfo "):
             assert "%t" not in command
-            stdout = (
-                "worker-cpu-0-0|cpu*|cpu|(null)\n"
-                "worker-gpu-0-0|gpu|gpu,cuda|gpu:1(S:0)\n"
-            )
+            stdout = "worker-cpu-0-0|cpu*|cpu|(null)\nworker-gpu-0-0|gpu|gpu,cuda|gpu:1(S:0)\n"
         elif "scontrol show partition" in command:
             stdout = "PartitionName=cpu Nodes=worker-cpu-0-0 State=UP\n"
         elif "scontrol show config" in command:
@@ -3348,9 +3345,7 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
         ("soperator-validation", "Postflight"),
     ]
     report = json.loads(
-        (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_JSON_FILENAME).read_text(
-            encoding="utf-8"
-        )
+        (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_JSON_FILENAME).read_text(encoding="utf-8")
     )
     assert report["upgrade_safety"]["post_upgrade_verification"]["status"] == "passed"
     assert report["protected_customer_state"]["before_hash"]
@@ -3479,17 +3474,13 @@ def test_soperator_upgrade_fast_stage_failure_blocks_next_stage(
         paths.project_dir / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR / "mk8s" / "checkpoint.json"
     )
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    chart_verification = checkpoint["stage_verification"]["soperator-chart"][
-        "fast_verification"
-    ]
+    chart_verification = checkpoint["stage_verification"]["soperator-chart"]["fast_verification"]
     assert chart_verification["status"] == "failed"
     assert chart_verification["passed"] is False
     assert checkpoint["status"] == "failed"
 
     report = json.loads(
-        (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_JSON_FILENAME).read_text(
-            encoding="utf-8"
-        )
+        (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_JSON_FILENAME).read_text(encoding="utf-8")
     )
     stage_verification = {item["phase_id"]: item for item in report["stage_verification"]}
     assert stage_verification["soperator-chart"]["status"] == "failed"
@@ -3602,7 +3593,9 @@ def test_soperator_upgrade_mk8s_only_runs_node_template_phase_without_raw_kubect
     payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
     assert payload["apps"]["charts"][0]["version"] == "0.25.0"
     assert "slurm-jobs" in calls
-    mk8s_calls = [call for call in calls if isinstance(call, tuple) and call[0] == "mk8s-node-template"]
+    mk8s_calls = [
+        call for call in calls if isinstance(call, tuple) and call[0] == "mk8s-node-template"
+    ]
     assert len(mk8s_calls) == 1
     assert mk8s_calls[0][1]["to_k8s_version"] == "1.33"
     assert mk8s_calls[0][1]["node_group"] == "worker"
@@ -3612,30 +3605,26 @@ def test_soperator_upgrade_mk8s_only_runs_node_template_phase_without_raw_kubect
     )
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert any(
-        item["id"] == "mk8s-node-template"
-        and item["top_level_stage"] == "MK8s Node Upgrades"
+        item["id"] == "mk8s-node-template" and item["top_level_stage"] == "MK8s Node Upgrades"
         for item in checkpoint["phase_history"]
     )
     assert any(
-        item["id"] == "post-mk8s-validation"
-        and item["top_level_stage"] == "MK8s Node Upgrades"
+        item["id"] == "post-mk8s-validation" and item["top_level_stage"] == "MK8s Node Upgrades"
         for item in checkpoint["phase_history"]
     )
     checkpoint_stage_verification = checkpoint["stage_verification"]
-    assert checkpoint_stage_verification["mk8s-node-template"]["fast_verification"][
-        "status"
-    ] == "passed"
-    assert checkpoint_stage_verification["post-mk8s-validation"]["fast_verification"][
-        "status"
-    ] == "passed"
-    report = json.loads(
-        (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_JSON_FILENAME).read_text(
-            encoding="utf-8"
-        )
+    assert (
+        checkpoint_stage_verification["mk8s-node-template"]["fast_verification"]["status"]
+        == "passed"
     )
-    report_stage_verification = {
-        item["phase_id"]: item for item in report["stage_verification"]
-    }
+    assert (
+        checkpoint_stage_verification["post-mk8s-validation"]["fast_verification"]["status"]
+        == "passed"
+    )
+    report = json.loads(
+        (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_JSON_FILENAME).read_text(encoding="utf-8")
+    )
+    report_stage_verification = {item["phase_id"]: item for item in report["stage_verification"]}
     assert report_stage_verification["mk8s-node-template"]["status"] == "passed"
     assert report_stage_verification["post-mk8s-validation"]["status"] == "passed"
     assert report_stage_verification["soperator-chart"]["status"] == "passed"
@@ -3715,9 +3704,7 @@ def test_soperator_upgrade_dry_run_blocks_skipped_k8s_minor_before_mutation(
     assert "Managed Kubernetes hop (execution blocked)" in rendered
     assert "Current Kubernetes version: `1.31`" in rendered
     assert "Requested Kubernetes target: `1.33`" in rendered
-    assert "Requested path would skip multiple live operations: 1.31 -> 1.32 -> 1.33" in (
-        rendered
-    )
+    assert "Requested path would skip multiple live operations: 1.31 -> 1.32 -> 1.33" in (rendered)
     assert "Run the next hop first with --to-k8s-version 1.32" in rendered
     assert calls == ["migration-guard"]
 
@@ -4092,7 +4079,7 @@ def test_soperator_upgrade_chart_only_job_policy_fail_blocks_before_chart_apply(
 
     def _job_gate(**kwargs: Any) -> tuple[str, ...]:
         calls.append(("slurm-gate", kwargs["node_names"], kwargs["policy"]))
-        raise RuntimeError("Running Slurm jobs exist on affected nodes.")
+        raise RuntimeError("Affected Slurm jobs exist for the upgrade scope.")
 
     monkeypatch.setattr(cli, "_handle_soperator_upgrade_running_jobs", _job_gate)
     _stub_soperator_upgrade_runtime(monkeypatch, paths, calls)
@@ -4102,7 +4089,7 @@ def test_soperator_upgrade_chart_only_job_policy_fail_blocks_before_chart_apply(
         lambda **_kwargs: ("worker-gpu-0-0",),
     )
 
-    with pytest.raises(RuntimeError, match="Running Slurm jobs exist"):
+    with pytest.raises(RuntimeError, match="Affected Slurm jobs exist"):
         _run_soperator_upgrade_for_test(
             config_path=paths.config_path,
             to_chart_version="0.26.0",
@@ -4150,20 +4137,166 @@ def test_soperator_upgrade_slurm_node_filter_maps_worker_pod_and_instance_aliase
     assert commands == ["scontrol show nodes"]
 
 
+def _soperator_slurm_job(
+    job_id: str = "42",
+    *,
+    user: str = "alice",
+    state: str = "RUNNING",
+    partition: str = "gpu",
+    allocated_nodes: str = "worker-gpu-0-0",
+    requested_nodes: str = "",
+    scheduled_nodes: str = "",
+    reason: str = "",
+    elapsed: str = "00:05",
+    limit: str = "30:00",
+    remaining: str = "25:00",
+    name: str = "restartable-train",
+    impact_scope: str = "allocated-node",
+) -> cli.AffectedSlurmJob:
+    return cli.AffectedSlurmJob(
+        job_id=job_id,
+        user=user,
+        state=state,
+        partition=partition,
+        allocated_nodes=allocated_nodes,
+        requested_nodes=requested_nodes,
+        scheduled_nodes=scheduled_nodes,
+        reason=reason,
+        elapsed=elapsed,
+        limit=limit,
+        remaining=remaining,
+        name=name,
+        impact_scope=impact_scope,
+    )
+
+
+def test_soperator_upgrade_job_policy_defaults_by_terminal_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: False)
+
+    assert cli._soperator_upgrade_job_policy(policy=None, interactive=True) == "wait-then-cancel"
+    assert cli._soperator_upgrade_job_policy(policy=None, interactive=False) == "wait-then-cancel"
+    assert cli._soperator_runtime_job_policy(None) == "wait-then-cancel"
+
+    with pytest.raises(RuntimeError, match="interactive terminal"):
+        cli._soperator_upgrade_job_policy(policy="interactive", interactive=True)
+    with pytest.raises(RuntimeError, match="interactive terminal"):
+        cli._soperator_runtime_job_policy("interactive")
+
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
+
+    assert cli._soperator_upgrade_job_policy(policy=None, interactive=True) == "interactive"
+    assert cli._soperator_upgrade_job_policy(policy=None, interactive=False) == "wait-then-cancel"
+    assert cli._soperator_runtime_job_policy(None) == "interactive"
+
+
+def test_soperator_upgrade_interactive_policy_rejects_non_tty_before_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prompted: list[str] = []
+
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: False)
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_slurm_nodes_for_rollout",
+        lambda **_kwargs: ("worker-0",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_affected_jobs",
+        lambda **_kwargs: (_soperator_slurm_job(job_id="12"),),
+    )
+    monkeypatch.setattr(
+        cli.typer,
+        "prompt",
+        lambda *_args, **_kwargs: prompted.append("prompted") or "",
+    )
+
+    with pytest.raises(RuntimeError, match="interactive terminal"):
+        cli._handle_soperator_upgrade_running_jobs(
+            namespace="soperator",
+            node_group="",
+            policy="interactive",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            wait_timeout_seconds=0,
+            refresh_interval_seconds=1,
+            checkpoint_id="checkpoint",
+        )
+
+    assert prompted == []
+
+
+def test_soperator_upgrade_wait_then_cancel_requires_positive_timeout() -> None:
+    with pytest.raises(RuntimeError, match="positive --job-wait-timeout"):
+        cli._handle_soperator_upgrade_running_jobs(
+            namespace="soperator",
+            node_group="",
+            policy="wait-then-cancel",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            wait_timeout_seconds=0,
+            refresh_interval_seconds=1,
+            checkpoint_id="checkpoint",
+        )
+
+
+def test_soperator_upgrade_prompt_selector_includes_pending_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_titles: list[str] = []
+
+    class _FakePrompt:
+        def __init__(self, result: object) -> None:
+            self._result = result
+
+        def ask(self) -> object:
+            return self._result
+
+    def _checkbox(*_args: object, **kwargs: object) -> _FakePrompt:
+        captured_titles.extend(str(choice.title) for choice in kwargs["choices"])
+        return _FakePrompt(["12"])
+
+    def _select(*_args: object, **_kwargs: object) -> _FakePrompt:
+        return _FakePrompt("cancel-selected")
+
+    fake_questionary = SimpleNamespace(
+        Choice=lambda *, title, value: SimpleNamespace(title=title, value=value),
+        checkbox=_checkbox,
+        select=_select,
+    )
+    monkeypatch.setitem(sys.modules, "questionary", fake_questionary)
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
+    monkeypatch.setattr(cli, "_configure_questionary_checkbox_symbols", lambda: None)
+    monkeypatch.setattr(cli, "_ask_questionary_with_prefix_jumps", lambda question: question.ask())
+
+    action, selected = cli._prompt_soperator_upgrade_job_control(
+        (
+            _soperator_slurm_job(
+                job_id="12",
+                state="PENDING",
+                partition="main",
+                allocated_nodes="",
+                reason="Priority",
+                remaining="unknown",
+                name="pending-train",
+                impact_scope="pending-partition",
+            ),
+        )
+    )
+
+    assert action == "cancel-selected"
+    assert selected == ("12",)
+    assert captured_titles == [
+        "12 | PENDING | alice | main | alloc=- | reason=Priority | remaining=unknown | pending-train"
+    ]
+
+
 def test_soperator_upgrade_fail_policy_does_not_drain_when_jobs_exist(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    job = cli._SoperatorUpgradeSlurmJob(
-        job_id="42",
-        user="alice",
-        state="RUNNING",
-        partition="gpu",
-        nodes="worker-gpu-0-0",
-        elapsed="00:05",
-        limit="30:00",
-        remaining="25:00",
-        name="restartable-train",
-    )
+    job = _soperator_slurm_job()
     drained: list[str] = []
 
     monkeypatch.setattr(
@@ -4178,11 +4311,11 @@ def test_soperator_upgrade_fail_policy_does_not_drain_when_jobs_exist(
     )
     monkeypatch.setattr(
         cli,
-        "_soperator_upgrade_running_jobs",
+        "_soperator_upgrade_affected_jobs",
         lambda **_kwargs: (job,),
     )
 
-    with pytest.raises(RuntimeError, match="Running Slurm jobs exist"):
+    with pytest.raises(RuntimeError, match="Affected Slurm jobs exist"):
         cli._handle_soperator_upgrade_running_jobs(
             namespace="soperator",
             node_group="",
@@ -4197,18 +4330,153 @@ def test_soperator_upgrade_fail_policy_does_not_drain_when_jobs_exist(
     assert drained == []
 
 
+def test_soperator_upgrade_pending_job_blocks_fail_policy_without_drain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _soperator_slurm_job(
+        job_id="12",
+        state="PENDING",
+        partition="main",
+        allocated_nodes="",
+        reason="Priority",
+        remaining="unknown",
+        impact_scope="pending-partition",
+    )
+    drained: list[str] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_slurm_nodes_for_rollout",
+        lambda **_kwargs: ("worker-0",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_drain_slurm_nodes",
+        lambda **_kwargs: drained.append("drain") or ("worker-0",),
+    )
+    monkeypatch.setattr(cli, "_soperator_upgrade_affected_jobs", lambda **_kwargs: (job,))
+
+    with pytest.raises(RuntimeError, match="Affected Slurm jobs exist"):
+        cli._handle_soperator_upgrade_running_jobs(
+            namespace="soperator",
+            node_group="",
+            policy="fail",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            wait_timeout_seconds=0,
+            refresh_interval_seconds=1,
+            checkpoint_id="checkpoint",
+        )
+
+    assert drained == []
+
+
+def test_soperator_upgrade_affected_jobs_include_scoped_pending_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[str] = []
+
+    def _login_command(
+        _namespace: str,
+        command: str,
+        **_kwargs: Any,
+    ) -> cli._SoperatorUpgradeCommandResult:
+        commands.append(command)
+        if command == "scontrol show node worker-0 -o":
+            return cli._SoperatorUpgradeCommandResult(
+                args=("kubectl", "exec"),
+                returncode=0,
+                stdout="NodeName=worker-0 Partitions=main State=IDLE",
+                stderr="",
+            )
+        if f"-t {cli._SOPERATOR_UPGRADE_ACTIVE_SQUEUE_STATES}" in command:
+            return cli._SoperatorUpgradeCommandResult(
+                args=("kubectl", "exec"),
+                returncode=0,
+                stdout=(
+                    "9|root|RUNNING|main|worker-0|||None|0:08|35:00|34:52|active\n"
+                    "10|root|SUSPENDED|main|worker-0|||None|0:09|35:00|34:51|suspended\n"
+                ),
+                stderr="",
+            )
+        if "-t PENDING" in command and "-p main" in command:
+            return cli._SoperatorUpgradeCommandResult(
+                args=("kubectl", "exec"),
+                returncode=0,
+                stdout="12|root|PENDING|main||||Priority|0:00|35:00|35:00|pending-main\n",
+                stderr="",
+            )
+        if "-t PENDING" in command:
+            return cli._SoperatorUpgradeCommandResult(
+                args=("kubectl", "exec"),
+                returncode=0,
+                stdout=(
+                    "12|root|PENDING|main||||Priority|0:00|35:00|35:00|pending-main\n"
+                    "13|root|PENDING|other||||Resources|0:00|35:00|35:00|unrelated\n"
+                    "14|root|PENDING|other||worker-0||Priority|0:00|35:00|35:00|pending-node\n"
+                ),
+                stderr="",
+            )
+        raise AssertionError(command)
+
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_login_command", _login_command)
+
+    jobs = cli._soperator_upgrade_affected_jobs(
+        namespace="soperator",
+        node_names=("worker-0",),
+    )
+
+    assert [job.job_id for job in jobs] == ["9", "10", "12", "14"]
+    assert jobs[1].state == "SUSPENDED"
+    assert jobs[2].impact_scope == "pending-partition"
+    assert jobs[3].impact_scope == "pending-node"
+    assert any("-p main" in command for command in commands if "-t PENDING" in command)
+    assert any("-p main" not in command for command in commands if "-t PENDING" in command)
+
+
+def test_soperator_upgrade_affected_jobs_fail_closed_when_partition_lookup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[str] = []
+
+    def _login_command(
+        _namespace: str,
+        command: str,
+        **_kwargs: Any,
+    ) -> cli._SoperatorUpgradeCommandResult:
+        commands.append(command)
+        if command == "scontrol show node worker-0 -o":
+            return cli._SoperatorUpgradeCommandResult(
+                args=("kubectl", "exec"),
+                returncode=1,
+                stdout="",
+                stderr="slurmctld unavailable",
+            )
+        raise AssertionError(command)
+
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_login_command", _login_command)
+
+    with pytest.raises(RuntimeError, match="could not inspect Slurm partitions"):
+        cli._soperator_upgrade_affected_jobs(
+            namespace="soperator",
+            node_names=("worker-0",),
+        )
+
+    assert commands == ["scontrol show node worker-0 -o"]
+
+
 def test_soperator_upgrade_cancel_selected_policy_cancels_jobs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     commands: list[str] = []
     queue_results = [
         (
-            cli._SoperatorUpgradeSlurmJob(
+            _soperator_slurm_job(
                 job_id="42",
                 user="alice",
                 state="RUNNING",
                 partition="gpu",
-                nodes="worker-gpu-0-0",
+                allocated_nodes="worker-gpu-0-0",
                 elapsed="00:05",
                 limit="30:00",
                 remaining="25:00",
@@ -4231,14 +4499,15 @@ def test_soperator_upgrade_cancel_selected_policy_cancels_jobs(
     )
     monkeypatch.setattr(
         cli,
-        "_soperator_upgrade_running_jobs",
+        "_soperator_upgrade_affected_jobs",
         lambda **_kwargs: queue_results.pop(0),
     )
     monkeypatch.setattr(
         cli,
         "_run_soperator_upgrade_login_command",
-        lambda _namespace, command, **_kwargs: commands.append(command)
-        or SimpleNamespace(stdout="", stderr="", returncode=0),
+        lambda _namespace, command, **_kwargs: (
+            commands.append(command) or SimpleNamespace(stdout="", stderr="", returncode=0)
+        ),
     )
 
     restored = cli._handle_soperator_upgrade_running_jobs(
@@ -4256,29 +4525,128 @@ def test_soperator_upgrade_cancel_selected_policy_cancels_jobs(
     assert commands == ["scancel 42"]
 
 
+def test_soperator_upgrade_cancel_selected_policy_cancels_pending_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[str] = []
+    queue_results = [
+        (
+            _soperator_slurm_job(
+                job_id="12",
+                state="PENDING",
+                partition="main",
+                allocated_nodes="",
+                reason="Priority",
+                impact_scope="pending-partition",
+            ),
+        ),
+        (),
+        (),
+    ]
+
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_slurm_nodes_for_rollout",
+        lambda **_kwargs: ("worker-0",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_drain_slurm_nodes",
+        lambda **_kwargs: ("worker-0",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_affected_jobs",
+        lambda **_kwargs: queue_results.pop(0),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_soperator_upgrade_login_command",
+        lambda _namespace, command, **_kwargs: (
+            commands.append(command) or SimpleNamespace(stdout="", stderr="", returncode=0)
+        ),
+    )
+
+    restored = cli._handle_soperator_upgrade_running_jobs(
+        namespace="soperator",
+        node_group="",
+        policy="cancel-selected",
+        cancel_job_ids=("12",),
+        requeue_job_ids=(),
+        wait_timeout_seconds=0,
+        refresh_interval_seconds=1,
+        checkpoint_id="checkpoint",
+    )
+
+    assert restored == ("worker-0",)
+    assert commands == ["scancel 12"]
+
+
+def test_soperator_upgrade_requeue_selected_rejects_pending_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[str] = []
+    job = _soperator_slurm_job(
+        job_id="12",
+        state="PENDING",
+        partition="main",
+        allocated_nodes="",
+        reason="Priority",
+        impact_scope="pending-partition",
+    )
+
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_slurm_nodes_for_rollout",
+        lambda **_kwargs: ("worker-0",),
+    )
+    monkeypatch.setattr(cli, "_soperator_upgrade_affected_jobs", lambda **_kwargs: (job,))
+    monkeypatch.setattr(
+        cli,
+        "_run_soperator_upgrade_login_command",
+        lambda _namespace, command, **_kwargs: (
+            commands.append(command) or SimpleNamespace(stdout="", stderr="", returncode=0)
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="cannot requeue pending Slurm job"):
+        cli._handle_soperator_upgrade_running_jobs(
+            namespace="soperator",
+            node_group="",
+            policy="requeue-selected",
+            cancel_job_ids=(),
+            requeue_job_ids=("12",),
+            wait_timeout_seconds=0,
+            refresh_interval_seconds=1,
+            checkpoint_id="checkpoint",
+        )
+
+    assert commands == []
+
+
 def test_soperator_upgrade_cancel_all_policy_cancels_all_jobs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     commands: list[str] = []
     queue_results = [
         (
-            cli._SoperatorUpgradeSlurmJob(
+            _soperator_slurm_job(
                 job_id="42",
                 user="alice",
                 state="RUNNING",
                 partition="gpu",
-                nodes="worker-gpu-0-0",
+                allocated_nodes="worker-gpu-0-0",
                 elapsed="00:05",
                 limit="30:00",
                 remaining="25:00",
                 name="restartable-train",
             ),
-            cli._SoperatorUpgradeSlurmJob(
+            _soperator_slurm_job(
                 job_id="43",
                 user="bob",
                 state="RUNNING",
                 partition="gpu",
-                nodes="worker-gpu-0-0",
+                allocated_nodes="worker-gpu-0-0",
                 elapsed="00:02",
                 limit="30:00",
                 remaining="28:00",
@@ -4301,14 +4669,15 @@ def test_soperator_upgrade_cancel_all_policy_cancels_all_jobs(
     )
     monkeypatch.setattr(
         cli,
-        "_soperator_upgrade_running_jobs",
+        "_soperator_upgrade_affected_jobs",
         lambda **_kwargs: queue_results.pop(0),
     )
     monkeypatch.setattr(
         cli,
         "_run_soperator_upgrade_login_command",
-        lambda _namespace, command, **_kwargs: commands.append(command)
-        or SimpleNamespace(stdout="", stderr="", returncode=0),
+        lambda _namespace, command, **_kwargs: (
+            commands.append(command) or SimpleNamespace(stdout="", stderr="", returncode=0)
+        ),
     )
 
     restored = cli._handle_soperator_upgrade_running_jobs(
@@ -4329,12 +4698,12 @@ def test_soperator_upgrade_cancel_all_policy_cancels_all_jobs(
 def test_soperator_upgrade_wait_policy_waits_until_jobs_clear(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    job = cli._SoperatorUpgradeSlurmJob(
+    job = _soperator_slurm_job(
         job_id="42",
         user="alice",
         state="RUNNING",
         partition="gpu",
-        nodes="worker-gpu-0-0",
+        allocated_nodes="worker-gpu-0-0",
         elapsed="00:05",
         limit="30:00",
         remaining="25:00",
@@ -4355,7 +4724,7 @@ def test_soperator_upgrade_wait_policy_waits_until_jobs_clear(
     )
     monkeypatch.setattr(
         cli,
-        "_soperator_upgrade_running_jobs",
+        "_soperator_upgrade_affected_jobs",
         lambda **_kwargs: queue_results.pop(0),
     )
     monkeypatch.setattr(cli.time, "sleep", lambda seconds: sleeps.append(seconds))
@@ -4376,18 +4745,86 @@ def test_soperator_upgrade_wait_policy_waits_until_jobs_clear(
     assert queue_results == []
 
 
+def test_soperator_upgrade_wait_then_cancel_waits_then_cancels_displayed_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active_job = _soperator_slurm_job(job_id="42")
+    pending_job = _soperator_slurm_job(
+        job_id="43",
+        state="PENDING",
+        allocated_nodes="",
+        requested_nodes="worker-gpu-0-0",
+        reason="Priority",
+        impact_scope="pending-node",
+    )
+    queue_results = [(active_job, pending_job), (active_job, pending_job), ()]
+    wait_results = [(active_job, pending_job), ()]
+    commands: list[str] = []
+    decisions: list[Mapping[str, object]] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_slurm_nodes_for_rollout",
+        lambda **_kwargs: ("worker-gpu-0-0",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_drain_slurm_nodes",
+        lambda **_kwargs: ("worker-gpu-0-0",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_affected_jobs",
+        lambda **_kwargs: queue_results.pop(0),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_wait_for_jobs_until_timeout",
+        lambda **_kwargs: wait_results.pop(0),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_soperator_upgrade_login_command",
+        lambda _namespace, command, **_kwargs: (
+            commands.append(command) or SimpleNamespace(stdout="", stderr="", returncode=0)
+        ),
+    )
+
+    restored = cli._handle_soperator_upgrade_running_jobs(
+        namespace="soperator",
+        node_group="",
+        policy="wait-then-cancel",
+        cancel_job_ids=(),
+        requeue_job_ids=(),
+        wait_timeout_seconds=3600,
+        refresh_interval_seconds=30,
+        checkpoint_id="checkpoint",
+        decision_recorder=decisions.append,
+    )
+
+    assert restored == ("worker-gpu-0-0",)
+    assert commands == ["scancel 42 43"]
+    assert [decision["action"] for decision in decisions] == [
+        "blocking-jobs-detected",
+        "wait-then-cancel-wait-started",
+        "wait-then-cancel-timeout",
+        "wait-then-cancel-auto-cancel",
+        "wait-then-cancel-cleared",
+    ]
+
+
 def test_soperator_upgrade_requeue_selected_policy_requeues_jobs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     commands: list[str] = []
     queue_results = [
         (
-            cli._SoperatorUpgradeSlurmJob(
+            _soperator_slurm_job(
                 job_id="42",
                 user="alice",
                 state="RUNNING",
                 partition="gpu",
-                nodes="worker-gpu-0-0",
+                allocated_nodes="worker-gpu-0-0",
                 elapsed="00:05",
                 limit="30:00",
                 remaining="25:00",
@@ -4411,14 +4848,15 @@ def test_soperator_upgrade_requeue_selected_policy_requeues_jobs(
     )
     monkeypatch.setattr(
         cli,
-        "_soperator_upgrade_running_jobs",
+        "_soperator_upgrade_affected_jobs",
         lambda **_kwargs: queue_results.pop(0),
     )
     monkeypatch.setattr(
         cli,
         "_run_soperator_upgrade_login_command",
-        lambda _namespace, command, **_kwargs: commands.append(command)
-        or SimpleNamespace(stdout="", stderr="", returncode=0),
+        lambda _namespace, command, **_kwargs: (
+            commands.append(command) or SimpleNamespace(stdout="", stderr="", returncode=0)
+        ),
     )
 
     restored = cli._handle_soperator_upgrade_running_jobs(
@@ -4442,12 +4880,12 @@ def test_soperator_upgrade_requeue_hold_selected_policy_holds_jobs(
     commands: list[str] = []
     queue_results = [
         (
-            cli._SoperatorUpgradeSlurmJob(
+            _soperator_slurm_job(
                 job_id="42",
                 user="alice",
                 state="RUNNING",
                 partition="gpu",
-                nodes="worker-gpu-0-0",
+                allocated_nodes="worker-gpu-0-0",
                 elapsed="00:05",
                 limit="30:00",
                 remaining="25:00",
@@ -4471,14 +4909,15 @@ def test_soperator_upgrade_requeue_hold_selected_policy_holds_jobs(
     )
     monkeypatch.setattr(
         cli,
-        "_soperator_upgrade_running_jobs",
+        "_soperator_upgrade_affected_jobs",
         lambda **_kwargs: queue_results.pop(0),
     )
     monkeypatch.setattr(
         cli,
         "_run_soperator_upgrade_login_command",
-        lambda _namespace, command, **_kwargs: commands.append(command)
-        or SimpleNamespace(stdout="", stderr="", returncode=0),
+        lambda _namespace, command, **_kwargs: (
+            commands.append(command) or SimpleNamespace(stdout="", stderr="", returncode=0)
+        ),
     )
 
     restored = cli._handle_soperator_upgrade_running_jobs(
@@ -4502,23 +4941,23 @@ def test_soperator_upgrade_requeue_hold_all_policy_holds_all_jobs(
     commands: list[str] = []
     queue_results = [
         (
-            cli._SoperatorUpgradeSlurmJob(
+            _soperator_slurm_job(
                 job_id="42",
                 user="alice",
                 state="RUNNING",
                 partition="gpu",
-                nodes="worker-gpu-0-0",
+                allocated_nodes="worker-gpu-0-0",
                 elapsed="00:05",
                 limit="30:00",
                 remaining="25:00",
                 name="restartable-train",
             ),
-            cli._SoperatorUpgradeSlurmJob(
+            _soperator_slurm_job(
                 job_id="43",
                 user="bob",
                 state="RUNNING",
                 partition="gpu",
-                nodes="worker-gpu-0-0",
+                allocated_nodes="worker-gpu-0-0",
                 elapsed="00:02",
                 limit="30:00",
                 remaining="28:00",
@@ -4542,14 +4981,15 @@ def test_soperator_upgrade_requeue_hold_all_policy_holds_all_jobs(
     )
     monkeypatch.setattr(
         cli,
-        "_soperator_upgrade_running_jobs",
+        "_soperator_upgrade_affected_jobs",
         lambda **_kwargs: queue_results.pop(0),
     )
     monkeypatch.setattr(
         cli,
         "_run_soperator_upgrade_login_command",
-        lambda _namespace, command, **_kwargs: commands.append(command)
-        or SimpleNamespace(stdout="", stderr="", returncode=0),
+        lambda _namespace, command, **_kwargs: (
+            commands.append(command) or SimpleNamespace(stdout="", stderr="", returncode=0)
+        ),
     )
 
     restored = cli._handle_soperator_upgrade_running_jobs(
@@ -4570,12 +5010,12 @@ def test_soperator_upgrade_requeue_hold_all_policy_holds_all_jobs(
 def test_soperator_upgrade_requeue_policy_waits_for_slurm_transition(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    job = cli._SoperatorUpgradeSlurmJob(
+    job = _soperator_slurm_job(
         job_id="42",
         user="alice",
         state="RUNNING",
         partition="gpu",
-        nodes="worker-gpu-0-0",
+        allocated_nodes="worker-gpu-0-0",
         elapsed="00:05",
         limit="30:00",
         remaining="25:00",
@@ -4602,14 +5042,15 @@ def test_soperator_upgrade_requeue_policy_waits_for_slurm_transition(
     )
     monkeypatch.setattr(
         cli,
-        "_soperator_upgrade_running_jobs",
+        "_soperator_upgrade_affected_jobs",
         lambda **_kwargs: queue_results.pop(0),
     )
     monkeypatch.setattr(
         cli,
         "_run_soperator_upgrade_login_command",
-        lambda _namespace, command, **_kwargs: commands.append(command)
-        or SimpleNamespace(stdout="", stderr="", returncode=0),
+        lambda _namespace, command, **_kwargs: (
+            commands.append(command) or SimpleNamespace(stdout="", stderr="", returncode=0)
+        ),
     )
     monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
 
@@ -4808,11 +5249,11 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
     assert stage_verification["activechecks-suspend"]["fast_verification"]["status"] == "passed"
     assert stage_verification["soperator-chart"]["fast_verification"]["status"] == "passed"
     assert stage_verification["activechecks-restore"]["fast_verification"]["status"] == "passed"
-    assert stage_verification["shared-safety-verification"]["fast_verification"]["status"] == "passed"
+    assert (
+        stage_verification["shared-safety-verification"]["fast_verification"]["status"] == "passed"
+    )
     upgrade_json = json.loads(
-        (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_JSON_FILENAME).read_text(
-            encoding="utf-8"
-        )
+        (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_JSON_FILENAME).read_text(encoding="utf-8")
     )
     report_stage_verification = {
         item["phase_id"]: item for item in upgrade_json["stage_verification"]
@@ -7757,6 +8198,105 @@ def test_render_command_points_migration_required_soperator_to_migrate(
     assert f"nebius-cxcli deploy {config_arg}" not in lines
 
 
+def test_ext_soperator_upgrade_interactive_non_tty_fails_before_backup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("deploy: {}\n", encoding="utf-8")
+    payload: dict[str, Any] = {
+        "deploy": {
+            "targets": [
+                {
+                    "instance_id": "external-cluster",
+                    "soperator_onboarding": {
+                        "accepted": True,
+                        "actions": ["upgrade-soperator"],
+                    },
+                }
+            ]
+        }
+    }
+    backup_called = False
+
+    @contextmanager
+    def _no_status(_message: str):
+        yield
+
+    def _backup(**_kwargs: object) -> object:
+        nonlocal backup_called
+        backup_called = True
+        raise AssertionError("backup must not be created before job-policy validation")
+
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: False)
+    monkeypatch.setattr(cli, "_load_source_payload", lambda _path: payload)
+    monkeypatch.setattr(
+        cli,
+        "_resolve_soperator_migration_target_ref",
+        lambda _payload, *, target_ref: target_ref or "external-cluster",
+    )
+    monkeypatch.setattr(
+        cli,
+        "legacy_soperator_migration_checkpoint_path",
+        lambda _config_path, _target_ref: tmp_path / "missing-checkpoint.json",
+    )
+    monkeypatch.setattr(
+        cli, "validate_soperator_onboarding_acceptance", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        cli,
+        "soperator_onboarding_target",
+        lambda _payload, *, target_ref: payload["deploy"]["targets"][0],
+    )
+    monkeypatch.setattr(cli, "_command_status", _no_status)
+    monkeypatch.setattr(
+        cli,
+        "_run_external_soperator_discovery_command",
+        lambda **_kwargs: tmp_path / "manifest.json",
+    )
+    monkeypatch.setattr(
+        cli,
+        "_load_soperator_source_discovery_report",
+        lambda **_kwargs: {"report": {}},
+    )
+    monkeypatch.setattr(cli, "_require_soperator_migration_actions", lambda **_kwargs: None)
+    monkeypatch.setattr(cli, "_create_external_soperator_upgrade_backup", _backup)
+    monkeypatch.setattr(
+        cli,
+        "execute_soperator_migration",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("execution must not start before job-policy validation")
+        ),
+    )
+
+    with pytest.raises(cli.typer.Exit) as excinfo:
+        cli.soperator_external_upgrade_command(
+            config_path=config_path,
+            target_ref_opt="external-cluster",
+            backup_dir=None,
+            job_policy="interactive",
+            cancel_job=None,
+            requeue_job=None,
+            job_wait_timeout=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
+            job_refresh_interval=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
+            dry_run=False,
+            approve=True,
+            approve_remediation=False,
+            allow_unsupported_soperator_upgrade_path=False,
+            interactive=True,
+            worker_rollout_strategy=None,
+            worker_wave_groups=None,
+            worker_wave_percent=None,
+            max_parallel_worker_groups=None,
+            strategy_max_surge_count=None,
+            strategy_max_unavailable_count=None,
+            strategy_drain_timeout=None,
+        )
+
+    assert excinfo.value.exit_code == 1
+    assert backup_called is False
+
+
 def test_render_command_points_gpu_reconciliation_only_soperator_to_deploy(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -9561,10 +10101,10 @@ def test_deploy_command_passes_auto_auth_flag(
         "skip_validation_kinds": set(),
         "requested_target_ref": None,
         "all_targets": False,
-        "job_policy": "fail",
+        "job_policy": "wait-then-cancel",
         "cancel_job_ids": (),
         "requeue_job_ids": (),
-        "job_wait_timeout_seconds": 0,
+        "job_wait_timeout_seconds": 3600,
         "job_refresh_interval_seconds": 30,
     }
 
@@ -12776,7 +13316,7 @@ def test_apply_rendered_flux_with_soperator_job_policy_blocks_existing_worker_jo
 
     def _job_gate(**kwargs: Any) -> tuple[str, ...]:
         calls.append(("job-gate", kwargs["node_names"]))
-        raise RuntimeError("Running Slurm jobs exist on affected nodes.")
+        raise RuntimeError("Affected Slurm jobs exist for the upgrade scope.")
 
     monkeypatch.setattr(cli, "_handle_soperator_upgrade_running_jobs", _job_gate)
     monkeypatch.setattr(
@@ -12785,7 +13325,7 @@ def test_apply_rendered_flux_with_soperator_job_policy_blocks_existing_worker_jo
         lambda paths, *, extra_env=None: calls.append(("flux", paths)),
     )
 
-    with pytest.raises(RuntimeError, match="Running Slurm jobs exist"):
+    with pytest.raises(RuntimeError, match="Affected Slurm jobs exist"):
         cli._apply_rendered_flux_with_soperator_job_policy(
             config,
             fake_paths,
@@ -21202,12 +21742,16 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert managed_soperator_result.exit_code == 0, managed_soperator_result.output
     assert managed_soperator_upgrade_result.exit_code == 0, managed_soperator_upgrade_result.output
     assert managed_soperator_backup_result.exit_code == 0, managed_soperator_backup_result.output
-    assert (
-        managed_soperator_discover_result.exit_code == 0
-    ), managed_soperator_discover_result.output
+    assert managed_soperator_discover_result.exit_code == 0, (
+        managed_soperator_discover_result.output
+    )
     assert managed_soperator_restore_result.exit_code == 0, managed_soperator_restore_result.output
-    assert managed_soperator_scale_down_result.exit_code == 0, managed_soperator_scale_down_result.output
-    assert managed_soperator_scale_up_result.exit_code == 0, managed_soperator_scale_up_result.output
+    assert managed_soperator_scale_down_result.exit_code == 0, (
+        managed_soperator_scale_down_result.output
+    )
+    assert managed_soperator_scale_up_result.exit_code == 0, (
+        managed_soperator_scale_up_result.output
+    )
     assert soperator_result.exit_code == 0, soperator_result.output
     assert ext_soperator_backup_result.exit_code == 0, ext_soperator_backup_result.output
     assert ext_soperator_discover_result.exit_code == 0, ext_soperator_discover_result.output
@@ -21260,9 +21804,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     normalized_managed_soperator_help = " ".join(managed_soperator_help.split())
     normalized_managed_soperator_upgrade_help = " ".join(managed_soperator_upgrade_help.split())
     normalized_managed_soperator_backup_help = " ".join(managed_soperator_backup_help.split())
-    normalized_managed_soperator_discover_help = " ".join(
-        managed_soperator_discover_help.split()
-    )
+    normalized_managed_soperator_discover_help = " ".join(managed_soperator_discover_help.split())
     normalized_managed_soperator_restore_help = " ".join(managed_soperator_restore_help.split())
     normalized_managed_soperator_scale_down_help = " ".join(
         managed_soperator_scale_down_help.split()
@@ -21519,7 +22061,9 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--worker-ordinal 3 --to-workers 3 --job-policy interactive" in (
         normalized_managed_soperator_scale_down_help
     )
-    assert "Ephemeral NodeSets use NodeSetPowerState" in normalized_managed_soperator_scale_down_help
+    assert (
+        "Ephemeral NodeSets use NodeSetPowerState" in normalized_managed_soperator_scale_down_help
+    )
     assert "--nodeset" in normalized_managed_soperator_scale_up_help
     assert "--to-workers" in normalized_managed_soperator_scale_up_help
     assert "--dry-run --execute" in normalized_managed_soperator_scale_up_help
@@ -21531,9 +22075,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "Kubernetes minor hops stay one hop per run" in (
         normalized_managed_soperator_upgrade_help
     )
-    assert "run the Soperator chart upgrade first" in (
-        normalized_managed_soperator_upgrade_help
-    )
+    assert "run the Soperator chart upgrade first" in (normalized_managed_soperator_upgrade_help)
     assert "upgrade [OPTIONS] CONFIG_YAML" in managed_soperator_upgrade_help
     assert "--target" in normalized_managed_soperator_upgrade_help
     assert "--to-chart-version" in normalized_managed_soperator_upgrade_help
@@ -21684,8 +22226,9 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "Restore is DR/new-empty-target only, not same-cluster rollback" in (
         normalized_soperator_help
     )
-    assert "upgrade is only for accepted onboarding plans that contain external-upgrade-owned actions" in (
-        normalized_soperator_help
+    assert (
+        "upgrade is only for accepted onboarding plans that contain external-upgrade-owned actions"
+        in (normalized_soperator_help)
     )
     assert (
         "nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root> "
@@ -21695,21 +22238,20 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "stores a cxcli target id in deploy.targets[].instance_id" in (normalized_soperator_help)
     assert (
         "If the accepted onboarding report says no external-upgrade-owned work is required, "
-        "deploy reconciles every generated target"
+        "deploy reconciles every generated target" in normalized_soperator_help
+    )
+    assert "use deploy --target <target-id> only to narrow one run" in (normalized_soperator_help)
+    assert "deploy-report.md plus deploy-time validations" in normalized_soperator_help
+    assert (
+        "If external-upgrade-owned work is required, do not deploy first"
         in normalized_soperator_help
     )
-    assert "use deploy --target <target-id> only to narrow one run" in (
-        normalized_soperator_help
-    )
-    assert "deploy-report.md plus deploy-time validations" in normalized_soperator_help
-    assert "If external-upgrade-owned work is required, do not deploy first" in normalized_soperator_help
     assert (
         "nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run"
         in normalized_soperator_help
     )
     assert (
-        "nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> "
-        "--execute --approve"
+        "nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --execute --approve"
     ) in normalized_soperator_help
     assert "CXCLI managed chart-only Soperator upgrades use soperator upgrade" in (
         normalized_soperator_help
@@ -21852,15 +22394,13 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "Use --dry-run for discovery refresh and the read-only plan" in (
         normalized_ext_soperator_upgrade_help
     )
-    assert (
-        "Use --execute only after accepting that plan" in normalized_ext_soperator_upgrade_help
-    )
+    assert "Use --execute only after accepting that plan" in normalized_ext_soperator_upgrade_help
     assert "Confirm approval for the accepted external upgrade plan" in (
         normalized_ext_soperator_upgrade_help
     )
     assert (
-        "Slurm job policy: interactive, wait, cancel-selected, cancel-all, "
-        "requeue-selected, requeue-all, requeue-hold-selected, "
+        "Slurm job policy: interactive, wait, wait-then-cancel, cancel-selected, "
+        "cancel-all, requeue-selected, requeue-all, requeue-hold-selected, "
         "requeue-hold-all, or fail"
     ) in normalized_ext_soperator_upgrade_help
     assert "Maximum wait for Slurm jobs" in normalized_ext_soperator_upgrade_help
@@ -21877,15 +22417,16 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "The target must already be onboarded and accepted through ext-soperator onboard" in (
         normalized_ext_soperator_upgrade_help
     )
-    assert "Dry-run refreshes discovery and prints the plan" in normalized_ext_soperator_upgrade_help
+    assert (
+        "Dry-run refreshes discovery and prints the plan" in normalized_ext_soperator_upgrade_help
+    )
     assert (
         "--execute --approve refreshes discovery, creates a restore-capable backup"
     ) in normalized_ext_soperator_upgrade_help
-    assert "runs exactly one locked upgrade-path segment" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert "Later Kubernetes minor hops use the same ext-soperator upgrade --execute --approve command" in (
-        normalized_ext_soperator_upgrade_help
+    assert "runs exactly one locked upgrade-path segment" in (normalized_ext_soperator_upgrade_help)
+    assert (
+        "Later Kubernetes minor hops use the same ext-soperator upgrade --execute --approve command"
+        in (normalized_ext_soperator_upgrade_help)
     )
     assert "cxcli advances from the locked path and checkpoint progress" in (
         normalized_ext_soperator_upgrade_help

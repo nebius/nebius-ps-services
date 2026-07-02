@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -1600,7 +1601,36 @@ spec:
                         "",
                     )
                 return SoperatorMigrationCommandResult(command, 0, "idle\nallocated\n", "")
+            if command[8:] == ("scontrol", "show", "nodes"):
+                node_names = list(
+                    str(item.get("metadata", {}).get("name", "") or "")
+                    for item in self.live_nodes
+                    if isinstance(item.get("metadata"), dict)
+                )
+                for fallback_node in ("node-a", "node-b", "cpu-node-a", "worker-gpu-0"):
+                    if fallback_node not in node_names:
+                        node_names.append(fallback_node)
+                return SoperatorMigrationCommandResult(
+                    command,
+                    0,
+                    "\n".join(
+                        f"NodeName={node} NodeHostName={node} Partitions=main"
+                        for node in node_names
+                        if node
+                    ),
+                    "",
+                )
+            if command[8:11] == ("scontrol", "show", "node") and command[-1] == "-o":
+                nodes = command[11].split(",") if len(command) > 11 else []
+                return SoperatorMigrationCommandResult(
+                    command,
+                    0,
+                    "\n".join(f"NodeName={node} Partitions=main State=IDLE" for node in nodes),
+                    "",
+                )
             if command[8:10] == ("squeue", "-h"):
+                if "PENDING" in command:
+                    return SoperatorMigrationCommandResult(command, 0, "", "")
                 return SoperatorMigrationCommandResult(
                     command,
                     self.slurm_queue_returncode,
@@ -2627,9 +2657,7 @@ def test_execute_records_approval_and_runs_checkpointed_mutators(tmp_path: Path)
     assert phase_reports["external-node-template-upgrade"]["top_level_stage"] == (
         "MK8s Node Upgrades"
     )
-    assert phase_reports["post-upgrade-mk8s-check"]["top_level_stage"] == (
-        "MK8s Node Upgrades"
-    )
+    assert phase_reports["post-upgrade-mk8s-check"]["top_level_stage"] == ("MK8s Node Upgrades")
     assert phase_reports["post-upgrade-helm-check"]["top_level_stage"] == "Soperator Upgrade"
     assert phase_reports["target-gpu-stack-remediation"]["fast_verification"]["status"] == "passed"
     assert phase_reports["post-upgrade-helm-check"]["fast_verification"]["status"] == "passed"
@@ -2776,12 +2804,11 @@ def test_execute_final_helm_check_failure_writes_pending_report(
     )
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert checkpoint["pending_phase"] == "post-upgrade-helm-check"
-    assert checkpoint["phase_state"]["post-upgrade-mk8s-check"]["fast_verification"][
-        "status"
-    ] == "passed"
-    helm_verification = checkpoint["phase_state"]["post-upgrade-helm-check"][
-        "fast_verification"
-    ]
+    assert (
+        checkpoint["phase_state"]["post-upgrade-mk8s-check"]["fast_verification"]["status"]
+        == "passed"
+    )
+    helm_verification = checkpoint["phase_state"]["post-upgrade-helm-check"]["fast_verification"]
     assert helm_verification["status"] == "failed"
     assert helm_verification["passed"] is False
     assert "execute-phase-fast-verification-failed" in {
@@ -2797,9 +2824,7 @@ def test_execute_final_helm_check_failure_writes_pending_report(
     assert stage_verification["post-upgrade-mk8s-check"]["status"] == "passed"
     assert stage_verification["post-upgrade-helm-check"]["status"] == "failed"
     assert upgrade_json_report["pending_phase"] == "post-upgrade-helm-check"
-    migrate_report = (reports_dir / "ext-soperator-upgrade-report.md").read_text(
-        encoding="utf-8"
-    )
+    migrate_report = (reports_dir / "ext-soperator-upgrade-report.md").read_text(encoding="utf-8")
     assert "`post-upgrade-helm-check`: `FAIL`" in migrate_report
 
 
@@ -2856,9 +2881,7 @@ def test_execute_final_mk8s_check_failure_writes_pending_report(
     )
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert checkpoint["pending_phase"] == "post-upgrade-mk8s-check"
-    mk8s_verification = checkpoint["phase_state"]["post-upgrade-mk8s-check"][
-        "fast_verification"
-    ]
+    mk8s_verification = checkpoint["phase_state"]["post-upgrade-mk8s-check"]["fast_verification"]
     assert mk8s_verification["status"] == "failed"
     assert mk8s_verification["passed"] is False
     assert "post-upgrade-helm-check" not in checkpoint["phase_state"]
@@ -2872,9 +2895,7 @@ def test_execute_final_mk8s_check_failure_writes_pending_report(
     assert stage_verification["post-upgrade-mk8s-check"]["status"] == "failed"
     assert stage_verification["post-upgrade-helm-check"]["status"] == "not_run"
     assert upgrade_json_report["pending_phase"] == "post-upgrade-mk8s-check"
-    migrate_report = (reports_dir / "ext-soperator-upgrade-report.md").read_text(
-        encoding="utf-8"
-    )
+    migrate_report = (reports_dir / "ext-soperator-upgrade-report.md").read_text(encoding="utf-8")
     assert "`post-upgrade-mk8s-check`: `FAIL`" in migrate_report
     assert "`post-upgrade-helm-check`: `PENDING`" in migrate_report
 
@@ -4709,7 +4730,7 @@ class _TimeoutAfterAcceptedNodeTemplateUpdateRunner(_FakeCommandRunner):
                     },
                     "status": _ready_node_group_status(version="1.32", nodes=2),
                 }
-            ]
+            ],
         )
         self.leave_rollout_in_progress = leave_rollout_in_progress
         self.timed_out = False
@@ -5296,10 +5317,11 @@ def test_execute_external_node_template_blocks_nonempty_slurm_queue_before_mutat
         snapshot_collector=lambda *, kube_context: snapshot,
         approved=True,
         command_runner=runner,
+        job_policy="fail",
     )
 
     assert result.pending_phase == "external-node-template-upgrade"
-    assert "Running Slurm jobs exist on affected nodes" in result.pending_reason
+    assert "Affected Slurm jobs exist for the upgrade scope" in result.pending_reason
     assert not any(
         call[0][:4] == ("nebius", "mk8s", "node-group", "update") and "--version" in call[0]
         for call in runner.calls
@@ -5310,7 +5332,10 @@ def _external_upgrade_slurm_runner(
     *,
     queue_outputs: list[str],
     calls: list[tuple[str, ...]],
+    pending_queue_outputs: list[str] | None = None,
 ) -> Callable[..., SoperatorMigrationCommandResult]:
+    pending_outputs = pending_queue_outputs if pending_queue_outputs is not None else []
+
     def runner(
         args: Sequence[str],
         *,
@@ -5357,8 +5382,30 @@ def _external_upgrade_slurm_runner(
             "exec",
             "login-0",
             "--",
-        ) and command[8:10] == ("squeue", "-h"):
-            return SoperatorMigrationCommandResult(command, 0, queue_outputs.pop(0), "")
+        ):
+            if command[8:] == ("scontrol", "show", "nodes"):
+                return SoperatorMigrationCommandResult(
+                    command,
+                    0,
+                    "NodeName=worker-gpu-0-0 NodeHostName=worker-gpu-0-0 Partitions=gpu",
+                    "",
+                )
+            if command[8:11] == ("scontrol", "show", "node") and command[-1] == "-o":
+                return SoperatorMigrationCommandResult(
+                    command,
+                    0,
+                    f"NodeName={command[11]} Partitions=gpu State=IDLE",
+                    "",
+                )
+            if command[8:10] == ("squeue", "-h"):
+                if "PENDING" in command:
+                    return SoperatorMigrationCommandResult(
+                        command,
+                        0,
+                        pending_outputs.pop(0) if pending_outputs else "",
+                        "",
+                    )
+                return SoperatorMigrationCommandResult(command, 0, queue_outputs.pop(0), "")
         return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
 
     return runner
@@ -5404,10 +5451,17 @@ def test_external_upgrade_slurm_jobs_translates_kubernetes_node_names() -> None:
                 "\n".join(
                     (
                         "NodeName=worker-3 Arch=x86_64 CoresPerSocket=8",
-                        "   NodeAddr=10.1.18.140 NodeHostName=worker-3 Version=24.11.6",
+                        "   NodeAddr=10.1.18.140 NodeHostName=worker-3 Version=24.11.6 Partitions=main",
                         "   InstanceId=computeinstance-e00e8ctxvehgkyged0",
                     )
                 ),
+                "",
+            )
+        if command[8:] == ("scontrol", "show", "node", "worker-3", "-o"):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "NodeName=worker-3 Partitions=main State=IDLE",
                 "",
             )
         if command[8:10] == ("squeue", "-h"):
@@ -5422,8 +5476,11 @@ def test_external_upgrade_slurm_jobs_translates_kubernetes_node_names() -> None:
 
     assert jobs == ()
     squeue_calls = [call for call in calls if call[8:10] == ("squeue", "-h")]
-    assert len(squeue_calls) == 1
-    assert squeue_calls[0][-2:] == ("-w", "worker-3")
+    active_squeue_calls = [
+        call for call in squeue_calls if migration._EXTERNAL_UPGRADE_ACTIVE_SQUEUE_STATES in call
+    ]
+    assert len(active_squeue_calls) == 1
+    assert active_squeue_calls[0][-2:] == ("-w", "worker-3")
 
 
 def test_external_upgrade_worker_nodeset_slurm_nodes_maps_running_worker_pods() -> None:
@@ -5637,7 +5694,7 @@ def test_external_upgrade_slurm_jobs_falls_back_to_controller_for_login_config_f
                 "\n".join(
                     (
                         "NodeName=worker-0 Arch=x86_64 CoresPerSocket=8",
-                        "   NodeAddr=10.1.18.140 NodeHostName=worker-0 Version=24.11.6",
+                        "   NodeAddr=10.1.18.140 NodeHostName=worker-0 Version=24.11.6 Partitions=main",
                         "   InstanceId=computeinstance-e00worker0",
                     )
                 ),
@@ -5651,6 +5708,8 @@ def test_external_upgrade_slurm_jobs_falls_back_to_controller_for_login_config_f
                 "squeue: fatal: Could not establish a configuration source",
             )
         if command[6:11] == ("controller-0", "-c", "slurmctld", "--", "squeue"):
+            if "PENDING" in command:
+                return SoperatorMigrationCommandResult(command, 0, "", "")
             return SoperatorMigrationCommandResult(
                 command,
                 0,
@@ -5666,7 +5725,7 @@ def test_external_upgrade_slurm_jobs_falls_back_to_controller_for_login_config_f
     )
 
     assert [job.job_id for job in jobs] == ["42"]
-    assert [job.nodes for job in jobs] == ["worker-0"]
+    assert [job.allocated_nodes for job in jobs] == ["worker-0"]
     assert any(call[6:11] == ("controller-0", "-c", "slurmctld", "--", "squeue") for call in calls)
 
 
@@ -5725,6 +5784,322 @@ def test_external_upgrade_slurm_jobs_fails_closed_for_invalid_node_name() -> Non
     assert squeue_calls[0][-2:] == ("-w", "computeinstance-1")
 
 
+def test_external_upgrade_slurm_jobs_include_scoped_pending_jobs() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {"items": [{"metadata": {"name": "login-0"}, "status": {"phase": "Running"}}]}
+                ),
+                "",
+            )
+        if command[8:] == ("scontrol", "show", "nodes"):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "NodeName=worker-0 NodeHostName=worker-0 Partitions=main",
+                "",
+            )
+        if command[8:] == ("scontrol", "show", "node", "worker-0", "-o"):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "NodeName=worker-0 Partitions=main State=IDLE",
+                "",
+            )
+        if (
+            command[8:10] == ("squeue", "-h")
+            and "PENDING" in command
+            and command[-2:]
+            == (
+                "-p",
+                "main",
+            )
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "12|root|PENDING|main||||Priority|0:00|35:00|35:00|pending-main\n",
+                "",
+            )
+        if command[8:10] == ("squeue", "-h") and "PENDING" in command:
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                (
+                    "12|root|PENDING|main||||Priority|0:00|35:00|35:00|pending-main\n"
+                    "13|root|PENDING|other||||Resources|0:00|35:00|35:00|unrelated\n"
+                    "14|root|PENDING|other||worker-0||Priority|0:00|35:00|35:00|pending-node\n"
+                ),
+                "",
+            )
+        if (
+            command[8:10] == ("squeue", "-h")
+            and migration._EXTERNAL_UPGRADE_ACTIVE_SQUEUE_STATES in command
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "10|root|STOPPED|main|worker-0|||None|0:09|35:00|34:51|stopped\n",
+                "",
+            )
+        if command[8:10] == ("squeue", "-h"):
+            return SoperatorMigrationCommandResult(command, 0, "", "")
+        return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
+
+    jobs = migration._external_upgrade_slurm_jobs(
+        command_runner=runner,
+        kube_context="external-context",
+        node_names=("worker-0",),
+    )
+
+    assert [job.job_id for job in jobs] == ["10", "12", "14"]
+    assert jobs[0].state == "STOPPED"
+    assert jobs[1].impact_scope == "pending-partition"
+    assert jobs[2].impact_scope == "pending-node"
+    assert any(call[-2:] == ("-p", "main") for call in calls if "PENDING" in call)
+    assert any(call[-2:] != ("-p", "main") for call in calls if "PENDING" in call)
+
+
+def test_external_upgrade_slurm_jobs_fail_closed_when_partition_lookup_fails() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {"items": [{"metadata": {"name": "login-0"}, "status": {"phase": "Running"}}]}
+                ),
+                "",
+            )
+        if command[8:] == ("scontrol", "show", "nodes"):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "NodeName=worker-0 NodeHostName=worker-0 Partitions=main",
+                "",
+            )
+        if (
+            command[8:10] == ("squeue", "-h")
+            and migration._EXTERNAL_UPGRADE_ACTIVE_SQUEUE_STATES in command
+        ):
+            return SoperatorMigrationCommandResult(command, 0, "", "")
+        if command[8:] == ("scontrol", "show", "node", "worker-0", "-o"):
+            return SoperatorMigrationCommandResult(command, 1, "", "slurmctld unavailable")
+        if command[8:10] == ("squeue", "-h"):
+            raise AssertionError("pending squeue should not run after partition lookup failure")
+        return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
+
+    with pytest.raises(RuntimeError, match="could not inspect Slurm partitions"):
+        migration._external_upgrade_slurm_jobs(
+            command_runner=runner,
+            kube_context="external-context",
+            node_names=("worker-0",),
+        )
+
+    assert not any(call[8:10] == ("squeue", "-h") and "PENDING" in call for call in calls)
+
+
+def test_external_upgrade_fail_policy_pauses_status_for_job_table() -> None:
+    calls: list[tuple[str, ...]] = []
+    pause_events: list[str] = []
+
+    @contextmanager
+    def _pause() -> Iterator[None]:
+        pause_events.append("pause")
+        yield
+        pause_events.append("resume")
+
+    with pytest.raises(migration.SoperatorMigrationPhasePending):
+        migration._handle_external_upgrade_slurm_jobs(
+            command_runner=_external_upgrade_slurm_runner(
+                queue_outputs=[
+                    "42|alice|RUNNING|gpu|worker-gpu-0-0|worker-gpu-0-0||None|00:05|30:00|25:00|active\n"
+                ],
+                calls=calls,
+            ),
+            kube_context="external-context",
+            node_names=("worker-gpu-0-0",),
+            policy="fail",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            wait_timeout_seconds=0,
+            refresh_interval_seconds=1,
+            interactive_prompt_pause=_pause,
+        )
+
+    assert pause_events == ["pause", "resume"]
+
+
+def test_external_upgrade_interactive_policy_rejects_non_tty_before_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    monkeypatch.setattr(migration, "_external_upgrade_is_tty_session", lambda: False)
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        return SoperatorMigrationCommandResult(command, 0, "", "")
+
+    with pytest.raises(RuntimeError, match="interactive terminal"):
+        migration._handle_external_upgrade_slurm_jobs(
+            command_runner=runner,
+            kube_context="external-context",
+            node_names=("worker-0",),
+            policy="interactive",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            wait_timeout_seconds=0,
+            refresh_interval_seconds=1,
+        )
+
+    assert calls == []
+
+
+def test_external_upgrade_job_policy_defaults_by_terminal_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(migration, "_external_upgrade_is_tty_session", lambda: False)
+    assert migration._external_upgrade_job_policy(None) == "wait-then-cancel"  # noqa: SLF001
+
+    monkeypatch.setattr(migration, "_external_upgrade_is_tty_session", lambda: True)
+    assert migration._external_upgrade_job_policy(None) == "interactive"  # noqa: SLF001
+    assert migration._external_upgrade_job_policy("wait") == "wait"  # noqa: SLF001
+
+    monkeypatch.setattr(migration, "_external_upgrade_is_tty_session", lambda: False)
+    with pytest.raises(RuntimeError, match="interactive terminal"):
+        migration._external_upgrade_job_policy("interactive")  # noqa: SLF001
+
+
+def test_external_upgrade_wait_then_cancel_requires_positive_timeout() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        return SoperatorMigrationCommandResult(command, 0, "", "")
+
+    with pytest.raises(RuntimeError, match="positive --job-wait-timeout"):
+        migration._handle_external_upgrade_slurm_jobs(
+            command_runner=runner,
+            kube_context="external-context",
+            node_names=("worker-0",),
+            policy="wait-then-cancel",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            wait_timeout_seconds=0,
+            refresh_interval_seconds=1,
+        )
+
+    assert calls == []
+
+
+def test_external_upgrade_slurm_quiet_rechecks_after_partition_drain() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="started or remained after Slurm partition drain",
+    ):
+        migration._ensure_slurm_quiet(
+            command_runner=_external_upgrade_slurm_runner(
+                queue_outputs=[
+                    "",
+                    "99|root|RUNNING|gpu|worker-gpu-0-0|||None|0:01|30:00|29:59|late-job\n",
+                ],
+                calls=calls,
+            ),
+            kube_context="external-context",
+            node_names=("worker-gpu-0-0",),
+            job_policy="fail",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            job_wait_timeout_seconds=0,
+            job_refresh_interval_seconds=1,
+        )
+
+    drain_index = next(
+        index
+        for index, call in enumerate(calls)
+        if call[8:] == ("scontrol", "update", "PartitionName=ALL", "State=DRAIN")
+    )
+    active_squeue_indices = [
+        index
+        for index, call in enumerate(calls)
+        if (
+            call[8:10] == ("squeue", "-h")
+            and migration._EXTERNAL_UPGRADE_ACTIVE_SQUEUE_STATES in call
+        )
+    ]
+    assert len(active_squeue_indices) == 2
+    assert active_squeue_indices[-1] > drain_index
+    assert any(
+        call[8:] == ("scontrol", "update", "PartitionName=ALL", "State=UP") for call in calls
+    )
+
+
 def test_external_upgrade_cancel_selected_policy_cancels_jobs() -> None:
     calls: list[tuple[str, ...]] = []
     queue_outputs = [
@@ -5746,8 +6121,59 @@ def test_external_upgrade_cancel_selected_policy_cancels_jobs() -> None:
         refresh_interval_seconds=1,
     )
 
-    assert lines == ["Slurm job preflight: cleared blocking jobs with policy cancel-selected."]
+    assert lines == ["Slurm job preflight: cleared affected jobs with policy cancel-selected."]
     assert any(call[8:] == ("scancel", "42") for call in calls)
+
+
+def test_external_upgrade_cancel_selected_policy_cancels_pending_jobs() -> None:
+    calls: list[tuple[str, ...]] = []
+    pending_outputs = [
+        "12|alice|PENDING|gpu||worker-gpu-0-0||Priority|0:00|30:00|30:00|pending-train\n",
+        "",
+    ]
+
+    lines = migration._handle_external_upgrade_slurm_jobs(
+        command_runner=_external_upgrade_slurm_runner(
+            queue_outputs=["", ""],
+            pending_queue_outputs=pending_outputs,
+            calls=calls,
+        ),
+        kube_context="external-context",
+        node_names=("worker-gpu-0-0",),
+        policy="cancel-selected",
+        cancel_job_ids=("12",),
+        requeue_job_ids=(),
+        wait_timeout_seconds=0,
+        refresh_interval_seconds=1,
+    )
+
+    assert lines == ["Slurm job preflight: cleared affected jobs with policy cancel-selected."]
+    assert any(call[8:] == ("scancel", "12") for call in calls)
+
+
+def test_external_upgrade_requeue_selected_rejects_pending_jobs() -> None:
+    calls: list[tuple[str, ...]] = []
+    pending_outputs = [
+        "12|alice|PENDING|gpu||worker-gpu-0-0||Priority|0:00|30:00|30:00|pending-train\n"
+    ]
+
+    with pytest.raises(RuntimeError, match="cannot requeue pending Slurm job"):
+        migration._handle_external_upgrade_slurm_jobs(
+            command_runner=_external_upgrade_slurm_runner(
+                queue_outputs=[""],
+                pending_queue_outputs=pending_outputs,
+                calls=calls,
+            ),
+            kube_context="external-context",
+            node_names=("worker-gpu-0-0",),
+            policy="requeue-selected",
+            cancel_job_ids=(),
+            requeue_job_ids=("12",),
+            wait_timeout_seconds=0,
+            refresh_interval_seconds=1,
+        )
+
+    assert not any(call[8:10] == ("scontrol", "requeue") for call in calls)
 
 
 def test_external_upgrade_cancel_all_policy_cancels_all_jobs() -> None:
@@ -5777,7 +6203,7 @@ def test_external_upgrade_cancel_all_policy_cancels_all_jobs() -> None:
         refresh_interval_seconds=1,
     )
 
-    assert lines == ["Slurm job preflight: cleared blocking jobs with policy cancel-all."]
+    assert lines == ["Slurm job preflight: cleared affected jobs with policy cancel-all."]
     assert any(call[8:] == ("scancel", "42", "43") for call in calls)
 
 
@@ -5807,9 +6233,87 @@ def test_external_upgrade_wait_policy_waits_until_jobs_clear(
         refresh_interval_seconds=1,
     )
 
-    assert lines == ["Slurm job preflight: waited for blocking jobs to finish."]
+    assert lines == ["Slurm job preflight: waited for affected jobs to finish."]
     assert sleeps == [1]
     assert queue_outputs == []
+
+
+def test_external_upgrade_wait_then_cancel_waits_then_cancels_displayed_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+    decisions: list[dict[str, Any]] = []
+    active_job = migration.AffectedSlurmJob(
+        job_id="42",
+        user="alice",
+        state="RUNNING",
+        partition="gpu",
+        allocated_nodes="worker-gpu-0-0",
+        requested_nodes="",
+        scheduled_nodes="",
+        reason="",
+        elapsed="00:05",
+        limit="30:00",
+        remaining="25:00",
+        name="restartable-train",
+        impact_scope="allocated-node",
+    )
+    pending_job = migration.AffectedSlurmJob(
+        job_id="43",
+        user="alice",
+        state="PENDING",
+        partition="gpu",
+        allocated_nodes="",
+        requested_nodes="worker-gpu-0-0",
+        scheduled_nodes="",
+        reason="Priority",
+        elapsed="00:00",
+        limit="30:00",
+        remaining="30:00",
+        name="pending-train",
+        impact_scope="pending-node",
+    )
+    wait_results = [(active_job, pending_job), ()]
+
+    monkeypatch.setattr(
+        migration,
+        "_wait_for_external_upgrade_slurm_jobs_until_timeout",
+        lambda **_kwargs: wait_results.pop(0),
+    )
+
+    lines = migration._handle_external_upgrade_slurm_jobs(
+        command_runner=_external_upgrade_slurm_runner(
+            queue_outputs=[
+                "42|alice|RUNNING|gpu|worker-gpu-0-0||||00:05|30:00|25:00|restartable-train\n",
+                "42|alice|RUNNING|gpu|worker-gpu-0-0||||00:05|30:00|25:00|restartable-train\n",
+            ],
+            pending_queue_outputs=[
+                "43|alice|PENDING|gpu||worker-gpu-0-0||Priority|00:00|30:00|30:00|pending-train\n",
+                "",
+                "43|alice|PENDING|gpu||worker-gpu-0-0||Priority|00:00|30:00|30:00|pending-train\n",
+                "",
+            ],
+            calls=calls,
+        ),
+        kube_context="external-context",
+        node_names=("worker-gpu-0-0",),
+        policy="wait-then-cancel",
+        cancel_job_ids=(),
+        requeue_job_ids=(),
+        wait_timeout_seconds=3600,
+        refresh_interval_seconds=30,
+        decision_recorder=decisions.append,
+    )
+
+    assert lines == ["Slurm job preflight: waited, cancelled timed-out affected jobs, and cleared."]
+    assert any(call[8:] == ("scancel", "42", "43") for call in calls)
+    assert [decision["action"] for decision in decisions] == [
+        "blocking-jobs-detected",
+        "wait-then-cancel-wait-started",
+        "wait-then-cancel-timeout",
+        "wait-then-cancel-auto-cancel",
+        "wait-then-cancel-cleared",
+    ]
 
 
 def test_external_upgrade_requeue_selected_policy_requeues_jobs() -> None:
@@ -5856,6 +6360,27 @@ def test_external_upgrade_requeue_selected_policy_requeues_jobs() -> None:
                 ),
                 "",
             )
+        if (
+            command[:8]
+            == (
+                "kubectl",
+                "--context",
+                "external-context",
+                "-n",
+                "soperator",
+                "exec",
+                "login-0",
+                "--",
+            )
+            and command[8:11] == ("scontrol", "show", "node")
+            and command[-1] == "-o"
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                f"NodeName={command[11]} Partitions=gpu State=IDLE",
+                "",
+            )
         if command[:8] == (
             "kubectl",
             "--context",
@@ -5866,6 +6391,8 @@ def test_external_upgrade_requeue_selected_policy_requeues_jobs() -> None:
             "login-0",
             "--",
         ) and command[8:10] == ("squeue", "-h"):
+            if "PENDING" in command:
+                return SoperatorMigrationCommandResult(command, 0, "", "")
             return SoperatorMigrationCommandResult(command, 0, queue_outputs.pop(0), "")
         return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
 
@@ -5880,7 +6407,7 @@ def test_external_upgrade_requeue_selected_policy_requeues_jobs() -> None:
         refresh_interval_seconds=1,
     )
 
-    assert lines == ["Slurm job preflight: cleared blocking jobs with policy requeue-selected."]
+    assert lines == ["Slurm job preflight: cleared affected jobs with policy requeue-selected."]
     assert any(call[8:] == ("scontrol", "requeue", "42") for call in calls)
 
 
@@ -5928,6 +6455,27 @@ def test_external_upgrade_requeue_hold_selected_policy_holds_jobs() -> None:
                 ),
                 "",
             )
+        if (
+            command[:8]
+            == (
+                "kubectl",
+                "--context",
+                "external-context",
+                "-n",
+                "soperator",
+                "exec",
+                "login-0",
+                "--",
+            )
+            and command[8:11] == ("scontrol", "show", "node")
+            and command[-1] == "-o"
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                f"NodeName={command[11]} Partitions=gpu State=IDLE",
+                "",
+            )
         if command[:8] == (
             "kubectl",
             "--context",
@@ -5938,6 +6486,8 @@ def test_external_upgrade_requeue_hold_selected_policy_holds_jobs() -> None:
             "login-0",
             "--",
         ) and command[8:10] == ("squeue", "-h"):
+            if "PENDING" in command:
+                return SoperatorMigrationCommandResult(command, 0, "", "")
             return SoperatorMigrationCommandResult(command, 0, queue_outputs.pop(0), "")
         return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
 
@@ -5953,7 +6503,7 @@ def test_external_upgrade_requeue_hold_selected_policy_holds_jobs() -> None:
     )
 
     assert lines == [
-        "Slurm job preflight: cleared blocking jobs with policy requeue-hold-selected."
+        "Slurm job preflight: cleared affected jobs with policy requeue-hold-selected."
     ]
     assert any(call[8:] == ("scontrol", "requeuehold", "42") for call in calls)
 
@@ -6008,6 +6558,27 @@ def test_external_upgrade_requeue_hold_all_policy_holds_all_jobs() -> None:
                 ),
                 "",
             )
+        if (
+            command[:8]
+            == (
+                "kubectl",
+                "--context",
+                "external-context",
+                "-n",
+                "soperator",
+                "exec",
+                "login-0",
+                "--",
+            )
+            and command[8:11] == ("scontrol", "show", "node")
+            and command[-1] == "-o"
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                f"NodeName={command[11]} Partitions=gpu State=IDLE",
+                "",
+            )
         if command[:8] == (
             "kubectl",
             "--context",
@@ -6018,6 +6589,8 @@ def test_external_upgrade_requeue_hold_all_policy_holds_all_jobs() -> None:
             "login-0",
             "--",
         ) and command[8:10] == ("squeue", "-h"):
+            if "PENDING" in command:
+                return SoperatorMigrationCommandResult(command, 0, "", "")
             return SoperatorMigrationCommandResult(command, 0, queue_outputs.pop(0), "")
         return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
 
@@ -6032,7 +6605,7 @@ def test_external_upgrade_requeue_hold_all_policy_holds_all_jobs() -> None:
         refresh_interval_seconds=1,
     )
 
-    assert lines == ["Slurm job preflight: cleared blocking jobs with policy requeue-hold-all."]
+    assert lines == ["Slurm job preflight: cleared affected jobs with policy requeue-hold-all."]
     assert any(call[8:] == ("scontrol", "requeuehold", "42", "43") for call in calls)
 
 
@@ -6082,6 +6655,27 @@ def test_external_upgrade_requeue_policy_waits_for_slurm_transition(monkeypatch)
                 ),
                 "",
             )
+        if (
+            command[:8]
+            == (
+                "kubectl",
+                "--context",
+                "external-context",
+                "-n",
+                "soperator",
+                "exec",
+                "login-0",
+                "--",
+            )
+            and command[8:11] == ("scontrol", "show", "node")
+            and command[-1] == "-o"
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                f"NodeName={command[11]} Partitions=gpu State=IDLE",
+                "",
+            )
         if command[:8] == (
             "kubectl",
             "--context",
@@ -6092,6 +6686,8 @@ def test_external_upgrade_requeue_policy_waits_for_slurm_transition(monkeypatch)
             "login-0",
             "--",
         ) and command[8:10] == ("squeue", "-h"):
+            if "PENDING" in command:
+                return SoperatorMigrationCommandResult(command, 0, "", "")
             return SoperatorMigrationCommandResult(command, 0, queue_outputs.pop(0), "")
         return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
 
@@ -6108,7 +6704,7 @@ def test_external_upgrade_requeue_policy_waits_for_slurm_transition(monkeypatch)
         refresh_interval_seconds=1,
     )
 
-    assert lines == ["Slurm job preflight: cleared blocking jobs with policy requeue-all."]
+    assert lines == ["Slurm job preflight: cleared affected jobs with policy requeue-all."]
     assert any(call[8:] == ("scontrol", "requeue", "42") for call in calls)
     assert sleeps == [1]
     assert queue_outputs == []
@@ -6884,7 +7480,9 @@ def test_source_worker_nodeset_values_uses_single_mismatched_worker_group_capaci
     assert values[0]["customInitContainers"] == [{"name": "site-init", "image": "site/custom"}]
 
 
-def test_source_worker_nodeset_values_uses_single_group_allocatable_when_nodeset_label_differs() -> None:
+def test_source_worker_nodeset_values_uses_single_group_allocatable_when_nodeset_label_differs() -> (
+    None
+):
     nodeset = _source_worker_nodeset("worker", gpu=False)
     spec = nodeset["spec"]
     assert isinstance(spec, dict)
@@ -8250,9 +8848,7 @@ def test_login_service_quiesce_skips_slurmcluster_without_login_role() -> None:
         state=state,
     )
 
-    slurm_items = [
-        item for item in state["resources"] if item["action"] == "slurm-node-size"
-    ]
+    slurm_items = [item for item in state["resources"] if item["action"] == "slurm-node-size"]
     assert slurm_items == [
         {
             "action": "slurm-node-size",
@@ -8263,9 +8859,7 @@ def test_login_service_quiesce_skips_slurmcluster_without_login_role() -> None:
         }
     ]
     assert not any(
-        len(call[0]) > 7
-        and call[0][5] == "patch"
-        and call[0][6].startswith("slurmcluster")
+        len(call[0]) > 7 and call[0][5] == "patch" and call[0][6].startswith("slurmcluster")
         for call in runner.calls
     )
 
@@ -8289,9 +8883,7 @@ def test_login_service_quiesce_skips_empty_slurmcluster_list() -> None:
         "size": None,
     }
     assert not any(
-        len(call[0]) > 7
-        and call[0][5] == "patch"
-        and call[0][6].startswith("slurmcluster")
+        len(call[0]) > 7 and call[0][5] == "patch" and call[0][6].startswith("slurmcluster")
         for call in runner.calls
     )
 
@@ -8321,9 +8913,7 @@ def test_login_service_quiesce_preserves_zero_slurmcluster_size() -> None:
         state=state,
     )
 
-    slurm_items = [
-        item for item in state["resources"] if item["action"] == "slurm-node-size"
-    ]
+    slurm_items = [item for item in state["resources"] if item["action"] == "slurm-node-size"]
     assert slurm_items[0]["size"] == 0
     assert (
         "kubectl",

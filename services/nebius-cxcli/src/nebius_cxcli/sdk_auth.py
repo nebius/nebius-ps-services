@@ -224,19 +224,29 @@ def init_nebius_sdk(
             )
             return None
 
+    def _has_codex_agent_credentials_file() -> bool:
+        credentials_file = _as_text(os.environ.get("NEBIUS_AUTH_CREDENTIALS_FILE"))
+        profile_name = _as_text(os.environ.get("NEBIUS_PROFILE"))
+        if not credentials_file or not profile_name.startswith("codex-agent-"):
+            return False
+        project_id = profile_name.removeprefix("codex-agent-")
+        path = Path(credentials_file).expanduser()
+        return (
+            path.name == f"codex-agent-authkey.{project_id}.json"
+            and path.exists()
+            and path.is_file()
+        )
+
     if prefer_operator_auth:
-        auth_attempts = [
-            _sdk_from_iam_token_env,
-            _sdk_from_config,
-        ]
+        auth_attempts = []
+        if _has_codex_agent_credentials_file():
+            auth_attempts.append(_sdk_from_credentials_file)
+        auth_attempts.extend([_sdk_from_iam_token_env, _sdk_from_config])
         if allow_cli_token:
             auth_attempts.append(_sdk_from_cli_token)
-        auth_attempts.extend(
-            [
-                _sdk_from_credentials_file,
-                _sdk_from_service_account_env,
-            ]
-        )
+        if not _has_codex_agent_credentials_file():
+            auth_attempts.append(_sdk_from_credentials_file)
+        auth_attempts.append(_sdk_from_service_account_env)
     else:
         auth_attempts = [
             _sdk_from_credentials_file,

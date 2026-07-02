@@ -52,8 +52,9 @@ def test_design_architecture_summary_matches_upgrade_surface() -> None:
     )
     assert "external-soperator-backup-" in design_flat
     assert "restore-ready YAML for namespaced in-cluster material" in design_flat
-    assert "Restore is archive-driven and dry-run by default, and it is DR/new-empty-target only" in (
-        design_flat
+    assert (
+        "Restore is archive-driven and dry-run by default, and it is DR/new-empty-target only"
+        in (design_flat)
     )
     assert "It is not same-cluster rollback" in design_flat
     assert "operators must not point restore at the original/source cluster" in design_flat
@@ -627,9 +628,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "Explicit non-ephemeral ordinal removal is tail-only" in soperator_flat
     assert "nebius-cxcli ext-soperator backup <config.yaml> --target <target>" in soperator
     assert "nebius-cxcli ext-soperator scale-down --project-id <project-id>" in soperator
-    assert "`--kube-context` is still required for Kubernetes and Slurm access" in (
-        soperator_flat
-    )
+    assert "`--kube-context` is still required for Kubernetes and Slurm access" in (soperator_flat)
     assert "replace worker node groups externally, scale back up" in soperator_flat
     assert (
         "nebius-cxcli ext-soperator backup \\ --project-id <project-id> \\ "
@@ -658,9 +657,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "`--worker-rollout-strategy`, `--worker-wave-groups`" in soperator
     assert "non-interactive onboarding" in soperator
     assert "verifies the needed quota and capacity during `--execute` preflight" in (soperator_flat)
-    assert "prints a color-highlighted sectioned plan covering target discovery" in (
-        soperator_flat
-    )
+    assert "prints a color-highlighted sectioned plan covering target discovery" in (soperator_flat)
     assert "refuses deploy-owned/no-upgrade action sets with render/deploy guidance" in (soperator)
     assert (
         "`nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --execute --approve`"
@@ -737,9 +734,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "`1.31 -> 1.33` and `1.31 -> 1.34` requests" in soperator_flat
     assert "Managed upgrades do not persist a locked multi-run path" in soperator_flat
     assert "blocks the combined run and prints a chart-first command" in soperator_flat
-    assert "Run the Soperator chart upgrade while Kubernetes stays at `1.32`" in (
-        soperator_flat
-    )
+    assert "Run the Soperator chart upgrade while Kubernetes stays at `1.32`" in (soperator_flat)
     assert "unsupported` and `not_validated` paths fail fast unless" in soperator_flat
     assert "`supported_with_warning` continue without the override" in soperator_flat
     assert "CXCLI-managed Soperator upgrade follows these stages:" in soperator_flat
@@ -1506,7 +1501,10 @@ def test_docs_define_component_selector_contract() -> None:
         in readme_flat
     )
     assert "`deploy.targets[].soperator_onboarding.upgrade_path`" in readme_flat
-    assert "Each `ext-soperator upgrade --execute --approve` run advances one locked segment" in readme_flat
+    assert (
+        "Each `ext-soperator upgrade --execute --approve` run advances one locked segment"
+        in readme_flat
+    )
     assert "keeps onboarding in place and prints the next same-command invocation" in readme_flat
     assert (
         "`generated/reports/ext-soperator-upgrade-report.md` shows `Pending phase: none`"
@@ -1559,11 +1557,13 @@ def test_docs_define_component_selector_contract() -> None:
         "to the cxcli-pinned target"
     ) in readme_flat
     assert "canonical ordering across the Kubernetes `1.33+` boundary" in readme_flat
-    assert "print the matched Soperator/Kubernetes upgrade-path rule during the decision summary" in (
-        readme_flat
+    assert (
+        "print the matched Soperator/Kubernetes upgrade-path rule during the decision summary"
+        in (readme_flat)
     )
-    assert "Unsupported accepted plans still require `--allow-unsupported-soperator-upgrade-path`" in (
-        readme_flat
+    assert (
+        "Unsupported accepted plans still require `--allow-unsupported-soperator-upgrade-path`"
+        in (readme_flat)
     )
     assert "discovered storage sizes are lower bounds" in readme_flat
     assert "Render/deploy must not request a smaller PVC/PV size" in readme_flat
@@ -1594,8 +1594,20 @@ def test_docs_define_component_selector_contract() -> None:
     assert "Existing worker node groups are preserved in place" in readme_flat
     assert "checks the required spare quota and GPU capacity before mutation" in readme_flat
     assert "requires all selected worker nodes to start Ready and schedulable" in readme_flat
-    assert "checks Slurm jobs on affected external node-template workers" in readme_flat
-    assert "checks all live worker NodeSets before target Soperator chart reconciliation" in readme_flat
+    assert "checks affected Slurm jobs on external node-template workers" in readme_flat
+    assert (
+        "pending jobs in affected partitions or requested/scheduled on affected nodes"
+        in readme_flat
+    )
+    assert "each affected running job" not in readme_flat
+    assert "each displayed affected job" in readme_flat
+    assert "defaults to `interactive` in a real TTY" in readme_flat
+    assert "to `wait-then-cancel` in non-TTY or `--no-interactive` automation" in (readme_flat)
+    assert "The default wait timeout is `1h`" in readme_flat
+    assert (
+        "checks all live worker NodeSets before target Soperator chart reconciliation"
+        in readme_flat
+    )
     assert (
         "normalizes target `kube-rbac-proxy` image values to "
         "`registry.k8s.io/kubebuilder/kube-rbac-proxy:v0.15.0`"
@@ -1720,9 +1732,7 @@ def test_docs_define_component_selector_contract() -> None:
     assert "This ordering is intentional" in design_flat
     assert "where the required Nebius GPU image/CUDA stack targets" in design_flat
     assert "before the cluster reaches the Kubernetes `1.33+` boundary" in design_flat
-    assert "`procMount: Unmasked` admission now depends on `hostUsers: false`" in (
-        design_flat
-    )
+    assert "`procMount: Unmasked` admission now depends on `hostUsers: false`" in (design_flat)
     assert "user-namespace/idmap and NFS behavior must match the target chart contract" in (
         design_flat
     )
@@ -1730,14 +1740,14 @@ def test_docs_define_component_selector_contract() -> None:
         design_flat
     )
     assert "stale Flux/Helm records must be retired before final validation" in design_flat
-    assert "releases newer than the cxcli pin, such as `4.1.1`, are deliberately not advertised" in (
-        design_flat
+    assert (
+        "releases newer than the cxcli pin, such as `4.1.1`, are deliberately not advertised"
+        in (design_flat)
     )
-    assert "remain `not_validated` until cxcli has an explicit tested policy rule" in (
-        design_flat
-    )
-    assert "defaults to one provider-supported minor hop from the discovered control-plane version" in (
-        design_flat
+    assert "remain `not_validated` until cxcli has an explicit tested policy rule" in (design_flat)
+    assert (
+        "defaults to one provider-supported minor hop from the discovered control-plane version"
+        in (design_flat)
     )
     assert "does not present external upgrade phases as actions taken by the onboard command" in (
         design_flat
@@ -1847,8 +1857,9 @@ def test_docs_define_component_selector_contract() -> None:
         "advances the selected accepted external MK8s control-plane/node-template hop, target GPU stack reconciliation phase when paired with external upgrade work, storage, copy, compute"
         in design_flat
     )
-    assert "External node-template work is one Kubernetes minor hop per `ext-soperator upgrade` run" in (
-        design_flat
+    assert (
+        "External node-template work is one Kubernetes minor hop per `ext-soperator upgrade` run"
+        in (design_flat)
     )
     assert "discovered PVC/PV sizes as lower bounds" in design_flat
     assert "does not attempt a storage shrink" in design_flat
@@ -1888,10 +1899,13 @@ def test_docs_define_component_selector_contract() -> None:
     )
     assert "normal `validate`, `render`, and `deploy` can run from any workstation" in design_flat
     assert (
-        "handles Slurm jobs on affected external node-template workers and all live "
+        "handles affected Slurm jobs on external node-template workers and all live "
         "worker NodeSets before target chart reconciliation through the `--job-policy` "
-        "wait, cancel, requeue, or requeue-hold decision state"
+        "interactive, wait, wait-then-cancel, cancel, requeue, or requeue-hold "
+        "decision state, including pending jobs"
     ) in design_flat
+    assert "TTY runs default to `interactive`" in design_flat
+    assert "non-TTY and `--no-interactive` runs default to `wait-then-cancel`" in (design_flat)
     assert "provides ad hoc `ext-soperator scale-up` and `ext-soperator scale-down`" in (
         design_flat
     )

@@ -598,7 +598,8 @@ and chart source-family changes.
   MariaDB accounting DB dump before mutation when live accounting exists.
   `externalDB.enabled=true` fails fast in v1 because external DB backup support is not implemented. For MK8s
   target changes, the command drains cxcli-owned Slurm worker nodes, applies the
-  selected running-job policy, and lets the Terraform/Nebius node-group rollout
+  selected affected-job policy for running, completing, and pending Slurm jobs,
+  and lets the Terraform/Nebius node-group rollout
   own Kubernetes drain/cordon behavior rather than running raw `kubectl drain`.
   The MK8s node-template stage waits for stable node-group readiness before
   advancing, and the protected config comparison excludes cxcli-owned temporary
@@ -618,7 +619,9 @@ and chart source-family changes.
   The managed stage model is explicit: planning/dry-run resolves chart and MK8s
   target intent; preflight validates the generated bundle, live Soperator/Slurm
   state, backup, protected-state capture, and ActiveChecks checkpoint; MK8s
-  rollout drains cxcli-owned Slurm nodes, applies `--job-policy`, and waits for
+  rollout drains cxcli-owned Slurm nodes, applies `--job-policy` to displayed
+  affected Slurm jobs, including pending jobs in affected partitions or
+  requested/scheduled on affected nodes, and waits for
   Terraform-managed control-plane/node-group readiness; chart apply updates the
   Soperator app row, rerenders, validates, applies Flux/static manifests, and
   verifies live chart identity; fast stage gates record `fast_verification`
@@ -1197,9 +1200,14 @@ the selected temporary strategy and original-strategy
 restore, updates worker node groups with zero-surge by default or safe-surge
 waves when selected, using an
 exact fixed worker-group count or a percent-based wave with an optional cap,
-handles Slurm jobs on affected external node-template workers and all live
+handles affected Slurm jobs on external node-template workers and all live
 worker NodeSets before target chart reconciliation through the `--job-policy`
-wait, cancel, requeue, or requeue-hold decision state,
+interactive, wait, wait-then-cancel, cancel, requeue, or requeue-hold decision
+state, including pending jobs in affected partitions or requested/scheduled on
+affected nodes. TTY runs default to `interactive`; non-TTY and
+`--no-interactive` runs default to `wait-then-cancel` with the one-hour
+`--job-wait-timeout`, then cancel only the still-displayed affected jobs before
+continuing,
 provides ad hoc `ext-soperator scale-up` and `ext-soperator scale-down`
 commands for external maintenance without onboarding, requiring both Nebius
 `--project-id`/`--cluster-id` for node-group lookup and `--kube-context` for
@@ -4125,7 +4133,11 @@ Current runtime implementation is Nebius-focused:
 - Nebius SDK/API integration for auth/IAM and provider option lookups.
   Provider option lookups use operator-facing SDK auth preference so live
   wizard discovery is not hijacked by Terraform runtime service-account env
-  vars left in the shell.
+  vars left in the shell. If the matching Codex agent
+  `NEBIUS_AUTH_CREDENTIALS_FILE` and `NEBIUS_PROFILE` pair points to an
+  existing credential file alongside `NEBIUS_IAM_TOKEN`, the credential file is
+  used first so long-running agent SDK clients keep renewable service-account
+  auth; stale credential paths fall back to the IAM token.
 - Nebius-oriented defaults for provider/config behavior.
 
 The component source model itself is Terraform-module + Helm-chart based, but this release does not claim full multi-vendor runtime support.

@@ -11,13 +11,15 @@ import re
 import shlex
 import shutil
 import stat
+import string
 import subprocess
+import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -27,7 +29,7 @@ from uuid import uuid4
 
 import yaml
 from rich.console import Console
-from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.live import Live
 from rich.table import Table
 
 from .component_instances import normalize_component_token
@@ -65,6 +67,17 @@ from .quota_checks import (
     format_quota_report_lines,
 )
 from .runtime_config import to_plain_data
+from .slurm_jobs import (
+    AffectedSlurmJob,
+    affected_slurm_partitions_from_scontrol_show_node,
+    dedupe_slurm_jobs,
+    ensure_requeueable_slurm_jobs,
+    filter_affected_pending_slurm_jobs,
+    format_slurm_duration_seconds,
+    parse_squeue_jobs,
+    selected_display_job_ids,
+    slurm_remaining_seconds,
+)
 from .soperator_gpu_driver_jail import (
     SOPERATOR_GPU_DRIVER_JAIL_INIT_CONTAINER_NAME,
     ensure_soperator_gpu_driver_jail_values,
@@ -252,9 +265,7 @@ _SOPERATOR_STORAGE_DEFAULTS: Mapping[str, Mapping[str, Any]] = {
 }
 _SOPERATOR_NAMESPACE = "soperator"
 _SECURITY_PROFILES_OPERATOR_NAMESPACE = "security-profiles-operator-system"
-_SECURITY_PROFILES_OPERATOR_WEBHOOK_RESOURCE = (
-    "deployment/security-profiles-operator-webhook"
-)
+_SECURITY_PROFILES_OPERATOR_WEBHOOK_RESOURCE = "deployment/security-profiles-operator-webhook"
 _SOPERATOR_TARGET_RELEASE_NAME = "soperator"
 _SOPERATOR_CONTROLLER_POD = "controller-0"
 _SOPERATOR_CONTROLLER_CONTAINER = "slurmctld"
@@ -353,6 +364,7 @@ _EXTERNAL_UPGRADE_JOB_POLICIES = frozenset(
     {
         "interactive",
         "wait",
+        "wait-then-cancel",
         "fail",
         "cancel-selected",
         "cancel-all",
@@ -362,6 +374,9 @@ _EXTERNAL_UPGRADE_JOB_POLICIES = frozenset(
         "requeue-hold-all",
     }
 )
+_EXTERNAL_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT_SECONDS = 3600
+_EXTERNAL_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL_SECONDS = 30
+_EXTERNAL_UPGRADE_CANCEL_CLEAR_TIMEOUT_SECONDS = 300
 
 
 class SoperatorMigrationPhasePending(RuntimeError):
@@ -463,19 +478,6 @@ class SoperatorMigrationStatusSnapshot:
     state: str
     signals: tuple[SoperatorMigrationStatusSignal, ...]
     summary: str
-
-
-@dataclass(frozen=True)
-class ExternalSoperatorUpgradeSlurmJob:
-    job_id: str
-    user: str
-    state: str
-    partition: str
-    nodes: str
-    elapsed: str
-    limit: str
-    remaining: str
-    name: str
 
 
 def soperator_migration_checkpoint_path(config_path: Path, target_ref: str) -> Path:
@@ -1433,7 +1435,9 @@ _SOPERATOR_DEFAULTED_SPEC_PATHS: Mapping[str, tuple[tuple[str, ...], ...]] = {
 def _sensitive_kubernetes_contract_key(key: Any) -> bool:
     normalized = str(key or "").strip().lower().replace("-", "_")
     compact = normalized.replace("_", "")
-    return any(part in normalized or part in compact for part in _SENSITIVE_KUBERNETES_CONTRACT_KEY_PARTS)
+    return any(
+        part in normalized or part in compact for part in _SENSITIVE_KUBERNETES_CONTRACT_KEY_PARTS
+    )
 
 
 def _strip_volatile_kubernetes_contract(value: Any) -> Any:
@@ -4875,6 +4879,7 @@ def _run_soperator_worker_rollout_live_preflight(
     job_wait_timeout_seconds: int,
     job_refresh_interval_seconds: int,
     slurm_decision_recorder: Callable[[Mapping[str, Any]], None] | None = None,
+    interactive_prompt_pause: Callable[[], Any] | None = None,
 ) -> list[str]:
     unavailable_budget = 0
     budget_label = f"{rollout.strategy} requires selected worker groups to start healthy"
@@ -4948,6 +4953,7 @@ def _run_soperator_worker_rollout_live_preflight(
                 wait_timeout_seconds=job_wait_timeout_seconds,
                 refresh_interval_seconds=job_refresh_interval_seconds,
                 decision_recorder=slurm_decision_recorder,
+                interactive_prompt_pause=interactive_prompt_pause,
             )
         )
     return lines
@@ -5234,29 +5240,12 @@ def _command_detail(result: SoperatorMigrationCommandResult) -> str:
     return result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
 
 
-def _external_upgrade_parse_slurm_jobs(output: str) -> tuple[ExternalSoperatorUpgradeSlurmJob, ...]:
-    jobs: list[ExternalSoperatorUpgradeSlurmJob] = []
-    for raw_line in output.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        parts = line.split("|", 8)
-        while len(parts) < 9:
-            parts.append("")
-        jobs.append(
-            ExternalSoperatorUpgradeSlurmJob(
-                job_id=parts[0],
-                user=parts[1],
-                state=parts[2],
-                partition=parts[3],
-                nodes=parts[4],
-                elapsed=parts[5],
-                limit=parts[6],
-                remaining=parts[7],
-                name=parts[8],
-            )
-        )
-    return tuple(jobs)
+def _external_upgrade_parse_slurm_jobs(
+    output: str,
+    *,
+    impact_scope: str = "allocated-node",
+) -> tuple[AffectedSlurmJob, ...]:
+    return parse_squeue_jobs(output, impact_scope=impact_scope)
 
 
 def _external_upgrade_parse_slurm_node_aliases(output: str) -> dict[str, str]:
@@ -5390,28 +5379,78 @@ def _external_upgrade_worker_nodeset_slurm_nodes(
     )
 
 
+_EXTERNAL_UPGRADE_SQUEUE_FORMAT = "%i|%u|%T|%P|%N|%n|%Y|%r|%M|%l|%L|%j"
+_EXTERNAL_UPGRADE_ACTIVE_SQUEUE_STATES = "RUNNING,COMPLETING,CONFIGURING,SUSPENDED,STOPPED"
+
+
+def _external_upgrade_affected_partitions(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    node_names: Sequence[str],
+) -> tuple[str, ...]:
+    selected_nodes = tuple(
+        str(node or "").strip() for node in node_names if str(node or "").strip()
+    )
+    if not selected_nodes:
+        return ()
+    result = _kubectl_exec_login(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        args=("scontrol", "show", "node", ",".join(selected_nodes), "-o"),
+        check=False,
+        timeout_seconds=120,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "External Soperator upgrade could not inspect Slurm partitions for affected nodes "
+            f"{', '.join(selected_nodes)} before pending-job policy evaluation: "
+            + _command_detail(result)
+        )
+    partitions = affected_slurm_partitions_from_scontrol_show_node(result.stdout)
+    if not partitions:
+        raise RuntimeError(
+            "External Soperator upgrade could not determine Slurm partitions for affected nodes "
+            f"{', '.join(selected_nodes)} before pending-job policy evaluation. "
+            "Resolve Slurm node partition metadata before using --job-policy."
+        )
+    return partitions
+
+
 def _external_upgrade_slurm_jobs(
     *,
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
     node_names: Sequence[str],
-) -> tuple[ExternalSoperatorUpgradeSlurmJob, ...]:
+) -> tuple[AffectedSlurmJob, ...]:
     selected_nodes = _external_upgrade_slurm_node_filter(
         command_runner=command_runner,
         kube_context=kube_context,
         node_names=node_names,
     )
 
-    def _squeue(nodes: Sequence[str]) -> SoperatorMigrationCommandResult:
+    def _squeue(
+        *,
+        states: str,
+        nodes: Sequence[str] = (),
+        partitions: Sequence[str] = (),
+    ) -> SoperatorMigrationCommandResult:
         args: list[str] = [
             "squeue",
             "-h",
+            "-t",
+            states,
             "-o",
-            "%i|%u|%T|%P|%N|%M|%l|%L|%j",
+            _EXTERNAL_UPGRADE_SQUEUE_FORMAT,
         ]
         filtered_nodes = tuple(str(node or "").strip() for node in nodes if str(node or "").strip())
         if filtered_nodes:
             args.extend(["-w", ",".join(filtered_nodes)])
+        filtered_partitions = tuple(
+            str(partition or "").strip() for partition in partitions if str(partition or "").strip()
+        )
+        if filtered_partitions:
+            args.extend(["-p", ",".join(filtered_partitions)])
         return _kubectl_exec_login(
             command_runner=command_runner,
             kube_context=kube_context,
@@ -5420,7 +5459,7 @@ def _external_upgrade_slurm_jobs(
             timeout_seconds=120,
         )
 
-    result = _squeue(selected_nodes)
+    result = _squeue(states=_EXTERNAL_UPGRADE_ACTIVE_SQUEUE_STATES, nodes=selected_nodes)
     if (
         result.returncode != 0
         and selected_nodes
@@ -5429,15 +5468,46 @@ def _external_upgrade_slurm_jobs(
         raise RuntimeError(
             "External Soperator upgrade could not inspect Slurm jobs for affected nodes "
             "because Slurm rejected the scoped node filter "
-            f"{', '.join(selected_nodes)}: "
-            + _command_detail(result)
+            f"{', '.join(selected_nodes)}: " + _command_detail(result)
         )
     if result.returncode != 0:
         raise RuntimeError(
             "External Soperator upgrade could not inspect Slurm jobs from a login pod: "
             + _command_detail(result)
         )
-    return _external_upgrade_parse_slurm_jobs(result.stdout)
+    active_jobs = _external_upgrade_parse_slurm_jobs(
+        result.stdout,
+        impact_scope="allocated-node",
+    )
+    partitions = _external_upgrade_affected_partitions(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        node_names=selected_nodes,
+    )
+    pending_result = _squeue(states="PENDING", partitions=partitions)
+    if pending_result.returncode != 0:
+        raise RuntimeError(
+            "External Soperator upgrade could not inspect pending Slurm jobs from a login pod: "
+            + _command_detail(pending_result)
+        )
+    pending_candidates = list(
+        _external_upgrade_parse_slurm_jobs(pending_result.stdout, impact_scope="pending")
+    )
+    node_pending_result = _squeue(states="PENDING")
+    if node_pending_result.returncode != 0:
+        raise RuntimeError(
+            "External Soperator upgrade could not inspect node-scoped pending Slurm jobs "
+            "from a login pod: " + _command_detail(node_pending_result)
+        )
+    pending_candidates.extend(
+        _external_upgrade_parse_slurm_jobs(node_pending_result.stdout, impact_scope="pending")
+    )
+    pending_jobs = filter_affected_pending_slurm_jobs(
+        dedupe_slurm_jobs(pending_candidates),
+        affected_nodes=selected_nodes,
+        affected_partitions=partitions,
+    )
+    return dedupe_slurm_jobs((*active_jobs, *pending_jobs))
 
 
 def _external_upgrade_cancel_slurm_jobs(
@@ -5494,7 +5564,7 @@ def _wait_for_external_upgrade_requeued_jobs_to_leave_nodes(
     job_ids: Sequence[str],
     timeout_seconds: int,
     refresh_interval_seconds: int,
-) -> tuple[ExternalSoperatorUpgradeSlurmJob, ...]:
+) -> tuple[AffectedSlurmJob, ...]:
     selected = frozenset(
         str(job_id or "").strip() for job_id in job_ids if str(job_id or "").strip()
     )
@@ -5517,54 +5587,37 @@ def _wait_for_external_upgrade_requeued_jobs_to_leave_nodes(
             return jobs
         if time.monotonic() >= deadline:
             raise SoperatorMigrationPhasePending(
-                f"{len(selected_remaining)} Slurm job(s) still run on affected nodes after requeue/requeuehold. "
+                f"{len(selected_remaining)} affected Slurm job(s) remain after requeue/requeuehold. "
                 "Rerun after they finish or cancel them explicitly."
             )
         time.sleep(max(refresh_interval_seconds, 1))
 
 
 def _external_upgrade_remaining_seconds(value: str) -> int | None:
-    token = str(value or "").strip()
-    if not token or token.upper() in {"N/A", "UNLIMITED", "NOT_SET"}:
-        return None
-    days = 0
-    if "-" in token:
-        day_text, token = token.split("-", 1)
-        try:
-            days = int(day_text)
-        except ValueError:
-            return None
-    fields = token.split(":")
-    try:
-        if len(fields) == 3:
-            hours, minutes, seconds = (int(item) for item in fields)
-        elif len(fields) == 2:
-            hours = 0
-            minutes, seconds = (int(item) for item in fields)
-        elif len(fields) == 1:
-            hours = 0
-            minutes = 0
-            seconds = int(fields[0])
-        else:
-            return None
-    except ValueError:
-        return None
-    return days * 86400 + hours * 3600 + minutes * 60 + seconds
+    return slurm_remaining_seconds(value)
+
+
+def _external_upgrade_slurm_table_value(value: str) -> str:
+    return value if str(value or "").strip() else "-"
 
 
 def _print_external_upgrade_jobs_table(
-    jobs: Sequence[ExternalSoperatorUpgradeSlurmJob],
+    jobs: Sequence[AffectedSlurmJob],
 ) -> None:
-    table = Table(title="Running Slurm jobs blocking external Soperator upgrade")
+    table = Table(title="Affected Slurm jobs blocking external Soperator upgrade")
     for column in (
         "Job",
         "User",
         "State",
         "Partition",
-        "Nodes",
+        "Allocated",
+        "Requested",
+        "Scheduled",
+        "Reason",
         "Elapsed",
         "Limit",
         "Remaining",
+        "Scope",
         "Name",
     ):
         table.add_column(column)
@@ -5574,13 +5627,353 @@ def _print_external_upgrade_jobs_table(
             job.user,
             job.state,
             job.partition,
-            job.nodes,
+            _external_upgrade_slurm_table_value(job.allocated_nodes),
+            _external_upgrade_slurm_table_value(job.requested_nodes),
+            _external_upgrade_slurm_table_value(job.scheduled_nodes),
+            _external_upgrade_slurm_table_value(job.reason),
             job.elapsed,
             job.limit,
             job.remaining,
+            job.impact_scope,
             job.name,
         )
     _console.print(table)
+
+
+@contextmanager
+def _external_upgrade_slurm_prompt_paused(
+    pause: Callable[[], Any] | None,
+) -> Iterator[None]:
+    if callable(pause):
+        with pause():
+            yield
+        return
+    yield
+
+
+def _external_upgrade_is_tty_session() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _external_upgrade_job_policy(policy: str | None) -> str:
+    interactive = _external_upgrade_is_tty_session()
+    resolved_policy = str(policy or "").strip()
+    if not resolved_policy:
+        resolved_policy = "interactive" if interactive else "wait-then-cancel"
+    if resolved_policy not in _EXTERNAL_UPGRADE_JOB_POLICIES:
+        raise RuntimeError(
+            "--job-policy must be one of: " + ", ".join(sorted(_EXTERNAL_UPGRADE_JOB_POLICIES))
+        )
+    if resolved_policy == "interactive" and not interactive:
+        raise RuntimeError(
+            "--job-policy interactive requires an interactive terminal. Use "
+            "wait-then-cancel, wait, fail, cancel-selected, cancel-all, "
+            "requeue-selected, requeue-all, requeue-hold-selected, or "
+            "requeue-hold-all."
+        )
+    return resolved_policy
+
+
+def _external_upgrade_configure_questionary_checkbox_symbols() -> None:
+    try:
+        from questionary.prompts import common as questionary_common
+
+        questionary_common.INDICATOR_SELECTED = "[x]"
+        questionary_common.INDICATOR_UNSELECTED = "[ ]"
+    except Exception:
+        return
+
+
+def _external_upgrade_questionary_choice_title(choice: Any) -> str:
+    title = getattr(choice, "title", "")
+    if isinstance(title, list):
+        return "".join(str(part[1]) for part in title if isinstance(part, tuple) and len(part) > 1)
+    return str(title or "")
+
+
+def _external_upgrade_find_questionary_control(container: Any) -> Any | None:
+    stack = [container]
+    seen: set[int] = set()
+    while stack:
+        current = stack.pop()
+        current_id = id(current)
+        if current_id in seen:
+            continue
+        seen.add(current_id)
+        if (
+            hasattr(current, "choices")
+            and hasattr(current, "pointed_at")
+            and callable(getattr(current, "is_selection_valid", None))
+        ):
+            return current
+        children = getattr(current, "children", None)
+        if children:
+            stack.extend(reversed(list(children)))
+        for attr in ("content", "container"):
+            child = getattr(current, attr, None)
+            if child is not None and child is not current:
+                stack.append(child)
+    return None
+
+
+def _external_upgrade_register_questionary_prefix_jump_keys(question: Any) -> None:
+    application = getattr(question, "application", None)
+    bindings = getattr(application, "key_bindings", None)
+    layout = getattr(application, "layout", None)
+    control = _external_upgrade_find_questionary_control(getattr(layout, "container", None))
+    if bindings is None or control is None:
+        return
+
+    def _jump_to_prefix(event: Any) -> None:
+        key_event = event.key_sequence[0] if getattr(event, "key_sequence", None) else None
+        key = str(getattr(key_event, "key", "") or "").casefold()
+        if not key:
+            return
+        choices = list(
+            getattr(control, "filtered_choices", None) or getattr(control, "choices", ())
+        )
+        for index, choice in enumerate(choices):
+            if getattr(choice, "disabled", False):
+                continue
+            if (
+                _external_upgrade_questionary_choice_title(choice)
+                .strip()
+                .casefold()
+                .startswith(key)
+            ):
+                control.pointed_at = index
+                return
+
+    try:
+        for key in string.ascii_letters + string.digits:
+            bindings.add(key, eager=True)(_jump_to_prefix)
+    except Exception:
+        return
+
+
+def _external_upgrade_ask_questionary_with_prefix_jumps(question: Any) -> Any:
+    _external_upgrade_register_questionary_prefix_jump_keys(question)
+    return question.ask()
+
+
+_EXTERNAL_UPGRADE_INTERACTIVE_JOB_ACTIONS: tuple[tuple[str, str], ...] = (
+    ("refresh", "r - refresh"),
+    ("wait", "w - wait"),
+    ("cancel-selected", "c - cancel selected"),
+    ("cancel-all", "a - cancel all displayed"),
+    ("requeue-selected", "q - requeue selected"),
+    ("requeue-all", "u - requeue all displayed"),
+    ("requeue-hold-selected", "h - requeue-hold selected"),
+    ("requeue-hold-all", "y - requeue-hold all displayed"),
+    ("abort", "x - abort"),
+)
+_EXTERNAL_UPGRADE_JOB_ACTION_ALIASES = {
+    "r": "refresh",
+    "refresh": "refresh",
+    "w": "wait",
+    "wait": "wait",
+    "c": "cancel-selected",
+    "cancel": "cancel-selected",
+    "cancel-selected": "cancel-selected",
+    "a": "cancel-all",
+    "all": "cancel-all",
+    "cancel-all": "cancel-all",
+    "q": "requeue-selected",
+    "requeue": "requeue-selected",
+    "requeue-selected": "requeue-selected",
+    "u": "requeue-all",
+    "requeue-all": "requeue-all",
+    "h": "requeue-hold-selected",
+    "hold": "requeue-hold-selected",
+    "requeue-hold": "requeue-hold-selected",
+    "requeue-hold-selected": "requeue-hold-selected",
+    "y": "requeue-hold-all",
+    "requeue-hold-all": "requeue-hold-all",
+    "x": "abort",
+    "abort": "abort",
+}
+
+
+def _external_upgrade_slurm_job_choice_title(job: AffectedSlurmJob) -> str:
+    pieces = [
+        job.job_id,
+        job.state,
+        job.user,
+        job.partition,
+        f"alloc={_external_upgrade_slurm_table_value(job.allocated_nodes)}",
+    ]
+    if job.requested_nodes:
+        pieces.append(f"req={job.requested_nodes}")
+    if job.reason:
+        pieces.append(f"reason={job.reason}")
+    pieces.extend((f"remaining={job.remaining or 'unknown'}", job.name))
+    return " | ".join(piece for piece in pieces if piece)
+
+
+def _prompt_external_upgrade_slurm_job_control(
+    jobs: Sequence[AffectedSlurmJob],
+    *,
+    prompt_pause: Callable[[], Any] | None,
+) -> tuple[str, tuple[str, ...]]:
+    with _external_upgrade_slurm_prompt_paused(prompt_pause):
+        if _external_upgrade_is_tty_session():
+            try:
+                import questionary
+
+                _external_upgrade_configure_questionary_checkbox_symbols()
+                selected = _external_upgrade_ask_questionary_with_prefix_jumps(
+                    questionary.checkbox(
+                        "Select affected Slurm jobs",
+                        choices=[
+                            questionary.Choice(
+                                title=_external_upgrade_slurm_job_choice_title(job),
+                                value=job.job_id,
+                            )
+                            for job in jobs
+                        ],
+                        qmark="",
+                    )
+                )
+                if selected is None:
+                    return ("abort", ())
+                action = _external_upgrade_ask_questionary_with_prefix_jumps(
+                    questionary.select(
+                        "Choose Slurm job action",
+                        choices=[
+                            questionary.Choice(title=title, value=value)
+                            for value, title in _EXTERNAL_UPGRADE_INTERACTIVE_JOB_ACTIONS
+                        ],
+                        qmark="",
+                    )
+                )
+                if action is None:
+                    return ("abort", tuple(str(job_id) for job_id in selected))
+                return (str(action), tuple(str(job_id) for job_id in selected))
+            except Exception as exc:
+                _console.print(
+                    f"[yellow]Interactive selector unavailable, using text fallback: {exc}[/yellow]"
+                )
+        _print_external_upgrade_jobs_table(jobs)
+        raw_ids = input("Job IDs to select, comma separated (blank for none): ").strip()
+        selected_ids = tuple(item.strip() for item in raw_ids.split(",") if item.strip())
+        raw_action = input(
+            "Action [r refresh, w wait, c cancel selected, a cancel all displayed, "
+            "q requeue selected, u requeue all displayed, h requeue-hold selected, "
+            "y requeue-hold all displayed, x abort] [r]: "
+        ).strip()
+        action = _EXTERNAL_UPGRADE_JOB_ACTION_ALIASES.get((raw_action or "r").lower())
+        return (action or "", selected_ids)
+
+
+def _external_upgrade_wait_dashboard(
+    jobs: Sequence[AffectedSlurmJob],
+    *,
+    local_elapsed_seconds: int,
+    poll_interval_seconds: int,
+) -> Table:
+    table = Table(
+        title=(
+            "Waiting for affected Slurm jobs "
+            f"(polling squeue every {max(poll_interval_seconds, 1)}s)"
+        )
+    )
+    for column in (
+        "Job",
+        "State",
+        "Partition",
+        "Allocated",
+        "Requested",
+        "Reason",
+        "Remaining",
+        "Scope",
+        "Name",
+    ):
+        table.add_column(column)
+    for job in jobs:
+        remaining_seconds = _external_upgrade_remaining_seconds(job.remaining)
+        countdown = (
+            "unknown"
+            if remaining_seconds is None
+            else format_slurm_duration_seconds(remaining_seconds - local_elapsed_seconds)
+        )
+        table.add_row(
+            job.job_id,
+            job.state,
+            job.partition,
+            _external_upgrade_slurm_table_value(job.allocated_nodes),
+            _external_upgrade_slurm_table_value(job.requested_nodes),
+            _external_upgrade_slurm_table_value(job.reason),
+            countdown,
+            job.impact_scope,
+            job.name,
+        )
+    return table
+
+
+def _wait_for_external_upgrade_slurm_jobs_until_timeout(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    node_names: Sequence[str],
+    timeout_seconds: int,
+    refresh_interval_seconds: int,
+) -> tuple[AffectedSlurmJob, ...]:
+    deadline = time.monotonic() + timeout_seconds if timeout_seconds > 0 else None
+    poll_interval = max(refresh_interval_seconds, 1)
+
+    def _jobs() -> tuple[AffectedSlurmJob, ...]:
+        return _external_upgrade_slurm_jobs(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            node_names=node_names,
+        )
+
+    def _timed_out() -> bool:
+        return deadline is not None and time.monotonic() >= deadline
+
+    if not getattr(_console, "is_terminal", False):
+        while True:
+            jobs = _jobs()
+            if not jobs:
+                _console.print("No affected Slurm jobs remain", soft_wrap=True)
+                return ()
+            _console.print(
+                _external_upgrade_wait_dashboard(
+                    jobs,
+                    local_elapsed_seconds=0,
+                    poll_interval_seconds=poll_interval,
+                )
+            )
+            for local_elapsed in range(poll_interval):
+                if _timed_out():
+                    return jobs
+                if local_elapsed:
+                    _console.print(
+                        _external_upgrade_wait_dashboard(
+                            jobs,
+                            local_elapsed_seconds=local_elapsed,
+                            poll_interval_seconds=poll_interval,
+                        )
+                    )
+                time.sleep(1)
+
+    with Live(console=_console, refresh_per_second=4) as live:
+        while True:
+            jobs = _jobs()
+            if not jobs:
+                live.update(Table(title="No affected Slurm jobs remain"))
+                return ()
+            for local_elapsed in range(poll_interval):
+                live.update(
+                    _external_upgrade_wait_dashboard(
+                        jobs,
+                        local_elapsed_seconds=local_elapsed,
+                        poll_interval_seconds=poll_interval,
+                    )
+                )
+                if _timed_out():
+                    return jobs
+                time.sleep(1)
 
 
 def _wait_for_external_upgrade_slurm_jobs(
@@ -5591,50 +5984,19 @@ def _wait_for_external_upgrade_slurm_jobs(
     timeout_seconds: int,
     refresh_interval_seconds: int,
 ) -> None:
-    started = time.monotonic()
-    deadline = started + timeout_seconds if timeout_seconds > 0 else None
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TimeElapsedColumn(),
-        console=_console,
-    ) as progress:
-        task_id = progress.add_task("Waiting for Slurm jobs to finish", total=None)
-        while True:
-            jobs = _external_upgrade_slurm_jobs(
-                command_runner=command_runner,
-                kube_context=kube_context,
-                node_names=node_names,
-            )
-            if not jobs:
-                progress.update(task_id, description="No blocking Slurm jobs remain")
-                return
-            remaining_values = [
-                seconds
-                for job in jobs
-                if (seconds := _external_upgrade_remaining_seconds(job.remaining)) is not None
-            ]
-            elapsed = int(time.monotonic() - started)
-            description = f"Waiting for {len(jobs)} Slurm job(s)"
-            if remaining_values:
-                longest = max(remaining_values)
-                description += f"; longest known time-left {_format_status_elapsed(longest)}"
-                progress.update(
-                    task_id,
-                    total=max(longest, 1),
-                    completed=min(elapsed, max(longest, 1)),
-                    description=description,
-                )
-            else:
-                progress.update(task_id, total=None, description=description)
-            if deadline is not None and time.monotonic() >= deadline:
-                raise RuntimeError(
-                    "Timed out waiting for Slurm jobs to finish. Rerun with a longer "
-                    "--job-wait-timeout, cancel, requeue, or requeue-hold selected jobs, "
-                    "or use --job-policy fail."
-                )
-            time.sleep(max(refresh_interval_seconds, 1))
+    remaining = _wait_for_external_upgrade_slurm_jobs_until_timeout(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        node_names=node_names,
+        timeout_seconds=timeout_seconds,
+        refresh_interval_seconds=refresh_interval_seconds,
+    )
+    if remaining:
+        raise RuntimeError(
+            "Timed out waiting for Slurm jobs to finish. Rerun with a longer "
+            "--job-wait-timeout, cancel, requeue, or requeue-hold selected jobs, "
+            "or use --job-policy wait-then-cancel."
+        )
 
 
 def _handle_external_upgrade_slurm_jobs(
@@ -5642,12 +6004,13 @@ def _handle_external_upgrade_slurm_jobs(
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
     node_names: Sequence[str],
-    policy: str,
+    policy: str | None,
     cancel_job_ids: Sequence[str],
     requeue_job_ids: Sequence[str],
     wait_timeout_seconds: int,
     refresh_interval_seconds: int,
     decision_recorder: Callable[[Mapping[str, Any]], None] | None = None,
+    interactive_prompt_pause: Callable[[], Any] | None = None,
 ) -> list[str]:
     def _record(action: str, **details: Any) -> None:
         if decision_recorder is None:
@@ -5660,14 +6023,82 @@ def _handle_external_upgrade_slurm_jobs(
             }
         )
 
-    resolved_policy = str(policy or "fail").strip() or "fail"
-    if resolved_policy not in _EXTERNAL_UPGRADE_JOB_POLICIES:
+    resolved_policy = _external_upgrade_job_policy(policy)
+    if resolved_policy == "wait-then-cancel" and wait_timeout_seconds <= 0:
         raise RuntimeError(
-            "--job-policy must be one of: " + ", ".join(sorted(_EXTERNAL_UPGRADE_JOB_POLICIES))
+            "--job-policy wait-then-cancel requires a positive --job-wait-timeout. "
+            "Use --job-policy wait --job-wait-timeout 0s for an unlimited wait."
         )
     selected_nodes = tuple(
         str(node or "").strip() for node in node_names if str(node or "").strip()
     )
+
+    def _wait_until_timeout(timeout_seconds: int) -> tuple[AffectedSlurmJob, ...]:
+        with _external_upgrade_slurm_prompt_paused(interactive_prompt_pause):
+            return _wait_for_external_upgrade_slurm_jobs_until_timeout(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                node_names=selected_nodes,
+                timeout_seconds=timeout_seconds,
+                refresh_interval_seconds=refresh_interval_seconds,
+            )
+
+    def _wait_then_cancel() -> list[str]:
+        _record(
+            "wait-then-cancel-wait-started",
+            timeout_seconds=wait_timeout_seconds,
+            refresh_interval_seconds=refresh_interval_seconds,
+        )
+        remaining = _wait_until_timeout(wait_timeout_seconds)
+        if not remaining:
+            _record("wait-then-cancel-wait-completed")
+            return ["Slurm job preflight: waited for affected jobs to finish."]
+        remaining = _external_upgrade_slurm_jobs(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            node_names=selected_nodes,
+        )
+        if not remaining:
+            _record("wait-then-cancel-cleared-after-timeout-refresh")
+            return ["Slurm job preflight: waited for affected jobs to finish."]
+        selected = tuple(job.job_id for job in remaining)
+        _record(
+            "wait-then-cancel-timeout",
+            timeout_seconds=wait_timeout_seconds,
+            job_ids=selected,
+            jobs=[job.__dict__ for job in remaining],
+        )
+        _console.print(
+            "Slurm job wait timeout reached; cancelling still-affected displayed jobs: "
+            + ", ".join(selected),
+            soft_wrap=True,
+        )
+        _external_upgrade_cancel_slurm_jobs(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            job_ids=selected,
+        )
+        _record(
+            "wait-then-cancel-auto-cancel",
+            job_ids=selected,
+            clear_timeout_seconds=_EXTERNAL_UPGRADE_CANCEL_CLEAR_TIMEOUT_SECONDS,
+        )
+        still_remaining = _wait_until_timeout(_EXTERNAL_UPGRADE_CANCEL_CLEAR_TIMEOUT_SECONDS)
+        if still_remaining:
+            remaining_ids = tuple(job.job_id for job in still_remaining)
+            _record(
+                "wait-then-cancel-clear-timeout",
+                job_ids=remaining_ids,
+                jobs=[job.__dict__ for job in still_remaining],
+            )
+            raise RuntimeError(
+                "Affected Slurm jobs remain after automatic cancellation: "
+                + ", ".join(remaining_ids)
+                + ". Clear them manually before rerunning the upgrade."
+            )
+        _record("wait-then-cancel-cleared", job_ids=selected)
+        return ["Slurm job preflight: waited, cancelled timed-out affected jobs, and cleared."]
+
     jobs = _external_upgrade_slurm_jobs(
         command_runner=command_runner,
         kube_context=kube_context,
@@ -5675,7 +6106,7 @@ def _handle_external_upgrade_slurm_jobs(
     )
     if not jobs:
         _record("no-blocking-jobs", policy=resolved_policy, node_names=selected_nodes)
-        return ["Slurm job preflight: no blocking jobs on affected nodes."]
+        return ["Slurm job preflight: no affected jobs in the upgrade scope."]
     _record(
         "blocking-jobs-detected",
         policy=resolved_policy,
@@ -5684,15 +6115,11 @@ def _handle_external_upgrade_slurm_jobs(
     )
     if resolved_policy == "interactive":
         while True:
-            _print_external_upgrade_jobs_table(jobs)
-            action = (
-                input(
-                    "Choose Slurm job action: refresh, wait, cancel-selected, cancel-all, "
-                    "requeue-selected, requeue-all, requeue-hold-selected, requeue-hold-all, abort [refresh]: "
-                ).strip()
-                or "refresh"
+            action, selected_ids = _prompt_external_upgrade_slurm_job_control(
+                jobs,
+                prompt_pause=interactive_prompt_pause,
             )
-            _record("operator-selected", selection=action)
+            _record("operator-selected", selection=action, job_ids=selected_ids)
             if action == "refresh":
                 jobs = _external_upgrade_slurm_jobs(
                     command_runner=command_runner,
@@ -5701,7 +6128,7 @@ def _handle_external_upgrade_slurm_jobs(
                 )
                 if not jobs:
                     _record("no-blocking-jobs-after-refresh", policy=resolved_policy)
-                    return ["Slurm job preflight: no blocking jobs remain after refresh."]
+                    return ["Slurm job preflight: no affected jobs remain after refresh."]
                 continue
             if action == "wait":
                 _record(
@@ -5709,18 +6136,21 @@ def _handle_external_upgrade_slurm_jobs(
                     timeout_seconds=wait_timeout_seconds,
                     refresh_interval_seconds=refresh_interval_seconds,
                 )
-                _wait_for_external_upgrade_slurm_jobs(
-                    command_runner=command_runner,
-                    kube_context=kube_context,
-                    node_names=selected_nodes,
-                    timeout_seconds=wait_timeout_seconds,
-                    refresh_interval_seconds=refresh_interval_seconds,
-                )
+                with _external_upgrade_slurm_prompt_paused(interactive_prompt_pause):
+                    _wait_for_external_upgrade_slurm_jobs(
+                        command_runner=command_runner,
+                        kube_context=kube_context,
+                        node_names=selected_nodes,
+                        timeout_seconds=wait_timeout_seconds,
+                        refresh_interval_seconds=refresh_interval_seconds,
+                    )
                 _record("wait-completed")
-                return ["Slurm job preflight: waited for blocking jobs to finish."]
+                return ["Slurm job preflight: waited for affected jobs to finish."]
             if action == "cancel-selected":
-                raw_ids = input("Job IDs to cancel, comma separated: ").strip()
-                selected = tuple(item.strip() for item in raw_ids.split(",") if item.strip())
+                selected = selected_display_job_ids(jobs, selected_ids, action=action)
+                if not selected:
+                    _console.print("[yellow]Select at least one displayed job to cancel.[/yellow]")
+                    continue
                 _record("cancel-selected", job_ids=selected)
                 _external_upgrade_cancel_slurm_jobs(
                     command_runner=command_runner,
@@ -5736,11 +6166,12 @@ def _handle_external_upgrade_slurm_jobs(
                     return ["Slurm job preflight: selected jobs cancelled."]
                 continue
             if action == "cancel-all":
-                _record("cancel-all", job_ids=[job.job_id for job in jobs])
+                selected = tuple(job.job_id for job in jobs)
+                _record("cancel-all", job_ids=selected)
                 _external_upgrade_cancel_slurm_jobs(
                     command_runner=command_runner,
                     kube_context=kube_context,
-                    job_ids=[job.job_id for job in jobs],
+                    job_ids=selected,
                 )
                 jobs = _external_upgrade_slurm_jobs(
                     command_runner=command_runner,
@@ -5748,11 +6179,17 @@ def _handle_external_upgrade_slurm_jobs(
                     node_names=selected_nodes,
                 )
                 if not jobs:
-                    return ["Slurm job preflight: all blocking jobs cancelled."]
+                    return ["Slurm job preflight: all affected jobs cancelled."]
                 continue
             if action == "requeue-selected":
-                raw_ids = input("Job IDs to requeue, comma separated: ").strip()
-                selected = tuple(item.strip() for item in raw_ids.split(",") if item.strip())
+                try:
+                    selected = ensure_requeueable_slurm_jobs(jobs, selected_ids, action=action)
+                except RuntimeError as exc:
+                    _console.print(f"[yellow]{exc}[/yellow]")
+                    continue
+                if not selected:
+                    _console.print("[yellow]Select at least one displayed job to requeue.[/yellow]")
+                    continue
                 _record("requeue-selected", job_ids=selected)
                 _external_upgrade_requeue_slurm_jobs(
                     command_runner=command_runner,
@@ -5771,26 +6208,40 @@ def _handle_external_upgrade_slurm_jobs(
                     return ["Slurm job preflight: selected jobs requeued."]
                 continue
             if action == "requeue-all":
-                _record("requeue-all", job_ids=[job.job_id for job in jobs])
+                selected = tuple(job.job_id for job in jobs)
+                try:
+                    selected = ensure_requeueable_slurm_jobs(jobs, selected, action=action)
+                except RuntimeError as exc:
+                    _console.print(f"[yellow]{exc}[/yellow]")
+                    continue
+                _record("requeue-all", job_ids=selected)
                 _external_upgrade_requeue_slurm_jobs(
                     command_runner=command_runner,
                     kube_context=kube_context,
-                    job_ids=[job.job_id for job in jobs],
+                    job_ids=selected,
                 )
                 jobs = _wait_for_external_upgrade_requeued_jobs_to_leave_nodes(
                     command_runner=command_runner,
                     kube_context=kube_context,
                     node_names=selected_nodes,
-                    job_ids=[job.job_id for job in jobs],
+                    job_ids=selected,
                     timeout_seconds=wait_timeout_seconds,
                     refresh_interval_seconds=refresh_interval_seconds,
                 )
                 if not jobs:
-                    return ["Slurm job preflight: all blocking jobs requeued."]
+                    return ["Slurm job preflight: all affected active jobs requeued."]
                 continue
             if action == "requeue-hold-selected":
-                raw_ids = input("Job IDs to requeue and hold, comma separated: ").strip()
-                selected = tuple(item.strip() for item in raw_ids.split(",") if item.strip())
+                try:
+                    selected = ensure_requeueable_slurm_jobs(jobs, selected_ids, action=action)
+                except RuntimeError as exc:
+                    _console.print(f"[yellow]{exc}[/yellow]")
+                    continue
+                if not selected:
+                    _console.print(
+                        "[yellow]Select at least one displayed job to requeue and hold.[/yellow]"
+                    )
+                    continue
                 _record("requeue-hold-selected", job_ids=selected)
                 _external_upgrade_requeue_slurm_jobs(
                     command_runner=command_runner,
@@ -5811,6 +6262,11 @@ def _handle_external_upgrade_slurm_jobs(
                 continue
             if action == "requeue-hold-all":
                 selected = tuple(job.job_id for job in jobs)
+                try:
+                    selected = ensure_requeueable_slurm_jobs(jobs, selected, action=action)
+                except RuntimeError as exc:
+                    _console.print(f"[yellow]{exc}[/yellow]")
+                    continue
                 _record("requeue-hold-all", job_ids=selected)
                 _external_upgrade_requeue_slurm_jobs(
                     command_runner=command_runner,
@@ -5827,47 +6283,50 @@ def _handle_external_upgrade_slurm_jobs(
                     refresh_interval_seconds=refresh_interval_seconds,
                 )
                 if not jobs:
-                    return ["Slurm job preflight: all blocking jobs requeued and held."]
+                    return ["Slurm job preflight: all affected active jobs requeued and held."]
                 continue
             if action == "abort":
                 _record("abort")
                 raise SoperatorMigrationPhasePending(
-                    "External Soperator upgrade stopped by operator while Slurm jobs are still running."
+                    "External Soperator upgrade stopped by operator while affected Slurm jobs are still present."
                 )
             _console.print(
                 "[yellow]Unknown action; choose refresh, wait, cancel-selected, cancel-all, "
                 "requeue-selected, requeue-all, requeue-hold-selected, requeue-hold-all, or abort.[/yellow]"
             )
     if resolved_policy == "fail":
-        _print_external_upgrade_jobs_table(jobs)
+        with _external_upgrade_slurm_prompt_paused(interactive_prompt_pause):
+            _print_external_upgrade_jobs_table(jobs)
         _record("fail", job_count=len(jobs))
         raise SoperatorMigrationPhasePending(
-            "Running Slurm jobs exist on affected nodes. Use --job-policy wait, "
-            "--job-policy cancel-selected with --cancel-job, --job-policy cancel-all, "
-            "--job-policy requeue-selected with --requeue-job, --job-policy requeue-all, "
-            "--job-policy requeue-hold-selected with --requeue-job, or "
-            "--job-policy requeue-hold-all."
+            "Affected Slurm jobs exist for the upgrade scope. Use --job-policy wait, "
+            "--job-policy wait-then-cancel, --job-policy cancel-selected with "
+            "--cancel-job, --job-policy cancel-all, --job-policy requeue-selected "
+            "with --requeue-job, --job-policy requeue-all, --job-policy "
+            "requeue-hold-selected with --requeue-job, or --job-policy "
+            "requeue-hold-all."
         )
+    if resolved_policy == "wait-then-cancel":
+        return _wait_then_cancel()
     if resolved_policy == "wait":
         _record(
             "wait-started",
             timeout_seconds=wait_timeout_seconds,
             refresh_interval_seconds=refresh_interval_seconds,
         )
-        _wait_for_external_upgrade_slurm_jobs(
-            command_runner=command_runner,
-            kube_context=kube_context,
-            node_names=selected_nodes,
-            timeout_seconds=wait_timeout_seconds,
-            refresh_interval_seconds=refresh_interval_seconds,
-        )
+        with _external_upgrade_slurm_prompt_paused(interactive_prompt_pause):
+            _wait_for_external_upgrade_slurm_jobs(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                node_names=selected_nodes,
+                timeout_seconds=wait_timeout_seconds,
+                refresh_interval_seconds=refresh_interval_seconds,
+            )
         _record("wait-completed")
-        return ["Slurm job preflight: waited for blocking jobs to finish."]
-    remaining: tuple[ExternalSoperatorUpgradeSlurmJob, ...] | None = None
+        return ["Slurm job preflight: waited for affected jobs to finish."]
+    remaining: tuple[AffectedSlurmJob, ...] | None = None
     if resolved_policy == "cancel-selected":
-        selected = tuple(
-            str(job_id or "").strip() for job_id in cancel_job_ids if str(job_id or "").strip()
-        )
+        selected = selected_display_job_ids(jobs, cancel_job_ids, action=resolved_policy)
         if not selected:
             raise RuntimeError("--job-policy cancel-selected requires at least one --cancel-job.")
         _record("cancel-selected", job_ids=selected)
@@ -5877,16 +6336,15 @@ def _handle_external_upgrade_slurm_jobs(
             job_ids=selected,
         )
     elif resolved_policy == "cancel-all":
-        _record("cancel-all", job_ids=[job.job_id for job in jobs])
+        selected = tuple(job.job_id for job in jobs)
+        _record("cancel-all", job_ids=selected)
         _external_upgrade_cancel_slurm_jobs(
             command_runner=command_runner,
             kube_context=kube_context,
-            job_ids=[job.job_id for job in jobs],
+            job_ids=selected,
         )
     elif resolved_policy == "requeue-selected":
-        selected = tuple(
-            str(job_id or "").strip() for job_id in requeue_job_ids if str(job_id or "").strip()
-        )
+        selected = ensure_requeueable_slurm_jobs(jobs, requeue_job_ids, action=resolved_policy)
         if not selected:
             raise RuntimeError("--job-policy requeue-selected requires at least one --requeue-job.")
         _record("requeue-selected", job_ids=selected)
@@ -5905,6 +6363,7 @@ def _handle_external_upgrade_slurm_jobs(
         )
     elif resolved_policy == "requeue-all":
         selected = tuple(job.job_id for job in jobs)
+        selected = ensure_requeueable_slurm_jobs(jobs, selected, action=resolved_policy)
         _record("requeue-all", job_ids=selected)
         _external_upgrade_requeue_slurm_jobs(
             command_runner=command_runner,
@@ -5920,9 +6379,7 @@ def _handle_external_upgrade_slurm_jobs(
             refresh_interval_seconds=refresh_interval_seconds,
         )
     elif resolved_policy == "requeue-hold-selected":
-        selected = tuple(
-            str(job_id or "").strip() for job_id in requeue_job_ids if str(job_id or "").strip()
-        )
+        selected = ensure_requeueable_slurm_jobs(jobs, requeue_job_ids, action=resolved_policy)
         if not selected:
             raise RuntimeError(
                 "--job-policy requeue-hold-selected requires at least one --requeue-job."
@@ -5944,6 +6401,7 @@ def _handle_external_upgrade_slurm_jobs(
         )
     elif resolved_policy == "requeue-hold-all":
         selected = tuple(job.job_id for job in jobs)
+        selected = ensure_requeueable_slurm_jobs(jobs, selected, action=resolved_policy)
         _record("requeue-hold-all", job_ids=selected)
         _external_upgrade_requeue_slurm_jobs(
             command_runner=command_runner,
@@ -5968,11 +6426,11 @@ def _handle_external_upgrade_slurm_jobs(
     if remaining:
         _record("blocking-jobs-remain", job_count=len(remaining))
         raise SoperatorMigrationPhasePending(
-            f"{len(remaining)} Slurm job(s) still run on affected nodes after job policy "
+            f"{len(remaining)} affected Slurm job(s) remain after job policy "
             f"{resolved_policy!r}. Rerun after they finish or cancel them explicitly."
         )
     _record("blocking-jobs-cleared", policy=resolved_policy)
-    return [f"Slurm job preflight: cleared blocking jobs with policy {resolved_policy}."]
+    return [f"Slurm job preflight: cleared affected jobs with policy {resolved_policy}."]
 
 
 def _node_ready(item: Mapping[str, Any]) -> bool:
@@ -6682,6 +7140,7 @@ def _ensure_slurm_quiet(
     job_refresh_interval_seconds: int,
     slurm_decision_recorder: Callable[[Mapping[str, Any]], None] | None = None,
     allow_missing_login_recovery: bool = False,
+    interactive_prompt_pause: Callable[[], Any] | None = None,
 ) -> list[str]:
     try:
         job_lines = _handle_external_upgrade_slurm_jobs(
@@ -6694,6 +7153,7 @@ def _ensure_slurm_quiet(
             wait_timeout_seconds=job_wait_timeout_seconds,
             refresh_interval_seconds=job_refresh_interval_seconds,
             decision_recorder=slurm_decision_recorder,
+            interactive_prompt_pause=interactive_prompt_pause,
         )
     except RuntimeError as exc:
         detail = str(exc)
@@ -6716,6 +7176,27 @@ def _ensure_slurm_quiet(
             *job_lines,
             "Slurm partition drain command was not supported by the source release.",
         ]
+    try:
+        remaining = _external_upgrade_slurm_jobs(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            node_names=node_names,
+        )
+    except Exception:
+        _resume_slurm_partitions(
+            command_runner=command_runner,
+            kube_context=kube_context,
+        )
+        raise
+    if remaining:
+        _resume_slurm_partitions(
+            command_runner=command_runner,
+            kube_context=kube_context,
+        )
+        raise SoperatorMigrationPhasePending(
+            f"{len(remaining)} affected Slurm job(s) started or remained after "
+            "Slurm partition drain. Rerun after they finish or cancel them explicitly."
+        )
     return [*job_lines, "Slurm partitions set to DRAIN for compute cutover."]
 
 
@@ -7218,9 +7699,7 @@ def _restore_external_service_role(
                 patch={
                     "spec": {
                         "slurmNodes": {
-                            restored_role: {
-                                "size": _non_negative_int(item.get("size"), fallback=1)
-                            }
+                            restored_role: {"size": _non_negative_int(item.get("size"), fallback=1)}
                         }
                     }
                 },
@@ -10790,12 +11269,13 @@ def _execute_rolling_compute_migration_phase(
     worker_node_groups: Sequence[str],
     command_runner: SoperatorMigrationCommandRunner,
     checkpoint_writer: Callable[[], None] | None = None,
-    job_policy: str = "fail",
+    job_policy: str | None = None,
     cancel_job_ids: Sequence[str] = (),
     requeue_job_ids: Sequence[str] = (),
-    job_wait_timeout_seconds: int = 0,
-    job_refresh_interval_seconds: int = 30,
+    job_wait_timeout_seconds: int = _EXTERNAL_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT_SECONDS,
+    job_refresh_interval_seconds: int = _EXTERNAL_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL_SECONDS,
     slurm_decision_recorder: Callable[[Mapping[str, Any]], None] | None = None,
+    interactive_prompt_pause: Callable[[], Any] | None = None,
 ) -> tuple[bool, list[str]]:
     phase = _phase_state(checkpoint, "rolling-compute-migration")
     nodes = _nodes_for_worker_groups(
@@ -10865,6 +11345,7 @@ def _execute_rolling_compute_migration_phase(
         job_refresh_interval_seconds=job_refresh_interval_seconds,
         slurm_decision_recorder=slurm_decision_recorder,
         allow_missing_login_recovery=not live_source_slurmcluster_present,
+        interactive_prompt_pause=interactive_prompt_pause,
     )
     try:
         lines.extend(
@@ -12285,9 +12766,7 @@ def _write_soperator_migrate_report(
         fast_verification = stage_fast_verification_report(phase_id, phase)
         stage_verification_reports.append(fast_verification)
         verification_status = str(fast_verification.get("status", "") or "not_run")
-        verification_summary = str(
-            fast_verification.get("summary", "") or "No summary recorded."
-        )
+        verification_summary = str(fast_verification.get("summary", "") or "No summary recorded.")
         top_level_stage = external_soperator_upgrade_top_level_stage(phase_id)
         phase_reports.append(
             {
@@ -12571,9 +13050,7 @@ def _same_resume_checkpoint_plan(
 ) -> bool:
     incoming = tuple(str(phase or "").strip() for phase in phase_ids if str(phase or "").strip())
     existing = tuple(
-        str(phase or "").strip()
-        for phase in existing_planned_phases
-        if str(phase or "").strip()
+        str(phase or "").strip() for phase in existing_planned_phases if str(phase or "").strip()
     )
     if existing == incoming:
         return True
@@ -14582,11 +15059,11 @@ def execute_soperator_migration(
     command_runner: SoperatorMigrationCommandRunner | None = None,
     status_callback: Callable[[str], None] | None = None,
     status_poll_interval_seconds: float = 30.0,
-    job_policy: str = "fail",
+    job_policy: str | None = None,
     cancel_job_ids: Sequence[str] = (),
     requeue_job_ids: Sequence[str] = (),
-    job_wait_timeout_seconds: int = 0,
-    job_refresh_interval_seconds: int = 30,
+    job_wait_timeout_seconds: int = _EXTERNAL_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT_SECONDS,
+    job_refresh_interval_seconds: int = _EXTERNAL_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL_SECONDS,
     worker_rollout_strategy: str | None = None,
     worker_wave_groups: int | None = None,
     worker_wave_percent: int | None = None,
@@ -14657,11 +15134,11 @@ def _execute_soperator_migration_unlocked(
     command_runner: SoperatorMigrationCommandRunner | None = None,
     status_callback: Callable[[str], None] | None = None,
     status_poll_interval_seconds: float = 30.0,
-    job_policy: str = "fail",
+    job_policy: str | None = None,
     cancel_job_ids: Sequence[str] = (),
     requeue_job_ids: Sequence[str] = (),
-    job_wait_timeout_seconds: int = 0,
-    job_refresh_interval_seconds: int = 30,
+    job_wait_timeout_seconds: int = _EXTERNAL_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT_SECONDS,
+    job_refresh_interval_seconds: int = _EXTERNAL_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL_SECONDS,
     worker_rollout_strategy: str | None = None,
     worker_wave_groups: int | None = None,
     worker_wave_percent: int | None = None,
@@ -14799,10 +15276,11 @@ def _execute_soperator_migration_unlocked(
         upgrade_path_fingerprint=upgrade_path_fingerprint,
         upgrade_path_segment_id=upgrade_path_segment_id,
     )
-    resolved_job_policy = str(job_policy or "fail").strip() or "fail"
-    if resolved_job_policy not in _EXTERNAL_UPGRADE_JOB_POLICIES:
+    resolved_job_policy = _external_upgrade_job_policy(job_policy)
+    if resolved_job_policy == "wait-then-cancel" and job_wait_timeout_seconds <= 0:
         raise RuntimeError(
-            "--job-policy must be one of: " + ", ".join(sorted(_EXTERNAL_UPGRADE_JOB_POLICIES))
+            "--job-policy wait-then-cancel requires a positive --job-wait-timeout. "
+            "Use --job-policy wait --job-wait-timeout 0s for an unlimited wait."
         )
     selected_cancel_job_ids = tuple(
         str(job_id or "").strip() for job_id in cancel_job_ids if str(job_id or "").strip()
@@ -14863,6 +15341,12 @@ def _execute_soperator_migration_unlocked(
             "slurm-job-policy",
             action=str(decision.get("action", "") or "unknown"),
         )
+
+    status_prompt_pause = (
+        getattr(status_callback, "pause", None) if status_callback is not None else None
+    )
+    if not callable(status_prompt_pause):
+        status_prompt_pause = None
 
     rollout_manifest = rollout.to_manifest_dict()
     saved_rollout = _mapping(checkpoint.get("external_node_template_rollout"))
@@ -14949,6 +15433,7 @@ def _execute_soperator_migration_unlocked(
                     job_wait_timeout_seconds=job_wait_timeout_seconds,
                     job_refresh_interval_seconds=job_refresh_interval_seconds,
                     slurm_decision_recorder=_record_slurm_decision,
+                    interactive_prompt_pause=status_prompt_pause,
                 )
             except SoperatorMigrationPhasePending as exc:
                 quota_preflight_pending_phase = _EXTERNAL_NODE_TEMPLATE_PHASE_ID
@@ -15157,6 +15642,7 @@ def _execute_soperator_migration_unlocked(
                 job_wait_timeout_seconds=job_wait_timeout_seconds,
                 job_refresh_interval_seconds=job_refresh_interval_seconds,
                 slurm_decision_recorder=_record_slurm_decision,
+                interactive_prompt_pause=status_prompt_pause,
             ),
             "final-control-plane-cutover": lambda: _execute_final_cutover_phase(
                 checkpoint=checkpoint,
@@ -15307,9 +15793,7 @@ def _execute_soperator_migration_unlocked(
                     )
                 ],
             )
-            mk8s_phase_lines = [
-                f"post-upgrade-mk8s-check: {line}" for line in mk8s_state_lines
-            ]
+            mk8s_phase_lines = [f"post-upgrade-mk8s-check: {line}" for line in mk8s_state_lines]
             phase_lines.extend(mk8s_phase_lines)
             _checkpoint_progress()
             _emit_phase_comment(
@@ -15362,9 +15846,7 @@ def _execute_soperator_migration_unlocked(
                     mutation_performed
                     or _helm_state_lines_include_retirement_mutation(helm_state_lines)
                 )
-                phase_lines.extend(
-                    f"post-upgrade-helm-check: {line}" for line in helm_state_lines
-                )
+                phase_lines.extend(f"post-upgrade-helm-check: {line}" for line in helm_state_lines)
                 _checkpoint_progress()
 
     if (
@@ -15392,9 +15874,7 @@ def _execute_soperator_migration_unlocked(
             checkpoint["pending_reason"] = pending_reason
             _checkpoint_progress()
         else:
-            phase_lines.extend(
-                f"validation-and-rollback-hold: {line}" for line in safety_lines
-            )
+            phase_lines.extend(f"validation-and-rollback-hold: {line}" for line in safety_lines)
             _checkpoint_progress()
 
     if pending_phase:

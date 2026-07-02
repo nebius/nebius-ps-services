@@ -134,6 +134,15 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Extended `agent-nebius-auth` runtime injection for long-running Bash commands
+  by exporting `NEBIUS_AUTH_CREDENTIALS_FILE`, defining a
+  `nebius_refresh_token` Bash helper through a restricted temporary `BASH_ENV`
+  file for child Bash processes, denying common nested environment dumps, and
+  documenting the credential-file or per-operation refresh pattern for raw
+  Nebius API calls.
+- Fixed `nebius_refresh_token` so every refresh clears existing token
+  environment variables before invoking the Nebius CLI profile token command,
+  preventing later refreshes from reusing a stale `NEBIUS_IAM_TOKEN`.
 - Hardened `install-grafana-mcp-for-nebius` local config checks so an existing
   Codex MCP server that points at a byte-identical source or installed wrapper
   copy is treated as matching state instead of a replacement-required
@@ -213,16 +222,17 @@ All notable changes to the reusable Codex skills are tracked here.
   cover profile drift on rerun, effective `NEBIUS_PROFILE` selection,
   interrupted profile creation, and concurrent setup.
 - Changed `agent-nebius-auth` so the setup script no longer writes an inline
-  Codex hook block to `$CODEX_HOME/config.toml`. The old `--install-hook` flag
-  now fails fast and points operators to the canonical
+  Codex hook block to `$CODEX_HOME/config.toml`. The unsupported
+  `--install-hook` flag now fails fast and points operators to the canonical
   `install-skills.sh --install-hooks agent-nebius-auth/assets/hooks
   --register-hooks` path for payload sync and `hooks.json` registration, while
   setup records the selected project under `~/.nebius` for the generic hook to
   read locally.
-- Added an installer-side `agent-nebius-auth` migration cleanup: registering
-  the hook now removes the old marked inline `config.toml` block, backs up the
-  file, and migrates the legacy project selector to
-  `~/.nebius/codex-agent-default-project-id` without printing the project ID.
+- Removed the installer-side `agent-nebius-auth` inline `config.toml`
+  migration cleanup. The canonical path is now fail-fast setup plus root
+  installer hook sync/`hooks.json` registration only; stale inline hook entries
+  are rejected before hook files or `hooks.json` are changed and must be removed
+  manually instead of being migrated.
 - Added a skill-local `agent-nebius-auth/README.md` with the setup-only
   workflow, installer-managed hook registration, runtime hook behavior,
   idempotency checks, and validation commands.
