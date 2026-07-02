@@ -594,8 +594,9 @@ and chart source-family changes.
   `apps:soperator@<target>` with the canonical `soperator upgrade` command
   instead of keeping a duplicate compatibility path. The Soperator path writes
   a local mode-0600 backup archive with raw Kubernetes Secret restore material,
-  Soperator resources/config, Slurm policy snapshots, and a chart-managed
-  MariaDB accounting DB dump before mutation when live accounting exists.
+  Soperator resources/config, recreation-runbook evidence, Slurm policy
+  snapshots, and a chart-managed MariaDB accounting DB dump before mutation
+  when live accounting exists.
   `externalDB.enabled=true` fails fast in v1 because external DB backup support is not implemented. For MK8s
   target changes, the command drains cxcli-owned Slurm worker nodes, applies the
   selected affected-job policy for running, completing, and pending Slurm jobs,
@@ -606,6 +607,22 @@ and chart source-family changes.
   drain state plus Nebius replacement instance churn while still checking
   Slurm partition/config, accounting policy, desired values, and stable
   node-to-partition/features/GRES mapping.
+  A chart upgrade updates the desired `SlurmCluster.spec.populateJail.image`,
+  but Soperator skips rewriting an already-completed shared jail rootfs unless
+  the maintenance overwrite path is used. Managed `soperator upgrade` therefore
+  treats `populate-jail-refresh` as a first-class stage after target chart
+  apply and before postflight validation. The default
+  `--populate-jail-refresh auto` refreshes when the target populate-jail image
+  changed or the target chart changed and rootfs compatibility is unproven;
+  `force` always refreshes; `manual` stops before the refresh and prints the
+  required maintenance overwrite action. The in-place refresh first applies the
+  selected `--job-policy` to affected worker NodeSets, then temporarily sets
+  `maintenance=downscaleAndOverwritePopulateJail` and
+  `populateJail.overwrite=true`, waits for login/worker consumers to stop,
+  waits for the refreshed `populate-jail` Job to complete with the target
+  image, then restores `maintenance=none` and `populateJail.overwrite=false`.
+  This avoids full cluster recreation for supported upgrades, but it is not
+  zero downtime for login/worker pods during the rootfs refresh window.
   Managed `soperator scale-up` and `soperator scale-down` are narrower worker
   capacity commands. Ephemeral worker NodeSets change active ordinals through
   `NodeSetPowerState`; non-ephemeral worker scale updates the cxcli-owned
@@ -624,9 +641,11 @@ and chart source-family changes.
   requested/scheduled on affected nodes, and waits for
   Terraform-managed control-plane/node-group readiness; chart apply updates the
   Soperator app row, rerenders, validates, applies Flux/static manifests, and
-  verifies live chart identity; fast stage gates record `fast_verification`
-  after each completed managed upgrade stage, including the post-MK8s
-  validation boundary, before advancing; postflight restores Slurm and
+  verifies live chart identity; populate-jail refresh uses the Soperator
+  maintenance overwrite path when required; fast stage gates record
+  `fast_verification` after each completed managed upgrade stage, including the
+  post-MK8s validation and populate-jail refresh boundaries, before advancing;
+  postflight restores Slurm and
   ActiveChecks, compares protected customer state, runs required Soperator/Slurm
   smoke plus the shared fast safety verifier, and writes
   `generated/reports/soperator-upgrade-report.md` and JSON. Kubernetes minor
@@ -690,6 +709,17 @@ and chart source-family changes.
   Soperator SlurmCluster/NodeSet/
   ActiveCheck resources. It also records Helm values, Slurm CLI snapshots, and
   the chart-managed MariaDB accounting dump after quiescing accounting writes.
+  Recreation-runbook material is collected by default: bound PV raw manifests
+  and reclaim-policy status, Flux-system ConfigMaps used to reconstruct
+  Soperator/terraform values, Kruise worker StatefulSet data when present,
+  worker-local PVC/PV evidence for `image-storage-worker-*` and
+  `local-data-worker-*`, `sacctmgr dump cluster=<cluster>`, running and
+  pending/held Slurm job id lists, `soperator.cfg` when available,
+  best-effort Terraform allocation state, and
+  `recreation/recreation-coverage.json` with collected, missing, skipped, and
+  not-applicable items. Restore keeps the generic DR contract and does not
+  automatically restore retained PV bindings; the raw recreation files document
+  that runbook path for explicit operator action.
   Restore is archive-driven and dry-run by default, and it is DR/new-empty-target
   only. It is not same-cluster rollback: operators must not point restore at
   the original/source cluster or an existing Soperator namespace. `--execute
@@ -1181,11 +1211,13 @@ is the separate execution surface for live orchestration. `--execute --approve`
 refreshes discovery, validates the accepted onboarding analysis, reads
 `generated/reports/soperator-discovery/<target>/manifest.json`, rechecks the live source
 release and full discovery fingerprint, creates a restore-capable backup before
-the first mutation for new/replacement-cluster restore only, writes a local
+the first mutation for new/replacement-cluster restore only, rejects sparse
+reused backup metadata before mutation, writes a local
 `.nebius-cxcli/ext-soperator-upgrades/` timeout-guarded checkpoint, and
 advances the selected accepted external MK8s control-plane/node-template hop,
 target GPU stack reconciliation phase when paired with external upgrade work,
-storage, copy, compute, cutover, validation, and retirement phases in order.
+storage, copy, compute, cutover, populate-jail refresh, validation, and
+retirement phases in order.
 External node-template work is one Kubernetes minor hop per `ext-soperator
 upgrade` run; later Kubernetes hops from the locked path use later invocations
 of the same `ext-soperator upgrade --execute --approve` command without normal
@@ -1204,10 +1236,15 @@ handles affected Slurm jobs on external node-template workers and all live
 worker NodeSets before target chart reconciliation through the `--job-policy`
 interactive, wait, wait-then-cancel, cancel, requeue, or requeue-hold decision
 state, including pending jobs in affected partitions or requested/scheduled on
-affected nodes. TTY runs default to `interactive`; non-TTY and
-`--no-interactive` runs default to `wait-then-cancel` with the one-hour
-`--job-wait-timeout`, then cancel only the still-displayed affected jobs before
-continuing,
+affected nodes. TTY upgrade runs default to `interactive`; non-TTY and
+`--no-interactive` upgrade runs default to `fail` so destructive cancel/requeue
+or wait-then-cancel policies remain explicit. When the target chart/rootfs
+changed, the populate-jail refresh phase applies the same job-policy gate to
+affected worker NodeSets before it applies the target chart with
+`maintenance=downscaleAndOverwritePopulateJail` and
+`populateJail.overwrite=true`, waits for login/worker consumers to stop and for
+the refreshed `populate-jail` Job to complete with the target image, then
+restores `maintenance=none` and `populateJail.overwrite=false`,
 provides ad hoc `ext-soperator scale-up` and `ext-soperator scale-down`
 commands for external maintenance without onboarding, requiring both Nebius
 `--project-id`/`--cluster-id` for node-group lookup and `--kube-context` for

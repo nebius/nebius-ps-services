@@ -153,6 +153,12 @@ def test_soperator_backup_archive_contains_restore_material(
         args: list[str],
         **kwargs: Any,
     ) -> cli._SoperatorUpgradeCommandResult:
+        if namespace == "flux-system":
+            return _command_result(
+                args,
+                returncode=1,
+                stderr='Error from server (NotFound): configmaps "soperator-fluxcd" not found',
+            )
         assert namespace == "soperator"
         if args[:2] == ["get", "deployment/accounting"]:
             return _command_result(
@@ -270,9 +276,15 @@ def test_soperator_backup_archive_contains_restore_material(
         assert "kubernetes/restore/secrets.yaml" in names
         assert "kubernetes/restore/deployments.yaml" in names
         assert "kubernetes/restore/services.yaml" in names
+        assert "recreation/recreation-coverage.json" in names
+        assert "recreation/flux-system-configmaps.json" in names
+        assert "slurm/sacctmgr-dump.cfg" in names
+        assert "slurm/running-job-ids.txt" in names
+        assert "slurm/pending-held-job-ids.txt" in names
         assert "accounting/slurm-accounting-db.sql" in names
         manifest = json.loads(archive.extractfile("backup-manifest.json").read())
         restore_plan = json.loads(archive.extractfile("restore-plan.json").read())
+        coverage = json.loads(archive.extractfile("recreation/recreation-coverage.json").read())
         service_restore = archive.extractfile("kubernetes/restore/services.yaml").read().decode()
         deployment_restore = (
             archive.extractfile("kubernetes/restore/deployments.yaml").read().decode()
@@ -281,7 +293,16 @@ def test_soperator_backup_archive_contains_restore_material(
     assert manifest["schema"] == "nebius-cxcli-soperator-backup/v1"
     assert manifest["source_kind"] == "managed-backup"
     assert manifest["kubernetes_restore_material"]["resource_counts"]["deployments"] == 1
+    assert manifest["recreation_runbook_material"]["coverage_path"] == (
+        "recreation/recreation-coverage.json"
+    )
+    assert manifest["recreation_runbook_material"]["pv_retain_bindings_are_manual"] is True
     assert "kubernetes/restore/deployments.yaml" in restore_plan["apply_order"]
+    assert "recreation/recreation-coverage.json" in restore_plan["restore_material"][
+        "recreation_raw"
+    ]
+    assert restore_plan["recreation_runbook"]["retained_pv_bindings_are_not_auto_restored"] is True
+    assert coverage["items"]["bound_persistentvolumes"]["status"] == "not_applicable"
     assert "clusterIP" not in service_restore
     assert "nodePort" not in service_restore
     assert "status" not in deployment_restore
@@ -305,6 +326,12 @@ def test_soperator_backup_allows_missing_accounting_db(
         args: list[str],
         **kwargs: Any,
     ) -> cli._SoperatorUpgradeCommandResult:
+        if namespace == "flux-system":
+            return _command_result(
+                args,
+                returncode=1,
+                stderr='Error from server (NotFound): configmaps "soperator-fluxcd" not found',
+            )
         assert namespace == "soperator"
         if args[:2] == ["get", "deployment/accounting"]:
             return _command_result(
@@ -395,6 +422,74 @@ def test_soperator_backup_allows_missing_accounting_db(
     assert restore_plan["security"]["contains_accounting_db_dump"] is False
     assert "# not_collected" in sacctmgr_clusters
     assert "accounting_storage/slurmdbd" in sacctmgr_clusters
+
+
+def test_soperator_backup_recreation_material_records_pv_reclaim_warnings(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    kubernetes_dir = tmp_path / "kubernetes"
+    kubernetes_dir.mkdir()
+    (kubernetes_dir / "persistentvolumeclaims.json").write_text(
+        json.dumps(
+            {
+                "items": [
+                    {
+                        "metadata": {"name": "image-storage-worker-0"},
+                        "spec": {"volumeName": "pv-worker-0"},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_kubectl_cluster(
+        args: list[str],
+        **_kwargs: Any,
+    ) -> cli._SoperatorUpgradeCommandResult:
+        assert args[:2] == ["get", "persistentvolumes"]
+        return _command_result(
+            args,
+            json.dumps(
+                {
+                    "items": [
+                        {
+                            "metadata": {"name": "pv-worker-0"},
+                            "spec": {
+                                "persistentVolumeReclaimPolicy": "Delete",
+                                "claimRef": {"name": "image-storage-worker-0"},
+                            },
+                        }
+                    ]
+                }
+            ),
+        )
+
+    def fake_kubectl(
+        namespace: str,
+        args: list[str],
+        **_kwargs: Any,
+    ) -> cli._SoperatorUpgradeCommandResult:
+        if namespace == "flux-system":
+            return _command_result(args, returncode=1, stderr="NotFound")
+        assert namespace == "soperator"
+        return _command_result(args, returncode=1, stderr="NotFound")
+
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_kubectl_cluster", fake_kubectl_cluster)
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_kubectl", fake_kubectl)
+
+    included, coverage = cli._soperator_upgrade_collect_recreation_material(
+        namespace="soperator",
+        output_dir=tmp_path / "recreation",
+        kubernetes_dir=kubernetes_dir,
+    )
+
+    assert "recreation/bound-persistentvolume-reclaim-policies.json" in included
+    assert coverage["items"]["bound_persistentvolumes"]["status"] == "collected"
+    assert "Delete" in coverage["warnings"][0]
+    worker = coverage["items"]["worker_local_pvc_pv_evidence"]
+    assert worker["status"] == "collected"
 
 
 def test_soperator_backup_uses_portable_wckey_snapshot_fields(

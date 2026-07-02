@@ -6,6 +6,12 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Added Soperator populate-jail refresh handling to managed `soperator upgrade`
+  and external `ext-soperator upgrade`. Chart upgrades now report a
+  `populate-jail-refresh` stage that can run the upstream maintenance overwrite
+  path, defaults non-TTY upgrade job handling to `fail` unless a disruptive
+  policy is selected explicitly, and extends Soperator backup archives with
+  recreation coverage evidence for new/replacement-cluster runbooks.
 - Changed Nebius SDK operator-auth precedence so the matching Codex agent
   `NEBIUS_AUTH_CREDENTIALS_FILE`/`NEBIUS_PROFILE` pair with an existing
   credential file wins over a static `NEBIUS_IAM_TOKEN`, keeping long-running

@@ -64,6 +64,8 @@ For existing `$CODEX_HOME/AGENTS.md`:
   is missing.
 - If managed markers already exist, update only the content between those
   markers.
+- Treat empty or stale managed markers as incomplete; update the managed block
+  content rather than accepting marker presence alone.
 - Do not delete, rewrite, or deduplicate user-authored sections outside the
   managed block.
 
@@ -132,14 +134,17 @@ For existing `$CODEX_HOME/config.toml`:
    For `hooks.json`, verify the required global `SessionStart` and
    `UserPromptSubmit` entries are present, but preserve additional workflow hook
    entries such as SDLC `PreToolUse` and `Stop`.
-   The root `install-skills.sh --install-all-hooks` helper can perform a
-   direct sync of all reviewed hook-only bundles when that is explicitly
-   needed. Use `install-skills.sh --install-hooks config-codex/assets/hooks`
-   only for a single-bundle sync. Both paths strip `.template` from installed
-   hook file names. Add `--register-hooks` only when the operator explicitly
-   wants the installer to semantically merge the bundle's hook registration into
-   `hooks.json`; neither path trusts hooks, patches `config.toml`, or replaces
-   this full setup workflow.
+   The root `install-skills.sh --install-all-hooks` helper can install reviewed
+   hook-only bundles when that is explicitly needed. Use
+   `install-skills.sh --install-hooks config-codex/assets/hooks` only for a
+   single-bundle install. Both paths strip `.template` from installed hook file
+   names, copy missing hook files, leave matching hook files unchanged, and stop
+   before replacing any differing existing hook file. Add `--register-hooks`
+   only when the operator explicitly wants the installer to semantically merge
+   the bundle's hook registration into `hooks.json`; add
+   `--replace-hooks-json` only when the selected source manifests should replace
+   `hooks.json` after backup. Neither path trusts hooks, patches `config.toml`,
+   replaces `AGENTS.md`, or replaces this full setup workflow.
 9. Confirm `global-context-management` and `config-codex` are installed,
    discoverable, or explicitly enabled as skill folders. Do not add explicit
    skill entries if discovery already works.
@@ -193,10 +198,15 @@ not evidence-backed, or outside this skill's scope, report that it was skipped.
 
 Use the focused checks in `references/local-setup.md`. At minimum:
 
-- Run `python3 scripts/check-local-idempotency.py --strict-agents-template` for
-  a laptop already expected to match the canonical global `AGENTS.md` template.
-  This script is read-only and allows extra reviewed hook registrations in
-  `hooks.json` when the required global hooks are present.
+- Run `python3 scripts/check-local-idempotency.py` for normal laptop setup.
+  This script is read-only, validates the merge-safe no-change contract, and
+  validates the current `AGENTS.md` managed block content when exact template
+  parity is not present. It allows extra reviewed hook registrations in
+  `hooks.json` when the required global hooks are present. Use
+  `--strict-agents-template` only for explicit canonical template/install-copy
+  audits, and use
+  `--require-template-mcp-servers` only when the user explicitly wants the
+  public MCP baseline audited against the template.
 - For source changes to the idempotency script, run
   `python3 scripts/test-check-local-idempotency.py`; it uses disposable local
   fixtures and does not inspect the user's real Codex home.

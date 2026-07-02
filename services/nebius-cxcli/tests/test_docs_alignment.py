@@ -419,8 +419,8 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
         "- `soperator upgrade`: `--target`, `--to-chart-version`, `--to-k8s-version`, "
         "`--to-os`, `--to-gpu-stack-preset`, `--node-group`, `--strategy`, "
         "`--strategy-max-surge-count`, `--drain-timeout`, `--backup-dir`, "
-        "`--job-policy`, `--cancel-job`, `--requeue-job`, `--job-wait-timeout`, "
-        "`--job-refresh-interval`, `--dry-run`, "
+        "`--populate-jail-refresh`, `--job-policy`, `--cancel-job`, `--requeue-job`, "
+        "`--job-wait-timeout`, `--job-refresh-interval`, `--dry-run`, "
         "`--approve-remediation/--no-approve-remediation`, "
         "`--allow-unsupported-soperator-upgrade-path`, "
         "`--interactive/--no-interactive`"
@@ -466,9 +466,10 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
         "`--no-interactive`"
     ) in common_flags_flat
     assert (
-        "- `ext-soperator upgrade`: `--target`, `--backup-dir`, `--job-policy`, "
-        "`--cancel-job`, `--requeue-job`, `--job-wait-timeout`, `--job-refresh-interval`, "
-        "`--dry-run/--execute`, `--approve/--no-approve`, "
+        "- `ext-soperator upgrade`: `--target`, `--backup-dir`, "
+        "`--populate-jail-refresh`, `--job-policy`, `--cancel-job`, `--requeue-job`, "
+        "`--job-wait-timeout`, `--job-refresh-interval`, `--dry-run/--execute`, "
+        "`--approve/--no-approve`, "
         "`--approve-remediation/--no-approve-remediation`, "
         "`--allow-unsupported-soperator-upgrade-path`, "
         "`--interactive/--no-interactive`, `--worker-rollout-strategy`, "
@@ -685,6 +686,8 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "restore-capable backup" in soperator_flat
     assert "raw Kubernetes Secret restore material" in soperator_flat
     assert "chart-managed MariaDB Slurm accounting DB dump" in soperator_flat
+    assert "recreation/recreation-coverage.json" in soperator_flat
+    assert "raw bound PV manifests and reclaim-policy evidence" in soperator_flat
     assert "restore-ready Kubernetes manifests" in soperator_flat
     assert "Deployments, StatefulSets, DaemonSets, CronJobs, RBAC" in soperator_flat
     assert "The restore command is dry-run by default and requires `--execute --approve`" in (
@@ -740,11 +743,15 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "CXCLI-managed Soperator upgrade follows these stages:" in soperator_flat
     assert "Preflight and backup: validate the current bundle" in soperator_flat
     assert "Slurm and MK8s rollout: when MK8s target flags are supplied" in soperator_flat
+    assert "Populate-jail refresh: when the target chart/rootfs changed" in soperator_flat
+    assert "`populate-jail` Job to complete with the target image" in soperator_flat
     assert "operator-facing top-level stage (`MK8s Node Upgrades` or `Soperator Upgrade`)" in (
         soperator_flat
     )
     assert "Fast stage verification gates: after ActiveChecks suspension" in soperator_flat
-    assert "post-MK8s validation, Soperator chart apply" in soperator_flat
+    assert "post-MK8s validation, Soperator chart apply, populate-jail refresh" in (
+        soperator_flat
+    )
     assert "final post-upgrade MK8s and Helm readiness checks" in soperator_flat
     assert "Postflight validation and restore: restore Slurm node state" in soperator_flat
     assert "JSON `stage_verification` details" in soperator_flat
@@ -866,6 +873,8 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "restore-capable backup, live Soperator/Slurm preflight" in upgrade_flat
     assert "protected config comparison" in upgrade_flat
     assert "Use `soperator upgrade` instead of the generic Helm path" in upgrade_flat
+    assert "SlurmCluster.spec.populateJail.image" in upgrade_flat
+    assert "`--populate-jail-refresh auto|force|manual`" in upgrade_flat
     assert "active `component_sources.yaml` Soperator chart pin as the default target version" in (
         upgrade_flat
     )
@@ -1601,8 +1610,10 @@ def test_docs_define_component_selector_contract() -> None:
     )
     assert "each affected running job" not in readme_flat
     assert "each displayed affected job" in readme_flat
-    assert "defaults to `interactive` in a real TTY" in readme_flat
-    assert "to `wait-then-cancel` in non-TTY or `--no-interactive` automation" in (readme_flat)
+    assert "Soperator upgrade commands default to `interactive` in a real TTY" in readme_flat
+    assert "to `fail` in non-TTY or `--no-interactive` automation" in readme_flat
+    assert "Local `deploy` and `flux apply` still default" in readme_flat
+    assert "to `wait-then-cancel` in non-TTY automation" in readme_flat
     assert "The default wait timeout is `1h`" in readme_flat
     assert (
         "checks all live worker NodeSets before target Soperator chart reconciliation"
@@ -1836,7 +1847,7 @@ def test_docs_define_component_selector_contract() -> None:
     )
     assert "validation hold verifies MK8s, target Soperator" in design_flat
     assert "every executed stage runs a fast stage-scoped verification" in design_flat
-    assert "including the post-MK8s validation boundary" in design_flat
+    assert "including the post-MK8s validation and populate-jail refresh boundaries" in design_flat
     assert "final post-upgrade MK8s and Helm readiness checks" in design_flat
     assert "`phase_state[<stage>].fast_verification`" in design_flat
     assert "JSON `stage_verification` array" in design_flat
@@ -1904,8 +1915,9 @@ def test_docs_define_component_selector_contract() -> None:
         "interactive, wait, wait-then-cancel, cancel, requeue, or requeue-hold "
         "decision state, including pending jobs"
     ) in design_flat
-    assert "TTY runs default to `interactive`" in design_flat
-    assert "non-TTY and `--no-interactive` runs default to `wait-then-cancel`" in (design_flat)
+    assert "TTY upgrade runs default to `interactive`" in design_flat
+    assert "non-TTY and `--no-interactive` upgrade runs default to `fail`" in design_flat
+    assert "`maintenance=downscaleAndOverwritePopulateJail`" in design_flat
     assert "provides ad hoc `ext-soperator scale-up` and `ext-soperator scale-down`" in (
         design_flat
     )

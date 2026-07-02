@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -412,6 +412,17 @@ def _backup_metadata(label: str = "original-pre-upgrade") -> dict[str, Any]:
         "path": f"backups/{label}.tar.gz",
         "sha256": f"{label}-sha256",
         "manifest_sha256": f"{label}-manifest-sha256",
+        "included_categories": [
+            "accounting",
+            "generated",
+            "kubernetes",
+            "recreation",
+            "slurm",
+            "soperator",
+            "source",
+        ],
+        "raw_secret_material": True,
+        "accounting_db_dump": True,
     }
 
 
@@ -613,6 +624,11 @@ class _FakeCommandRunner:
             or [
                 {
                     "metadata": {"name": "external-cluster", "namespace": "soperator"},
+                    "spec": {
+                        "populateJail": {
+                            "image": "registry.example/soperator/populate-jail:4.0.1-ps.1"
+                        }
+                    },
                     "status": {"phase": "Available"},
                 }
             ]
@@ -710,6 +726,7 @@ spec:
         self.slurm_queue_output = slurm_queue_output
         self.slurm_queue_returncode = slurm_queue_returncode
         self.file_update_payloads: list[dict[str, Any]] = []
+        self._populate_jail_refresh_saved_pods: list[dict[str, Any]] | None = None
 
     def _upsert_helm_release(
         self,
@@ -1117,6 +1134,28 @@ spec:
                 chart="soperator-4.0.1-ps.1",
                 app_version="4.0.1",
             )
+            try:
+                values = json.loads(input_text or "{}")
+            except json.JSONDecodeError:
+                values = {}
+            populate = values.get("populateJail") if isinstance(values, dict) else None
+            if (
+                isinstance(values, dict)
+                and values.get("maintenance") == "downscaleAndOverwritePopulateJail"
+                and isinstance(populate, dict)
+                and populate.get("overwrite") is True
+            ):
+                self._populate_jail_refresh_saved_pods = list(self.live_pods)
+                self.live_pods = []
+            elif (
+                isinstance(values, dict)
+                and values.get("maintenance") == "none"
+                and isinstance(populate, dict)
+                and populate.get("overwrite") is False
+                and self._populate_jail_refresh_saved_pods is not None
+            ):
+                self.live_pods = self._populate_jail_refresh_saved_pods
+                self._populate_jail_refresh_saved_pods = None
             return SoperatorMigrationCommandResult(command, 0, "{}", "")
         if command[:7] == (
             "kubectl",
@@ -1459,9 +1498,55 @@ spec:
                 metadata = item.get("metadata")
                 if isinstance(metadata, dict) and metadata.get("name") == name:
                     payload = json.loads(json.dumps(item))
+                    payload.setdefault("spec", {}).setdefault("populateJail", {}).setdefault(
+                        "image",
+                        "registry.example/soperator/populate-jail:4.0.1-ps.1",
+                    )
                     payload.setdefault("status", {"phase": "Available"})
                     return SoperatorMigrationCommandResult(command, 0, json.dumps(payload), "")
             return SoperatorMigrationCommandResult(command, 1, "", "NotFound")
+        if (
+            command[:7]
+            == (
+                "kubectl",
+                "--context",
+                "external-context",
+                "-n",
+                "soperator",
+                "get",
+                "job",
+            )
+            and command[-2:] == ("-o", "json")
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "metadata": {"name": command[7], "namespace": "soperator"},
+                        "spec": {
+                            "template": {
+                                "spec": {
+                                    "containers": [
+                                        {
+                                            "name": "populate-jail",
+                                            "image": (
+                                                "registry.example/soperator/"
+                                                "populate-jail:4.0.1-ps.1"
+                                            ),
+                                        }
+                                    ]
+                                }
+                            }
+                        },
+                        "status": {
+                            "succeeded": 1,
+                            "conditions": [{"type": "Complete", "status": "True"}],
+                        },
+                    }
+                ),
+                "",
+            )
         if command[:7] == (
             "kubectl",
             "--context",
@@ -1857,6 +1942,28 @@ def test_execute_requires_backup_metadata_before_approved_mutation(tmp_path: Pat
         command[:4] == ("helm", "--kube-context", "external-context", "upgrade")
         for command in commands
     )
+
+
+def test_execute_rejects_sparse_backup_metadata_before_approved_mutation(
+    tmp_path: Path,
+) -> None:
+    sparse_backup = {
+        "path": "backups/sparse.tar.gz",
+        "sha256": "sparse-sha256",
+        "manifest_sha256": "sparse-manifest-sha256",
+    }
+
+    with pytest.raises(RuntimeError, match="backup metadata is sparse"):
+        _execute_soperator_migration(
+            config_path=tmp_path / "config.yaml",
+            target_ref="external-cluster",
+            payload=_payload(),
+            source_report=_source_report(),
+            backup_metadata=sparse_backup,
+            snapshot_collector=lambda *, kube_context: _snapshot(),
+            approved=True,
+            command_runner=_FakeCommandRunner(),
+        )
 
 
 def test_write_checkpoint_preserves_existing_file_when_replace_fails(
@@ -2598,6 +2705,7 @@ def test_execute_records_approval_and_runs_checkpointed_mutators(tmp_path: Path)
         "online-bulk-data-sync",
         "rolling-compute-migration",
         "final-control-plane-cutover",
+        "populate-jail-refresh",
         "validation-and-rollback-hold",
         "retire-old-resources",
     )
@@ -2663,6 +2771,57 @@ def test_execute_records_approval_and_runs_checkpointed_mutators(tmp_path: Path)
     assert phase_reports["post-upgrade-helm-check"]["fast_verification"]["status"] == "passed"
     assert "- Top-level stage: `MK8s Node Upgrades`" in migrate_report
     assert "- Top-level stage: `Soperator Upgrade`" in migrate_report
+    populate_phase = checkpoint["phase_state"]["populate-jail-refresh"]
+    assert populate_phase["slurm_job_scope_nodes"]
+    assert populate_phase["slurm_quiet_at"]
+    assert populate_phase["slurm_resumed_at"]
+
+    def _helm_input_values(index: int) -> dict[str, Any]:
+        raw = runner.calls[index][1]
+        try:
+            parsed = json.loads(raw or "{}")
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    overwrite_indices = [
+        index
+        for index, (command, _input_text) in enumerate(runner.calls)
+        if command
+        and command[0] == "helm"
+        and "upgrade" in command
+        and _helm_input_values(index).get("maintenance") == "downscaleAndOverwritePopulateJail"
+    ]
+    assert overwrite_indices
+    overwrite_index = overwrite_indices[-1]
+    steady_index = next(
+        index
+        for index in range(overwrite_index + 1, len(runner.calls))
+        if runner.calls[index][0]
+        and runner.calls[index][0][0] == "helm"
+        and "upgrade" in runner.calls[index][0]
+        and _helm_input_values(index).get("maintenance") == "none"
+        and _helm_input_values(index).get("populateJail", {}).get("overwrite") is False
+    )
+    drain_indices = [
+        index
+        for index, (command, _input_text) in enumerate(runner.calls)
+        if command[8:] == ("scontrol", "update", "PartitionName=ALL", "State=DRAIN")
+    ]
+    resume_indices = [
+        index
+        for index, (command, _input_text) in enumerate(runner.calls)
+        if command[8:] == ("scontrol", "update", "PartitionName=ALL", "State=UP")
+    ]
+    last_drain_before_overwrite = max(
+        index for index in drain_indices if index < overwrite_index
+    )
+    last_resume_before_overwrite = max(
+        (index for index in resume_indices if index < overwrite_index),
+        default=-1,
+    )
+    assert last_drain_before_overwrite > last_resume_before_overwrite
+    assert any(index > steady_index for index in resume_indices)
 
     runner.calls.clear()
     resumed = execute_soperator_migration(
@@ -2905,16 +3064,8 @@ def test_execute_preserves_original_backup_metadata_after_mutating_resume(
 ) -> None:
     source_report = _source_report()
     config_path = tmp_path / "config.yaml"
-    original_backup = {
-        "path": "backups/original-pre-upgrade.tar.gz",
-        "sha256": "original-sha256",
-        "manifest_sha256": "original-manifest-sha256",
-    }
-    replacement_backup = {
-        "path": "backups/partial-state.tar.gz",
-        "sha256": "partial-sha256",
-        "manifest_sha256": "partial-manifest-sha256",
-    }
+    original_backup = _backup_metadata("original-pre-upgrade")
+    replacement_backup = _backup_metadata("partial-state")
     execute_soperator_migration(
         config_path=config_path,
         target_ref="external-cluster",
@@ -6015,7 +6166,7 @@ def test_external_upgrade_job_policy_defaults_by_terminal_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(migration, "_external_upgrade_is_tty_session", lambda: False)
-    assert migration._external_upgrade_job_policy(None) == "wait-then-cancel"  # noqa: SLF001
+    assert migration._external_upgrade_job_policy(None) == "fail"  # noqa: SLF001
 
     monkeypatch.setattr(migration, "_external_upgrade_is_tty_session", lambda: True)
     assert migration._external_upgrade_job_policy(None) == "interactive"  # noqa: SLF001
@@ -6097,6 +6248,71 @@ def test_external_upgrade_slurm_quiet_rechecks_after_partition_drain() -> None:
     assert active_squeue_indices[-1] > drain_index
     assert any(
         call[8:] == ("scontrol", "update", "PartitionName=ALL", "State=UP") for call in calls
+    )
+
+
+def test_populate_jail_refresh_phase_job_policy_fail_blocks_before_helm_overwrite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = _FakeCommandRunner(
+        live_pods=[
+            {
+                "metadata": {"name": "login-0"},
+                "status": {"phase": "Running"},
+            },
+            {
+                "metadata": {
+                    "name": "worker-gpu-0",
+                    "labels": {"slurm.nebius.ai/nodeset-name": "worker-gpu"},
+                },
+                "status": {"phase": "Running"},
+            },
+        ],
+        slurm_queue_output=(
+            "42|alice|RUNNING|gpu|worker-gpu-0|worker-gpu-0||None|"
+            "00:05|30:00|25:00|active\n"
+        ),
+    )
+    helm_calls: list[Mapping[str, Any]] = []
+    monkeypatch.setattr(
+        migration,
+        "_patch_target_values_for_compute",
+        lambda **_kwargs: {"maintenance": "none", "populateJail": {"overwrite": False}},
+    )
+    monkeypatch.setattr(
+        migration,
+        "_helm_upgrade_target_soperator",
+        lambda **kwargs: helm_calls.append(kwargs),
+    )
+    checkpoint: dict[str, Any] = {
+        "phase_state": {},
+        "worker_node_groups": ["gpu-pool"],
+    }
+
+    with pytest.raises(migration.SoperatorMigrationPhasePending, match="Affected Slurm jobs"):
+        migration._execute_populate_jail_refresh_phase(  # noqa: SLF001
+            checkpoint=checkpoint,
+            payload={},
+            source_report={"report": {"target_version": "4.0.1"}},
+            live_snapshot={},
+            target_ref="external-cluster",
+            kube_context="external-context",
+            command_runner=runner,
+            populate_jail_refresh="force",
+            job_policy="fail",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            job_wait_timeout_seconds=0,
+            job_refresh_interval_seconds=1,
+        )
+
+    assert helm_calls == []
+    assert any(
+        command[8:10] == ("squeue", "-h") for command, _input_text in runner.calls
+    )
+    assert not any(
+        command[8:] == ("scontrol", "update", "PartitionName=ALL", "State=DRAIN")
+        for command, _input_text in runner.calls
     )
 
 
@@ -9826,7 +10042,7 @@ def test_execute_clears_interrupted_pending_helm_operation(tmp_path: Path) -> No
         for call in runner.calls
         if call[0][0] == "helm" and "upgrade" in call[0] and call[0][5] == "soperator"
     ]
-    assert len(helm_upgrades) == 2
+    assert len(helm_upgrades) == 4
     assert any(
         call[0][:8]
         == (
@@ -9896,7 +10112,7 @@ def test_execute_retries_soperator_helm_upgrade_while_webhook_starts(
         for call in runner.calls
         if call[0][0] == "helm" and "upgrade" in call[0] and call[0][5] == "soperator"
     ]
-    assert len(helm_upgrades) == 2
+    assert len(helm_upgrades) == 4
 
 
 def test_execute_reconciles_completed_compute_cutover_cleanup(tmp_path: Path) -> None:
@@ -10049,7 +10265,7 @@ def test_execute_adopts_existing_helm_owned_resource_conflict(tmp_path: Path) ->
         if call[0][:4] == ("helm", "--kube-context", "external-context", "upgrade")
         and call[0][5] == "soperator"
     ]
-    assert len(helm_upgrade_calls) == 2
+    assert len(helm_upgrade_calls) == 4
     assert (
         (
             "kubectl",

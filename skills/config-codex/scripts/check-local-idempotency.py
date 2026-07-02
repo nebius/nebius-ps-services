@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Read-only idempotency preflight for a local Codex home.
 
-The check intentionally validates the minimal config-codex contract instead of
-diffing config.toml against the public template. Existing local config files
-often contain app, plugin, project, hook-trust, desktop, or extra MCP settings
-that must be preserved and are not part of this skill's convergence target.
+By default, this validates the minimal merge-safe config-codex contract instead
+of diffing user-owned files against public templates. Existing local
+AGENTS.md/config.toml files often contain app, plugin, project, hook-trust,
+desktop, MCP, or personal policy settings that must be preserved and are not
+part of this skill's convergence target.
 """
 
 from __future__ import annotations
@@ -21,6 +22,23 @@ import tomllib
 REQUIRED_AGENT_NAMES = ("repo_mapper", "test_strategist", "risk_reviewer")
 MANAGED_BEGIN = "<!-- BEGIN config-codex managed context -->"
 MANAGED_END = "<!-- END config-codex managed context -->"
+REQUIRED_MANAGED_CONTEXT_SNIPPETS = (
+    (
+        "For non-trivial planning, implementation, debugging, refactoring, "
+        "migration, architecture, review, testing, CI failure, or multi-file "
+        "coding tasks, use `global-context-management`."
+    ),
+    (
+        "Read the durable task-state file injected by global hooks at task "
+        "start, resume, or after compaction when prior context may matter."
+    ),
+    "Update it with concise checkpoints",
+    "Use bounded read-only subagents",
+    (
+        "After code, config, or documentation changes in a turn, before the "
+        "final response, explicitly use `$align` for the changed surfaces"
+    ),
+)
 TEMPLATE_ASSETS = {
     "hooks/session_start_context.py": "hooks/session_start_context.py.template",
     "hooks/user_prompt_context.py": "hooks/user_prompt_context.py.template",
@@ -49,7 +67,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help=(
             "Require AGENTS.md to exactly match assets/AGENTS.md.template. "
-            "Use for validating this repo's canonical laptop setup."
+            "Use only for canonical template/install-copy audits, not normal "
+            "laptop setup."
+        ),
+    )
+    parser.add_argument(
+        "--require-template-mcp-servers",
+        action="store_true",
+        help=(
+            "Require every MCP server from assets/config.toml.template to be "
+            "present with exact template values. Use only for explicit "
+            "template-baseline audits; normal laptop setup preserves existing "
+            "MCP config and patches requested integrations separately."
         ),
     )
     return parser.parse_args(argv)
@@ -101,6 +130,10 @@ def truthy(value: object) -> bool:
     return False
 
 
+def compact_markdown_text(value: str) -> str:
+    return " ".join(line.strip() for line in value.splitlines() if line.strip())
+
+
 def check_agents_md(codex_home: Path, strict: bool, failures: list[str]) -> None:
     agents_path = codex_home / "AGENTS.md"
     template_path = skill_root() / "assets" / "AGENTS.md.template"
@@ -116,22 +149,33 @@ def check_agents_md(codex_home: Path, strict: bool, failures: list[str]) -> None
     if strict:
         fail("AGENTS.md differs from AGENTS.md.template", failures)
         return
-    if MANAGED_BEGIN in actual and MANAGED_END in actual:
-        ok("AGENTS.md has config-codex managed markers")
+    begin = actual.find(MANAGED_BEGIN)
+    end = actual.find(MANAGED_END)
+    if begin != -1 and end != -1 and begin < end:
+        managed_block = actual[begin + len(MANAGED_BEGIN) : end]
+        managed_text = compact_markdown_text(managed_block)
+        missing = [
+            snippet
+            for snippet in REQUIRED_MANAGED_CONTEXT_SNIPPETS
+            if compact_markdown_text(snippet) not in managed_text
+        ]
+        if missing:
+            fail("AGENTS.md managed block is stale or incomplete", failures)
+            return
+        ok("AGENTS.md has current config-codex managed block")
         return
     fail("AGENTS.md has neither exact template content nor managed markers", failures)
 
 
-def check_config_toml(codex_home: Path, failures: list[str]) -> None:
+def check_config_toml(
+    codex_home: Path,
+    require_template_mcp_servers: bool,
+    failures: list[str],
+) -> None:
     config_path = codex_home / "config.toml"
     config = load_toml(config_path, "config.toml", failures)
     if not config:
         return
-    template = load_toml(
-        skill_root() / "assets" / "config.toml.template",
-        "config.toml.template",
-        failures,
-    )
 
     features = config.get("features", {})
     for key in ("hooks", "multi_agent"):
@@ -173,7 +217,15 @@ def check_config_toml(codex_home: Path, failures: list[str]) -> None:
         else:
             fail(f"agents.{name} is not read-only", failures)
 
-    check_required_mcp_servers(config, template, failures)
+    if require_template_mcp_servers:
+        template = load_toml(
+            skill_root() / "assets" / "config.toml.template",
+            "config.toml.template",
+            failures,
+        )
+        check_required_mcp_servers(config, template, failures)
+    else:
+        ok("template MCP server parity is not required for merge-safe laptop check")
 
 
 def check_required_mcp_servers(config: dict, template: dict, failures: list[str]) -> None:
@@ -296,7 +348,7 @@ def main(argv: list[str]) -> int:
     failures: list[str] = []
     print("Checking Codex home: <codex-home>")
     check_agents_md(codex_home, args.strict_agents_template, failures)
-    check_config_toml(codex_home, failures)
+    check_config_toml(codex_home, args.require_template_mcp_servers, failures)
     check_runtime_files(codex_home, failures)
     if failures:
         print(f"Idempotency preflight failed: {len(failures)} issue(s)")

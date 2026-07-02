@@ -49,7 +49,7 @@ User asks for Codex setup
 config-codex skill selects public templates
   |
   v
-Existing local files are backed up
+Existing local files are inspected; changed targets are backed up
   |
   v
 $CODEX_HOME is patched or populated
@@ -95,9 +95,11 @@ default contract:
   sort it, normalize comments, or create a backup.
 
 For `AGENTS.md`, exact template parity is a no-op. Otherwise, add or update
-only the compact managed context section. For `config.toml`, parse the file
-first and patch the minimum settings needed for hooks, multi-agent support, and
-the three read-only custom agent config layers.
+only the compact managed context section. Empty or stale managed markers do not
+satisfy validation; the content between the markers must carry the current
+durable guidance. For `config.toml`, parse the file first and patch the
+minimum settings needed for hooks, multi-agent support, and the three read-only
+custom agent config layers.
 
 Do not treat `assets/config.toml.template` as desired state for existing
 machines. It is the create-only baseline for a missing config plus examples of
@@ -120,9 +122,10 @@ skill.
 
 Hook scripts, custom-agent TOML files, and optional policy files are template
 assets rather than semantic patch targets. Copy them when missing. If an
-existing file byte-matches the previous template, replacing it with the current
-template is idempotent and safe. If it differs from the expected template, stop
-and show the diff instead of overwriting local customizations.
+existing file matches the current template, leave it unchanged. If it differs
+from the expected template, stop and show the diff instead of overwriting local
+customizations; replace it only after the user has reviewed the diff and
+confirmed that the local customization should be discarded.
 
 `hooks.json` is a semantic merge target, not a byte-for-byte payload template.
 The required global-context `SessionStart` and `UserPromptSubmit` entries must
@@ -310,8 +313,7 @@ setup.
 
    ```bash
    python3 config-codex/scripts/check-local-idempotency.py \
-     --codex-home "$CODEX_HOME" \
-     --strict-agents-template
+     --codex-home "$CODEX_HOME"
    ```
 
 5. If the preflight fails, let Codex patch only the failed surfaces from the
@@ -488,7 +490,10 @@ setup.
 - `scripts/check-local-idempotency.py`: read-only preflight that checks the
   minimal no-change contract for an already configured Codex home without
   printing config values. It checks required global hook registrations as a
-  subset so extra reviewed workflow hooks can coexist.
+  subset so extra reviewed workflow hooks can coexist, and validates the
+  current managed `AGENTS.md` block content when the whole file does not match
+  the template. Exact `AGENTS.md` template parity and public MCP baseline
+  parity are explicit audit modes, not normal laptop setup requirements.
 
 Low-level hook file sync can use the root installer:
 
@@ -500,10 +505,12 @@ Low-level hook file sync can use the root installer:
 The first command syncs every reviewed hook-only bundle under the source skills
 folder. The second command syncs only this skill's hook payload templates. Both
 copy into `$CODEX_HOME/hooks` with `.template` stripped from installed file
-names. Add `--register-hooks` when the installer should semantically merge the
-bundle's hook registration into `$CODEX_HOME/hooks.json`; registration still
-does not trust hooks, patch `config.toml`, or replace the full `config-codex`
-setup workflow.
+names, copy missing hook files, leave matching hook files unchanged, and stop
+before replacing any differing existing hook file. Add `--register-hooks` when
+the installer should semantically merge the bundle's hook registration into
+`$CODEX_HOME/hooks.json`; registration still does not trust hooks, patch
+`config.toml`, replace `AGENTS.md`, or replace the full `config-codex` setup
+workflow.
 
 - `agents/openai.yaml`: UI metadata and implicit invocation policy.
 
@@ -515,8 +522,7 @@ From the skills repo root:
 python3 align-skill/scripts/validate-skill-structure.py config-codex
 python3 align-skill/scripts/validate-skill-structure.py global-context-management
 python3 config-codex/scripts/check-local-idempotency.py \
-  --codex-home "$HOME/.codex" \
-  --strict-agents-template
+  --codex-home "$HOME/.codex"
 python3 config-codex/scripts/test-check-local-idempotency.py
 python3 global-context-management/scripts/validate-local-templates.py
 markdownlint README.md CHANGELOG.md config-codex/**/*.md

@@ -50,6 +50,7 @@ from nebius_cxcli.quota_checks import (
     QuotaRequirement,
     RegionalQuotaAvailability,
 )
+from nebius_cxcli.soperator_populate_jail import PopulateJailSnapshot
 
 runner = CliRunner()
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
@@ -206,6 +207,8 @@ def _stub_soperator_upgrade_runtime(
     monkeypatch: pytest.MonkeyPatch,
     paths: ProjectPaths,
     calls: list[object],
+    *,
+    populate_jail_image_changed: bool = True,
 ) -> None:
     backup_path = paths.project_dir / "backups" / "soperator-upgrade-test.tar.gz"
 
@@ -216,7 +219,15 @@ def _stub_soperator_upgrade_runtime(
             path=backup_path,
             size_bytes=6,
             sha256="archive-sha",
-            included_categories=("accounting", "kubernetes", "slurm"),
+            included_categories=(
+                "accounting",
+                "generated",
+                "kubernetes",
+                "recreation",
+                "slurm",
+                "soperator",
+                "source",
+            ),
             secret_material_included=True,
             accounting_db_included=True,
             manifest_sha256="manifest-sha",
@@ -299,6 +310,73 @@ def _stub_soperator_upgrade_runtime(
         "_soperator_upgrade_slurm_nodes_for_worker_nodesets",
         lambda **_kwargs: (),
     )
+    target_populate_jail_image = (
+        "registry.example/populate-jail:new"
+        if populate_jail_image_changed
+        else "registry.example/populate-jail:old"
+    )
+    populate_snapshots = [
+        PopulateJailSnapshot(
+            slurmcluster_name="mk8s",
+            image="registry.example/populate-jail:old",
+            job_name="mk8s-populate-jail",
+            job_uid="old-job",
+            job_complete=True,
+            job_image="registry.example/populate-jail:old",
+            status="collected",
+        ),
+        PopulateJailSnapshot(
+            slurmcluster_name="mk8s",
+            image=target_populate_jail_image,
+            job_name="mk8s-populate-jail",
+            job_uid="old-job",
+            job_complete=True,
+            job_image="registry.example/populate-jail:old",
+            status="collected",
+        ),
+    ]
+
+    def _inspect_populate_jail(*_args: object, **_kwargs: object) -> PopulateJailSnapshot:
+        if populate_snapshots:
+            return populate_snapshots.pop(0)
+        return PopulateJailSnapshot(
+            slurmcluster_name="mk8s",
+            image=target_populate_jail_image,
+            job_name="mk8s-populate-jail",
+            job_uid="new-job",
+            job_complete=True,
+            job_image=target_populate_jail_image,
+            status="collected",
+        )
+
+    monkeypatch.setattr(cli, "inspect_populate_jail", _inspect_populate_jail)
+    monkeypatch.setattr(
+        cli,
+        "wait_for_populate_jail_consumers_down",
+        lambda *_args, **_kwargs: PopulateJailSnapshot(
+            slurmcluster_name="mk8s",
+            image=target_populate_jail_image,
+            job_name="mk8s-populate-jail",
+            job_uid="old-job",
+            job_complete=True,
+            job_image="registry.example/populate-jail:old",
+            active_consumer_pods=(),
+            status="collected",
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "wait_for_populate_jail_refresh",
+        lambda *_args, **_kwargs: PopulateJailSnapshot(
+            slurmcluster_name="mk8s",
+            image=target_populate_jail_image,
+            job_name="mk8s-populate-jail",
+            job_uid="new-job",
+            job_complete=True,
+            job_image=target_populate_jail_image,
+            status="collected",
+        ),
+    )
 
 
 def test_soperator_upgrade_config_fingerprint_ignores_transient_node_state(
@@ -366,6 +444,7 @@ def test_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path) -> 
         drain_timeout="auto",
         strategy_max_surge_count=None,
         backup_dir=None,
+        populate_jail_refresh="auto",
         job_policy="requeue-selected",
         cancel_job=("17",),
         requeue_job=("42", "43"),
@@ -562,6 +641,7 @@ def test_ext_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path)
         config_path=tmp_path / "config.yaml",
         target_ref="external",
         backup_dir=None,
+        populate_jail_refresh="auto",
         job_policy="requeue-hold-selected",
         cancel_job=("17",),
         requeue_job=("42", "43"),
@@ -609,6 +689,7 @@ def _run_soperator_upgrade_for_test(
     to_gpu_stack_preset: str | None = None,
     node_group: str = "",
     job_policy: str | None = None,
+    populate_jail_refresh: str = "auto",
     dry_run: bool = False,
     allow_unsupported_soperator_upgrade_path: bool = False,
     interactive: bool = False,
@@ -625,6 +706,7 @@ def _run_soperator_upgrade_for_test(
         drain_timeout="auto",
         strategy_max_surge_count=None,
         backup_dir=None,
+        populate_jail_refresh=populate_jail_refresh,
         job_policy=job_policy,
         cancel_job=(),
         requeue_job=(),
@@ -3342,6 +3424,22 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
             {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
         ),
         "soperator-static-ready",
+        "render",
+        ("validate", "Validate rendered Soperator populate-jail overwrite maintenance"),
+        (
+            "flux-apply",
+            (paths.generated_dir,),
+            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
+        ),
+        "soperator-static-ready",
+        "render",
+        ("validate", "Validate rendered Soperator populate-jail steady-state restore"),
+        (
+            "flux-apply",
+            (paths.generated_dir,),
+            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
+        ),
+        "soperator-static-ready",
         ("soperator-validation", "Postflight"),
     ]
     report = json.loads(
@@ -3461,7 +3559,12 @@ def test_soperator_upgrade_fast_stage_failure_blocks_next_stage(
         "_update_source_helm_chart_version",
         lambda *_args, **_kwargs: True,
     )
-    _stub_soperator_upgrade_runtime(monkeypatch, paths, calls)
+    _stub_soperator_upgrade_runtime(
+        monkeypatch,
+        paths,
+        calls,
+        populate_jail_image_changed=False,
+    )
 
     with pytest.raises(RuntimeError, match="fast stage verification failed after soperator-chart"):
         _run_soperator_upgrade_for_test(
@@ -3579,7 +3682,12 @@ def test_soperator_upgrade_mk8s_only_runs_node_template_phase_without_raw_kubect
             AssertionError(f"raw kubectl call was not expected: {args}")
         ),
     )
-    _stub_soperator_upgrade_runtime(monkeypatch, paths, calls)
+    _stub_soperator_upgrade_runtime(
+        monkeypatch,
+        paths,
+        calls,
+        populate_jail_image_changed=False,
+    )
 
     _run_soperator_upgrade_for_test(
         config_path=paths.config_path,
@@ -4101,6 +4209,114 @@ def test_soperator_upgrade_chart_only_job_policy_fail_blocks_before_chart_apply(
     assert not any(isinstance(call, tuple) and call[0] == "flux-apply" for call in calls)
 
 
+def test_soperator_upgrade_force_populate_jail_refresh_job_policy_fail_blocks_before_overwrite(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    paths.infra_dir.mkdir(parents=True)
+    paths.flux_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
+    paths.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "infra": {
+                    "components": [
+                        {
+                            "id": "mk8s",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "inputs": {},
+                        }
+                    ]
+                },
+                "apps": {
+                    "charts": [
+                        {
+                            "id": "soperator",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "namespace": "soperator",
+                            "release-name": "soperator",
+                            "target_ref": "mk8s",
+                            "version": "0.26.0",
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    generated_config = SimpleNamespace()
+    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    calls: list[object] = []
+
+    monkeypatch.setattr(
+        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli,
+        "_load_deploy_context",
+        lambda _path: (generated_config, paths, manifest),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_generated_bundle_validation",
+        lambda *_args, **kwargs: calls.append(("validate", kwargs["title"])) or {},
+    )
+    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: calls.append("render"))
+    monkeypatch.setattr(
+        cli,
+        "flux_apply_command",
+        lambda *args, **kwargs: calls.append(("flux-apply", args, kwargs)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_verify_soperator_static_upgrade_ready",
+        lambda *_args, **_kwargs: calls.append("soperator-static-ready"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_raise_if_soperator_upgrade_would_bypass_migration",
+        lambda *_args, **_kwargs: calls.append("migration-guard"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_soperator_upgrade_validation_phase",
+        lambda *_args, **kwargs: (
+            calls.append(("soperator-validation", kwargs["phase_label"])) or ()
+        ),
+    )
+    monkeypatch.setattr(cli, "_update_source_helm_chart_version", lambda *_args, **_kwargs: False)
+    _stub_soperator_upgrade_runtime(monkeypatch, paths, calls, populate_jail_image_changed=False)
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_slurm_nodes_for_worker_nodesets",
+        lambda **_kwargs: ("worker-gpu-0-0",),
+    )
+
+    def _job_gate(**kwargs: Any) -> tuple[str, ...]:
+        calls.append(("slurm-gate", kwargs["node_names"], kwargs["policy"]))
+        raise RuntimeError("Affected Slurm jobs exist for the upgrade scope.")
+
+    monkeypatch.setattr(cli, "_handle_soperator_upgrade_running_jobs", _job_gate)
+
+    with pytest.raises(RuntimeError, match="Affected Slurm jobs exist"):
+        _run_soperator_upgrade_for_test(
+            config_path=paths.config_path,
+            to_chart_version="0.26.0",
+            populate_jail_refresh="force",
+            job_policy="fail",
+        )
+
+    assert ("slurm-gate", ("worker-gpu-0-0",), "fail") in calls
+    assert (
+        "validate",
+        "Validate rendered Soperator populate-jail overwrite maintenance",
+    ) not in calls
+    assert not any(isinstance(call, tuple) and call[0] == "flux-apply" for call in calls)
+
+
 def test_soperator_upgrade_slurm_node_filter_maps_worker_pod_and_instance_aliases(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4175,8 +4391,8 @@ def test_soperator_upgrade_job_policy_defaults_by_terminal_mode(
 ) -> None:
     monkeypatch.setattr(cli, "_is_tty_session", lambda: False)
 
-    assert cli._soperator_upgrade_job_policy(policy=None, interactive=True) == "wait-then-cancel"
-    assert cli._soperator_upgrade_job_policy(policy=None, interactive=False) == "wait-then-cancel"
+    assert cli._soperator_upgrade_job_policy(policy=None, interactive=True) == "fail"
+    assert cli._soperator_upgrade_job_policy(policy=None, interactive=False) == "fail"
     assert cli._soperator_runtime_job_policy(None) == "wait-then-cancel"
 
     with pytest.raises(RuntimeError, match="interactive terminal"):
@@ -4187,7 +4403,7 @@ def test_soperator_upgrade_job_policy_defaults_by_terminal_mode(
     monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
 
     assert cli._soperator_upgrade_job_policy(policy=None, interactive=True) == "interactive"
-    assert cli._soperator_upgrade_job_policy(policy=None, interactive=False) == "wait-then-cancel"
+    assert cli._soperator_upgrade_job_policy(policy=None, interactive=False) == "fail"
     assert cli._soperator_runtime_job_policy(None) == "interactive"
 
 
@@ -5164,6 +5380,7 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
         drain_timeout="auto",
         strategy_max_surge_count=None,
         backup_dir=None,
+        populate_jail_refresh="auto",
         job_policy=None,
         cancel_job=(),
         requeue_job=(),
@@ -5200,6 +5417,22 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
             {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
         ),
         "soperator-static-ready",
+        "render",
+        ("validate", "Validate rendered Soperator populate-jail overwrite maintenance"),
+        (
+            "flux-apply",
+            (paths.generated_dir,),
+            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
+        ),
+        "soperator-static-ready",
+        "render",
+        ("validate", "Validate rendered Soperator populate-jail steady-state restore"),
+        (
+            "flux-apply",
+            (paths.generated_dir,),
+            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
+        ),
+        "soperator-static-ready",
         ("soperator-validation", "Postflight"),
         "render",
         ("validate", "Validate rendered Soperator ActiveChecks restore"),
@@ -5228,12 +5461,19 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
         "activechecks-suspended",
         "stage-fast-verification-passed",
         "preflight-soperator-validation-completed",
-        "soperator-worker-job-policy-skipped",
-        "stage-fast-verification-passed",
-        "chart-applied",
-        "stage-fast-verification-passed",
-        "postflight-completed",
-        "stage-fast-verification-passed",
+            "soperator-worker-job-policy-skipped",
+            "stage-fast-verification-passed",
+            "chart-applied",
+            "stage-fast-verification-passed",
+            "populate-jail-refresh-planned",
+            "populate-jail-refresh-overwrite-maintenance-applied",
+            "populate-jail-refresh-consumers-down",
+            "populate-jail-refresh-job-completed",
+            "populate-jail-refresh-steady-state-applied",
+            "populate-jail-refresh-completed",
+            "stage-fast-verification-passed",
+            "postflight-completed",
+            "stage-fast-verification-passed",
         "activechecks-restore-started",
         "activechecks-restored",
         "stage-fast-verification-passed",
@@ -5632,7 +5872,12 @@ def test_soperator_upgrade_resumes_pending_activechecks_restore_from_checkpoint(
             or {"status": "suspended", "patched": ["nccl"], "skipped": []}
         ),
     )
-    _stub_soperator_upgrade_runtime(monkeypatch, paths, calls)
+    _stub_soperator_upgrade_runtime(
+        monkeypatch,
+        paths,
+        calls,
+        populate_jail_image_changed=False,
+    )
 
     _run_soperator_upgrade_for_test(
         config_path=paths.config_path,

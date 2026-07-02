@@ -29,10 +29,11 @@ set -euo pipefail
 #   - Drift visibility: destination skills missing from the selected source are
 #     listed at the end with a --remove-skill hint instead of being removed unless
 #     they are still marked as owned by the same source.
-#   - Hook drift visibility: hook installation lists extra installed hook files
-#     and hooks.json registrations that are not present in the selected source
-#     manifests, but it never deletes them automatically unless
-#     --replace-hooks-json is explicitly set for registrations.
+#   - Hook drift visibility: hook installation copies missing hook files and
+#     leaves differing existing hook files for manual review. It lists extra
+#     installed hook files and hooks.json registrations that are not present in
+#     the selected source manifests, but it never deletes them automatically
+#     unless --replace-hooks-json is explicitly set for registrations.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_SRC_DIR="${SCRIPT_DIR}"
@@ -119,6 +120,7 @@ show_usage() {
   printf '%b\n' "  ${S_YELLOW}--remove-skill${S_RESET}   Remove one skill by its visible Codex skill name or folder name"
   printf '%b\n' "  ${S_YELLOW}--install-hooks${S_RESET}  Copy hook files from a source hook directory into"
   printf '%b\n' "                    ${S_CYAN}\${CODEX_HOME:-~/.codex}/hooks${S_RESET}, stripping .template suffixes"
+  printf '%b\n' "                    and refusing to replace differing existing hook files"
   printf '%b\n' "                    without modifying hooks.json unless --register-hooks is also set"
   printf '%b\n' "  ${S_YELLOW}--install-all-hooks${S_RESET}"
   printf '%b\n' "                    Copy hook files from every ${S_CYAN}*/assets/hooks${S_RESET} directory"
@@ -155,6 +157,7 @@ show_usage() {
   printf '%b\n' "  - Reinstalling from a source that still contains the skill will add it back."
   printf '%b\n' "  - ${S_CYAN}--install-hooks${S_RESET} is opt-in because hooks are runtime guardrails, not skills."
   printf '%b\n' "  - ${S_CYAN}--install-all-hooks${S_RESET} discovers only hook-only ${S_CYAN}*/assets/hooks${S_RESET} directories under this source."
+  printf '%b\n' "  - Existing hook files with different content are left unchanged for manual review."
   printf '%b\n' "  - ${S_CYAN}--register-hooks${S_RESET} preserves existing ${S_CYAN}hooks.json${S_RESET} entries and appends missing source entries."
   printf '%b\n' "  - ${S_CYAN}--register-hooks${S_RESET} refuses duplicate Python hook files within the same hook event."
   printf '%b\n' "  - ${S_CYAN}--replace-hooks-json${S_RESET} explicitly backs up and replaces ${S_CYAN}hooks.json${S_RESET} with selected source entries."
@@ -592,6 +595,41 @@ HOOK_SYNC_INSTALLED=0
 HOOK_SYNC_UNCHANGED=0
 HOOK_SYNC_TOTAL=0
 HOOK_FILE_STATUS_FILE=""
+
+preflight_hook_file_conflicts() {
+  local codex_home="$1"
+  local hook_dest="${codex_home}/hooks"
+  local hook_src=""
+  local src=""
+  local rel=""
+  local dest_rel=""
+  local dest=""
+  local conflicts=0
+
+  shift
+  for hook_src in "$@"; do
+    while IFS= read -r -d '' src; do
+      rel="${src#"${hook_src}/"}"
+      is_installable_hook_rel "${rel}" || continue
+      dest_rel="${rel%.template}"
+      dest="${hook_dest}/${dest_rel}"
+      if [[ -f "${dest}" ]] && ! cmp -s "${src}" "${dest}"; then
+        if [[ "${conflicts}" -eq 0 ]]; then
+          log_error "refusing to replace existing customized hook file(s)"
+        fi
+        printf '%b\n' "  source: ${S_CYAN}${src}${S_RESET}" >&2
+        printf '%b\n' "  target: ${S_CYAN}${dest}${S_RESET}" >&2
+        conflicts=$((conflicts + 1))
+      fi
+    done < <(find "${hook_src}" -type f -print0)
+  done
+
+  if [[ "${conflicts}" -gt 0 ]]; then
+    log_note "Review the target file(s), then remove or update them manually before rerunning hook installation."
+    log_note "This installer copies missing hook files and repairs matching file permissions, but it does not overwrite local hook customizations."
+    exit 1
+  fi
+}
 
 sync_hook_files() {
   local hook_src="$1"
@@ -1421,6 +1459,7 @@ install_hooks() {
   fi
 
   reject_inline_agent_nebius_auth_config_hook "${codex_home}" "${hook_src}"
+  preflight_hook_file_conflicts "${codex_home}" "${hook_src}"
 
   if [[ "${register_hooks}" -eq 1 ]]; then
     require_command "python3" "for hooks.json registration"
@@ -1544,6 +1583,11 @@ install_all_hooks() {
   fi
   source_root="$(cd "${source_root_arg}" && pwd -P)"
 
+  require_command "install" "for hook installation"
+  require_command "cmp" "for hook idempotency checks"
+  require_command "chmod" "for hook permission repair"
+  require_command "find" "for hook source discovery"
+
   while IFS= read -r hook_src; do
     [[ -n "${hook_src}" ]] || continue
     hook_dirs+=("${hook_src}")
@@ -1558,6 +1602,7 @@ install_all_hooks() {
   validate_hook_dest_collisions "${hook_dirs[@]}"
 
   reject_inline_agent_nebius_auth_config_hook "${codex_home}" "${hook_dirs[@]}"
+  preflight_hook_file_conflicts "${codex_home}" "${hook_dirs[@]}"
 
   if [[ "${register_hooks}" -eq 1 ]]; then
     require_command "python3" "for hooks.json registration"

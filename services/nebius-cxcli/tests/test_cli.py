@@ -1230,7 +1230,15 @@ def _stub_external_soperator_upgrade_backup(monkeypatch: pytest.MonkeyPatch) -> 
             "size_bytes": 123,
             "sha256": "backup-sha256",
             "manifest_sha256": "manifest-sha256",
-            "included_categories": ["source", "kubernetes", "soperator", "slurm", "accounting"],
+            "included_categories": [
+                "accounting",
+                "generated",
+                "kubernetes",
+                "recreation",
+                "slurm",
+                "soperator",
+                "source",
+            ],
             "raw_secret_material": True,
             "accounting_db_dump": True,
             "report_redacted": True,
@@ -1760,6 +1768,17 @@ spec:
   replicas: 1
 """
         }
+        self.live_pods: list[dict[str, object]] = [
+            {
+                "metadata": {
+                    "name": "login-0",
+                    "labels": {"app.kubernetes.io/component": "login"},
+                },
+                "status": {"phase": "Running"},
+            }
+        ]
+        self._populate_jail_refresh_saved_pods: list[dict[str, object]] | None = None
+        self.populate_jail_job_uid = "populate-jail-job-old"
 
     def _upsert_helm_release(
         self,
@@ -1790,7 +1809,7 @@ spec:
         timeout_seconds: int = 300,
         check: bool = True,
     ) -> SoperatorMigrationCommandResult:
-        del input_text, timeout_seconds, check
+        del timeout_seconds, check
         command = tuple(str(item) for item in args)
         if command[:4] == ("nebius", "compute", "filesystem", "get-by-name"):
             name = command[command.index("--name") + 1]
@@ -1978,6 +1997,31 @@ spec:
   replicas: 1
 """,
             )
+            try:
+                values = json.loads(input_text or "{}")
+            except json.JSONDecodeError:
+                values = {}
+            populate = values.get("populateJail") if isinstance(values, dict) else None
+            if (
+                release_name == "soperator"
+                and isinstance(values, dict)
+                and values.get("maintenance") == "downscaleAndOverwritePopulateJail"
+                and isinstance(populate, dict)
+                and populate.get("overwrite") is True
+            ):
+                self._populate_jail_refresh_saved_pods = list(self.live_pods)
+                self.live_pods = []
+                self.populate_jail_job_uid = "populate-jail-job-new"
+            elif (
+                release_name == "soperator"
+                and isinstance(values, dict)
+                and values.get("maintenance") == "none"
+                and isinstance(populate, dict)
+                and populate.get("overwrite") is False
+                and self._populate_jail_refresh_saved_pods is not None
+            ):
+                self.live_pods = self._populate_jail_refresh_saved_pods
+                self._populate_jail_refresh_saved_pods = None
             return SoperatorMigrationCommandResult(command, 0, "{}", "")
         if command[:5] == (
             "kubectl",
@@ -2051,17 +2095,72 @@ spec:
             return SoperatorMigrationCommandResult(
                 command,
                 0,
+                json.dumps({"items": self.live_pods}),
+                "",
+            )
+        if command[:7] == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "slurmcluster",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
                 json.dumps(
                     {
-                        "items": [
-                            {
-                                "metadata": {
-                                    "name": "login-0",
-                                    "labels": {"app.kubernetes.io/component": "login"},
-                                },
-                                "status": {"phase": "Running"},
+                        "metadata": {"name": command[7], "namespace": "soperator"},
+                        "spec": {
+                            "populateJail": {
+                                "image": "registry.example/soperator/populate-jail:4.0.2-ps.3"
                             }
-                        ]
+                        },
+                        "status": {"phase": "Available"},
+                    }
+                ),
+                "",
+            )
+        if command[:7] == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "job",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "metadata": {
+                            "name": command[7],
+                            "namespace": "soperator",
+                            "uid": self.populate_jail_job_uid,
+                        },
+                        "spec": {
+                            "template": {
+                                "spec": {
+                                    "containers": [
+                                        {
+                                            "name": "populate-jail",
+                                            "image": (
+                                                "registry.example/soperator/"
+                                                "populate-jail:4.0.2-ps.3"
+                                            ),
+                                        }
+                                    ]
+                                }
+                            }
+                        },
+                        "status": {
+                            "succeeded": 1,
+                            "conditions": [{"type": "Complete", "status": "True"}],
+                        },
                     }
                 ),
                 "",
@@ -2129,6 +2228,26 @@ spec:
         ):
             if command[8:11] == ("sinfo", "-h", "-o"):
                 return SoperatorMigrationCommandResult(command, 0, "idle\n", "")
+            if command[8:] == ("scontrol", "show", "nodes"):
+                return SoperatorMigrationCommandResult(
+                    command,
+                    0,
+                    "\n".join(
+                        (
+                            "NodeName=node-a NodeHostName=node-a Partitions=main",
+                            "NodeName=node-b NodeHostName=node-b Partitions=main",
+                        )
+                    ),
+                    "",
+                )
+            if command[8:11] == ("scontrol", "show", "node") and command[-1] == "-o":
+                nodes = command[11].split(",") if len(command) > 11 else []
+                return SoperatorMigrationCommandResult(
+                    command,
+                    0,
+                    "\n".join(f"NodeName={node} Partitions=main State=IDLE" for node in nodes),
+                    "",
+                )
             if command[8:10] == ("squeue", "-h"):
                 return SoperatorMigrationCommandResult(command, 0, "", "")
             if command[8:10] == ("bash", "-lc") and "cxcli-soperator-smoke" in command[10]:
@@ -7690,7 +7809,7 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "Resume contract:" in result.output
     assert "Execution controls:" in result.output
     assert "Execution mode: dry-run; no cluster changes were made." in result.output
-    assert "Slurm job policy: wait-then-cancel" in result.output
+    assert "Slurm job policy: fail" in result.output
     assert "Slurm job policy: interactive" not in result.output
     assert "Backup: restore-capable archive" in result.output
     assert "only into a new/replacement cluster" in result.output
@@ -8380,6 +8499,13 @@ def test_soperator_migration_plan_styles_topic_labels() -> None:
             "Soperator 4.0.2-ps.3 cutover: final Soperator chart cutover",
         ),
         (
+            "populate-jail-refresh",
+            "Populate-jail refresh",
+            {},
+            {"target_soperator_version": "4.0.2-ps.3"},
+            "Populate-jail refresh",
+        ),
+        (
             "validation-and-rollback-hold",
             "Validation and rollback hold",
             {},
@@ -8796,6 +8922,15 @@ def test_ext_soperator_upgrade_execute_reuses_checkpoint_backup_after_mutation_s
         "path": "backups/original-pre-upgrade.tar.gz",
         "sha256": "original-sha256",
         "manifest_sha256": "original-manifest-sha256",
+        "included_categories": [
+            "accounting",
+            "generated",
+            "kubernetes",
+            "recreation",
+            "slurm",
+            "soperator",
+            "source",
+        ],
     }
     checkpoint_path.parent.mkdir(parents=True)
     checkpoint_path.write_text(
@@ -8994,8 +9129,8 @@ def test_ext_soperator_upgrade_execute_records_approval_and_worker_groups(
         "Completed execute phases: discovery-and-plan, customer-approval, "
         "external-node-template-upgrade, target-gpu-stack-remediation, "
         "create-aligned-sfs, online-bulk-data-sync, "
-        "rolling-compute-migration, final-control-plane-cutover, validation-and-rollback-hold, "
-        "retire-old-resources"
+        "rolling-compute-migration, final-control-plane-cutover, populate-jail-refresh, "
+        "validation-and-rollback-hold, retire-old-resources"
     ) in result.output
     assert "Pending phase: none" in result.output
     assert "Upgrade performed: yes." in result.output
@@ -9056,6 +9191,7 @@ def test_ext_soperator_upgrade_execute_refreshes_config_after_completed_upgrade(
                 "customer-approval",
                 "rolling-compute-migration",
                 "final-control-plane-cutover",
+                "populate-jail-refresh",
                 "validation-and-rollback-hold",
                 "retire-old-resources",
             ),

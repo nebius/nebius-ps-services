@@ -252,6 +252,22 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
 
         self.assert_failed_before_mutation(result, original_config)
 
+    def test_hook_install_refuses_to_replace_customized_hook_file(self) -> None:
+        self.installed_hook_path().parent.mkdir(parents=True, exist_ok=True)
+        custom_hook = "# local hook customization\n"
+        self.installed_hook_path().write_text(custom_hook, encoding="utf-8")
+
+        result = self.run_installer_copy_only()
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            self.installed_hook_path().read_text(encoding="utf-8"),
+            custom_hook,
+        )
+        self.assertFalse((self.codex_home / "hooks.json").exists())
+        self.assertIn("refusing to replace existing customized hook file", result.stderr)
+        self.assertIn("pre_tool_use_nebius_auth.py", result.stderr)
+
     def test_repeated_install_all_hooks_reports_unchanged_by_source(self) -> None:
         first = self.run_all_hooks_installer()
         second = self.run_all_hooks_installer()

@@ -14,6 +14,27 @@ from pathlib import Path
 SCRIPT = Path(__file__).resolve().with_name("check-local-idempotency.py")
 SKILL_ROOT = Path(__file__).resolve().parent.parent
 ASSETS = SKILL_ROOT / "assets"
+MANAGED_BLOCK = "\n".join(
+    [
+        "<!-- BEGIN config-codex managed context -->",
+        "## Skills",
+        "",
+        "- For non-trivial planning, implementation, debugging, refactoring,",
+        "  migration, architecture, review, testing, CI failure, or multi-file",
+        "  coding tasks, use `global-context-management`.",
+        "",
+        "## Context Management",
+        "",
+        "- Read the durable task-state file injected by global hooks at task",
+        "  start, resume, or after compaction when prior context may matter.",
+        "  Update it with concise checkpoints, and do not create repo-local",
+        "  task-state files unless explicitly requested.",
+        "- Use bounded read-only subagents for noisy exploration when useful.",
+        "- After code, config, or documentation changes in a turn, before the",
+        "  final response, explicitly use `$align` for the changed surfaces.",
+        "<!-- END config-codex managed context -->",
+    ]
+)
 
 
 def copy_template(source: Path, target: Path) -> None:
@@ -45,7 +66,7 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
         task_state.mkdir()
         task_state.chmod(0o700)
 
-    def run_check(self) -> subprocess.CompletedProcess[str]:
+    def run_check(self, *extra_args: str) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         return subprocess.run(
@@ -54,7 +75,7 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
                 str(SCRIPT),
                 "--codex-home",
                 str(self.codex_home),
-                "--strict-agents-template",
+                *extra_args,
             ],
             text=True,
             stdout=subprocess.PIPE,
@@ -69,8 +90,8 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(value), encoding="utf-8")
 
-    def assert_check_passes(self) -> None:
-        result = self.run_check()
+    def assert_check_passes(self, *extra_args: str) -> None:
+        result = self.run_check(*extra_args)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("Idempotency preflight passed", result.stdout)
 
@@ -84,6 +105,102 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
 
     def test_passes_without_optional_policy(self) -> None:
         self.assert_check_passes()
+
+    def test_strict_agents_template_accepts_exact_template(self) -> None:
+        self.assert_check_passes("--strict-agents-template")
+
+    def test_default_allows_user_agents_with_managed_block(self) -> None:
+        (self.codex_home / "AGENTS.md").write_text(
+            "\n".join(
+                [
+                    "# Local user rules",
+                    "",
+                    "- Keep my personal editor workflow intact.",
+                    "",
+                    MANAGED_BLOCK,
+                    "",
+                    "- Preserve this unrelated laptop rule.",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        self.assert_check_passes()
+
+        result = self.run_check("--strict-agents-template")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("AGENTS.md differs from AGENTS.md.template", result.stdout)
+
+    def test_default_rejects_empty_agents_managed_block(self) -> None:
+        (self.codex_home / "AGENTS.md").write_text(
+            "\n".join(
+                [
+                    "# Local user rules",
+                    "",
+                    "<!-- BEGIN config-codex managed context -->",
+                    "<!-- END config-codex managed context -->",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("AGENTS.md managed block is stale or incomplete", result.stdout)
+
+    def test_default_rejects_stale_agents_managed_block(self) -> None:
+        (self.codex_home / "AGENTS.md").write_text(
+            "\n".join(
+                [
+                    "# Local user rules",
+                    "",
+                    "<!-- BEGIN config-codex managed context -->",
+                    "- Use global-context-management for complex tasks.",
+                    "<!-- END config-codex managed context -->",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("AGENTS.md managed block is stale or incomplete", result.stdout)
+
+    def test_default_does_not_require_template_mcp_server_parity(self) -> None:
+        config_path = self.codex_home / "config.toml"
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8").replace(
+                "@upstash/context7-mcp@latest",
+                "@upstash/context7-mcp@1.0.0",
+            ),
+            encoding="utf-8",
+        )
+
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(
+            "template MCP server parity is not required for merge-safe laptop check",
+            result.stdout,
+        )
+
+    def test_template_mcp_audit_detects_drift(self) -> None:
+        config_path = self.codex_home / "config.toml"
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8").replace(
+                "@upstash/context7-mcp@latest",
+                "@upstash/context7-mcp@1.0.0",
+            ),
+            encoding="utf-8",
+        )
+
+        result = self.run_check("--require-template-mcp-servers")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(
+            "mcp_servers.context7 differs from template and needs review",
+            result.stdout,
+        )
 
     def test_passes_with_enabled_optional_policy(self) -> None:
         self.write_policy({"auto_read_only_subagents": True})

@@ -495,7 +495,8 @@ generate coverage, or stage files.
 public-safe templates. Use it for `$CODEX_HOME` layout, global `AGENTS.md`
 policy, `config.toml` features and MCP servers, hooks, task-state directories,
 custom read-only agents, and validation without copying personal paths or
-secrets into a public repository.
+secrets into a public repository. Existing laptop `AGENTS.md` and
+`config.toml` files are merge targets, not template replacement targets.
 
 ### `github-workflows`
 
@@ -654,7 +655,9 @@ script as the source and installs every sibling skill folder that contains
 The `--install-hooks` option is deliberately separate from normal skill
 installation. It copies hook files from an explicit source hook directory into
 `${CODEX_HOME:-$HOME/.codex}/hooks`, stripping `.template` suffixes for
-installed files. Add `--register-hooks` to merge that bundle's
+installed files. It copies missing hook files, leaves matching files unchanged,
+and stops before replacing any differing existing hook file. Add
+`--register-hooks` to merge that bundle's
 `hooks.json` or `hooks.json.template` registration manifest into
 `${CODEX_HOME:-$HOME/.codex}/hooks.json`.
 The `--install-all-hooks` option is also explicit, but discovers every reviewed
@@ -664,10 +667,11 @@ With `--register-hooks`, it also merges each discovered bundle's registration
 manifest while preserving existing hook entries. Add `--replace-hooks-json`
 only when you intentionally want to back up and replace `hooks.json` with a
 clean file built from the selected source manifests. Hook install modes are
-idempotent: unchanged files are not recopied, registration appends only missing
-source entries by default, refuses duplicate Python hook files within the same
-hook event, and any extra installed hook files or hook registrations are
-reported for review instead of removed automatically.
+idempotent: unchanged files are not recopied, differing existing hook files are
+left for manual review, registration appends only missing source entries by
+default, refuses duplicate Python hook files within the same hook event, and
+any extra installed hook files or hook registrations are reported for review
+instead of removed automatically.
 
 ### Supported Sources
 
@@ -763,11 +767,13 @@ CODEX_HOME=~/custom-codex ./install-skills.sh --install-all-hooks --register-hoo
   guardrails, not skills. Use a hook-only source directory such as
   `sdlc-start/assets/hooks` or `config-codex/assets/hooks`. Without
   `--register-hooks`, this only syncs files under
-  `${CODEX_HOME:-$HOME/.codex}/hooks`.
+  `${CODEX_HOME:-$HOME/.codex}/hooks`, and it stops before replacing any
+  differing existing hook file.
 - `--install-all-hooks` discovers only skill-owned hook-only directories named
   `*/assets/hooks` under this source folder, checks for conflicting installed
   file names, and syncs all reviewed hook bundles into
-  `${CODEX_HOME:-$HOME/.codex}/hooks`.
+  `${CODEX_HOME:-$HOME/.codex}/hooks` without overwriting differing existing
+  hook files.
 - `--register-hooks` can be combined with either hook-install mode. It looks
   for `hooks.json` or `hooks.json.template` in the hook directory or its parent,
   validates the source and destination JSON, backs up an existing

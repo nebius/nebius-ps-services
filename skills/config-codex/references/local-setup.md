@@ -22,18 +22,22 @@ Before writing anything, inspect the current local setup and build a patch
 plan. If no file needs to change, do not create backups and do not rewrite
 files just to match template formatting.
 
-For a laptop expected to match this repo's canonical local setup exactly, run:
+For a normal laptop setup, run the merge-safe preflight:
 
 ```bash
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 
 python3 config-codex/scripts/check-local-idempotency.py \
-  --codex-home "$CODEX_HOME" \
-  --strict-agents-template
+  --codex-home "$CODEX_HOME"
 ```
 
 If the check passes, report that no local changes are required for the checked
 surfaces. If it fails, patch only the failed surfaces.
+Use `--strict-agents-template` only for explicit canonical
+template/install-copy audits, and use `--require-template-mcp-servers` only
+when the user explicitly wants the public MCP baseline audited against
+`assets/config.toml.template`. These audit flags must not be used as
+justification to replace existing laptop `AGENTS.md` or `config.toml` files.
 
 When local policy blocks an otherwise safe patch, do not work around the
 guard. Report the blocked file, the smallest intended edit, and the manual
@@ -73,7 +77,9 @@ chmod 700 "$CODEX_HOME/task-state"
 
 ## Create Or Patch From Templates
 
-Use the files in `assets/` as source templates:
+Use the files in `assets/` as source templates. The arrows below describe the
+source for missing files; existing files follow the merge and
+replace-if-unmodified rules after the list.
 
 ```text
 assets/AGENTS.md.template              -> $CODEX_HOME/AGENTS.md
@@ -124,19 +130,22 @@ The root `install-skills.sh --register-hooks` path follows the same semantic
 merge model for hook bundles by default: it validates `hooks.json`, preserves
 existing entries, and appends only missing source entries. It also refuses
 duplicate Python hook files within the same hook event so stale variants cannot
-silently run alongside current registrations. It still does not trust hooks or
-patch `config.toml`. Add `--replace-hooks-json` only when the operator
-intentionally wants to back up and replace `hooks.json` with a clean file built
-from the selected source manifests. Hook install modes are idempotent and
-report extra installed hook files or `hooks.json` entries that are not present
-in the selected source manifests; those reports are advisory and do not delete
-files or edit existing registrations unless `--replace-hooks-json` is
-explicitly set.
+silently run alongside current registrations. Hook file installation copies
+missing files, leaves matching files unchanged, and stops before replacing any
+differing existing hook file so local customizations can be reviewed manually.
+It still does not trust hooks or patch `config.toml`. Add
+`--replace-hooks-json` only when the operator intentionally wants to back up
+and replace `hooks.json` with a clean file built from the selected source
+manifests. Hook install modes are idempotent and report extra installed hook
+files or `hooks.json` entries that are not present in the selected source
+manifests; those reports are advisory and do not delete files or edit existing
+registrations unless `--replace-hooks-json` is explicitly set.
 
 If `$CODEX_HOME/AGENTS.md` is missing, create it from
 `assets/AGENTS.md.template`. If it exists, do not replace it. Append or update a
 small managed section for `config-codex`/`global-context-management` guidance
-and leave unrelated user rules untouched.
+and leave unrelated user rules untouched. Marker presence alone is not enough:
+empty or stale managed blocks must be updated in place.
 
 Recommended managed block markers:
 
@@ -230,12 +239,13 @@ Run the read-only idempotency preflight:
 
 ```bash
 python3 config-codex/scripts/check-local-idempotency.py \
-  --codex-home "$CODEX_HOME" \
-  --strict-agents-template
+  --codex-home "$CODEX_HOME"
 ```
 
-The preflight checks the required global hook registrations as a subset and
-allows extra reviewed workflow hooks to coexist in `hooks.json`.
+The preflight checks the merge-safe laptop contract, including required global
+hook registrations as a subset so extra reviewed workflow hooks can coexist in
+`hooks.json`. It accepts exact `AGENTS.md` template parity or a current managed
+block; empty or stale managed markers fail validation.
 
 Summarize the result as an alignment matrix before making or recommending
 changes:
@@ -248,11 +258,11 @@ Manual action: <narrow edit the user can apply after review>
 Leave untouched: <aligned local files that should not be changed>
 ```
 
-For example, if only `$CODEX_HOME/AGENTS.md` differs from
-`assets/AGENTS.md.template`, report the exact stale bullet and tell the user to
-patch only that bullet. Do not recommend replacing the whole file, and do not
-touch `config.toml`, hooks, hook policy, custom-agent TOMLs, or `hooks.json`
-when those surfaces already validate.
+For example, if only the managed context block in `$CODEX_HOME/AGENTS.md` has a
+stale bullet, report the exact stale bullet and tell the user to patch only
+that bullet. Do not recommend replacing the whole file, and do not touch
+`config.toml`, hooks, hook policy, custom-agent TOMLs, or `hooks.json` when
+those surfaces already validate.
 
 Syntax-check rendered hooks without bytecode writes:
 

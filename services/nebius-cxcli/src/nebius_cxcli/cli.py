@@ -478,6 +478,19 @@ from .soperator_onboarding import (
     write_soperator_onboarding_reports,
     write_source_soperator_discovery_report,
 )
+from .soperator_populate_jail import (
+    POPULATE_JAIL_REFRESH_PHASE_ID,
+    completed_populate_jail_refresh_result,
+    inspect_populate_jail,
+    manual_populate_jail_refresh_result,
+    normalize_populate_jail_refresh_mode,
+    plan_populate_jail_refresh,
+    populate_jail_refresh_values,
+    populate_jail_steady_state_values,
+    skipped_populate_jail_refresh_result,
+    wait_for_populate_jail_consumers_down,
+    wait_for_populate_jail_refresh,
+)
 from .soperator_scaling import (
     SOPERATOR_SCALE_DOWN,
     SOPERATOR_SCALE_OWNERSHIP_EXTERNAL,
@@ -2479,6 +2492,9 @@ class _SoperatorBackupKubernetesMaterial:
     raw_paths: tuple[str, ...]
     restore_paths: tuple[str, ...]
     resource_counts: dict[str, int]
+    recreation_paths: tuple[str, ...] = ()
+    recreation_coverage_path: str = ""
+    recreation_coverage: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -2516,6 +2532,7 @@ _SOPERATOR_FAST_STAGE_VERIFICATION_PHASE_IDS = (
     "post-mk8s-validation",
     "soperator-worker-job-policy",
     "soperator-chart",
+    POPULATE_JAIL_REFRESH_PHASE_ID,
     "postflight-validation",
     "activechecks-restore",
     "slurm-restore",
@@ -2547,6 +2564,11 @@ _SOPERATOR_UPGRADE_JOB_POLICIES = frozenset(
 _SOPERATOR_UPGRADE_JOB_POLICY_HELP = (
     "Slurm job policy: interactive, wait, wait-then-cancel, cancel-selected, cancel-all, "
     "requeue-selected, requeue-all, requeue-hold-selected, requeue-hold-all, or fail."
+)
+_SOPERATOR_POPULATE_JAIL_REFRESH_HELP = (
+    "Populate-jail rootfs refresh mode: auto refreshes when the target chart/rootfs "
+    "requires it, force refreshes even when unchanged, and manual stops with the "
+    "maintenance overwrite command instead of proceeding."
 )
 _SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL = "30s"
 _SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT = "1h"
@@ -4874,6 +4896,400 @@ def _soperator_upgrade_collect_kubernetes_restore_material(
     )
 
 
+def _soperator_backup_json_items(payload: Any) -> list[dict[str, Any]]:
+    if not isinstance(payload, Mapping):
+        return []
+    items = payload.get("items")
+    if not isinstance(items, list):
+        return []
+    return [dict(item) for item in items if isinstance(item, Mapping)]
+
+
+def _soperator_backup_load_json(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return dict(payload) if isinstance(payload, Mapping) else {}
+
+
+def _soperator_backup_metadata_name(resource: Mapping[str, Any]) -> str:
+    metadata = resource.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return ""
+    return str(metadata.get("name", "") or "").strip()
+
+
+def _soperator_backup_pvc_volume_name(resource: Mapping[str, Any]) -> str:
+    spec = resource.get("spec")
+    if not isinstance(spec, Mapping):
+        return ""
+    return str(spec.get("volumeName", "") or "").strip()
+
+
+def _soperator_backup_pv_claim_name(resource: Mapping[str, Any]) -> str:
+    spec = resource.get("spec")
+    if not isinstance(spec, Mapping):
+        return ""
+    claim_ref = spec.get("claimRef")
+    if not isinstance(claim_ref, Mapping):
+        return ""
+    return str(claim_ref.get("name", "") or "").strip()
+
+
+def _soperator_backup_pv_reclaim_policy(resource: Mapping[str, Any]) -> str:
+    spec = resource.get("spec")
+    if not isinstance(spec, Mapping):
+        return ""
+    return str(spec.get("persistentVolumeReclaimPolicy", "") or "").strip()
+
+
+def _soperator_backup_not_found(result: _SoperatorUpgradeCommandResult) -> bool:
+    detail = f"{result.stderr}\n{result.stdout}".lower()
+    return "notfound" in detail or "not found" in detail
+
+
+def _soperator_backup_recreation_status_payload(
+    *,
+    status: str,
+    reason: str,
+    command: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "apiVersion": "nebius-cxcli/v1",
+        "kind": "SoperatorBackupRecreationEvidence",
+        "status": status,
+        "reason": reason,
+    }
+    if command:
+        payload["command"] = list(command)
+    return payload
+
+
+def _soperator_backup_record_coverage(
+    coverage: dict[str, Any],
+    key: str,
+    *,
+    status: str,
+    paths: Sequence[str] = (),
+    detail: str = "",
+    warnings: Sequence[str] = (),
+) -> None:
+    entry: dict[str, Any] = {"status": status, "paths": list(paths)}
+    if detail:
+        entry["detail"] = detail
+    if warnings:
+        entry["warnings"] = list(warnings)
+        coverage.setdefault("warnings", []).extend(str(item) for item in warnings)
+    items = coverage.setdefault("items", {})
+    if isinstance(items, dict):
+        items[key] = entry
+    bucket = coverage.setdefault(
+        {
+            "collected": "collected",
+            "missing": "missing",
+            "skipped": "skipped",
+            "not_applicable": "not_applicable",
+        }.get(status, "skipped"),
+        [],
+    )
+    if isinstance(bucket, list):
+        bucket.append(key)
+
+
+def _soperator_backup_collect_flux_configmaps(
+    *,
+    output_dir: Path,
+    kube_context: str | None,
+) -> tuple[tuple[str, ...], tuple[str, ...], str]:
+    names = ("soperator-fluxcd", "terraform-fluxcd-values")
+    items: list[dict[str, Any]] = []
+    missing: list[str] = []
+    errors: list[str] = []
+    for name in names:
+        result = _run_soperator_upgrade_kubectl(
+            "flux-system",
+            ["get", "configmap", name, "-o", "json"],
+            kube_context=kube_context,
+            timeout_seconds=60,
+            check=False,
+        )
+        if result.returncode == 0:
+            payload = _soperator_backup_load_json_from_text(result.stdout)
+            if payload:
+                items.append(payload)
+            else:
+                errors.append(f"{name}: kubectl returned invalid JSON")
+        elif _soperator_backup_not_found(result):
+            missing.append(name)
+        else:
+            errors.append(f"{name}: {(result.stderr or result.stdout or '').strip()}")
+    path = output_dir / "flux-system-configmaps.json"
+    _soperator_upgrade_write_json(
+        path,
+        {
+            "apiVersion": "v1",
+            "kind": "ConfigMapList",
+            "items": items,
+            "missing": missing,
+            "errors": errors,
+        },
+    )
+    if items:
+        status = "collected"
+    elif missing and not errors:
+        status = "skipped"
+    else:
+        status = "missing"
+    detail = ""
+    if missing:
+        detail = "missing: " + ", ".join(missing)
+    if errors:
+        detail = (detail + "; " if detail else "") + "errors: " + "; ".join(errors)
+    return ("recreation/flux-system-configmaps.json",), (status,), detail
+
+
+def _soperator_backup_load_json_from_text(value: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return dict(payload) if isinstance(payload, Mapping) else {}
+
+
+def _soperator_upgrade_collect_recreation_material(
+    *,
+    namespace: str,
+    output_dir: Path,
+    kubernetes_dir: Path,
+    kube_context: str | None = None,
+) -> tuple[tuple[str, ...], dict[str, Any]]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    included: list[str] = []
+    coverage: dict[str, Any] = {
+        "schema": "nebius-cxcli-soperator-recreation-coverage/v1",
+        "generated_at": datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "namespace": namespace,
+        "items": {},
+        "collected": [],
+        "missing": [],
+        "skipped": [],
+        "not_applicable": [],
+        "warnings": [],
+    }
+
+    pvc_payload = _soperator_backup_load_json(kubernetes_dir / "persistentvolumeclaims.json")
+    pvc_items = _soperator_backup_json_items(pvc_payload)
+    volume_names = sorted(
+        {
+            volume_name
+            for volume_name in (
+                _soperator_backup_pvc_volume_name(item) for item in pvc_items
+            )
+            if volume_name
+        }
+    )
+    pv_items: list[dict[str, Any]] = []
+    if volume_names:
+        result = _run_soperator_upgrade_kubectl_cluster(
+            ["get", "persistentvolumes", *volume_names, "-o", "json"],
+            kube_context=kube_context,
+            timeout_seconds=120,
+            check=False,
+        )
+        pv_path = output_dir / "bound-persistentvolumes.json"
+        reclaim_path = output_dir / "bound-persistentvolume-reclaim-policies.json"
+        if result.returncode == 0:
+            pv_path.write_text(result.stdout, encoding="utf-8")
+            included.append("recreation/bound-persistentvolumes.json")
+            pv_payload = _soperator_backup_load_json_from_text(result.stdout)
+            pv_items = _soperator_backup_json_items(pv_payload)
+            warnings: list[str] = []
+            policies: list[dict[str, str]] = []
+            for pv in pv_items:
+                name = _soperator_backup_metadata_name(pv)
+                policy = _soperator_backup_pv_reclaim_policy(pv)
+                claim_name = _soperator_backup_pv_claim_name(pv)
+                entry = {
+                    "name": name,
+                    "claim": claim_name,
+                    "persistentVolumeReclaimPolicy": policy,
+                }
+                if policy and policy != "Retain":
+                    warning = (
+                        f"PersistentVolume {name} uses reclaim policy {policy}; "
+                        "recreation runbooks may require manual retain handling."
+                    )
+                    entry["warning"] = warning
+                    warnings.append(warning)
+                policies.append(entry)
+            _soperator_upgrade_write_json(reclaim_path, {"items": policies, "warnings": warnings})
+            included.append("recreation/bound-persistentvolume-reclaim-policies.json")
+            _soperator_backup_record_coverage(
+                coverage,
+                "bound_persistentvolumes",
+                status="collected",
+                paths=(
+                    "recreation/bound-persistentvolumes.json",
+                    "recreation/bound-persistentvolume-reclaim-policies.json",
+                ),
+                warnings=warnings,
+            )
+        else:
+            _soperator_upgrade_write_json(
+                pv_path,
+                _soperator_backup_recreation_status_payload(
+                    status="not_collected",
+                    reason=(result.stderr or result.stdout or "").strip(),
+                    command=result.args,
+                ),
+            )
+            included.append("recreation/bound-persistentvolumes.json")
+            _soperator_backup_record_coverage(
+                coverage,
+                "bound_persistentvolumes",
+                status="missing",
+                paths=("recreation/bound-persistentvolumes.json",),
+                detail=(result.stderr or result.stdout or "").strip(),
+            )
+    else:
+        _soperator_backup_record_coverage(
+            coverage,
+            "bound_persistentvolumes",
+            status="not_applicable",
+            detail="no bound PVC volumeName values were present in the backup",
+        )
+
+    flux_paths, flux_status, flux_detail = _soperator_backup_collect_flux_configmaps(
+        output_dir=output_dir,
+        kube_context=kube_context,
+    )
+    included.extend(flux_paths)
+    _soperator_backup_record_coverage(
+        coverage,
+        "flux_system_configmaps",
+        status=flux_status[0] if flux_status else "missing",
+        paths=flux_paths,
+        detail=flux_detail,
+    )
+
+    kruise_result = _run_soperator_upgrade_kubectl(
+        namespace,
+        ["get", "statefulsets.apps.kruise.io", "worker", "-o", "json"],
+        kube_context=kube_context,
+        timeout_seconds=60,
+        check=False,
+    )
+    kruise_path = output_dir / "kruise-worker-statefulset.json"
+    if kruise_result.returncode == 0:
+        kruise_path.write_text(kruise_result.stdout, encoding="utf-8")
+        kruise_status = "collected"
+        kruise_detail = ""
+    elif _soperator_backup_not_found(kruise_result):
+        _soperator_upgrade_write_json(
+            kruise_path,
+            _soperator_backup_recreation_status_payload(
+                status="not_applicable",
+                reason="Kruise worker StatefulSet was not present",
+                command=kruise_result.args,
+            ),
+        )
+        kruise_status = "not_applicable"
+        kruise_detail = "Kruise worker StatefulSet was not present"
+    else:
+        _soperator_upgrade_write_json(
+            kruise_path,
+            _soperator_backup_recreation_status_payload(
+                status="not_collected",
+                reason=(kruise_result.stderr or kruise_result.stdout or "").strip(),
+                command=kruise_result.args,
+            ),
+        )
+        kruise_status = "skipped"
+        kruise_detail = (kruise_result.stderr or kruise_result.stdout or "").strip()
+    included.append("recreation/kruise-worker-statefulset.json")
+    _soperator_backup_record_coverage(
+        coverage,
+        "kruise_worker_statefulset",
+        status=kruise_status,
+        paths=("recreation/kruise-worker-statefulset.json",),
+        detail=kruise_detail,
+    )
+
+    worker_local_pvcs = [
+        item
+        for item in pvc_items
+        if _soperator_backup_metadata_name(item).startswith(
+            ("image-storage-worker-", "local-data-worker-")
+        )
+    ]
+    worker_volume_names = {
+        volume_name
+        for volume_name in (
+            _soperator_backup_pvc_volume_name(item) for item in worker_local_pvcs
+        )
+        if volume_name
+    }
+    worker_pvs = [
+        item
+        for item in pv_items
+        if _soperator_backup_metadata_name(item) in worker_volume_names
+    ]
+    worker_local_path = output_dir / "worker-local-pvc-pv-evidence.json"
+    _soperator_upgrade_write_json(
+        worker_local_path,
+        {
+            "persistentVolumeClaims": worker_local_pvcs,
+            "persistentVolumes": worker_pvs,
+            "volumeNames": sorted(worker_volume_names),
+        },
+    )
+    included.append("recreation/worker-local-pvc-pv-evidence.json")
+    if worker_local_pvcs and (worker_pvs or not worker_volume_names):
+        worker_status = "collected"
+        worker_detail = ""
+    elif worker_local_pvcs:
+        worker_status = "missing"
+        worker_detail = "worker-local PVCs were present but matching PV evidence was not collected"
+    else:
+        worker_status = "not_applicable"
+        worker_detail = "no image-storage-worker-* or local-data-worker-* PVCs were present"
+    _soperator_backup_record_coverage(
+        coverage,
+        "worker_local_pvc_pv_evidence",
+        status=worker_status,
+        paths=("recreation/worker-local-pvc-pv-evidence.json",),
+        detail=worker_detail,
+    )
+
+    terraform_path = output_dir / "terraform-allocation-state.json"
+    cxcli_path = shutil.which("cxcli") or shutil.which("nebius-cxcli")
+    _soperator_upgrade_write_json(
+        terraform_path,
+        {
+            "status": "skipped",
+            "reason": (
+                "cxcli executable was not available for Terraform allocation-state discovery"
+                if not cxcli_path
+                else "Terraform allocation-state discovery is not available in this backup context"
+            ),
+            "cxcli": cxcli_path,
+        },
+    )
+    included.append("recreation/terraform-allocation-state.json")
+    _soperator_backup_record_coverage(
+        coverage,
+        "terraform_allocation_state",
+        status="skipped",
+        paths=("recreation/terraform-allocation-state.json",),
+    )
+
+    coverage_path = output_dir / "recreation-coverage.json"
+    _soperator_upgrade_write_json(coverage_path, coverage)
+    included.append("recreation/recreation-coverage.json")
+    return tuple(included), coverage
+
+
 def _soperator_upgrade_collect_helm_values(
     *,
     namespace: str,
@@ -4916,13 +5332,21 @@ def _soperator_upgrade_collect_slurm_snapshots(
     output_dir.mkdir(parents=True, exist_ok=True)
     slurm_commands = {
         "slurm-conf.txt": "cat ${SLURM_CONF:-/etc/slurm/slurm.conf} 2>/dev/null || true",
+        "soperator.cfg": (
+            "cat /etc/slurm/soperator.cfg 2>/dev/null "
+            "|| cat ${SOPERATOR_CFG:-/etc/soperator/soperator.cfg} 2>/dev/null "
+            "|| true"
+        ),
         "scontrol-show-config.txt": "scontrol show config",
         "scontrol-show-partition.txt": "scontrol show partition",
         "scontrol-show-nodes.txt": "scontrol show nodes",
         "sinfo.txt": "sinfo",
         "squeue.txt": "squeue",
+        "running-job-ids.txt": "squeue -h -t R -o '%i'",
+        "pending-held-job-ids.txt": "squeue -h -t PD -o '%i|%T|%R'",
     }
     accounting_commands = {
+        "sacctmgr-dump.cfg": "sacctmgr dump cluster=soperator",
         "sacctmgr-clusters.txt": "sacctmgr -nP show cluster format=Cluster,ControlHost,ControlPort,RPC,Share",
         "sacctmgr-accounts.txt": "sacctmgr -nP show account format=Account,Description,Organization",
         "sacctmgr-users.txt": "sacctmgr -nP show user format=User,DefaultAccount,AdminLevel",
@@ -5236,6 +5660,12 @@ def _soperator_upgrade_manifest_payload(
             "apply_paths": list(kubernetes_material.restore_paths),
             "resource_counts": dict(kubernetes_material.resource_counts),
         },
+        "recreation_runbook_material": {
+            "raw_paths": list(kubernetes_material.recreation_paths),
+            "coverage_path": kubernetes_material.recreation_coverage_path,
+            "coverage": copy.deepcopy(to_plain_data(kubernetes_material.recreation_coverage)),
+            "pv_retain_bindings_are_manual": True,
+        },
     }
 
 
@@ -5309,6 +5739,22 @@ def _create_restore_capable_soperator_upgrade_backup(
                 kube_context=kube_context,
             )
             included.extend(kubernetes_material.included_paths)
+            recreation_paths, recreation_coverage = _soperator_upgrade_collect_recreation_material(
+                namespace=namespace,
+                output_dir=root / "recreation",
+                kubernetes_dir=root / "kubernetes",
+                kube_context=kube_context,
+            )
+            kubernetes_material = _SoperatorBackupKubernetesMaterial(
+                included_paths=kubernetes_material.included_paths,
+                raw_paths=kubernetes_material.raw_paths,
+                restore_paths=kubernetes_material.restore_paths,
+                resource_counts=kubernetes_material.resource_counts,
+                recreation_paths=recreation_paths,
+                recreation_coverage_path="recreation/recreation-coverage.json",
+                recreation_coverage=recreation_coverage,
+            )
+            included.extend(recreation_paths)
             included.extend(
                 _soperator_upgrade_collect_helm_values(
                     namespace=namespace,
@@ -5394,6 +5840,8 @@ def _create_restore_capable_soperator_upgrade_backup(
                     "config_yaml": "source/config.yaml",
                     "kubernetes_raw": list(kubernetes_material.raw_paths),
                     "kubernetes_apply": list(kubernetes_material.restore_paths),
+                    "recreation_raw": list(kubernetes_material.recreation_paths),
+                    "recreation_coverage": kubernetes_material.recreation_coverage_path,
                     "soperator_resources": [
                         path
                         for path in kubernetes_material.restore_paths
@@ -5408,6 +5856,13 @@ def _create_restore_capable_soperator_upgrade_backup(
                     "dump": accounting_dump_relative,
                     "verification": "accounting/slurm-accounting-db-verification.json",
                     "chart_managed_mariadb_only": True,
+                },
+                "recreation_runbook": {
+                    "retained_pv_bindings_are_not_auto_restored": True,
+                    "pv_reclaim_policy_evidence": (
+                        "recreation/bound-persistentvolume-reclaim-policies.json"
+                    ),
+                    "coverage": kubernetes_material.recreation_coverage_path,
                 },
                 "security": {
                     "contains_raw_kubernetes_secrets": True,
@@ -5914,7 +6369,7 @@ def _soperator_upgrade_job_policy(*, policy: str | None, interactive: bool) -> s
     prompt_allowed = bool(interactive and _is_tty_session())
     resolved = _non_empty_text(policy)
     if not resolved:
-        resolved = "interactive" if prompt_allowed else "wait-then-cancel"
+        resolved = "interactive" if prompt_allowed else "fail"
     if resolved not in _SOPERATOR_UPGRADE_JOB_POLICIES:
         raise RuntimeError(
             "--job-policy must be one of: " + ", ".join(sorted(_SOPERATOR_UPGRADE_JOB_POLICIES))
@@ -5922,7 +6377,7 @@ def _soperator_upgrade_job_policy(*, policy: str | None, interactive: bool) -> s
     if resolved == "interactive" and not prompt_allowed:
         raise RuntimeError(
             "--job-policy interactive requires an interactive terminal. Use "
-            "wait-then-cancel, wait, fail, cancel-selected, cancel-all, "
+            "fail, wait, wait-then-cancel, cancel-selected, cancel-all, "
             "requeue-selected, requeue-all, requeue-hold-selected, or "
             "requeue-hold-all with --no-interactive."
         )
@@ -5941,7 +6396,7 @@ def _soperator_runtime_job_policy(policy: str | None) -> str:
     if resolved == "interactive" and not interactive:
         raise RuntimeError(
             "--job-policy interactive requires an interactive terminal. Use "
-            "wait-then-cancel, wait, fail, cancel-selected, cancel-all, "
+            "fail, wait, wait-then-cancel, cancel-selected, cancel-all, "
             "requeue-selected, requeue-all, requeue-hold-selected, or "
             "requeue-hold-all."
         )
@@ -8303,6 +8758,23 @@ def _write_soperator_upgrade_report(
     if manual_command:
         slurm_lines.append(f"- Manual recovery command: `{manual_command}`")
 
+    populate_jail = checkpoint.get("populate_jail_refresh")
+    populate_jail_map = populate_jail if isinstance(populate_jail, Mapping) else {}
+    populate_result = populate_jail_map.get("result")
+    populate_result_map = populate_result if isinstance(populate_result, Mapping) else {}
+    populate_jail_lines = [
+        f"- Mode: `{populate_jail_map.get('mode') or 'auto'}`",
+        f"- Required: `{populate_jail_map.get('required')}`",
+        f"- Status: `{populate_result_map.get('status') or populate_jail_map.get('status') or 'planned'}`",
+        f"- Reason: {populate_result_map.get('reason') or populate_jail_map.get('reason') or 'not evaluated'}",
+        f"- Target image: `{populate_result_map.get('target_image') or 'unknown'}`",
+        f"- Job: `{populate_result_map.get('job_name') or 'unknown'}`",
+        f"- Maintenance restored: `{populate_result_map.get('maintenance_restored')}`",
+    ]
+    populate_detail = _non_empty_text(populate_result_map.get("detail"))
+    if populate_detail:
+        populate_jail_lines.append(f"- Detail: {populate_detail}")
+
     comparison = checkpoint.get("config_comparison")
     comparison_map = comparison if isinstance(comparison, Mapping) else {}
     comparison_lines = []
@@ -8345,6 +8817,10 @@ def _write_soperator_upgrade_report(
             "## Slurm Drain And Jobs",
             "",
             *slurm_lines,
+            "",
+            "## Populate-Jail Refresh",
+            "",
+            *populate_jail_lines,
             "",
             "## Protected Config Comparison",
             "",
@@ -10471,6 +10947,7 @@ def _external_soperator_upgrade_command_args(
     config_path: Path,
     target_ref: str,
     backup_dir: Path | None,
+    populate_jail_refresh: str,
     job_policy: str,
     cancel_job: Sequence[str],
     requeue_job: Sequence[str],
@@ -10492,6 +10969,7 @@ def _external_soperator_upgrade_command_args(
     args = ["nebius-cxcli", "ext-soperator", "upgrade", str(config_path), "--target", target_ref]
     if backup_dir is not None:
         args.extend(["--backup-dir", str(backup_dir)])
+    args.extend(["--populate-jail-refresh", populate_jail_refresh])
     args.extend(["--job-policy", job_policy])
     for job_id in cancel_job:
         args.extend(["--cancel-job", str(job_id)])
@@ -12196,6 +12674,13 @@ def soperator_upgrade_command(
             "--backup-dir", help="Backup directory. Default: <config.yaml parent>/backups."
         ),
     ] = None,
+    populate_jail_refresh: Annotated[
+        str,
+        typer.Option(
+            "--populate-jail-refresh",
+            help=_SOPERATOR_POPULATE_JAIL_REFRESH_HELP,
+        ),
+    ] = "auto",
     job_policy: Annotated[
         str | None,
         typer.Option(
@@ -12284,6 +12769,7 @@ def soperator_upgrade_command(
             drain_timeout=drain_timeout,
             strategy_max_surge_count=strategy_max_surge_count,
             backup_dir=backup_dir,
+            populate_jail_refresh=populate_jail_refresh,
             job_policy=job_policy,
             cancel_job=tuple(cancel_job or ()),
             requeue_job=tuple(requeue_job or ()),
@@ -12313,6 +12799,7 @@ def _run_soperator_upgrade_command(
     drain_timeout: str,
     strategy_max_surge_count: int | None,
     backup_dir: Path | None,
+    populate_jail_refresh: str,
     job_policy: str | None,
     cancel_job: Sequence[str],
     requeue_job: Sequence[str],
@@ -12372,6 +12859,7 @@ def _run_soperator_upgrade_command(
         drain_timeout=drain_timeout,
         strategy_max_surge_count=strategy_max_surge_count,
         backup_dir=backup_dir,
+        populate_jail_refresh=normalize_populate_jail_refresh_mode(populate_jail_refresh),
         job_policy=_soperator_upgrade_job_policy(policy=job_policy, interactive=interactive),
         cancel_job=cancel_job,
         requeue_job=requeue_job,
@@ -12397,6 +12885,7 @@ def _soperator_upgrade_command_args(
     drain_timeout: str,
     strategy_max_surge_count: int | None,
     backup_dir: Path | None,
+    populate_jail_refresh: str,
     job_policy: str,
     cancel_job: Sequence[str],
     requeue_job: Sequence[str],
@@ -12431,6 +12920,7 @@ def _soperator_upgrade_command_args(
         args.extend(["--strategy-max-surge-count", str(strategy_max_surge_count)])
     if backup_dir is not None:
         args.extend(["--backup-dir", str(backup_dir)])
+    args.extend(["--populate-jail-refresh", populate_jail_refresh])
     args.extend(["--job-policy", job_policy])
     for job_id in cancel_job:
         args.extend(["--cancel-job", str(job_id)])
@@ -12591,6 +13081,7 @@ def _managed_soperator_upgrade_order_issue(
     drain_timeout: str,
     strategy_max_surge_count: int | None,
     backup_dir: Path | None,
+    populate_jail_refresh: str,
     job_policy: str,
     cancel_job: Sequence[str],
     requeue_job: Sequence[str],
@@ -12636,6 +13127,7 @@ def _managed_soperator_upgrade_order_issue(
             drain_timeout=drain_timeout,
             strategy_max_surge_count=strategy_max_surge_count,
             backup_dir=backup_dir,
+            populate_jail_refresh=populate_jail_refresh,
             job_policy=job_policy,
             cancel_job=cancel_job,
             requeue_job=requeue_job,
@@ -12659,6 +13151,7 @@ def _managed_soperator_upgrade_order_issue(
             drain_timeout=drain_timeout,
             strategy_max_surge_count=strategy_max_surge_count,
             backup_dir=backup_dir,
+            populate_jail_refresh=populate_jail_refresh,
             job_policy=job_policy,
             cancel_job=cancel_job,
             requeue_job=requeue_job,
@@ -12742,6 +13235,7 @@ def _format_managed_soperator_cluster_upgrade_plan(
     to_gpu_stack_preset: str | None,
     node_group: str,
     job_policy: str,
+    populate_jail_refresh: str,
     dry_run: bool,
     repeat_dry_run_command: str | None,
     k8s_hop_issue: Mapping[str, str] | None = None,
@@ -12767,6 +13261,7 @@ def _format_managed_soperator_cluster_upgrade_plan(
             f"`{_non_empty_text(to_gpu_stack_preset) or 'unchanged/operator-managed'}`",
             f"  - node group: `{_non_empty_text(node_group) or 'all selected by plan'}`",
             f"- Slurm job policy: `{job_policy}`",
+            f"- populate-jail refresh: `{populate_jail_refresh}`",
             "- backup: restore-capable archive with raw Secrets and optional accounting DB dump "
             "will be created before mutation",
             "- Kubernetes drain: owned by the managed node-group rollout; this command "
@@ -12831,6 +13326,7 @@ def _run_managed_soperator_cluster_upgrade(
     drain_timeout: str,
     strategy_max_surge_count: int | None,
     backup_dir: Path | None,
+    populate_jail_refresh: str,
     job_policy: str,
     cancel_job: Sequence[str],
     requeue_job: Sequence[str],
@@ -12880,6 +13376,7 @@ def _run_managed_soperator_cluster_upgrade(
         drain_timeout=drain_timeout,
         strategy_max_surge_count=strategy_max_surge_count,
         backup_dir=backup_dir,
+        populate_jail_refresh=populate_jail_refresh,
         job_policy=job_policy,
         cancel_job=cancel_job,
         requeue_job=requeue_job,
@@ -12900,6 +13397,7 @@ def _run_managed_soperator_cluster_upgrade(
         drain_timeout=drain_timeout,
         strategy_max_surge_count=strategy_max_surge_count,
         backup_dir=backup_dir,
+        populate_jail_refresh=populate_jail_refresh,
         job_policy=job_policy,
         cancel_job=cancel_job,
         requeue_job=requeue_job,
@@ -12920,6 +13418,7 @@ def _run_managed_soperator_cluster_upgrade(
             to_gpu_stack_preset=to_gpu_stack_preset,
             node_group=node_group,
             job_policy=job_policy,
+            populate_jail_refresh=populate_jail_refresh,
             dry_run=dry_run,
             repeat_dry_run_command=repeat_dry_run_command,
             k8s_hop_issue=k8s_hop_issue,
@@ -12971,6 +13470,7 @@ def _run_managed_soperator_cluster_upgrade(
             drain_timeout=drain_timeout,
             strategy_max_surge_count=strategy_max_surge_count,
             backup_dir=backup_dir,
+            populate_jail_refresh=populate_jail_refresh,
             job_policy=job_policy,
             cancel_job=cancel_job,
             requeue_job=requeue_job,
@@ -12997,6 +13497,11 @@ def _run_managed_soperator_cluster_upgrade(
         "drained_nodes": [],
         "restore_manual_command": None,
         "job_policy": job_policy,
+    }
+    checkpoint["populate_jail_refresh"] = {
+        "mode": populate_jail_refresh,
+        "required": None,
+        "status": "planned",
     }
     _write_soperator_upgrade_checkpoint(checkpoint_path, checkpoint)
 
@@ -13065,6 +13570,36 @@ def _run_managed_soperator_cluster_upgrade(
             current_version=expected_version,
             target_version=expected_version,
         )
+
+    def _populate_jail_runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> _SoperatorUpgradeCommandResult:
+        return _run_soperator_upgrade_process(
+            args,
+            input_text=input_text,
+            timeout_seconds=timeout_seconds,
+            check=check,
+        )
+
+    def _inspect_populate_jail() -> Any:
+        return inspect_populate_jail(
+            _populate_jail_runner,
+            namespace=plan.namespace or "default",
+            target_ref=target.target_ref,
+        )
+
+    def _soperator_row_values_snapshot() -> dict[str, Any]:
+        row = _source_helm_chart_row(source_payload, target)
+        values = row.get("values")
+        return copy.deepcopy(values) if isinstance(values, dict) else {}
+
+    def _set_soperator_row_values(values: Mapping[str, Any]) -> None:
+        row = _source_helm_chart_row(source_payload, target)
+        row["values"] = copy.deepcopy(dict(values))
 
     def _render_validate_apply_soperator_stage(
         *,
@@ -13212,6 +13747,64 @@ def _run_managed_soperator_cluster_upgrade(
         if isinstance(decisions, list):
             decisions.append(copy.deepcopy(to_plain_data(decision)))
         _write_soperator_upgrade_checkpoint(checkpoint_path, checkpoint)
+
+    soperator_worker_job_policy_checked = False
+
+    def _apply_soperator_worker_job_policy(
+        *,
+        scope: str,
+        checkpoint_prefix: str,
+        phase_comment: str,
+        summary: str,
+    ) -> None:
+        nonlocal soperator_worker_job_policy_checked
+        _set_phase("soperator-worker-job-policy", phase_comment)
+        worker_slurm_nodes = _soperator_upgrade_slurm_nodes_for_worker_nodesets(
+            namespace=plan.namespace or "default",
+        )
+        if worker_slurm_nodes:
+            drained_nodes = _handle_soperator_upgrade_running_jobs(
+                namespace=plan.namespace or "default",
+                node_names=worker_slurm_nodes,
+                policy=job_policy,
+                cancel_job_ids=cancel_job,
+                requeue_job_ids=requeue_job,
+                wait_timeout_seconds=job_wait_timeout_seconds,
+                refresh_interval_seconds=job_refresh_interval_seconds,
+                checkpoint_id=checkpoint_id,
+                decision_recorder=_record_slurm_decision,
+            )
+            _record_slurm_restore_nodes(
+                drained_nodes,
+                scope=scope,
+                worker_nodes=worker_slurm_nodes,
+            )
+            _checkpoint(f"{checkpoint_prefix}-jobs-cleared")
+        else:
+            _record_slurm_restore_nodes((), scope=scope, worker_nodes=())
+            _checkpoint(
+                f"{checkpoint_prefix}-job-policy-skipped",
+                reason="no live running worker NodeSet pods were found",
+            )
+        soperator_worker_job_policy_checked = True
+        slurm_state = checkpoint.get("slurm")
+        slurm_map = slurm_state if isinstance(slurm_state, Mapping) else {}
+        _run_stage_fast_verification(
+            phase_id="soperator-worker-job-policy",
+            summary=summary,
+            checks=[
+                stage_fast_verification_check(
+                    "Slurm job policy",
+                    "passed" if slurm_map.get("job_policy") == job_policy else "failed",
+                    f"recorded={slurm_map.get('job_policy') or 'unset'}, expected={job_policy}",
+                ),
+                stage_fast_verification_check(
+                    "Worker NodeSet scope",
+                    "passed",
+                    f"nodes={len(worker_slurm_nodes)}",
+                ),
+            ],
+        )
 
     try:
         _set_phase(
@@ -13531,6 +14124,7 @@ def _run_managed_soperator_cluster_upgrade(
             "soperator-chart",
             "Applying or confirming the target Soperator Helm chart version.",
         )
+        populate_jail_before = _inspect_populate_jail()
         changed = _update_source_helm_chart_version(
             source_payload,
             target=target,
@@ -13544,54 +14138,14 @@ def _run_managed_soperator_cluster_upgrade(
             staged_config, staged_paths, staged_manifest = generated_config, paths, manifest
             _checkpoint("chart-applied", reason="already-current")
         else:
-            _set_phase(
-                "soperator-worker-job-policy",
-                "Applying the configured Slurm affected-job policy before Soperator chart reconciliation.",
-            )
-            worker_slurm_nodes = _soperator_upgrade_slurm_nodes_for_worker_nodesets(
-                namespace=plan.namespace or "default",
-            )
-            if worker_slurm_nodes:
-                chart_drained_nodes = _handle_soperator_upgrade_running_jobs(
-                    namespace=plan.namespace or "default",
-                    node_names=worker_slurm_nodes,
-                    policy=job_policy,
-                    cancel_job_ids=cancel_job,
-                    requeue_job_ids=requeue_job,
-                    wait_timeout_seconds=job_wait_timeout_seconds,
-                    refresh_interval_seconds=job_refresh_interval_seconds,
-                    checkpoint_id=checkpoint_id,
-                    decision_recorder=_record_slurm_decision,
-                )
-                _record_slurm_restore_nodes(
-                    chart_drained_nodes,
-                    scope="soperator-chart",
-                    worker_nodes=worker_slurm_nodes,
-                )
-                _checkpoint("soperator-worker-jobs-cleared")
-            else:
-                _record_slurm_restore_nodes((), scope="soperator-chart", worker_nodes=())
-                _checkpoint(
-                    "soperator-worker-job-policy-skipped",
-                    reason="no live running worker NodeSet pods were found",
-                )
-            slurm_state = checkpoint.get("slurm")
-            slurm_map = slurm_state if isinstance(slurm_state, Mapping) else {}
-            _run_stage_fast_verification(
-                phase_id="soperator-worker-job-policy",
+            _apply_soperator_worker_job_policy(
+                scope="soperator-chart",
+                checkpoint_prefix="soperator-worker",
+                phase_comment=(
+                    "Applying the configured Slurm affected-job policy before "
+                    "Soperator chart reconciliation."
+                ),
                 summary="Slurm job policy completed before Soperator chart reconciliation.",
-                checks=[
-                    stage_fast_verification_check(
-                        "Slurm job policy",
-                        "passed" if slurm_map.get("job_policy") == job_policy else "failed",
-                        f"recorded={slurm_map.get('job_policy') or 'unset'}, expected={job_policy}",
-                    ),
-                    stage_fast_verification_check(
-                        "Worker NodeSet scope",
-                        "passed",
-                        f"nodes={len(worker_slurm_nodes)}",
-                    ),
-                ],
             )
             _set_phase(
                 "soperator-chart",
@@ -13621,6 +14175,152 @@ def _run_managed_soperator_cluster_upgrade(
                         if not changed
                         else "render, validation, Flux apply, and static readiness completed"
                     ),
+                ),
+            ],
+            report_paths=staged_paths,
+        )
+
+        _set_phase(
+            POPULATE_JAIL_REFRESH_PHASE_ID,
+            "Refreshing the shared Soperator jail rootfs when the target chart requires it.",
+        )
+        populate_jail_after_chart = _inspect_populate_jail()
+        populate_jail_plan = plan_populate_jail_refresh(
+            mode=populate_jail_refresh,
+            chart_changed=changed,
+            before=populate_jail_before,
+            after_chart=populate_jail_after_chart,
+            namespace=plan.namespace or "default",
+        )
+        checkpoint["populate_jail_refresh"] = populate_jail_plan.as_payload()
+        _checkpoint(
+            "populate-jail-refresh-planned",
+            required=populate_jail_plan.required,
+            mode=populate_jail_plan.mode,
+            reason=populate_jail_plan.reason,
+        )
+        if not populate_jail_plan.required:
+            populate_jail_result = skipped_populate_jail_refresh_result(populate_jail_plan)
+        elif populate_jail_plan.mode == "manual":
+            populate_jail_result = manual_populate_jail_refresh_result(populate_jail_plan)
+            checkpoint["populate_jail_refresh"]["result"] = populate_jail_result.as_payload()
+            _checkpoint(
+                "populate-jail-refresh-manual-required",
+                instruction=populate_jail_result.detail,
+            )
+            _run_stage_fast_verification(
+                phase_id=POPULATE_JAIL_REFRESH_PHASE_ID,
+                summary="Populate-jail refresh requires manual maintenance overwrite.",
+                checks=[
+                    stage_fast_verification_check(
+                        "Populate-jail refresh mode",
+                        "failed",
+                        populate_jail_result.detail,
+                    )
+                ],
+                report_paths=staged_paths,
+            )
+            raise RuntimeError(populate_jail_result.detail)
+        else:
+            steady_values = _soperator_row_values_snapshot()
+            refreshed_snapshot = None
+            maintenance_restored = False
+            if not soperator_worker_job_policy_checked:
+                _apply_soperator_worker_job_policy(
+                    scope=POPULATE_JAIL_REFRESH_PHASE_ID,
+                    checkpoint_prefix="populate-jail-refresh",
+                    phase_comment=(
+                        "Applying the configured Slurm affected-job policy before "
+                        "populate-jail rootfs refresh."
+                    ),
+                    summary=(
+                        "Slurm job policy completed before populate-jail rootfs refresh."
+                    ),
+                )
+                _set_phase(
+                    POPULATE_JAIL_REFRESH_PHASE_ID,
+                    "Refreshing the shared Soperator jail rootfs when the target chart requires it.",
+                )
+            try:
+                _set_soperator_row_values(populate_jail_refresh_values(steady_values))
+                staged_config, staged_paths, staged_manifest = _render_validate_apply_soperator_stage(
+                    update_message="Soperator populate-jail overwrite maintenance",
+                    validation_title="Validate rendered Soperator populate-jail overwrite maintenance",
+                    expected_plan=plan,
+                )
+                _checkpoint("populate-jail-refresh-overwrite-maintenance-applied")
+                consumers_down = wait_for_populate_jail_consumers_down(
+                    _populate_jail_runner,
+                    namespace=plan.namespace or "default",
+                    target_ref=target.target_ref,
+                )
+                _checkpoint(
+                    "populate-jail-refresh-consumers-down",
+                    active_consumer_pods=list(consumers_down.active_consumer_pods),
+                )
+                refreshed_snapshot = wait_for_populate_jail_refresh(
+                    _populate_jail_runner,
+                    namespace=plan.namespace or "default",
+                    target_ref=target.target_ref,
+                    previous_job_uid=populate_jail_after_chart.job_uid,
+                    expected_image=populate_jail_after_chart.image,
+                )
+                _checkpoint(
+                    "populate-jail-refresh-job-completed",
+                    job=refreshed_snapshot.job_name,
+                    image=refreshed_snapshot.job_image,
+                )
+            finally:
+                _set_soperator_row_values(populate_jail_steady_state_values(steady_values))
+                staged_config, staged_paths, staged_manifest = _render_validate_apply_soperator_stage(
+                    update_message="Soperator populate-jail steady-state maintenance restore",
+                    validation_title="Validate rendered Soperator populate-jail steady-state restore",
+                    expected_plan=plan,
+                )
+                maintenance_restored = True
+                _checkpoint("populate-jail-refresh-steady-state-applied")
+            if refreshed_snapshot is None:
+                refreshed_snapshot = _inspect_populate_jail()
+            populate_jail_result = completed_populate_jail_refresh_result(
+                mode=populate_jail_plan.mode,
+                reason=populate_jail_plan.reason,
+                snapshot=refreshed_snapshot,
+                maintenance_restored=maintenance_restored,
+            )
+        checkpoint["populate_jail_refresh"]["result"] = populate_jail_result.as_payload()
+        _checkpoint(
+            "populate-jail-refresh-completed",
+            status=populate_jail_result.status,
+            target_image=populate_jail_result.target_image,
+        )
+        _run_stage_fast_verification(
+            phase_id=POPULATE_JAIL_REFRESH_PHASE_ID,
+            summary=(
+                "Populate-jail refresh completed."
+                if populate_jail_result.status == "refreshed"
+                else "Populate-jail refresh was not required."
+            ),
+            checks=[
+                stage_fast_verification_check(
+                    "Populate-jail refresh status",
+                    "passed" if populate_jail_result.status == "refreshed" else "skipped",
+                    f"status={populate_jail_result.status}, reason={populate_jail_result.reason}",
+                ),
+                stage_fast_verification_check(
+                    "Populate-jail target image",
+                    "passed" if populate_jail_result.status != "refreshed"
+                    or not populate_jail_result.target_image
+                    or populate_jail_result.job_image == populate_jail_result.target_image
+                    else "failed",
+                    (
+                        f"job_image={populate_jail_result.job_image or 'unset'}, "
+                        f"target={populate_jail_result.target_image or 'unset'}"
+                    ),
+                ),
+                stage_fast_verification_check(
+                    "Populate-jail maintenance restore",
+                    "passed" if populate_jail_result.maintenance_restored else "failed",
+                    f"restored={populate_jail_result.maintenance_restored}",
                 ),
             ],
             report_paths=staged_paths,
@@ -52437,6 +53137,13 @@ def soperator_external_upgrade_command(
             "--backup-dir", help="Backup directory. Default: <config.yaml parent>/backups."
         ),
     ] = None,
+    populate_jail_refresh: Annotated[
+        str,
+        typer.Option(
+            "--populate-jail-refresh",
+            help=_SOPERATOR_POPULATE_JAIL_REFRESH_HELP,
+        ),
+    ] = "auto",
     job_policy: Annotated[
         str | None,
         typer.Option(
@@ -52732,6 +53439,9 @@ def soperator_external_upgrade_command(
             target_ref=target_ref,
             onboarding=effective_onboarding,
         )
+        resolved_populate_jail_refresh = normalize_populate_jail_refresh_mode(
+            populate_jail_refresh
+        )
         resolved_job_policy = _soperator_upgrade_job_policy(
             policy=job_policy,
             interactive=interactive,
@@ -52782,6 +53492,7 @@ def soperator_external_upgrade_command(
                     config_path=config_path,
                     target_ref=target_ref,
                     backup_dir=backup_dir,
+                    populate_jail_refresh=resolved_populate_jail_refresh,
                     job_policy=resolved_job_policy,
                     cancel_job=selected_cancel_jobs,
                     requeue_job=selected_requeue_jobs,
@@ -52859,6 +53570,7 @@ def soperator_external_upgrade_command(
                     approved=approve,
                     status_callback=emit_status,
                     job_policy=resolved_job_policy,
+                    populate_jail_refresh=resolved_populate_jail_refresh,
                     cancel_job_ids=selected_cancel_jobs,
                     requeue_job_ids=selected_requeue_jobs,
                     job_wait_timeout_seconds=job_wait_timeout_seconds,

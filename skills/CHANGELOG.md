@@ -138,6 +138,11 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Hardened `config-codex` laptop setup so existing `AGENTS.md` and
+  `config.toml` are treated as merge targets by default, exact template checks
+  are explicit audit modes, default validation rejects empty or stale managed
+  `AGENTS.md` blocks, and hook installation stops before replacing differing
+  existing hook files.
 - Enhanced `align` into a changed-scope post-change quality gate that
   coordinates mandatory cross-code validation, `code-review`, `linter`,
   `apply-security`, and focused test/build lanes while keeping safe-only

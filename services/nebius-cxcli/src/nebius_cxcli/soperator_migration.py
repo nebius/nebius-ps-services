@@ -99,6 +99,19 @@ from .soperator_onboarding import (
     soperator_migration_profile_group,
     soperator_onboarding_target,
 )
+from .soperator_populate_jail import (
+    POPULATE_JAIL_REFRESH_PHASE_ID,
+    completed_populate_jail_refresh_result,
+    inspect_populate_jail,
+    manual_populate_jail_refresh_result,
+    normalize_populate_jail_refresh_mode,
+    plan_populate_jail_refresh,
+    populate_jail_refresh_values,
+    populate_jail_steady_state_values,
+    skipped_populate_jail_refresh_result,
+    wait_for_populate_jail_consumers_down,
+    wait_for_populate_jail_refresh,
+)
 from .soperator_upgrade_safety import (
     ProtectedCustomerState,
     build_stage_fast_verification_payload,
@@ -134,6 +147,7 @@ _MUTATING_PHASE_IDS = frozenset(
         "online-bulk-data-sync",
         "rolling-compute-migration",
         "final-control-plane-cutover",
+        POPULATE_JAIL_REFRESH_PHASE_ID,
         "validation-and-rollback-hold",
         "retire-old-resources",
     }
@@ -147,6 +161,7 @@ _ORDERED_EXECUTE_PHASE_IDS = (
     "online-bulk-data-sync",
     "rolling-compute-migration",
     "final-control-plane-cutover",
+    POPULATE_JAIL_REFRESH_PHASE_ID,
     "validation-and-rollback-hold",
     "retire-old-resources",
 )
@@ -176,6 +191,15 @@ _EXTERNAL_UPGRADE_MK8S_TOP_LEVEL_PHASE_IDS = frozenset(
 _FAST_STAGE_VERIFICATION_PHASE_IDS = frozenset(
     (*_MUTATING_PHASE_IDS, *_POST_UPGRADE_CHECK_PHASE_IDS)
 )
+_EXTERNAL_UPGRADE_BACKUP_REQUIRED_CATEGORIES = frozenset(
+    {"accounting", "generated", "kubernetes", "recreation", "slurm", "soperator", "source"}
+)
+_EXTERNAL_UPGRADE_BACKUP_REQUIRED_FIELDS = (
+    "path",
+    "sha256",
+    "manifest_sha256",
+    "included_categories",
+)
 _STATUS_PHASE_LABELS = {
     "discovery-and-plan": "Discovery and upgrade plan",
     "customer-approval": "Customer approval gate",
@@ -185,6 +209,7 @@ _STATUS_PHASE_LABELS = {
     "online-bulk-data-sync": "Online bulk data sync",
     "rolling-compute-migration": "Rolling compute migration",
     "final-control-plane-cutover": "Final control-plane cutover",
+    POPULATE_JAIL_REFRESH_PHASE_ID: "Populate-jail refresh",
     "validation-and-rollback-hold": "Validation and rollback hold",
     "retire-old-resources": "Retire old resources",
     "post-upgrade-mk8s-check": "Post-upgrade MK8s check",
@@ -1645,6 +1670,7 @@ def _phase_allowed_by_onboarding_actions(
         )
     if phase_id in {
         "final-control-plane-cutover",
+        POPULATE_JAIL_REFRESH_PHASE_ID,
         "validation-and-rollback-hold",
         "retire-old-resources",
     }:
@@ -1697,6 +1723,19 @@ def _phase_ids_for_actions(
                 insert_at = phases.index(predecessor) + 1
                 break
         phases.insert(insert_at, "rolling-compute-migration")
+        phase_ids = tuple(phases)
+    if (
+        phase_ids
+        and ONBOARDING_ACTION_UPGRADE_SOPERATOR in actions
+        and POPULATE_JAIL_REFRESH_PHASE_ID not in phase_ids
+    ):
+        phases = list(phase_ids)
+        insert_at = len(phases)
+        for predecessor in ("final-control-plane-cutover", "rolling-compute-migration"):
+            if predecessor in phases:
+                insert_at = phases.index(predecessor) + 1
+                break
+        phases.insert(insert_at, POPULATE_JAIL_REFRESH_PHASE_ID)
         phase_ids = tuple(phases)
     if (
         phase_ids
@@ -5659,7 +5698,7 @@ def _external_upgrade_job_policy(policy: str | None) -> str:
     interactive = _external_upgrade_is_tty_session()
     resolved_policy = str(policy or "").strip()
     if not resolved_policy:
-        resolved_policy = "interactive" if interactive else "wait-then-cancel"
+        resolved_policy = "interactive" if interactive else "fail"
     if resolved_policy not in _EXTERNAL_UPGRADE_JOB_POLICIES:
         raise RuntimeError(
             "--job-policy must be one of: " + ", ".join(sorted(_EXTERNAL_UPGRADE_JOB_POLICIES))
@@ -5667,7 +5706,7 @@ def _external_upgrade_job_policy(policy: str | None) -> str:
     if resolved_policy == "interactive" and not interactive:
         raise RuntimeError(
             "--job-policy interactive requires an interactive terminal. Use "
-            "wait-then-cancel, wait, fail, cancel-selected, cancel-all, "
+            "fail, wait, wait-then-cancel, cancel-selected, cancel-all, "
             "requeue-selected, requeue-all, requeue-hold-selected, or "
             "requeue-hold-all."
         )
@@ -11270,6 +11309,7 @@ def _execute_rolling_compute_migration_phase(
     command_runner: SoperatorMigrationCommandRunner,
     checkpoint_writer: Callable[[], None] | None = None,
     job_policy: str | None = None,
+    populate_jail_refresh: str = "auto",
     cancel_job_ids: Sequence[str] = (),
     requeue_job_ids: Sequence[str] = (),
     job_wait_timeout_seconds: int = _EXTERNAL_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT_SECONDS,
@@ -11325,6 +11365,7 @@ def _execute_rolling_compute_migration_phase(
         source_report=source_report,
         target_ref=target_ref,
     )
+    phase["live_source_slurmcluster_present"] = live_source_slurmcluster_present
     live_worker_slurm_nodes = _external_upgrade_worker_nodeset_slurm_nodes(
         command_runner=command_runner,
         kube_context=kube_context,
@@ -11944,6 +11985,171 @@ def _execute_final_cutover_phase(
     phase["validated_resources"] = list(names)
     phase["cutover_at"] = _utc_now()
     return False, ["Final cutover validated: target Slurm custom resources are present."]
+
+
+def _execute_populate_jail_refresh_phase(
+    *,
+    checkpoint: dict[str, Any],
+    payload: Mapping[str, Any],
+    source_report: Mapping[str, Any],
+    live_snapshot: Mapping[str, Any],
+    target_ref: str,
+    kube_context: str,
+    command_runner: SoperatorMigrationCommandRunner,
+    populate_jail_refresh: str,
+    job_policy: str,
+    cancel_job_ids: Sequence[str],
+    requeue_job_ids: Sequence[str],
+    job_wait_timeout_seconds: int,
+    job_refresh_interval_seconds: int,
+    slurm_decision_recorder: Callable[[Mapping[str, Any]], None] | None = None,
+    interactive_prompt_pause: Callable[[], Any] | None = None,
+) -> tuple[bool, list[str]]:
+    phase = _phase_state(checkpoint, POPULATE_JAIL_REFRESH_PHASE_ID)
+    before = inspect_populate_jail(
+        command_runner,
+        namespace=_SOPERATOR_NAMESPACE,
+        target_ref=target_ref,
+        kube_context=kube_context,
+    )
+    plan = plan_populate_jail_refresh(
+        mode=populate_jail_refresh,
+        chart_changed=True,
+        before=before,
+        after_chart=before,
+        namespace=_SOPERATOR_NAMESPACE,
+    )
+    phase["plan"] = plan.as_payload()
+    if not plan.required:
+        result = skipped_populate_jail_refresh_result(plan)
+        phase["result"] = result.as_payload()
+        phase["completed_at"] = _utc_now()
+        return False, [f"Populate-jail refresh skipped: {result.reason}."]
+    if plan.mode == "manual":
+        result = manual_populate_jail_refresh_result(plan)
+        phase["result"] = result.as_payload()
+        phase["pending_reason"] = result.detail
+        raise SoperatorMigrationPhasePending(result.detail)
+
+    values = _patch_target_values_for_compute(
+        checkpoint=checkpoint,
+        payload=payload,
+        target_ref=target_ref,
+        source_report=source_report,
+        live_snapshot=live_snapshot,
+    )
+    target_version = str(_mapping(source_report.get("report")).get("target_version", "") or "")
+    checkpoint_worker_groups = tuple(
+        str(group or "") for group in checkpoint.get("worker_node_groups", []) or []
+    )
+    live_source_slurmcluster_present = _live_source_slurmcluster_present(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        source_report=source_report,
+        target_ref=target_ref,
+    )
+    live_worker_slurm_nodes = _external_upgrade_worker_nodeset_slurm_nodes(
+        command_runner=command_runner,
+        kube_context=kube_context,
+    )
+    source_worker_nodes = _nodes_for_worker_groups(
+        source_report=source_report,
+        worker_node_groups=checkpoint_worker_groups,
+    )
+    quiet_nodes = live_worker_slurm_nodes or source_worker_nodes
+    phase["slurm_job_scope_nodes"] = list(quiet_nodes)
+    phase["slurm_job_scope"] = (
+        "live-worker-nodesets" if live_worker_slurm_nodes else "source-worker-node-groups"
+    )
+    refreshed = None
+    maintenance_restored = False
+    mutation_performed = False
+    quiet_lines = _ensure_slurm_quiet(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        node_names=quiet_nodes,
+        job_policy=job_policy,
+        cancel_job_ids=cancel_job_ids,
+        requeue_job_ids=requeue_job_ids,
+        job_wait_timeout_seconds=job_wait_timeout_seconds,
+        job_refresh_interval_seconds=job_refresh_interval_seconds,
+        slurm_decision_recorder=slurm_decision_recorder,
+        allow_missing_login_recovery=not live_source_slurmcluster_present,
+        interactive_prompt_pause=interactive_prompt_pause,
+    )
+    phase["slurm_quiet_at"] = _utc_now()
+    phase["slurm_quiet_lines"] = list(quiet_lines)
+    slurm_resume_lines: list[str] = []
+    try:
+        _helm_upgrade_target_soperator(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            values=populate_jail_refresh_values(values),
+            expected_version=target_version,
+            wait=False,
+        )
+        mutation_performed = True
+        phase["overwrite_maintenance_applied_at"] = _utc_now()
+        consumers_down = wait_for_populate_jail_consumers_down(
+            command_runner,
+            namespace=_SOPERATOR_NAMESPACE,
+            target_ref=target_ref,
+            kube_context=kube_context,
+        )
+        phase["consumers_down_at"] = _utc_now()
+        phase["active_consumer_pods"] = list(consumers_down.active_consumer_pods)
+        refreshed = wait_for_populate_jail_refresh(
+            command_runner,
+            namespace=_SOPERATOR_NAMESPACE,
+            target_ref=target_ref,
+            previous_job_uid=before.job_uid,
+            expected_image=before.image,
+            kube_context=kube_context,
+        )
+        phase["job_completed_at"] = _utc_now()
+    finally:
+        _helm_upgrade_target_soperator(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            values=populate_jail_steady_state_values(values),
+            expected_version=target_version,
+            wait=False,
+        )
+        _kubectl_rollout_status(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            namespace=_SOPERATOR_NAMESPACE,
+            resource="deployment/soperator-manager",
+            timeout="15m",
+        )
+        maintenance_restored = True
+        mutation_performed = True
+        phase["steady_state_applied_at"] = _utc_now()
+        _resume_slurm_partitions(
+            command_runner=command_runner,
+            kube_context=kube_context,
+        )
+        phase["slurm_resumed_at"] = _utc_now()
+        slurm_resume_lines = ["Slurm partitions resumed after populate-jail refresh."]
+    if refreshed is None:
+        refreshed = inspect_populate_jail(
+            command_runner,
+            namespace=_SOPERATOR_NAMESPACE,
+            target_ref=target_ref,
+            kube_context=kube_context,
+        )
+    result = completed_populate_jail_refresh_result(
+        mode=plan.mode,
+        reason=plan.reason,
+        snapshot=refreshed,
+        maintenance_restored=maintenance_restored,
+    )
+    phase["result"] = result.as_payload()
+    phase["completed_at"] = _utc_now()
+    return mutation_performed, [
+        *slurm_resume_lines,
+        f"Populate-jail refreshed with image {result.job_image or result.target_image or 'unknown'}.",
+    ]
 
 
 def _target_mk8s_gpu_validation_specs(
@@ -12599,6 +12805,14 @@ def _phase_report_summary(phase_id: str, phase: Mapping[str, Any]) -> str:
             phase.get("target_slurmcluster", "") or phase.get("target_ref", "") or ""
         ).strip()
         return f"target Soperator chart and SlurmCluster cutover validated{f' for {target}' if target else ''}."
+    if phase_id == POPULATE_JAIL_REFRESH_PHASE_ID:
+        result = _mapping(phase.get("result"))
+        status = str(result.get("status", "") or "not_run")
+        image = str(result.get("job_image") or result.get("target_image") or "").strip()
+        reason = str(result.get("reason", "") or "").strip()
+        if image:
+            return f"populate-jail refresh status={status}; image={image}."
+        return f"populate-jail refresh status={status}{f'; {reason}' if reason else ''}."
     if phase_id == "validation-and-rollback-hold":
         gpu_count = _positive_int(phase.get("mk8s_gpu_validation_count"), fallback=0)
         soperator_count = _positive_int(
@@ -13096,8 +13310,42 @@ def external_soperator_upgrade_resume_backup_metadata(
             "partially upgraded cluster; review recovery state and remove the checkpoint "
             "only after deciding to restart."
         )
+    _validate_external_upgrade_backup_metadata(backup)
     plain_backup = to_plain_data(backup)
     return dict(plain_backup) if isinstance(plain_backup, Mapping) else backup
+
+
+def _validate_external_upgrade_backup_metadata(backup: Mapping[str, Any]) -> None:
+    missing_fields = [
+        field
+        for field in _EXTERNAL_UPGRADE_BACKUP_REQUIRED_FIELDS
+        if not str(backup.get(field, "") or "").strip()
+        and field != "included_categories"
+    ]
+    categories_value = backup.get("included_categories")
+    categories = {
+        str(category or "").strip()
+        for category in categories_value
+        if str(category or "").strip()
+    } if isinstance(categories_value, Sequence) and not isinstance(
+        categories_value, (str, bytes, bytearray)
+    ) else set()
+    if not categories:
+        missing_fields.append("included_categories")
+    missing_categories = sorted(_EXTERNAL_UPGRADE_BACKUP_REQUIRED_CATEGORIES - categories)
+    if not missing_fields and not missing_categories:
+        return
+    details: list[str] = []
+    if missing_fields:
+        details.append("missing fields: " + ", ".join(missing_fields))
+    if missing_categories:
+        details.append("missing archive categories: " + ", ".join(missing_categories))
+    raise RuntimeError(
+        "External Soperator upgrade backup metadata is sparse and cannot prove "
+        "recreation-grade coverage before mutation: "
+        + "; ".join(details)
+        + ". Create a fresh ext-soperator upgrade backup with this cxcli version."
+    )
 
 
 def _target_resume_versions(target_version: str) -> set[str]:
@@ -14467,6 +14715,32 @@ def _final_cutover_satisfied(
     return True
 
 
+def _populate_jail_refresh_satisfied(
+    *,
+    checkpoint: Mapping[str, Any],
+    target_ref: str,
+    kube_context: str,
+    command_runner: SoperatorMigrationCommandRunner,
+) -> bool:
+    phase = _mapping(_mapping(checkpoint.get("phase_state")).get(POPULATE_JAIL_REFRESH_PHASE_ID))
+    result = _mapping(phase.get("result"))
+    status = str(result.get("status", "") or "").strip()
+    if status == "skipped":
+        return True
+    if status != "refreshed" or result.get("maintenance_restored") is not True:
+        return False
+    snapshot = inspect_populate_jail(
+        command_runner,
+        namespace=_SOPERATOR_NAMESPACE,
+        target_ref=target_ref,
+        kube_context=kube_context,
+    )
+    expected_image = str(result.get("job_image") or result.get("target_image") or "").strip()
+    if not snapshot.job_complete:
+        return False
+    return not expected_image or snapshot.job_image == expected_image
+
+
 def _record_phase_fast_verification(
     *,
     checkpoint: dict[str, Any],
@@ -14914,6 +15188,55 @@ def _run_external_upgrade_phase_fast_verification(
                         summary,
                     )
                 ]
+        elif phase_id == POPULATE_JAIL_REFRESH_PHASE_ID:
+            phase = _mapping(_mapping(checkpoint.get("phase_state")).get(phase_id))
+            result = _mapping(phase.get("result"))
+            status = str(result.get("status", "") or "").strip()
+            if status == "skipped":
+                summary = f"populate-jail refresh skipped as expected: {result.get('reason') or 'not required'}."
+                checks = [
+                    _fast_verification_check(
+                        "Populate-jail refresh",
+                        "skipped",
+                        str(result.get("reason") or "not required"),
+                    )
+                ]
+            else:
+                snapshot = inspect_populate_jail(
+                    command_runner,
+                    namespace=_SOPERATOR_NAMESPACE,
+                    target_ref=target_ref,
+                    kube_context=kube_context,
+                )
+                expected_image = str(
+                    result.get("job_image") or result.get("target_image") or ""
+                ).strip()
+                image_ok = not expected_image or snapshot.job_image == expected_image
+                maintenance_restored = result.get("maintenance_restored") is True
+                checks = [
+                    _fast_verification_check(
+                        "Populate-jail Job completion",
+                        "passed" if snapshot.job_complete else "failed",
+                        f"job={snapshot.job_name or 'unknown'}",
+                    ),
+                    _fast_verification_check(
+                        "Populate-jail image",
+                        "passed" if image_ok else "failed",
+                        f"expected={expected_image or 'unknown'}, actual={snapshot.job_image or 'unknown'}",
+                    ),
+                    _fast_verification_check(
+                        "Populate-jail maintenance restore",
+                        "passed" if maintenance_restored else "failed",
+                        "steady-state maintenance values were reapplied"
+                        if maintenance_restored
+                        else "steady-state maintenance restoration was not recorded",
+                    ),
+                ]
+                summary = (
+                    f"populate-jail refresh verified with image {snapshot.job_image or expected_image}."
+                    if not _fast_verification_failed(checks)
+                    else "populate-jail refresh is incomplete or not using the target image."
+                )
         elif phase_id == "validation-and-rollback-hold":
             summary, checks = _validation_hold_fast_verification_checks(checkpoint=checkpoint)
         elif phase_id == "retire-old-resources":
@@ -14994,6 +15317,12 @@ def _reconcile_completed_action_phases(
             kube_context=kube_context,
             command_runner=command_runner,
         ),
+        POPULATE_JAIL_REFRESH_PHASE_ID: lambda: _populate_jail_refresh_satisfied(
+            checkpoint=checkpoint,
+            target_ref=target_ref,
+            kube_context=kube_context,
+            command_runner=command_runner,
+        ),
     }
     lines: list[str] = []
     demoted_action = False
@@ -15060,6 +15389,7 @@ def execute_soperator_migration(
     status_callback: Callable[[str], None] | None = None,
     status_poll_interval_seconds: float = 30.0,
     job_policy: str | None = None,
+    populate_jail_refresh: str = "auto",
     cancel_job_ids: Sequence[str] = (),
     requeue_job_ids: Sequence[str] = (),
     job_wait_timeout_seconds: int = _EXTERNAL_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT_SECONDS,
@@ -15105,6 +15435,7 @@ def execute_soperator_migration(
             status_callback=status_callback,
             status_poll_interval_seconds=status_poll_interval_seconds,
             job_policy=job_policy,
+            populate_jail_refresh=populate_jail_refresh,
             cancel_job_ids=cancel_job_ids,
             requeue_job_ids=requeue_job_ids,
             job_wait_timeout_seconds=job_wait_timeout_seconds,
@@ -15135,6 +15466,7 @@ def _execute_soperator_migration_unlocked(
     status_callback: Callable[[str], None] | None = None,
     status_poll_interval_seconds: float = 30.0,
     job_policy: str | None = None,
+    populate_jail_refresh: str = "auto",
     cancel_job_ids: Sequence[str] = (),
     requeue_job_ids: Sequence[str] = (),
     job_wait_timeout_seconds: int = _EXTERNAL_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT_SECONDS,
@@ -15276,6 +15608,9 @@ def _execute_soperator_migration_unlocked(
         upgrade_path_fingerprint=upgrade_path_fingerprint,
         upgrade_path_segment_id=upgrade_path_segment_id,
     )
+    resolved_populate_jail_refresh = normalize_populate_jail_refresh_mode(
+        populate_jail_refresh
+    )
     resolved_job_policy = _external_upgrade_job_policy(job_policy)
     if resolved_job_policy == "wait-then-cancel" and job_wait_timeout_seconds <= 0:
         raise RuntimeError(
@@ -15325,6 +15660,14 @@ def _execute_soperator_migration_unlocked(
         }
     )
     checkpoint["slurm"] = slurm_state
+    checkpoint["populate_jail_refresh"] = {
+        **dict(_mapping(checkpoint.get("populate_jail_refresh"))),
+        "mode": resolved_populate_jail_refresh,
+        "status": str(
+            _mapping(checkpoint.get("populate_jail_refresh")).get("status", "planned")
+            or "planned"
+        ),
+    }
 
     def _record_slurm_decision(decision: Mapping[str, Any]) -> None:
         slurm = checkpoint.setdefault("slurm", {})
@@ -15449,6 +15792,8 @@ def _execute_soperator_migration_unlocked(
                 "approved mutation. Run through `nebius-cxcli ext-soperator upgrade --execute "
                 "--approve` so cxcli can create or reuse the pre-upgrade backup."
             )
+        if backup_state and (set(phase_ids) & _MUTATING_PHASE_IDS):
+            _validate_external_upgrade_backup_metadata(backup_state)
         if protected_state_before is None:
             _emit_phase_comment(
                 "protected-state-capture",
@@ -15651,6 +15996,23 @@ def _execute_soperator_migration_unlocked(
                 kube_context=kube_context,
                 command_runner=active_command_runner,
             ),
+            POPULATE_JAIL_REFRESH_PHASE_ID: lambda: _execute_populate_jail_refresh_phase(
+                checkpoint=checkpoint,
+                payload=payload,
+                source_report=execution_source_report,
+                live_snapshot=live_snapshot,
+                target_ref=normalized_target,
+                kube_context=kube_context,
+                command_runner=active_command_runner,
+                populate_jail_refresh=resolved_populate_jail_refresh,
+                job_policy=resolved_job_policy,
+                cancel_job_ids=selected_cancel_job_ids,
+                requeue_job_ids=selected_requeue_job_ids,
+                job_wait_timeout_seconds=job_wait_timeout_seconds,
+                job_refresh_interval_seconds=job_refresh_interval_seconds,
+                slurm_decision_recorder=_record_slurm_decision,
+                interactive_prompt_pause=status_prompt_pause,
+            ),
             "validation-and-rollback-hold": lambda: _execute_validation_hold_phase(
                 config_path=config_path,
                 checkpoint=checkpoint,
@@ -15733,6 +16095,7 @@ def _execute_soperator_migration_unlocked(
                 "online-bulk-data-sync",
                 "rolling-compute-migration",
                 "final-control-plane-cutover",
+                POPULATE_JAIL_REFRESH_PHASE_ID,
             }:
                 live_snapshot = snapshot_collector(kube_context=kube_context)
                 _append_event(
