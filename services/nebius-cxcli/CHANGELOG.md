@@ -75,7 +75,9 @@ All notable changes to this project are tracked here. This changelog follows
   rerenders over render-owned artifacts still prompt or require `--force`.
 - Added public Soperator Slurm upgrade smoke job examples with a configurable
   submitter for repeated CPU/GPU `sbatch` submissions, array mode, optional
-  exclusive placement, and interactive job-policy demonstrations.
+  exclusive placement, interactive job-policy demonstrations, and a `login`
+  subcommand that stages the examples under `/root/testjobs` before opening a
+  login-node SSH session there.
 - Extended Soperator Slurm job-policy coverage to chart-driven worker
   reconciliation. Managed `soperator upgrade`, external `ext-soperator
   upgrade`, local `deploy`, and `flux apply` now gate disruptive Soperator

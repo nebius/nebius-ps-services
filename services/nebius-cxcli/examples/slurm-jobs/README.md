@@ -11,16 +11,16 @@ NCCL tests, storage tests, or application performance tests.
 
 ## Copy To The Login Node
 
-Copy this directory to the Slurm login node, then run the submitter from that
-login-node SSH session so `sbatch` can reach the cluster's Slurm controller:
+From the local checkout root, let the submitter create `/root/testjobs`, copy
+the example files there, and open an SSH session already landed in that
+directory:
 
 ```bash
-# On your machine, from the local checkout.
-scp -r examples/slurm-jobs root@<login-external-ip>:/shared/slurm-jobs
-
-# On the Slurm login node.
-cd /shared/slurm-jobs
+./examples/slurm-jobs/submit-job-test.sh login <login-external-ip>
 ```
+
+Run the submit commands below from that login-node SSH session so `sbatch` can
+reach the cluster's Slurm controller.
 
 ## Submit CPU Jobs
 

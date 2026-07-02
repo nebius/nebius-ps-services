@@ -2161,8 +2161,9 @@ def test_readme_guides_soperator_slurm_checks_through_login_service() -> None:
     )
     assert "srun -p cpu -N1 -n1 /bin/hostname" in section
     assert "examples/slurm-jobs/" in section
-    assert "scp -r examples/slurm-jobs root@<login-external-ip>:/shared/slurm-jobs" in section
-    assert "cd /shared/slurm-jobs" in section
+    assert "./examples/slurm-jobs/submit-job-test.sh login <login-external-ip>" in section
+    assert "scp -r examples/slurm-jobs root@<login-external-ip>:/shared/slurm-jobs" not in section
+    assert "cd /shared/slurm-jobs" not in section
     assert "bash ./submit-job-test.sh --partition cpu --count 10" in section
     assert (
         "bash ./submit-job-test.sh --part-type gpu --partition gpu --count 10 --gpus-per-job 1"

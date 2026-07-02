@@ -19,13 +19,16 @@ requeue=0
 output_dir="slurm-smoke-logs"
 dry_run=0
 heartbeat_seconds="30"
+login_ip=""
+login_remote_dir="/root/testjobs"
 
 show_usage() {
   cat <<'EOF'
 Submit public Soperator Slurm smoke jobs for upgrade-policy testing.
 
 Usage:
-  submit-job-test.sh [options]
+  submit-job-test.sh [submit options]
+  submit-job-test.sh login <login-external-ip> [--dry-run]
 
 Options:
   --part-type cpu|gpu        CPU/GPU job template to submit. Default: cpu.
@@ -45,7 +48,12 @@ Options:
   --dry-run                  Print sbatch commands without submitting.
   -h, --help                 Show this help text.
 
+Login mode:
+  Copies this directory to root@<login-external-ip>:/root/testjobs, then opens
+  an SSH session in /root/testjobs. Copying is part of login mode.
+
 Examples:
+  ./submit-job-test.sh login <login-external-ip>
   ./submit-job-test.sh --partition cpu --count 10
   ./submit-job-test.sh --part-type gpu --partition gpu --count 10 --gpus-per-job 1
   ./submit-job-test.sh --part-type gpu --partition gpu --count 10 --submit-mode array --dry-run
@@ -121,6 +129,57 @@ submit_command() {
   fi
 
   "$@"
+}
+
+run_or_print_command() {
+  if ((dry_run)); then
+    print_command "$@"
+    return 0
+  fi
+
+  "$@"
+}
+
+stage_examples_and_login() {
+  local login_target="root@${login_ip}"
+
+  if ((!dry_run)); then
+    require_command ssh
+    require_command scp
+  fi
+
+  run_or_print_command ssh "$login_target" "mkdir -p ${login_remote_dir}"
+  run_or_print_command scp -r "${SCRIPT_DIR}/." "${login_target}:${login_remote_dir}/"
+  run_or_print_command ssh -t "$login_target" "cd ${login_remote_dir} && exec \"\${SHELL:-/bin/bash}\" -i"
+}
+
+parse_login_args() {
+  while (($# > 0)); do
+    case "$1" in
+      --dry-run)
+        dry_run=1
+        shift
+        ;;
+      -h | --help)
+        show_usage
+        exit 0
+        ;;
+      --*)
+        die "Unknown login option: $1"
+        ;;
+      *)
+        if [[ -n "$login_ip" ]]; then
+          die "Unexpected login argument: $1"
+        fi
+        login_ip="$1"
+        shift
+        ;;
+    esac
+  done
+
+  if [[ -z "$login_ip" ]]; then
+    die "login requires <login-external-ip>"
+  fi
 }
 
 parse_args() {
@@ -334,6 +393,13 @@ submit_array_job() {
 }
 
 main() {
+  if [[ "${1:-}" == "login" ]]; then
+    shift
+    parse_login_args "$@"
+    stage_examples_and_login
+    return 0
+  fi
+
   parse_args "$@"
   validate_args
 

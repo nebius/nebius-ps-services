@@ -63,6 +63,8 @@ def test_submitter_help_documents_public_flags() -> None:
     result = run_submitter("--help")
 
     assert result.returncode == 0
+    assert "submit-job-test.sh login <login-external-ip>" in result.stdout
+    assert "Copying is part of login mode" in result.stdout
     for flag in PUBLIC_FLAGS:
         assert flag in result.stdout
 
@@ -70,9 +72,28 @@ def test_submitter_help_documents_public_flags() -> None:
 def test_example_readme_documents_login_node_copy_flow() -> None:
     readme = (EXAMPLE_DIR / "README.md").read_text(encoding="utf-8")
 
-    assert "scp -r examples/slurm-jobs root@<login-external-ip>:/shared/slurm-jobs" in readme
-    assert "cd /shared/slurm-jobs" in readme
+    assert "./examples/slurm-jobs/submit-job-test.sh login <login-external-ip>" in readme
     assert "login-node SSH session" in readme
+    assert "/root/testjobs" in readme
+    assert "scp -r examples/slurm-jobs" not in readme
+    assert "cd /shared/slurm-jobs" not in readme
+
+
+def test_login_dry_run_prints_copy_and_remote_shell_commands() -> None:
+    result = run_submitter("login", "203.0.113.10", "--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.splitlines()
+    assert len(lines) == 3
+    assert lines[0].startswith("ssh root@203.0.113.10 ")
+    assert "mkdir" in lines[0]
+    assert "/root/testjobs" in lines[0]
+    assert lines[1].startswith("scp -r ")
+    assert f"{EXAMPLE_DIR}/." in lines[1]
+    assert "root@203.0.113.10:/root/testjobs/" in lines[1]
+    assert lines[2].startswith("ssh -t root@203.0.113.10 ")
+    assert "cd" in lines[2]
+    assert "/root/testjobs" in lines[2]
 
 
 def test_submitter_rejects_unknown_options() -> None:

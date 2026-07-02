@@ -2665,17 +2665,16 @@ sbatch -p train --qos=train --requeue --time=04:00:00 --wrap 'hostname; sleep 60
 For longer upgrade-policy demonstrations, use the public sample jobs in
 [`examples/slurm-jobs/`](examples/slurm-jobs/). These examples are generic:
 they test Slurm allocation, job visibility, interruption, wait, cancellation,
-and requeue behavior rather than CPU or GPU performance. Copy the example
-directory to the Slurm login node, then submit the jobs from the login-node SSH
-session so `sbatch` can reach the cluster's Slurm controller:
+and requeue behavior rather than CPU or GPU performance. Use the helper to
+copy the examples to `/root/testjobs` on the Slurm login node and open an SSH
+session there, then submit the jobs from that login-node session so `sbatch`
+can reach the cluster's Slurm controller:
 
 ```bash
 # On your machine, from the local checkout.
-scp -r examples/slurm-jobs root@<login-external-ip>:/shared/slurm-jobs
+./examples/slurm-jobs/submit-job-test.sh login <login-external-ip>
 
-# On the Slurm login node.
-cd /shared/slurm-jobs
-
+# In the SSH session opened by the helper.
 # Submit 10 CPU jobs to the cpu partition. Omit --count to submit one job.
 bash ./submit-job-test.sh --partition cpu --count 10
 
