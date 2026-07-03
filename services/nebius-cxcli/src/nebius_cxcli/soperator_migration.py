@@ -11,7 +11,6 @@ import re
 import shlex
 import shutil
 import stat
-import string
 import subprocess
 import sys
 import tempfile
@@ -67,16 +66,19 @@ from .quota_checks import (
     format_quota_report_lines,
 )
 from .runtime_config import to_plain_data
+from .slurm_job_control import (
+    build_slurm_jobs_table,
+    build_slurm_wait_dashboard,
+    prompt_slurm_job_control,
+)
 from .slurm_jobs import (
     AffectedSlurmJob,
     affected_slurm_partitions_from_scontrol_show_node,
     dedupe_slurm_jobs,
     ensure_requeueable_slurm_jobs,
     filter_affected_pending_slurm_jobs,
-    format_slurm_duration_seconds,
     parse_squeue_jobs,
     selected_display_job_ids,
-    slurm_remaining_seconds,
 )
 from .soperator_gpu_driver_jail import (
     SOPERATOR_GPU_DRIVER_JAIL_INIT_CONTAINER_NAME,
@@ -5634,51 +5636,13 @@ def _wait_for_external_upgrade_requeued_jobs_to_leave_nodes(
         time.sleep(max(refresh_interval_seconds, 1))
 
 
-def _external_upgrade_remaining_seconds(value: str) -> int | None:
-    return slurm_remaining_seconds(value)
-
-
-def _external_upgrade_slurm_table_value(value: str) -> str:
-    return value if str(value or "").strip() else "-"
+_EXTERNAL_UPGRADE_JOBS_TABLE_TITLE = "Affected Slurm jobs blocking external Soperator upgrade"
 
 
 def _print_external_upgrade_jobs_table(
     jobs: Sequence[AffectedSlurmJob],
 ) -> None:
-    table = Table(title="Affected Slurm jobs blocking external Soperator upgrade")
-    for column in (
-        "Job",
-        "User",
-        "State",
-        "Partition",
-        "Allocated",
-        "Requested",
-        "Scheduled",
-        "Reason",
-        "Elapsed",
-        "Limit",
-        "Remaining",
-        "Scope",
-        "Name",
-    ):
-        table.add_column(column)
-    for job in jobs:
-        table.add_row(
-            job.job_id,
-            job.user,
-            job.state,
-            job.partition,
-            _external_upgrade_slurm_table_value(job.allocated_nodes),
-            _external_upgrade_slurm_table_value(job.requested_nodes),
-            _external_upgrade_slurm_table_value(job.scheduled_nodes),
-            _external_upgrade_slurm_table_value(job.reason),
-            job.elapsed,
-            job.limit,
-            job.remaining,
-            job.impact_scope,
-            job.name,
-        )
-    _console.print(table)
+    _console.print(build_slurm_jobs_table(jobs, title=_EXTERNAL_UPGRADE_JOBS_TABLE_TITLE))
 
 
 @contextmanager
@@ -5694,6 +5658,12 @@ def _external_upgrade_slurm_prompt_paused(
 
 def _external_upgrade_is_tty_session() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _external_upgrade_text_prompt(message: str, default: str, show_default: bool) -> str:
+    suffix = f" [{default}]" if show_default and default else ""
+    raw = input(f"{message}{suffix}: ").strip()
+    return raw or default
 
 
 def _external_upgrade_job_policy(
@@ -5722,195 +5692,19 @@ def _external_upgrade_job_policy(
     return resolved_policy
 
 
-def _external_upgrade_configure_questionary_checkbox_symbols() -> None:
-    try:
-        from questionary.prompts import common as questionary_common
-
-        questionary_common.INDICATOR_SELECTED = "[x]"
-        questionary_common.INDICATOR_UNSELECTED = "[ ]"
-    except Exception:
-        return
-
-
-def _external_upgrade_questionary_choice_title(choice: Any) -> str:
-    title = getattr(choice, "title", "")
-    if isinstance(title, list):
-        return "".join(str(part[1]) for part in title if isinstance(part, tuple) and len(part) > 1)
-    return str(title or "")
-
-
-def _external_upgrade_find_questionary_control(container: Any) -> Any | None:
-    stack = [container]
-    seen: set[int] = set()
-    while stack:
-        current = stack.pop()
-        current_id = id(current)
-        if current_id in seen:
-            continue
-        seen.add(current_id)
-        if (
-            hasattr(current, "choices")
-            and hasattr(current, "pointed_at")
-            and callable(getattr(current, "is_selection_valid", None))
-        ):
-            return current
-        children = getattr(current, "children", None)
-        if children:
-            stack.extend(reversed(list(children)))
-        for attr in ("content", "container"):
-            child = getattr(current, attr, None)
-            if child is not None and child is not current:
-                stack.append(child)
-    return None
-
-
-def _external_upgrade_register_questionary_prefix_jump_keys(question: Any) -> None:
-    application = getattr(question, "application", None)
-    bindings = getattr(application, "key_bindings", None)
-    layout = getattr(application, "layout", None)
-    control = _external_upgrade_find_questionary_control(getattr(layout, "container", None))
-    if bindings is None or control is None:
-        return
-
-    def _jump_to_prefix(event: Any) -> None:
-        key_event = event.key_sequence[0] if getattr(event, "key_sequence", None) else None
-        key = str(getattr(key_event, "key", "") or "").casefold()
-        if not key:
-            return
-        choices = list(
-            getattr(control, "filtered_choices", None) or getattr(control, "choices", ())
-        )
-        for index, choice in enumerate(choices):
-            if getattr(choice, "disabled", False):
-                continue
-            if (
-                _external_upgrade_questionary_choice_title(choice)
-                .strip()
-                .casefold()
-                .startswith(key)
-            ):
-                control.pointed_at = index
-                return
-
-    try:
-        for key in string.ascii_letters + string.digits:
-            bindings.add(key, eager=True)(_jump_to_prefix)
-    except Exception:
-        return
-
-
-def _external_upgrade_ask_questionary_with_prefix_jumps(question: Any) -> Any:
-    _external_upgrade_register_questionary_prefix_jump_keys(question)
-    return question.ask()
-
-
-_EXTERNAL_UPGRADE_INTERACTIVE_JOB_ACTIONS: tuple[tuple[str, str], ...] = (
-    ("refresh", "r - refresh"),
-    ("wait-to-finish", "w - wait to finish"),
-    ("cancel-selected", "c - cancel selected"),
-    ("cancel-all", "a - cancel all displayed"),
-    ("requeue-selected", "q - requeue selected"),
-    ("requeue-all", "u - requeue all displayed"),
-    ("requeue-hold-selected", "h - requeue-hold selected"),
-    ("requeue-hold-all", "y - requeue-hold all displayed"),
-    ("abort", "x - abort"),
-)
-_EXTERNAL_UPGRADE_JOB_ACTION_ALIASES = {
-    "r": "refresh",
-    "refresh": "refresh",
-    "w": "wait-to-finish",
-    "wait-to-finish": "wait-to-finish",
-    "c": "cancel-selected",
-    "cancel": "cancel-selected",
-    "cancel-selected": "cancel-selected",
-    "a": "cancel-all",
-    "all": "cancel-all",
-    "cancel-all": "cancel-all",
-    "q": "requeue-selected",
-    "requeue": "requeue-selected",
-    "requeue-selected": "requeue-selected",
-    "u": "requeue-all",
-    "requeue-all": "requeue-all",
-    "h": "requeue-hold-selected",
-    "hold": "requeue-hold-selected",
-    "requeue-hold": "requeue-hold-selected",
-    "requeue-hold-selected": "requeue-hold-selected",
-    "y": "requeue-hold-all",
-    "requeue-hold-all": "requeue-hold-all",
-    "x": "abort",
-    "abort": "abort",
-}
-
-
-def _external_upgrade_slurm_job_choice_title(job: AffectedSlurmJob) -> str:
-    pieces = [
-        job.job_id,
-        job.state,
-        job.user,
-        job.partition,
-        f"alloc={_external_upgrade_slurm_table_value(job.allocated_nodes)}",
-    ]
-    if job.requested_nodes:
-        pieces.append(f"req={job.requested_nodes}")
-    if job.reason:
-        pieces.append(f"reason={job.reason}")
-    pieces.extend((f"remaining={job.remaining or 'unknown'}", job.name))
-    return " | ".join(piece for piece in pieces if piece)
-
-
 def _prompt_external_upgrade_slurm_job_control(
     jobs: Sequence[AffectedSlurmJob],
     *,
     prompt_pause: Callable[[], Any] | None,
 ) -> tuple[str, tuple[str, ...]]:
     with _external_upgrade_slurm_prompt_paused(prompt_pause):
-        if _external_upgrade_is_tty_session():
-            try:
-                import questionary
-
-                _external_upgrade_configure_questionary_checkbox_symbols()
-                selected = _external_upgrade_ask_questionary_with_prefix_jumps(
-                    questionary.checkbox(
-                        "Select affected Slurm jobs",
-                        choices=[
-                            questionary.Choice(
-                                title=_external_upgrade_slurm_job_choice_title(job),
-                                value=job.job_id,
-                            )
-                            for job in jobs
-                        ],
-                        qmark="",
-                    )
-                )
-                if selected is None:
-                    return ("abort", ())
-                action = _external_upgrade_ask_questionary_with_prefix_jumps(
-                    questionary.select(
-                        "Choose Slurm job action",
-                        choices=[
-                            questionary.Choice(title=title, value=value)
-                            for value, title in _EXTERNAL_UPGRADE_INTERACTIVE_JOB_ACTIONS
-                        ],
-                        qmark="",
-                    )
-                )
-                if action is None:
-                    return ("abort", tuple(str(job_id) for job_id in selected))
-                return (str(action), tuple(str(job_id) for job_id in selected))
-            except Exception as exc:
-                _console.print(
-                    f"[yellow]Interactive selector unavailable, using text fallback: {exc}[/yellow]"
-                )
-        _print_external_upgrade_jobs_table(jobs)
-        raw_ids = input("Job IDs to select, comma separated (blank for none): ").strip()
-        selected_ids = tuple(item.strip() for item in raw_ids.split(",") if item.strip())
-        raw_action = input(
-            "Action [r refresh, w wait-to-finish, c cancel selected, a cancel all displayed, "
-            "q requeue selected, u requeue all displayed, h requeue-hold selected, "
-            "y requeue-hold all displayed, x abort] [r]: "
-        ).strip()
-        action = _EXTERNAL_UPGRADE_JOB_ACTION_ALIASES.get((raw_action or "r").lower())
-        return (action or "", selected_ids)
+        return prompt_slurm_job_control(
+            jobs,
+            console=_console,
+            table_title=_EXTERNAL_UPGRADE_JOBS_TABLE_TITLE,
+            is_tty=_external_upgrade_is_tty_session(),
+            text_prompt=_external_upgrade_text_prompt,
+        )
 
 
 def _external_upgrade_wait_dashboard(
@@ -5919,43 +5713,11 @@ def _external_upgrade_wait_dashboard(
     local_elapsed_seconds: int,
     poll_interval_seconds: int,
 ) -> Table:
-    table = Table(
-        title=(
-            "Waiting for affected Slurm jobs "
-            f"(polling squeue every {max(poll_interval_seconds, 1)}s)"
-        )
+    return build_slurm_wait_dashboard(
+        jobs,
+        local_elapsed_seconds=local_elapsed_seconds,
+        poll_interval_seconds=poll_interval_seconds,
     )
-    for column in (
-        "Job",
-        "State",
-        "Partition",
-        "Allocated",
-        "Requested",
-        "Reason",
-        "Remaining",
-        "Scope",
-        "Name",
-    ):
-        table.add_column(column)
-    for job in jobs:
-        remaining_seconds = _external_upgrade_remaining_seconds(job.remaining)
-        countdown = (
-            "unknown"
-            if remaining_seconds is None
-            else format_slurm_duration_seconds(remaining_seconds - local_elapsed_seconds)
-        )
-        table.add_row(
-            job.job_id,
-            job.state,
-            job.partition,
-            _external_upgrade_slurm_table_value(job.allocated_nodes),
-            _external_upgrade_slurm_table_value(job.requested_nodes),
-            _external_upgrade_slurm_table_value(job.reason),
-            countdown,
-            job.impact_scope,
-            job.name,
-        )
-    return table
 
 
 def _wait_for_external_upgrade_slurm_jobs_until_timeout(
@@ -6260,7 +6022,7 @@ def _handle_external_upgrade_slurm_jobs(
                     return ["Slurm job preflight: selected jobs requeued."]
                 continue
             if action == "requeue-all":
-                selected = tuple(job.job_id for job in jobs)
+                selected = tuple(selected_ids) or tuple(job.job_id for job in jobs)
                 try:
                     selected = ensure_requeueable_slurm_jobs(jobs, selected, action=action)
                 except RuntimeError as exc:
@@ -6313,7 +6075,7 @@ def _handle_external_upgrade_slurm_jobs(
                     return ["Slurm job preflight: selected jobs requeued and held."]
                 continue
             if action == "requeue-hold-all":
-                selected = tuple(job.job_id for job in jobs)
+                selected = tuple(selected_ids) or tuple(job.job_id for job in jobs)
                 try:
                     selected = ensure_requeueable_slurm_jobs(jobs, selected, action=action)
                 except RuntimeError as exc:

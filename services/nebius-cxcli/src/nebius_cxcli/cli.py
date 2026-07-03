@@ -396,16 +396,19 @@ from .slack_notifier_runtime import (
     ensure_soperator_notifier_runtime_secrets,
     soperator_notifier_enabled_for_target,
 )
+from .slurm_job_control import (
+    build_slurm_jobs_table,
+    build_slurm_wait_dashboard,
+    prompt_slurm_job_control,
+)
 from .slurm_jobs import (
     AffectedSlurmJob,
     affected_slurm_partitions_from_scontrol_show_node,
     dedupe_slurm_jobs,
     ensure_requeueable_slurm_jobs,
     filter_affected_pending_slurm_jobs,
-    format_slurm_duration_seconds,
     parse_squeue_jobs,
     selected_display_job_ids,
-    slurm_remaining_seconds,
 )
 from .soperator_backup_runtime import (
     ensure_soperator_backup_runtime_secrets,
@@ -6739,45 +6742,11 @@ def _soperator_upgrade_affected_jobs(
     )
 
 
-def _slurm_table_value(value: str) -> str:
-    return value if str(value or "").strip() else "-"
+_SOPERATOR_UPGRADE_JOBS_TABLE_TITLE = "Affected Slurm jobs blocking Soperator upgrade"
 
 
 def _print_soperator_upgrade_jobs_table(jobs: Sequence[AffectedSlurmJob]) -> None:
-    table = Table(title="Affected Slurm jobs blocking Soperator upgrade")
-    for column in (
-        "Job",
-        "User",
-        "State",
-        "Partition",
-        "Allocated",
-        "Requested",
-        "Scheduled",
-        "Reason",
-        "Elapsed",
-        "Limit",
-        "Remaining",
-        "Scope",
-        "Name",
-    ):
-        table.add_column(column)
-    for job in jobs:
-        table.add_row(
-            job.job_id,
-            job.user,
-            job.state,
-            job.partition,
-            _slurm_table_value(job.allocated_nodes),
-            _slurm_table_value(job.requested_nodes),
-            _slurm_table_value(job.scheduled_nodes),
-            _slurm_table_value(job.reason),
-            job.elapsed,
-            job.limit,
-            job.remaining,
-            job.impact_scope,
-            job.name,
-        )
-    console.print(table)
+    console.print(build_slurm_jobs_table(jobs, title=_SOPERATOR_UPGRADE_JOBS_TABLE_TITLE))
 
 
 @contextmanager
@@ -6790,116 +6759,19 @@ def _soperator_upgrade_job_prompt_paused() -> Iterator[None]:
     yield
 
 
-_SOPERATOR_UPGRADE_INTERACTIVE_ACTIONS: tuple[tuple[str, str], ...] = (
-    ("refresh", "r - refresh"),
-    ("wait-to-finish", "w - wait to finish"),
-    ("cancel-selected", "c - cancel selected"),
-    ("cancel-all", "a - cancel all displayed"),
-    ("requeue-selected", "q - requeue selected"),
-    ("requeue-all", "u - requeue all displayed"),
-    ("requeue-hold-selected", "h - requeue-hold selected"),
-    ("requeue-hold-all", "y - requeue-hold all displayed"),
-    ("abort", "x - abort"),
-)
-_SOPERATOR_UPGRADE_ACTION_ALIASES = {
-    "r": "refresh",
-    "refresh": "refresh",
-    "w": "wait-to-finish",
-    "wait-to-finish": "wait-to-finish",
-    "c": "cancel-selected",
-    "cancel": "cancel-selected",
-    "cancel-selected": "cancel-selected",
-    "a": "cancel-all",
-    "all": "cancel-all",
-    "cancel-all": "cancel-all",
-    "q": "requeue-selected",
-    "requeue": "requeue-selected",
-    "requeue-selected": "requeue-selected",
-    "u": "requeue-all",
-    "requeue-all": "requeue-all",
-    "h": "requeue-hold-selected",
-    "hold": "requeue-hold-selected",
-    "requeue-hold": "requeue-hold-selected",
-    "requeue-hold-selected": "requeue-hold-selected",
-    "y": "requeue-hold-all",
-    "requeue-hold-all": "requeue-hold-all",
-    "x": "abort",
-    "abort": "abort",
-}
-
-
-def _soperator_upgrade_job_choice_title(job: AffectedSlurmJob) -> str:
-    pieces = [
-        job.job_id,
-        job.state,
-        job.user,
-        job.partition,
-        f"alloc={_slurm_table_value(job.allocated_nodes)}",
-    ]
-    if job.requested_nodes:
-        pieces.append(f"req={job.requested_nodes}")
-    if job.reason:
-        pieces.append(f"reason={job.reason}")
-    pieces.extend((f"remaining={job.remaining or 'unknown'}", job.name))
-    return " | ".join(piece for piece in pieces if piece)
-
-
 def _prompt_soperator_upgrade_job_control(
     jobs: Sequence[AffectedSlurmJob],
 ) -> tuple[str, tuple[str, ...]]:
     with _soperator_upgrade_job_prompt_paused():
-        if _is_tty_session():
-            try:
-                import questionary
-
-                _configure_questionary_checkbox_symbols()
-                selected = _ask_questionary_with_prefix_jumps(
-                    questionary.checkbox(
-                        "Select affected Slurm jobs",
-                        choices=[
-                            questionary.Choice(
-                                title=_soperator_upgrade_job_choice_title(job),
-                                value=job.job_id,
-                            )
-                            for job in jobs
-                        ],
-                        qmark="",
-                    )
-                )
-                if selected is None:
-                    return ("abort", ())
-                action = _ask_questionary_with_prefix_jumps(
-                    questionary.select(
-                        "Choose Slurm job action",
-                        choices=[
-                            questionary.Choice(title=title, value=value)
-                            for value, title in _SOPERATOR_UPGRADE_INTERACTIVE_ACTIONS
-                        ],
-                        qmark="",
-                    )
-                )
-                if action is None:
-                    return ("abort", tuple(str(job_id) for job_id in selected))
-                return (str(action), tuple(str(job_id) for job_id in selected))
-            except Exception as exc:
-                console.print(
-                    f"[yellow]Interactive selector unavailable, using text fallback: {exc}[/yellow]"
-                )
-        _print_soperator_upgrade_jobs_table(jobs)
-        raw_ids = typer.prompt(
-            "Job IDs to select, comma separated (blank for none)",
-            default="",
-            show_default=False,
+        return prompt_slurm_job_control(
+            jobs,
+            console=console,
+            table_title=_SOPERATOR_UPGRADE_JOBS_TABLE_TITLE,
+            is_tty=_is_tty_session(),
+            text_prompt=lambda message, default, show_default: str(
+                typer.prompt(message, default=default, show_default=show_default)
+            ),
         )
-        selected_ids = tuple(item.strip() for item in raw_ids.split(",") if item.strip())
-        raw_action = typer.prompt(
-            "Action [r refresh, w wait-to-finish, c cancel selected, a cancel all displayed, "
-            "q requeue selected, u requeue all displayed, h requeue-hold selected, "
-            "y requeue-hold all displayed, x abort]",
-            default="r",
-        )
-        action = _SOPERATOR_UPGRADE_ACTION_ALIASES.get(raw_action.strip().lower())
-        return (action or "", selected_ids)
 
 
 def _soperator_upgrade_cancel_jobs(
@@ -6984,43 +6856,11 @@ def _soperator_upgrade_wait_dashboard(
     local_elapsed_seconds: int,
     poll_interval_seconds: int,
 ) -> Table:
-    table = Table(
-        title=(
-            "Waiting for affected Slurm jobs "
-            f"(polling squeue every {max(poll_interval_seconds, 1)}s)"
-        )
+    return build_slurm_wait_dashboard(
+        jobs,
+        local_elapsed_seconds=local_elapsed_seconds,
+        poll_interval_seconds=poll_interval_seconds,
     )
-    for column in (
-        "Job",
-        "State",
-        "Partition",
-        "Allocated",
-        "Requested",
-        "Reason",
-        "Remaining",
-        "Scope",
-        "Name",
-    ):
-        table.add_column(column)
-    for job in jobs:
-        remaining_seconds = slurm_remaining_seconds(job.remaining)
-        countdown = (
-            "unknown"
-            if remaining_seconds is None
-            else format_slurm_duration_seconds(remaining_seconds - local_elapsed_seconds)
-        )
-        table.add_row(
-            job.job_id,
-            job.state,
-            job.partition,
-            _slurm_table_value(job.allocated_nodes),
-            _slurm_table_value(job.requested_nodes),
-            _slurm_table_value(job.reason),
-            countdown,
-            job.impact_scope,
-            job.name,
-        )
-    return table
 
 
 def _soperator_upgrade_wait_for_jobs_until_timeout(
@@ -7500,7 +7340,7 @@ def _handle_soperator_upgrade_running_jobs(
                     return _drain_after_jobs_clear()
                 continue
             if action == "requeue-all":
-                selected = tuple(job.job_id for job in jobs)
+                selected = tuple(selected_ids) or tuple(job.job_id for job in jobs)
                 try:
                     selected = ensure_requeueable_slurm_jobs(jobs, selected, action=action)
                 except RuntimeError as exc:
@@ -7532,7 +7372,7 @@ def _handle_soperator_upgrade_running_jobs(
                     return _drain_after_jobs_clear()
                 continue
             if action == "requeue-hold-all":
-                selected = tuple(job.job_id for job in jobs)
+                selected = tuple(selected_ids) or tuple(job.job_id for job in jobs)
                 try:
                     selected = ensure_requeueable_slurm_jobs(jobs, selected, action=action)
                 except RuntimeError as exc:

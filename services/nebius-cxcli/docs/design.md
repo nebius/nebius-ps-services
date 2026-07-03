@@ -1239,7 +1239,12 @@ state, including pending jobs in affected partitions or requested/scheduled on
 affected nodes. TTY managed and external upgrade runs default to `interactive`;
 non-TTY and `--no-interactive` upgrade runs default to `fail`, so automation
 should pass an explicit policy such as `--job-policy wait-to-finish` and
-destructive cancel/requeue or wait-then-cancel policies remain deliberate. When
+destructive cancel/requeue or wait-then-cancel policies remain deliberate.
+Prompt-capable interactive runs render the affected jobs in an aligned Textual
+table with persistent controls: `a` selects or clears all rows, `i` inverts the
+selection, lowercase selected-action keys such as `c`/`q`/`h` operate on the
+selected rows, and uppercase `C`/`Q`/`H` operate on all displayed or all active
+displayed jobs as appropriate. When
 the target chart/rootfs changed, the populate-jail refresh phase applies the same
 job-policy gate to
 affected worker NodeSets before it applies the target chart with

@@ -114,16 +114,19 @@ All notable changes to this project are tracked here. This changelog follows
 - Extended managed `soperator upgrade` and external `ext-soperator upgrade`
   Slurm job gates from running allocations to affected Slurm jobs, including
   pending jobs in affected partitions or requested/scheduled on affected nodes.
-  Interactive job control now uses selectable affected jobs plus an action
-  selector, pauses the external upgrade status spinner while prompts are active,
-  and shows a per-second countdown dashboard between `squeue` polls. Requeue
-  policies reject pending jobs with guidance to cancel, wait, choose another
-  displayed job, or abort.
-- Changed default Soperator Slurm job-policy handling so TTY runs default to
-  `interactive`, while non-TTY and `--no-interactive` runs default to
-  `wait-then-cancel`. The default `--job-wait-timeout` is now `1h`; after that
-  timeout cxcli cancels only the still-displayed affected jobs and proceeds only
-  after they clear.
+  Interactive job control now uses an aligned Textual table in prompt-capable
+  terminals, reserves `a` for select/clear all and `i` for invert selection,
+  uses uppercase `C` for all displayed cancellation, and uses uppercase `Q`/`H`
+  for all displayed active requeue actions. External upgrade status spinners
+  pause while prompts are active, and wait output shows a per-second countdown
+  dashboard between `squeue` polls. Requeue policies reject pending jobs with
+  guidance to cancel, wait, choose another displayed job, or abort.
+- Changed default Soperator Slurm job-policy handling so managed and external
+  upgrade runs default to `interactive` only in a real TTY and to `fail` in
+  non-TTY or `--no-interactive` automation, while local `deploy` and `flux
+  apply` still default to `wait-then-cancel` outside a TTY. The default
+  `--job-wait-timeout` is now `1h`; after that timeout cxcli cancels only the
+  still-displayed affected jobs and proceeds only after they clear.
 - Changed existing config-backed commands so `client_info.nebius.tenant_id` is
   optional when the command can operate from `project_id` and `region_id`.
   `create` and deployments-root `ext-soperator onboard` still require tenant

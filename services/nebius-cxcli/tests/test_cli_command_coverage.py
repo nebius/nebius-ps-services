@@ -4467,31 +4467,15 @@ def test_soperator_upgrade_wait_then_cancel_requires_positive_timeout() -> None:
 def test_soperator_upgrade_prompt_selector_includes_pending_jobs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured_titles: list[str] = []
+    captured: dict[str, object] = {}
 
-    class _FakePrompt:
-        def __init__(self, result: object) -> None:
-            self._result = result
+    def _prompt_slurm_job_control(*args: object, **kwargs: object) -> tuple[str, tuple[str, ...]]:
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return ("cancel-selected", ("12",))
 
-        def ask(self) -> object:
-            return self._result
-
-    def _checkbox(*_args: object, **kwargs: object) -> _FakePrompt:
-        captured_titles.extend(str(choice.title) for choice in kwargs["choices"])
-        return _FakePrompt(["12"])
-
-    def _select(*_args: object, **_kwargs: object) -> _FakePrompt:
-        return _FakePrompt("cancel-selected")
-
-    fake_questionary = SimpleNamespace(
-        Choice=lambda *, title, value: SimpleNamespace(title=title, value=value),
-        checkbox=_checkbox,
-        select=_select,
-    )
-    monkeypatch.setitem(sys.modules, "questionary", fake_questionary)
     monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
-    monkeypatch.setattr(cli, "_configure_questionary_checkbox_symbols", lambda: None)
-    monkeypatch.setattr(cli, "_ask_questionary_with_prefix_jumps", lambda question: question.ask())
+    monkeypatch.setattr(cli, "prompt_slurm_job_control", _prompt_slurm_job_control)
 
     action, selected = cli._prompt_soperator_upgrade_job_control(
         (
@@ -4510,9 +4494,20 @@ def test_soperator_upgrade_prompt_selector_includes_pending_jobs(
 
     assert action == "cancel-selected"
     assert selected == ("12",)
-    assert captured_titles == [
-        "12 | PENDING | alice | main | alloc=- | reason=Priority | remaining=unknown | pending-train"
-    ]
+    captured_jobs = captured["args"][0]
+    assert captured_jobs == (
+        _soperator_slurm_job(
+            job_id="12",
+            state="PENDING",
+            partition="main",
+            allocated_nodes="",
+            reason="Priority",
+            remaining="unknown",
+            name="pending-train",
+            impact_scope="pending-partition",
+        ),
+    )
+    assert captured["kwargs"]["is_tty"] is True
 
 
 def test_soperator_upgrade_fail_policy_does_not_drain_when_jobs_exist(

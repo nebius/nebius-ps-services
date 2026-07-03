@@ -3285,8 +3285,13 @@ Important external upgrade flags:
   wait-to-finish` or another explicit policy. Local `deploy` and `flux apply`
   still default to `interactive` in a real TTY and to `wait-then-cancel` in
   non-TTY automation.
-  `interactive` shows a selectable affected-job list and
-  action selector, `wait-to-finish` polls until affected jobs finish or clear,
+  `interactive` shows an aligned affected-job table with persistent controls:
+  space selects the highlighted row, `a` selects or clears all rows, `i` inverts
+  the selection, `r` refreshes, `w` waits, `c` cancels selected jobs, uppercase
+  `C` cancels all displayed jobs, `q` requeues selected active jobs, uppercase
+  `Q` requeues all displayed active jobs, `h` requeues and holds selected active
+  jobs, uppercase `H` requeues and holds all displayed active jobs, and `x`
+  aborts. `wait-to-finish` polls until affected jobs finish or clear,
   `wait-then-cancel` waits through `--job-wait-timeout`, cancels only the still
   displayed affected jobs, then continues only after they clear, `fail` stops
   before mutation, the cancel policies call `scancel`, the requeue policies call

@@ -6036,6 +6036,45 @@ def test_external_upgrade_slurm_jobs_include_scoped_pending_jobs() -> None:
     assert any(call[-2:] != ("-p", "main") for call in calls if "PENDING" in call)
 
 
+def test_external_upgrade_prompt_selector_includes_pending_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pending_job = migration.AffectedSlurmJob(
+        job_id="12",
+        user="root",
+        state="PENDING",
+        partition="main",
+        allocated_nodes="",
+        requested_nodes="",
+        scheduled_nodes="",
+        reason="Priority",
+        elapsed="0:00",
+        limit="35:00",
+        remaining="35:00",
+        name="pending-main",
+        impact_scope="pending-partition",
+    )
+    captured: dict[str, object] = {}
+
+    def _prompt_slurm_job_control(*args: object, **kwargs: object) -> tuple[str, tuple[str, ...]]:
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return ("cancel-selected", ("12",))
+
+    monkeypatch.setattr(migration, "_external_upgrade_is_tty_session", lambda: True)
+    monkeypatch.setattr(migration, "prompt_slurm_job_control", _prompt_slurm_job_control)
+
+    action, selected = migration._prompt_external_upgrade_slurm_job_control(
+        (pending_job,),
+        prompt_pause=None,
+    )
+
+    assert action == "cancel-selected"
+    assert selected == ("12",)
+    assert captured["args"][0] == (pending_job,)
+    assert captured["kwargs"]["is_tty"] is True
+
+
 def test_external_upgrade_slurm_jobs_fail_closed_when_partition_lookup_fails() -> None:
     calls: list[tuple[str, ...]] = []
 
