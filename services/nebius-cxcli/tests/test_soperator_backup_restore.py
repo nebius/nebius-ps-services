@@ -83,7 +83,10 @@ def _required_recreation_items() -> dict[str, list[dict[str, Any]]]:
                 "metadata": {"name": name, "resourceVersion": "1"},
                 "data": {"password": "c2VjcmV0"},
             }
-            for name in cli._SOPERATOR_BACKUP_REQUIRED_RECREATION_SECRETS
+            for name in (
+                *cli._SOPERATOR_BACKUP_REQUIRED_RECREATION_SECRETS,
+                *cli._SOPERATOR_BACKUP_OPTIONAL_RECREATION_SECRETS,
+            )
         ],
         "configmaps": [
             {
@@ -581,6 +584,60 @@ def test_soperator_backup_fails_when_required_recreation_material_missing(
         assert "Secret/mariadb-root" in str(exc)
     else:  # pragma: no cover - assertion guard
         raise AssertionError("backup accepted missing required recreation secret")
+
+
+def test_soperator_backup_allows_missing_mariadb_metrics_generated_secrets(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    assert not set(cli._SOPERATOR_BACKUP_OPTIONAL_RECREATION_SECRETS).intersection(
+        cli._SOPERATOR_BACKUP_REQUIRED_RECREATION_SECRETS
+    )
+    kubernetes_dir = tmp_path / "kubernetes"
+    kubernetes_dir.mkdir()
+    required_items = _required_recreation_items()
+    optional_secret_names = set(cli._SOPERATOR_BACKUP_OPTIONAL_RECREATION_SECRETS)
+    required_items["secrets"] = [
+        item
+        for item in required_items["secrets"]
+        if item["metadata"]["name"] not in optional_secret_names
+    ]
+    for label, items in required_items.items():
+        (kubernetes_dir / f"{label}.json").write_text(
+            json.dumps({"items": items}),
+            encoding="utf-8",
+        )
+    (kubernetes_dir / "services.json").write_text(json.dumps({"items": []}), encoding="utf-8")
+
+    def fake_kubectl_cluster(
+        args: list[str],
+        **_kwargs: Any,
+    ) -> cli._SoperatorUpgradeCommandResult:
+        if args[:2] == ["get", "persistentvolumes"]:
+            return _command_result(args, _kubernetes_list(_required_recreation_pvs()))
+        raise AssertionError(f"unexpected cluster kubectl args: {args}")
+
+    def fake_kubectl(
+        namespace: str,
+        args: list[str],
+        **_kwargs: Any,
+    ) -> cli._SoperatorUpgradeCommandResult:
+        if namespace == "flux-system":
+            return _command_result(args, returncode=1, stderr="NotFound")
+        assert namespace == "soperator"
+        return _command_result(args, returncode=1, stderr="NotFound")
+
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_kubectl_cluster", fake_kubectl_cluster)
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_kubectl", fake_kubectl)
+
+    included, coverage = cli._soperator_upgrade_collect_recreation_material(
+        namespace="soperator",
+        output_dir=tmp_path / "recreation",
+        kubernetes_dir=kubernetes_dir,
+    )
+
+    assert "recreation/restore/persistentvolumes.yaml" in included
+    assert coverage["items"]["required_recreation_material"]["status"] == "collected"
 
 
 def test_soperator_backup_allows_missing_accounting_db(

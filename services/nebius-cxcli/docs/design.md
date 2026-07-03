@@ -728,12 +728,14 @@ and chart source-family changes.
   `recreation/recreation-coverage.json` with collected, missing, skipped, and
   not-applicable items. Backup fails when required recreation material is
   missing and not proven not-applicable; worker-local PVC/PV and Terraform
-  allocation evidence stay warning-only. Restore keeps the DR/new-empty-target
-  contract, validates checksums, recreation coverage, and required CRD/API
-  availability, applies cluster-scoped retained PV restore manifests before
-  namespaced PVCs and other restore-ready manifests, and imports the DB dump
-  when requested. VM/NFS data disk retention and final Terraform convergence
-  remain explicit operator runbook responsibilities.
+  allocation evidence stay warning-only. Generated MariaDB metrics Secrets are
+  preserved when present in the raw Secret restore material, but they are not
+  required because older source operators may not create them. Restore keeps the
+  DR/new-empty-target contract, validates checksums, recreation coverage, and
+  required CRD/API availability, applies cluster-scoped retained PV restore
+  manifests before namespaced PVCs and other restore-ready manifests, and
+  imports the DB dump when requested. VM/NFS data disk retention and final
+  Terraform convergence remain explicit operator runbook responsibilities.
   Restore is archive-driven and dry-run by default, and it is DR/new-empty-target
   only. It is not same-cluster rollback: operators must not point restore at
   the original/source cluster or an existing Soperator namespace. `--execute
@@ -1314,7 +1316,9 @@ source config plus generated reports are refreshed, normal `validate`, `render`,
 and `deploy` can run from any workstation with the repo state and required
 Nebius/Kubernetes access. `ext-soperator onboard` is therefore
 discovery-only and does not create SFS filesystems, attach storage, drain
-nodes, run data sync jobs, or mutate Helm/Soperator resources. After a
+nodes, run data sync jobs, or mutate Helm/Soperator resources. Before mutation
+starts, reruns may refresh the checkpointed source discovery fingerprint when
+the source version, target version, and phase plan are unchanged. After a
 mutating phase starts, resume relies on phase checkpoints because the original
 full discovery fingerprint is expected to change as new storage and attachments
 appear. Every mutating phase must watch Nebius API, Kubernetes, Soperator, and

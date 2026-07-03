@@ -15518,7 +15518,10 @@ def _execute_soperator_migration_unlocked(
         source_version=expected_source_version or live_source_version,
         target_version=target_version,
         phase_ids=phase_ids,
-        allow_source_report_refresh=mutating_progress_started,
+        # Premutation runs passed strict live source-contract validation above;
+        # mutation resumes remain phase-checkpoint based. Refresh still requires
+        # the same source version, target version, and phase plan.
+        allow_source_report_refresh=True,
         upgrade_path_fingerprint=upgrade_path_fingerprint,
         upgrade_path_segment_id=upgrade_path_segment_id,
     )

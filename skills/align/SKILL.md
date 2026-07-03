@@ -119,6 +119,24 @@ guardrails. This does not change those skills' standalone invocation policies.
 If a child skill has a stricter safety or no-auto-fix rule, keep the stricter
 rule.
 
+`apply-security` remains standalone explicit-only. The `align` request is the
+explicit coordinator invocation for the security lane, so do not skip
+`apply-security` merely because it is absent from the initial implicit skills
+list. Resolve and read its `SKILL.md` directly when needed:
+
+1. Use the current session's skill path if `apply-security` was explicitly
+   provided or appears in the available skill list.
+2. Otherwise try the sibling skill path next to this skill, such as
+   `../apply-security/SKILL.md` from the loaded `align/SKILL.md` directory.
+3. If the sibling path is unavailable, search standard Codex skill locations
+   that are already readable in the current environment, including repo-local
+   skill roots and the user-level `$HOME/.agents/skills` tree.
+
+After loading `apply-security`, follow its required-reference rules for the
+security lane. If it cannot be found or read, report the security lane as
+blocked or skipped with the paths checked; do not report that alignment is
+complete.
+
 Default remediation policy is safe-only: fix clear, low-risk issues inside the
 current changed scope; report blockers and request explicit approval for risky,
 ambiguous, public-contract, architecture, or security-sensitive changes.
@@ -246,8 +264,9 @@ code so aggressively that wiring becomes harder to trace.
    skills only when their metadata clearly matches a concrete part of the task,
    such as workflow, Helm, shell, Terraform, Python, documentation,
    spreadsheet, slide, PDF, or repo-local skill work. Read the relevant
-   `SKILL.md`, keep scope narrow, and do not let another skill override these
-   safety rules unless the user explicitly asked for that behavior.
+   `SKILL.md`, using the explicit `apply-security` resolution fallback when
+   needed. Keep scope narrow, and do not let another skill override these safety
+   rules unless the user explicitly asked for that behavior.
 4. Establish the actual contract.
    Compare implementation against tests, CLI help, examples, workflows, and
    documentation. Treat mismatches as evidence to resolve, not as proof that

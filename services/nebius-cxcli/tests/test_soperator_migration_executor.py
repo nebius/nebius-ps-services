@@ -11052,6 +11052,54 @@ def test_execute_rejects_stale_checkpoint(tmp_path: Path) -> None:
         )
 
 
+def test_execute_allows_premutation_checkpoint_source_report_refresh(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    checkpoint_path = soperator_migration_checkpoint_path(config_path, "external-cluster")
+    checkpoint_path.parent.mkdir(parents=True)
+    payload = _payload()
+    source_report = _source_report()
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]  # type: ignore[index]
+    report = source_report["report"]
+    assert isinstance(onboarding, dict)
+    assert isinstance(report, dict)
+    phase_ids = migration._phase_ids_for_actions(report=report, onboarding=onboarding)
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+                "target_ref": "external-cluster",
+                "source_report_fingerprint": "old-source-report",
+                "source_version": "3.0.5",
+                "target_version": "4.0.1-ps.1",
+                "planned_phases": list(phase_ids),
+                "completed_phases": [],
+                "pending_phase": "none",
+                "events": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        execute_soperator_migration(
+            config_path=config_path,
+            target_ref="external-cluster",
+            payload=payload,
+            source_report=source_report,
+            snapshot_collector=lambda *, kube_context: _snapshot(),
+            approved=True,
+        )
+    assert "checkpoint is stale" not in str(exc_info.value)
+
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["source_report_fingerprint"] == migration._source_report_checkpoint_fingerprint(
+        source_report
+    )
+    assert checkpoint["backup"] == _backup_metadata("test-pre-upgrade")
+    assert checkpoint["events"][-1]["event"] == "backup-metadata-checkpointed"
+    assert checkpoint["events"][-2]["event"] == "execute-checkpoint-source-report-refreshed"
+
+
 def test_execute_rejects_retired_migration_checkpoint_path(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     checkpoint_path = migration.legacy_soperator_migration_checkpoint_path(

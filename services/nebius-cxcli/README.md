@@ -3565,9 +3565,11 @@ disable arbitrary live external ActiveChecks before upgrade because those
 settings may be operator-owned diagnostics. Disable external diagnostics
 deliberately before the external upgrade window unless they are part of a
 cxcli-managed upgrade checkpoint.
-After a mutating phase starts, resume relies on phase checkpoints because the
-original full discovery fingerprint is expected to change as new storage,
-attachments, and target node groups appear.
+Before mutation starts, reruns may refresh the checkpointed source discovery
+fingerprint when the source version, target version, and phase plan are
+unchanged. After a mutating phase starts, resume relies on phase checkpoints
+because the original full discovery fingerprint is expected to change as new
+storage, attachments, and target node groups appear.
 Reruns are action-idempotent rather than checkpoint-only: before skipping a
 completed action phase, `ext-soperator upgrade --execute` rechecks the
 corresponding live state. External node-template phases compare the live MK8s

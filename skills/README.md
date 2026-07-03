@@ -223,7 +223,10 @@ current repository or runtime evidence before making safe fixes. Before
 completion, it runs mandatory changed-scope lanes for cross-code validation,
 `code-review`, `linter`, `apply-security`, and focused repository-native tests
 or builds, using safe-only remediation and reporting risky blockers for
-explicit approval.
+explicit approval. `apply-security` remains explicit-only for standalone use,
+but `align` treats the security lane as a coordinator-owned explicit load and
+resolves the `apply-security/SKILL.md` contract directly when it is not in the
+initial implicit skill list.
 
 ### `align-skill`
 

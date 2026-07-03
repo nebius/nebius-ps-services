@@ -58,6 +58,12 @@ Run focused validation and report residual risk
 8. Broaden only when shared contracts, security-sensitive surfaces, or unclear
    dependency boundaries require it.
 
+`apply-security` stays explicit-only as a standalone skill. Invoking `align`
+acts as the explicit coordinator request for the security lane: if
+`apply-security` is not present in the initial implicit skill list, `align`
+resolves and reads the sibling or installed `apply-security/SKILL.md` directly
+before applying its required-reference and safe-remediation rules.
+
 ## Core Concepts
 
 - Evidence beats speculation.

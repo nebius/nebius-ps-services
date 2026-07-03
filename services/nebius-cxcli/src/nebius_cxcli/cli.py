@@ -2631,6 +2631,8 @@ _SOPERATOR_BACKUP_REQUIRED_RECREATION_SECRETS = (
     "mariadb-root",
     "soperator-sshd-keys",
     "soperator-slurmdbd-configs",
+)
+_SOPERATOR_BACKUP_OPTIONAL_RECREATION_SECRETS = (
     "soperator-acct-db-metrics-password",
     "soperator-acct-db-metrics-config",
 )

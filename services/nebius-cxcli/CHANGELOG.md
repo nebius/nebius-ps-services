@@ -45,8 +45,9 @@ All notable changes to this project are tracked here. This changelog follows
   PVC `volumeName`, and restore those bindings before the remaining namespaced
   resources on new empty target clusters after validating archive checksums,
   recreation coverage, and required CRD/API availability. Slurm accounting dumps
-  now derive the cluster name from live `slurm.conf`; VM/NFS retention and final
-  Terraform convergence remain operator runbook steps.
+  now derive the cluster name from live `slurm.conf`; generated MariaDB metrics
+  Secrets are backed up when present but no longer block backups when absent;
+  VM/NFS retention and final Terraform convergence remain operator runbook steps.
 - Changed Nebius SDK operator-auth precedence so the matching Codex agent
   `NEBIUS_AUTH_CREDENTIALS_FILE`/`NEBIUS_PROFILE` pair with an existing
   credential file wins over a static `NEBIUS_IAM_TOKEN`, keeping long-running
@@ -90,8 +91,9 @@ All notable changes to this project are tracked here. This changelog follows
   accepted onboarding fingerprint. Repeated `ext-soperator upgrade --execute
   --approve` runs now advance one locked segment at a time from checkpoint
   progress, print the next same-command invocation, keep onboarding in place
-  while segments remain, and hand back to deploy-owned reconciliation only
-  after the final locked segment completes.
+  while segments remain, refresh pre-mutation source discovery fingerprints
+  when source/target versions and phase plans still match, and hand back to
+  deploy-owned reconciliation only after the final locked segment completes.
 - Clarified `ext-soperator upgrade` plan phase rows so the approval, MK8s
   node-template, target GPU stack, Soperator chart, and final cutover phase
   descriptions show the current locked segment's Kubernetes and Soperator hops
