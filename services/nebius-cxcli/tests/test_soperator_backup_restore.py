@@ -74,6 +74,124 @@ def _source_payload() -> dict[str, Any]:
     }
 
 
+def _required_recreation_items() -> dict[str, list[dict[str, Any]]]:
+    return {
+        "secrets": [
+            {
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": {"name": name, "resourceVersion": "1"},
+                "data": {"password": "c2VjcmV0"},
+            }
+            for name in cli._SOPERATOR_BACKUP_REQUIRED_RECREATION_SECRETS
+        ],
+        "configmaps": [
+            {
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {"name": name, "uid": "uid"},
+                "data": {"slurm.conf": "ClusterName=test\n"},
+            }
+            for name in cli._SOPERATOR_BACKUP_REQUIRED_RECREATION_CONFIGMAPS
+        ],
+        "persistentvolumeclaims": [
+            {
+                "apiVersion": "v1",
+                "kind": "PersistentVolumeClaim",
+                "metadata": {
+                    "name": "controller-spool-controller-0",
+                    "uid": "pvc-uid",
+                    "annotations": {
+                        "pv.kubernetes.io/bind-completed": "yes",
+                        "example.nebius.ai/keep": "true",
+                    },
+                },
+                "spec": {
+                    "accessModes": ["ReadWriteOnce"],
+                    "resources": {"requests": {"storage": "10Gi"}},
+                    "storageClassName": "retain",
+                    "volumeName": "pv-controller-spool",
+                },
+                "status": {"phase": "Bound"},
+            },
+            {
+                "apiVersion": "v1",
+                "kind": "PersistentVolumeClaim",
+                "metadata": {"name": "storage-soperator-acct-db-0", "uid": "pvc-uid"},
+                "spec": {
+                    "accessModes": ["ReadWriteOnce"],
+                    "resources": {"requests": {"storage": "20Gi"}},
+                    "storageClassName": "retain",
+                    "volumeName": "pv-accounting",
+                },
+                "status": {"phase": "Bound"},
+            },
+        ],
+        "slurmclusters": [
+            {
+                "apiVersion": "slurm.nebius.ai/v1",
+                "kind": "SlurmCluster",
+                "metadata": {"name": "soperator"},
+                "spec": {"clusterName": "soperator"},
+            }
+        ],
+    }
+
+
+def _required_recreation_pvs() -> list[dict[str, Any]]:
+    return [
+        {
+            "apiVersion": "v1",
+            "kind": "PersistentVolume",
+            "metadata": {
+                "name": "pv-controller-spool",
+                "uid": "pv-uid",
+                "annotations": {
+                    "pv.kubernetes.io/provisioned-by": "example.csi",
+                    "example.nebius.ai/keep": "true",
+                },
+            },
+            "spec": {
+                "capacity": {"storage": "10Gi"},
+                "accessModes": ["ReadWriteOnce"],
+                "persistentVolumeReclaimPolicy": "Retain",
+                "storageClassName": "retain",
+                "claimRef": {
+                    "apiVersion": "v1",
+                    "kind": "PersistentVolumeClaim",
+                    "name": "controller-spool-controller-0",
+                    "namespace": "soperator",
+                    "uid": "claim-uid",
+                    "resourceVersion": "2",
+                },
+                "csi": {"driver": "example.csi", "volumeHandle": "controller-spool"},
+            },
+            "status": {"phase": "Bound"},
+        },
+        {
+            "apiVersion": "v1",
+            "kind": "PersistentVolume",
+            "metadata": {"name": "pv-accounting", "uid": "pv-uid"},
+            "spec": {
+                "capacity": {"storage": "20Gi"},
+                "accessModes": ["ReadWriteOnce"],
+                "persistentVolumeReclaimPolicy": "Retain",
+                "storageClassName": "retain",
+                "claimRef": {
+                    "apiVersion": "v1",
+                    "kind": "PersistentVolumeClaim",
+                    "name": "storage-soperator-acct-db-0",
+                    "namespace": "soperator",
+                    "uid": "claim-uid",
+                    "resourceVersion": "3",
+                },
+                "csi": {"driver": "example.csi", "volumeHandle": "accounting"},
+            },
+            "status": {"phase": "Bound"},
+        },
+    ]
+
+
 def test_soperator_backup_filename_uses_external_prefix_without_upgrade_transitions() -> None:
     filename = cli._soperator_upgrade_backup_filename(
         target_ref="mk8scluster-e00wrz1h8fhxgbdf8j",
@@ -250,22 +368,7 @@ def test_soperator_backup_archive_contains_restore_material(
         if args[:1] == ["get"]:
             resource = args[1]
             items_by_resource: dict[str, list[dict[str, Any]]] = {
-                "secrets": [
-                    {
-                        "apiVersion": "v1",
-                        "kind": "Secret",
-                        "metadata": {"name": "slurm-secret", "resourceVersion": "1"},
-                        "data": {"password": "c2VjcmV0"},
-                    }
-                ],
-                "configmaps": [
-                    {
-                        "apiVersion": "v1",
-                        "kind": "ConfigMap",
-                        "metadata": {"name": "slurm-conf", "uid": "uid"},
-                        "data": {"slurm.conf": "ClusterName=test\n"},
-                    }
-                ],
+                **_required_recreation_items(),
                 "services": [
                     {
                         "apiVersion": "v1",
@@ -286,14 +389,6 @@ def test_soperator_backup_archive_contains_restore_material(
                         "status": {"readyReplicas": 1},
                     }
                 ],
-                "slurmclusters": [
-                    {
-                        "apiVersion": "soperator.nebius.ai/v1",
-                        "kind": "SlurmCluster",
-                        "metadata": {"name": "slurm"},
-                        "spec": {"clusterName": "slurm"},
-                    }
-                ],
                 "pods": [
                     {
                         "apiVersion": "v1",
@@ -306,7 +401,16 @@ def test_soperator_backup_archive_contains_restore_material(
             return _command_result(args, _kubernetes_list(items_by_resource.get(resource, [])))
         raise AssertionError(f"unexpected kubectl args: {args}")
 
+    def fake_kubectl_cluster(
+        args: list[str],
+        **_kwargs: Any,
+    ) -> cli._SoperatorUpgradeCommandResult:
+        if args[:2] == ["get", "persistentvolumes"]:
+            return _command_result(args, _kubernetes_list(_required_recreation_pvs()))
+        raise AssertionError(f"unexpected cluster kubectl args: {args}")
+
     monkeypatch.setattr(cli, "_run_soperator_upgrade_kubectl", fake_kubectl)
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_kubectl_cluster", fake_kubectl_cluster)
     monkeypatch.setattr(
         cli,
         "_run_soperator_upgrade_process",
@@ -364,6 +468,23 @@ def test_soperator_backup_archive_contains_restore_material(
         deployment_restore = (
             archive.extractfile("kubernetes/restore/deployments.yaml").read().decode()
         )
+        generic_pvc_restore = (
+            archive.extractfile("kubernetes/restore/persistentvolumeclaims.yaml")
+            .read()
+            .decode()
+        )
+        required_pv_restore = yaml.safe_load_all(
+            archive.extractfile("recreation/restore/persistentvolumes.yaml")
+            .read()
+            .decode()
+        )
+        required_pvc_restore = yaml.safe_load_all(
+            archive.extractfile("recreation/restore/persistentvolumeclaims.yaml")
+            .read()
+            .decode()
+        )
+        required_pvs = list(required_pv_restore)
+        required_pvcs = list(required_pvc_restore)
 
     assert manifest["schema"] == "nebius-cxcli-soperator-backup/v1"
     assert manifest["source_kind"] == "managed-backup"
@@ -371,16 +492,95 @@ def test_soperator_backup_archive_contains_restore_material(
     assert manifest["recreation_runbook_material"]["coverage_path"] == (
         "recreation/recreation-coverage.json"
     )
-    assert manifest["recreation_runbook_material"]["pv_retain_bindings_are_manual"] is True
+    assert manifest["recreation_runbook_material"][
+        "retained_pv_bindings_are_command_restored"
+    ] is True
+    assert "recreation/restore/persistentvolumes.yaml" in manifest[
+        "recreation_runbook_material"
+    ]["restore_paths"]
+    assert "recreation/restore/persistentvolumes.yaml" in names
+    assert "recreation/restore/persistentvolumeclaims.yaml" in names
+    assert restore_plan["cluster_apply_order"] == ["recreation/restore/persistentvolumes.yaml"]
+    assert restore_plan["apply_order"][:4] == [
+        "recreation/restore/persistentvolumes.yaml",
+        "kubernetes/restore/secrets.yaml",
+        "kubernetes/restore/configmaps.yaml",
+        "recreation/restore/persistentvolumeclaims.yaml",
+    ]
     assert "kubernetes/restore/deployments.yaml" in restore_plan["apply_order"]
+    assert restore_plan["recreation_runbook"]["retained_pv_bindings_are_command_restored"] is True
     assert "recreation/recreation-coverage.json" in restore_plan["restore_material"][
         "recreation_raw"
     ]
-    assert restore_plan["recreation_runbook"]["retained_pv_bindings_are_not_auto_restored"] is True
-    assert coverage["items"]["bound_persistentvolumes"]["status"] == "not_applicable"
+    assert coverage["items"]["bound_persistentvolumes"]["status"] == "collected"
+    assert coverage["items"]["required_recreation_material"]["status"] == "collected"
     assert "clusterIP" not in service_restore
     assert "nodePort" not in service_restore
     assert "status" not in deployment_restore
+    assert "controller-spool-controller-0" not in generic_pvc_restore
+    assert required_pvs[0]["kind"] == "PersistentVolume"
+    assert "namespace" not in required_pvs[0]["metadata"]
+    assert required_pvs[0]["metadata"]["annotations"] == {"example.nebius.ai/keep": "true"}
+    assert required_pvs[0]["spec"]["claimRef"]["name"] == "controller-spool-controller-0"
+    assert "uid" not in required_pvs[0]["spec"]["claimRef"]
+    assert "resourceVersion" not in required_pvs[0]["spec"]["claimRef"]
+    assert required_pvcs[0]["kind"] == "PersistentVolumeClaim"
+    assert required_pvcs[0]["metadata"]["namespace"] == "soperator"
+    assert required_pvcs[0]["metadata"]["annotations"] == {"example.nebius.ai/keep": "true"}
+    assert required_pvcs[0]["spec"]["volumeName"] == "pv-controller-spool"
+
+
+def test_soperator_backup_fails_when_required_recreation_material_missing(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    kubernetes_dir = tmp_path / "kubernetes"
+    kubernetes_dir.mkdir()
+    required_items = _required_recreation_items()
+    required_items["secrets"] = [
+        item
+        for item in required_items["secrets"]
+        if item["metadata"]["name"] != "mariadb-root"
+    ]
+    for label, items in required_items.items():
+        (kubernetes_dir / f"{label}.json").write_text(
+            json.dumps({"items": items}),
+            encoding="utf-8",
+        )
+    (kubernetes_dir / "services.json").write_text(json.dumps({"items": []}), encoding="utf-8")
+
+    def fake_kubectl_cluster(
+        args: list[str],
+        **_kwargs: Any,
+    ) -> cli._SoperatorUpgradeCommandResult:
+        if args[:2] == ["get", "persistentvolumes"]:
+            return _command_result(args, _kubernetes_list(_required_recreation_pvs()[:1]))
+        raise AssertionError(f"unexpected cluster kubectl args: {args}")
+
+    def fake_kubectl(
+        namespace: str,
+        args: list[str],
+        **_kwargs: Any,
+    ) -> cli._SoperatorUpgradeCommandResult:
+        if namespace == "flux-system":
+            return _command_result(args, returncode=1, stderr="NotFound")
+        assert namespace == "soperator"
+        return _command_result(args, returncode=1, stderr="NotFound")
+
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_kubectl_cluster", fake_kubectl_cluster)
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_kubectl", fake_kubectl)
+
+    try:
+        cli._soperator_upgrade_collect_recreation_material(
+            namespace="soperator",
+            output_dir=tmp_path / "recreation",
+            kubernetes_dir=kubernetes_dir,
+        )
+    except RuntimeError as exc:
+        assert "PersistentVolume/pv-accounting" in str(exc)
+        assert "Secret/mariadb-root" in str(exc)
+    else:  # pragma: no cover - assertion guard
+        raise AssertionError("backup accepted missing required recreation secret")
 
 
 def test_soperator_backup_allows_missing_accounting_db(
@@ -419,22 +619,21 @@ def test_soperator_backup_allows_missing_accounting_db(
         if args[:1] == ["get"]:
             resource = args[1]
             items_by_resource: dict[str, list[dict[str, Any]]] = {
-                "secrets": [
-                    {
-                        "apiVersion": "v1",
-                        "kind": "Secret",
-                        "metadata": {"name": "slurm-secret"},
-                        "data": {"password": "c2VjcmV0"},
-                    }
-                ],
-                "configmaps": [],
+                **_required_recreation_items(),
                 "services": [],
                 "deployments.apps": [],
-                "slurmclusters": [],
                 "pods": [],
             }
             return _command_result(args, _kubernetes_list(items_by_resource.get(resource, [])))
         raise AssertionError(f"unexpected kubectl args: {args}")
+
+    def fake_kubectl_cluster(
+        args: list[str],
+        **_kwargs: Any,
+    ) -> cli._SoperatorUpgradeCommandResult:
+        if args[:2] == ["get", "persistentvolumes"]:
+            return _command_result(args, _kubernetes_list(_required_recreation_pvs()))
+        raise AssertionError(f"unexpected cluster kubectl args: {args}")
 
     def fake_login_command(
         namespace: str,
@@ -454,6 +653,7 @@ def test_soperator_backup_allows_missing_accounting_db(
         return _command_result(["login", command], "snapshot\n")
 
     monkeypatch.setattr(cli, "_run_soperator_upgrade_kubectl", fake_kubectl)
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_kubectl_cluster", fake_kubectl_cluster)
     monkeypatch.setattr(
         cli,
         "_run_soperator_upgrade_process",
@@ -505,10 +705,12 @@ def test_soperator_backup_recreation_material_records_pv_reclaim_warnings(
 ) -> None:
     kubernetes_dir = tmp_path / "kubernetes"
     kubernetes_dir.mkdir()
+    required_items = _required_recreation_items()
     (kubernetes_dir / "persistentvolumeclaims.json").write_text(
         json.dumps(
             {
                 "items": [
+                    *required_items["persistentvolumeclaims"],
                     {
                         "metadata": {"name": "image-storage-worker-0"},
                         "spec": {"volumeName": "pv-worker-0"},
@@ -516,6 +718,22 @@ def test_soperator_backup_recreation_material_records_pv_reclaim_warnings(
                 ]
             }
         ),
+        encoding="utf-8",
+    )
+    (kubernetes_dir / "secrets.json").write_text(
+        json.dumps({"items": required_items["secrets"]}),
+        encoding="utf-8",
+    )
+    (kubernetes_dir / "configmaps.json").write_text(
+        json.dumps({"items": required_items["configmaps"]}),
+        encoding="utf-8",
+    )
+    (kubernetes_dir / "slurmclusters.json").write_text(
+        json.dumps({"items": required_items["slurmclusters"]}),
+        encoding="utf-8",
+    )
+    (kubernetes_dir / "services.json").write_text(
+        json.dumps({"items": []}),
         encoding="utf-8",
     )
 
@@ -529,6 +747,7 @@ def test_soperator_backup_recreation_material_records_pv_reclaim_warnings(
             json.dumps(
                 {
                     "items": [
+                        *_required_recreation_pvs(),
                         {
                             "metadata": {"name": "pv-worker-0"},
                             "spec": {
@@ -597,6 +816,34 @@ def test_soperator_backup_uses_portable_wckey_snapshot_fields(
     assert discovery["commands"]["sacctmgr_wckeys"]["returncode"] == 0
     assert "sacctmgr -nP show wckey format=Cluster,User,WCKey" in commands
     assert all("show wckey format=Cluster,Account,User,WCKey" not in command for command in commands)
+
+
+def test_soperator_backup_derives_sacctmgr_dump_cluster_from_slurm_conf(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    commands: list[str] = []
+
+    def fake_login_command(
+        namespace: str,
+        command: str,
+        **_kwargs: Any,
+    ) -> cli._SoperatorUpgradeCommandResult:
+        assert namespace == "soperator"
+        commands.append(command)
+        if command.startswith("cat ${SLURM_CONF"):
+            return _command_result(["login", command], "ClusterName=prod-cluster\n")
+        return _command_result(["login", command], "snapshot\n")
+
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_login_command", fake_login_command)
+
+    cli._soperator_upgrade_collect_slurm_snapshots(
+        namespace="soperator",
+        output_dir=tmp_path / "slurm",
+    )
+
+    assert "sacctmgr dump cluster=prod-cluster" in commands
+    assert "sacctmgr dump cluster=soperator" not in commands
 
 
 def test_soperator_backup_resolves_target_mariadb_pod(monkeypatch) -> None:
@@ -788,6 +1035,7 @@ def _write_restore_archive(
     *,
     corrupt_checksum: bool = False,
     apply_order: list[str] | None = None,
+    cluster_apply_order: list[str] | None = None,
     accounting_dump: str = "accounting/slurm-accounting-db.sql",
     extra_files: dict[str, str] | None = None,
     omit_checksums: set[str] | None = None,
@@ -795,7 +1043,11 @@ def _write_restore_archive(
     root = tmp_path / "restore-root"
     (root / "kubernetes" / "restore").mkdir(parents=True)
     (root / "accounting").mkdir()
+    (root / "recreation").mkdir()
     apply_paths = apply_order or ["kubernetes/restore/configmaps.yaml"]
+    required_recreation_paths = [
+        path for path in apply_paths if path.startswith("recreation/restore/")
+    ]
     files = {
         "backup-manifest.json": json.dumps(
             {
@@ -814,7 +1066,29 @@ def _write_restore_archive(
                 "target_ref": "mk8s",
                 "namespace": "soperator",
                 "apply_order": apply_paths,
+                "cluster_apply_order": cluster_apply_order or [],
+                "restore_material": {
+                    "kubernetes_apply": apply_paths,
+                    "kubernetes_cluster_apply": cluster_apply_order or [],
+                    "recreation_coverage": "recreation/recreation-coverage.json",
+                },
+                "recreation_runbook": {
+                    "coverage": "recreation/recreation-coverage.json",
+                },
                 "accounting_db": {"dump": accounting_dump},
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        "recreation/recreation-coverage.json": json.dumps(
+            {
+                "schema": "nebius-cxcli-soperator-recreation-coverage/v1",
+                "items": {
+                    "required_recreation_material": {
+                        "status": "collected",
+                        "paths": required_recreation_paths,
+                    },
+                },
             },
             sort_keys=True,
         )
@@ -938,6 +1212,97 @@ def test_soperator_restore_execute_applies_manifests_and_imports_db(
     )
 
 
+def test_soperator_restore_applies_cluster_pvs_before_prebound_pvcs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    archive_path = _write_restore_archive(
+        tmp_path,
+        apply_order=[
+            "recreation/restore/persistentvolumes.yaml",
+            "recreation/restore/persistentvolumeclaims.yaml",
+            "kubernetes/restore/configmaps.yaml",
+        ],
+        cluster_apply_order=["recreation/restore/persistentvolumes.yaml"],
+        extra_files={
+            "recreation/restore/persistentvolumes.yaml": (
+                "apiVersion: v1\n"
+                "kind: PersistentVolume\n"
+                "metadata:\n"
+                "  name: pv-controller-spool\n"
+                "spec:\n"
+                "  claimRef:\n"
+                "    name: controller-spool-controller-0\n"
+                "    namespace: soperator\n"
+            ),
+            "recreation/restore/persistentvolumeclaims.yaml": (
+                "apiVersion: v1\n"
+                "kind: PersistentVolumeClaim\n"
+                "metadata:\n"
+                "  name: controller-spool-controller-0\n"
+                "  namespace: soperator\n"
+                "spec:\n"
+                "  volumeName: pv-controller-spool\n"
+            ),
+        },
+    )
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def fake_cluster(args: list[str], **_kwargs: Any) -> cli._SoperatorUpgradeCommandResult:
+        calls.append(("cluster", tuple(args)))
+        if args == ["get", "PersistentVolume/pv-controller-spool"]:
+            return _command_result(args, returncode=1)
+        if args[:2] == ["get", "namespace"]:
+            return _command_result(args, returncode=1)
+        if args[:2] == ["apply", "-f"]:
+            docs = list(yaml.safe_load_all(Path(args[2]).read_text(encoding="utf-8")))
+            assert docs[0]["kind"] == "PersistentVolume"
+            assert "namespace" not in docs[0]["metadata"]
+            assert docs[0]["spec"]["claimRef"]["namespace"] == "restored"
+        return _command_result(args)
+
+    def fake_kubectl(
+        namespace: str,
+        args: list[str],
+        **_kwargs: Any,
+    ) -> cli._SoperatorUpgradeCommandResult:
+        calls.append(("namespaced", tuple(args)))
+        if args[:2] == ["apply", "-f"] and args[2].endswith("persistentvolumeclaims.yaml"):
+            docs = list(yaml.safe_load_all(Path(args[2]).read_text(encoding="utf-8")))
+            assert namespace == "restored"
+            assert docs[0]["metadata"]["namespace"] == "restored"
+            assert docs[0]["spec"]["volumeName"] == "pv-controller-spool"
+        return _command_result(args)
+
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_kubectl_cluster", fake_cluster)
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_kubectl", fake_kubectl)
+
+    cli._run_soperator_restore_archive(
+        archive_path=archive_path,
+        target_ref="mk8s",
+        namespace="restored",
+        kube_context="ctx",
+        dry_run=False,
+        approve=True,
+        restore_accounting_db=False,
+    )
+
+    cluster_apply_index = next(
+        index
+        for index, call in enumerate(calls)
+        if call[0] == "cluster" and call[1][:2] == ("apply", "-f")
+    )
+    pvc_apply_index = next(
+        index
+        for index, call in enumerate(calls)
+        if call[0] == "namespaced"
+        and call[1][:2] == ("apply", "-f")
+        and call[1][2].endswith("persistentvolumeclaims.yaml")
+    )
+    assert cluster_apply_index < pvc_apply_index
+    assert calls[0] == ("cluster", ("get", "PersistentVolume/pv-controller-spool"))
+
+
 def test_soperator_restore_rejects_unchecked_restore_plan_member(tmp_path: Path) -> None:
     archive_path = _write_restore_archive(
         tmp_path,
@@ -964,6 +1329,43 @@ def test_soperator_restore_rejects_unchecked_restore_plan_member(tmp_path: Path)
         assert "unchecked archive member" in str(exc)
     else:  # pragma: no cover - assertion guard
         raise AssertionError("restore accepted an unchecked restore-plan member")
+
+
+def test_soperator_restore_rejects_incomplete_recreation_coverage(tmp_path: Path) -> None:
+    archive_path = _write_restore_archive(
+        tmp_path,
+        extra_files={
+            "recreation/recreation-coverage.json": json.dumps(
+                {
+                    "schema": "nebius-cxcli-soperator-recreation-coverage/v1",
+                    "items": {
+                        "required_recreation_material": {
+                            "status": "missing",
+                            "detail": "PersistentVolume/pv-accounting",
+                        },
+                    },
+                },
+                sort_keys=True,
+            )
+            + "\n",
+        },
+    )
+
+    try:
+        cli._run_soperator_restore_archive(
+            archive_path=archive_path,
+            target_ref="mk8s",
+            namespace=None,
+            kube_context=None,
+            dry_run=True,
+            approve=False,
+            restore_accounting_db=True,
+        )
+    except RuntimeError as exc:
+        assert "required_recreation_material=missing" in str(exc)
+        assert "PersistentVolume/pv-accounting" in str(exc)
+    else:  # pragma: no cover - assertion guard
+        raise AssertionError("restore accepted incomplete recreation coverage")
 
 
 def test_soperator_restore_rejects_escaping_restore_plan_member(tmp_path: Path) -> None:

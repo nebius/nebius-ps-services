@@ -39,6 +39,14 @@ All notable changes to this project are tracked here. This changelog follows
   path, defaults non-TTY upgrade job handling to `fail` unless a disruptive
   policy is selected explicitly, and extends Soperator backup archives with
   recreation coverage evidence for new/replacement-cluster runbooks.
+- Changed managed and external Soperator backup/restore archives to fail fast
+  when required controller/accounting recreation material is missing, record
+  sanitized retained PV/PVC restore manifests that preserve PV `claimRef` and
+  PVC `volumeName`, and restore those bindings before the remaining namespaced
+  resources on new empty target clusters after validating archive checksums,
+  recreation coverage, and required CRD/API availability. Slurm accounting dumps
+  now derive the cluster name from live `slurm.conf`; VM/NFS retention and final
+  Terraform convergence remain operator runbook steps.
 - Changed Nebius SDK operator-auth precedence so the matching Codex agent
   `NEBIUS_AUTH_CREDENTIALS_FILE`/`NEBIUS_PROFILE` pair with an existing
   credential file wins over a static `NEBIUS_IAM_TOKEN`, keeping long-running

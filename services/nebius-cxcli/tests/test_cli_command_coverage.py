@@ -23113,6 +23113,9 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--backup-dir" in normalized_managed_soperator_backup_help
     assert "--kube-context" in normalized_managed_soperator_backup_help
     assert "raw Kubernetes Secrets" in normalized_managed_soperator_backup_help
+    assert "retained controller/accounting PV/PVC restore material" in (
+        normalized_managed_soperator_backup_help
+    )
     assert "--output-dir" in normalized_managed_soperator_discover_help
     assert "--redaction" in normalized_managed_soperator_discover_help
     assert "soperator-discovery/<target>/manifest.json" in (
@@ -23132,6 +23135,12 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--restore-accounting-db" in normalized_managed_soperator_restore_help
     assert "Restore is dry-run by default" in normalized_managed_soperator_restore_help
     assert "--kube-context replacement-cluster --execute --approve" in (
+        normalized_managed_soperator_restore_help
+    )
+    assert "restores retained controller/accounting PV/PVC bindings" in (
+        normalized_managed_soperator_restore_help
+    )
+    assert "VM/NFS retention and final Terraform convergence remain operator runbook steps" in (
         normalized_managed_soperator_restore_help
     )
     assert "--target mk8s --dry-run" in normalized_managed_soperator_backup_help
@@ -23250,6 +23259,9 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "internal uses the private endpoint" in normalized_ext_soperator_backup_help
     assert "preexisting private network reachability" in normalized_ext_soperator_backup_help
     assert "external-soperator-backup-" in normalized_ext_soperator_backup_help
+    assert "retained controller/accounting PV/PVC restore material" in (
+        normalized_ext_soperator_backup_help
+    )
     assert "--cluster-id" in normalized_ext_soperator_discover_help
     assert "--client-name" in normalized_ext_soperator_discover_help
     assert "--project-id" in normalized_ext_soperator_discover_help
@@ -23294,6 +23306,12 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     )
     assert "not an in-place rollback" in normalized_ext_soperator_restore_help
     assert "original/source cluster or an existing Soperator namespace" in (
+        normalized_ext_soperator_restore_help
+    )
+    assert "restores retained controller/accounting PV/PVC bindings" in (
+        normalized_ext_soperator_restore_help
+    )
+    assert "VM/NFS retention and final Terraform convergence remain operator runbook steps" in (
         normalized_ext_soperator_restore_help
     )
     assert "--project-id" in normalized_ext_soperator_scale_down_help

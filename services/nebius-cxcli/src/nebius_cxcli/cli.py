@@ -2503,6 +2503,8 @@ class _SoperatorBackupKubernetesMaterial:
     raw_paths: tuple[str, ...]
     restore_paths: tuple[str, ...]
     resource_counts: dict[str, int]
+    recreation_restore_paths: tuple[str, ...] = ()
+    required_recreation_warnings: tuple[str, ...] = ()
     recreation_paths: tuple[str, ...] = ()
     recreation_coverage_path: str = ""
     recreation_coverage: Mapping[str, Any] = field(default_factory=dict)
@@ -2619,6 +2621,33 @@ _SOPERATOR_NODESET_LABEL_KEYS = (
 )
 _SOPERATOR_BACKUP_REQUIRED_KUBERNETES_RESOURCES = frozenset(
     {"slurmclusters", "configmaps", "secrets"}
+)
+_SOPERATOR_BACKUP_REQUIRED_RECREATION_PVCS = (
+    "controller-spool-controller-0",
+    "storage-soperator-acct-db-0",
+)
+_SOPERATOR_BACKUP_REQUIRED_RECREATION_SECRETS = (
+    "mariadb-password",
+    "mariadb-root",
+    "soperator-sshd-keys",
+    "soperator-slurmdbd-configs",
+    "soperator-acct-db-metrics-password",
+    "soperator-acct-db-metrics-config",
+)
+_SOPERATOR_BACKUP_REQUIRED_RECREATION_CONFIGMAPS = (
+    "soperator-slurm-configs",
+    "slurm-scripts",
+)
+_SOPERATOR_BACKUP_SERVER_OWNED_METADATA_ANNOTATIONS = frozenset(
+    {
+        "kubectl.kubernetes.io/last-applied-configuration",
+        "pv.kubernetes.io/bind-completed",
+        "pv.kubernetes.io/bound-by-controller",
+        "pv.kubernetes.io/provisioned-by",
+        "volume.beta.kubernetes.io/storage-provisioner",
+        "volume.kubernetes.io/selected-node",
+        "volume.kubernetes.io/storage-provisioner",
+    }
 )
 _SOPERATOR_BACKUP_KUBERNETES_RESOURCES: tuple[tuple[str, str], ...] = (
     ("serviceaccounts", "serviceaccounts"),
@@ -4781,6 +4810,17 @@ def _soperator_upgrade_write_json(path: Path, payload: Any) -> None:
     _write_text_atomic(path, _soperator_upgrade_json_dumps(payload) + "\n")
 
 
+def _soperator_backup_clean_metadata_annotations(annotations: Any) -> dict[str, Any]:
+    if not isinstance(annotations, Mapping):
+        return {}
+    cleaned = {
+        str(key): copy.deepcopy(to_plain_data(value))
+        for key, value in annotations.items()
+        if str(key) not in _SOPERATOR_BACKUP_SERVER_OWNED_METADATA_ANNOTATIONS
+    }
+    return cleaned
+
+
 def _soperator_backup_clean_metadata(
     metadata: Mapping[str, Any],
     *,
@@ -4796,15 +4836,27 @@ def _soperator_backup_clean_metadata(
     labels = metadata.get("labels")
     if isinstance(labels, Mapping) and labels:
         cleaned["labels"] = copy.deepcopy(to_plain_data(labels))
-    annotations = metadata.get("annotations")
-    if isinstance(annotations, Mapping) and annotations:
-        cleaned_annotations = {
-            str(key): copy.deepcopy(to_plain_data(value))
-            for key, value in annotations.items()
-            if str(key) != "kubectl.kubernetes.io/last-applied-configuration"
-        }
-        if cleaned_annotations:
-            cleaned["annotations"] = cleaned_annotations
+    cleaned_annotations = _soperator_backup_clean_metadata_annotations(
+        metadata.get("annotations")
+    )
+    if cleaned_annotations:
+        cleaned["annotations"] = cleaned_annotations
+    return cleaned
+
+
+def _soperator_backup_clean_cluster_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    cleaned: dict[str, Any] = {}
+    name = _non_empty_text(metadata.get("name"))
+    if name:
+        cleaned["name"] = name
+    labels = metadata.get("labels")
+    if isinstance(labels, Mapping) and labels:
+        cleaned["labels"] = copy.deepcopy(to_plain_data(labels))
+    cleaned_annotations = _soperator_backup_clean_metadata_annotations(
+        metadata.get("annotations")
+    )
+    if cleaned_annotations:
+        cleaned["annotations"] = cleaned_annotations
     return cleaned
 
 
@@ -4842,11 +4894,54 @@ def _soperator_backup_sanitized_resource_for_restore(
                 if isinstance(port, dict):
                     port.pop("nodePort", None)
     elif kind == "PersistentVolumeClaim" and isinstance(spec, dict):
+        name = _soperator_backup_metadata_name(sanitized)
+        if name in _SOPERATOR_BACKUP_REQUIRED_RECREATION_PVCS:
+            return {}
         spec.pop("volumeName", None)
     elif kind == "ServiceAccount":
         sanitized.pop("secrets", None)
         if isinstance(sanitized.get("metadata"), dict):
             sanitized["metadata"].pop("secrets", None)
+    return sanitized
+
+
+def _soperator_backup_sanitized_persistentvolume_for_recreation_restore(
+    resource: Mapping[str, Any],
+) -> dict[str, Any]:
+    sanitized = copy.deepcopy(to_plain_data(resource))
+    if not isinstance(sanitized, dict):
+        return {}
+    metadata = sanitized.get("metadata")
+    sanitized["metadata"] = (
+        _soperator_backup_clean_cluster_metadata(metadata)
+        if isinstance(metadata, Mapping)
+        else {}
+    )
+    sanitized.pop("status", None)
+    spec = sanitized.get("spec")
+    if isinstance(spec, dict):
+        claim_ref = spec.get("claimRef")
+        if isinstance(claim_ref, dict):
+            claim_ref.pop("uid", None)
+            claim_ref.pop("resourceVersion", None)
+    return sanitized
+
+
+def _soperator_backup_sanitized_pvc_for_recreation_restore(
+    resource: Mapping[str, Any],
+    *,
+    namespace: str,
+) -> dict[str, Any]:
+    sanitized = copy.deepcopy(to_plain_data(resource))
+    if not isinstance(sanitized, dict):
+        return {}
+    metadata = sanitized.get("metadata")
+    sanitized["metadata"] = (
+        _soperator_backup_clean_metadata(metadata, namespace=namespace)
+        if isinstance(metadata, Mapping)
+        else {"namespace": namespace}
+    )
+    sanitized.pop("status", None)
     return sanitized
 
 
@@ -5115,6 +5210,7 @@ def _soperator_upgrade_collect_recreation_material(
 
     pvc_payload = _soperator_backup_load_json(kubernetes_dir / "persistentvolumeclaims.json")
     pvc_items = _soperator_backup_json_items(pvc_payload)
+    pvc_by_name = {_soperator_backup_metadata_name(item): item for item in pvc_items}
     volume_names = sorted(
         {
             volume_name
@@ -5194,6 +5290,119 @@ def _soperator_upgrade_collect_recreation_material(
             status="not_applicable",
             detail="no bound PVC volumeName values were present in the backup",
         )
+
+    required_restore_dir = output_dir / "restore"
+    required_restore_dir.mkdir(parents=True, exist_ok=True)
+    pv_by_name = {_soperator_backup_metadata_name(item): item for item in pv_items}
+    secret_items = _soperator_backup_json_items(
+        _soperator_backup_load_json(kubernetes_dir / "secrets.json")
+    )
+    configmap_items = _soperator_backup_json_items(
+        _soperator_backup_load_json(kubernetes_dir / "configmaps.json")
+    )
+    slurmcluster_items = _soperator_backup_json_items(
+        _soperator_backup_load_json(kubernetes_dir / "slurmclusters.json")
+    )
+    secret_names = {_soperator_backup_metadata_name(item) for item in secret_items}
+    configmap_names = {_soperator_backup_metadata_name(item) for item in configmap_items}
+    missing_required: list[str] = []
+    required_pvcs: list[dict[str, Any]] = []
+    required_pvs: list[dict[str, Any]] = []
+    for pvc_name in _SOPERATOR_BACKUP_REQUIRED_RECREATION_PVCS:
+        pvc = pvc_by_name.get(pvc_name)
+        if pvc is None:
+            missing_required.append(f"PersistentVolumeClaim/{pvc_name}")
+            continue
+        required_pvcs.append(pvc)
+        volume_name = _soperator_backup_pvc_volume_name(pvc)
+        if not volume_name:
+            missing_required.append(f"PersistentVolumeClaim/{pvc_name}.spec.volumeName")
+            continue
+        pv = pv_by_name.get(volume_name)
+        if pv is None:
+            missing_required.append(f"PersistentVolume/{volume_name}")
+            continue
+        required_pvs.append(pv)
+    for secret_name in _SOPERATOR_BACKUP_REQUIRED_RECREATION_SECRETS:
+        if secret_name not in secret_names:
+            missing_required.append(f"Secret/{secret_name}")
+    for configmap_name in _SOPERATOR_BACKUP_REQUIRED_RECREATION_CONFIGMAPS:
+        if configmap_name not in configmap_names:
+            missing_required.append(f"ConfigMap/{configmap_name}")
+    if not slurmcluster_items:
+        missing_required.append("SlurmCluster")
+
+    required_warnings: list[str] = []
+    for pv in required_pvs:
+        policy = _soperator_backup_pv_reclaim_policy(pv)
+        if policy and policy != "Retain":
+            required_warnings.append(
+                "Required recreation PersistentVolume "
+                f"{_soperator_backup_metadata_name(pv)} uses reclaim policy {policy}; "
+                "patch it to Retain before destroying the source cluster."
+            )
+
+    required_restore_paths: tuple[str, ...] = ()
+    if missing_required:
+        _soperator_backup_record_coverage(
+            coverage,
+            "required_recreation_material",
+            status="missing",
+            detail=", ".join(missing_required),
+            warnings=required_warnings,
+        )
+    else:
+        pv_restore_path = required_restore_dir / "persistentvolumes.yaml"
+        pvc_restore_path = required_restore_dir / "persistentvolumeclaims.yaml"
+        pv_restore_path.write_text(
+            _soperator_backup_restore_manifest_text(
+                [
+                    _soperator_backup_sanitized_persistentvolume_for_recreation_restore(pv)
+                    for pv in required_pvs
+                ]
+            ),
+            encoding="utf-8",
+        )
+        pvc_restore_path.write_text(
+            _soperator_backup_restore_manifest_text(
+                [
+                    _soperator_backup_sanitized_pvc_for_recreation_restore(
+                        pvc,
+                        namespace=namespace,
+                    )
+                    for pvc in required_pvcs
+                ]
+            ),
+            encoding="utf-8",
+        )
+        required_restore_paths = (
+            "recreation/restore/persistentvolumes.yaml",
+            "recreation/restore/persistentvolumeclaims.yaml",
+        )
+        included.extend(required_restore_paths)
+        _soperator_backup_record_coverage(
+            coverage,
+            "required_recreation_material",
+            status="collected",
+            paths=required_restore_paths,
+            warnings=required_warnings,
+        )
+
+    services_items = _soperator_backup_json_items(
+        _soperator_backup_load_json(kubernetes_dir / "services.json")
+    )
+    login_services = [
+        _soperator_backup_metadata_name(item)
+        for item in services_items
+        if "login" in _soperator_backup_metadata_name(item)
+    ]
+    _soperator_backup_record_coverage(
+        coverage,
+        "login_service_evidence",
+        status="collected" if login_services else "skipped",
+        paths=("kubernetes/services.json",),
+        detail=", ".join(login_services) if login_services else "no login service was present",
+    )
 
     flux_paths, flux_status, flux_detail = _soperator_backup_collect_flux_configmaps(
         output_dir=output_dir,
@@ -5322,6 +5531,11 @@ def _soperator_upgrade_collect_recreation_material(
     coverage_path = output_dir / "recreation-coverage.json"
     _soperator_upgrade_write_json(coverage_path, coverage)
     included.append("recreation/recreation-coverage.json")
+    if missing_required:
+        raise RuntimeError(
+            "Soperator backup missing required recreation material: "
+            + ", ".join(missing_required)
+        )
     return tuple(included), coverage
 
 
@@ -5358,6 +5572,19 @@ def _soperator_upgrade_collect_helm_values(
     return ("soperator/helm-values.json",)
 
 
+def _soperator_slurm_cluster_name_from_config(value: str) -> str:
+    for line in value.splitlines():
+        raw = line.strip()
+        if not raw or raw.startswith("#") or "=" not in raw:
+            continue
+        key, candidate = raw.split("=", maxsplit=1)
+        if key.strip().lower() == "clustername":
+            name = candidate.strip().split()[0] if candidate.strip() else ""
+            if name:
+                return name
+    return "soperator"
+
+
 def _soperator_upgrade_collect_slurm_snapshots(
     *,
     namespace: str,
@@ -5381,7 +5608,6 @@ def _soperator_upgrade_collect_slurm_snapshots(
         "pending-held-job-ids.txt": "squeue -h -t PD -o '%i|%T|%R'",
     }
     accounting_commands = {
-        "sacctmgr-dump.cfg": "sacctmgr dump cluster=soperator",
         "sacctmgr-clusters.txt": "sacctmgr -nP show cluster format=Cluster,ControlHost,ControlPort,RPC,Share",
         "sacctmgr-accounts.txt": "sacctmgr -nP show account format=Account,Description,Organization",
         "sacctmgr-users.txt": "sacctmgr -nP show user format=User,DefaultAccount,AdminLevel",
@@ -5393,6 +5619,7 @@ def _soperator_upgrade_collect_slurm_snapshots(
         "sacctmgr-wckeys.txt": "sacctmgr -nP show wckey format=Cluster,User,WCKey",
     }
     included: list[str] = []
+    slurm_conf = ""
     for filename, command in slurm_commands.items():
         result = _run_soperator_upgrade_login_command(
             namespace,
@@ -5402,6 +5629,13 @@ def _soperator_upgrade_collect_slurm_snapshots(
         )
         (output_dir / filename).write_text(result.stdout, encoding="utf-8")
         included.append(f"slurm/{filename}")
+        if filename == "slurm-conf.txt":
+            slurm_conf = result.stdout
+    cluster_name = _soperator_slurm_cluster_name_from_config(slurm_conf)
+    accounting_commands = {
+        "sacctmgr-dump.cfg": f"sacctmgr dump cluster={shlex.quote(cluster_name)}",
+        **accounting_commands,
+    }
     for filename, command in accounting_commands.items():
         result = _run_soperator_upgrade_login_command(
             namespace,
@@ -5698,9 +5932,12 @@ def _soperator_upgrade_manifest_payload(
         },
         "recreation_runbook_material": {
             "raw_paths": list(kubernetes_material.recreation_paths),
+            "restore_paths": list(kubernetes_material.recreation_restore_paths),
             "coverage_path": kubernetes_material.recreation_coverage_path,
             "coverage": copy.deepcopy(to_plain_data(kubernetes_material.recreation_coverage)),
-            "pv_retain_bindings_are_manual": True,
+            "retained_pv_bindings_are_command_restored": bool(
+                kubernetes_material.recreation_restore_paths
+            ),
         },
     }
 
@@ -5782,11 +6019,31 @@ def _create_restore_capable_soperator_upgrade_backup(
                 kubernetes_dir=root / "kubernetes",
                 kube_context=kube_context,
             )
+            required_recreation = recreation_coverage.get("items", {}).get(
+                "required_recreation_material",
+                {},
+            )
+            recreation_restore_paths = (
+                tuple(
+                    str(path)
+                    for path in required_recreation.get("paths", ())
+                    if str(path).startswith("recreation/restore/")
+                )
+                if isinstance(required_recreation, Mapping)
+                else ()
+            )
+            required_recreation_warnings = tuple(
+                str(item)
+                for item in recreation_coverage.get("warnings", ())
+                if str(item).strip()
+            )
             kubernetes_material = _SoperatorBackupKubernetesMaterial(
                 included_paths=kubernetes_material.included_paths,
                 raw_paths=kubernetes_material.raw_paths,
                 restore_paths=kubernetes_material.restore_paths,
                 resource_counts=kubernetes_material.resource_counts,
+                recreation_restore_paths=recreation_restore_paths,
+                required_recreation_warnings=required_recreation_warnings,
                 recreation_paths=recreation_paths,
                 recreation_coverage_path="recreation/recreation-coverage.json",
                 recreation_coverage=recreation_coverage,
@@ -5869,6 +6126,32 @@ def _create_restore_capable_soperator_upgrade_backup(
                 kubernetes_material=kubernetes_material,
                 source_k8s_version=source_k8s_version,
             )
+            cluster_apply_paths = [
+                path
+                for path in kubernetes_material.recreation_restore_paths
+                if Path(path).name == "persistentvolumes.yaml"
+            ]
+            prebound_pvc_apply_paths = [
+                path
+                for path in kubernetes_material.recreation_restore_paths
+                if Path(path).name == "persistentvolumeclaims.yaml"
+            ]
+            required_config_apply_paths = [
+                path
+                for path in kubernetes_material.restore_paths
+                if Path(path).name in {"secrets.yaml", "configmaps.yaml"}
+            ]
+            remaining_apply_paths = [
+                path
+                for path in kubernetes_material.restore_paths
+                if path not in required_config_apply_paths
+            ]
+            apply_order = [
+                *cluster_apply_paths,
+                *required_config_apply_paths,
+                *prebound_pvc_apply_paths,
+                *remaining_apply_paths,
+            ]
             restore_plan = {
                 "schema": "nebius-cxcli-soperator-restore-plan/v1",
                 "target_ref": target.target_ref,
@@ -5878,6 +6161,8 @@ def _create_restore_capable_soperator_upgrade_backup(
                     "config_yaml": "source/config.yaml",
                     "kubernetes_raw": list(kubernetes_material.raw_paths),
                     "kubernetes_apply": list(kubernetes_material.restore_paths),
+                    "kubernetes_cluster_apply": cluster_apply_paths,
+                    "recreation_apply": list(kubernetes_material.recreation_restore_paths),
                     "recreation_raw": list(kubernetes_material.recreation_paths),
                     "recreation_coverage": kubernetes_material.recreation_coverage_path,
                     "soperator_resources": [
@@ -5888,7 +6173,8 @@ def _create_restore_capable_soperator_upgrade_backup(
                     ],
                     "accounting_db_dump": accounting_dump_relative,
                 },
-                "apply_order": list(kubernetes_material.restore_paths),
+                "apply_order": apply_order,
+                "cluster_apply_order": cluster_apply_paths,
                 "accounting_db": {
                     "status": accounting_verification.get("status", "collected"),
                     "dump": accounting_dump_relative,
@@ -5896,11 +6182,15 @@ def _create_restore_capable_soperator_upgrade_backup(
                     "chart_managed_mariadb_only": True,
                 },
                 "recreation_runbook": {
-                    "retained_pv_bindings_are_not_auto_restored": True,
+                    "retained_pv_bindings_are_command_restored": bool(
+                        kubernetes_material.recreation_restore_paths
+                    ),
                     "pv_reclaim_policy_evidence": (
                         "recreation/bound-persistentvolume-reclaim-policies.json"
                     ),
+                    "required_recreation_material": "recreation/restore",
                     "coverage": kubernetes_material.recreation_coverage_path,
+                    "warnings": list(kubernetes_material.required_recreation_warnings),
                 },
                 "security": {
                     "contains_raw_kubernetes_secrets": True,
@@ -6018,6 +6308,71 @@ def _soperator_restore_accounting_dump_path(restore_plan: Mapping[str, Any]) -> 
     return dump_relative
 
 
+def _soperator_restore_recreation_coverage_path(restore_plan: Mapping[str, Any]) -> str:
+    restore_material = restore_plan.get("restore_material")
+    if isinstance(restore_material, Mapping):
+        path = _non_empty_text(restore_material.get("recreation_coverage"))
+        if path:
+            return path
+    recreation_runbook = restore_plan.get("recreation_runbook")
+    if isinstance(recreation_runbook, Mapping):
+        return _non_empty_text(recreation_runbook.get("coverage"))
+    return ""
+
+
+def _soperator_restore_validate_recreation_coverage(
+    root: Path,
+    restore_plan: Mapping[str, Any],
+    checksums: Mapping[str, str],
+) -> None:
+    coverage_relative = _soperator_restore_recreation_coverage_path(restore_plan)
+    if not coverage_relative:
+        raise RuntimeError("Soperator restore plan is missing recreation coverage metadata.")
+    coverage_path = _soperator_restore_member_path(
+        root,
+        coverage_relative,
+        checksums=checksums,
+    )
+    try:
+        coverage = json.loads(coverage_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Soperator backup archive has invalid JSON at {coverage_relative}."
+        ) from exc
+    if not isinstance(coverage, Mapping):
+        raise RuntimeError(
+            f"Soperator backup archive {coverage_relative} must contain a JSON object."
+        )
+    items = coverage.get("items")
+    required = (
+        items.get("required_recreation_material") if isinstance(items, Mapping) else None
+    )
+    if not isinstance(required, Mapping):
+        raise RuntimeError(
+            "Soperator restore recreation coverage is missing required_recreation_material."
+        )
+    status = _non_empty_text(required.get("status"))
+    if status != "collected":
+        detail = _non_empty_text(required.get("detail"))
+        raise RuntimeError(
+            "Soperator restore recreation coverage is not complete: "
+            f"required_recreation_material={status or 'unknown'}"
+            + (f" ({detail})" if detail else "")
+        )
+    apply_paths = set(_soperator_restore_apply_paths(restore_plan))
+    required_paths = required.get("paths")
+    missing_apply_paths = [
+        str(path)
+        for path in required_paths
+        if str(path or "").strip() and str(path) not in apply_paths
+    ] if isinstance(required_paths, list) else []
+    if missing_apply_paths:
+        raise RuntimeError(
+            "Soperator restore plan does not apply required recreation material: "
+            + ", ".join(missing_apply_paths)
+        )
+
+
 def _soperator_restore_verify_archive(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     manifest = _soperator_restore_read_json(root, "backup-manifest.json")
     restore_plan = _soperator_restore_read_json(root, "restore-plan.json")
@@ -6049,6 +6404,7 @@ def _soperator_restore_verify_archive(root: Path) -> tuple[dict[str, Any], dict[
             accounting_dump_path,
             checksums=checksums,
         )
+    _soperator_restore_validate_recreation_coverage(root, restore_plan, checksums)
     return manifest, restore_plan
 
 
@@ -6064,6 +6420,18 @@ def _soperator_restore_apply_paths(restore_plan: Mapping[str, Any]) -> tuple[str
     return ()
 
 
+def _soperator_restore_cluster_apply_paths(restore_plan: Mapping[str, Any]) -> tuple[str, ...]:
+    cluster_apply_order = restore_plan.get("cluster_apply_order")
+    if isinstance(cluster_apply_order, list):
+        return tuple(str(item) for item in cluster_apply_order if str(item or "").strip())
+    restore_material = restore_plan.get("restore_material")
+    if isinstance(restore_material, Mapping):
+        apply_paths = restore_material.get("kubernetes_cluster_apply")
+        if isinstance(apply_paths, list):
+            return tuple(str(item) for item in apply_paths if str(item or "").strip())
+    return ()
+
+
 def _soperator_restore_rewrite_namespace(path: Path, namespace: str) -> None:
     raw = path.read_text(encoding="utf-8")
     if not raw.strip():
@@ -6072,6 +6440,13 @@ def _soperator_restore_rewrite_namespace(path: Path, namespace: str) -> None:
     rewritten: list[Mapping[str, Any]] = []
     for document in documents:
         if not isinstance(document, dict):
+            continue
+        if _non_empty_text(document.get("kind")) == "PersistentVolume":
+            spec = document.get("spec")
+            claim_ref = spec.get("claimRef") if isinstance(spec, dict) else None
+            if isinstance(claim_ref, dict):
+                claim_ref["namespace"] = namespace
+            rewritten.append(document)
             continue
         metadata = document.setdefault("metadata", {})
         if isinstance(metadata, dict):
@@ -6105,8 +6480,9 @@ def _soperator_restore_manifest_resource_refs(
     *,
     root: Path,
     restore_plan: Mapping[str, Any],
-) -> tuple[tuple[str, str], ...]:
-    refs: list[tuple[str, str]] = []
+) -> tuple[tuple[str, str, str], ...]:
+    refs: list[tuple[str, str, str]] = []
+    cluster_paths = set(_soperator_restore_cluster_apply_paths(restore_plan))
     for relative_path in _soperator_restore_apply_paths(restore_plan):
         path = _soperator_restore_member_path(root, relative_path, checksums=None)
         raw = path.read_text(encoding="utf-8")
@@ -6119,7 +6495,12 @@ def _soperator_restore_manifest_resource_refs(
             metadata = document.get("metadata")
             name = _non_empty_text(metadata.get("name")) if isinstance(metadata, Mapping) else ""
             if kind and name:
-                refs.append((kind, name))
+                scope = (
+                    "cluster"
+                    if relative_path in cluster_paths or kind == "PersistentVolume"
+                    else "namespaced"
+                )
+                refs.append((scope, kind, name))
     return tuple(refs)
 
 
@@ -6127,17 +6508,25 @@ def _soperator_restore_fail_on_existing_resources(
     *,
     namespace: str,
     kube_context: str | None,
-    refs: Sequence[tuple[str, str]],
+    refs: Sequence[tuple[str, str, str]],
 ) -> None:
     existing: list[str] = []
-    for kind, name in refs:
-        result = _run_soperator_upgrade_kubectl(
-            namespace,
-            ["get", f"{kind}/{name}"],
-            kube_context=kube_context,
-            timeout_seconds=60,
-            check=False,
-        )
+    for scope, kind, name in refs:
+        if scope == "cluster":
+            result = _run_soperator_upgrade_kubectl_cluster(
+                ["get", f"{kind}/{name}"],
+                kube_context=kube_context,
+                timeout_seconds=60,
+                check=False,
+            )
+        else:
+            result = _run_soperator_upgrade_kubectl(
+                namespace,
+                ["get", f"{kind}/{name}"],
+                kube_context=kube_context,
+                timeout_seconds=60,
+                check=False,
+            )
         if result.returncode == 0:
             existing.append(f"{kind}/{name}")
     if existing:
@@ -6149,6 +6538,46 @@ def _soperator_restore_fail_on_existing_resources(
         )
 
 
+def _soperator_restore_validate_api_availability(
+    *,
+    root: Path,
+    restore_plan: Mapping[str, Any],
+    kube_context: str | None,
+) -> None:
+    required_crds = {
+        "SlurmCluster": "slurmclusters.slurm.nebius.ai",
+        "NodeSet": "nodesets.slurm.nebius.ai",
+        "ActiveCheck": "activechecks.slurm.nebius.ai",
+    }
+    kinds: set[str] = set()
+    for relative_path in _soperator_restore_apply_paths(restore_plan):
+        path = _soperator_restore_member_path(root, relative_path, checksums=None)
+        raw = path.read_text(encoding="utf-8")
+        if not raw.strip():
+            continue
+        for document in yaml.safe_load_all(raw):
+            if isinstance(document, Mapping):
+                kind = _non_empty_text(document.get("kind"))
+                if kind in required_crds:
+                    kinds.add(kind)
+    missing: list[str] = []
+    for kind in sorted(kinds):
+        crd = required_crds[kind]
+        result = _run_soperator_upgrade_kubectl_cluster(
+            ["get", f"customresourcedefinition.apiextensions.k8s.io/{crd}"],
+            kube_context=kube_context,
+            timeout_seconds=60,
+            check=False,
+        )
+        if result.returncode != 0:
+            missing.append(crd)
+    if missing:
+        raise RuntimeError(
+            "Soperator restore target is missing required Soperator CRD(s): "
+            + ", ".join(missing)
+        )
+
+
 def _soperator_restore_apply_kubernetes_material(
     *,
     root: Path,
@@ -6157,24 +6586,45 @@ def _soperator_restore_apply_kubernetes_material(
     kube_context: str | None,
 ) -> tuple[str, ...]:
     applied: list[str] = []
+    _soperator_restore_validate_api_availability(
+        root=root,
+        restore_plan=restore_plan,
+        kube_context=kube_context,
+    )
+    refs = _soperator_restore_manifest_resource_refs(root=root, restore_plan=restore_plan)
+    cluster_refs = tuple(ref for ref in refs if ref[0] == "cluster")
+    if cluster_refs:
+        _soperator_restore_fail_on_existing_resources(
+            namespace=namespace,
+            kube_context=kube_context,
+            refs=cluster_refs,
+        )
     namespace_created = _soperator_restore_ensure_namespace(namespace, kube_context=kube_context)
     if not namespace_created:
         _soperator_restore_fail_on_existing_resources(
             namespace=namespace,
             kube_context=kube_context,
-            refs=_soperator_restore_manifest_resource_refs(root=root, restore_plan=restore_plan),
+            refs=tuple(ref for ref in refs if ref[0] != "cluster"),
         )
+    cluster_paths = set(_soperator_restore_cluster_apply_paths(restore_plan))
     for relative_path in _soperator_restore_apply_paths(restore_plan):
         path = _soperator_restore_member_path(root, relative_path, checksums=None)
         if not path.read_text(encoding="utf-8").strip():
             continue
         _soperator_restore_rewrite_namespace(path, namespace)
-        _run_soperator_upgrade_kubectl(
-            namespace,
-            ["apply", "-f", str(path)],
-            kube_context=kube_context,
-            timeout_seconds=300,
-        )
+        if relative_path in cluster_paths:
+            _run_soperator_upgrade_kubectl_cluster(
+                ["apply", "-f", str(path)],
+                kube_context=kube_context,
+                timeout_seconds=300,
+            )
+        else:
+            _run_soperator_upgrade_kubectl(
+                namespace,
+                ["apply", "-f", str(path)],
+                kube_context=kube_context,
+                timeout_seconds=300,
+            )
         applied.append(relative_path)
     return tuple(applied)
 
@@ -6239,6 +6689,19 @@ def _format_soperator_restore_plan_lines(
     restore_accounting_db: bool,
 ) -> tuple[str, ...]:
     apply_paths = _soperator_restore_apply_paths(restore_plan)
+    cluster_apply_paths = _soperator_restore_cluster_apply_paths(restore_plan)
+    restore_material = restore_plan.get("restore_material")
+    recreation_apply = (
+        restore_material.get("recreation_apply")
+        if isinstance(restore_material, Mapping)
+        else ()
+    )
+    recreation_runbook = restore_plan.get("recreation_runbook")
+    warnings = (
+        recreation_runbook.get("warnings")
+        if isinstance(recreation_runbook, Mapping)
+        else ()
+    )
     accounting = manifest.get("accounting_db")
     accounting_bytes = accounting.get("dump_bytes") if isinstance(accounting, Mapping) else None
     lines = [
@@ -6247,10 +6710,16 @@ def _format_soperator_restore_plan_lines(
         f"- source kind: `{manifest.get('source_kind') or 'unknown'}`",
         f"- namespace: `{namespace}`",
         f"- Kubernetes restore manifests: `{len(apply_paths)}` files",
+        f"- cluster-scoped restore manifests: `{len(cluster_apply_paths)}` files",
+        "- retained controller/accounting PV/PVC bindings: "
+        f"`{'yes' if isinstance(recreation_apply, list) and recreation_apply else 'no'}`",
         f"- accounting DB restore: `{'yes' if restore_accounting_db else 'no'}`",
         f"- accounting dump bytes: `{accounting_bytes or 0}`",
         "- sensitive material: archive contains raw Kubernetes Secrets and SQL dump; values are not printed",
+        "- VM/NFS retention and final Terraform convergence remain operator runbook steps",
     ]
+    if isinstance(warnings, list) and warnings:
+        lines.append(f"- recreation warnings: `{len(warnings)}`; inspect restore-plan.json")
     if dry_run:
         lines.append("Dry run only: no namespace, Kubernetes resource, or DB changes were made.")
     else:
@@ -12386,8 +12855,9 @@ def soperator_discover_command(
         "Examples: nebius-cxcli soperator backup <config.yaml> --target mk8s --dry-run; "
         "nebius-cxcli soperator backup <config.yaml> --target mk8s "
         "--backup-dir ./backups/soperator. "
-        "The archive includes raw Kubernetes Secrets and the chart-managed MariaDB "
-        "accounting DB dump, so store it as sensitive material."
+        "The archive includes raw Kubernetes Secrets, retained controller/accounting "
+        "PV/PVC restore material, and the chart-managed MariaDB accounting DB dump, "
+        "so store it as sensitive material."
     ),
 )
 def soperator_backup_command(
@@ -12467,7 +12937,10 @@ def soperator_backup_command(
         "--kube-context replacement-cluster --execute --approve. "
         "Restore is dry-run by default. Use it only for DR restore "
         "to a new empty compatible target cluster. This is not an in-place rollback; "
-        "do not target the original/source cluster or an existing Soperator namespace."
+        "do not target the original/source cluster or an existing Soperator namespace. "
+        "Execute mode restores retained controller/accounting PV/PVC bindings before "
+        "the remaining namespace resources; VM/NFS retention and final Terraform "
+        "convergence remain operator runbook steps."
     ),
 )
 def soperator_restore_command(
@@ -50895,7 +51368,8 @@ def component_add_command(
         "--cluster-id backup, --access external selects the public control-plane endpoint and "
         "--access internal selects the private endpoint; cxcli assumes this machine already has "
         "private network reachability for internal access. The archive name starts with "
-        "external-soperator-backup- and includes raw Secrets plus the chart-managed MariaDB "
+        "external-soperator-backup- and includes raw Secrets, retained "
+        "controller/accounting PV/PVC restore material, and the chart-managed MariaDB "
         "accounting DB dump when live accounting exists."
     ),
 )
@@ -51100,7 +51574,10 @@ def ext_soperator_backup_command(
         "--kube-context new-cluster --execute --approve. Restore is dry-run by default. "
         "Use it only for DR restore to a new empty external target cluster. This is "
         "not an in-place rollback; do not target the original/source cluster or an "
-        "existing Soperator namespace."
+        "existing Soperator namespace. Execute mode restores retained "
+        "controller/accounting PV/PVC bindings before the remaining namespace "
+        "resources; VM/NFS retention and final Terraform convergence remain "
+        "operator runbook steps."
     ),
 )
 def ext_soperator_restore_command(

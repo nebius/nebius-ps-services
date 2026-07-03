@@ -711,8 +711,13 @@ and chart source-family changes.
   service accounts, services, PVCs, Deployments, StatefulSets, DaemonSets,
   CronJobs, RBAC, PodDisruptionBudgets, NetworkPolicies, HPAs, Ingresses, and
   Soperator SlurmCluster/NodeSet/
-  ActiveCheck resources. It also records Helm values, Slurm CLI snapshots, and
-  the chart-managed MariaDB accounting dump after quiescing accounting writes.
+  ActiveCheck resources. Required controller/accounting PVCs are filtered out
+  of the generic PVC restore path and written with their retained PV bindings
+  under `recreation/restore/persistentvolumes.yaml` and
+  `recreation/restore/persistentvolumeclaims.yaml`, preserving PV `claimRef`
+  and PVC `volumeName` while stripping unsafe server-owned metadata and status.
+  It also records Helm values, Slurm CLI snapshots, and the chart-managed
+  MariaDB accounting dump after quiescing accounting writes.
   Recreation-runbook material is collected by default: bound PV raw manifests
   and reclaim-policy status, Flux-system ConfigMaps used to reconstruct
   Soperator/terraform values, Kruise worker StatefulSet data when present,
@@ -721,9 +726,14 @@ and chart source-family changes.
   pending/held Slurm job id lists, `soperator.cfg` when available,
   best-effort Terraform allocation state, and
   `recreation/recreation-coverage.json` with collected, missing, skipped, and
-  not-applicable items. Restore keeps the generic DR contract and does not
-  automatically restore retained PV bindings; the raw recreation files document
-  that runbook path for explicit operator action.
+  not-applicable items. Backup fails when required recreation material is
+  missing and not proven not-applicable; worker-local PVC/PV and Terraform
+  allocation evidence stay warning-only. Restore keeps the DR/new-empty-target
+  contract, validates checksums, recreation coverage, and required CRD/API
+  availability, applies cluster-scoped retained PV restore manifests before
+  namespaced PVCs and other restore-ready manifests, and imports the DB dump
+  when requested. VM/NFS data disk retention and final Terraform convergence
+  remain explicit operator runbook responsibilities.
   Restore is archive-driven and dry-run by default, and it is DR/new-empty-target
   only. It is not same-cluster rollback: operators must not point restore at
   the original/source cluster or an existing Soperator namespace. `--execute
