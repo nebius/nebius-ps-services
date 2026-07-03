@@ -3261,7 +3261,7 @@ Important external upgrade flags:
   `populateJail.overwrite=true`, waits for login/worker consumers to stop and
   for the refreshed `populate-jail` Job to complete with the target image, then
   restores `maintenance=none` and `populateJail.overwrite=false`.
-- `--job-policy interactive|wait|wait-then-cancel|fail|cancel-selected|cancel-all|requeue-selected|requeue-all|requeue-hold-selected|requeue-hold-all`:
+- `--job-policy interactive|wait-to-finish|wait-then-cancel|fail|cancel-selected|cancel-all|requeue-selected|requeue-all|requeue-hold-selected|requeue-hold-all`:
   decide how to handle affected Slurm jobs before cxcli mutates Soperator
   worker pods. Affected jobs include active allocations on affected nodes and
   pending jobs in affected partitions or explicitly requested/scheduled on
@@ -3278,12 +3278,15 @@ Important external upgrade flags:
   applying rendered Soperator Flux resources for a target that already has a
   live SlurmCluster, and skip the gate only for first install when no live
   SlurmCluster exists yet.
-  When the flag is omitted, Soperator upgrade commands default to
-  `interactive` in a real TTY with `--interactive` enabled and to `fail` in
-  non-TTY or `--no-interactive` automation. Local `deploy` and `flux apply`
+  When the flag is omitted, managed `soperator upgrade` and external
+  `ext-soperator upgrade` runs default to `interactive` only in a real TTY with
+  `--interactive` enabled, and to `fail` in non-TTY or `--no-interactive`
+  automation. Automation should pass `--no-interactive --job-policy
+  wait-to-finish` or another explicit policy. Local `deploy` and `flux apply`
   still default to `interactive` in a real TTY and to `wait-then-cancel` in
-  non-TTY automation. `interactive` shows a selectable affected-job list and
-  action selector, `wait` polls until affected jobs finish or clear,
+  non-TTY automation.
+  `interactive` shows a selectable affected-job list and
+  action selector, `wait-to-finish` polls until affected jobs finish or clear,
   `wait-then-cancel` waits through `--job-wait-timeout`, cancels only the still
   displayed affected jobs, then continues only after they clear, `fail` stops
   before mutation, the cancel policies call `scancel`, the requeue policies call
@@ -3302,8 +3305,8 @@ Important external upgrade flags:
   job remains in the affected upgrade scope. Held requeued jobs remain held
   until an operator runs `scontrol release <jobid>`.
 - `--job-wait-timeout` and `--job-refresh-interval`: bound and refresh the
-  `wait` and `wait-then-cancel` policies. The default wait timeout is `1h`;
-  `wait-then-cancel` requires a positive timeout, while `wait --job-wait-timeout
+  `wait-to-finish` and `wait-then-cancel` policies. The default wait timeout is `1h`;
+  `wait-then-cancel` requires a positive timeout, while `wait-to-finish --job-wait-timeout
   0s` waits without a timeout. While waiting, cxcli updates an in-place
   affected-job dashboard every second, locally counting down known Slurm
   `Remaining` values from `squeue`; unknown remaining time stays `unknown`, and
@@ -3670,7 +3673,7 @@ CXCLI-managed Soperator upgrade follows these stages:
    suspension.
 3. Slurm and MK8s rollout: when MK8s target flags are supplied, identify affected
    node groups and Slurm nodes, drain only cxcli-owned Slurm nodes, apply
-   `--job-policy` (`wait`, cancel, requeue, or requeue-hold), run the
+   `--job-policy` (`wait-to-finish`, cancel, requeue, or requeue-hold), run the
    Terraform-managed node-template workflow, and wait for stable control-plane
    and node-group readiness.
 4. Soperator chart apply: when a chart target is requested, update the Soperator

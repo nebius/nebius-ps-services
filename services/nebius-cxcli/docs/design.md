@@ -1234,12 +1234,14 @@ waves when selected, using an
 exact fixed worker-group count or a percent-based wave with an optional cap,
 handles affected Slurm jobs on external node-template workers and all live
 worker NodeSets before target chart reconciliation through the `--job-policy`
-interactive, wait, wait-then-cancel, cancel, requeue, or requeue-hold decision
+interactive, wait-to-finish, wait-then-cancel, cancel, requeue, or requeue-hold decision
 state, including pending jobs in affected partitions or requested/scheduled on
-affected nodes. TTY upgrade runs default to `interactive`; non-TTY and
-`--no-interactive` upgrade runs default to `fail` so destructive cancel/requeue
-or wait-then-cancel policies remain explicit. When the target chart/rootfs
-changed, the populate-jail refresh phase applies the same job-policy gate to
+affected nodes. TTY managed and external upgrade runs default to `interactive`;
+non-TTY and `--no-interactive` upgrade runs default to `fail`, so automation
+should pass an explicit policy such as `--job-policy wait-to-finish` and
+destructive cancel/requeue or wait-then-cancel policies remain deliberate. When
+the target chart/rootfs changed, the populate-jail refresh phase applies the same
+job-policy gate to
 affected worker NodeSets before it applies the target chart with
 `maintenance=downscaleAndOverwritePopulateJail` and
 `populateJail.overwrite=true`, waits for login/worker consumers to stop and for

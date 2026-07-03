@@ -1610,8 +1610,11 @@ def test_docs_define_component_selector_contract() -> None:
     )
     assert "each affected running job" not in readme_flat
     assert "each displayed affected job" in readme_flat
-    assert "Soperator upgrade commands default to `interactive` in a real TTY" in readme_flat
+    assert "managed `soperator upgrade` and external `ext-soperator upgrade` runs default" in (
+        readme_flat
+    )
     assert "to `fail` in non-TTY or `--no-interactive` automation" in readme_flat
+    assert "`--no-interactive --job-policy wait-to-finish`" in readme_flat
     assert "Local `deploy` and `flux apply` still default" in readme_flat
     assert "to `wait-then-cancel` in non-TTY automation" in readme_flat
     assert "The default wait timeout is `1h`" in readme_flat
@@ -1912,11 +1915,12 @@ def test_docs_define_component_selector_contract() -> None:
     assert (
         "handles affected Slurm jobs on external node-template workers and all live "
         "worker NodeSets before target chart reconciliation through the `--job-policy` "
-        "interactive, wait, wait-then-cancel, cancel, requeue, or requeue-hold "
+        "interactive, wait-to-finish, wait-then-cancel, cancel, requeue, or requeue-hold "
         "decision state, including pending jobs"
     ) in design_flat
-    assert "TTY upgrade runs default to `interactive`" in design_flat
+    assert "TTY managed and external upgrade runs default to `interactive`" in design_flat
     assert "non-TTY and `--no-interactive` upgrade runs default to `fail`" in design_flat
+    assert "explicit policy such as `--job-policy wait-to-finish`" in design_flat
     assert "`maintenance=downscaleAndOverwritePopulateJail`" in design_flat
     assert "provides ad hoc `ext-soperator scale-up` and `ext-soperator scale-down`" in (
         design_flat

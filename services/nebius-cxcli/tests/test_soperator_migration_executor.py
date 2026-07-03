@@ -6170,11 +6170,13 @@ def test_external_upgrade_job_policy_defaults_by_terminal_mode(
 
     monkeypatch.setattr(migration, "_external_upgrade_is_tty_session", lambda: True)
     assert migration._external_upgrade_job_policy(None) == "interactive"  # noqa: SLF001
-    assert migration._external_upgrade_job_policy("wait") == "wait"  # noqa: SLF001
+    assert migration._external_upgrade_job_policy("wait-to-finish") == "wait-to-finish"  # noqa: SLF001
 
     monkeypatch.setattr(migration, "_external_upgrade_is_tty_session", lambda: False)
     with pytest.raises(RuntimeError, match="interactive terminal"):
         migration._external_upgrade_job_policy("interactive")  # noqa: SLF001
+    with pytest.raises(RuntimeError, match="wait-to-finish"):
+        migration._external_upgrade_job_policy("wait")  # noqa: SLF001
 
 
 def test_external_upgrade_wait_then_cancel_requires_positive_timeout() -> None:
@@ -6423,7 +6425,7 @@ def test_external_upgrade_cancel_all_policy_cancels_all_jobs() -> None:
     assert any(call[8:] == ("scancel", "42", "43") for call in calls)
 
 
-def test_external_upgrade_wait_policy_waits_until_jobs_clear(
+def test_external_upgrade_wait_to_finish_policy_waits_until_jobs_clear(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[str, ...]] = []
@@ -6442,7 +6444,7 @@ def test_external_upgrade_wait_policy_waits_until_jobs_clear(
         ),
         kube_context="external-context",
         node_names=("worker-gpu-0-0",),
-        policy="wait",
+        policy="wait-to-finish",
         cancel_job_ids=(),
         requeue_job_ids=(),
         wait_timeout_seconds=30,

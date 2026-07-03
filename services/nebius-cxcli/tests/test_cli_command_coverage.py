@@ -4399,11 +4399,17 @@ def test_soperator_upgrade_job_policy_defaults_by_terminal_mode(
         cli._soperator_upgrade_job_policy(policy="interactive", interactive=True)
     with pytest.raises(RuntimeError, match="interactive terminal"):
         cli._soperator_runtime_job_policy("interactive")
+    with pytest.raises(RuntimeError, match="wait-to-finish"):
+        cli._soperator_upgrade_job_policy(policy="wait", interactive=False)
 
     monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
 
     assert cli._soperator_upgrade_job_policy(policy=None, interactive=True) == "interactive"
     assert cli._soperator_upgrade_job_policy(policy=None, interactive=False) == "fail"
+    assert (
+        cli._soperator_upgrade_job_policy(policy="wait-to-finish", interactive=True)
+        == "wait-to-finish"
+    )
     assert cli._soperator_runtime_job_policy(None) == "interactive"
 
 
@@ -4911,7 +4917,7 @@ def test_soperator_upgrade_cancel_all_policy_cancels_all_jobs(
     assert commands == ["scancel 42 43"]
 
 
-def test_soperator_upgrade_wait_policy_waits_until_jobs_clear(
+def test_soperator_upgrade_wait_to_finish_policy_waits_until_jobs_clear(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     job = _soperator_slurm_job(
@@ -4948,7 +4954,7 @@ def test_soperator_upgrade_wait_policy_waits_until_jobs_clear(
     restored = cli._handle_soperator_upgrade_running_jobs(
         namespace="soperator",
         node_group="",
-        policy="wait",
+        policy="wait-to-finish",
         cancel_job_ids=(),
         requeue_job_ids=(),
         wait_timeout_seconds=30,
@@ -8540,6 +8546,125 @@ def test_ext_soperator_upgrade_interactive_non_tty_fails_before_backup(
 
     assert excinfo.value.exit_code == 1
     assert backup_called is False
+
+
+@pytest.mark.parametrize(("tty", "expected_policy"), [(True, "interactive"), (False, "fail")])
+def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_by_terminal_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tty: bool,
+    expected_policy: str,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("deploy: {}\n", encoding="utf-8")
+    payload: dict[str, Any] = {
+        "deploy": {
+            "targets": [
+                {
+                    "instance_id": "external-cluster",
+                    "soperator_onboarding": {
+                        "accepted": True,
+                        "actions": ["upgrade-soperator"],
+                        "source_version": "1.22.3",
+                        "target_version": "4.0.2-ps.3",
+                    },
+                }
+            ]
+        }
+    }
+    captured: dict[str, Any] = {}
+
+    @contextmanager
+    def _no_status(_message: str):
+        yield
+
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: tty)
+    monkeypatch.setattr(cli, "_load_source_payload", lambda _path: payload)
+    monkeypatch.setattr(
+        cli,
+        "_resolve_soperator_migration_target_ref",
+        lambda _payload, *, target_ref: target_ref or "external-cluster",
+    )
+    monkeypatch.setattr(
+        cli,
+        "legacy_soperator_migration_checkpoint_path",
+        lambda _config_path, _target_ref: tmp_path / "missing-checkpoint.json",
+    )
+    monkeypatch.setattr(
+        cli, "validate_soperator_onboarding_acceptance", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        cli,
+        "soperator_onboarding_target",
+        lambda _payload, *, target_ref: payload["deploy"]["targets"][0],
+    )
+    monkeypatch.setattr(cli, "_command_status", _no_status)
+    monkeypatch.setattr(
+        cli,
+        "_run_external_soperator_discovery_command",
+        lambda **_kwargs: tmp_path / "manifest.json",
+    )
+    monkeypatch.setattr(
+        cli,
+        "_load_soperator_source_discovery_report",
+        lambda **_kwargs: {
+            "report": {"source_version": "1.22.3", "target_version": "4.0.2-ps.3"},
+            "snapshot": {},
+        },
+    )
+    monkeypatch.setattr(cli, "_require_soperator_migration_actions", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        cli,
+        "external_soperator_upgrade_resume_backup_metadata",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(cli, "_external_soperator_backup_kube_context", lambda *_args, **_kwargs: "ctx")
+    monkeypatch.setattr(
+        cli,
+        "_create_external_soperator_upgrade_backup",
+        lambda **_kwargs: {"path": str(tmp_path / "backup.tar.gz")},
+    )
+    monkeypatch.setattr(
+        cli,
+        "external_soperator_upgrade_protected_comparison_passed",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_refresh_soperator_onboarding_after_completed_migration",
+        lambda **_kwargs: (),
+    )
+
+    def _execute(**kwargs: Any) -> SimpleNamespace:
+        captured.update(kwargs)
+        return SimpleNamespace(pending_phase="none", lines=("done",))
+
+    monkeypatch.setattr(cli, "execute_soperator_migration", _execute)
+
+    cli.soperator_external_upgrade_command(
+        config_path=config_path,
+        target_ref_opt="external-cluster",
+        backup_dir=None,
+        job_policy=None,
+        cancel_job=None,
+        requeue_job=None,
+        job_wait_timeout=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
+        job_refresh_interval=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
+        dry_run=False,
+        approve=True,
+        approve_remediation=False,
+        allow_unsupported_soperator_upgrade_path=False,
+        interactive=True,
+        worker_rollout_strategy=None,
+        worker_wave_groups=None,
+        worker_wave_percent=None,
+        max_parallel_worker_groups=None,
+        strategy_max_surge_count=None,
+        strategy_max_unavailable_count=None,
+        strategy_drain_timeout=None,
+    )
+
+    assert captured["job_policy"] == expected_policy
 
 
 def test_render_command_points_gpu_reconciliation_only_soperator_to_deploy(
@@ -22241,7 +22366,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     ) in normalized_managed_soperator_help
     assert (
         "nebius-cxcli soperator scale-down <config.yaml> --target <target> "
-        "--nodeset worker-gpu-0 --to-workers 0 --job-policy wait --dry-run"
+        "--nodeset worker-gpu-0 --to-workers 0 --job-policy wait-to-finish --dry-run"
     ) in normalized_managed_soperator_help
     assert (
         "nebius-cxcli soperator scale-up <config.yaml> --target <target> "
@@ -22300,7 +22425,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--dry-run --execute" in normalized_managed_soperator_scale_down_help
     assert "--approve --no-approve" in normalized_managed_soperator_scale_down_help
     assert "--job-policy" in normalized_managed_soperator_scale_down_help
-    assert "--job-policy wait --job-wait-timeout 2h --dry-run" in (
+    assert "--job-policy wait-to-finish --job-wait-timeout 2h --dry-run" in (
         normalized_managed_soperator_scale_down_help
     )
     assert "--worker-ordinal 3 --to-workers 3 --job-policy interactive" in (
@@ -22339,7 +22464,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     )
     assert (
         "--to-k8s-version 1.33 --to-os ubuntu24.04 --to-gpu-stack-preset cuda13.0 "
-        "--to-chart-version <chart-version> --job-policy wait --job-wait-timeout 2h "
+        "--to-chart-version <chart-version> --job-policy wait-to-finish --job-wait-timeout 2h "
         "--dry-run"
     ) in normalized_managed_soperator_upgrade_help
     assert "does not bypass Kubernetes minor-hop, backup, quota, protected-state" in (
@@ -22361,7 +22486,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert (
         "nebius-cxcli ext-soperator scale-down --project-id PROJECT "
         "--cluster-id MK8SCLUSTER --kube-context CONTEXT --nodeset worker-gpu-0 "
-        "--to-workers 0 --job-policy wait --dry-run"
+        "--to-workers 0 --job-policy wait-to-finish --dry-run"
     ) in normalized_soperator_help
     assert (
         "nebius-cxcli ext-soperator backup --project-id PROJECT --cluster-id MK8SCLUSTER "
@@ -22449,7 +22574,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--job-policy" in normalized_ext_soperator_scale_down_help
     assert "--dry-run --execute" in normalized_ext_soperator_scale_down_help
     assert "--approve --no-approve" in normalized_ext_soperator_scale_down_help
-    assert "--job-policy wait --job-wait-timeout 2h --dry-run" in (
+    assert "--job-policy wait-to-finish --job-wait-timeout 2h --dry-run" in (
         normalized_ext_soperator_scale_down_help
     )
     assert "--worker-ordinal 3 --to-workers 3 --job-policy interactive" in (
@@ -22644,7 +22769,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         normalized_ext_soperator_upgrade_help
     )
     assert (
-        "Slurm job policy: interactive, wait, wait-then-cancel, cancel-selected, "
+        "Slurm job policy: interactive, wait-to-finish, wait-then-cancel, cancel-selected, "
         "cancel-all, requeue-selected, requeue-all, requeue-hold-selected, "
         "requeue-hold-all, or fail"
     ) in normalized_ext_soperator_upgrade_help
@@ -22653,12 +22778,13 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         "nebius-cxcli ext-soperator upgrade ./deployments/tenant/project/config.yaml "
         "--target external-cluster --execute --approve"
     ) in normalized_ext_soperator_upgrade_help
-    assert "--job-policy wait --job-wait-timeout 2h --dry-run" in (
+    assert "--job-policy wait-to-finish --job-wait-timeout 2h --dry-run" in (
         normalized_ext_soperator_upgrade_help
     )
-    assert "--worker-rollout-strategy safe-surge --worker-wave-groups 1 --job-policy wait" in (
-        normalized_ext_soperator_upgrade_help
-    )
+    assert (
+        "--worker-rollout-strategy safe-surge --worker-wave-groups 1 "
+        "--job-policy wait-to-finish"
+    ) in normalized_ext_soperator_upgrade_help
     assert "The target must already be onboarded and accepted through ext-soperator onboard" in (
         normalized_ext_soperator_upgrade_help
     )

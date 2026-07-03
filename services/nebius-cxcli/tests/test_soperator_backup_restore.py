@@ -93,6 +93,81 @@ def test_soperator_backup_filename_uses_external_prefix_without_upgrade_transiti
     )
 
 
+def test_ext_soperator_upgrade_backup_filename_includes_source_transitions() -> None:
+    filename = cli._soperator_upgrade_backup_filename(
+        target_ref="external-cluster",
+        chart_from="1.22.3",
+        chart_to="4.0.2-ps.3",
+        k8s_from="1.31",
+        k8s_to="1.32",
+        generated_at=datetime(2026, 7, 2, 22, 53, 35, tzinfo=UTC),
+        prefix="ext-soperator-upgrade",
+    )
+
+    assert (
+        filename
+        == "ext-soperator-upgrade-external-cluster-"
+        "20260702T225335Z-chart-1.22.3-to-4.0.2-ps.3-k8s-1.31-to-1.32.tar.gz"
+    )
+    assert "unknown" not in filename
+
+
+def test_create_external_soperator_upgrade_backup_uses_accepted_transition_metadata(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    payload = _source_payload()
+    payload["apps"]["charts"][0]["version"] = "4.0.2-ps.3"
+    payload["deploy"] = {
+        "targets": [
+            {
+                "instance_id": "mk8s",
+                "soperator_onboarding": {
+                    "source_version": "1.22.3",
+                    "target_version": "4.0.2-ps.3",
+                    "node_template_upgrade": {"target_k8s_version": "1.32"},
+                },
+            }
+        ]
+    }
+    config_path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+    captured: dict[str, Any] = {}
+
+    def fake_backup(**kwargs: Any) -> cli._SoperatorUpgradeBackupResult:
+        captured.update(kwargs)
+        return cli._SoperatorUpgradeBackupResult(
+            path=tmp_path / "backups" / "ext-soperator-upgrade.tar.gz",
+            size_bytes=1,
+            sha256="archive-sha",
+            included_categories=("accounting", "kubernetes"),
+            secret_material_included=True,
+            accounting_db_included=True,
+            manifest_sha256="manifest-sha",
+        )
+
+    monkeypatch.setattr(cli, "_create_restore_capable_soperator_upgrade_backup", fake_backup)
+
+    metadata = cli._create_external_soperator_upgrade_backup(
+        config_path=config_path,
+        source_payload=payload,
+        target_ref="mk8s",
+        backup_dir=tmp_path / "backups",
+        kube_context="ctx",
+        command=["nebius-cxcli", "ext-soperator", "upgrade", str(config_path)],
+        source_chart_version="1.22.3",
+        target_chart_version="4.0.2-ps.3",
+        source_k8s_version="1.31",
+        target_k8s_version="1.32",
+    )
+
+    assert metadata["path"].endswith("ext-soperator-upgrade.tar.gz")
+    assert captured["plan"].current_version == "1.22.3"
+    assert captured["plan"].target_version == "4.0.2-ps.3"
+    assert captured["source_k8s_version"] == "1.31"
+    assert captured["target_k8s_version"] == "1.32"
+
+
 def test_soperator_login_command_falls_back_to_controller_for_config_source_failure(
     monkeypatch,
 ) -> None:

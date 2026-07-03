@@ -7739,6 +7739,7 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "Current Kubernetes version: 1.31" not in result.output
     assert "Support policy:" in result.output
     assert "Soperator upgrade path: status=supported" in result.output
+    assert "matches the committed cxcli upgrade-path policy" not in result.output
     assert "Locked upgrade path:" in result.output
     assert "Path locked: yes" in result.output
     assert "Kubernetes path: 1.31 -> 1.32" in result.output
@@ -7766,7 +7767,7 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     )
     assert (
         "[MK8s Node Upgrades] external-node-template-upgrade: planned - "
-        "Kubernetes hop 1.31 -> 1.32: upgrade external MK8s control plane "
+        "Kubernetes hop 1.31 -> 1.32: upgrade MK8s control plane "
         "and node templates"
         in result.output
     )
@@ -7802,9 +7803,8 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "Zero-surge spare capacity required: no surge quota" in result.output
     assert "active service or worker group capacity may be reduced by 1 node" in result.output
     assert "Planned worker waves: wave 1: gpu-pool." in result.output
-    assert "zero-surge uses max_surge=0" in result.output
-    assert "one Kubernetes minor hop per external upgrade run" in result.output
-    assert "safe-surge requires max_surge_count temporary surge node(s)" in result.output
+    assert "one accepted Kubernetes minor hop per upgrade run" in result.output
+    assert "safe-surge needs temporary surge quota/capacity" in result.output
     assert "Failure handling contract:" in result.output
     assert "Resume contract:" in result.output
     assert "Execution controls:" in result.output
@@ -7812,8 +7812,8 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "Slurm job policy: fail" in result.output
     assert "Slurm job policy: interactive" not in result.output
     assert "Backup: restore-capable archive" in result.output
-    assert "only into a new/replacement cluster" in result.output
-    assert "not back onto the original source cluster" in result.output
+    assert "restore is supported only into a new/replacement cluster" in result.output
+    assert "not back onto the original source cluster" not in result.output
     assert result.output.count("Slurm job policy:") == 1
     assert result.output.count("Backup: restore-capable archive") == 1
 
@@ -7875,7 +7875,7 @@ def test_ext_soperator_upgrade_dry_run_prints_full_locked_path(
     ) in result.output
     assert (
         "[MK8s Node Upgrades] external-node-template-upgrade: planned - "
-        "Kubernetes hop 1.31 -> 1.32: upgrade external MK8s control plane "
+        "Kubernetes hop 1.31 -> 1.32: upgrade MK8s control plane "
         "and node templates"
     ) in result.output
     assert (
@@ -7887,6 +7887,35 @@ def test_ext_soperator_upgrade_dry_run_prints_full_locked_path(
         result.output
     )
     assert "ext-soperator onboard" not in result.output
+
+
+def test_ext_soperator_upgrade_backup_transition_uses_locked_segment_source(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_old_soperator_migration_config(
+        tmp_path,
+        source_soperator_version="1.22.3",
+        current_k8s_version="1.31",
+        target_k8s_version="1.34",
+    )
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]
+    upgrade_path = onboarding["upgrade_path"]
+    source_report = cli_module._load_soperator_source_discovery_report(
+        config_path=config_path,
+        target_ref="external-cluster",
+    )
+
+    transition = cli_module._external_soperator_upgrade_backup_transition(
+        source_report=source_report,
+        onboarding=onboarding,
+        current_segment=upgrade_path["segments"][0],
+    )
+
+    assert transition.source_chart_version == "1.22.3"
+    assert transition.target_chart_version == _soperator_test_chart_version()
+    assert transition.source_k8s_version == "1.31"
+    assert transition.target_k8s_version == "1.32"
 
 
 def test_ext_soperator_upgrade_dry_run_advances_locked_path_from_checkpoint(
@@ -7941,7 +7970,7 @@ def test_ext_soperator_upgrade_dry_run_advances_locked_path_from_checkpoint(
     assert "Kubernetes version: 1.32 -> 1.33" not in second.output
     assert (
         "[MK8s Node Upgrades] external-node-template-upgrade: planned - "
-        "Kubernetes hop 1.32 -> 1.33: upgrade external MK8s control plane "
+        "Kubernetes hop 1.32 -> 1.33: upgrade MK8s control plane "
         "and node templates"
     ) in second.output
     assert "Soperator hop" not in second.output
@@ -8456,14 +8485,14 @@ def test_soperator_migration_plan_styles_topic_labels() -> None:
         ),
         (
             "external-node-template-upgrade",
-            "Upgrade external MK8s control plane and node templates",
+            "Upgrade MK8s control plane and node templates",
             {"external_node_template_upgrade_required": True},
             {
                 "current_k8s_version": "1.31",
                 "target_k8s_version": "1.32",
             },
             (
-                "Kubernetes hop 1.31 -> 1.32: upgrade external MK8s control plane "
+                "Kubernetes hop 1.31 -> 1.32: upgrade MK8s control plane "
                 "and node templates"
             ),
         ),

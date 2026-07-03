@@ -2077,7 +2077,7 @@ ext_soperator_app = typer.Typer(
         "--execute --approve; "
         "nebius-cxcli ext-soperator scale-down --project-id PROJECT "
         "--cluster-id MK8SCLUSTER --kube-context CONTEXT --nodeset worker-gpu-0 "
-        "--to-workers 0 --job-policy wait --dry-run; "
+        "--to-workers 0 --job-policy wait-to-finish --dry-run; "
         "nebius-cxcli ext-soperator scale-up --project-id PROJECT "
         "--cluster-id MK8SCLUSTER --kube-context CONTEXT --nodeset worker-gpu-0 "
         "--to-workers 4 --execute --approve; "
@@ -2118,13 +2118,13 @@ soperator_app = typer.Typer(
     epilog=(
         "Examples: nebius-cxcli soperator upgrade <config.yaml> "
         "--target <target> --to-k8s-version 1.33 --to-chart-version <chart-version> "
-        "--job-policy wait --dry-run; nebius-cxcli soperator upgrade <config.yaml> "
+        "--job-policy wait-to-finish --dry-run; nebius-cxcli soperator upgrade <config.yaml> "
         "--target <target> --to-chart-version <chart-version>; "
         "nebius-cxcli soperator discover <config.yaml> --target <target> "
         "--output-dir ./support-bundles; "
         "nebius-cxcli soperator backup <config.yaml> --target <target>; "
         "nebius-cxcli soperator scale-down <config.yaml> --target <target> "
-        "--nodeset worker-gpu-0 --to-workers 0 --job-policy wait --dry-run; "
+        "--nodeset worker-gpu-0 --to-workers 0 --job-policy wait-to-finish --dry-run; "
         "nebius-cxcli soperator scale-up <config.yaml> --target <target> "
         "--nodeset worker-gpu-0 --to-workers 4 --execute --approve; "
         "nebius-cxcli soperator restore <backup.tar.gz> --kube-context <new-context> "
@@ -2487,6 +2487,14 @@ class _SoperatorUpgradeBackupResult:
 
 
 @dataclass(frozen=True)
+class _ExternalSoperatorUpgradeBackupTransition:
+    source_chart_version: str | None
+    target_chart_version: str | None
+    source_k8s_version: str | None
+    target_k8s_version: str | None
+
+
+@dataclass(frozen=True)
 class _SoperatorBackupKubernetesMaterial:
     included_paths: tuple[str, ...]
     raw_paths: tuple[str, ...]
@@ -2550,7 +2558,7 @@ _SOPERATOR_MK8S_TOP_LEVEL_PHASE_IDS = frozenset(
 _SOPERATOR_UPGRADE_JOB_POLICIES = frozenset(
     {
         "interactive",
-        "wait",
+        "wait-to-finish",
         "wait-then-cancel",
         "cancel-selected",
         "cancel-all",
@@ -2562,8 +2570,9 @@ _SOPERATOR_UPGRADE_JOB_POLICIES = frozenset(
     }
 )
 _SOPERATOR_UPGRADE_JOB_POLICY_HELP = (
-    "Slurm job policy: interactive, wait, wait-then-cancel, cancel-selected, cancel-all, "
-    "requeue-selected, requeue-all, requeue-hold-selected, requeue-hold-all, or fail."
+    "Slurm job policy: interactive, wait-to-finish, wait-then-cancel, cancel-selected, "
+    "cancel-all, requeue-selected, requeue-all, requeue-hold-selected, requeue-hold-all, "
+    "or fail."
 )
 _SOPERATOR_POPULATE_JAIL_REFRESH_HELP = (
     "Populate-jail rootfs refresh mode: auto refreshes when the target chart/rootfs "
@@ -5623,6 +5632,7 @@ def _soperator_upgrade_manifest_payload(
     accounting_db_included: bool,
     source_kind: str,
     kubernetes_material: _SoperatorBackupKubernetesMaterial,
+    source_k8s_version: str | None = None,
 ) -> dict[str, Any]:
     return {
         "schema": "nebius-cxcli-soperator-backup/v1",
@@ -5640,7 +5650,7 @@ def _soperator_upgrade_manifest_payload(
             "to": plan.target_version,
         },
         "kubernetes": {
-            "from": None,
+            "from": _non_empty_text(source_k8s_version) or None,
             "to": _non_empty_text(target_k8s_version) or None,
         },
         "command": list(command),
@@ -5681,6 +5691,7 @@ def _create_restore_capable_soperator_upgrade_backup(
     checkpoint_id: str,
     target_k8s_version: str | None,
     command: Sequence[str],
+    source_k8s_version: str | None = None,
     checkpoint_event: Callable[[str], None] | None = None,
     archive_prefix: str = "soperator-upgrade",
     source_kind: str = "managed-upgrade",
@@ -5701,7 +5712,7 @@ def _create_restore_capable_soperator_upgrade_backup(
         target_ref=target.target_ref,
         chart_from=plan.current_version,
         chart_to=plan.target_version,
-        k8s_from=None,
+        k8s_from=source_k8s_version,
         k8s_to=target_k8s_version,
         generated_at=generated_at,
         prefix=archive_prefix,
@@ -5830,6 +5841,7 @@ def _create_restore_capable_soperator_upgrade_backup(
                 accounting_db_included=accounting_db_included,
                 source_kind=source_kind,
                 kubernetes_material=kubernetes_material,
+                source_k8s_version=source_k8s_version,
             )
             restore_plan = {
                 "schema": "nebius-cxcli-soperator-restore-plan/v1",
@@ -6377,7 +6389,7 @@ def _soperator_upgrade_job_policy(*, policy: str | None, interactive: bool) -> s
     if resolved == "interactive" and not prompt_allowed:
         raise RuntimeError(
             "--job-policy interactive requires an interactive terminal. Use "
-            "fail, wait, wait-then-cancel, cancel-selected, cancel-all, "
+            "fail, wait-to-finish, wait-then-cancel, cancel-selected, cancel-all, "
             "requeue-selected, requeue-all, requeue-hold-selected, or "
             "requeue-hold-all with --no-interactive."
         )
@@ -6396,7 +6408,7 @@ def _soperator_runtime_job_policy(policy: str | None) -> str:
     if resolved == "interactive" and not interactive:
         raise RuntimeError(
             "--job-policy interactive requires an interactive terminal. Use "
-            "fail, wait, wait-then-cancel, cancel-selected, cancel-all, "
+            "fail, wait-to-finish, wait-then-cancel, cancel-selected, cancel-all, "
             "requeue-selected, requeue-all, requeue-hold-selected, or "
             "requeue-hold-all."
         )
@@ -6779,7 +6791,7 @@ def _soperator_upgrade_job_prompt_paused() -> Iterator[None]:
 
 _SOPERATOR_UPGRADE_INTERACTIVE_ACTIONS: tuple[tuple[str, str], ...] = (
     ("refresh", "r - refresh"),
-    ("wait", "w - wait"),
+    ("wait-to-finish", "w - wait to finish"),
     ("cancel-selected", "c - cancel selected"),
     ("cancel-all", "a - cancel all displayed"),
     ("requeue-selected", "q - requeue selected"),
@@ -6791,8 +6803,8 @@ _SOPERATOR_UPGRADE_INTERACTIVE_ACTIONS: tuple[tuple[str, str], ...] = (
 _SOPERATOR_UPGRADE_ACTION_ALIASES = {
     "r": "refresh",
     "refresh": "refresh",
-    "w": "wait",
-    "wait": "wait",
+    "w": "wait-to-finish",
+    "wait-to-finish": "wait-to-finish",
     "c": "cancel-selected",
     "cancel": "cancel-selected",
     "cancel-selected": "cancel-selected",
@@ -6880,7 +6892,7 @@ def _prompt_soperator_upgrade_job_control(
         )
         selected_ids = tuple(item.strip() for item in raw_ids.split(",") if item.strip())
         raw_action = typer.prompt(
-            "Action [r refresh, w wait, c cancel selected, a cancel all displayed, "
+            "Action [r refresh, w wait-to-finish, c cancel selected, a cancel all displayed, "
             "q requeue selected, u requeue all displayed, h requeue-hold selected, "
             "y requeue-hold all displayed, x abort]",
             default="r",
@@ -7249,14 +7261,14 @@ def _handle_soperator_upgrade_running_jobs(
     if policy == "interactive" and not _is_tty_session():
         raise RuntimeError(
             "--job-policy interactive requires an interactive terminal. Use "
-            "wait-then-cancel, wait, fail, cancel-selected, cancel-all, "
+            "wait-then-cancel, wait-to-finish, fail, cancel-selected, cancel-all, "
             "requeue-selected, requeue-all, requeue-hold-selected, or "
             "requeue-hold-all."
         )
     if policy == "wait-then-cancel" and wait_timeout_seconds <= 0:
         raise RuntimeError(
             "--job-policy wait-then-cancel requires a positive --job-wait-timeout. "
-            "Use --job-policy wait --job-wait-timeout 0s for an unlimited wait."
+            "Use --job-policy wait-to-finish --job-wait-timeout 0s for an unlimited wait."
         )
 
     def _record(action: str, **details: Any) -> None:
@@ -7443,7 +7455,7 @@ def _handle_soperator_upgrade_running_jobs(
                     _record("no-blocking-jobs-after-refresh", policy=policy)
                     return _drain_after_jobs_clear()
                 continue
-            if action == "wait":
+            if action == "wait-to-finish":
                 _record(
                     "wait-started",
                     timeout_seconds=wait_timeout_seconds,
@@ -7538,7 +7550,7 @@ def _handle_soperator_upgrade_running_jobs(
                     "Soperator upgrade aborted while affected Slurm jobs are still present."
                 )
             console.print(
-                "[yellow]Unknown action; choose refresh, wait, cancel-selected, "
+                "[yellow]Unknown action; choose refresh, wait-to-finish, cancel-selected, "
                 "cancel-all, requeue-selected, requeue-all, requeue-hold-selected, "
                 "requeue-hold-all, or abort.[/yellow]"
             )
@@ -7547,7 +7559,7 @@ def _handle_soperator_upgrade_running_jobs(
             _print_soperator_upgrade_jobs_table(jobs)
         _record("fail", job_count=len(jobs))
         raise RuntimeError(
-            "Affected Slurm jobs exist for the upgrade scope. Use --job-policy wait, "
+            "Affected Slurm jobs exist for the upgrade scope. Use --job-policy wait-to-finish, "
             "--job-policy wait-then-cancel, --job-policy cancel-selected with "
             "--cancel-job, --job-policy cancel-all, --job-policy requeue-selected "
             "with --requeue-job, --job-policy requeue-all, --job-policy "
@@ -7594,7 +7606,7 @@ def _handle_soperator_upgrade_running_jobs(
         _record("requeue-hold-all", job_ids=selected)
         _requeue(selected, hold=True)
         _wait_for_requeued(selected)
-    elif policy == "wait":
+    elif policy == "wait-to-finish":
         _record(
             "wait-started",
             timeout_seconds=wait_timeout_seconds,
@@ -11019,6 +11031,37 @@ def _external_soperator_upgrade_target_k8s_version(
     )
 
 
+def _external_soperator_upgrade_backup_transition(
+    *,
+    source_report: Mapping[str, Any],
+    onboarding: Mapping[str, Any],
+    current_segment: Mapping[str, Any] | None,
+) -> _ExternalSoperatorUpgradeBackupTransition:
+    report = source_report.get("report")
+    if not isinstance(report, Mapping):
+        report = {}
+    current_k8s_version, target_k8s_version = soperator_discovery_report_k8s_versions(report)
+    segment = current_segment if isinstance(current_segment, Mapping) else {}
+    return _ExternalSoperatorUpgradeBackupTransition(
+        source_chart_version=(
+            _non_empty_text(segment.get("source_soperator_version"))
+            or _non_empty_text(onboarding.get("source_version"))
+            or _non_empty_text(report.get("source_version"))
+        ),
+        target_chart_version=(
+            _non_empty_text(segment.get("target_soperator_version"))
+            or _non_empty_text(onboarding.get("target_version"))
+            or _non_empty_text(report.get("target_version"))
+        ),
+        source_k8s_version=(
+            _non_empty_text(segment.get("current_k8s_version")) or current_k8s_version
+        ),
+        target_k8s_version=(
+            _non_empty_text(segment.get("target_k8s_version")) or target_k8s_version
+        ),
+    )
+
+
 def _create_external_soperator_upgrade_backup(
     *,
     config_path: Path,
@@ -11027,6 +11070,10 @@ def _create_external_soperator_upgrade_backup(
     backup_dir: Path | None,
     kube_context: str | None,
     command: Sequence[str],
+    source_chart_version: str | None = None,
+    target_chart_version: str | None = None,
+    source_k8s_version: str | None = None,
+    target_k8s_version: str | None = None,
 ) -> dict[str, Any]:
     target, plan = _soperator_backup_plan_from_payload(
         source_payload=source_payload,
@@ -11035,6 +11082,14 @@ def _create_external_soperator_upgrade_backup(
         release_name=None,
         interactive=False,
     )
+    effective_source_chart_version = _non_empty_text(source_chart_version)
+    effective_target_chart_version = _non_empty_text(target_chart_version)
+    if effective_source_chart_version or effective_target_chart_version:
+        plan = replace(
+            plan,
+            current_version=effective_source_chart_version or plan.current_version,
+            target_version=effective_target_chart_version or plan.target_version,
+        )
     generated_config, manifest = _load_soperator_backup_generated_context(
         config_path=config_path,
         source_payload=source_payload,
@@ -11051,11 +11106,15 @@ def _create_external_soperator_upgrade_backup(
         target=target,
         plan=plan,
         checkpoint_id=checkpoint_id,
-        target_k8s_version=_external_soperator_upgrade_target_k8s_version(
-            source_payload,
-            target_ref=target_ref,
+        target_k8s_version=(
+            _non_empty_text(target_k8s_version)
+            or _external_soperator_upgrade_target_k8s_version(
+                source_payload,
+                target_ref=target_ref,
+            )
         ),
         command=command,
+        source_k8s_version=source_k8s_version,
         archive_prefix="ext-soperator-upgrade",
         source_kind="external-upgrade",
         kube_context=kube_context,
@@ -12382,10 +12441,10 @@ def soperator_restore_command(
     short_help="Scale down a cxcli-managed Soperator worker NodeSet.",
     epilog=(
         "Examples: nebius-cxcli soperator scale-down <config.yaml> --target mk8s "
-        "--nodeset worker-gpu-0 --to-workers 0 --job-policy wait --job-wait-timeout 2h "
+        "--nodeset worker-gpu-0 --to-workers 0 --job-policy wait-to-finish --job-wait-timeout 2h "
         "--dry-run; "
         "nebius-cxcli soperator scale-down <config.yaml> --target mk8s "
-        "--nodeset worker-gpu-0 --to-workers 0 --job-policy wait --execute --approve; "
+        "--nodeset worker-gpu-0 --to-workers 0 --job-policy wait-to-finish --execute --approve; "
         "nebius-cxcli soperator scale-down <config.yaml> --target mk8s "
         "--nodeset worker-gpu-0 --worker-ordinal 3 --to-workers 3 "
         "--job-policy interactive --execute --approve. "
@@ -12451,7 +12510,7 @@ def soperator_scale_down_command(
             "--job-wait-timeout",
             help=(
                 "Maximum wait for Slurm jobs, for example 2h; 0s means unlimited "
-                "for --job-policy wait. wait-then-cancel requires a positive timeout."
+                "for --job-policy wait-to-finish. wait-then-cancel requires a positive timeout."
             ),
         ),
     ] = _SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
@@ -12600,11 +12659,11 @@ def soperator_scale_up_command(
         "--to-chart-version <chart-version>; "
         "nebius-cxcli soperator upgrade <config.yaml> --target mk8s "
         "--to-k8s-version 1.33 --to-os ubuntu24.04 --to-gpu-stack-preset cuda13.0 "
-        "--to-chart-version <chart-version> --job-policy wait --job-wait-timeout 2h "
+        "--to-chart-version <chart-version> --job-policy wait-to-finish --job-wait-timeout 2h "
         "--dry-run; "
         "nebius-cxcli soperator upgrade <config.yaml> --target mk8s "
         "--to-k8s-version 1.33 --to-os ubuntu24.04 --to-gpu-stack-preset cuda13.0 "
-        "--to-chart-version <chart-version> --job-policy wait. "
+        "--to-chart-version <chart-version> --job-policy wait-to-finish. "
         "The run without --dry-run creates the restore-capable backup and applies "
         "the requested Soperator-aware upgrade. Kubernetes minor hops stay one "
         "hop per run; if the support policy requires a chart-first step before "
@@ -12710,7 +12769,7 @@ def soperator_upgrade_command(
             "--job-wait-timeout",
             help=(
                 "Maximum wait for Slurm jobs, for example 2h; 0s means unlimited "
-                "for --job-policy wait. wait-then-cancel requires a positive timeout."
+                "for --job-policy wait-to-finish. wait-then-cancel requires a positive timeout."
             ),
         ),
     ] = _SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
@@ -13701,7 +13760,7 @@ def _run_managed_soperator_cluster_upgrade(
     if job_policy == "wait-then-cancel" and job_wait_timeout_seconds <= 0:
         raise RuntimeError(
             "--job-policy wait-then-cancel requires a positive --job-wait-timeout. "
-            "Use --job-policy wait --job-wait-timeout 0s for an unlimited wait."
+            "Use --job-policy wait-to-finish --job-wait-timeout 0s for an unlimited wait."
         )
 
     def _record_slurm_restore_nodes(
@@ -18157,6 +18216,7 @@ def _soperator_support_policy_plan_lines(
     reject_disposition: str = "execution blocked",
     label: str = "Soperator upgrade path",
     rejection_subject: str = "Soperator upgrade-path rejection",
+    include_messages: bool = True,
 ) -> tuple[str, ...]:
     lines: list[str] = []
     for finding in soperator_upgrade_support_findings(report):
@@ -18170,7 +18230,7 @@ def _soperator_support_policy_plan_lines(
         elif _non_empty_text(finding.get("status")) == "supported_with_warning":
             prefix = f"- {label} warning: "
         lines.append(prefix + _soperator_support_finding_label(finding))
-        if message:
+        if message and include_messages:
             lines.append(f"  - {message}")
         if _non_empty_text(finding.get("status")) in SOPERATOR_UPGRADE_SUPPORT_REJECT_STATUSES:
             lines.append(
@@ -51460,58 +51520,28 @@ _SOPERATOR_MIGRATION_ACTIONS = frozenset(
 _SOPERATOR_EXTERNAL_NODE_TEMPLATE_PHASE_ID = "external-node-template-upgrade"
 _SOPERATOR_TARGET_GPU_STACK_PHASE_ID = "target-gpu-stack-remediation"
 _SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES = (
-    "Live executor contract: --execute rechecks the pre-mutation source "
-    "release and discovery fingerprint, checks net-new external upgrade quota before "
-    "approved mutations, then runs the selected checkpointed external MK8s "
-    "control-plane/node-template, target GPU stack, SFS, copy, compute, cutover, "
-    "validation, and retirement phases for this accepted plan in order.",
-    "External node-template contract: onboarded external targets are not "
-    "Terraform-owned, so --execute uses direct Nebius updates for Kubernetes "
-    "version, node OS image, and Nebius GPU driver preset. The Kubernetes target "
-    "is the accepted onboarding target for this run; cxcli enforces one "
-    "Kubernetes minor hop per external upgrade run instead of silently continuing "
-    "to later discovery-guidance hops. Control plane goes first, then "
-    "service-role node groups and bounded worker waves. zero-surge uses "
-    "max_surge=0, max_unavailable=1, drain_timeout=30m and may quiesce login, "
-    "one-node controller/accounting, and known drain-blocking webhook workloads. "
-    "safe-surge uses max_surge=1, max_unavailable=0, drain_timeout=30m when "
-    "spare quota/capacity is available. Set worker_group_strategy.drain_timeout "
-    "to none to wait indefinitely; cxcli restores each node group's original "
-    "strategy.",
-    "Node-template quota contract: zero-surge requires no spare quota but can "
-    "reduce active capacity by max_unavailable_count node(s) during rollout. "
-    "safe-surge requires max_surge_count temporary surge node(s) for each active "
-    "service group or worker wave; cxcli checks spare quota, GPU capacity, and "
-    "selected worker nodes are Ready and schedulable before mutation.",
-    "Status contract: approved --execute prints phase-aware external Soperator "
-    "upgrade status; target remediation phases report MK8s health, storage "
-    "phases report SFS/PVC progress and continuity, while compute and cutover "
-    "phases report MK8s, Slurm, and Soperator health.",
-    "Validation contract: validation-and-rollback-hold runs the required MK8s "
-    "node inventory smoke plus target-scoped deploy.targets[].deployment_testing.* "
-    "deploy-time checks from config.yaml, including operator readiness and "
-    "GPU visibility when those checks are enabled; NCCL/performance checks are "
-    "reserved for acceptance-test benchmark. It also runs the required "
-    "Soperator deployment snapshot, including soperator-manager Deployment, "
-    "jail storage object, Pending Soperator pod/event, SlurmCluster, and "
-    "NodeSet visibility checks. Validation JSON "
-    "details are written under generated/reports/, ext-soperator-upgrade-report.md includes "
-    "the Soperator/Slurm and MK8s GPU validation rollups, and deploy-report.md "
-    "is refreshed as a secondary deploy-compatible MK8s GPU summary.",
+    "Live executor contract: --execute rechecks source release, discovery "
+    "fingerprint, and external upgrade quota before running accepted "
+    "checkpointed phases in order.",
+    "External node-template contract: direct Nebius updates run one accepted "
+    "Kubernetes minor hop per upgrade run: control plane first, then service "
+    "groups and bounded worker waves.",
+    "Node-template quota contract: zero-surge needs no spare quota but can "
+    "reduce active capacity; safe-surge needs temporary surge quota/capacity "
+    "and Ready schedulable workers.",
+    "Status contract: approved --execute reports phase-aware MK8s, storage, "
+    "compute, cutover, validation, and retirement status.",
+    "Validation contract: validation runs MK8s inventory, configured deploy-time "
+    "checks, required Soperator snapshots, and JSON/Markdown rollups under "
+    "generated/reports/.",
     "Failure handling contract: mutating phases watch Nebius, Kubernetes, "
-    "Soperator, and Slurm signals; complete only when prerequisites are absent "
-    "or satisfied; and checkpoint pending gates before approval or retirement.",
-    "Resume contract: timeout-guarded checkpoints let interrupted external upgrades "
-    "resume without rerunning completed data-copy or retirement phases, while "
-    "--execute still rechecks completed selected remediation/upgrade/cutover "
-    "actions against live state and retries them if they drift.",
-    "Completion contract: before reporting success, --execute repeats the final "
-    "MK8s readiness check for accepted external node-template work, verifies the "
-    "target Helm release workloads, suspends old source-family Flux "
-    "Kustomization desired state, deletes suspended old source-family Flux "
-    "HelmRelease records, retires stale profile-derived source-family Helm "
-    "release records, preserves shared/storage resources, and fails only if "
-    "stale source-family releases remain afterward.",
+    "Soperator, and Slurm signals and checkpoint pending gates before approval "
+    "or retirement.",
+    "Resume contract: checkpoints skip completed data-copy/retirement work and "
+    "recheck completed remediation, upgrade, and cutover actions for drift.",
+    "Completion contract: success requires final MK8s readiness, target Helm "
+    "workload health, and stale source-family Flux/Helm cleanup while preserving "
+    "shared/storage resources.",
 )
 _SOPERATOR_MIGRATION_PLAN_TOPIC_STYLES = {
     "External Soperator upgrade plan": "bold cyan",
@@ -51526,6 +51556,7 @@ _SOPERATOR_MIGRATION_PLAN_TOPIC_STYLES = {
     "Soperator version": "blue",
     "Kubernetes version": "blue",
     "Support policy": "bold cyan",
+    "Locked upgrade path": "bold cyan",
     "Accepted onboarding actions": "bold cyan",
     "Storage mode": "bold magenta",
     "Compute mode": "bold magenta",
@@ -51929,7 +51960,7 @@ def _soperator_migration_output_phases(
     ):
         external_node_template_phase = {
             "id": _SOPERATOR_EXTERNAL_NODE_TEMPLATE_PHASE_ID,
-            "title": "Upgrade external MK8s control plane and node templates",
+            "title": "Upgrade MK8s control plane and node templates",
             "status": "planned",
             "requires_customer_approval": True,
         }
@@ -52046,7 +52077,7 @@ def _soperator_migration_phase_display_title(
         if approval_hops:
             return "Customer approval for " + " and ".join(approval_hops)
     if phase_id == _SOPERATOR_EXTERNAL_NODE_TEMPLATE_PHASE_ID and k8s_hop:
-        return f"Kubernetes hop {k8s_hop}: upgrade external MK8s control plane and node templates"
+        return f"Kubernetes hop {k8s_hop}: upgrade MK8s control plane and node templates"
     if phase_id == _SOPERATOR_TARGET_GPU_STACK_PHASE_ID and target_k8s:
         return f"Kubernetes {target_k8s} GPU stack: reconcile target MK8s GPU operator stack"
     if (
@@ -52465,7 +52496,10 @@ def _format_soperator_migration_plan_lines(
             )
         if accepted_k8s_hop:
             lines.append(f"Accepted Kubernetes hop: {accepted_k8s_hop}.")
-    support_policy_lines = _soperator_support_policy_plan_lines(report)
+    support_policy_lines = _soperator_support_policy_plan_lines(
+        report,
+        include_messages=not bool(upgrade_path),
+    )
     if support_policy_lines:
         lines.extend(["", "Support policy:"])
         lines.extend(support_policy_lines)
@@ -52555,9 +52589,8 @@ def _format_soperator_migration_plan_lines(
     if job_policy:
         lines.append(f"Slurm job policy: {job_policy}")
     lines.append(
-        "Backup: restore-capable archive with raw Secrets and optional accounting DB dump "
-        "is required before approved mutation; restore from that archive is supported "
-        "only into a new/replacement cluster, not back onto the original source cluster."
+        "Backup: restore-capable archive is required before approved mutation; "
+        "restore is supported only into a new/replacement cluster."
     )
     lines.extend(["", "Execution contracts:"])
     lines.extend(_SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES)
@@ -52871,11 +52904,11 @@ def _refresh_soperator_onboarding_after_completed_migration(
     epilog=(
         "Examples: nebius-cxcli ext-soperator scale-down --project-id PROJECT "
         "--cluster-id MK8SCLUSTER --kube-context CONTEXT --namespace soperator "
-        "--nodeset worker-gpu-0 --to-workers 0 --job-policy wait --job-wait-timeout 2h "
+        "--nodeset worker-gpu-0 --to-workers 0 --job-policy wait-to-finish --job-wait-timeout 2h "
         "--dry-run; "
         "nebius-cxcli ext-soperator scale-down --project-id PROJECT "
         "--cluster-id MK8SCLUSTER --kube-context CONTEXT --namespace soperator "
-        "--nodeset worker-gpu-0 --to-workers 0 --job-policy wait --execute --approve; "
+        "--nodeset worker-gpu-0 --to-workers 0 --job-policy wait-to-finish --execute --approve; "
         "nebius-cxcli ext-soperator scale-down --project-id PROJECT "
         "--cluster-id MK8SCLUSTER --kube-context CONTEXT --namespace soperator "
         "--nodeset worker-gpu-0 --worker-ordinal 3 --to-workers 3 "
@@ -52948,7 +52981,7 @@ def ext_soperator_scale_down_command(
             "--job-wait-timeout",
             help=(
                 "Maximum wait for Slurm jobs, for example 2h; 0s means unlimited "
-                "for --job-policy wait. wait-then-cancel requires a positive timeout."
+                "for --job-policy wait-to-finish. wait-then-cancel requires a positive timeout."
             ),
         ),
     ] = _SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
@@ -53098,10 +53131,10 @@ def ext_soperator_scale_up_command(
         "nebius-cxcli ext-soperator upgrade ./deployments/tenant/project/config.yaml "
         "--target external-cluster --execute --approve; "
         "nebius-cxcli ext-soperator upgrade ./deployments/tenant/project/config.yaml "
-        "--target external-cluster --job-policy wait --job-wait-timeout 2h --dry-run; "
+        "--target external-cluster --job-policy wait-to-finish --job-wait-timeout 2h --dry-run; "
         "nebius-cxcli ext-soperator upgrade ./deployments/tenant/project/config.yaml "
         "--target external-cluster --worker-rollout-strategy safe-surge "
-        "--worker-wave-groups 1 --job-policy wait --execute --approve. "
+        "--worker-wave-groups 1 --job-policy wait-to-finish --execute --approve. "
         "--target is the cxcli target "
         "id saved as deploy.targets[].instance_id, not the Nebius cluster_id or "
         "display name. The target must already be onboarded and accepted through "
@@ -53173,7 +53206,7 @@ def soperator_external_upgrade_command(
             "--job-wait-timeout",
             help=(
                 "Maximum wait for Slurm jobs, for example 2h; 0s means unlimited "
-                "for --job-policy wait. wait-then-cancel requires a positive timeout."
+                "for --job-policy wait-to-finish. wait-then-cancel requires a positive timeout."
             ),
         ),
     ] = _SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
@@ -53459,7 +53492,7 @@ def soperator_external_upgrade_command(
         if resolved_job_policy == "wait-then-cancel" and job_wait_timeout_seconds <= 0:
             raise RuntimeError(
                 "--job-policy wait-then-cancel requires a positive --job-wait-timeout. "
-                "Use --job-policy wait --job-wait-timeout 0s for an unlimited wait."
+                "Use --job-policy wait-to-finish --job-wait-timeout 0s for an unlimited wait."
             )
         for line in _format_soperator_migration_plan_lines(
             config_path=config_path,
@@ -53543,6 +53576,11 @@ def soperator_external_upgrade_command(
                             target_ref=target_ref,
                             kube_context=None,
                         )
+                        backup_transition = _external_soperator_upgrade_backup_transition(
+                            source_report=source_report,
+                            onboarding=effective_onboarding,
+                            current_segment=current_segment,
+                        )
                         emit_status(
                             "External Soperator upgrade phase backup "
                             f"(top-level stage: {external_soperator_upgrade_top_level_stage('backup')}): "
@@ -53556,6 +53594,10 @@ def soperator_external_upgrade_command(
                             backup_dir=backup_dir,
                             kube_context=effective_kube_context,
                             command=command_args,
+                            source_chart_version=backup_transition.source_chart_version,
+                            target_chart_version=backup_transition.target_chart_version,
+                            source_k8s_version=backup_transition.source_k8s_version,
+                            target_k8s_version=backup_transition.target_k8s_version,
                         )
                 execution_result = execute_soperator_migration(
                     config_path=config_path,
@@ -56764,7 +56806,7 @@ def deploy_command(
             "--job-wait-timeout",
             help=(
                 "Maximum wait for Slurm jobs, for example 2h; 0s means unlimited "
-                "for --job-policy wait. wait-then-cancel requires a positive timeout."
+                "for --job-policy wait-to-finish. wait-then-cancel requires a positive timeout."
             ),
         ),
     ] = _SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
@@ -57492,7 +57534,7 @@ def flux_apply_command(
             "--job-wait-timeout",
             help=(
                 "Maximum wait for Slurm jobs, for example 2h; 0s means unlimited "
-                "for --job-policy wait. wait-then-cancel requires a positive timeout."
+                "for --job-policy wait-to-finish. wait-then-cancel requires a positive timeout."
             ),
         ),
     ] = _SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,

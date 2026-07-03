@@ -6,6 +6,18 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Changed `ext-soperator upgrade --execute` runs with no explicit
+  `--job-policy` to match managed `soperator upgrade`: real TTY runs with
+  `--interactive` default to `interactive`, while non-TTY and `--no-interactive`
+  runs default to `fail`.
+- Renamed the blocking Soperator Slurm job policy from `wait` to
+  `wait-to-finish` across managed and external Soperator upgrade, scale-down,
+  deploy, and Flux apply surfaces. The old `wait` value is no longer accepted.
+- Changed `ext-soperator upgrade` output to keep locked-path plans more compact:
+  support policy now avoids repeating the explanatory rule text when the locked
+  path is printed, MK8s node-upgrade phase wording is shorter, execution
+  contracts are summarized, and external-upgrade backup archives now use the
+  accepted source chart/Kubernetes versions in transition names.
 - Added Soperator populate-jail refresh handling to managed `soperator upgrade`
   and external `ext-soperator upgrade`. Chart upgrades now report a
   `populate-jail-refresh` stage that can run the upstream maintenance overwrite

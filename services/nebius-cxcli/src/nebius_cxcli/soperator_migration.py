@@ -388,7 +388,7 @@ _console = Console()
 _EXTERNAL_UPGRADE_JOB_POLICIES = frozenset(
     {
         "interactive",
-        "wait",
+        "wait-to-finish",
         "wait-then-cancel",
         "fail",
         "cancel-selected",
@@ -5706,7 +5706,7 @@ def _external_upgrade_job_policy(policy: str | None) -> str:
     if resolved_policy == "interactive" and not interactive:
         raise RuntimeError(
             "--job-policy interactive requires an interactive terminal. Use "
-            "fail, wait, wait-then-cancel, cancel-selected, cancel-all, "
+            "fail, wait-to-finish, wait-then-cancel, cancel-selected, cancel-all, "
             "requeue-selected, requeue-all, requeue-hold-selected, or "
             "requeue-hold-all."
         )
@@ -5797,7 +5797,7 @@ def _external_upgrade_ask_questionary_with_prefix_jumps(question: Any) -> Any:
 
 _EXTERNAL_UPGRADE_INTERACTIVE_JOB_ACTIONS: tuple[tuple[str, str], ...] = (
     ("refresh", "r - refresh"),
-    ("wait", "w - wait"),
+    ("wait-to-finish", "w - wait to finish"),
     ("cancel-selected", "c - cancel selected"),
     ("cancel-all", "a - cancel all displayed"),
     ("requeue-selected", "q - requeue selected"),
@@ -5809,8 +5809,8 @@ _EXTERNAL_UPGRADE_INTERACTIVE_JOB_ACTIONS: tuple[tuple[str, str], ...] = (
 _EXTERNAL_UPGRADE_JOB_ACTION_ALIASES = {
     "r": "refresh",
     "refresh": "refresh",
-    "w": "wait",
-    "wait": "wait",
+    "w": "wait-to-finish",
+    "wait-to-finish": "wait-to-finish",
     "c": "cancel-selected",
     "cancel": "cancel-selected",
     "cancel-selected": "cancel-selected",
@@ -5896,7 +5896,7 @@ def _prompt_external_upgrade_slurm_job_control(
         raw_ids = input("Job IDs to select, comma separated (blank for none): ").strip()
         selected_ids = tuple(item.strip() for item in raw_ids.split(",") if item.strip())
         raw_action = input(
-            "Action [r refresh, w wait, c cancel selected, a cancel all displayed, "
+            "Action [r refresh, w wait-to-finish, c cancel selected, a cancel all displayed, "
             "q requeue selected, u requeue all displayed, h requeue-hold selected, "
             "y requeue-hold all displayed, x abort] [r]: "
         ).strip()
@@ -6066,7 +6066,7 @@ def _handle_external_upgrade_slurm_jobs(
     if resolved_policy == "wait-then-cancel" and wait_timeout_seconds <= 0:
         raise RuntimeError(
             "--job-policy wait-then-cancel requires a positive --job-wait-timeout. "
-            "Use --job-policy wait --job-wait-timeout 0s for an unlimited wait."
+            "Use --job-policy wait-to-finish --job-wait-timeout 0s for an unlimited wait."
         )
     selected_nodes = tuple(
         str(node or "").strip() for node in node_names if str(node or "").strip()
@@ -6169,7 +6169,7 @@ def _handle_external_upgrade_slurm_jobs(
                     _record("no-blocking-jobs-after-refresh", policy=resolved_policy)
                     return ["Slurm job preflight: no affected jobs remain after refresh."]
                 continue
-            if action == "wait":
+            if action == "wait-to-finish":
                 _record(
                     "wait-started",
                     timeout_seconds=wait_timeout_seconds,
@@ -6330,7 +6330,7 @@ def _handle_external_upgrade_slurm_jobs(
                     "External Soperator upgrade stopped by operator while affected Slurm jobs are still present."
                 )
             _console.print(
-                "[yellow]Unknown action; choose refresh, wait, cancel-selected, cancel-all, "
+                "[yellow]Unknown action; choose refresh, wait-to-finish, cancel-selected, cancel-all, "
                 "requeue-selected, requeue-all, requeue-hold-selected, requeue-hold-all, or abort.[/yellow]"
             )
     if resolved_policy == "fail":
@@ -6338,7 +6338,7 @@ def _handle_external_upgrade_slurm_jobs(
             _print_external_upgrade_jobs_table(jobs)
         _record("fail", job_count=len(jobs))
         raise SoperatorMigrationPhasePending(
-            "Affected Slurm jobs exist for the upgrade scope. Use --job-policy wait, "
+            "Affected Slurm jobs exist for the upgrade scope. Use --job-policy wait-to-finish, "
             "--job-policy wait-then-cancel, --job-policy cancel-selected with "
             "--cancel-job, --job-policy cancel-all, --job-policy requeue-selected "
             "with --requeue-job, --job-policy requeue-all, --job-policy "
@@ -6347,7 +6347,7 @@ def _handle_external_upgrade_slurm_jobs(
         )
     if resolved_policy == "wait-then-cancel":
         return _wait_then_cancel()
-    if resolved_policy == "wait":
+    if resolved_policy == "wait-to-finish":
         _record(
             "wait-started",
             timeout_seconds=wait_timeout_seconds,
@@ -15615,7 +15615,7 @@ def _execute_soperator_migration_unlocked(
     if resolved_job_policy == "wait-then-cancel" and job_wait_timeout_seconds <= 0:
         raise RuntimeError(
             "--job-policy wait-then-cancel requires a positive --job-wait-timeout. "
-            "Use --job-policy wait --job-wait-timeout 0s for an unlimited wait."
+            "Use --job-policy wait-to-finish --job-wait-timeout 0s for an unlimited wait."
         )
     selected_cancel_job_ids = tuple(
         str(job_id or "").strip() for job_id in cancel_job_ids if str(job_id or "").strip()
