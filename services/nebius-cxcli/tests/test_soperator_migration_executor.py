@@ -2717,6 +2717,7 @@ def test_execute_records_approval_and_runs_checkpointed_mutators(tmp_path: Path)
     assert "post-upgrade-helm-check: Verified target Soperator Helm chart readiness" in "\n".join(
         result.lines
     )
+    assert "Phase validation post-upgrade-helm-check: PASS" in "\n".join(result.lines)
     assert "Data sync skipped: no old Soperator storage was detected" in "\n".join(result.lines)
     assert any(
         call[0][:4] == ("nebius", "compute", "filesystem", "create") for call in runner.calls
@@ -2743,8 +2744,11 @@ def test_execute_records_approval_and_runs_checkpointed_mutators(tmp_path: Path)
         if phase_id in {"discovery-and-plan", "customer-approval"}:
             continue
         verification = checkpoint["phase_state"][phase_id]["fast_verification"]
-        assert verification["status"] == "passed"
-        assert verification["passed"] is True
+        assert verification["status"] in {"passed", "skipped"}
+        if verification["status"] == "passed":
+            assert verification["passed"] is True
+        else:
+            assert verification["passed"] is None
         assert verification["verified_at"]
     assert "execute-phase-fast-verification-passed" in {
         event["event"] for event in checkpoint["events"]
@@ -2761,6 +2765,8 @@ def test_execute_records_approval_and_runs_checkpointed_mutators(tmp_path: Path)
     }
     assert stage_verification["external-node-template-upgrade"]["status"] == "passed"
     assert stage_verification["target-gpu-stack-remediation"]["passed"] is True
+    assert stage_verification["online-bulk-data-sync"]["status"] == "skipped"
+    assert stage_verification["retire-old-resources"]["status"] == "skipped"
     assert stage_verification["post-upgrade-mk8s-check"]["status"] == "passed"
     assert stage_verification["post-upgrade-helm-check"]["status"] == "passed"
     phase_reports = {item["id"]: item for item in upgrade_json_report["phases"]}
@@ -2922,6 +2928,94 @@ def test_execute_fast_verification_failure_keeps_same_phase_pending(
     }
     assert stage_verification["target-gpu-stack-remediation"]["status"] == "failed"
     assert stage_verification["rolling-compute-migration"]["status"] == "not_run"
+
+
+@pytest.mark.parametrize(
+    ("phase_id", "verifier_name", "next_phase_id"),
+    [
+        (
+            "online-bulk-data-sync",
+            "_online_bulk_data_sync_fast_verification_checks",
+            "rolling-compute-migration",
+        ),
+        (
+            "rolling-compute-migration",
+            "_rolling_compute_fast_verification_checks",
+            "final-control-plane-cutover",
+        ),
+        (
+            "validation-and-rollback-hold",
+            "_validation_hold_fast_verification_checks",
+            "retire-old-resources",
+        ),
+        (
+            "retire-old-resources",
+            "_retire_old_resources_fast_verification_checks",
+            "post-upgrade-mk8s-check",
+        ),
+    ],
+)
+def test_execute_phase_fast_verification_failure_keeps_same_phase_pending(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    phase_id: str,
+    verifier_name: str,
+    next_phase_id: str,
+) -> None:
+    summary = f"{phase_id} verification evidence was not satisfied."
+
+    def _fail_phase_verification(**_kwargs: Any) -> tuple[str, list[Mapping[str, str]]]:
+        return (
+            summary,
+            [
+                migration._fast_verification_check(  # noqa: SLF001
+                    phase_id,
+                    "failed",
+                    "phase proof missing",
+                )
+            ],
+        )
+
+    monkeypatch.setattr(migration, verifier_name, _fail_phase_verification)
+
+    result = execute_soperator_migration(
+        config_path=tmp_path / "config.yaml",
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=_source_report(_snapshot()),
+        backup_metadata=_backup_metadata(f"{phase_id}-pending"),
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        approved=True,
+        command_runner=_FakeCommandRunner(),
+        worker_rollout_strategy="safe-surge",
+    )
+
+    assert result.pending_phase == phase_id
+    assert f"fast stage verification failed after {phase_id}" in result.pending_reason
+    assert phase_id not in result.completed_phases
+    result_text = "\n".join(result.lines)
+    assert f"Phase validation {phase_id}: FAIL - {summary}" in result_text
+
+    reports_dir = tmp_path / "generated" / "reports"
+    migrate_report = (reports_dir / "ext-soperator-upgrade-report.md").read_text(
+        encoding="utf-8"
+    )
+    upgrade_json_report = json.loads(
+        (reports_dir / "ext-soperator-upgrade-report.json").read_text(encoding="utf-8")
+    )
+    assert upgrade_json_report["pending_phase"] == phase_id
+    assert phase_id in upgrade_json_report["pending_reason"]
+    assert f"`{phase_id}`: `FAIL`" in migrate_report
+    assert f"`{next_phase_id}`: `PENDING`" in migrate_report
+    stage_verification = {
+        item["phase_id"]: item for item in upgrade_json_report["stage_verification"]
+    }
+    verification = stage_verification[phase_id]
+    assert verification["status"] == "failed"
+    assert verification["passed"] is False
+    assert verification["verified_at"]
+    assert verification["checks"][0]["summary"] == "phase proof missing"
+    assert stage_verification[next_phase_id]["status"] == "not_run"
 
 
 def test_execute_runtime_error_keeps_current_phase_pending_and_resumes_same_phase(
@@ -3123,6 +3217,9 @@ def test_execute_final_helm_check_failure_writes_pending_report(
 
     assert result.pending_phase == "post-upgrade-helm-check"
     assert result.pending_reason == "target Helm release is not ready"
+    assert "Phase validation post-upgrade-helm-check: FAIL - target Helm release is not ready" in (
+        "\n".join(result.lines)
+    )
     checkpoint_path = soperator_migration_checkpoint_path(
         tmp_path / "config.yaml",
         "external-cluster",
@@ -3250,6 +3347,10 @@ def test_execute_final_mk8s_check_failure_writes_pending_report(
 
     assert result.pending_phase == "post-upgrade-mk8s-check"
     assert result.pending_reason == "target MK8s node-template state is not ready"
+    assert (
+        "Phase validation post-upgrade-mk8s-check: FAIL - "
+        "target MK8s node-template state is not ready"
+    ) in "\n".join(result.lines)
     assert helm_calls == 1
     checkpoint_path = soperator_migration_checkpoint_path(
         tmp_path / "config.yaml",

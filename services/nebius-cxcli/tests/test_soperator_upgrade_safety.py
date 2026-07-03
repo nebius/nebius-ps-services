@@ -15,6 +15,7 @@ from nebius_cxcli.soperator_upgrade_safety import (
     stage_fast_verification_check,
     stage_fast_verification_markdown_lines,
     stage_fast_verification_report,
+    stage_fast_verification_status,
 )
 
 
@@ -963,6 +964,9 @@ def test_stage_fast_verification_payload_and_report_defaults_are_canonical() -> 
     assert passed["passed"] is True
     assert failed["passed"] is False
     assert pending["passed"] is None
+    assert stage_fast_verification_status(passed["checks"]) == "passed"
+    assert stage_fast_verification_status(failed["checks"]) == "failed"
+    assert stage_fast_verification_status(pending["checks"]) == "skipped"
     assert stage_fast_verification_report("missing-stage", {}) == {
         "phase_id": "missing-stage",
         "status": "not_run",

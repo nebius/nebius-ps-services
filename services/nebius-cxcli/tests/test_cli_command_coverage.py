@@ -3402,6 +3402,8 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
         ),
     )
     _stub_soperator_upgrade_runtime(monkeypatch, paths, calls)
+    rich_console = cli.Console(record=True, width=300)
+    monkeypatch.setattr(cli, "console", rich_console)
 
     cli.soperator_upgrade_command(
         paths.config_path,
@@ -3453,8 +3455,15 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
     assert stage_verification["soperator-chart"]["status"] == "passed"
     assert stage_verification["postflight-validation"]["status"] == "passed"
     assert stage_verification["shared-safety-verification"]["status"] == "passed"
-    assert stage_verification["mk8s-node-template"]["status"] == "not_run"
-    assert stage_verification["post-mk8s-validation"]["status"] == "not_run"
+    assert stage_verification["mk8s-node-template"]["status"] == "skipped"
+    assert stage_verification["post-mk8s-validation"]["status"] == "skipped"
+    assert stage_verification["mk8s-node-template"]["verified_at"]
+    phase_state = report["phase_state"]
+    for phase_id in cli._SOPERATOR_UPGRADE_PLANNED_PHASE_IDS:
+        verification = phase_state[phase_id]["fast_verification"]
+        assert verification["status"] in {"passed", "skipped"}
+        assert verification["verified_at"]
+        assert verification["checks"]
     assert report["current_phase"]["id"] == "completed"
     assert report["current_phase"]["top_level_stage"] == "Soperator Upgrade"
     assert report["current_phase"]["component"].startswith("apps:soperator")
@@ -3473,9 +3482,14 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
     assert "## Phase History" in markdown_report
     assert "## Stage Fast Verification" in markdown_report
     assert "`soperator-chart`: `PASS`" in markdown_report
-    assert "`mk8s-node-template`: `PENDING`" in markdown_report
+    assert "`mk8s-node-template`: `SKIP`" in markdown_report
     assert "`backup`" in markdown_report
     assert "`shared-safety-verification`" in markdown_report
+    rendered = rich_console.export_text()
+    assert "Phase validation preflight: PASS" in rendered
+    assert "Phase validation backup: PASS" in rendered
+    assert "Phase validation mk8s-node-template: SKIP" in rendered
+    assert "Phase validation shared-safety-verification: PASS" in rendered
 
 
 def test_soperator_upgrade_fast_stage_failure_blocks_next_stage(
@@ -3565,6 +3579,8 @@ def test_soperator_upgrade_fast_stage_failure_blocks_next_stage(
         calls,
         populate_jail_image_changed=False,
     )
+    rich_console = cli.Console(record=True, width=300)
+    monkeypatch.setattr(cli, "console", rich_console)
 
     with pytest.raises(RuntimeError, match="fast stage verification failed after soperator-chart"):
         _run_soperator_upgrade_for_test(
@@ -3581,13 +3597,19 @@ def test_soperator_upgrade_fast_stage_failure_blocks_next_stage(
     assert chart_verification["status"] == "failed"
     assert chart_verification["passed"] is False
     assert checkpoint["status"] == "failed"
+    assert checkpoint["pending_phase"] == "soperator-chart"
 
     report = json.loads(
         (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_JSON_FILENAME).read_text(encoding="utf-8")
     )
     stage_verification = {item["phase_id"]: item for item in report["stage_verification"]}
     assert stage_verification["soperator-chart"]["status"] == "failed"
+    assert stage_verification["soperator-chart"]["verified_at"]
+    assert stage_verification["soperator-chart"]["checks"][0]["summary"]
     assert stage_verification["postflight-validation"]["status"] == "not_run"
+    assert report["pending_phase"] == "soperator-chart"
+    assert report["pending_reason"]
+    assert "Phase validation soperator-chart: FAIL" in rich_console.export_text()
 
 
 def test_soperator_upgrade_runtime_error_keeps_current_phase_pending_and_resumes_same_phase(
@@ -6027,6 +6049,178 @@ def test_soperator_upgrade_resume_late_pending_phase_skips_completed_late_phases
     assert checkpoint["pending_phase"] == "none"
     assert checkpoint["status"] == "completed"
     assert checkpoint["completed_phases"] == list(cli._SOPERATOR_UPGRADE_PLANNED_PHASE_IDS)
+
+
+def test_soperator_upgrade_resume_demotes_completed_phase_missing_fast_verification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    paths.infra_dir.mkdir(parents=True)
+    paths.flux_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
+    paths.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "apps": {
+                    "charts": [
+                        {
+                            "id": "soperator",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "namespace": "soperator",
+                            "release-name": "soperator",
+                            "target_ref": "mk8s",
+                            "version": "0.25.0",
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    generated_config = SimpleNamespace()
+    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    calls: list[object] = []
+
+    monkeypatch.setattr(
+        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli,
+        "_raise_if_soperator_upgrade_would_bypass_migration",
+        lambda *_args, **_kwargs: calls.append("migration-guard"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_generated_bundle_validation",
+        lambda *_args, **kwargs: calls.append(("validate", kwargs["title"])) or {},
+    )
+    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: calls.append("render"))
+    monkeypatch.setattr(
+        cli,
+        "flux_apply_command",
+        lambda *args, **kwargs: calls.append(("flux-apply", args, kwargs)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_verify_soperator_static_upgrade_ready",
+        lambda *_args, **_kwargs: calls.append("soperator-static-ready"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_soperator_upgrade_validation_phase",
+        lambda *_args, **kwargs: (
+            calls.append(("soperator-validation", kwargs["phase_label"])) or ()
+        ),
+    )
+    _stub_soperator_upgrade_runtime(monkeypatch, paths, calls)
+
+    before_state = cli.ProtectedCustomerState(
+        target_ref="mk8s",
+        namespace="soperator",
+        captured_at="before",
+        sections={"pods": {"available": True, "items": []}},
+    )
+    after_state = cli.ProtectedCustomerState(
+        target_ref="mk8s",
+        namespace="soperator",
+        captured_at="after",
+        sections={"pods": {"available": True, "items": []}},
+    )
+
+    def _post_verification(**_kwargs: object) -> SimpleNamespace:
+        calls.append("shared-safety")
+        payload = {
+            "status": "passed",
+            "passed": True,
+            "checks": [{"name": "pods-running-or-completed", "status": "passed"}],
+        }
+        return SimpleNamespace(
+            status="passed",
+            passed=True,
+            checks=tuple(payload["checks"]),
+            protected_state=after_state,
+            comparison={
+                "status": "matched",
+                "before_hash": before_state.content_hash,
+                "after_hash": after_state.content_hash,
+                "deltas": [],
+                "blocked_count": 0,
+                "approval_required_count": 0,
+            },
+            command_audit=(),
+            heavy_validation_followups=(),
+            zero_downtime_eligibility={"status": "passed", "eligible": True},
+            as_payload=lambda: payload,
+        )
+
+    monkeypatch.setattr(cli, "_managed_soperator_upgrade_run_post_verification", _post_verification)
+
+    _run_soperator_upgrade_for_test(config_path=paths.config_path)
+
+    checkpoint_path = (
+        paths.project_dir / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR / "mk8s" / "checkpoint.json"
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    phase_state = checkpoint["phase_state"]["shared-safety-verification"]
+    phase_state.pop("fast_verification", None)
+    checkpoint["stage_verification"].pop("shared-safety-verification", None)
+    for item in checkpoint["phase_history"]:
+        if item.get("id") == "shared-safety-verification":
+            item.pop("fast_verification", None)
+    checkpoint["pending_phase"] = "none"
+    checkpoint["pending_reason"] = ""
+    checkpoint["status"] = "completed"
+    checkpoint_path.write_text(json.dumps(checkpoint, indent=2) + "\n", encoding="utf-8")
+
+    calls.clear()
+    _run_soperator_upgrade_for_test(
+        config_path=paths.config_path,
+        to_chart_version="0.26.0",
+    )
+
+    assert calls == ["migration-guard", "shared-safety"]
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["pending_phase"] == "none"
+    assert checkpoint["status"] == "completed"
+    assert checkpoint["completed_phases"] == list(cli._SOPERATOR_UPGRADE_PLANNED_PHASE_IDS)
+    verification = checkpoint["phase_state"]["shared-safety-verification"]["fast_verification"]
+    assert verification["status"] == "passed"
+    assert "completed-phase-reverify-required" in {
+        event["event"] for event in checkpoint["events"]
+    }
+
+    discovery_path = Path(checkpoint["discovery"]["path"])
+    discovery_path.unlink()
+
+    def _rediscover(**_kwargs: object) -> Path:
+        calls.append("discovery")
+        discovery_path.parent.mkdir(parents=True, exist_ok=True)
+        discovery_path.write_text('{"schema": "discovery"}\n', encoding="utf-8")
+        return discovery_path
+
+    monkeypatch.setattr(cli, "_run_managed_soperator_discovery_command", _rediscover)
+
+    calls.clear()
+    _run_soperator_upgrade_for_test(
+        config_path=paths.config_path,
+        to_chart_version="0.26.0",
+    )
+
+    assert calls == ["migration-guard", "discovery"]
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["pending_phase"] == "none"
+    assert checkpoint["completed_phases"] == list(cli._SOPERATOR_UPGRADE_PLANNED_PHASE_IDS)
+    assert Path(checkpoint["discovery"]["path"]).exists()
+    assert any(
+        event["event"] == "completed-phase-reverify-required"
+        and "discovery: discovery manifest is missing" in event.get("reason", "")
+        for event in checkpoint["events"]
+    )
 
 
 def test_soperator_upgrade_restores_activechecks_after_failed_upgrade(

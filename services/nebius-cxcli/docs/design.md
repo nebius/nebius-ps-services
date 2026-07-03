@@ -680,7 +680,11 @@ and chart source-family changes.
   backup evidence, manual heavy follow-ups, the final `current_phase`, the
   operator-facing top-level stage (`MK8s Node Upgrades` or `Soperator Upgrade`),
   the Markdown `Stage Fast Verification` rollup plus JSON `stage_verification`
-  details, and the phase history with component-aware operator comments. Quiet terminal phases
+  details, per-phase `phase_state[<phase>].fast_verification` proof, and the
+  phase history with component-aware operator comments. Setup phases record
+  evidence-only checks; runtime phases record targeted phase-fast smoke. Full
+  Soperator/Slurm validation remains at managed preflight/postflight instead of
+  running after every phase. Quiet terminal phases
   such as discovery, backup, protected-state capture, live ActiveChecks
   patching, Slurm restore, shared safety verification, and report writing keep
   a spinner active. If the process is interrupted
@@ -1175,12 +1179,15 @@ discovered worker NodeSets and partition refs when source evidence exists,
 normalizes source-era runtime settings, and retires legacy source Flux/Helm
 records; validation hold verifies MK8s, target Soperator, configured MK8s GPU
 checks, required Soperator deployment snapshot, protected-state deltas, and the
-shared bounded fast safety verifier; every executed stage runs a fast
-stage-scoped verification before the next stage starts and records
-`phase_state[<stage>].fast_verification`; the final post-upgrade MK8s and Helm
-readiness checks record the same fast-verification shape before report
-completion; completion writes the external upgrade reports with the Markdown
-`Stage Fast Verification` rollup and JSON `stage_verification` array,
+shared bounded fast safety verifier; every executed stage runs a targeted fast
+stage-scoped verification before the next stage starts, prints
+`Phase validation <phase-id>: PASS|FAIL|SKIP - <summary>`, and records
+`phase_state[<stage>].fast_verification`; the full Soperator/Slurm validation
+suite remains at validation hold rather than after every individual phase; the
+final post-upgrade MK8s and Helm readiness checks record the same
+fast-verification shape before report completion; completion writes the external
+upgrade reports with the Markdown `Stage Fast Verification` rollup and JSON
+`stage_verification` array,
 checkpoints pending phases, and refreshes the target into the deploy-owned shape
 when `Pending phase: none`.
 
@@ -1306,7 +1313,9 @@ upgrades can resume without redoing completed safe work or retiring old
 storage and compute early. Reruns are action-idempotent: the accepted
 `deploy.targets[].soperator_onboarding.actions` list defines the desired work,
 and `ext-soperator upgrade --execute` rechecks completed action phases against
-live state before skipping them. Rerunning `ext-soperator onboard` remains
+live state before skipping them, including data sync, rolling compute,
+validation hold, old-resource retirement, and final post-upgrade checks.
+Rerunning `ext-soperator onboard` remains
 read-only, but it refreshes the source discovery bundle with provider template
 evidence and current/target Kubernetes version fields
 and removes `upgrade-external-node-template` only when the live control plane

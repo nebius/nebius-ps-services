@@ -513,9 +513,9 @@ from .soperator_upgrade_safety import (
     run_post_upgrade_fast_verification,
     safety_report_markdown_lines,
     stage_fast_verification_check,
-    stage_fast_verification_failed,
     stage_fast_verification_markdown_lines,
     stage_fast_verification_report,
+    stage_fast_verification_status,
     update_safety_payload_with_before,
     update_safety_payload_with_verification,
     upgrade_safety_checkpoint_payload,
@@ -2537,7 +2537,12 @@ _SOPERATOR_ACTIVECHECKS_UPGRADE_PATHS = (
     "values.soperator-activechecks.waitForChecks.enabled",
 )
 _SOPERATOR_FAST_STAGE_VERIFICATION_PHASE_IDS = (
+    "preflight",
+    "discovery",
+    "backup",
+    "protected-state-capture",
     "activechecks-suspend",
+    "soperator-preflight-validation",
     "slurm-job-drain",
     "mk8s-node-template",
     "post-mk8s-validation",
@@ -8292,6 +8297,113 @@ def _soperator_upgrade_checkpoint_complete(checkpoint: Mapping[str, Any]) -> boo
     return bool(completed) and set(_SOPERATOR_UPGRADE_PLANNED_PHASE_IDS) <= completed
 
 
+def _soperator_upgrade_phase_fast_verification(
+    checkpoint: Mapping[str, Any],
+    phase_id: str,
+) -> Mapping[str, Any]:
+    phase_state = checkpoint.get("phase_state")
+    phase_state_map = phase_state if isinstance(phase_state, Mapping) else {}
+    phase = phase_state_map.get(phase_id)
+    phase_map = phase if isinstance(phase, Mapping) else {}
+    verification = phase_map.get("fast_verification")
+    if isinstance(verification, Mapping):
+        return verification
+    stage_state = checkpoint.get("stage_verification")
+    stage_state_map = stage_state if isinstance(stage_state, Mapping) else {}
+    stage = stage_state_map.get(phase_id)
+    stage_map = stage if isinstance(stage, Mapping) else {}
+    verification = stage_map.get("fast_verification")
+    return verification if isinstance(verification, Mapping) else {}
+
+
+def _soperator_upgrade_checkpoint_artifact_path(project_dir: Path, value: object) -> Path | None:
+    text = _non_empty_text(value)
+    if not text:
+        return None
+    path = Path(text).expanduser()
+    return path if path.is_absolute() else project_dir / path
+
+
+def _soperator_upgrade_completed_phase_reverify_issue(
+    checkpoint: Mapping[str, Any],
+    phase_id: str,
+    *,
+    project_dir: Path,
+) -> str:
+    verification = _soperator_upgrade_phase_fast_verification(checkpoint, phase_id)
+    status = str(verification.get("status", "") or "").strip().lower().replace("_", "-")
+    if status not in {"passed", "skipped"}:
+        return "missing or failed fast verification"
+    if status == "skipped":
+        return ""
+    if phase_id == "discovery":
+        discovery = checkpoint.get("discovery")
+        discovery_map = discovery if isinstance(discovery, Mapping) else {}
+        manifest_path = _soperator_upgrade_checkpoint_artifact_path(
+            project_dir,
+            discovery_map.get("path"),
+        )
+        bundle_dir = _soperator_upgrade_checkpoint_artifact_path(
+            project_dir,
+            discovery_map.get("bundle_dir"),
+        )
+        if manifest_path is None or not manifest_path.exists():
+            return "discovery manifest is missing"
+        if bundle_dir is None or not bundle_dir.exists():
+            return "discovery bundle directory is missing"
+    elif phase_id == "backup":
+        backup = checkpoint.get("backup")
+        backup_map = backup if isinstance(backup, Mapping) else {}
+        archive_path = _soperator_upgrade_checkpoint_artifact_path(
+            project_dir,
+            backup_map.get("path"),
+        )
+        if archive_path is None or not archive_path.exists():
+            return "backup archive is missing"
+        if not _non_empty_text(backup_map.get("sha256")):
+            return "backup archive hash is missing"
+        if not _non_empty_text(backup_map.get("manifest_sha256")):
+            return "backup manifest hash is missing"
+    elif phase_id == "protected-state-capture":
+        safety = checkpoint.get("upgrade_safety")
+        safety_map = safety if isinstance(safety, Mapping) else {}
+        protected = safety_map.get("protected_customer_state")
+        protected_map = protected if isinstance(protected, Mapping) else {}
+        if not _non_empty_text(protected_map.get("before_hash")):
+            return "protected-state baseline hash is missing"
+    return ""
+
+
+def _soperator_upgrade_verified_completed_phase_set(
+    checkpoint: dict[str, Any],
+    *,
+    project_dir: Path,
+) -> set[str]:
+    completed = _soperator_upgrade_completed_phase_set(checkpoint)
+    demoted: dict[str, str] = {}
+    for phase_id in _SOPERATOR_UPGRADE_PLANNED_PHASE_IDS:
+        if phase_id not in completed:
+            continue
+        issue = _soperator_upgrade_completed_phase_reverify_issue(
+            checkpoint,
+            phase_id,
+            project_dir=project_dir,
+        )
+        if not issue:
+            continue
+        completed.discard(phase_id)
+        demoted[phase_id] = issue
+    if demoted:
+        checkpoint["completed_phases"] = _ordered_soperator_upgrade_completed_phases(completed)
+        _append_soperator_upgrade_event(
+            checkpoint,
+            "completed-phase-reverify-required",
+            phase=", ".join(demoted),
+            reason="; ".join(f"{phase}: {reason}" for phase, reason in demoted.items()),
+        )
+    return completed
+
+
 def _soperator_upgrade_config_fingerprint_from_payload(
     payload: Mapping[str, Any],
     *,
@@ -8544,7 +8656,7 @@ def _record_soperator_upgrade_stage_fast_verification(
     summary: str,
     checks: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
-    status = "failed" if stage_fast_verification_failed(checks) else "passed"
+    status = stage_fast_verification_status(checks)
     payload = build_stage_fast_verification_payload(
         phase_id=phase_id,
         status=status,
@@ -8553,6 +8665,8 @@ def _record_soperator_upgrade_stage_fast_verification(
     )
     state = _soperator_upgrade_stage_verification_state(checkpoint)
     state[phase_id] = {"fast_verification": payload}
+    phase = _soperator_upgrade_phase_state(checkpoint, phase_id)
+    phase["fast_verification"] = payload
     current_phase = checkpoint.get("current_phase")
     if isinstance(current_phase, dict) and current_phase.get("id") == phase_id:
         current_phase["fast_verification"] = payload
@@ -8562,9 +8676,12 @@ def _record_soperator_upgrade_stage_fast_verification(
             if isinstance(item, dict) and item.get("id") == phase_id:
                 item["fast_verification"] = payload
                 break
+    event_status = (
+        "failed" if status == "failed" else "skipped" if status == "skipped" else "passed"
+    )
     _append_soperator_upgrade_event(
         checkpoint,
-        "stage-fast-verification-" + ("failed" if status == "failed" else "passed"),
+        "stage-fast-verification-" + event_status,
         phase=phase_id,
         status=status,
         summary=summary,
@@ -13558,7 +13675,10 @@ def _run_managed_soperator_cluster_upgrade(
     )
     protected_state_before = _managed_soperator_upgrade_baseline_from_checkpoint(checkpoint)
     component_label = f"{target.selector} ({plan.namespace or 'default'}/{plan.release_name})"
-    completed_phases = _soperator_upgrade_completed_phase_set(checkpoint)
+    completed_phases = _soperator_upgrade_verified_completed_phase_set(
+        checkpoint,
+        project_dir=paths.project_dir,
+    )
 
     def _checkpoint(event: str, **details: Any) -> None:
         _append_soperator_upgrade_event(checkpoint, event, **details)
@@ -13603,6 +13723,17 @@ def _run_managed_soperator_cluster_upgrade(
     def _skip_checkpoint_phase(phase_id: str, reason: str) -> None:
         if _phase_is_completed(phase_id):
             return
+        _run_stage_fast_verification(
+            phase_id=phase_id,
+            summary=reason,
+            checks=[
+                stage_fast_verification_check(
+                    "Phase selection",
+                    "skipped",
+                    reason,
+                )
+            ],
+        )
         phase_state = _soperator_upgrade_phase_state(checkpoint, phase_id)
         phase_state["skipped_reason"] = reason
         phase_state["completed_at"] = _soperator_upgrade_now_iso()
@@ -13780,6 +13911,15 @@ def _run_managed_soperator_cluster_upgrade(
             checks=checks,
         )
         _write_soperator_upgrade_checkpoint(checkpoint_path, checkpoint)
+        console.print(
+            "Phase validation "
+            + phase_id
+            + ": "
+            + status_label(str(payload.get("status", "") or "not_run"))
+            + " - "
+            + str(payload.get("summary", "") or "No summary recorded."),
+            soft_wrap=True,
+        )
         if payload.get("status") == "failed":
             _write_soperator_upgrade_report(report_paths or paths, checkpoint)
             failed = [
@@ -13943,6 +14083,22 @@ def _run_managed_soperator_cluster_upgrade(
                 _expected_version_plan(plan.current_version),
             )
             _checkpoint("preflight-completed")
+            _run_stage_fast_verification(
+                phase_id="preflight",
+                summary="Generated bundle validation and current Soperator readiness completed.",
+                checks=[
+                    stage_fast_verification_check(
+                        "Generated bundle validation",
+                        "passed",
+                        "Soperator cluster upgrade preflight completed.",
+                    ),
+                    stage_fast_verification_check(
+                        "Current Soperator readiness",
+                        "passed",
+                        "Static Soperator readiness matched the current chart version.",
+                    ),
+                ],
+            )
             _complete_checkpoint_phase("preflight")
         if _start_checkpoint_phase(
             "discovery",
@@ -13969,6 +14125,22 @@ def _run_managed_soperator_cluster_upgrade(
                 "redaction": "local",
             }
             _checkpoint("discovery-created")
+            _run_stage_fast_verification(
+                phase_id="discovery",
+                summary="Managed Soperator discovery bundle was written.",
+                checks=[
+                    stage_fast_verification_check(
+                        "Discovery manifest",
+                        "passed" if discovery_path.exists() else "failed",
+                        str(discovery_path),
+                    ),
+                    stage_fast_verification_check(
+                        "Discovery bundle",
+                        "passed" if discovery_path.parent.exists() else "failed",
+                        str(discovery_path.parent),
+                    ),
+                ],
+            )
             _complete_checkpoint_phase("discovery")
 
         if pre_fingerprint is None:
@@ -14011,6 +14183,29 @@ def _run_managed_soperator_cluster_upgrade(
                 "report_redacted": True,
             }
             _checkpoint("backup-created")
+            _run_stage_fast_verification(
+                phase_id="backup",
+                summary="Restore-capable backup metadata is recorded.",
+                checks=[
+                    stage_fast_verification_check(
+                        "Backup archive path",
+                        "passed" if _non_empty_text(checkpoint["backup"].get("path")) else "failed",
+                        str(checkpoint["backup"].get("path") or "missing"),
+                    ),
+                    stage_fast_verification_check(
+                        "Backup archive SHA256",
+                        "passed" if _non_empty_text(checkpoint["backup"].get("sha256")) else "failed",
+                        str(checkpoint["backup"].get("sha256") or "missing"),
+                    ),
+                    stage_fast_verification_check(
+                        "Backup manifest SHA256",
+                        "passed"
+                        if _non_empty_text(checkpoint["backup"].get("manifest_sha256"))
+                        else "failed",
+                        str(checkpoint["backup"].get("manifest_sha256") or "missing"),
+                    ),
+                ],
+            )
             _complete_checkpoint_phase("backup")
         if _start_checkpoint_phase(
             "protected-state-capture",
@@ -14032,6 +14227,22 @@ def _run_managed_soperator_cluster_upgrade(
                 else None,
             )
             _checkpoint("protected-state-captured")
+            safety = checkpoint.get("upgrade_safety")
+            safety_map = safety if isinstance(safety, Mapping) else {}
+            protected = safety_map.get("protected_customer_state")
+            protected_map = protected if isinstance(protected, Mapping) else {}
+            before_hash = _non_empty_text(protected_map.get("before_hash"))
+            _run_stage_fast_verification(
+                phase_id="protected-state-capture",
+                summary="Protected customer-state baseline is recorded.",
+                checks=[
+                    stage_fast_verification_check(
+                        "Protected state before hash",
+                        "passed" if before_hash else "failed",
+                        before_hash or "missing",
+                    )
+                ],
+            )
             _complete_checkpoint_phase("protected-state-capture")
 
         if lifecycle.required and _start_checkpoint_phase(
@@ -14086,7 +14297,7 @@ def _run_managed_soperator_cluster_upgrade(
             "soperator-preflight-validation",
             "Running live Soperator and Slurm validation before mutation.",
         ):
-            _run_soperator_upgrade_validation_phase(
+            preflight_reports = _run_soperator_upgrade_validation_phase(
                 generated_config,
                 paths,
                 manifest,
@@ -14095,6 +14306,21 @@ def _run_managed_soperator_cluster_upgrade(
                 persist_reports=False,
             )
             _checkpoint("preflight-soperator-validation-completed")
+            _run_stage_fast_verification(
+                phase_id="soperator-preflight-validation",
+                summary="Preflight Soperator and Slurm validation completed.",
+                checks=[
+                    stage_fast_verification_check(
+                        "Preflight validation command",
+                        "passed",
+                        (
+                            "temporary reports were used"
+                            if not preflight_reports
+                            else f"reports={len(preflight_reports)}"
+                        ),
+                    )
+                ],
+            )
             _complete_checkpoint_phase("soperator-preflight-validation")
 
         if requested_mk8s_change:

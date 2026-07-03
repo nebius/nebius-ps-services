@@ -13,6 +13,13 @@ All notable changes to this project are tracked here. This changelog follows
   phase from the beginning, verify completed phases before skipping them, and
   persist the current pending phase/report on ordinary errors, Ctrl+C, and Typer
   aborts when Python can run cleanup.
+- Added phase-scoped Soperator upgrade validation summaries. Managed
+  `soperator upgrade` now records `phase_state[<phase>].fast_verification` for
+  every planned phase, including evidence-only setup phases, and both managed
+  and external upgrade execution print a phase validation summary before
+  advancing. Failed phase verification keeps the same phase pending, writes the
+  Markdown/JSON upgrade reports, and stops; full Soperator/Slurm validation
+  remains at managed postflight and external validation-hold boundaries.
 - Changed `ext-soperator upgrade --execute` runs with no explicit
   `--job-policy` to match managed `soperator upgrade`: real TTY runs default
   to `interactive` and carry that resolved policy through plan output, backup

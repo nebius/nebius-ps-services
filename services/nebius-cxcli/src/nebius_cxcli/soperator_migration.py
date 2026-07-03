@@ -125,6 +125,7 @@ from .soperator_upgrade_safety import (
     stage_fast_verification_failed,
     stage_fast_verification_markdown_lines,
     stage_fast_verification_report,
+    stage_fast_verification_status,
     update_safety_payload_with_before,
     update_safety_payload_with_verification,
     upgrade_safety_checkpoint_payload,
@@ -14603,14 +14604,25 @@ def _record_phase_fast_verification(
     )
     phase = _phase_state(checkpoint, phase_id)
     phase["fast_verification"] = payload
+    event_status = (
+        "failed" if status == "failed" else "skipped" if status == "skipped" else "passed"
+    )
     _append_event(
         checkpoint,
-        "execute-phase-fast-verification-" + ("failed" if status == "failed" else "passed"),
+        "execute-phase-fast-verification-" + event_status,
         phase=phase_id,
         status=status,
         summary=summary,
     )
     return payload
+
+
+def _phase_validation_summary_line(phase_id: str, verification: Mapping[str, Any]) -> str:
+    return (
+        f"Phase validation {phase_id}: "
+        f"{status_label(str(verification.get('status', '') or 'not_run'))} - "
+        f"{verification.get('summary') or 'No summary recorded.'}"
+    )
 
 
 def _fast_verification_check(name: str, status: str, summary: str) -> dict[str, str]:
@@ -15105,8 +15117,8 @@ def _run_external_upgrade_phase_fast_verification(
                 summary,
             )
         ]
-    status = "failed" if _fast_verification_failed(checks) else "passed"
-    _record_phase_fast_verification(
+    status = stage_fast_verification_status(checks)
+    payload = _record_phase_fast_verification(
         checkpoint=checkpoint,
         phase_id=phase_id,
         status=status,
@@ -15117,7 +15129,20 @@ def _run_external_upgrade_phase_fast_verification(
         raise SoperatorMigrationPhasePending(
             f"fast stage verification failed after {phase_id}: {summary}"
         )
-    return [f"Fast stage verification passed: {summary}"]
+    return [_phase_validation_summary_line(phase_id, payload)]
+
+
+def _fast_check_result_satisfied(result: tuple[str, list[Mapping[str, str]]]) -> bool:
+    _summary, checks = result
+    return not _fast_verification_failed(checks)
+
+
+def _completed_phase_probe_satisfied(probe: Callable[[], Any]) -> bool:
+    try:
+        probe()
+    except Exception:
+        return False
+    return True
 
 
 def _reconcile_completed_action_phases(
@@ -15163,11 +15188,54 @@ def _reconcile_completed_action_phases(
             kube_context=kube_context,
             command_runner=command_runner,
         ),
+        "online-bulk-data-sync": lambda: _fast_check_result_satisfied(
+            _online_bulk_data_sync_fast_verification_checks(
+                checkpoint=checkpoint,
+                kube_context=kube_context,
+                command_runner=command_runner,
+            )
+        ),
+        "rolling-compute-migration": lambda: _fast_check_result_satisfied(
+            _rolling_compute_fast_verification_checks(
+                checkpoint=checkpoint,
+                payload=payload,
+                source_report=source_report,
+                live_snapshot=live_snapshot,
+                target_ref=target_ref,
+                kube_context=kube_context,
+                command_runner=command_runner,
+            )
+        ),
         POPULATE_JAIL_REFRESH_PHASE_ID: lambda: _populate_jail_refresh_satisfied(
             checkpoint=checkpoint,
             target_ref=target_ref,
             kube_context=kube_context,
             command_runner=command_runner,
+        ),
+        "validation-and-rollback-hold": lambda: _fast_check_result_satisfied(
+            _validation_hold_fast_verification_checks(checkpoint=checkpoint)
+        ),
+        "retire-old-resources": lambda: _fast_check_result_satisfied(
+            _retire_old_resources_fast_verification_checks(checkpoint=checkpoint)
+        ),
+        "post-upgrade-mk8s-check": lambda: _completed_phase_probe_satisfied(
+            lambda: _verify_completed_soperator_migration_mk8s_state(
+                payload=payload,
+                source_report=source_report,
+                target_ref=target_ref,
+                worker_node_groups=worker_node_groups,
+                phase_ids=phase_ids,
+                command_runner=command_runner,
+            )
+        ),
+        "post-upgrade-helm-check": lambda: _completed_phase_probe_satisfied(
+            lambda: _verify_completed_soperator_migration_helm_state(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                target_version=str(
+                    _target_onboarding(payload, target_ref).get("target_version", "") or ""
+                ),
+            )
         ),
     }
     lines: list[str] = []
@@ -15977,6 +16045,25 @@ def _execute_soperator_migration_unlocked(
                 pending_reason = str(exc)
                 checkpoint["pending_phase"] = pending_phase
                 checkpoint["pending_reason"] = pending_reason
+                verification = stage_fast_verification_report(
+                    phase_id,
+                    _mapping(_mapping(checkpoint.get("phase_state")).get(phase_id)),
+                )
+                if str(verification.get("status", "") or "not_run") == "not_run":
+                    verification = _record_phase_fast_verification(
+                        checkpoint=checkpoint,
+                        phase_id=phase_id,
+                        status="failed",
+                        summary=pending_reason,
+                        checks=[
+                            _fast_verification_check(
+                                _STATUS_PHASE_LABELS.get(phase_id, phase_id),
+                                "failed",
+                                pending_reason,
+                            )
+                        ],
+                    )
+                phase_lines.append(_phase_validation_summary_line(phase_id, verification))
                 _checkpoint_progress()
                 break
             except (KeyboardInterrupt, EOFError) as exc:
@@ -15998,7 +16085,7 @@ def _execute_soperator_migration_unlocked(
                 mutation_performed=phase_mutation,
             )
             _clear_completed_pending_phase(checkpoint, phase_id)
-            phase_lines.extend([f"{phase_id}: {line}" for line in verification_lines])
+            phase_lines.extend(verification_lines)
             _checkpoint_progress()
             if phase_id in {
                 _EXTERNAL_NODE_TEMPLATE_PHASE_ID,
@@ -16039,7 +16126,7 @@ def _execute_soperator_migration_unlocked(
         except RuntimeError as exc:
             pending_phase = "post-upgrade-mk8s-check"
             pending_reason = str(exc).strip() or "post-upgrade MK8s check failed."
-            _record_phase_fast_verification(
+            payload = _record_phase_fast_verification(
                 checkpoint=checkpoint,
                 phase_id=pending_phase,
                 status="failed",
@@ -16052,6 +16139,7 @@ def _execute_soperator_migration_unlocked(
                     )
                 ],
             )
+            phase_lines.append(_phase_validation_summary_line(pending_phase, payload))
             _checkpoint_progress()
         except (KeyboardInterrupt, EOFError) as exc:
             _record_phase_failure("post-upgrade-mk8s-check", exc)
@@ -16065,7 +16153,7 @@ def _execute_soperator_migration_unlocked(
                 if mk8s_state_lines
                 else "completed MK8s node-template and worker rollout state verified."
             )
-            _record_phase_fast_verification(
+            payload = _record_phase_fast_verification(
                 checkpoint=checkpoint,
                 phase_id="post-upgrade-mk8s-check",
                 status="passed",
@@ -16080,6 +16168,7 @@ def _execute_soperator_migration_unlocked(
             )
             mk8s_phase_lines = [f"post-upgrade-mk8s-check: {line}" for line in mk8s_state_lines]
             phase_lines.extend(mk8s_phase_lines)
+            phase_lines.append(_phase_validation_summary_line("post-upgrade-mk8s-check", payload))
             completed_phases.add("post-upgrade-mk8s-check")
             _append_event(
                 checkpoint,
@@ -16107,7 +16196,7 @@ def _execute_soperator_migration_unlocked(
         except RuntimeError as exc:
             pending_phase = "post-upgrade-helm-check"
             pending_reason = str(exc).strip() or "post-upgrade Helm check failed."
-            _record_phase_fast_verification(
+            payload = _record_phase_fast_verification(
                 checkpoint=checkpoint,
                 phase_id=pending_phase,
                 status="failed",
@@ -16120,6 +16209,7 @@ def _execute_soperator_migration_unlocked(
                     )
                 ],
             )
+            phase_lines.append(_phase_validation_summary_line(pending_phase, payload))
             _checkpoint_progress()
         except (KeyboardInterrupt, EOFError) as exc:
             _record_phase_failure("post-upgrade-helm-check", exc)
@@ -16133,7 +16223,7 @@ def _execute_soperator_migration_unlocked(
                 if helm_state_lines
                 else "final Helm releases and target Soperator readiness verified."
             )
-            _record_phase_fast_verification(
+            payload = _record_phase_fast_verification(
                 checkpoint=checkpoint,
                 phase_id="post-upgrade-helm-check",
                 status="passed",
@@ -16151,6 +16241,7 @@ def _execute_soperator_migration_unlocked(
                 or _helm_state_lines_include_retirement_mutation(helm_state_lines)
             )
             phase_lines.extend(f"post-upgrade-helm-check: {line}" for line in helm_state_lines)
+            phase_lines.append(_phase_validation_summary_line("post-upgrade-helm-check", payload))
             completed_phases.add("post-upgrade-helm-check")
             _append_event(
                 checkpoint,

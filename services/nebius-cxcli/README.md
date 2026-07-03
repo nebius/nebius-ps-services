@@ -3568,10 +3568,16 @@ filesystems and node-group attachments; final cutover verifies the target
 SlurmCluster and expected NodeSets. If a completed action is no longer
 satisfied, cxcli removes that phase from the local completed set and reruns the
 existing phase handler. During execute, every completed stage also records a
-stage-scoped `fast_verification` checkpoint and the external upgrade report
-includes a `Stage Fast Verification` rollup plus the JSON `stage_verification`
-array. Post-upgrade MK8s and Helm readiness are first-class checkpointed
-phases, so a rerun can restart at either final check after an interruption.
+targeted stage-scoped `fast_verification` checkpoint, prints
+`Phase validation <phase-id>: PASS|FAIL|SKIP - <summary>`, and the external
+upgrade report includes a `Stage Fast Verification` rollup plus the JSON
+`stage_verification` array. Data sync, rolling compute, validation hold,
+old-resource retirement, and post-upgrade MK8s/Helm checks are reverified
+before a completed checkpoint phase is trusted on resume. The full
+Soperator/Slurm validation suite still runs at validation hold rather than
+after every individual phase. Post-upgrade MK8s and Helm readiness are
+first-class checkpointed phases, so a rerun can restart at either final check
+after an interruption.
 Before validation hold and again before reporting completion, cxcli verifies
 the target Soperator Helm release and rendered workloads, records the final
 post-upgrade MK8s and Helm readiness checks in the same stage-verification
@@ -3704,12 +3710,15 @@ CXCLI-managed Soperator upgrade follows these stages:
    stop, wait for the refreshed `populate-jail` Job to complete with the target
    image, and restore steady-state maintenance values before postflight
    validation.
-6. Fast stage verification gates: after ActiveChecks suspension, Slurm job
-   drain, MK8s node-template rollout, post-MK8s validation, Soperator chart
-   apply, populate-jail refresh, postflight validation, ActiveChecks restore,
-   Slurm restore, and shared safety verification, record a stage-scoped
-   `fast_verification` result before the next stage starts. Failed gates write
-   the checkpoint/report and stop the run.
+6. Fast phase verification gates: after every planned phase, record a
+   stage-scoped `fast_verification` result before the next phase starts. Setup
+   phases validate evidence only, such as generated-bundle preflight,
+   discovery-bundle path, backup hashes, protected-state baseline, and
+   preflight-validation completion. Runtime phases use targeted phase checks
+   for MK8s readiness, chart identity, populate-jail result, ActiveChecks
+   restore, Slurm restore, postflight, and shared safety. No-op phases are
+   recorded as `SKIP`; failed gates print the phase validation summary, write
+   the checkpoint/report, and stop the run.
 7. Postflight validation and restore: restore Slurm node state and cxcli-owned
    ActiveChecks, compare protected config and shared protected-state hashes while
    ignoring cxcli-owned temporary drain/replacement churn, run required
@@ -3743,9 +3752,9 @@ chart when requested, verifies the static Soperator chart version on live
 Kubernetes objects, compares protected customer config fingerprints plus shared
 protected-state before/after hashes while excluding cxcli-owned temporary drain
 state and replacement instance churn, reruns the required Soperator/Slurm smoke
-validation, runs the same bounded read-only fast safety verifier used by
-external upgrades, gates each completed managed upgrade stage with a
-stage-scoped `fast_verification`, and writes command-owned validation details
+validation at postflight, runs the same bounded read-only fast safety verifier
+used by external upgrades, gates each completed managed upgrade phase with a
+targeted stage-scoped `fast_verification`, and writes command-owned validation details
 plus the Markdown `Stage Fast Verification` rollup and JSON `stage_verification`
 details in
 `generated/reports/soperator-upgrade-report.md` /

@@ -1494,6 +1494,11 @@ def test_docs_define_component_selector_contract() -> None:
     assert "JSON detail reports referenced from those Markdown reports" in readme_flat
     assert "`Stage Fast Verification` rollup" in readme_flat
     assert "JSON `stage_verification` array" in readme_flat
+    assert "Setup phases validate evidence only" in readme_flat
+    assert "No-op phases are recorded as `SKIP`" in readme_flat
+    assert "Soperator/Slurm validation suite still runs at validation hold" in readme_flat
+    assert "per-phase `phase_state[<phase>].fast_verification` proof" in design_flat
+    assert "targeted phase-fast smoke" in design_flat
     assert (
         "the selected actions become deploy-owned for the next normal reconciliation" in readme_flat
     )

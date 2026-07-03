@@ -795,6 +795,19 @@ def stage_fast_verification_failed(checks: Sequence[Mapping[str, Any]]) -> bool:
     return any(str(check.get("status", "") or "") == "failed" for check in checks)
 
 
+def stage_fast_verification_status(checks: Sequence[Mapping[str, Any]]) -> str:
+    if stage_fast_verification_failed(checks):
+        return "failed"
+    statuses = [
+        str(check.get("status", "") or "").strip().lower().replace("_", "-")
+        for check in checks
+        if str(check.get("status", "") or "").strip()
+    ]
+    if statuses and all(status in {"skipped", "skip"} for status in statuses):
+        return "skipped"
+    return "passed"
+
+
 def build_stage_fast_verification_payload(
     *,
     phase_id: str,
