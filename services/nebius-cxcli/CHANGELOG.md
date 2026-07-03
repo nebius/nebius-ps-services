@@ -6,6 +6,13 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Added phase-bounded resume checkpoints for managed `soperator upgrade` and
+  hardened the existing external `ext-soperator upgrade --execute` phase
+  runner. Both commands now record `planned_phases`, `completed_phases`,
+  `pending_phase`, and per-phase `phase_state`; reruns restart the interrupted
+  phase from the beginning, verify completed phases before skipping them, and
+  persist the current pending phase/report on ordinary errors, Ctrl+C, and Typer
+  aborts when Python can run cleanup.
 - Changed `ext-soperator upgrade --execute` runs with no explicit
   `--job-policy` to match managed `soperator upgrade`: real TTY runs default
   to `interactive` and carry that resolved policy through plan output, backup

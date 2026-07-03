@@ -2708,6 +2708,8 @@ def test_execute_records_approval_and_runs_checkpointed_mutators(tmp_path: Path)
         "populate-jail-refresh",
         "validation-and-rollback-hold",
         "retire-old-resources",
+        "post-upgrade-mk8s-check",
+        "post-upgrade-helm-check",
     )
     assert result.pending_phase == "none"
     assert "Auto-selected source worker node groups: gpu-pool" in "\n".join(result.lines)
@@ -2922,6 +2924,170 @@ def test_execute_fast_verification_failure_keeps_same_phase_pending(
     assert stage_verification["rolling-compute-migration"]["status"] == "not_run"
 
 
+def test_execute_runtime_error_keeps_current_phase_pending_and_resumes_same_phase(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = _snapshot()
+    source_report = _source_report(snapshot)
+    runner = _FakeCommandRunner()
+    original_handler = migration._execute_target_gpu_stack_remediation_phase
+    handler_calls = 0
+
+    def _fail_once_target_gpu_stack(**kwargs: Any) -> tuple[bool, list[str]]:
+        nonlocal handler_calls
+        handler_calls += 1
+        if handler_calls == 1:
+            checkpoint = kwargs["checkpoint"]
+            assert isinstance(checkpoint, dict)
+            phase = checkpoint.setdefault("phase_state", {}).setdefault(
+                migration._TARGET_GPU_STACK_PHASE_ID,
+                {},
+            )
+            phase["attempt_recorded_before_failure"] = True
+            writer = kwargs.get("checkpoint_writer")
+            if callable(writer):
+                writer()
+            raise RuntimeError("target GPU stack failed mid-phase")
+        return original_handler(**kwargs)
+
+    monkeypatch.setattr(
+        migration,
+        "_execute_target_gpu_stack_remediation_phase",
+        _fail_once_target_gpu_stack,
+    )
+
+    with pytest.raises(RuntimeError, match="target GPU stack failed mid-phase"):
+        execute_soperator_migration(
+            config_path=tmp_path / "config.yaml",
+            target_ref="external-cluster",
+            payload=_payload(),
+            source_report=source_report,
+            backup_metadata=_backup_metadata("runtime-error-pending"),
+            snapshot_collector=lambda *, kube_context: snapshot,
+            approved=True,
+            command_runner=runner,
+            worker_rollout_strategy="safe-surge",
+        )
+
+    checkpoint_path = soperator_migration_checkpoint_path(
+        tmp_path / "config.yaml",
+        "external-cluster",
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["pending_phase"] == migration._TARGET_GPU_STACK_PHASE_ID
+    assert checkpoint["pending_reason"] == "target GPU stack failed mid-phase"
+    assert checkpoint["completed_phases"] == [
+        "discovery-and-plan",
+        "customer-approval",
+        "external-node-template-upgrade",
+    ]
+    assert migration._TARGET_GPU_STACK_PHASE_ID not in checkpoint["completed_phases"]
+    assert checkpoint["phase_state"][migration._TARGET_GPU_STACK_PHASE_ID][
+        "attempt_recorded_before_failure"
+    ] is True
+    assert "execute-phase-failed" in {event["event"] for event in checkpoint["events"]}
+    assert (tmp_path / "generated" / "reports" / "ext-soperator-upgrade-report.md").exists()
+
+    runner.calls.clear()
+    resumed = execute_soperator_migration(
+        config_path=tmp_path / "config.yaml",
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=source_report,
+        snapshot_collector=lambda *, kube_context: snapshot,
+        command_runner=runner,
+        worker_rollout_strategy="safe-surge",
+    )
+
+    assert handler_calls == 2
+    assert resumed.pending_phase == "none"
+    assert migration._TARGET_GPU_STACK_PHASE_ID in resumed.completed_phases
+    assert any(
+        call[0][:4] == ("helm", "--kube-context", "external-context", "upgrade")
+        for call in runner.calls
+    )
+
+
+def test_execute_keyboard_interrupt_keeps_current_phase_pending_and_resumes_same_phase(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = _snapshot()
+    source_report = _source_report(snapshot)
+    runner = _FakeCommandRunner()
+    original_handler = migration._execute_target_gpu_stack_remediation_phase
+    handler_calls = 0
+
+    def _interrupt_once_target_gpu_stack(**kwargs: Any) -> tuple[bool, list[str]]:
+        nonlocal handler_calls
+        handler_calls += 1
+        if handler_calls == 1:
+            checkpoint = kwargs["checkpoint"]
+            assert isinstance(checkpoint, dict)
+            phase = checkpoint.setdefault("phase_state", {}).setdefault(
+                migration._TARGET_GPU_STACK_PHASE_ID,
+                {},
+            )
+            phase["attempt_recorded_before_interrupt"] = True
+            writer = kwargs.get("checkpoint_writer")
+            if callable(writer):
+                writer()
+            raise KeyboardInterrupt
+        return original_handler(**kwargs)
+
+    monkeypatch.setattr(
+        migration,
+        "_execute_target_gpu_stack_remediation_phase",
+        _interrupt_once_target_gpu_stack,
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        execute_soperator_migration(
+            config_path=tmp_path / "config.yaml",
+            target_ref="external-cluster",
+            payload=_payload(),
+            source_report=source_report,
+            backup_metadata=_backup_metadata("keyboard-interrupt-pending"),
+            snapshot_collector=lambda *, kube_context: snapshot,
+            approved=True,
+            command_runner=runner,
+            worker_rollout_strategy="safe-surge",
+        )
+
+    checkpoint_path = soperator_migration_checkpoint_path(
+        tmp_path / "config.yaml",
+        "external-cluster",
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["pending_phase"] == migration._TARGET_GPU_STACK_PHASE_ID
+    assert checkpoint["pending_reason"] == "interrupted by user"
+    assert checkpoint["completed_phases"] == [
+        "discovery-and-plan",
+        "customer-approval",
+        "external-node-template-upgrade",
+    ]
+    assert checkpoint["phase_state"][migration._TARGET_GPU_STACK_PHASE_ID][
+        "attempt_recorded_before_interrupt"
+    ] is True
+    assert "execute-interrupted" in {event["event"] for event in checkpoint["events"]}
+
+    runner.calls.clear()
+    resumed = execute_soperator_migration(
+        config_path=tmp_path / "config.yaml",
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=source_report,
+        snapshot_collector=lambda *, kube_context: snapshot,
+        command_runner=runner,
+        worker_rollout_strategy="safe-surge",
+    )
+
+    assert handler_calls == 2
+    assert resumed.pending_phase == "none"
+    assert migration._TARGET_GPU_STACK_PHASE_ID in resumed.completed_phases
+
+
 def test_execute_final_helm_check_failure_writes_pending_report(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2985,6 +3151,57 @@ def test_execute_final_helm_check_failure_writes_pending_report(
     assert upgrade_json_report["pending_phase"] == "post-upgrade-helm-check"
     migrate_report = (reports_dir / "ext-soperator-upgrade-report.md").read_text(encoding="utf-8")
     assert "`post-upgrade-helm-check`: `FAIL`" in migrate_report
+
+
+def test_execute_final_helm_check_keyboard_interrupt_writes_pending_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_report = _source_report(_snapshot())
+    original_helm_verifier = migration._verify_completed_soperator_migration_helm_state
+    verifier_calls = 0
+
+    def _interrupt_final_helm_check(**kwargs: Any) -> list[str]:
+        nonlocal verifier_calls
+        verifier_calls += 1
+        if verifier_calls >= 2:
+            raise KeyboardInterrupt
+        return original_helm_verifier(**kwargs)
+
+    monkeypatch.setattr(
+        migration,
+        "_verify_completed_soperator_migration_helm_state",
+        _interrupt_final_helm_check,
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        execute_soperator_migration(
+            config_path=tmp_path / "config.yaml",
+            target_ref="external-cluster",
+            payload=_payload(),
+            source_report=source_report,
+            backup_metadata=_backup_metadata("final-helm-interrupted"),
+            snapshot_collector=lambda *, kube_context: _snapshot(),
+            approved=True,
+            command_runner=_FakeCommandRunner(),
+            worker_rollout_strategy="safe-surge",
+        )
+
+    checkpoint_path = soperator_migration_checkpoint_path(
+        tmp_path / "config.yaml",
+        "external-cluster",
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["pending_phase"] == "post-upgrade-helm-check"
+    assert checkpoint["pending_reason"] == "interrupted by user"
+    assert "post-upgrade-helm-check" not in checkpoint["completed_phases"]
+    assert "execute-interrupted" in {event["event"] for event in checkpoint["events"]}
+    reports_dir = tmp_path / "generated" / "reports"
+    upgrade_json_report = json.loads(
+        (reports_dir / "ext-soperator-upgrade-report.json").read_text(encoding="utf-8")
+    )
+    assert upgrade_json_report["pending_phase"] == "post-upgrade-helm-check"
+    assert upgrade_json_report["pending_reason"] == "interrupted by user"
 
 
 def test_execute_final_mk8s_check_failure_writes_pending_report(
@@ -3237,7 +3454,7 @@ def test_execute_clears_stale_pending_phase_after_successful_resume(
     )
 
     assert resumed.pending_phase == "none"
-    assert retire_pending_observations == [("none", "")]
+    assert retire_pending_observations == [("retire-old-resources", "")]
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert checkpoint["pending_phase"] == "none"
     assert checkpoint["pending_reason"] == ""
@@ -8389,6 +8606,8 @@ def test_execute_runs_gpu_reconciliation_when_report_has_no_migration_plan(
         "discovery-and-plan",
         "customer-approval",
         "target-gpu-stack-remediation",
+        "post-upgrade-mk8s-check",
+        "post-upgrade-helm-check",
     )
     helm_upgrade_calls = [
         call
@@ -10507,10 +10726,15 @@ def test_execute_requires_inferred_worker_groups_for_approved_compute_migration(
         )
     assert "nebius-cxcli ext-soperator onboard" in str(exc_info.value)
 
-    assert not soperator_migration_checkpoint_path(
+    checkpoint_path = soperator_migration_checkpoint_path(
         tmp_path / "config.yaml",
         "external-cluster",
-    ).exists()
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["backup"] == _backup_metadata("test-pre-upgrade")
+    assert checkpoint["completed_phases"] == []
+    assert checkpoint["pending_phase"] == "none"
+    assert not checkpoint.get("customer_approved_at")
 
 
 def test_execute_rejects_changed_live_source_version(tmp_path: Path) -> None:

@@ -166,6 +166,8 @@ _ORDERED_EXECUTE_PHASE_IDS = (
     POPULATE_JAIL_REFRESH_PHASE_ID,
     "validation-and-rollback-hold",
     "retire-old-resources",
+    "post-upgrade-mk8s-check",
+    "post-upgrade-helm-check",
 )
 _SUPPORTED_EXECUTE_PHASE_IDS = frozenset(_ORDERED_EXECUTE_PHASE_IDS)
 _SOPERATOR_STORAGE_KEYS = ("jail", "controller-spool", "accounting")
@@ -179,6 +181,8 @@ _RESUME_OPTIONAL_PLANNED_PHASE_IDS = frozenset(
         "final-control-plane-cutover",
         "validation-and-rollback-hold",
         "retire-old-resources",
+        "post-upgrade-mk8s-check",
+        "post-upgrade-helm-check",
     }
 )
 _EXTERNAL_UPGRADE_TOP_LEVEL_STAGE_MK8S = "MK8s Node Upgrades"
@@ -1764,6 +1768,12 @@ def _phase_ids_for_actions(
         if _EXTERNAL_NODE_TEMPLATE_PHASE_ID in phases:
             insert_at = max(insert_at, phases.index(_EXTERNAL_NODE_TEMPLATE_PHASE_ID) + 1)
         phases.insert(insert_at, _TARGET_GPU_STACK_PHASE_ID)
+        phase_ids = tuple(phases)
+    if phase_ids and actions:
+        phases = list(phase_ids)
+        for phase_id in _POST_UPGRADE_CHECK_PHASE_IDS:
+            if phase_id not in phases:
+                phases.append(phase_id)
         phase_ids = tuple(phases)
     return phase_ids
 
@@ -10852,6 +10862,7 @@ def _execute_target_gpu_stack_remediation_phase(
     target_ref: str,
     kube_context: str,
     command_runner: SoperatorMigrationCommandRunner,
+    checkpoint_writer: Callable[[], None] | None = None,
 ) -> tuple[bool, list[str]]:
     phase = _phase_state(checkpoint, _TARGET_GPU_STACK_PHASE_ID)
     rows = _target_gpu_stack_app_rows(payload, target_ref)
@@ -10883,6 +10894,9 @@ def _execute_target_gpu_stack_remediation_phase(
                 post_render_patches,
                 sort_keys=True,
             )
+        phase["charts"] = [dict(item) for item in applied]
+        if checkpoint_writer is not None:
+            checkpoint_writer()
         version = f"@{result['version']}" if result.get("version") else ""
         lines.append(
             "Applied target GPU stack chart: "
@@ -10904,6 +10918,8 @@ def _execute_target_gpu_stack_remediation_phase(
             )
     phase["charts"] = [dict(item) for item in applied]
     phase["completed_at"] = _utc_now()
+    if checkpoint_writer is not None:
+        checkpoint_writer()
     return True, lines
 
 
@@ -11784,6 +11800,7 @@ def _execute_populate_jail_refresh_phase(
     slurm_decision_recorder: Callable[[Mapping[str, Any]], None] | None = None,
     interactive_prompt_pause: Callable[[], Any] | None = None,
     allow_resolved_interactive_job_policy: bool = False,
+    checkpoint_writer: Callable[[], None] | None = None,
 ) -> tuple[bool, list[str]]:
     phase = _phase_state(checkpoint, POPULATE_JAIL_REFRESH_PHASE_ID)
     before = inspect_populate_jail(
@@ -11800,15 +11817,21 @@ def _execute_populate_jail_refresh_phase(
         namespace=_SOPERATOR_NAMESPACE,
     )
     phase["plan"] = plan.as_payload()
+    if checkpoint_writer is not None:
+        checkpoint_writer()
     if not plan.required:
         result = skipped_populate_jail_refresh_result(plan)
         phase["result"] = result.as_payload()
         phase["completed_at"] = _utc_now()
+        if checkpoint_writer is not None:
+            checkpoint_writer()
         return False, [f"Populate-jail refresh skipped: {result.reason}."]
     if plan.mode == "manual":
         result = manual_populate_jail_refresh_result(plan)
         phase["result"] = result.as_payload()
         phase["pending_reason"] = result.detail
+        if checkpoint_writer is not None:
+            checkpoint_writer()
         raise SoperatorMigrationPhasePending(result.detail)
 
     values = _patch_target_values_for_compute(
@@ -11860,6 +11883,8 @@ def _execute_populate_jail_refresh_phase(
     )
     phase["slurm_quiet_at"] = _utc_now()
     phase["slurm_quiet_lines"] = list(quiet_lines)
+    if checkpoint_writer is not None:
+        checkpoint_writer()
     slurm_resume_lines: list[str] = []
     try:
         _helm_upgrade_target_soperator(
@@ -11871,6 +11896,8 @@ def _execute_populate_jail_refresh_phase(
         )
         mutation_performed = True
         phase["overwrite_maintenance_applied_at"] = _utc_now()
+        if checkpoint_writer is not None:
+            checkpoint_writer()
         consumers_down = wait_for_populate_jail_consumers_down(
             command_runner,
             namespace=_SOPERATOR_NAMESPACE,
@@ -11879,6 +11906,8 @@ def _execute_populate_jail_refresh_phase(
         )
         phase["consumers_down_at"] = _utc_now()
         phase["active_consumer_pods"] = list(consumers_down.active_consumer_pods)
+        if checkpoint_writer is not None:
+            checkpoint_writer()
         refreshed = wait_for_populate_jail_refresh(
             command_runner,
             namespace=_SOPERATOR_NAMESPACE,
@@ -11888,6 +11917,8 @@ def _execute_populate_jail_refresh_phase(
             kube_context=kube_context,
         )
         phase["job_completed_at"] = _utc_now()
+        if checkpoint_writer is not None:
+            checkpoint_writer()
     finally:
         _helm_upgrade_target_soperator(
             command_runner=command_runner,
@@ -11906,12 +11937,16 @@ def _execute_populate_jail_refresh_phase(
         maintenance_restored = True
         mutation_performed = True
         phase["steady_state_applied_at"] = _utc_now()
+        if checkpoint_writer is not None:
+            checkpoint_writer()
         _resume_slurm_partitions(
             command_runner=command_runner,
             kube_context=kube_context,
         )
         phase["slurm_resumed_at"] = _utc_now()
         slurm_resume_lines = ["Slurm partitions resumed after populate-jail refresh."]
+        if checkpoint_writer is not None:
+            checkpoint_writer()
     if refreshed is None:
         refreshed = inspect_populate_jail(
             command_runner,
@@ -11927,6 +11962,8 @@ def _execute_populate_jail_refresh_phase(
     )
     phase["result"] = result.as_payload()
     phase["completed_at"] = _utc_now()
+    if checkpoint_writer is not None:
+        checkpoint_writer()
     return mutation_performed, [
         *slurm_resume_lines,
         f"Populate-jail refreshed with image {result.job_image or result.target_image or 'unknown'}.",
@@ -12401,6 +12438,7 @@ def _execute_retire_old_resources_phase(
     live_snapshot: Mapping[str, Any],
     kube_context: str,
     command_runner: SoperatorMigrationCommandRunner,
+    checkpoint_writer: Callable[[], None] | None = None,
 ) -> tuple[bool, list[str]]:
     phase = _phase_state(checkpoint, "retire-old-resources")
     rolling = _mapping(_mapping(checkpoint.get("phase_state")).get("rolling-compute-migration"))
@@ -12413,6 +12451,8 @@ def _execute_retire_old_resources_phase(
                 "and replaced service-role compute references are no longer active."
             )
         phase["skipped_reason"] = "in-place worker node groups preserved"
+        if checkpoint_writer is not None:
+            checkpoint_writer()
         return False, ["Retire old resources skipped: in-place worker node groups are preserved."]
 
     old_nodes = _nodes_for_source_groups(
@@ -12426,12 +12466,18 @@ def _execute_retire_old_resources_phase(
             nodes=old_nodes,
             action="cordon",
         )
+        phase["old_nodes_cordoned_at"] = _utc_now()
+        if checkpoint_writer is not None:
+            checkpoint_writer()
         _uncordon_or_drain_nodes(
             command_runner=command_runner,
             kube_context=kube_context,
             nodes=old_nodes,
             action="drain",
         )
+        phase["old_nodes_drained_at"] = _utc_now()
+        if checkpoint_writer is not None:
+            checkpoint_writer()
     retired: list[dict[str, str]] = []
     for group_name, item in old_groups_raw.items():
         node_group_id = str(_mapping(item).get("id", "") or "").strip()
@@ -12442,11 +12488,17 @@ def _execute_retire_old_resources_phase(
             node_group_id=node_group_id,
             count=0,
         )
+        phase["last_scaled_node_group_id"] = node_group_id
+        if checkpoint_writer is not None:
+            checkpoint_writer()
         _delete_node_group(
             command_runner=command_runner,
             node_group_id=node_group_id,
         )
         retired.append({"source_group": str(group_name), "node_group_id": node_group_id})
+        phase["retired_node_groups"] = retired
+        if checkpoint_writer is not None:
+            checkpoint_writer()
     if not retired:
         raise SoperatorMigrationPhasePending(
             "retire-old-resources found replaced service-role groups in the checkpoint, but no "
@@ -12455,6 +12507,8 @@ def _execute_retire_old_resources_phase(
     phase["retired_node_groups"] = retired
     if _snapshot_storage(source_report):
         phase["storage_retirement"] = "held"
+    if checkpoint_writer is not None:
+        checkpoint_writer()
     return True, [
         "Retired replaced service-role node groups: "
         + ", ".join(f"{item['source_group']} ({item['node_group_id']})" for item in retired)
@@ -12725,6 +12779,8 @@ def _write_soperator_migrate_report(
     phase_reports: list[dict[str, Any]] = []
     stage_verification_reports: list[dict[str, Any]] = []
     for phase_id in phase_ids:
+        if phase_id in _POST_UPGRADE_CHECK_PHASE_IDS:
+            continue
         status = _phase_report_status(
             phase_id,
             completed_phases=completed_phases,
@@ -12985,6 +13041,9 @@ def _checkpoint_for_run(
             if isinstance(completed_segment_ids, list):
                 checkpoint["completed_segment_ids"] = list(completed_segment_ids)
     checkpoint.setdefault("upgrade_safety", upgrade_safety_checkpoint_payload())
+    checkpoint.setdefault("pending_phase", "none")
+    checkpoint.setdefault("pending_reason", "")
+    checkpoint.setdefault("phase_state", {})
     if upgrade_path_fingerprint:
         path_state = dict(_mapping(checkpoint.get("upgrade_path")))
         path_state["fingerprint"] = upgrade_path_fingerprint
@@ -13049,9 +13108,15 @@ def _same_resume_checkpoint_plan(
     )
     if existing == incoming:
         return True
-    if not incoming or existing[: len(incoming)] != incoming:
-        return False
-    return all(phase in _RESUME_OPTIONAL_PLANNED_PHASE_IDS for phase in existing[len(incoming) :])
+    if incoming and existing[: len(incoming)] == incoming:
+        return all(
+            phase in _RESUME_OPTIONAL_PLANNED_PHASE_IDS for phase in existing[len(incoming) :]
+        )
+    if existing and incoming[: len(existing)] == existing:
+        return all(
+            phase in _RESUME_OPTIONAL_PLANNED_PHASE_IDS for phase in incoming[len(existing) :]
+        )
+    return False
 
 
 def _checkpoint_has_mutating_progress(checkpoint: Mapping[str, Any] | None) -> bool:
@@ -15435,6 +15500,10 @@ def _execute_soperator_migration_unlocked(
     elif incoming_backup:
         backup_state.update(incoming_backup)
     checkpoint["backup"] = backup_state
+    if incoming_backup:
+        checkpoint["updated_at"] = _utc_now()
+        _append_event(checkpoint, "backup-metadata-checkpointed")
+        _write_checkpoint(checkpoint_path, checkpoint)
     slurm_state = dict(_mapping(checkpoint.get("slurm")))
     slurm_state.update(
         {
@@ -15640,6 +15709,45 @@ def _execute_soperator_migration_unlocked(
         checkpoint["updated_at"] = _utc_now()
         _write_checkpoint(checkpoint_path, checkpoint)
 
+    def _record_phase_failure(
+        phase_id: str,
+        exc: BaseException,
+    ) -> None:
+        nonlocal pending_phase, pending_reason
+        interrupted = isinstance(exc, (KeyboardInterrupt, EOFError))
+        pending_phase = phase_id
+        pending_reason = (
+            "interrupted by user"
+            if interrupted
+            else (str(exc).strip() or exc.__class__.__name__)
+        )
+        checkpoint["pending_phase"] = pending_phase
+        checkpoint["pending_reason"] = pending_reason
+        _append_event(
+            checkpoint,
+            "execute-interrupted" if interrupted else "execute-phase-failed",
+            phase=phase_id,
+            error=pending_reason,
+        )
+        report_path = _migrate_report_path(config_path)
+        json_report_path = _upgrade_report_json_path(config_path)
+        checkpoint["upgrade_report"] = str(report_path)
+        checkpoint["upgrade_report_json"] = str(json_report_path)
+        _write_soperator_migrate_report(
+            config_path=config_path,
+            checkpoint_path=checkpoint_path,
+            checkpoint=checkpoint,
+            phase_ids=phase_ids,
+            completed_phases=completed_phases,
+            target_ref=normalized_target,
+            source_version=live_source_version,
+            target_version=target_version,
+            pending_phase=pending_phase,
+            pending_reason=pending_reason,
+            mutation_performed=mutation_performed,
+        )
+        _checkpoint_progress()
+
     status_reporter: SoperatorMigrationStatusReporter | None = None
     if effective_approval and status_callback is not None:
         status_reporter = SoperatorMigrationStatusReporter(
@@ -15740,6 +15848,7 @@ def _execute_soperator_migration_unlocked(
                 target_ref=normalized_target,
                 kube_context=kube_context,
                 command_runner=active_command_runner,
+                checkpoint_writer=_checkpoint_progress,
             ),
             "create-aligned-sfs": lambda: _execute_create_aligned_sfs_phase(
                 checkpoint=checkpoint,
@@ -15801,6 +15910,7 @@ def _execute_soperator_migration_unlocked(
                 slurm_decision_recorder=_record_slurm_decision,
                 interactive_prompt_pause=status_prompt_pause,
                 allow_resolved_interactive_job_policy=allow_resolved_interactive_job_policy,
+                checkpoint_writer=_checkpoint_progress,
             ),
             "validation-and-rollback-hold": lambda: _execute_validation_hold_phase(
                 config_path=config_path,
@@ -15819,10 +15929,13 @@ def _execute_soperator_migration_unlocked(
                 live_snapshot=live_snapshot,
                 kube_context=kube_context,
                 command_runner=active_command_runner,
+                checkpoint_writer=_checkpoint_progress,
             ),
         }
         for phase_id in phase_ids:
             if phase_id in {"discovery-and-plan", "customer-approval"}:
+                continue
+            if phase_id in _POST_UPGRADE_CHECK_PHASE_IDS:
                 continue
             if phase_id in completed_phases:
                 continue
@@ -15835,6 +15948,10 @@ def _execute_soperator_migration_unlocked(
             phase_mutation = False
             verification_lines: list[str] = []
             try:
+                checkpoint["pending_phase"] = phase_id
+                checkpoint["pending_reason"] = ""
+                _append_event(checkpoint, "execute-phase-started", phase=phase_id)
+                _checkpoint_progress()
                 if status_reporter is not None:
                     _append_status_event(status_reporter.set_phase(phase_id), point="phase-start")
                     status_reporter.start()
@@ -15862,6 +15979,12 @@ def _execute_soperator_migration_unlocked(
                 checkpoint["pending_reason"] = pending_reason
                 _checkpoint_progress()
                 break
+            except (KeyboardInterrupt, EOFError) as exc:
+                _record_phase_failure(phase_id, exc)
+                raise
+            except Exception as exc:
+                _record_phase_failure(phase_id, exc)
+                raise
             finally:
                 if status_reporter is not None:
                     _append_status_event(status_reporter.emit(force=True), point="phase-end")
@@ -15899,6 +16022,10 @@ def _execute_soperator_migration_unlocked(
             "post-upgrade-mk8s-check",
             "verifying completed MK8s node-template and worker rollout state.",
         )
+        checkpoint["pending_phase"] = "post-upgrade-mk8s-check"
+        checkpoint["pending_reason"] = ""
+        _append_event(checkpoint, "execute-phase-started", phase="post-upgrade-mk8s-check")
+        _checkpoint_progress()
         mk8s_phase_lines: list[str] = []
         try:
             mk8s_state_lines = _verify_completed_soperator_migration_mk8s_state(
@@ -15926,6 +16053,12 @@ def _execute_soperator_migration_unlocked(
                 ],
             )
             _checkpoint_progress()
+        except (KeyboardInterrupt, EOFError) as exc:
+            _record_phase_failure("post-upgrade-mk8s-check", exc)
+            raise
+        except Exception as exc:
+            _record_phase_failure("post-upgrade-mk8s-check", exc)
+            raise
         else:
             mk8s_summary = (
                 mk8s_state_lines[0]
@@ -15947,59 +16080,86 @@ def _execute_soperator_migration_unlocked(
             )
             mk8s_phase_lines = [f"post-upgrade-mk8s-check: {line}" for line in mk8s_state_lines]
             phase_lines.extend(mk8s_phase_lines)
-            _checkpoint_progress()
-            _emit_phase_comment(
-                "post-upgrade-helm-check",
-                "verifying final Helm releases and target Soperator readiness.",
+            completed_phases.add("post-upgrade-mk8s-check")
+            _append_event(
+                checkpoint,
+                "execute-phase-completed",
+                phase="post-upgrade-mk8s-check",
+                mutation_performed=False,
             )
-            try:
-                helm_state_lines = _verify_completed_soperator_migration_helm_state(
-                    command_runner=active_command_runner,
-                    kube_context=kube_context,
-                    target_version=target_version,
-                )
-            except RuntimeError as exc:
-                pending_phase = "post-upgrade-helm-check"
-                pending_reason = str(exc).strip() or "post-upgrade Helm check failed."
-                _record_phase_fast_verification(
-                    checkpoint=checkpoint,
-                    phase_id=pending_phase,
-                    status="failed",
-                    summary=pending_reason,
-                    checks=[
-                        _fast_verification_check(
-                            "Post-upgrade Helm state",
-                            "failed",
-                            pending_reason,
-                        )
-                    ],
-                )
-                _checkpoint_progress()
-            else:
-                helm_summary = (
-                    helm_state_lines[0]
-                    if helm_state_lines
-                    else "final Helm releases and target Soperator readiness verified."
-                )
-                _record_phase_fast_verification(
-                    checkpoint=checkpoint,
-                    phase_id="post-upgrade-helm-check",
-                    status="passed",
-                    summary=helm_summary,
-                    checks=[
-                        _fast_verification_check(
-                            "Post-upgrade Helm state",
-                            "passed",
-                            helm_summary,
-                        )
-                    ],
-                )
-                mutation_performed = (
-                    mutation_performed
-                    or _helm_state_lines_include_retirement_mutation(helm_state_lines)
-                )
-                phase_lines.extend(f"post-upgrade-helm-check: {line}" for line in helm_state_lines)
-                _checkpoint_progress()
+            _clear_completed_pending_phase(checkpoint, "post-upgrade-mk8s-check")
+            _checkpoint_progress()
+    if not pending_phase and effective_approval:
+        _emit_phase_comment(
+            "post-upgrade-helm-check",
+            "verifying final Helm releases and target Soperator readiness.",
+        )
+        checkpoint["pending_phase"] = "post-upgrade-helm-check"
+        checkpoint["pending_reason"] = ""
+        _append_event(checkpoint, "execute-phase-started", phase="post-upgrade-helm-check")
+        _checkpoint_progress()
+        try:
+            helm_state_lines = _verify_completed_soperator_migration_helm_state(
+                command_runner=active_command_runner,
+                kube_context=kube_context,
+                target_version=target_version,
+            )
+        except RuntimeError as exc:
+            pending_phase = "post-upgrade-helm-check"
+            pending_reason = str(exc).strip() or "post-upgrade Helm check failed."
+            _record_phase_fast_verification(
+                checkpoint=checkpoint,
+                phase_id=pending_phase,
+                status="failed",
+                summary=pending_reason,
+                checks=[
+                    _fast_verification_check(
+                        "Post-upgrade Helm state",
+                        "failed",
+                        pending_reason,
+                    )
+                ],
+            )
+            _checkpoint_progress()
+        except (KeyboardInterrupt, EOFError) as exc:
+            _record_phase_failure("post-upgrade-helm-check", exc)
+            raise
+        except Exception as exc:
+            _record_phase_failure("post-upgrade-helm-check", exc)
+            raise
+        else:
+            helm_summary = (
+                helm_state_lines[0]
+                if helm_state_lines
+                else "final Helm releases and target Soperator readiness verified."
+            )
+            _record_phase_fast_verification(
+                checkpoint=checkpoint,
+                phase_id="post-upgrade-helm-check",
+                status="passed",
+                summary=helm_summary,
+                checks=[
+                    _fast_verification_check(
+                        "Post-upgrade Helm state",
+                        "passed",
+                        helm_summary,
+                    )
+                ],
+            )
+            mutation_performed = (
+                mutation_performed
+                or _helm_state_lines_include_retirement_mutation(helm_state_lines)
+            )
+            phase_lines.extend(f"post-upgrade-helm-check: {line}" for line in helm_state_lines)
+            completed_phases.add("post-upgrade-helm-check")
+            _append_event(
+                checkpoint,
+                "execute-phase-completed",
+                phase="post-upgrade-helm-check",
+                mutation_performed=False,
+            )
+            _clear_completed_pending_phase(checkpoint, "post-upgrade-helm-check")
+            _checkpoint_progress()
 
     if (
         not pending_phase

@@ -2317,6 +2317,17 @@ generated reports are refreshed, normal `validate`, `render`, and `deploy`
 commands can run from any workstation that has the repo state and required
 Nebius/Kubernetes access.
 
+Both Soperator upgrade commands use phase-bounded local checkpoints. Each run
+records the ordered `planned_phases`, the verified `completed_phases`, the
+active `pending_phase`, and per-phase `phase_state`. If Python catches an
+error, Ctrl+C, or Typer abort, cxcli writes the current pending phase and report
+before exiting; Ctrl+C keeps exit code 130. If the process or target
+environment dies before cleanup can run, the checkpoint already names the
+current phase before that phase's first mutation. Rerun the same command from
+the same workdir: cxcli restarts the pending phase from its beginning,
+reconciles live/config state, skips only completed phases that still verify,
+and never marks a phase complete until the handler and fast verification pass.
+
 ### CXCLI Managed Soperator Clusters
 
 Use the cxcli-managed path when cxcli should create and own the infrastructure:
@@ -3559,9 +3570,11 @@ satisfied, cxcli removes that phase from the local completed set and reruns the
 existing phase handler. During execute, every completed stage also records a
 stage-scoped `fast_verification` checkpoint and the external upgrade report
 includes a `Stage Fast Verification` rollup plus the JSON `stage_verification`
-array. Before validation hold and again before reporting completion, cxcli
-verifies the target Soperator Helm release and rendered workloads, records the
-final post-upgrade MK8s and Helm readiness checks in the same stage-verification
+array. Post-upgrade MK8s and Helm readiness are first-class checkpointed
+phases, so a rerun can restart at either final check after an interruption.
+Before validation hold and again before reporting completion, cxcli verifies
+the target Soperator Helm release and rendered workloads, records the final
+post-upgrade MK8s and Helm readiness checks in the same stage-verification
 report, then suspends old source-family Flux Kustomization desired state,
 deletes suspended old source-family Flux HelmRelease records, and retires stale
 Helm release records while preserving shared/storage/custom resources. This completion path
@@ -3703,8 +3716,12 @@ CXCLI-managed Soperator upgrade follows these stages:
    Soperator/Slurm smoke validation, run the shared bounded fast safety verifier,
    and write `soperator-upgrade-report.md` plus JSON detail.
 8. Resume behavior: rerun the same command from the same workdir when a phase is
-   interrupted. If the target is already current, the command still performs the
-   verification/report path without replaying unnecessary mutations.
+   interrupted. The checkpoint names the active `pending_phase`; rerun restarts
+   that phase from its beginning and uses phase idempotency plus live/config
+   reconciliation to pass already-satisfied work. Completed phases are skipped
+   only after their recorded state still verifies. If the target is already
+   current, the command still performs the verification/report path without
+   replaying unnecessary mutations.
 
 `upgrade node-template` validates the live compatibility matrix, updates
 `config.yaml`, rerenders, validates, applies the staged Terraform changes, waits

@@ -2549,6 +2549,23 @@ _SOPERATOR_FAST_STAGE_VERIFICATION_PHASE_IDS = (
     "slurm-restore",
     "shared-safety-verification",
 )
+_SOPERATOR_UPGRADE_PLANNED_PHASE_IDS = (
+    "preflight",
+    "discovery",
+    "backup",
+    "protected-state-capture",
+    "activechecks-suspend",
+    "soperator-preflight-validation",
+    "slurm-job-drain",
+    "mk8s-node-template",
+    "post-mk8s-validation",
+    "soperator-chart",
+    POPULATE_JAIL_REFRESH_PHASE_ID,
+    "postflight-validation",
+    "activechecks-restore",
+    "slurm-restore",
+    "shared-safety-verification",
+)
 _SOPERATOR_TOP_LEVEL_STAGE_MK8S = "MK8s Node Upgrades"
 _SOPERATOR_TOP_LEVEL_STAGE_CHART = "Soperator Upgrade"
 _SOPERATOR_MK8S_TOP_LEVEL_PHASE_IDS = frozenset(
@@ -8149,6 +8166,11 @@ def _new_soperator_upgrade_checkpoint(
         "status": "planned",
         "current_phase": planned_phase,
         "phase_history": [planned_phase],
+        "planned_phases": list(_SOPERATOR_UPGRADE_PLANNED_PHASE_IDS),
+        "completed_phases": [],
+        "pending_phase": "none",
+        "pending_reason": "",
+        "phase_state": {},
         "target_ref": plan.target.target_ref,
         "selector": plan.target.selector,
         "namespace": plan.namespace or "default",
@@ -8232,6 +8254,75 @@ def _load_soperator_upgrade_checkpoint(path: Path) -> dict[str, Any] | None:
     return payload
 
 
+def _soperator_upgrade_phase_state(
+    checkpoint: dict[str, Any],
+    phase_id: str,
+) -> dict[str, Any]:
+    raw_state = checkpoint.setdefault("phase_state", {})
+    if not isinstance(raw_state, dict):
+        raw_state = {}
+        checkpoint["phase_state"] = raw_state
+    phase = raw_state.setdefault(phase_id, {})
+    if not isinstance(phase, dict):
+        raise RuntimeError(
+            f"Soperator upgrade checkpoint phase_state.{phase_id} must be a mapping."
+        )
+    return phase
+
+
+def _soperator_upgrade_completed_phase_set(checkpoint: Mapping[str, Any]) -> set[str]:
+    return {
+        str(phase or "").strip()
+        for phase in checkpoint.get("completed_phases", []) or []
+        if str(phase or "").strip()
+    }
+
+
+def _ordered_soperator_upgrade_completed_phases(phases: Iterable[str]) -> list[str]:
+    completed = {str(phase or "").strip() for phase in phases if str(phase or "").strip()}
+    ordered = [phase for phase in _SOPERATOR_UPGRADE_PLANNED_PHASE_IDS if phase in completed]
+    ordered.extend(sorted(completed - set(_SOPERATOR_UPGRADE_PLANNED_PHASE_IDS)))
+    return ordered
+
+
+def _soperator_upgrade_checkpoint_complete(checkpoint: Mapping[str, Any]) -> bool:
+    if str(checkpoint.get("pending_phase", "") or "").strip() != "none":
+        return False
+    completed = _soperator_upgrade_completed_phase_set(checkpoint)
+    return bool(completed) and set(_SOPERATOR_UPGRADE_PLANNED_PHASE_IDS) <= completed
+
+
+def _soperator_upgrade_config_fingerprint_from_payload(
+    payload: Mapping[str, Any],
+    *,
+    checkpoint_path: Path,
+    label: str,
+) -> _SoperatorUpgradeConfigFingerprint:
+    missing = [
+        key
+        for key in (
+            "values_sha256",
+            "slurm_policy_sha256",
+            "accounting_policy_sha256",
+            "node_mapping_sha256",
+        )
+        if not _non_empty_text(payload.get(key))
+    ]
+    if missing:
+        raise RuntimeError(
+            f"Soperator upgrade checkpoint {checkpoint_path} is missing {label} "
+            "protected config fingerprint field(s): "
+            + ", ".join(missing)
+            + ". Rerun cannot safely resume this phase."
+        )
+    return _SoperatorUpgradeConfigFingerprint(
+        values_sha256=str(payload["values_sha256"]),
+        slurm_policy_sha256=str(payload["slurm_policy_sha256"]),
+        accounting_policy_sha256=str(payload["accounting_policy_sha256"]),
+        node_mapping_sha256=str(payload["node_mapping_sha256"]),
+    )
+
+
 def _soperator_upgrade_checkpoint_events(checkpoint: Mapping[str, Any]) -> tuple[str, ...]:
     events = checkpoint.get("events")
     if not isinstance(events, list):
@@ -8312,8 +8403,6 @@ def _soperator_upgrade_resume_checkpoint(
     checkpoint = _load_soperator_upgrade_checkpoint(checkpoint_path)
     if checkpoint is None:
         return None, None
-    if not _soperator_upgrade_checkpoint_has_pending_activechecks_restore(checkpoint):
-        return None, None
     checkpoint_target_ref = _non_empty_text(checkpoint.get("target_ref"))
     if checkpoint_target_ref and checkpoint_target_ref != plan.target.target_ref:
         raise RuntimeError(
@@ -8327,6 +8416,43 @@ def _soperator_upgrade_resume_checkpoint(
             f"{checkpoint_target_version}, but this run requested {plan.target_version}. "
             "Rerun the same upgrade command first so cxcli can restore the checkpointed "
             "ActiveChecks values."
+        )
+    has_phase_contract = isinstance(checkpoint.get("planned_phases"), list)
+    completed = _soperator_upgrade_completed_phase_set(checkpoint)
+    pending_phase = str(checkpoint.get("pending_phase", "") or "").strip()
+    legacy_activechecks_restore = _soperator_upgrade_checkpoint_has_pending_activechecks_restore(
+        checkpoint
+    )
+    if not has_phase_contract:
+        if not legacy_activechecks_restore:
+            raise RuntimeError(
+                f"Soperator upgrade checkpoint {checkpoint_path} was created before "
+                "phase-bounded resume metadata was available. cxcli cannot prove where "
+                "to resume safely. Review the checkpoint and recovery instructions before "
+                "removing it."
+            )
+        checkpoint["planned_phases"] = list(_SOPERATOR_UPGRADE_PLANNED_PHASE_IDS)
+        restore_index = _SOPERATOR_UPGRADE_PLANNED_PHASE_IDS.index("activechecks-restore")
+        checkpoint["completed_phases"] = list(_SOPERATOR_UPGRADE_PLANNED_PHASE_IDS[:restore_index])
+        checkpoint["pending_phase"] = "activechecks-restore"
+        checkpoint["pending_reason"] = "legacy checkpoint requires ActiveChecks restore"
+        checkpoint.setdefault("phase_state", {})
+    elif pending_phase and pending_phase != "none":
+        if pending_phase not in _SOPERATOR_UPGRADE_PLANNED_PHASE_IDS:
+            raise RuntimeError(
+                f"Soperator upgrade checkpoint {checkpoint_path} has unsupported pending "
+                f"phase {pending_phase!r}. Review or remove the checkpoint before executing."
+            )
+    elif has_phase_contract and not _soperator_upgrade_checkpoint_complete(checkpoint):
+        # Incomplete phase-aware checkpoints with pending_phase=none are treated as
+        # resumable from the first uncompleted phase.
+        checkpoint["completed_phases"] = _ordered_soperator_upgrade_completed_phases(completed)
+        checkpoint["pending_phase"] = "none"
+        checkpoint.setdefault("pending_reason", "")
+    elif not _soperator_upgrade_checkpoint_complete(checkpoint):
+        raise RuntimeError(
+            f"Soperator upgrade checkpoint {checkpoint_path} does not contain completed "
+            "phase metadata. Review or remove the checkpoint before executing."
         )
     lifecycle = _soperator_upgrade_checkpoint_lifecycle(
         checkpoint,
@@ -8355,7 +8481,12 @@ def _soperator_upgrade_resume_checkpoint(
     _append_soperator_upgrade_event(
         checkpoint,
         "resumed",
-        reason="pending-activechecks-restore",
+        reason=(
+            "pending-activechecks-restore"
+            if legacy_activechecks_restore and not has_phase_contract
+            else "phase-bounded-resume"
+        ),
+        pending_phase=str(checkpoint.get("pending_phase") or "none"),
     )
     return checkpoint, lifecycle
 
@@ -13393,30 +13524,102 @@ def _run_managed_soperator_cluster_upgrade(
         checkpoint["soperator_support_policy"] = {
             "findings": list(soperator_upgrade_support_findings(support_report)),
         }
-    checkpoint["slurm"] = {
-        "drained_nodes": [],
-        "restore_manual_command": None,
-        "job_policy": job_policy,
-    }
+    checkpoint["planned_phases"] = list(_SOPERATOR_UPGRADE_PLANNED_PHASE_IDS)
+    checkpoint["completed_phases"] = _ordered_soperator_upgrade_completed_phases(
+        _soperator_upgrade_completed_phase_set(checkpoint)
+    )
+    checkpoint.setdefault("pending_phase", "none")
+    checkpoint.setdefault("pending_reason", "")
+    checkpoint.setdefault("phase_state", {})
+    slurm_state = _state_mapping(checkpoint.get("slurm"))
+    slurm_state.setdefault("drained_nodes", [])
+    slurm_state.setdefault("restore_manual_command", None)
+    slurm_state["job_policy"] = job_policy
+    checkpoint["slurm"] = slurm_state
     checkpoint["populate_jail_refresh"] = {
+        **_state_mapping(checkpoint.get("populate_jail_refresh")),
         "mode": populate_jail_refresh,
-        "required": None,
-        "status": "planned",
+        "required": _state_mapping(checkpoint.get("populate_jail_refresh")).get("required"),
+        "status": str(
+            _state_mapping(checkpoint.get("populate_jail_refresh")).get("status", "planned")
+            or "planned"
+        ),
     }
     _write_soperator_upgrade_checkpoint(checkpoint_path, checkpoint)
 
-    restore_required = bool(resume_checkpoint is not None and lifecycle.required)
-    slurm_restore_nodes: tuple[str, ...] = ()
+    restore_required = bool(
+        lifecycle.required and _soperator_upgrade_checkpoint_has_pending_activechecks_restore(checkpoint)
+    )
+    existing_slurm_nodes = _state_mapping(checkpoint.get("slurm")).get("drained_nodes")
+    slurm_restore_nodes: tuple[str, ...] = tuple(
+        str(node or "").strip()
+        for node in (existing_slurm_nodes if isinstance(existing_slurm_nodes, list) else [])
+        if str(node or "").strip()
+    )
     protected_state_before = _managed_soperator_upgrade_baseline_from_checkpoint(checkpoint)
     component_label = f"{target.selector} ({plan.namespace or 'default'}/{plan.release_name})"
+    completed_phases = _soperator_upgrade_completed_phase_set(checkpoint)
 
     def _checkpoint(event: str, **details: Any) -> None:
         _append_soperator_upgrade_event(checkpoint, event, **details)
         _write_soperator_upgrade_checkpoint(checkpoint_path, checkpoint)
 
+    def _sync_completed_phases() -> None:
+        checkpoint["completed_phases"] = _ordered_soperator_upgrade_completed_phases(
+            completed_phases
+        )
+
+    def _phase_is_completed(phase_id: str) -> bool:
+        return phase_id in completed_phases
+
+    def _start_checkpoint_phase(phase_id: str, comment: str) -> bool:
+        if _phase_is_completed(phase_id):
+            console.print(
+                f"Soperator upgrade phase `{phase_id}` already completed; verifying next phase.",
+                soft_wrap=True,
+            )
+            return False
+        checkpoint["pending_phase"] = phase_id
+        checkpoint["pending_reason"] = ""
+        _soperator_upgrade_phase_state(checkpoint, phase_id).setdefault(
+            "started_at",
+            _soperator_upgrade_now_iso(),
+        )
+        _set_phase(phase_id, comment)
+        return True
+
+    def _complete_checkpoint_phase(phase_id: str, **details: Any) -> None:
+        phase_state = _soperator_upgrade_phase_state(checkpoint, phase_id)
+        phase_state["completed_at"] = _soperator_upgrade_now_iso()
+        if details:
+            phase_state.update(copy.deepcopy(to_plain_data(details)))
+        completed_phases.add(phase_id)
+        _sync_completed_phases()
+        if str(checkpoint.get("pending_phase", "") or "") == phase_id:
+            checkpoint["pending_phase"] = "none"
+            checkpoint["pending_reason"] = ""
+        _checkpoint("phase-completed", phase=phase_id)
+
+    def _skip_checkpoint_phase(phase_id: str, reason: str) -> None:
+        if _phase_is_completed(phase_id):
+            return
+        phase_state = _soperator_upgrade_phase_state(checkpoint, phase_id)
+        phase_state["skipped_reason"] = reason
+        phase_state["completed_at"] = _soperator_upgrade_now_iso()
+        completed_phases.add(phase_id)
+        _sync_completed_phases()
+        if str(checkpoint.get("pending_phase", "") or "") == phase_id:
+            checkpoint["pending_phase"] = "none"
+            checkpoint["pending_reason"] = ""
+        _checkpoint("phase-skipped", phase=phase_id, reason=reason)
+
+    def _current_pending_phase() -> str:
+        pending = str(checkpoint.get("pending_phase", "") or "").strip()
+        return pending if pending and pending != "none" else ""
+
     def _phase_display(phase_id: str, comment: str) -> str:
         return (
-            f"Soperator upgrade phase [{phase_id}] "
+            f"Soperator upgrade phase `{phase_id}` "
             f"(top-level stage: {_soperator_upgrade_top_level_stage(phase_id)}) "
             f"for {component_label}: {comment}"
         )
@@ -13649,6 +13852,17 @@ def _run_managed_soperator_cluster_upgrade(
         _write_soperator_upgrade_checkpoint(checkpoint_path, checkpoint)
 
     soperator_worker_job_policy_checked = False
+    staged_config, staged_paths, staged_manifest = generated_config, paths, manifest
+    pre_fingerprint: _SoperatorUpgradeConfigFingerprint | None = None
+    pre_fingerprint_payload = _state_mapping(
+        _state_mapping(checkpoint.get("config_comparison")).get("pre_upgrade")
+    )
+    if pre_fingerprint_payload:
+        pre_fingerprint = _soperator_upgrade_config_fingerprint_from_payload(
+            pre_fingerprint_payload,
+            checkpoint_path=checkpoint_path,
+            label="pre-upgrade",
+        )
 
     def _apply_soperator_worker_job_policy(
         *,
@@ -13707,29 +13921,30 @@ def _run_managed_soperator_cluster_upgrade(
         )
 
     try:
-        _set_phase(
+        if _start_checkpoint_phase(
             "preflight",
             "Validating the generated bundle and current Soperator chart readiness.",
-        )
-        _checkpoint("preflight-generated-validation-started")
-        _run_generated_bundle_validation(
-            generated_config,
-            paths,
-            auto_auth_bootstrap=True,
-            title="Soperator cluster upgrade preflight",
-            quota_phase="upgrade",
-            flux_command_name="upgrade",
-            manifest=manifest,
-            prompt_mysterybox_payload_values=False,
-        )
-        _verify_soperator_static_upgrade_ready(
-            generated_config,
-            paths,
-            manifest,
-            _expected_version_plan(plan.current_version),
-        )
-        _checkpoint("preflight-completed")
-        with _phase_spinner(
+        ):
+            _checkpoint("preflight-generated-validation-started")
+            _run_generated_bundle_validation(
+                generated_config,
+                paths,
+                auto_auth_bootstrap=True,
+                title="Soperator cluster upgrade preflight",
+                quota_phase="upgrade",
+                flux_command_name="upgrade",
+                manifest=manifest,
+                prompt_mysterybox_payload_values=False,
+            )
+            _verify_soperator_static_upgrade_ready(
+                generated_config,
+                paths,
+                manifest,
+                _expected_version_plan(plan.current_version),
+            )
+            _checkpoint("preflight-completed")
+            _complete_checkpoint_phase("preflight")
+        if _start_checkpoint_phase(
             "discovery",
             "Capturing a support-safe read-only discovery bundle before backup and mutation.",
         ):
@@ -13748,22 +13963,26 @@ def _run_managed_soperator_cluster_upgrade(
                 redaction="local",
                 interactive=False,
             )
-        checkpoint["discovery"] = {
-            "path": str(discovery_path),
-            "bundle_dir": str(discovery_path.parent),
-            "redaction": "local",
-        }
-        _checkpoint("discovery-created")
+            checkpoint["discovery"] = {
+                "path": str(discovery_path),
+                "bundle_dir": str(discovery_path.parent),
+                "redaction": "local",
+            }
+            _checkpoint("discovery-created")
+            _complete_checkpoint_phase("discovery")
 
-        pre_fingerprint = _capture_soperator_upgrade_config_fingerprint(
-            source_payload=source_payload,
-            target=target,
-            namespace=plan.namespace or "default",
-        )
-        config_comparison = checkpoint.setdefault("config_comparison", {})
-        if isinstance(config_comparison, dict):
-            config_comparison["pre_upgrade"] = pre_fingerprint.as_payload()
-        with _phase_spinner(
+        if pre_fingerprint is None:
+            pre_fingerprint = _capture_soperator_upgrade_config_fingerprint(
+                source_payload=source_payload,
+                target=target,
+                namespace=plan.namespace or "default",
+            )
+            config_comparison = checkpoint.setdefault("config_comparison", {})
+            if isinstance(config_comparison, dict):
+                config_comparison["pre_upgrade"] = pre_fingerprint.as_payload()
+            _write_soperator_upgrade_checkpoint(checkpoint_path, checkpoint)
+
+        if _start_checkpoint_phase(
             "backup",
             "Creating the restore-capable backup before any upgrade mutation.",
         ):
@@ -13780,23 +13999,24 @@ def _run_managed_soperator_cluster_upgrade(
                 command=checkpoint.get("command", []),
                 checkpoint_event=_checkpoint_backup_event,
             )
-        checkpoint["backup"] = {
-            "required": True,
-            "path": str(backup.path),
-            "size_bytes": backup.size_bytes,
-            "sha256": backup.sha256,
-            "manifest_sha256": backup.manifest_sha256,
-            "included_categories": list(backup.included_categories),
-            "raw_secret_material": backup.secret_material_included,
-            "accounting_db_dump": backup.accounting_db_included,
-            "report_redacted": True,
-        }
-        _checkpoint("backup-created")
-        if protected_state_before is None:
-            with _phase_spinner(
-                "protected-state-capture",
-                "Capturing managed-equivalent protected customer state for later comparison.",
-            ):
+            checkpoint["backup"] = {
+                "required": True,
+                "path": str(backup.path),
+                "size_bytes": backup.size_bytes,
+                "sha256": backup.sha256,
+                "manifest_sha256": backup.manifest_sha256,
+                "included_categories": list(backup.included_categories),
+                "raw_secret_material": backup.secret_material_included,
+                "accounting_db_dump": backup.accounting_db_included,
+                "report_redacted": True,
+            }
+            _checkpoint("backup-created")
+            _complete_checkpoint_phase("backup")
+        if _start_checkpoint_phase(
+            "protected-state-capture",
+            "Capturing managed-equivalent protected customer state for later comparison.",
+        ):
+            if protected_state_before is None:
                 protected_state_before = _managed_soperator_upgrade_capture_protected_state(
                     source_payload=source_payload,
                     target=target,
@@ -13812,12 +14032,12 @@ def _run_managed_soperator_cluster_upgrade(
                 else None,
             )
             _checkpoint("protected-state-captured")
+            _complete_checkpoint_phase("protected-state-capture")
 
-        if lifecycle.required:
-            _set_phase(
-                "activechecks-suspend",
-                "Temporarily suspending cxcli-owned ActiveChecks for the upgrade window.",
-            )
+        if lifecycle.required and _start_checkpoint_phase(
+            "activechecks-suspend",
+            "Temporarily suspending cxcli-owned ActiveChecks for the upgrade window.",
+        ):
             _checkpoint("activechecks-suspend-started")
             _soperator_upgrade_suspend_activechecks_values(source_payload, target)
             restore_required = True
@@ -13827,17 +14047,17 @@ def _run_managed_soperator_cluster_upgrade(
                 validation_title="Validate rendered Soperator ActiveChecks suspension",
                 expected_plan=current_version_plan,
             )
-            with _phase_spinner(
+            _set_phase(
                 "activechecks-live-suspend",
                 "Patching live ActiveChecks resources so old checks do not relaunch.",
-            ):
-                live_suspend = _suspend_live_soperator_activechecks(
-                    generated_config,
-                    paths,
-                    manifest,
-                    current_version_plan,
-                    source_payload=source_payload,
-                )
+            )
+            live_suspend = _suspend_live_soperator_activechecks(
+                generated_config,
+                paths,
+                manifest,
+                current_version_plan,
+                source_payload=source_payload,
+            )
             activechecks_state = checkpoint.setdefault("activechecks", {})
             if isinstance(activechecks_state, dict):
                 activechecks_state["live_suspend"] = live_suspend
@@ -13858,77 +14078,86 @@ def _run_managed_soperator_cluster_upgrade(
                 summary="ActiveChecks source values and live resources are suspended.",
                 checks=activechecks_checks,
             )
+            _complete_checkpoint_phase("activechecks-suspend")
+        elif not lifecycle.required:
+            _skip_checkpoint_phase("activechecks-suspend", "ActiveChecks suspend not required")
 
-        _set_phase(
+        if _start_checkpoint_phase(
             "soperator-preflight-validation",
             "Running live Soperator and Slurm validation before mutation.",
-        )
-        _run_soperator_upgrade_validation_phase(
-            generated_config,
-            paths,
-            manifest,
-            plan,
-            phase_label="Preflight",
-            persist_reports=False,
-        )
-        _checkpoint("preflight-soperator-validation-completed")
+        ):
+            _run_soperator_upgrade_validation_phase(
+                generated_config,
+                paths,
+                manifest,
+                plan,
+                phase_label="Preflight",
+                persist_reports=False,
+            )
+            _checkpoint("preflight-soperator-validation-completed")
+            _complete_checkpoint_phase("soperator-preflight-validation")
 
         if requested_mk8s_change:
-            _set_phase(
+            if _start_checkpoint_phase(
                 "slurm-job-drain",
                 "Applying the configured Slurm affected-job policy before node-template rollout.",
-            )
-            _checkpoint("slurm-drain-started")
-            slurm_restore_nodes = _handle_soperator_upgrade_running_jobs(
-                namespace=plan.namespace or "default",
-                node_group=node_group,
-                policy=job_policy,
-                cancel_job_ids=cancel_job,
-                requeue_job_ids=requeue_job,
-                wait_timeout_seconds=job_wait_timeout_seconds,
-                refresh_interval_seconds=job_refresh_interval_seconds,
-                checkpoint_id=checkpoint_id,
-                decision_recorder=_record_slurm_decision,
-            )
-            _record_slurm_restore_nodes(slurm_restore_nodes, scope="mk8s-node-template")
-            _checkpoint("slurm-jobs-cleared")
-            slurm_state = checkpoint.get("slurm")
-            slurm_map = slurm_state if isinstance(slurm_state, Mapping) else {}
-            _run_stage_fast_verification(
-                phase_id="slurm-job-drain",
-                summary="Slurm job policy completed before the MK8s node-template rollout.",
-                checks=[
-                    stage_fast_verification_check(
-                        "Slurm job policy",
-                        "passed" if slurm_map.get("job_policy") == job_policy else "failed",
-                        f"recorded={slurm_map.get('job_policy') or 'unset'}, expected={job_policy}",
-                    ),
-                    stage_fast_verification_check(
-                        "Drained node record",
-                        "passed" if isinstance(slurm_map.get("drained_nodes"), list) else "failed",
-                        f"drained_nodes={len(slurm_map.get('drained_nodes') or [])}",
-                    ),
-                ],
-            )
-            _set_phase(
+            ):
+                _checkpoint("slurm-drain-started")
+                slurm_restore_nodes = _handle_soperator_upgrade_running_jobs(
+                    namespace=plan.namespace or "default",
+                    node_group=node_group,
+                    policy=job_policy,
+                    cancel_job_ids=cancel_job,
+                    requeue_job_ids=requeue_job,
+                    wait_timeout_seconds=job_wait_timeout_seconds,
+                    refresh_interval_seconds=job_refresh_interval_seconds,
+                    checkpoint_id=checkpoint_id,
+                    decision_recorder=_record_slurm_decision,
+                )
+                _record_slurm_restore_nodes(slurm_restore_nodes, scope="mk8s-node-template")
+                _checkpoint("slurm-jobs-cleared")
+                slurm_state = checkpoint.get("slurm")
+                slurm_map = slurm_state if isinstance(slurm_state, Mapping) else {}
+                _run_stage_fast_verification(
+                    phase_id="slurm-job-drain",
+                    summary="Slurm job policy completed before the MK8s node-template rollout.",
+                    checks=[
+                        stage_fast_verification_check(
+                            "Slurm job policy",
+                            "passed" if slurm_map.get("job_policy") == job_policy else "failed",
+                            f"recorded={slurm_map.get('job_policy') or 'unset'}, expected={job_policy}",
+                        ),
+                        stage_fast_verification_check(
+                            "Drained node record",
+                            "passed"
+                            if isinstance(slurm_map.get("drained_nodes"), list)
+                            else "failed",
+                            f"drained_nodes={len(slurm_map.get('drained_nodes') or [])}",
+                        ),
+                    ],
+                )
+                _complete_checkpoint_phase("slurm-job-drain")
+            if _start_checkpoint_phase(
                 "mk8s-node-template",
                 "Rolling the requested MK8s node-template changes through the managed path.",
-            )
-            _run_soperator_mk8s_node_template_phase(
-                config_path=config_path,
-                target_ref=target.target_ref,
-                to_k8s_version=to_k8s_version,
-                to_os=to_os,
-                to_gpu_stack_preset=to_gpu_stack_preset,
-                node_group=node_group,
-                disruption_policy=disruption_policy,
-                drain_timeout=drain_timeout,
-                strategy_max_surge_count=strategy_max_surge_count,
-            )
-            mk8s_state = checkpoint.setdefault("mk8s", {})
-            if isinstance(mk8s_state, dict):
-                mk8s_state["status"] = "completed"
-            _checkpoint("mk8s-completed")
+            ):
+                _run_soperator_mk8s_node_template_phase(
+                    config_path=config_path,
+                    target_ref=target.target_ref,
+                    to_k8s_version=to_k8s_version,
+                    to_os=to_os,
+                    to_gpu_stack_preset=to_gpu_stack_preset,
+                    node_group=node_group,
+                    disruption_policy=disruption_policy,
+                    drain_timeout=drain_timeout,
+                    strategy_max_surge_count=strategy_max_surge_count,
+                )
+                mk8s_state = checkpoint.setdefault("mk8s", {})
+                if isinstance(mk8s_state, dict):
+                    mk8s_state["status"] = "completed"
+                _checkpoint("mk8s-completed")
+            else:
+                mk8s_state = checkpoint.setdefault("mk8s", {})
             mk8s_map = mk8s_state if isinstance(mk8s_state, Mapping) else {}
             mk8s_version_ok = not _non_empty_text(to_k8s_version) or (
                 mk8s_map.get("target_k8s_version") == to_k8s_version
@@ -13972,91 +14201,119 @@ def _run_managed_soperator_cluster_upgrade(
                     ),
                 ],
             )
-            _set_phase(
+            _complete_checkpoint_phase("mk8s-node-template")
+            if _start_checkpoint_phase(
                 "post-mk8s-validation",
                 "Verifying Soperator and protected config after the MK8s rollout.",
-            )
-            source_payload = _load_source_payload(config_path)
-            generated_config, paths, manifest = _load_deploy_context(config_path)
-            post_mk8s_reports = _run_soperator_upgrade_validation_phase(
-                generated_config,
-                paths,
-                manifest,
-                _expected_version_plan(plan.current_version),
-                phase_label="Post-MK8s",
-                persist_reports=False,
-            )
-            post_mk8s_fingerprint = _capture_soperator_upgrade_config_fingerprint(
-                source_payload=source_payload,
-                target=target,
-                namespace=plan.namespace or "default",
-            )
-            comparison = _compare_soperator_upgrade_config_fingerprints(
-                before=pre_fingerprint,
-                after=post_mk8s_fingerprint,
-                phase_label="MK8s phase",
-            )
-            config_comparison = checkpoint.setdefault("config_comparison", {})
-            if isinstance(config_comparison, dict):
-                config_comparison["post_mk8s"] = comparison
-            _checkpoint(
-                "post-mk8s-validation-completed",
-                validation_reports=_soperator_upgrade_relative_paths(paths, post_mk8s_reports),
-            )
-            _run_stage_fast_verification(
-                phase_id="post-mk8s-validation",
-                summary="Post-MK8s Soperator validation and protected config comparison completed.",
-                checks=[
-                    stage_fast_verification_check(
-                        "Post-MK8s validation reports",
-                        "passed",
-                        f"reports={len(post_mk8s_reports)}",
+            ):
+                source_payload = _load_source_payload(config_path)
+                generated_config, paths, manifest = _load_deploy_context(config_path)
+                post_mk8s_reports = _run_soperator_upgrade_validation_phase(
+                    generated_config,
+                    paths,
+                    manifest,
+                    _expected_version_plan(plan.current_version),
+                    phase_label="Post-MK8s",
+                    persist_reports=False,
+                )
+                post_mk8s_fingerprint = _capture_soperator_upgrade_config_fingerprint(
+                    source_payload=source_payload,
+                    target=target,
+                    namespace=plan.namespace or "default",
+                )
+                if pre_fingerprint is None:
+                    raise RuntimeError(
+                        "Soperator upgrade checkpoint is missing the pre-upgrade "
+                        "fingerprint; cannot validate post-MK8s state."
+                    )
+                comparison = _compare_soperator_upgrade_config_fingerprints(
+                    before=pre_fingerprint,
+                    after=post_mk8s_fingerprint,
+                    phase_label="MK8s phase",
+                )
+                config_comparison = checkpoint.setdefault("config_comparison", {})
+                if isinstance(config_comparison, dict):
+                    config_comparison["post_mk8s"] = comparison
+                _checkpoint(
+                    "post-mk8s-validation-completed",
+                    validation_reports=_soperator_upgrade_relative_paths(
+                        paths,
+                        post_mk8s_reports,
                     ),
-                    stage_fast_verification_check(
-                        "Post-MK8s protected config comparison",
-                        "passed" if comparison.get("status") == "matched" else "failed",
-                        f"status={comparison.get('status') or 'unknown'}",
+                )
+                _run_stage_fast_verification(
+                    phase_id="post-mk8s-validation",
+                    summary=(
+                        "Post-MK8s Soperator validation and protected config "
+                        "comparison completed."
                     ),
-                ],
-            )
+                    checks=[
+                        stage_fast_verification_check(
+                            "Post-MK8s validation reports",
+                            "passed",
+                            f"reports={len(post_mk8s_reports)}",
+                        ),
+                        stage_fast_verification_check(
+                            "Post-MK8s protected config comparison",
+                            "passed" if comparison.get("status") == "matched" else "failed",
+                            f"status={comparison.get('status') or 'unknown'}",
+                        ),
+                    ],
+                )
+                _complete_checkpoint_phase("post-mk8s-validation")
+        else:
+            _skip_checkpoint_phase("slurm-job-drain", "MK8s node-template change not requested")
+            _skip_checkpoint_phase("mk8s-node-template", "MK8s node-template change not requested")
+            _skip_checkpoint_phase("post-mk8s-validation", "MK8s node-template change not requested")
 
-        _set_phase(
+        chart_state = _soperator_upgrade_phase_state(checkpoint, "soperator-chart")
+        populate_jail_before = _inspect_populate_jail()
+        if _start_checkpoint_phase(
             "soperator-chart",
             "Applying or confirming the target Soperator Helm chart version.",
-        )
-        populate_jail_before = _inspect_populate_jail()
-        changed = _update_source_helm_chart_version(
-            source_payload,
-            target=target,
-            target_version=to_chart_version,
-        )
-        if not changed:
-            console.print(
-                f"Soperator target {target.target_ref} already uses chart version "
-                f"{to_chart_version}."
-            )
-            staged_config, staged_paths, staged_manifest = generated_config, paths, manifest
-            _checkpoint("chart-applied", reason="already-current")
+        ):
+            changed = _update_source_helm_chart_version(
+                source_payload,
+                target=target,
+                target_version=to_chart_version,
+            ) or bool(chart_state.get("chart_changed"))
+            chart_state["chart_changed"] = changed
+            _write_soperator_upgrade_checkpoint(checkpoint_path, checkpoint)
+            if not changed:
+                console.print(
+                    f"Soperator target {target.target_ref} already uses chart version "
+                    f"{to_chart_version}."
+                )
+                staged_config, staged_paths, staged_manifest = generated_config, paths, manifest
+                _checkpoint("chart-applied", reason="already-current")
+            else:
+                _apply_soperator_worker_job_policy(
+                    scope="soperator-chart",
+                    checkpoint_prefix="soperator-worker",
+                    phase_comment=(
+                        "Applying the configured Slurm affected-job policy before "
+                        "Soperator chart reconciliation."
+                    ),
+                    summary="Slurm job policy completed before Soperator chart reconciliation.",
+                )
+                _set_phase(
+                    "soperator-chart",
+                    "Applying the target Soperator Helm chart version.",
+                )
+                staged_config, staged_paths, staged_manifest = (
+                    _render_validate_apply_soperator_stage(
+                        update_message=(
+                            f"Soperator chart {target.selector} upgrade to {to_chart_version}"
+                        ),
+                        validation_title=(
+                            f"Validate rendered Soperator upgrade to {to_chart_version}"
+                        ),
+                        expected_plan=plan,
+                    )
+                )
+                _checkpoint("chart-applied")
         else:
-            _apply_soperator_worker_job_policy(
-                scope="soperator-chart",
-                checkpoint_prefix="soperator-worker",
-                phase_comment=(
-                    "Applying the configured Slurm affected-job policy before "
-                    "Soperator chart reconciliation."
-                ),
-                summary="Slurm job policy completed before Soperator chart reconciliation.",
-            )
-            _set_phase(
-                "soperator-chart",
-                "Applying the target Soperator Helm chart version.",
-            )
-            staged_config, staged_paths, staged_manifest = _render_validate_apply_soperator_stage(
-                update_message=f"Soperator chart {target.selector} upgrade to {to_chart_version}",
-                validation_title=f"Validate rendered Soperator upgrade to {to_chart_version}",
-                expected_plan=plan,
-            )
-            _checkpoint("chart-applied")
+            changed = bool(chart_state.get("chart_changed"))
         row_version = _non_empty_text(_source_helm_chart_row(source_payload, target).get("version"))
         _run_stage_fast_verification(
             phase_id="soperator-chart",
@@ -14079,266 +14336,300 @@ def _run_managed_soperator_cluster_upgrade(
             ],
             report_paths=staged_paths,
         )
+        _complete_checkpoint_phase("soperator-chart", chart_changed=changed)
 
-        _set_phase(
+        if _start_checkpoint_phase(
             POPULATE_JAIL_REFRESH_PHASE_ID,
             "Refreshing the shared Soperator jail rootfs when the target chart requires it.",
-        )
-        populate_jail_after_chart = _inspect_populate_jail()
-        populate_jail_plan = plan_populate_jail_refresh(
-            mode=populate_jail_refresh,
-            chart_changed=changed,
-            before=populate_jail_before,
-            after_chart=populate_jail_after_chart,
-            namespace=plan.namespace or "default",
-        )
-        checkpoint["populate_jail_refresh"] = populate_jail_plan.as_payload()
-        _checkpoint(
-            "populate-jail-refresh-planned",
-            required=populate_jail_plan.required,
-            mode=populate_jail_plan.mode,
-            reason=populate_jail_plan.reason,
-        )
-        if not populate_jail_plan.required:
-            populate_jail_result = skipped_populate_jail_refresh_result(populate_jail_plan)
-        elif populate_jail_plan.mode == "manual":
-            populate_jail_result = manual_populate_jail_refresh_result(populate_jail_plan)
+        ):
+            populate_jail_after_chart = _inspect_populate_jail()
+            populate_jail_plan = plan_populate_jail_refresh(
+                mode=populate_jail_refresh,
+                chart_changed=changed,
+                before=populate_jail_before,
+                after_chart=populate_jail_after_chart,
+                namespace=plan.namespace or "default",
+            )
+            checkpoint["populate_jail_refresh"] = populate_jail_plan.as_payload()
+            _checkpoint(
+                "populate-jail-refresh-planned",
+                required=populate_jail_plan.required,
+                mode=populate_jail_plan.mode,
+                reason=populate_jail_plan.reason,
+            )
+            if not populate_jail_plan.required:
+                populate_jail_result = skipped_populate_jail_refresh_result(populate_jail_plan)
+            elif populate_jail_plan.mode == "manual":
+                populate_jail_result = manual_populate_jail_refresh_result(populate_jail_plan)
+                checkpoint["populate_jail_refresh"]["result"] = populate_jail_result.as_payload()
+                _checkpoint(
+                    "populate-jail-refresh-manual-required",
+                    instruction=populate_jail_result.detail,
+                )
+                _run_stage_fast_verification(
+                    phase_id=POPULATE_JAIL_REFRESH_PHASE_ID,
+                    summary="Populate-jail refresh requires manual maintenance overwrite.",
+                    checks=[
+                        stage_fast_verification_check(
+                            "Populate-jail refresh mode",
+                            "failed",
+                            populate_jail_result.detail,
+                        )
+                    ],
+                    report_paths=staged_paths,
+                )
+                raise RuntimeError(populate_jail_result.detail)
+            else:
+                steady_values = _soperator_row_values_snapshot()
+                refreshed_snapshot = None
+                maintenance_restored = False
+                if not soperator_worker_job_policy_checked:
+                    _apply_soperator_worker_job_policy(
+                        scope=POPULATE_JAIL_REFRESH_PHASE_ID,
+                        checkpoint_prefix="populate-jail-refresh",
+                        phase_comment=(
+                            "Applying the configured Slurm affected-job policy before "
+                            "populate-jail rootfs refresh."
+                        ),
+                        summary=(
+                            "Slurm job policy completed before populate-jail rootfs refresh."
+                        ),
+                    )
+                    _set_phase(
+                        POPULATE_JAIL_REFRESH_PHASE_ID,
+                        "Refreshing the shared Soperator jail rootfs when the target chart requires it.",
+                    )
+                try:
+                    _set_soperator_row_values(populate_jail_refresh_values(steady_values))
+                    staged_config, staged_paths, staged_manifest = (
+                        _render_validate_apply_soperator_stage(
+                            update_message="Soperator populate-jail overwrite maintenance",
+                            validation_title=(
+                                "Validate rendered Soperator populate-jail overwrite maintenance"
+                            ),
+                            expected_plan=plan,
+                        )
+                    )
+                    _checkpoint("populate-jail-refresh-overwrite-maintenance-applied")
+                    consumers_down = wait_for_populate_jail_consumers_down(
+                        _populate_jail_runner,
+                        namespace=plan.namespace or "default",
+                        target_ref=target.target_ref,
+                    )
+                    _checkpoint(
+                        "populate-jail-refresh-consumers-down",
+                        active_consumer_pods=list(consumers_down.active_consumer_pods),
+                    )
+                    refreshed_snapshot = wait_for_populate_jail_refresh(
+                        _populate_jail_runner,
+                        namespace=plan.namespace or "default",
+                        target_ref=target.target_ref,
+                        previous_job_uid=populate_jail_after_chart.job_uid,
+                        expected_image=populate_jail_after_chart.image,
+                    )
+                    _checkpoint(
+                        "populate-jail-refresh-job-completed",
+                        job=refreshed_snapshot.job_name,
+                        image=refreshed_snapshot.job_image,
+                    )
+                finally:
+                    _set_soperator_row_values(populate_jail_steady_state_values(steady_values))
+                    staged_config, staged_paths, staged_manifest = (
+                        _render_validate_apply_soperator_stage(
+                            update_message="Soperator populate-jail steady-state maintenance restore",
+                            validation_title=(
+                                "Validate rendered Soperator populate-jail steady-state restore"
+                            ),
+                            expected_plan=plan,
+                        )
+                    )
+                    maintenance_restored = True
+                    _checkpoint("populate-jail-refresh-steady-state-applied")
+                if refreshed_snapshot is None:
+                    refreshed_snapshot = _inspect_populate_jail()
+                populate_jail_result = completed_populate_jail_refresh_result(
+                    mode=populate_jail_plan.mode,
+                    reason=populate_jail_plan.reason,
+                    snapshot=refreshed_snapshot,
+                    maintenance_restored=maintenance_restored,
+                )
             checkpoint["populate_jail_refresh"]["result"] = populate_jail_result.as_payload()
             _checkpoint(
-                "populate-jail-refresh-manual-required",
-                instruction=populate_jail_result.detail,
+                "populate-jail-refresh-completed",
+                status=populate_jail_result.status,
+                target_image=populate_jail_result.target_image,
             )
             _run_stage_fast_verification(
                 phase_id=POPULATE_JAIL_REFRESH_PHASE_ID,
-                summary="Populate-jail refresh requires manual maintenance overwrite.",
+                summary=(
+                    "Populate-jail refresh completed."
+                    if populate_jail_result.status == "refreshed"
+                    else "Populate-jail refresh was not required."
+                ),
                 checks=[
                     stage_fast_verification_check(
-                        "Populate-jail refresh mode",
-                        "failed",
-                        populate_jail_result.detail,
-                    )
+                        "Populate-jail refresh status",
+                        "passed" if populate_jail_result.status == "refreshed" else "skipped",
+                        (
+                            f"status={populate_jail_result.status}, "
+                            f"reason={populate_jail_result.reason}"
+                        ),
+                    ),
+                    stage_fast_verification_check(
+                        "Populate-jail target image",
+                        "passed" if populate_jail_result.status != "refreshed"
+                        or not populate_jail_result.target_image
+                        or populate_jail_result.job_image == populate_jail_result.target_image
+                        else "failed",
+                        (
+                            f"job_image={populate_jail_result.job_image or 'unset'}, "
+                            f"target={populate_jail_result.target_image or 'unset'}"
+                        ),
+                    ),
+                    stage_fast_verification_check(
+                        "Populate-jail maintenance restore",
+                        "passed" if populate_jail_result.maintenance_restored else "failed",
+                        f"restored={populate_jail_result.maintenance_restored}",
+                    ),
                 ],
                 report_paths=staged_paths,
             )
-            raise RuntimeError(populate_jail_result.detail)
-        else:
-            steady_values = _soperator_row_values_snapshot()
-            refreshed_snapshot = None
-            maintenance_restored = False
-            if not soperator_worker_job_policy_checked:
-                _apply_soperator_worker_job_policy(
-                    scope=POPULATE_JAIL_REFRESH_PHASE_ID,
-                    checkpoint_prefix="populate-jail-refresh",
-                    phase_comment=(
-                        "Applying the configured Slurm affected-job policy before "
-                        "populate-jail rootfs refresh."
-                    ),
-                    summary=(
-                        "Slurm job policy completed before populate-jail rootfs refresh."
-                    ),
-                )
-                _set_phase(
-                    POPULATE_JAIL_REFRESH_PHASE_ID,
-                    "Refreshing the shared Soperator jail rootfs when the target chart requires it.",
-                )
-            try:
-                _set_soperator_row_values(populate_jail_refresh_values(steady_values))
-                staged_config, staged_paths, staged_manifest = _render_validate_apply_soperator_stage(
-                    update_message="Soperator populate-jail overwrite maintenance",
-                    validation_title="Validate rendered Soperator populate-jail overwrite maintenance",
-                    expected_plan=plan,
-                )
-                _checkpoint("populate-jail-refresh-overwrite-maintenance-applied")
-                consumers_down = wait_for_populate_jail_consumers_down(
-                    _populate_jail_runner,
-                    namespace=plan.namespace or "default",
-                    target_ref=target.target_ref,
-                )
-                _checkpoint(
-                    "populate-jail-refresh-consumers-down",
-                    active_consumer_pods=list(consumers_down.active_consumer_pods),
-                )
-                refreshed_snapshot = wait_for_populate_jail_refresh(
-                    _populate_jail_runner,
-                    namespace=plan.namespace or "default",
-                    target_ref=target.target_ref,
-                    previous_job_uid=populate_jail_after_chart.job_uid,
-                    expected_image=populate_jail_after_chart.image,
-                )
-                _checkpoint(
-                    "populate-jail-refresh-job-completed",
-                    job=refreshed_snapshot.job_name,
-                    image=refreshed_snapshot.job_image,
-                )
-            finally:
-                _set_soperator_row_values(populate_jail_steady_state_values(steady_values))
-                staged_config, staged_paths, staged_manifest = _render_validate_apply_soperator_stage(
-                    update_message="Soperator populate-jail steady-state maintenance restore",
-                    validation_title="Validate rendered Soperator populate-jail steady-state restore",
-                    expected_plan=plan,
-                )
-                maintenance_restored = True
-                _checkpoint("populate-jail-refresh-steady-state-applied")
-            if refreshed_snapshot is None:
-                refreshed_snapshot = _inspect_populate_jail()
-            populate_jail_result = completed_populate_jail_refresh_result(
-                mode=populate_jail_plan.mode,
-                reason=populate_jail_plan.reason,
-                snapshot=refreshed_snapshot,
-                maintenance_restored=maintenance_restored,
-            )
-        checkpoint["populate_jail_refresh"]["result"] = populate_jail_result.as_payload()
-        _checkpoint(
-            "populate-jail-refresh-completed",
-            status=populate_jail_result.status,
-            target_image=populate_jail_result.target_image,
-        )
-        _run_stage_fast_verification(
-            phase_id=POPULATE_JAIL_REFRESH_PHASE_ID,
-            summary=(
-                "Populate-jail refresh completed."
-                if populate_jail_result.status == "refreshed"
-                else "Populate-jail refresh was not required."
-            ),
-            checks=[
-                stage_fast_verification_check(
-                    "Populate-jail refresh status",
-                    "passed" if populate_jail_result.status == "refreshed" else "skipped",
-                    f"status={populate_jail_result.status}, reason={populate_jail_result.reason}",
-                ),
-                stage_fast_verification_check(
-                    "Populate-jail target image",
-                    "passed" if populate_jail_result.status != "refreshed"
-                    or not populate_jail_result.target_image
-                    or populate_jail_result.job_image == populate_jail_result.target_image
-                    else "failed",
-                    (
-                        f"job_image={populate_jail_result.job_image or 'unset'}, "
-                        f"target={populate_jail_result.target_image or 'unset'}"
-                    ),
-                ),
-                stage_fast_verification_check(
-                    "Populate-jail maintenance restore",
-                    "passed" if populate_jail_result.maintenance_restored else "failed",
-                    f"restored={populate_jail_result.maintenance_restored}",
-                ),
-            ],
-            report_paths=staged_paths,
-        )
+            _complete_checkpoint_phase(POPULATE_JAIL_REFRESH_PHASE_ID)
 
-        _set_phase(
+        if _start_checkpoint_phase(
             "postflight-validation",
             "Running final Soperator validation and protected config comparison.",
-        )
-        postflight_reports = _run_soperator_upgrade_validation_phase(
-            staged_config,
-            staged_paths,
-            staged_manifest,
-            plan,
-            phase_label="Postflight",
-            persist_reports=True,
-        )
-        postflight_fingerprint = _capture_soperator_upgrade_config_fingerprint(
-            source_payload=source_payload,
-            target=target,
-            namespace=plan.namespace or "default",
-        )
-        comparison = _compare_soperator_upgrade_config_fingerprints(
-            before=pre_fingerprint,
-            after=postflight_fingerprint,
-            phase_label="chart/postflight phase",
-        )
-        config_comparison = checkpoint.setdefault("config_comparison", {})
-        if isinstance(config_comparison, dict):
-            config_comparison["postflight"] = comparison
-        _checkpoint(
-            "postflight-completed",
-            validation_reports=_soperator_upgrade_relative_paths(
+        ):
+            postflight_reports = _run_soperator_upgrade_validation_phase(
+                staged_config,
                 staged_paths,
-                postflight_reports,
-            ),
-        )
-        _run_stage_fast_verification(
-            phase_id="postflight-validation",
-            summary="Postflight Soperator validation and protected config comparison completed.",
-            checks=[
-                stage_fast_verification_check(
-                    "Postflight validation reports",
-                    "passed",
-                    f"reports={len(postflight_reports)}",
+                staged_manifest,
+                plan,
+                phase_label="Postflight",
+                persist_reports=True,
+            )
+            postflight_fingerprint = _capture_soperator_upgrade_config_fingerprint(
+                source_payload=source_payload,
+                target=target,
+                namespace=plan.namespace or "default",
+            )
+            comparison = _compare_soperator_upgrade_config_fingerprints(
+                before=pre_fingerprint
+                if pre_fingerprint is not None
+                else _soperator_upgrade_config_fingerprint_from_payload(
+                    _state_mapping(
+                        _state_mapping(checkpoint.get("config_comparison")).get("pre_upgrade")
+                    ),
+                    checkpoint_path=checkpoint_path,
+                    label="pre-upgrade",
                 ),
-                stage_fast_verification_check(
-                    "Protected config comparison",
-                    "passed" if comparison.get("status") == "matched" else "failed",
-                    f"status={comparison.get('status') or 'unknown'}",
+                after=postflight_fingerprint,
+                phase_label="chart/postflight phase",
+            )
+            config_comparison = checkpoint.setdefault("config_comparison", {})
+            if isinstance(config_comparison, dict):
+                config_comparison["postflight"] = comparison
+            _checkpoint(
+                "postflight-completed",
+                validation_reports=_soperator_upgrade_relative_paths(
+                    staged_paths,
+                    postflight_reports,
                 ),
-            ],
-            report_paths=staged_paths,
-        )
-
-        if lifecycle.required:
-            _set_phase(
-                "activechecks-restore",
-                "Restoring pre-upgrade ActiveChecks settings.",
             )
-            _checkpoint("activechecks-restore-started")
-            _soperator_upgrade_restore_activechecks_values(
-                source_payload,
-                target,
-                lifecycle,
-            )
-            staged_config, staged_paths, staged_manifest = _render_validate_apply_soperator_stage(
-                update_message="Soperator ActiveChecks restore",
-                validation_title="Validate rendered Soperator ActiveChecks restore",
-                expected_plan=_expected_version_plan(to_chart_version),
-            )
-            restore_required = False
-            _checkpoint("activechecks-restored")
             _run_stage_fast_verification(
-                phase_id="activechecks-restore",
-                summary="ActiveChecks source values are restored to their pre-upgrade state.",
-                checks=_activechecks_source_value_checks(suspended=False),
+                phase_id="postflight-validation",
+                summary="Postflight Soperator validation and protected config comparison completed.",
+                checks=[
+                    stage_fast_verification_check(
+                        "Postflight validation reports",
+                        "passed",
+                        f"reports={len(postflight_reports)}",
+                    ),
+                    stage_fast_verification_check(
+                        "Protected config comparison",
+                        "passed" if comparison.get("status") == "matched" else "failed",
+                        f"status={comparison.get('status') or 'unknown'}",
+                    ),
+                ],
                 report_paths=staged_paths,
             )
+            _complete_checkpoint_phase("postflight-validation")
+
+        if lifecycle.required:
+            if _start_checkpoint_phase(
+                "activechecks-restore",
+                "Restoring pre-upgrade ActiveChecks settings.",
+            ):
+                _checkpoint("activechecks-restore-started")
+                _soperator_upgrade_restore_activechecks_values(
+                    source_payload,
+                    target,
+                    lifecycle,
+                )
+                staged_config, staged_paths, staged_manifest = (
+                    _render_validate_apply_soperator_stage(
+                        update_message="Soperator ActiveChecks restore",
+                        validation_title="Validate rendered Soperator ActiveChecks restore",
+                        expected_plan=_expected_version_plan(to_chart_version),
+                    )
+                )
+                restore_required = False
+                _checkpoint("activechecks-restored")
+                _run_stage_fast_verification(
+                    phase_id="activechecks-restore",
+                    summary="ActiveChecks source values are restored to their pre-upgrade state.",
+                    checks=_activechecks_source_value_checks(suspended=False),
+                    report_paths=staged_paths,
+                )
+                _complete_checkpoint_phase("activechecks-restore")
         else:
             _checkpoint("activechecks-restored", reason="not-required")
+            _skip_checkpoint_phase("activechecks-restore", "ActiveChecks restore not required")
 
-        if slurm_restore_nodes:
-            with _phase_spinner(
-                "slurm-restore",
-                "Resuming nodes that cxcli drained for the managed rollout.",
-            ):
-                _soperator_upgrade_restore_slurm_nodes(
-                    namespace=plan.namespace or "default",
-                    node_names=slurm_restore_nodes,
-                )
-        slurm_state = checkpoint.setdefault("slurm", {})
-        if isinstance(slurm_state, dict):
-            slurm_state["restore_manual_command"] = None
-        _checkpoint("slurm-restored")
-        slurm_map = slurm_state if isinstance(slurm_state, Mapping) else {}
-        _run_stage_fast_verification(
-            phase_id="slurm-restore",
-            summary="Slurm nodes drained by cxcli are resumed or no restore was required.",
-            checks=[
-                stage_fast_verification_check(
-                    "Slurm restore command",
-                    "passed"
-                    if not _non_empty_text(slurm_map.get("restore_manual_command"))
-                    else "failed",
-                    "manual restore command cleared"
-                    if not _non_empty_text(slurm_map.get("restore_manual_command"))
-                    else "manual restore command is still recorded",
-                ),
-                stage_fast_verification_check(
-                    "Slurm restored nodes",
-                    "passed" if slurm_restore_nodes else "skipped",
-                    f"nodes={len(slurm_restore_nodes)}",
-                ),
-            ],
-            report_paths=staged_paths,
-        )
-        with _phase_spinner(
+        if _start_checkpoint_phase(
+            "slurm-restore",
+            "Resuming nodes that cxcli drained for the managed rollout.",
+        ):
+            if slurm_restore_nodes:
+                with _phase_spinner("slurm-restore", "Resuming checkpointed Slurm nodes."):
+                    _soperator_upgrade_restore_slurm_nodes(
+                        namespace=plan.namespace or "default",
+                        node_names=slurm_restore_nodes,
+                    )
+            slurm_state = checkpoint.setdefault("slurm", {})
+            if isinstance(slurm_state, dict):
+                slurm_state["restore_manual_command"] = None
+            _checkpoint("slurm-restored")
+            slurm_map = slurm_state if isinstance(slurm_state, Mapping) else {}
+            _run_stage_fast_verification(
+                phase_id="slurm-restore",
+                summary="Slurm nodes drained by cxcli are resumed or no restore was required.",
+                checks=[
+                    stage_fast_verification_check(
+                        "Slurm restore command",
+                        "passed"
+                        if not _non_empty_text(slurm_map.get("restore_manual_command"))
+                        else "failed",
+                        "manual restore command cleared"
+                        if not _non_empty_text(slurm_map.get("restore_manual_command"))
+                        else "manual restore command is still recorded",
+                    ),
+                    stage_fast_verification_check(
+                        "Slurm restored nodes",
+                        "passed" if slurm_restore_nodes else "skipped",
+                        f"nodes={len(slurm_restore_nodes)}",
+                    ),
+                ],
+                report_paths=staged_paths,
+            )
+            _complete_checkpoint_phase("slurm-restore")
+            slurm_restore_nodes = ()
+        else:
+            slurm_state = checkpoint.get("slurm")
+            slurm_map = slurm_state if isinstance(slurm_state, Mapping) else {}
+            if not _non_empty_text(slurm_map.get("restore_manual_command")):
+                slurm_restore_nodes = ()
+        if _start_checkpoint_phase(
             "shared-safety-verification",
             "Running the shared protected-state and fast smoke verification.",
         ):
@@ -14351,38 +14642,42 @@ def _run_managed_soperator_cluster_upgrade(
                 managed_node_template_upgrade=requested_mk8s_change,
                 approve_remediation=approve_remediation,
             )
-        checkpoint["upgrade_safety"] = update_safety_payload_with_verification(
-            checkpoint.get("upgrade_safety")
-            if isinstance(checkpoint.get("upgrade_safety"), Mapping)
-            else None,
-            safety_verification,
-            remediation_approved=approve_remediation,
-        )
-        _checkpoint(
-            "shared-safety-verified",
-            status=safety_verification.status,
-            passed=safety_verification.passed,
-        )
-        _run_stage_fast_verification(
-            phase_id="shared-safety-verification",
-            summary="Shared protected-state and fast safety verification completed.",
-            checks=safety_verification.checks,
-            report_paths=staged_paths,
-        )
-        if not safety_verification.passed:
-            failed = [
-                str(check.get("name") or "check")
-                for check in safety_verification.checks
-                if isinstance(check, Mapping) and check.get("status") == "failed"
-            ]
-            raise RuntimeError(
-                "Soperator post-upgrade shared safety verification failed"
-                + (": " + ", ".join(failed) if failed else ".")
+            checkpoint["upgrade_safety"] = update_safety_payload_with_verification(
+                checkpoint.get("upgrade_safety")
+                if isinstance(checkpoint.get("upgrade_safety"), Mapping)
+                else None,
+                safety_verification,
+                remediation_approved=approve_remediation,
             )
+            _checkpoint(
+                "shared-safety-verified",
+                status=safety_verification.status,
+                passed=safety_verification.passed,
+            )
+            _run_stage_fast_verification(
+                phase_id="shared-safety-verification",
+                summary="Shared protected-state and fast safety verification completed.",
+                checks=safety_verification.checks,
+                report_paths=staged_paths,
+            )
+            if not safety_verification.passed:
+                failed = [
+                    str(check.get("name") or "check")
+                    for check in safety_verification.checks
+                    if isinstance(check, Mapping) and check.get("status") == "failed"
+                ]
+                raise RuntimeError(
+                    "Soperator post-upgrade shared safety verification failed"
+                    + (": " + ", ".join(failed) if failed else ".")
+                )
+            _complete_checkpoint_phase("shared-safety-verification")
         with _phase_spinner(
             "completed",
             "All managed Soperator upgrade gates passed; writing final reports.",
         ):
+            checkpoint["pending_phase"] = "none"
+            checkpoint["pending_reason"] = ""
+            _sync_completed_phases()
             _checkpoint("completed")
             upgrade_report_path, _upgrade_report_json_path = _write_soperator_upgrade_report(
                 staged_paths,
@@ -14393,12 +14688,28 @@ def _run_managed_soperator_cluster_upgrade(
             "[green]Soperator cluster upgrade completed[/green]: "
             f"{target.target_ref} chart {plan.current_version or 'unset'} -> {to_chart_version}"
         )
-    except Exception as exc:
+    except (Exception, KeyboardInterrupt, EOFError, typer.Abort) as exc:
+        interrupted = isinstance(exc, (KeyboardInterrupt, EOFError, typer.Abort))
+        failure_reason = (
+            "interrupted by user"
+            if interrupted
+            else (str(exc).strip() or exc.__class__.__name__)
+        )
+        failed_phase = _current_pending_phase()
+        if not failed_phase:
+            current_phase = checkpoint.get("current_phase")
+            if isinstance(current_phase, Mapping):
+                phase_id = str(current_phase.get("id", "") or "").strip()
+                if phase_id in _SOPERATOR_UPGRADE_PLANNED_PHASE_IDS:
+                    failed_phase = phase_id
+        if failed_phase and failed_phase not in completed_phases:
+            checkpoint["pending_phase"] = failed_phase
+            checkpoint["pending_reason"] = failure_reason
         _set_phase(
             "failed",
             "Upgrade failed; checkpointing cleanup requirements before raising the error.",
         )
-        _checkpoint("failed", error=str(exc))
+        _checkpoint("interrupted" if interrupted else "failed", error=failure_reason)
         activechecks_restore_status = (
             "already-restored" if lifecycle.required and not restore_required else "not-required"
         )
@@ -14447,12 +14758,16 @@ def _run_managed_soperator_cluster_upgrade(
                 )
         checkpoint["status"] = "failed"
         checkpoint["failure"] = {
-            "error": str(exc),
+            "error": failure_reason,
+            "interrupted": interrupted,
+            "pending_phase": checkpoint.get("pending_phase") or "none",
             "activechecks_restore": activechecks_restore_status,
             "slurm_restore": "left-drained" if slurm_restore_nodes else "not-required",
         }
         _write_soperator_upgrade_checkpoint(checkpoint_path, checkpoint)
         _write_soperator_upgrade_report(paths, checkpoint)
+        if interrupted:
+            raise typer.Exit(code=130) from None
         raise
 
 
