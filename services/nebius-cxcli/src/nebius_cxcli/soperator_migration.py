@@ -4919,6 +4919,7 @@ def _run_soperator_worker_rollout_live_preflight(
     job_refresh_interval_seconds: int,
     slurm_decision_recorder: Callable[[Mapping[str, Any]], None] | None = None,
     interactive_prompt_pause: Callable[[], Any] | None = None,
+    allow_resolved_interactive_job_policy: bool = False,
 ) -> list[str]:
     unavailable_budget = 0
     budget_label = f"{rollout.strategy} requires selected worker groups to start healthy"
@@ -4993,6 +4994,7 @@ def _run_soperator_worker_rollout_live_preflight(
                 refresh_interval_seconds=job_refresh_interval_seconds,
                 decision_recorder=slurm_decision_recorder,
                 interactive_prompt_pause=interactive_prompt_pause,
+                allow_resolved_interactive_job_policy=allow_resolved_interactive_job_policy,
             )
         )
     return lines
@@ -5694,16 +5696,23 @@ def _external_upgrade_is_tty_session() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def _external_upgrade_job_policy(policy: str | None) -> str:
+def _external_upgrade_job_policy(
+    policy: str | None,
+    *,
+    default_policy: str | None = None,
+    allow_resolved_interactive: bool = False,
+) -> str:
     interactive = _external_upgrade_is_tty_session()
     resolved_policy = str(policy or "").strip()
     if not resolved_policy:
-        resolved_policy = "interactive" if interactive else "fail"
+        resolved_policy = str(default_policy or "").strip()
+        if not resolved_policy:
+            resolved_policy = "interactive" if interactive else "fail"
     if resolved_policy not in _EXTERNAL_UPGRADE_JOB_POLICIES:
         raise RuntimeError(
             "--job-policy must be one of: " + ", ".join(sorted(_EXTERNAL_UPGRADE_JOB_POLICIES))
         )
-    if resolved_policy == "interactive" and not interactive:
+    if resolved_policy == "interactive" and not (interactive or allow_resolved_interactive):
         raise RuntimeError(
             "--job-policy interactive requires an interactive terminal. Use "
             "fail, wait-to-finish, wait-then-cancel, cancel-selected, cancel-all, "
@@ -6050,6 +6059,7 @@ def _handle_external_upgrade_slurm_jobs(
     refresh_interval_seconds: int,
     decision_recorder: Callable[[Mapping[str, Any]], None] | None = None,
     interactive_prompt_pause: Callable[[], Any] | None = None,
+    allow_resolved_interactive_job_policy: bool = False,
 ) -> list[str]:
     def _record(action: str, **details: Any) -> None:
         if decision_recorder is None:
@@ -6062,7 +6072,10 @@ def _handle_external_upgrade_slurm_jobs(
             }
         )
 
-    resolved_policy = _external_upgrade_job_policy(policy)
+    resolved_policy = _external_upgrade_job_policy(
+        policy,
+        allow_resolved_interactive=allow_resolved_interactive_job_policy,
+    )
     if resolved_policy == "wait-then-cancel" and wait_timeout_seconds <= 0:
         raise RuntimeError(
             "--job-policy wait-then-cancel requires a positive --job-wait-timeout. "
@@ -7180,6 +7193,7 @@ def _ensure_slurm_quiet(
     slurm_decision_recorder: Callable[[Mapping[str, Any]], None] | None = None,
     allow_missing_login_recovery: bool = False,
     interactive_prompt_pause: Callable[[], Any] | None = None,
+    allow_resolved_interactive_job_policy: bool = False,
 ) -> list[str]:
     try:
         job_lines = _handle_external_upgrade_slurm_jobs(
@@ -7193,6 +7207,7 @@ def _ensure_slurm_quiet(
             refresh_interval_seconds=job_refresh_interval_seconds,
             decision_recorder=slurm_decision_recorder,
             interactive_prompt_pause=interactive_prompt_pause,
+            allow_resolved_interactive_job_policy=allow_resolved_interactive_job_policy,
         )
     except RuntimeError as exc:
         detail = str(exc)
@@ -11316,6 +11331,7 @@ def _execute_rolling_compute_migration_phase(
     job_refresh_interval_seconds: int = _EXTERNAL_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL_SECONDS,
     slurm_decision_recorder: Callable[[Mapping[str, Any]], None] | None = None,
     interactive_prompt_pause: Callable[[], Any] | None = None,
+    allow_resolved_interactive_job_policy: bool = False,
 ) -> tuple[bool, list[str]]:
     phase = _phase_state(checkpoint, "rolling-compute-migration")
     nodes = _nodes_for_worker_groups(
@@ -11387,6 +11403,7 @@ def _execute_rolling_compute_migration_phase(
         slurm_decision_recorder=slurm_decision_recorder,
         allow_missing_login_recovery=not live_source_slurmcluster_present,
         interactive_prompt_pause=interactive_prompt_pause,
+        allow_resolved_interactive_job_policy=allow_resolved_interactive_job_policy,
     )
     try:
         lines.extend(
@@ -12004,6 +12021,7 @@ def _execute_populate_jail_refresh_phase(
     job_refresh_interval_seconds: int,
     slurm_decision_recorder: Callable[[Mapping[str, Any]], None] | None = None,
     interactive_prompt_pause: Callable[[], Any] | None = None,
+    allow_resolved_interactive_job_policy: bool = False,
 ) -> tuple[bool, list[str]]:
     phase = _phase_state(checkpoint, POPULATE_JAIL_REFRESH_PHASE_ID)
     before = inspect_populate_jail(
@@ -12076,6 +12094,7 @@ def _execute_populate_jail_refresh_phase(
         slurm_decision_recorder=slurm_decision_recorder,
         allow_missing_login_recovery=not live_source_slurmcluster_present,
         interactive_prompt_pause=interactive_prompt_pause,
+        allow_resolved_interactive_job_policy=allow_resolved_interactive_job_policy,
     )
     phase["slurm_quiet_at"] = _utc_now()
     phase["slurm_quiet_lines"] = list(quiet_lines)
@@ -15611,7 +15630,12 @@ def _execute_soperator_migration_unlocked(
     resolved_populate_jail_refresh = normalize_populate_jail_refresh_mode(
         populate_jail_refresh
     )
-    resolved_job_policy = _external_upgrade_job_policy(job_policy)
+    resolved_job_policy = _external_upgrade_job_policy(
+        job_policy,
+        default_policy="fail",
+        allow_resolved_interactive=job_policy == "interactive",
+    )
+    allow_resolved_interactive_job_policy = resolved_job_policy == "interactive"
     if resolved_job_policy == "wait-then-cancel" and job_wait_timeout_seconds <= 0:
         raise RuntimeError(
             "--job-policy wait-then-cancel requires a positive --job-wait-timeout. "
@@ -15777,6 +15801,7 @@ def _execute_soperator_migration_unlocked(
                     job_refresh_interval_seconds=job_refresh_interval_seconds,
                     slurm_decision_recorder=_record_slurm_decision,
                     interactive_prompt_pause=status_prompt_pause,
+                    allow_resolved_interactive_job_policy=allow_resolved_interactive_job_policy,
                 )
             except SoperatorMigrationPhasePending as exc:
                 quota_preflight_pending_phase = _EXTERNAL_NODE_TEMPLATE_PHASE_ID
@@ -15988,6 +16013,7 @@ def _execute_soperator_migration_unlocked(
                 job_refresh_interval_seconds=job_refresh_interval_seconds,
                 slurm_decision_recorder=_record_slurm_decision,
                 interactive_prompt_pause=status_prompt_pause,
+                allow_resolved_interactive_job_policy=allow_resolved_interactive_job_policy,
             ),
             "final-control-plane-cutover": lambda: _execute_final_cutover_phase(
                 checkpoint=checkpoint,
@@ -16012,6 +16038,7 @@ def _execute_soperator_migration_unlocked(
                 job_refresh_interval_seconds=job_refresh_interval_seconds,
                 slurm_decision_recorder=_record_slurm_decision,
                 interactive_prompt_pause=status_prompt_pause,
+                allow_resolved_interactive_job_policy=allow_resolved_interactive_job_policy,
             ),
             "validation-and-rollback-hold": lambda: _execute_validation_hold_phase(
                 config_path=config_path,

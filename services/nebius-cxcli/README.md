@@ -2716,14 +2716,14 @@ per job where the cluster policy allows that. Use `--run-minutes` and
 `--wall-minutes` to change the job duration, `--submit-mode array` for compact
 bulk submission, and `--dry-run` to inspect the generated `sbatch` commands.
 
-During Soperator upgrades, use the interactive job policy when you want the
-operator to select wait, cancellation, requeue, or other available handling for
-each displayed affected job:
+During Soperator upgrades, a real terminal defaults to the interactive job
+policy, so human operators can keep the command short and still select wait,
+cancellation, requeue, or other available handling for each displayed affected
+job:
 
 ```bash
 nebius-cxcli soperator upgrade CONFIG_YAML --target TARGET \
-  --to-chart-version TARGET_VERSION \
-  --job-policy interactive
+  --to-chart-version TARGET_VERSION
 ```
 
 How to read the common outputs:

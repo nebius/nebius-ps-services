@@ -2196,9 +2196,10 @@ def test_readme_guides_soperator_slurm_checks_through_login_service() -> None:
     assert "cd /shared/slurm-jobs" not in section
     assert "bash ./submit-job-test.sh\n" in section
     assert "bash ./submit-job-test.sh --part-type cpu --partition cpu --count 10" in section
+    assert "a real terminal defaults to the interactive job policy" in section_flat
     assert "nebius-cxcli soperator upgrade CONFIG_YAML --target TARGET" in section_flat
     assert "--to-chart-version TARGET_VERSION" in section_flat
-    assert "--job-policy interactive" in section_flat
+    assert "--job-policy interactive" not in section_flat
     assert "Do not prefix normal SSH-session commands with chroot" not in section
     assert "kubectl exec into the sshd container" not in section
     assert "chroot /mnt/jail srun" not in section

@@ -8548,11 +8548,15 @@ def test_ext_soperator_upgrade_interactive_non_tty_fails_before_backup(
     assert backup_called is False
 
 
-@pytest.mark.parametrize(("tty", "expected_policy"), [(True, "interactive"), (False, "fail")])
+@pytest.mark.parametrize(
+    ("tty", "interactive", "expected_policy"),
+    [(True, True, "interactive"), (False, True, "fail"), (True, False, "fail")],
+)
 def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_by_terminal_mode(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     tty: bool,
+    interactive: bool,
     expected_policy: str,
 ) -> None:
     config_path = tmp_path / "config.yaml"
@@ -8573,12 +8577,15 @@ def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_by_terminal_m
         }
     }
     captured: dict[str, Any] = {}
+    events: list[str] = []
+    rich_console = cli.Console(record=True, width=300)
 
     @contextmanager
     def _no_status(_message: str):
         yield
 
     monkeypatch.setattr(cli, "_is_tty_session", lambda: tty)
+    monkeypatch.setattr(soperator_migration, "_external_upgrade_is_tty_session", lambda: False)
     monkeypatch.setattr(cli, "_load_source_payload", lambda _path: payload)
     monkeypatch.setattr(
         cli,
@@ -8599,6 +8606,7 @@ def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_by_terminal_m
         lambda _payload, *, target_ref: payload["deploy"]["targets"][0],
     )
     monkeypatch.setattr(cli, "_command_status", _no_status)
+    monkeypatch.setattr(cli, "console", rich_console)
     monkeypatch.setattr(
         cli,
         "_run_external_soperator_discovery_command",
@@ -8622,7 +8630,7 @@ def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_by_terminal_m
     monkeypatch.setattr(
         cli,
         "_create_external_soperator_upgrade_backup",
-        lambda **_kwargs: {"path": str(tmp_path / "backup.tar.gz")},
+        lambda **_kwargs: events.append("backup") or {"path": str(tmp_path / "backup.tar.gz")},
     )
     monkeypatch.setattr(
         cli,
@@ -8636,6 +8644,7 @@ def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_by_terminal_m
     )
 
     def _execute(**kwargs: Any) -> SimpleNamespace:
+        events.append("execute")
         captured.update(kwargs)
         return SimpleNamespace(pending_phase="none", lines=("done",))
 
@@ -8654,7 +8663,7 @@ def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_by_terminal_m
         approve=True,
         approve_remediation=False,
         allow_unsupported_soperator_upgrade_path=False,
-        interactive=True,
+        interactive=interactive,
         worker_rollout_strategy=None,
         worker_wave_groups=None,
         worker_wave_percent=None,
@@ -8664,7 +8673,10 @@ def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_by_terminal_m
         strategy_drain_timeout=None,
     )
 
+    rendered = rich_console.export_text()
+    assert f"Slurm job policy: {expected_policy}" in rendered
     assert captured["job_policy"] == expected_policy
+    assert events == ["backup", "execute"]
 
 
 def test_render_command_points_gpu_reconciliation_only_soperator_to_deploy(
@@ -22470,6 +22482,12 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "does not bypass Kubernetes minor-hop, backup, quota, protected-state" in (
         normalized_managed_soperator_upgrade_help
     )
+    assert "Default: interactive in a prompt-capable terminal" in (
+        normalized_managed_soperator_upgrade_help
+    )
+    assert "Automation should pass --no-interactive --job-policy <policy>" in (
+        normalized_managed_soperator_upgrade_help
+    )
     assert "ext-soperator [OPTIONS] COMMAND [ARGS]" in soperator_help
     assert "Manage existing external Nebius MK8s clusters for Soperator" in (
         normalized_soperator_help
@@ -22773,6 +22791,12 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         "cancel-all, requeue-selected, requeue-all, requeue-hold-selected, "
         "requeue-hold-all, or fail"
     ) in normalized_ext_soperator_upgrade_help
+    assert "Default: interactive in a prompt-capable terminal" in (
+        normalized_ext_soperator_upgrade_help
+    )
+    assert "Automation should pass --no-interactive --job-policy <policy>" in (
+        normalized_ext_soperator_upgrade_help
+    )
     assert "Maximum wait for Slurm jobs" in normalized_ext_soperator_upgrade_help
     assert (
         "nebius-cxcli ext-soperator upgrade ./deployments/tenant/project/config.yaml "

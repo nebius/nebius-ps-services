@@ -7,8 +7,9 @@ All notable changes to this project are tracked here. This changelog follows
 ## [Unreleased]
 
 - Changed `ext-soperator upgrade --execute` runs with no explicit
-  `--job-policy` to match managed `soperator upgrade`: real TTY runs with
-  `--interactive` default to `interactive`, while non-TTY and `--no-interactive`
+  `--job-policy` to match managed `soperator upgrade`: real TTY runs default
+  to `interactive` and carry that resolved policy through plan output, backup
+  metadata, and checkpointed execution, while non-TTY and `--no-interactive`
   runs default to `fail`.
 - Renamed the blocking Soperator Slurm job policy from `wait` to
   `wait-to-finish` across managed and external Soperator upgrade, scale-down,

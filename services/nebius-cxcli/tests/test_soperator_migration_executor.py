@@ -6170,13 +6170,48 @@ def test_external_upgrade_job_policy_defaults_by_terminal_mode(
 
     monkeypatch.setattr(migration, "_external_upgrade_is_tty_session", lambda: True)
     assert migration._external_upgrade_job_policy(None) == "interactive"  # noqa: SLF001
+    assert (
+        migration._external_upgrade_job_policy(None, default_policy="fail") == "fail"  # noqa: SLF001
+    )
     assert migration._external_upgrade_job_policy("wait-to-finish") == "wait-to-finish"  # noqa: SLF001
 
     monkeypatch.setattr(migration, "_external_upgrade_is_tty_session", lambda: False)
+    assert (
+        migration._external_upgrade_job_policy(
+            "interactive",
+            allow_resolved_interactive=True,
+        )
+        == "interactive"
+    )
     with pytest.raises(RuntimeError, match="interactive terminal"):
         migration._external_upgrade_job_policy("interactive")  # noqa: SLF001
     with pytest.raises(RuntimeError, match="wait-to-finish"):
         migration._external_upgrade_job_policy("wait")  # noqa: SLF001
+
+
+def test_external_upgrade_resolved_interactive_policy_skips_late_tty_recheck(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(migration, "_external_upgrade_is_tty_session", lambda: False)
+
+    lines = migration._handle_external_upgrade_slurm_jobs(
+        command_runner=_external_upgrade_slurm_runner(
+            queue_outputs=[""],
+            calls=calls,
+        ),
+        kube_context="external-context",
+        node_names=("worker-gpu-0-0",),
+        policy="interactive",
+        cancel_job_ids=(),
+        requeue_job_ids=(),
+        wait_timeout_seconds=0,
+        refresh_interval_seconds=1,
+        allow_resolved_interactive_job_policy=True,
+    )
+
+    assert lines == ["Slurm job preflight: no affected jobs in the upgrade scope."]
+    assert any(command[8:10] == ("squeue", "-h") for command in calls)
 
 
 def test_external_upgrade_wait_then_cancel_requires_positive_timeout() -> None:

@@ -2572,7 +2572,8 @@ _SOPERATOR_UPGRADE_JOB_POLICIES = frozenset(
 _SOPERATOR_UPGRADE_JOB_POLICY_HELP = (
     "Slurm job policy: interactive, wait-to-finish, wait-then-cancel, cancel-selected, "
     "cancel-all, requeue-selected, requeue-all, requeue-hold-selected, requeue-hold-all, "
-    "or fail."
+    "or fail. Default: interactive in a prompt-capable terminal, fail with --no-interactive "
+    "or non-TTY. Automation should pass --no-interactive --job-policy <policy>."
 )
 _SOPERATOR_POPULATE_JAIL_REFRESH_HELP = (
     "Populate-jail rootfs refresh mode: auto refreshes when the target chart/rootfs "
