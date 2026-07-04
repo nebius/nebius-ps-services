@@ -726,7 +726,10 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "Validation hold: verify external MK8s control-plane and node-group readiness" in (
         soperator_flat
     )
-    assert "Segment completion: write `ext-soperator-upgrade-report.md` and JSON" in (
+    assert "Segment completion: write the latest `ext-soperator-upgrade-report.md` / `.json`" in (
+        soperator_flat
+    )
+    assert "write the segment snapshot under `generated/reports/ext-soperator-upgrades/<target>/<segment-id>/`" in (
         soperator_flat
     )
     assert "Final handoff: after the last locked segment reports `Pending phase: none`" in (

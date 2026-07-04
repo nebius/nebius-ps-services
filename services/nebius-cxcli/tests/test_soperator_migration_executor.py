@@ -497,6 +497,32 @@ def _payload(
     return payload
 
 
+def _locked_upgrade_path_fixture() -> dict[str, Any]:
+    return {
+        "schema": "nebius-cxcli-ext-soperator-upgrade-path/v1",
+        "locked": True,
+        "source_k8s_version": "1.31",
+        "target_k8s_version": "1.32",
+        "source_soperator_version": "3.0.5",
+        "target_soperator_version": "4.0.1-ps.1",
+        "segments": [
+            {
+                "id": "segment-1-kubernetes-1-31-1-32-soperator",
+                "title": "Kubernetes 1.31 -> 1.32 plus Soperator",
+                "current_k8s_version": "1.31",
+                "target_k8s_version": "1.32",
+                "source_soperator_version": "3.0.5",
+                "target_soperator_version": "4.0.1-ps.1",
+                "actions": [
+                    "approve-external-soperator-upgrade",
+                    "upgrade-external-node-template",
+                    "upgrade-soperator",
+                ],
+            }
+        ],
+    }
+
+
 def _backup_metadata(label: str = "original-pre-upgrade") -> dict[str, Any]:
     return {
         "path": f"backups/{label}.tar.gz",
@@ -4866,6 +4892,8 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
     monkeypatch.setattr(migration, "mk8s_gpu_validation_specs", _fake_specs)
     monkeypatch.setattr(migration, "run_mk8s_gpu_validations", _fake_run)
 
+    locked_upgrade_path = _locked_upgrade_path_fixture()
+    segment_id = locked_upgrade_path["segments"][0]["id"]
     result = execute_soperator_migration(
         config_path=tmp_path / "config.yaml",
         target_ref="external-cluster",
@@ -4874,6 +4902,9 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
         snapshot_collector=lambda *, kube_context: _snapshot(),
         approved=True,
         command_runner=_FakeCommandRunner(),
+        locked_upgrade_path=locked_upgrade_path,
+        upgrade_path_fingerprint="locked-path-fingerprint",
+        upgrade_path_segment_id=segment_id,
     )
 
     assert result.pending_phase == "none"
@@ -4903,6 +4934,9 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
         (reports_dir / "ext-soperator-upgrade-report.json").read_text(encoding="utf-8")
     )
     assert "## Upgrade Steps" in migrate_report
+    assert "## Locked Upgrade Path" in migrate_report
+    assert "Kubernetes 1.31 -> 1.32 plus Soperator" in migrate_report
+    assert "ext-soperator-upgrades/external-cluster/segment-1-kubernetes-1-31-1-32-soperator/report.md" in migrate_report
     assert "## Stage Fast Verification" in migrate_report
     assert "- Upgrade performed: `yes`" in migrate_report
     assert "`validation-and-rollback-hold`: `PASS`" in migrate_report
@@ -4939,20 +4973,51 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
     assert checkpoint["upgrade_report_json"].endswith(
         "generated/reports/ext-soperator-upgrade-report.json"
     )
+    assert checkpoint["locked_upgrade_path"] == locked_upgrade_path
+    assert checkpoint["upgrade_path_fingerprint"] == "locked-path-fingerprint"
+    assert checkpoint["current_segment_id"] == segment_id
+    assert checkpoint["completed_segment_ids"] == [segment_id]
+    expected_backup = _backup_metadata_with_archive(tmp_path / "config.yaml", "test-pre-upgrade")
+    segment_state = checkpoint["segment_state"][segment_id]
+    assert segment_state["segment_report_path"].endswith(
+        "generated/reports/ext-soperator-upgrades/external-cluster/"
+        "segment-1-kubernetes-1-31-1-32-soperator/report.md"
+    )
+    assert segment_state["backup_path"] == expected_backup["path"]
     assert checkpoint["upgrade_safety"]["post_upgrade_verification"]["status"] == "passed"
     assert checkpoint["upgrade_safety"]["protected_customer_state"]["before_hash"]
     assert checkpoint["upgrade_safety"]["protected_customer_state"]["after_hash"]
-    assert upgrade_json_report["schema"] == "nebius-cxcli-ext-soperator-upgrade-report/v1"
+    assert upgrade_json_report["schema"] == migration.SOPERATOR_MIGRATION_REPORT_SCHEMA
     assert upgrade_json_report["target_ref"] == "external-cluster"
     assert upgrade_json_report["upgrade_performed"] is True
     assert upgrade_json_report["pending_phase"] == "none"
     assert upgrade_json_report["checkpoint_path"].endswith(
         ".nebius-cxcli/ext-soperator-upgrades/external-cluster/checkpoint.json"
     )
-    expected_backup = _backup_metadata_with_archive(tmp_path / "config.yaml", "test-pre-upgrade")
     assert upgrade_json_report["backup"]["path"] == expected_backup["path"]
     assert upgrade_json_report["backup"]["sha256"] == expected_backup["sha256"]
     assert upgrade_json_report["backup"]["size_bytes"] == expected_backup["size_bytes"]
+    assert upgrade_json_report["locked_upgrade_path"] == locked_upgrade_path
+    assert upgrade_json_report["upgrade_path_progress"]["fingerprint"] == (
+        "locked-path-fingerprint"
+    )
+    assert upgrade_json_report["upgrade_path_progress"]["completed_segment_ids"] == [segment_id]
+    assert upgrade_json_report["segment_history"][0]["status"] == "completed"
+    assert upgrade_json_report["segment_history"][0]["backup_path"] == expected_backup["path"]
+    segment_report_path, segment_json_report_path = (
+        migration.ext_soperator_upgrade_segment_report_paths(
+            tmp_path / "config.yaml",
+            "external-cluster",
+            segment_id,
+        )
+    )
+    assert segment_report_path.exists()
+    assert segment_json_report_path.exists()
+    segment_json_report = json.loads(segment_json_report_path.read_text(encoding="utf-8"))
+    assert segment_json_report["latest_markdown_report"].endswith(
+        "generated/reports/ext-soperator-upgrade-report.md"
+    )
+    assert segment_json_report["markdown_report"] == str(segment_report_path)
     assert upgrade_json_report["post_upgrade_verification"]["status"] == "passed"
     assert upgrade_json_report["protected_customer_state"]["before_hash"]
     assert upgrade_json_report["fast_smoke"]["status"] == "passed"
@@ -12016,7 +12081,7 @@ def test_checkpoint_allows_same_plan_report_refresh_after_mutation_started() -> 
     )
     checkpoint = migration._checkpoint_for_run(
         existing={
-            "schema": "nebius-cxcli-soperator-migration-execution/v1",
+            "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
             "target_ref": "external-cluster",
             "source_report_fingerprint": "old",
             "source_version": "1.23.3",
@@ -12038,6 +12103,33 @@ def test_checkpoint_allows_same_plan_report_refresh_after_mutation_started() -> 
     assert checkpoint["events"][-1]["previous_source_report_fingerprint"] == "old"
 
 
+def test_checkpoint_rejects_progress_only_locked_path_state() -> None:
+    with pytest.raises(RuntimeError, match="Old progress-only checkpoints are not supported"):
+        migration._checkpoint_for_run(
+            existing={
+                "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+                "target_ref": "external-cluster",
+                "source_report_fingerprint": "old",
+                "source_version": "3.0.5",
+                "target_version": "4.0.1-ps.1",
+                "planned_phases": ["discovery-and-plan"],
+                "completed_phases": ["discovery-and-plan"],
+                "upgrade_path_fingerprint": "locked-path-fingerprint",
+                "current_segment_id": "segment-1",
+                "completed_segment_ids": ["segment-1"],
+                "events": [],
+            },
+            target_ref="external-cluster",
+            source_report_fingerprint="new",
+            source_version="4.0.1",
+            target_version="4.0.1-ps.1",
+            phase_ids=("discovery-and-plan",),
+            allow_source_report_refresh=True,
+            upgrade_path_fingerprint="locked-path-fingerprint",
+            upgrade_path_segment_id="segment-2",
+        )
+
+
 def test_checkpoint_allows_report_refresh_when_resume_plan_omits_terminal_phases() -> None:
     phase_ids = (
         "discovery-and-plan",
@@ -12048,7 +12140,7 @@ def test_checkpoint_allows_report_refresh_when_resume_plan_omits_terminal_phases
     )
     checkpoint = migration._checkpoint_for_run(
         existing={
-            "schema": "nebius-cxcli-soperator-migration-execution/v1",
+            "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
             "target_ref": "external-cluster",
             "source_report_fingerprint": "old",
             "source_version": "1.22.3",
@@ -12084,7 +12176,7 @@ def test_checkpoint_starts_fresh_after_completed_prior_hop() -> None:
     )
     checkpoint = migration._checkpoint_for_run(
         existing={
-            "schema": "nebius-cxcli-soperator-migration-execution/v1",
+            "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
             "target_ref": "external-cluster",
             "source_report_fingerprint": "old",
             "source_version": "1.22.3",
@@ -12121,7 +12213,7 @@ def test_checkpoint_rejects_report_refresh_when_plan_changed() -> None:
     with pytest.raises(RuntimeError, match="checkpoint is stale"):
         migration._checkpoint_for_run(
             existing={
-                "schema": "nebius-cxcli-soperator-migration-execution/v1",
+                "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
                 "target_ref": "external-cluster",
                 "source_report_fingerprint": "old",
                 "source_version": "1.23.3",

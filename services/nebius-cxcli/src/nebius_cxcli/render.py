@@ -43,7 +43,7 @@ _LIFECYCLE_REPORT_FILENAMES = frozenset(
         "upgrade-node-template-report.json",
     }
 )
-_LIFECYCLE_REPORT_DIRNAMES = frozenset({"soperator-discovery"})
+_LIFECYCLE_REPORT_DIRNAMES = frozenset({"ext-soperator-upgrades", "soperator-discovery"})
 _REPORT_JSON_REF_RE = re.compile(r"`([^`/\\]+\.json)`")
 
 

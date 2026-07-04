@@ -3856,6 +3856,14 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     onboard_report = paths.reports_dir / "soperator-discovery" / "external-cluster"
     migrate_report = paths.reports_dir / "ext-soperator-upgrade-report.md"
     migration_detail_report = paths.reports_dir / "deploy-smoke-report-external.json"
+    segment_report_dir = (
+        paths.reports_dir
+        / "ext-soperator-upgrades"
+        / "external-cluster"
+        / "segment-1-kubernetes-1-31-1-32-soperator"
+    )
+    segment_report = segment_report_dir / "report.md"
+    segment_json_report = segment_report_dir / "report.json"
     unreferenced_migration_like_report = paths.reports_dir / "deploy-smoke-report-old.json"
     node_template_report = paths.reports_dir / "upgrade-node-template-report.md"
     node_template_report_json = paths.reports_dir / "upgrade-node-template-report.json"
@@ -3888,6 +3896,9 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
         encoding="utf-8",
     )
     migration_detail_report.write_text('{"passed": true}\n', encoding="utf-8")
+    segment_report_dir.mkdir(parents=True)
+    segment_report.write_text("# Segment Report\n", encoding="utf-8")
+    segment_json_report.write_text('{"segment": "segment-1"}\n', encoding="utf-8")
     unreferenced_migration_like_report.write_text('{"passed": false}\n', encoding="utf-8")
     node_template_report.write_text("# MK8s Node Template Upgrade Report\n", encoding="utf-8")
     node_template_report_json.write_text('{"status": "passed"}\n', encoding="utf-8")
@@ -3909,6 +3920,8 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     )
     assert migrate_report.read_text(encoding="utf-8").startswith("# External Soperator Upgrade Report")
     assert migration_detail_report.read_text(encoding="utf-8") == '{"passed": true}\n'
+    assert segment_report.read_text(encoding="utf-8") == "# Segment Report\n"
+    assert segment_json_report.read_text(encoding="utf-8") == '{"segment": "segment-1"}\n'
     assert not unreferenced_migration_like_report.exists()
     assert node_template_report.read_text(encoding="utf-8").startswith(
         "# MK8s Node Template Upgrade Report"

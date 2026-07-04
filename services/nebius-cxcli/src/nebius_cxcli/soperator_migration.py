@@ -139,11 +139,13 @@ from .soperator_validation import (
     soperator_cluster_validation_specs,
 )
 
-SOPERATOR_MIGRATION_EXECUTION_SCHEMA = "nebius-cxcli-ext-soperator-upgrade-execution/v1"
+SOPERATOR_MIGRATION_EXECUTION_SCHEMA = "nebius-cxcli-ext-soperator-upgrade-execution/v2"
+SOPERATOR_MIGRATION_REPORT_SCHEMA = "nebius-cxcli-ext-soperator-upgrade-report/v2"
 SOPERATOR_MIGRATION_CHECKPOINT_DIR = ".nebius-cxcli/ext-soperator-upgrades"
 LEGACY_SOPERATOR_MIGRATION_CHECKPOINT_DIR = ".nebius-cxcli/soperator-migrations"
 MIGRATE_REPORT_FILENAME = "ext-soperator-upgrade-report.md"
 UPGRADE_REPORT_JSON_FILENAME = "ext-soperator-upgrade-report.json"
+EXT_SOPERATOR_UPGRADE_SEGMENT_REPORT_DIRNAME = "ext-soperator-upgrades"
 _MUTATING_PHASE_IDS = frozenset(
     {
         "external-node-template-upgrade",
@@ -519,6 +521,160 @@ class SoperatorMigrationStatusSnapshot:
 def soperator_migration_checkpoint_path(config_path: Path, target_ref: str) -> Path:
     normalized = normalize_component_token(target_ref) or "mk8s"
     return config_path.parent / SOPERATOR_MIGRATION_CHECKPOINT_DIR / normalized / "checkpoint.json"
+
+
+def _unsupported_checkpoint_schema_message(path: Path) -> str:
+    return (
+        "Unsupported external Soperator upgrade checkpoint schema in "
+        f"{path}. This cxcli version requires checkpoint schema "
+        f"{SOPERATOR_MIGRATION_EXECUTION_SCHEMA} with a full locked_upgrade_path "
+        "snapshot. Old progress-only checkpoints cannot be resumed; rerun "
+        "`nebius-cxcli ext-soperator onboard` only as an intentional repair/replan "
+        "path, or remove the checkpoint after reviewing recovery state."
+    )
+
+
+def _locked_upgrade_path_repair_message() -> str:
+    return (
+        "External Soperator upgrade checkpoint cannot resume because it does not "
+        "contain the full locked_upgrade_path snapshot. Old progress-only "
+        "checkpoints are not supported; rerun `nebius-cxcli ext-soperator onboard` "
+        "only as an intentional repair/replan path, or remove the checkpoint after "
+        "reviewing recovery state."
+    )
+
+
+def _checkpoint_locked_upgrade_path(checkpoint: Mapping[str, Any] | None) -> dict[str, Any]:
+    locked_path = (checkpoint or {}).get("locked_upgrade_path")
+    if not isinstance(locked_path, Mapping):
+        return {}
+    segments = locked_path.get("segments")
+    if not isinstance(segments, list) or not segments:
+        return {}
+    payload = to_plain_data(dict(locked_path))
+    return dict(payload) if isinstance(payload, Mapping) else {}
+
+
+def _checkpoint_has_progress_only_locked_path(checkpoint: Mapping[str, Any] | None) -> bool:
+    if not isinstance(checkpoint, Mapping) or _checkpoint_locked_upgrade_path(checkpoint):
+        return False
+    path_state = checkpoint.get("upgrade_path")
+    if isinstance(path_state, Mapping) and any(
+        key in path_state
+        for key in (
+            "fingerprint",
+            "current_segment_id",
+            "completed_segment_ids",
+            "segment_state",
+        )
+    ):
+        return True
+    return any(
+        key in checkpoint
+        for key in (
+            "upgrade_path_fingerprint",
+            "current_segment_id",
+            "completed_segment_ids",
+            "segment_state",
+        )
+    )
+
+
+def _checkpoint_upgrade_path_progress(checkpoint: Mapping[str, Any]) -> dict[str, Any]:
+    segment_state = _mapping(checkpoint.get("segment_state"))
+    return {
+        "fingerprint": str(checkpoint.get("upgrade_path_fingerprint", "") or ""),
+        "current_segment_id": str(checkpoint.get("current_segment_id", "") or ""),
+        "completed_segment_ids": [
+            str(segment_id or "").strip()
+            for segment_id in checkpoint.get("completed_segment_ids", []) or []
+            if str(segment_id or "").strip()
+        ],
+        "pending_phase": str(checkpoint.get("pending_phase", "") or ""),
+        "segment_state": to_plain_data(segment_state),
+    }
+
+
+def ext_soperator_upgrade_segment_report_paths(
+    config_path: Path,
+    target_ref: str,
+    segment_id: str,
+) -> tuple[Path, Path]:
+    normalized_target = normalize_component_token(target_ref) or "target"
+    normalized_segment = normalize_component_token(segment_id) or "segment"
+    report_dir = (
+        config_path.parent
+        / "generated"
+        / "reports"
+        / EXT_SOPERATOR_UPGRADE_SEGMENT_REPORT_DIRNAME
+        / normalized_target
+        / normalized_segment
+    )
+    return report_dir / "report.md", report_dir / "report.json"
+
+
+def _locked_upgrade_path_segment_history(
+    *,
+    config_path: Path,
+    target_ref: str,
+    checkpoint: Mapping[str, Any],
+    locked_upgrade_path: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    segments = locked_upgrade_path.get("segments")
+    if not isinstance(segments, Sequence) or isinstance(segments, (str, bytes, bytearray)):
+        return []
+    completed = {
+        str(segment_id or "").strip()
+        for segment_id in checkpoint.get("completed_segment_ids", []) or []
+        if str(segment_id or "").strip()
+    }
+    current_segment_id = str(checkpoint.get("current_segment_id", "") or "").strip()
+    pending_phase = str(checkpoint.get("pending_phase", "") or "").strip()
+    segment_state = _mapping(checkpoint.get("segment_state"))
+    checkpoint_backup = _mapping(checkpoint.get("backup"))
+    history: list[dict[str, Any]] = []
+    for raw_segment in segments:
+        if not isinstance(raw_segment, Mapping):
+            continue
+        segment_id = str(raw_segment.get("id", "") or "").strip()
+        if not segment_id:
+            continue
+        state = _mapping(segment_state.get(segment_id))
+        report_path, json_report_path = ext_soperator_upgrade_segment_report_paths(
+            config_path,
+            target_ref,
+            segment_id,
+        )
+        if segment_id in completed:
+            status = "completed"
+        elif segment_id == current_segment_id and (
+            (pending_phase and pending_phase != "none") or state
+        ):
+            status = "current"
+        else:
+            status = "remaining"
+        backup_path = str(state.get("backup_path", "") or checkpoint_backup.get("path", "") or "")
+        history.append(
+            {
+                "id": segment_id,
+                "title": str(raw_segment.get("title", "") or segment_id),
+                "status": status,
+                "current_k8s_version": str(raw_segment.get("current_k8s_version", "") or ""),
+                "target_k8s_version": str(raw_segment.get("target_k8s_version", "") or ""),
+                "source_soperator_version": str(
+                    raw_segment.get("source_soperator_version", "") or ""
+                ),
+                "target_soperator_version": str(
+                    raw_segment.get("target_soperator_version", "") or ""
+                ),
+                "report_path": str(state.get("segment_report_path", "") or report_path),
+                "json_report_path": str(
+                    state.get("segment_json_report_path", "") or json_report_path
+                ),
+                "backup_path": backup_path,
+            }
+        )
+    return history
 
 
 def legacy_soperator_migration_checkpoint_path(config_path: Path, target_ref: str) -> Path:
@@ -12873,7 +13029,9 @@ def _load_checkpoint(path: Path) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         raise RuntimeError(f"External Soperator upgrade checkpoint must be a JSON object: {path}")
     if payload.get("schema") != SOPERATOR_MIGRATION_EXECUTION_SCHEMA:
-        raise RuntimeError(f"Unsupported external Soperator upgrade checkpoint schema in {path}.")
+        raise RuntimeError(_unsupported_checkpoint_schema_message(path))
+    if _checkpoint_has_progress_only_locked_path(payload):
+        raise RuntimeError(_locked_upgrade_path_repair_message())
     return payload
 
 
@@ -13129,13 +13287,22 @@ def _write_soperator_migrate_report(
     json_report_path = _upgrade_report_json_path(config_path)
     report_path.parent.mkdir(parents=True, exist_ok=True)
     phase_state = _mapping(checkpoint.get("phase_state"))
+    generated_at = _utc_now()
+    locked_upgrade_path = _checkpoint_locked_upgrade_path(checkpoint)
+    upgrade_path_progress = _checkpoint_upgrade_path_progress(checkpoint)
+    segment_history = _locked_upgrade_path_segment_history(
+        config_path=config_path,
+        target_ref=target_ref,
+        checkpoint=checkpoint,
+        locked_upgrade_path=locked_upgrade_path,
+    )
     lines = [
         "# External Soperator Upgrade Report",
         "",
         f"- Target: `{target_ref}`",
         f"- Source version: `{source_version or 'unknown'}`",
         f"- Target version: `{target_version or 'unknown'}`",
-        f"- Generated at: `{_utc_now()}`",
+        f"- Generated at: `{generated_at}`",
         f"- Checkpoint: `{checkpoint_path}`",
         f"- JSON report: `{json_report_path}`",
         "- Upgrade status: `"
@@ -13149,9 +13316,40 @@ def _write_soperator_migrate_report(
         f"- Pending reason: `{pending_reason or 'none'}`",
         "- Upgrade performed: `" + ("yes" if mutation_performed else "no") + "`",
         "",
-        "## Upgrade Steps",
-        "",
     ]
+    if locked_upgrade_path:
+        completed_count = len(upgrade_path_progress.get("completed_segment_ids", []) or [])
+        current_segment_id = str(upgrade_path_progress.get("current_segment_id", "") or "")
+        remaining_count = max(len(segment_history) - completed_count, 0)
+        lines.extend(
+            [
+                "## Locked Upgrade Path",
+                "",
+                f"- Path fingerprint: `{upgrade_path_progress.get('fingerprint') or 'unknown'}`",
+                f"- Current segment: `{current_segment_id or 'none'}`",
+                f"- Completed segments: `{completed_count}`",
+                f"- Remaining segments: `{remaining_count}`",
+                "",
+                "| Segment | Status | Snapshot | Backup |",
+                "| --- | --- | --- | --- |",
+            ]
+        )
+        for segment in segment_history:
+            snapshot = str(segment.get("report_path", "") or "")
+            backup = str(segment.get("backup_path", "") or "")
+            lines.append(
+                "| "
+                + str(segment.get("title", "") or segment.get("id", "segment"))
+                + " | `"
+                + str(segment.get("status", "remaining"))
+                + "` | `"
+                + (snapshot or "pending")
+                + "` | `"
+                + (backup or "pending")
+                + "` |"
+            )
+        lines.append("")
+    lines.extend(["## Upgrade Steps", ""])
     phase_reports: list[dict[str, Any]] = []
     stage_verification_reports: list[dict[str, Any]] = []
     for phase_id in phase_ids:
@@ -13263,11 +13461,11 @@ def _write_soperator_migrate_report(
     lines.append("")
     upgrade_safety = _mapping(checkpoint.get("upgrade_safety"))
     json_report = {
-        "schema": "nebius-cxcli-ext-soperator-upgrade-report/v1",
+        "schema": SOPERATOR_MIGRATION_REPORT_SCHEMA,
         "target_ref": target_ref,
         "source_version": source_version or "",
         "target_version": target_version or "",
-        "generated_at": _utc_now(),
+        "generated_at": generated_at,
         "checkpoint_path": str(checkpoint_path),
         "markdown_report": str(report_path),
         "json_report": str(json_report_path),
@@ -13278,7 +13476,9 @@ def _write_soperator_migrate_report(
         "phases": phase_reports,
         "stage_verification": stage_verification_reports,
         "backup": to_plain_data(_mapping(checkpoint.get("backup"))),
-        "upgrade_path": to_plain_data(_mapping(checkpoint.get("upgrade_path"))),
+        "locked_upgrade_path": to_plain_data(locked_upgrade_path),
+        "upgrade_path_progress": to_plain_data(upgrade_path_progress),
+        "segment_history": to_plain_data(segment_history),
         "slurm": to_plain_data(_mapping(checkpoint.get("slurm"))),
         "mk8s": to_plain_data(
             _mapping(_mapping(phase_state).get(_EXTERNAL_NODE_TEMPLATE_PHASE_ID))
@@ -13313,6 +13513,23 @@ def _write_soperator_migrate_report(
         json.dumps(json_report, indent=2, sort_keys=True) + "\n",
     )
     _write_text_atomic(report_path, "\n".join(lines).rstrip() + "\n")
+    current_segment_id = str(checkpoint.get("current_segment_id", "") or "").strip()
+    if locked_upgrade_path and current_segment_id:
+        segment_report_path, segment_json_report_path = ext_soperator_upgrade_segment_report_paths(
+            config_path,
+            target_ref,
+            current_segment_id,
+        )
+        snapshot_json_report = dict(json_report)
+        snapshot_json_report["markdown_report"] = str(segment_report_path)
+        snapshot_json_report["json_report"] = str(segment_json_report_path)
+        snapshot_json_report["latest_markdown_report"] = str(report_path)
+        snapshot_json_report["latest_json_report"] = str(json_report_path)
+        _write_text_atomic(
+            segment_json_report_path,
+            json.dumps(snapshot_json_report, indent=2, sort_keys=True) + "\n",
+        )
+        _write_text_atomic(segment_report_path, "\n".join(lines).rstrip() + "\n")
     return report_path
 
 
@@ -13327,18 +13544,29 @@ def _checkpoint_for_run(
     allow_source_report_refresh: bool = False,
     upgrade_path_fingerprint: str = "",
     upgrade_path_segment_id: str = "",
+    locked_upgrade_path: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     source_report_refreshed = False
     previous_source_report_fingerprint = ""
-    preserved_upgrade_path: dict[str, Any] | None = None
+    preserved_locked_upgrade_path: dict[str, Any] | None = None
+    preserved_completed_segment_ids: list[str] = []
+    preserved_segment_state: dict[str, Any] = {}
+    incoming_locked_path: dict[str, Any] = {}
+    if locked_upgrade_path:
+        plain_locked_path = to_plain_data(dict(locked_upgrade_path))
+        incoming_locked_path = (
+            dict(plain_locked_path) if isinstance(plain_locked_path, Mapping) else {}
+        )
     if existing is not None:
         if str(existing.get("target_ref", "") or "") != target_ref:
             raise RuntimeError(
                 "External Soperator upgrade checkpoint belongs to a different target."
             )
-        path_state = _mapping(existing.get("upgrade_path"))
+        if _checkpoint_has_progress_only_locked_path(existing):
+            raise RuntimeError(_locked_upgrade_path_repair_message())
+        existing_locked_path = _checkpoint_locked_upgrade_path(existing)
         existing_path_fingerprint = str(
-            existing.get("upgrade_path_fingerprint", "") or path_state.get("fingerprint", "") or ""
+            existing.get("upgrade_path_fingerprint", "") or ""
         ).strip()
         if (
             upgrade_path_fingerprint
@@ -13356,7 +13584,18 @@ def _checkpoint_for_run(
             != source_report_fingerprint
         ):
             if upgrade_path_fingerprint and existing_path_fingerprint == upgrade_path_fingerprint:
-                preserved_upgrade_path = copy.deepcopy(to_plain_data(dict(path_state)))
+                preserved_locked_upgrade_path = copy.deepcopy(
+                    existing_locked_path or incoming_locked_path
+                )
+                preserved_completed_segment_ids = [
+                    str(segment_id or "").strip()
+                    for segment_id in existing.get("completed_segment_ids", []) or []
+                    if str(segment_id or "").strip()
+                ]
+                segment_state = to_plain_data(_mapping(existing.get("segment_state")))
+                preserved_segment_state = (
+                    dict(segment_state) if isinstance(segment_state, Mapping) else {}
+                )
             existing = None
     if existing is not None:
         existing_source_version = str(existing.get("source_version", "") or "").strip()
@@ -13410,35 +13649,34 @@ def _checkpoint_for_run(
             "events": [],
             "upgrade_safety": upgrade_safety_checkpoint_payload(),
         }
-        if preserved_upgrade_path is not None:
-            checkpoint["upgrade_path"] = preserved_upgrade_path
+        if preserved_locked_upgrade_path is not None:
+            checkpoint["locked_upgrade_path"] = preserved_locked_upgrade_path
             checkpoint["upgrade_path_fingerprint"] = upgrade_path_fingerprint
-            completed_segment_ids = preserved_upgrade_path.get("completed_segment_ids")
-            if isinstance(completed_segment_ids, list):
-                checkpoint["completed_segment_ids"] = list(completed_segment_ids)
+            checkpoint["completed_segment_ids"] = list(preserved_completed_segment_ids)
+            checkpoint["segment_state"] = copy.deepcopy(preserved_segment_state)
     checkpoint.setdefault("upgrade_safety", upgrade_safety_checkpoint_payload())
     checkpoint.setdefault("pending_phase", "none")
     checkpoint.setdefault("pending_reason", "")
     checkpoint.setdefault("phase_state", {})
     if upgrade_path_fingerprint:
-        path_state = dict(_mapping(checkpoint.get("upgrade_path")))
-        path_state["fingerprint"] = upgrade_path_fingerprint
+        locked_path = _checkpoint_locked_upgrade_path(checkpoint) or incoming_locked_path
+        if not locked_path:
+            raise RuntimeError(_locked_upgrade_path_repair_message())
+        checkpoint["locked_upgrade_path"] = copy.deepcopy(locked_path)
         if upgrade_path_segment_id:
-            path_state["current_segment_id"] = upgrade_path_segment_id
-            segment_state = path_state.setdefault("segment_state", {})
+            segment_state = checkpoint.setdefault("segment_state", {})
             if not isinstance(segment_state, dict):
                 segment_state = {}
-                path_state["segment_state"] = segment_state
+                checkpoint["segment_state"] = segment_state
             segment_entry = segment_state.setdefault(upgrade_path_segment_id, {})
             if isinstance(segment_entry, dict):
                 segment_entry.setdefault("started_at", _utc_now())
                 segment_entry["source_report_fingerprint"] = source_report_fingerprint
                 segment_entry["planned_phases"] = list(phase_ids)
-        completed_segment_ids = path_state.get("completed_segment_ids")
+        completed_segment_ids = checkpoint.get("completed_segment_ids")
         if not isinstance(completed_segment_ids, list):
             completed_segment_ids = []
-            path_state["completed_segment_ids"] = completed_segment_ids
-        checkpoint["upgrade_path"] = path_state
+            checkpoint["completed_segment_ids"] = completed_segment_ids
         checkpoint["upgrade_path_fingerprint"] = upgrade_path_fingerprint
         checkpoint["current_segment_id"] = upgrade_path_segment_id
         checkpoint["completed_segment_ids"] = list(completed_segment_ids)
@@ -15754,6 +15992,7 @@ def execute_soperator_migration(
     strategy_drain_timeout: str | None = None,
     upgrade_path_fingerprint: str = "",
     upgrade_path_segment_id: str = "",
+    locked_upgrade_path: Mapping[str, Any] | None = None,
 ) -> SoperatorMigrationExecutionResult:
     """Run checkpointed live external Soperator upgrade phases."""
 
@@ -15800,6 +16039,7 @@ def execute_soperator_migration(
             strategy_drain_timeout=strategy_drain_timeout,
             upgrade_path_fingerprint=upgrade_path_fingerprint,
             upgrade_path_segment_id=upgrade_path_segment_id,
+            locked_upgrade_path=locked_upgrade_path,
         )
 
 
@@ -15831,6 +16071,7 @@ def _execute_soperator_migration_unlocked(
     strategy_drain_timeout: str | None = None,
     upgrade_path_fingerprint: str = "",
     upgrade_path_segment_id: str = "",
+    locked_upgrade_path: Mapping[str, Any] | None = None,
 ) -> SoperatorMigrationExecutionResult:
     normalized_target = normalize_component_token(target_ref)
     if not normalized_target:
@@ -15971,6 +16212,7 @@ def _execute_soperator_migration_unlocked(
         allow_source_report_refresh=True,
         upgrade_path_fingerprint=upgrade_path_fingerprint,
         upgrade_path_segment_id=upgrade_path_segment_id,
+        locked_upgrade_path=locked_upgrade_path,
     )
     resolved_populate_jail_refresh = normalize_populate_jail_refresh_mode(
         populate_jail_refresh
@@ -16751,33 +16993,41 @@ def _execute_soperator_migration_unlocked(
     checkpoint["upgrade_report"] = str(report_path)
     checkpoint["upgrade_report_json"] = str(json_report_path)
     if upgrade_path_fingerprint and upgrade_path_segment_id:
-        path_state = dict(_mapping(checkpoint.get("upgrade_path")))
-        path_state["fingerprint"] = upgrade_path_fingerprint
-        path_state["current_segment_id"] = upgrade_path_segment_id
+        if not _checkpoint_locked_upgrade_path(checkpoint):
+            raise RuntimeError(_locked_upgrade_path_repair_message())
         completed_segment_ids = [
             str(segment_id or "").strip()
-            for segment_id in path_state.get("completed_segment_ids", []) or []
+            for segment_id in checkpoint.get("completed_segment_ids", []) or []
             if str(segment_id or "").strip()
         ]
-        segment_state = path_state.setdefault("segment_state", {})
+        segment_state = checkpoint.setdefault("segment_state", {})
         if not isinstance(segment_state, dict):
             segment_state = {}
-            path_state["segment_state"] = segment_state
+            checkpoint["segment_state"] = segment_state
         segment_entry = segment_state.setdefault(upgrade_path_segment_id, {})
         if isinstance(segment_entry, dict):
+            segment_report_path, segment_json_report_path = ext_soperator_upgrade_segment_report_paths(
+                config_path,
+                normalized_target,
+                upgrade_path_segment_id,
+            )
             segment_entry["live_source_version"] = live_source_version
             segment_entry["target_version"] = target_version
             segment_entry["completed_phases"] = _ordered_phase_list(completed_phases, phase_ids)
             segment_entry["report_path"] = str(report_path)
             segment_entry["json_report_path"] = str(json_report_path)
+            segment_entry["segment_report_path"] = str(segment_report_path)
+            segment_entry["segment_json_report_path"] = str(segment_json_report_path)
+            backup_path = str(_mapping(checkpoint.get("backup")).get("path", "") or "").strip()
+            if backup_path:
+                segment_entry["backup_path"] = backup_path
             if str(checkpoint.get("pending_phase", "") or "") == "none":
                 segment_entry["completed_at"] = _utc_now()
         if str(checkpoint.get("pending_phase", "") or "") == "none":
             if upgrade_path_segment_id not in completed_segment_ids:
                 completed_segment_ids.append(upgrade_path_segment_id)
-            path_state["completed_segment_ids"] = completed_segment_ids
             checkpoint["completed_segment_ids"] = list(completed_segment_ids)
-        checkpoint["upgrade_path"] = path_state
+        checkpoint["segment_state"] = segment_state
         checkpoint["upgrade_path_fingerprint"] = upgrade_path_fingerprint
         checkpoint["current_segment_id"] = upgrade_path_segment_id
     _emit_phase_comment(

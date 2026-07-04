@@ -427,6 +427,7 @@ from .soperator_discovery import (
 )
 from .soperator_gpu_driver_jail import ensure_soperator_gpu_driver_jail_values
 from .soperator_migration import (
+    SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
     SOPERATOR_WORKER_ROLLOUT_DEFAULT_WAVE_PERCENT,
     SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE,
     SOPERATOR_WORKER_ROLLOUT_STRATEGY_ZERO_SURGE,
@@ -53097,6 +53098,93 @@ def _locked_upgrade_path_from_onboarding(onboarding: Mapping[str, Any]) -> dict[
     return copy.deepcopy(to_plain_data(dict(upgrade_path)))
 
 
+def _locked_upgrade_checkpoint_repair_message(checkpoint_path: Path) -> str:
+    return (
+        "External Soperator upgrade checkpoint cannot resume from "
+        f"{checkpoint_path} because it does not contain a full locked_upgrade_path "
+        "snapshot. Old progress-only checkpoints are not supported; rerun "
+        "`nebius-cxcli ext-soperator onboard` only as an intentional repair/replan "
+        "path, or remove the checkpoint after reviewing recovery state."
+    )
+
+
+def _locked_upgrade_checkpoint_has_progress_only_path(
+    checkpoint: Mapping[str, Any],
+) -> bool:
+    locked_path = checkpoint.get("locked_upgrade_path")
+    if isinstance(locked_path, Mapping):
+        return False
+    path_state = checkpoint.get("upgrade_path")
+    if isinstance(path_state, Mapping) and any(
+        key in path_state
+        for key in (
+            "fingerprint",
+            "current_segment_id",
+            "completed_segment_ids",
+            "segment_state",
+        )
+    ):
+        return True
+    return any(
+        key in checkpoint
+        for key in (
+            "upgrade_path_fingerprint",
+            "current_segment_id",
+            "completed_segment_ids",
+            "segment_state",
+        )
+    )
+
+
+def _locked_upgrade_checkpoint_payload(
+    *,
+    config_path: Path,
+    target_ref: str,
+) -> Mapping[str, Any] | None:
+    checkpoint_path = soperator_migration_checkpoint_path(config_path, target_ref)
+    if not checkpoint_path.exists():
+        return None
+    try:
+        checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"External Soperator upgrade checkpoint is invalid: {checkpoint_path}: {exc}"
+        ) from exc
+    if not isinstance(checkpoint, Mapping):
+        raise RuntimeError(
+            f"External Soperator upgrade checkpoint must be a JSON object: {checkpoint_path}"
+        )
+    if checkpoint.get("schema") != SOPERATOR_MIGRATION_EXECUTION_SCHEMA:
+        raise RuntimeError(
+            "Unsupported external Soperator upgrade checkpoint schema in "
+            f"{checkpoint_path}. This cxcli version requires checkpoint schema "
+            f"{SOPERATOR_MIGRATION_EXECUTION_SCHEMA} with a full locked_upgrade_path "
+            "snapshot. Old progress-only checkpoints cannot be resumed; rerun "
+            "`nebius-cxcli ext-soperator onboard` only as an intentional repair/replan "
+            "path, or remove the checkpoint after reviewing recovery state."
+        )
+    if _locked_upgrade_checkpoint_has_progress_only_path(checkpoint):
+        raise RuntimeError(_locked_upgrade_checkpoint_repair_message(checkpoint_path))
+    return checkpoint
+
+
+def _locked_upgrade_path_from_checkpoint(
+    *,
+    config_path: Path,
+    target_ref: str,
+) -> dict[str, Any]:
+    checkpoint = _locked_upgrade_checkpoint_payload(
+        config_path=config_path,
+        target_ref=target_ref,
+    )
+    if checkpoint is None:
+        return {}
+    locked_path = checkpoint.get("locked_upgrade_path")
+    if not isinstance(locked_path, Mapping):
+        return {}
+    return _locked_upgrade_path_from_onboarding({"upgrade_path": locked_path})
+
+
 def _locked_upgrade_path_segments(upgrade_path: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
     segments = upgrade_path.get("segments")
     if not isinstance(segments, list):
@@ -53119,24 +53207,13 @@ def _locked_upgrade_path_progress(
         "checkpoint_path": str(checkpoint_path),
         "pending_phase": "",
     }
-    if not checkpoint_path.exists():
+    checkpoint = _locked_upgrade_checkpoint_payload(
+        config_path=config_path,
+        target_ref=target_ref,
+    )
+    if checkpoint is None:
         return progress
-    try:
-        checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise RuntimeError(
-            f"External Soperator upgrade checkpoint is invalid: {checkpoint_path}: {exc}"
-        ) from exc
-    if not isinstance(checkpoint, Mapping):
-        raise RuntimeError(
-            f"External Soperator upgrade checkpoint must be a JSON object: {checkpoint_path}"
-        )
-    path_state = checkpoint.get("upgrade_path")
-    if not isinstance(path_state, Mapping):
-        path_state = {}
-    checkpoint_fingerprint = _non_empty_text(
-        checkpoint.get("upgrade_path_fingerprint")
-    ) or _non_empty_text(path_state.get("fingerprint"))
+    checkpoint_fingerprint = _non_empty_text(checkpoint.get("upgrade_path_fingerprint"))
     if checkpoint_fingerprint and checkpoint_fingerprint != fingerprint:
         raise RuntimeError(
             "External Soperator upgrade checkpoint was started with a different locked "
@@ -53145,18 +53222,14 @@ def _locked_upgrade_path_progress(
             "or review and remove the checkpoint before restarting."
         )
     completed = checkpoint.get("completed_segment_ids")
-    if not isinstance(completed, list):
-        completed = path_state.get("completed_segment_ids")
     progress["completed_segment_ids"] = [
         str(segment_id or "").strip()
         for segment_id in (completed if isinstance(completed, list) else [])
         if str(segment_id or "").strip()
     ]
-    progress["current_segment_id"] = _non_empty_text(
-        checkpoint.get("current_segment_id")
-    ) or _non_empty_text(path_state.get("current_segment_id"))
+    progress["current_segment_id"] = _non_empty_text(checkpoint.get("current_segment_id"))
     progress["pending_phase"] = _non_empty_text(checkpoint.get("pending_phase"))
-    segment_state = path_state.get("segment_state")
+    segment_state = checkpoint.get("segment_state")
     if isinstance(segment_state, Mapping):
         progress["segment_state"] = copy.deepcopy(to_plain_data(segment_state))
     return progress
@@ -53325,6 +53398,7 @@ def _locked_upgrade_path_plan_lines(
     upgrade_path: Mapping[str, Any],
     progress: Mapping[str, Any],
     current_segment: Mapping[str, Any] | None,
+    path_source: str = "",
 ) -> list[str]:
     segments = _locked_upgrade_path_segments(upgrade_path)
     completed = {
@@ -53339,6 +53413,7 @@ def _locked_upgrade_path_plan_lines(
     lines = [
         "",
         "Locked upgrade path:",
+        f"Path source: {path_source or 'config.yaml onboarding'}",
         f"Path schema: {_non_empty_text(upgrade_path.get('schema')) or 'unknown'}",
         "Path locked: yes",
         f"Path fingerprint: {fingerprint}",
@@ -53414,6 +53489,7 @@ def _format_soperator_migration_plan_lines(
     upgrade_path: Mapping[str, Any] | None = None,
     upgrade_path_progress: Mapping[str, Any] | None = None,
     current_segment: Mapping[str, Any] | None = None,
+    upgrade_path_source: str = "",
 ) -> list[str]:
     target = soperator_onboarding_target(payload, target_ref=target_ref)
     onboarding = target.get("soperator_onboarding") if isinstance(target, Mapping) else {}
@@ -53485,6 +53561,7 @@ def _format_soperator_migration_plan_lines(
                 upgrade_path=upgrade_path,
                 progress=upgrade_path_progress or {},
                 current_segment=current_segment,
+                path_source=upgrade_path_source,
             )
         )
     lines.extend(
@@ -54334,12 +54411,51 @@ def soperator_external_upgrade_command(
                 f"{legacy_checkpoint}. Remove it after review; ext-soperator upgrade "
                 "does not resume retired checkpoints."
             )
-        validate_soperator_onboarding_acceptance(payload, target_ref=target_ref)
+        checkpoint_locked_upgrade_path = _locked_upgrade_path_from_checkpoint(
+            config_path=config_path,
+            target_ref=target_ref,
+        )
+        try:
+            validate_soperator_onboarding_acceptance(payload, target_ref=target_ref)
+        except ValueError as exc:
+            validation_message = str(exc)
+            target_for_checkpoint_resume = soperator_onboarding_target(
+                payload,
+                target_ref=target_ref,
+            )
+            onboarding_for_checkpoint_resume = (
+                target_for_checkpoint_resume.get("soperator_onboarding")
+                if isinstance(target_for_checkpoint_resume, Mapping)
+                else {}
+            )
+            checkpoint_resume_allowed = (
+                checkpoint_locked_upgrade_path
+                and isinstance(onboarding_for_checkpoint_resume, Mapping)
+                and onboarding_for_checkpoint_resume.get("accepted") is True
+                and "does not have a current accepted" in validation_message
+            )
+            if not checkpoint_resume_allowed:
+                raise
         target = soperator_onboarding_target(payload, target_ref=target_ref)
         onboarding = target.get("soperator_onboarding") if isinstance(target, Mapping) else {}
         if not isinstance(onboarding, Mapping):
             onboarding = {}
         locked_upgrade_path = _locked_upgrade_path_from_onboarding(onboarding)
+        locked_upgrade_path_source = "config.yaml onboarding"
+        if not locked_upgrade_path:
+            locked_upgrade_path = checkpoint_locked_upgrade_path
+            locked_upgrade_path_source = "checkpoint"
+        if (
+            not locked_upgrade_path
+            and _soperator_migration_action_flags(onboarding)["migration_required"]
+        ):
+            checkpoint_path = soperator_migration_checkpoint_path(config_path, target_ref)
+            raise RuntimeError(
+                "External Soperator upgrade requires a full locked upgrade path, but none "
+                "exists in deploy.targets[].soperator_onboarding.upgrade_path or the "
+                f"checkpoint at {checkpoint_path}. Rerun `nebius-cxcli ext-soperator onboard` "
+                "only as an intentional repair/replan path."
+            )
         upgrade_path_progress: dict[str, Any] = {}
         current_segment: Mapping[str, Any] | None = None
         effective_payload: Mapping[str, Any] = payload
@@ -54361,6 +54477,7 @@ def soperator_external_upgrade_command(
                     upgrade_path=locked_upgrade_path,
                     progress=upgrade_path_progress,
                     current_segment=None,
+                    path_source=locked_upgrade_path_source,
                 ):
                     console.print(_style_soperator_migration_plan_line(line), soft_wrap=True)
                 return
@@ -54485,6 +54602,7 @@ def soperator_external_upgrade_command(
             upgrade_path=locked_upgrade_path or None,
             upgrade_path_progress=upgrade_path_progress,
             current_segment=current_segment,
+            upgrade_path_source=locked_upgrade_path_source,
         ):
             console.print(_style_soperator_migration_plan_line(line), soft_wrap=True)
         if not dry_run:
@@ -54603,6 +54721,7 @@ def soperator_external_upgrade_command(
                         if isinstance(current_segment, Mapping)
                         else ""
                     ),
+                    locked_upgrade_path=locked_upgrade_path or None,
                 )
                 if execution_result.pending_phase == "none":
                     if not external_soperator_upgrade_protected_comparison_passed(

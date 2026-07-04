@@ -40,7 +40,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `align` | Implicit allowed | Project-wide alignment and changed-scope quality gates across code, wiring, tests, CI, CLI/help, config, documentation, workflows, project skills, code review, lint/syntax, and security. |
 | `align-skill` | Implicit allowed | Review, harden, validate, and improve existing or newly scaffolded Codex or Agent Skill folders after an initial scaffold or draft exists. |
 | `brainstorm` | Implicit allowed | Explore ideas in chat with source-ranked project, repo, skill, internal, vendor, and advisory design-skill context before implementation. |
-| `code-review` | Implicit allowed | Strict implementation-quality review of local diffs, current branches, changed files, or patches for maintainability and structural simplification. |
+| `code-review` | Implicit allowed | Neutral findings-first review of local diffs, local branches, changed files, modules, repository areas, or patches for bugs, tests, reliability, maintainability, and structural simplification. |
 | `create-learning-course` | Explicit only | Create public-safe learning courses, course workspaces, syllabi, lessons, exercises, glossaries, and publication review checkpoints. |
 | `global-context-management` | Implicit allowed | Keep complex Codex tasks focused with durable task state, concise parent-thread context, targeted read-only subagents when authorized, focused validation, and final risk review. |
 | `research` | Implicit allowed | Senior-engineer technical due diligence on technologies, APIs, RFCs, protocols, architecture patterns, products, and feature requirements. |
@@ -160,7 +160,7 @@ $research Research Kubernetes Gateway API, explain how it works internally, iden
 
 $design Design this new feature before implementation: read the requirements, inspect the existing code and docs, route unfamiliar topic and technology research through $research, compare options, and create a /plan handoff.
 
-$code-review Audit the current branch for structural code-quality regressions, missed simplifications, abstraction problems, and maintainability blockers.
+$code-review Review the current local branch for bugs, regressions, test gaps, reliability risks, maintainability blockers, and missed structural simplifications.
 
 $system-design-rules Review this ADR against the system design checklist, compare the trade-offs, and identify missing reliability, data, security, observability, cost, and ownership decisions.
 
@@ -294,15 +294,17 @@ Agentic SDLC-owned `docs/design.md`.
 
 ### `code-review`
 
-`code-review` performs a strict implementation-quality review of the current
-branch, local diff, changed files, or provided patch. Use it when the user wants
-findings-first feedback on maintainability, abstraction quality, modularity,
-type boundaries, file-size growth, spaghetti branches, and missed structural
-simplifications. It is review-first and should not edit code unless the user
-explicitly asks for fixes. `review-pr` remains the GitHub PR readiness and
-branch-update workflow, while `align` remains the broader project consistency
-and repair workflow. Use `apply-security` for security-specific review and
-`system-design-rules` for design-phase architecture decisions.
+`code-review` performs a neutral, evidence-based review of the current local
+branch, local diff, changed files, module, repository area, or provided patch.
+Use it when the user wants findings-first feedback on bugs, regressions, test
+gaps, reliability risks, security-adjacent issues, maintainability,
+abstraction quality, modularity, type boundaries, file-size growth, spaghetti
+branches, and missed structural simplifications. It is review-first and should
+not edit code unless the user explicitly asks for fixes. `review-pr` remains
+the GitHub PR review, readiness, and branch-update workflow, while `align`
+remains the broader project consistency and repair workflow. Use
+`apply-security` for security-specific scans, threat modeling, and remediation,
+and `system-design-rules` for design-phase architecture decisions.
 
 ### `system-design-rules`
 

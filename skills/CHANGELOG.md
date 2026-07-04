@@ -148,6 +148,12 @@ All notable changes to the reusable Codex skills are tracked here.
   `apply-security`, and focused test/build lanes while keeping safe-only
   remediation, incremental scope expansion, and explicit approval for risky
   security or public-contract changes.
+- Expanded `code-review` from strict structural implementation-quality review
+  into a neutral, evidence-based findings-first review skill that also covers
+  bugs, regressions, meaningful test gaps, reliability and operations risk,
+  security-adjacent implementation issues, owner-review needs, and severity
+  decisions while preserving boundaries with `review-pr`, `align`,
+  `apply-security`, and `system-design-rules`.
 - Changed `apply-security` to implicit invocation so it can act as a general
   security adviser during design, implementation, review, and validation
   sessions, while keeping patching constrained to authorized low-risk

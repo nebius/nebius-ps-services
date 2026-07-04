@@ -6,6 +6,17 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Changed external Soperator multi-hop execution to persist the accepted locked
+  path in v2 checkpoints as `locked_upgrade_path` plus explicit
+  `upgrade_path_fingerprint`, `current_segment_id`, `completed_segment_ids`,
+  `pending_phase`, and `segment_state`. Repeated identical
+  `ext-soperator upgrade <config.yaml> --target <target> --execute --approve`
+  invocations now advance one locked segment at a time, can resume from the
+  checkpoint snapshot if `config.yaml` loses the onboarding `upgrade_path`, and
+  fail fast on old progress-only checkpoints. The latest external upgrade
+  Markdown/JSON reports now include locked-path progress and each segment also
+  writes a snapshot under
+  `generated/reports/ext-soperator-upgrades/<target>/<segment-id>/`.
 - Added phase-bounded resume checkpoints for managed `soperator upgrade` and
   hardened the existing external `ext-soperator upgrade --execute` phase
   runner. Both commands now record `planned_phases`, `completed_phases`,

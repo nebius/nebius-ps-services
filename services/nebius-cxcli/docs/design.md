@@ -1146,10 +1146,16 @@ inspect the explicit external-upgrade-owned actions. Onboarding locks the full
 discovery-guided path under
 `deploy.targets[].soperator_onboarding.upgrade_path`; each
 `ext-soperator upgrade --execute --approve` run executes exactly one locked
-segment, and checkpoint progress selects the next segment on rerun. In
+segment, and v2 checkpoint progress selects the next segment on rerun from
+top-level `locked_upgrade_path`, `upgrade_path_fingerprint`,
+`current_segment_id`, `completed_segment_ids`, `pending_phase`, and
+`segment_state`. If `config.yaml` loses the onboarding `upgrade_path` while
+locked segments remain, cxcli resumes from the checkpoint snapshot; old
+progress-only checkpoints fail fast and require intentional re-onboarding to
+repair or replan. In
 interactive terminals, the dry-run plan groups target discovery, versions, the
-full locked path, completed/current/remaining segments, the accepted one-minor
-Kubernetes hop for the current segment, support policy, accepted onboarding
+full locked path, completed/current/remaining segments, locked path source, the
+accepted one-minor Kubernetes hop for the current segment, support policy, accepted onboarding
 actions, external node-template rollout, phases, execution controls, and
 execution guarantees so operators can scan the plan before accepting live work.
 The route
@@ -1301,8 +1307,10 @@ target-scoped `deploy.targets[].deployment_testing.mk8s_gpu.*` checks configured
   manual or `acceptance-test` commands, writes
   `generated/reports/ext-soperator-upgrade-report.md` and
   `generated/reports/ext-soperator-upgrade-report.json` with MK8s GPU,
-  Soperator/Slurm validation rollups, protected-state hashes and deltas, backup
-  metadata, Slurm decisions, phase state, and recovery notes, refreshes
+  Soperator/Slurm validation rollups, protected-state hashes and deltas,
+  locked-path progress, backup metadata, Slurm decisions, phase state, and
+  recovery notes, writes segment snapshots under
+  `generated/reports/ext-soperator-upgrades/<target>/<segment-id>/`, refreshes
   `generated/reports/deploy-report.md` as a secondary deploy-compatible MK8s GPU
   summary only after protected comparison passes, and checkpoints pending gates
   instead of retiring old resources early. During chart takeover it suspends legacy Flux HelmReleases
@@ -4123,7 +4131,7 @@ Flux render:
 - Runtime inventory/report artifacts are written only by deployment/apply paths.
 - `generated/reports/deploy-report.md` is the deploy-time human-readable customer handoff report and the body used by the `email` command after a deployment/apply command has created it.
 - The generated Markdown should stay lint-clean, including no trailing duplicate blank lines at EOF.
-- `create` and `render` do not create the Markdown report; `deploy`, `terraform apply`, `flux apply`, and `flux bootstrap` refresh it for the active project. All lifecycle reports stay under `generated/reports/`, and command-specific reports use deterministic latest filenames rather than timestamped session directories. The render-time `generated/` replacement preserves command-owned runtime reports such as `deploy-report.md`, the Soperator `soperator-discovery/` bundle directory including `soperator-discovery/<target>/manifest.json`, `ext-soperator-upgrade-report.md`, `upgrade-node-template-report.md`, `upgrade-node-template-report.json`, `upgrade-node-group-report.md`, `upgrade-node-group-report.json`, `soperator-upgrade-report.md`, `soperator-upgrade-report.json`, and JSON detail files referenced from those Markdown reports, but still removes unrelated stale report files with the replaced bundle. Existing lifecycle reports alone do not trigger the render overwrite prompt because they are carried forward rather than replaced.
+- `create` and `render` do not create the Markdown report; `deploy`, `terraform apply`, `flux apply`, and `flux bootstrap` refresh it for the active project. All lifecycle reports stay under `generated/reports/`, and command-specific reports use deterministic latest filenames rather than timestamped session directories. The render-time `generated/` replacement preserves command-owned runtime reports such as `deploy-report.md`, the Soperator `soperator-discovery/` bundle directory including `soperator-discovery/<target>/manifest.json`, `ext-soperator-upgrade-report.md`, the external Soperator segment snapshot directory `ext-soperator-upgrades/`, `upgrade-node-template-report.md`, `upgrade-node-template-report.json`, `upgrade-node-group-report.md`, `upgrade-node-group-report.json`, `soperator-upgrade-report.md`, `soperator-upgrade-report.json`, and JSON detail files referenced from those Markdown reports, but still removes unrelated stale report files with the replaced bundle. Existing lifecycle reports alone do not trigger the render overwrite prompt because they are carried forward rather than replaced.
 - Explicit Namespace docs for chart target namespaces.
 - Generic HelmRelease docs from enabled app releases.
 - Deterministic flat output under the rendered Flux tree:
