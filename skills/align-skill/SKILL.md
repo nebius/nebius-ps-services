@@ -233,8 +233,9 @@ contract:
   prompt matches their `description`.
 - Use `false` when the skill must be explicitly invoked by the user or
   coordinator, such as Git commit/push/PR/merge flows, release/publish flows,
-  auth or local setup, security mutation, container attachment, external MCP
-  installation, workflow test harnesses, or any `sdlc-*` Agentic SDLC phase.
+  auth or local setup, high-risk security mutation, container attachment,
+  external MCP installation, workflow test harnesses, or any `sdlc-*` Agentic
+  SDLC phase.
 - For `sdlc-*` skills, keep the description prefix
   `Use only as part of the Agentic SDLC workflow;` and set
   `allow_implicit_invocation: false`.

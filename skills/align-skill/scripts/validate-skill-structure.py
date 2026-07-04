@@ -68,7 +68,6 @@ EXPLICIT_INVOCATION_SECTION_MARKERS = (
 EXPLICIT_ONLY_SKILL_NAMES = {
     "agent-nebius-auth",
     "agentic-sdlc-test",
-    "apply-security",
     "attach-ubuntu",
     "code-info",
     "commit",

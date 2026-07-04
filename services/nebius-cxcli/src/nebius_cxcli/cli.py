@@ -397,6 +397,8 @@ from .slack_notifier_runtime import (
     soperator_notifier_enabled_for_target,
 )
 from .slurm_job_control import (
+    SLURM_JOB_CONTROL_WAIT_COMPLETED,
+    SLURM_JOB_CONTROL_WAIT_TIMEOUT,
     build_slurm_jobs_table,
     build_slurm_wait_dashboard,
     prompt_slurm_job_control,
@@ -7254,6 +7256,10 @@ def _soperator_upgrade_job_prompt_paused() -> Iterator[None]:
 
 def _prompt_soperator_upgrade_job_control(
     jobs: Sequence[AffectedSlurmJob],
+    *,
+    jobs_provider: Callable[[], Sequence[AffectedSlurmJob]] | None = None,
+    wait_timeout_seconds: int = 0,
+    refresh_interval_seconds: int = 30,
 ) -> tuple[str, tuple[str, ...]]:
     with _soperator_upgrade_job_prompt_paused():
         return prompt_slurm_job_control(
@@ -7264,6 +7270,9 @@ def _prompt_soperator_upgrade_job_control(
             text_prompt=lambda message, default, show_default: str(
                 typer.prompt(message, default=default, show_default=show_default)
             ),
+            jobs_provider=jobs_provider,
+            wait_timeout_seconds=wait_timeout_seconds,
+            poll_interval_seconds=refresh_interval_seconds,
         )
 
 
@@ -7781,7 +7790,12 @@ def _handle_soperator_upgrade_running_jobs(
     )
     if policy == "interactive":
         while True:
-            action, selected_ids = _prompt_soperator_upgrade_job_control(jobs)
+            action, selected_ids = _prompt_soperator_upgrade_job_control(
+                jobs,
+                jobs_provider=_jobs,
+                wait_timeout_seconds=wait_timeout_seconds,
+                refresh_interval_seconds=refresh_interval_seconds,
+            )
             _record("operator-selected", selection=action, job_ids=selected_ids)
             if action == "refresh":
                 jobs = _jobs()
@@ -7789,6 +7803,25 @@ def _handle_soperator_upgrade_running_jobs(
                     _record("no-blocking-jobs-after-refresh", policy=policy)
                     return _drain_after_jobs_clear()
                 continue
+            if action == SLURM_JOB_CONTROL_WAIT_COMPLETED:
+                _record(
+                    "wait-started",
+                    timeout_seconds=wait_timeout_seconds,
+                    refresh_interval_seconds=refresh_interval_seconds,
+                )
+                _record("wait-completed")
+                return _drain_after_jobs_clear()
+            if action == SLURM_JOB_CONTROL_WAIT_TIMEOUT:
+                _record(
+                    "wait-started",
+                    timeout_seconds=wait_timeout_seconds,
+                    refresh_interval_seconds=refresh_interval_seconds,
+                )
+                raise RuntimeError(
+                    "Timed out waiting for Slurm jobs to finish. Rerun with a longer "
+                    "--job-wait-timeout, cancel, requeue, or requeue-hold selected jobs, "
+                    "or use --job-policy wait-then-cancel."
+                )
             if action == "wait-to-finish":
                 _record(
                     "wait-started",

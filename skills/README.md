@@ -73,7 +73,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 
 | Skill | Invocation | Description |
 | --- | --- | --- |
-| `apply-security` | Explicit only | Review or fix security issues across infrastructure, deployment, Helm, Kubernetes, Terraform, CI/CD, shell, and application code. |
+| `apply-security` | Implicit allowed | Advise on, review, and safely remediate security issues across design, implementation, infrastructure, deployment, Helm, Kubernetes, Terraform, CI/CD, shell, and application code. |
 | `design` | Implicit allowed | Design software features, applications, components, APIs, data flows, and technology choices before implementation, ending with a `/plan` handoff. |
 | `github-workflows` | Implicit allowed | Create, review, or standardize GitHub Actions for PR/merge CI, merge automation, reusable workflows, permissions, and release/image YAML. |
 | `gitignore` | Implicit allowed | Create or update stack-aware `.gitignore` files with sensible macOS, VS Code, and detected language/tool defaults. |
@@ -222,11 +222,9 @@ Memory, and durable task-state context, then verifies that context against
 current repository or runtime evidence before making safe fixes. Before
 completion, it runs mandatory changed-scope lanes for cross-code validation,
 `code-review`, `linter`, `apply-security`, and focused repository-native tests
-or builds, using safe-only remediation and reporting risky blockers for
-explicit approval. `apply-security` remains explicit-only for standalone use,
-but `align` treats the security lane as a coordinator-owned explicit load and
-resolves the `apply-security/SKILL.md` contract directly when it is not in the
-initial implicit skill list.
+or builds. It uses safe-only remediation, reports risky blockers for explicit
+approval, and resolves `apply-security/SKILL.md` directly when the mandatory
+security lane is not visible in the initial skills list.
 
 ### `align-skill`
 
@@ -429,9 +427,11 @@ local state layout, hook boundaries, and full skill-by-skill lifecycle.
 
 `apply-security` reviews infrastructure, deployment, Helm, Kubernetes,
 Terraform, CI/CD, Bash, Python, Java, JavaScript, TypeScript, and Rust code for
-security issues, ranks findings by severity, confidence, exploitability, and
-blast radius, plans safe remediations, and applies minimal patches only when
-they preserve intended behavior or have explicit approval.
+security issues. It can be selected implicitly during design, implementation,
+review, and validation sessions as a security adviser. It ranks findings by
+severity, confidence, exploitability, and blast radius, plans safe
+remediations, and applies minimal patches only when the current task allows
+edits and the change preserves intended behavior or has explicit approval.
 
 ### `attach-ubuntu`
 

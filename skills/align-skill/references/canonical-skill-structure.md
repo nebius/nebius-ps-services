@@ -118,9 +118,9 @@ Set `allow_implicit_invocation` from the skill contract:
   prompt matches the front matter `description`.
 - `false`: skills that must be explicitly requested by the user or a workflow
   coordinator, including Git commit/push/PR/merge flows, release/publish flows,
-  auth or local setup, security mutation, container attachment, external MCP
-  installation, workflow verification harnesses, and all `sdlc-*` Agentic SDLC
-  phase skills.
+  auth or local setup, high-risk security mutation, container attachment,
+  external MCP installation, workflow verification harnesses, and all `sdlc-*`
+  Agentic SDLC phase skills.
 
 If `SKILL.md` says the skill should run only after an explicit request, reflect
 that in `agents/openai.yaml`; do not rely on prose alone. If the policy is

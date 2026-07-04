@@ -148,10 +148,17 @@ All notable changes to the reusable Codex skills are tracked here.
   `apply-security`, and focused test/build lanes while keeping safe-only
   remediation, incremental scope expansion, and explicit approval for risky
   security or public-contract changes.
-- Clarified that `align` explicitly coordinates the standalone explicit-only
-  `apply-security` security lane by resolving and reading the
-  `apply-security/SKILL.md` contract directly when it is absent from the
-  initial implicit skill list.
+- Changed `apply-security` to implicit invocation so it can act as a general
+  security adviser during design, implementation, review, and validation
+  sessions, while keeping patching constrained to authorized low-risk
+  remediations.
+- Clarified that `align` coordinates the `apply-security` security lane by
+  resolving and reading the `apply-security/SKILL.md` contract directly when it
+  is absent from the initial skills list because of budget, installation, or
+  discovery limits.
+- Refined `align` wording so its child-skill coordination, mandatory
+  `apply-security` lane, and high-risk security approval boundaries are clearer
+  and less repetitive.
 - Extended `agent-nebius-auth` runtime injection for long-running Bash commands
   by exporting `NEBIUS_AUTH_CREDENTIALS_FILE`, defining a
   `nebius_refresh_token` Bash helper through a restricted temporary `BASH_ENV`

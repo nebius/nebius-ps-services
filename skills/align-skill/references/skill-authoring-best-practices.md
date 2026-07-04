@@ -40,8 +40,8 @@ Source basis:
   with `Use only as part of the Agentic SDLC workflow;`.
 - Set `policy.allow_implicit_invocation: false` for `sdlc-*` skills and other
   skills that must be explicitly requested, such as Git commit/push/PR/merge,
-  publish/release, auth/setup, security mutation, container attachment, MCP
-  installation, or workflow-verification harnesses.
+  publish/release, auth/setup, high-risk security mutation, container
+  attachment, MCP installation, or workflow-verification harnesses.
 - Set `policy.allow_implicit_invocation: true` for ordinary reusable skills
   that Codex may safely choose from the `description`. This is OpenAI Codex's
   default, but this repository still records it explicitly for validation.

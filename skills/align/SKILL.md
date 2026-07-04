@@ -1,12 +1,13 @@
 ---
 name: align
-description: "Use for project-wide alignment or post-change validation: reconcile code, wiring, tests, CI, CLI/help, config, README/design docs, workflows, and project skills; run changed-scope code-review, lint/syntax, security, and regression gates before completion. Integrate current thread, Agent Memory, and task state before minimal evidence-backed fixes. Do not use for skill-folder-only metadata validation; use align-skill."
+description: "Use for project-wide alignment or post-change validation: reconcile code, wiring, tests, CI, CLI/help, config, docs, workflows, and project skills; run changed-scope code-review, lint/syntax, security, and regression gates. Integrate current thread, relevant Agent Memory, and task state before low-risk evidence-backed fixes. Do not use for skill-folder-only validation; use align-skill."
 ---
 
 # Align
 
-Use this skill for safe, end-to-end project alignment, code review, and
-post-change validation.
+Use this skill for safe, end-to-end project alignment and post-change
+validation. It coordinates code review as one validation lane; it is not a
+replacement for focused `code-review` requests.
 
 The goal is to make the repository consistent, correctly wired, modular where
 reasonable, and aligned with the behavior described by its README, design
@@ -104,33 +105,30 @@ Mandatory lanes for the changed scope:
   issues.
 - Security: load `apply-security` and run a changed-scope security review for
   infrastructure, deployment, workflow, shell, and application surfaces. Apply
-  only the low-risk fixes allowed by `apply-security`'s safe auto-fix policy;
-  report or block on public exposure, IAM/RBAC, auth, crypto, serialization,
-  database, availability, credential, or external-route changes that require
-  explicit approval.
+  only the low-risk fixes allowed by `apply-security`'s safe auto-fix policy.
+  Plan first, report, or block on high-risk or externally visible public
+  exposure, IAM/RBAC, auth, crypto, serialization, database, availability,
+  credential, or external-route changes that require explicit approval.
 - Tests and builds: run the narrowest repository-native tests, type checks,
   build checks, smoke commands, help renders, or dry runs needed to validate
   affected behavior. Broaden only when shared contracts or high-risk surfaces
   changed.
 
-Invoking `align` authorizes it to coordinate the `code-review`, `linter`, and
-`apply-security` contracts as validation lanes under `align` scope and
-guardrails. This does not change those skills' standalone invocation policies.
-If a child skill has a stricter safety or no-auto-fix rule, keep the stricter
-rule.
+A request to use `align` authorizes it to coordinate `code-review`, `linter`,
+and `apply-security` as validation lanes inside `align`'s current changed
+scope. Keep each child skill's stricter safety and no-auto-fix rules.
 
-`apply-security` remains standalone explicit-only. The `align` request is the
-explicit coordinator invocation for the security lane, so do not skip
-`apply-security` merely because it is absent from the initial implicit skills
-list. Resolve and read its `SKILL.md` directly when needed:
+`apply-security` may be selected implicitly outside `align`; inside `align`, it
+is mandatory. If it is not visible in the initial skills list because of
+skill-list budget, installation, or discovery limits, resolve and read its
+`SKILL.md` directly:
 
-1. Use the current session's skill path if `apply-security` was explicitly
-   provided or appears in the available skill list.
-2. Otherwise try the sibling skill path next to this skill, such as
-   `../apply-security/SKILL.md` from the loaded `align/SKILL.md` directory.
-3. If the sibling path is unavailable, search standard Codex skill locations
-   that are already readable in the current environment, including repo-local
-   skill roots and the user-level `$HOME/.agents/skills` tree.
+1. Use the current session's skill path when available.
+2. Otherwise try the sibling path next to this skill, such as
+   `../apply-security/SKILL.md`.
+3. If the sibling path is unavailable, search readable standard Codex skill
+   locations, including repo-local skill roots and
+   `$HOME/.agents/skills/apply-security`.
 
 After loading `apply-security`, follow its required-reference rules for the
 security lane. If it cannot be found or read, report the security lane as
@@ -264,9 +262,10 @@ code so aggressively that wiring becomes harder to trace.
    skills only when their metadata clearly matches a concrete part of the task,
    such as workflow, Helm, shell, Terraform, Python, documentation,
    spreadsheet, slide, PDF, or repo-local skill work. Read the relevant
-   `SKILL.md`, using the explicit `apply-security` resolution fallback when
-   needed. Keep scope narrow, and do not let another skill override these safety
-   rules unless the user explicitly asked for that behavior.
+   `SKILL.md`; use the direct `apply-security` resolution path above when the
+   security lane is not visible in the initial skill list. Keep scope narrow,
+   and do not let another skill override these safety rules unless the user
+   explicitly asked for that behavior.
 4. Establish the actual contract.
    Compare implementation against tests, CLI help, examples, workflows, and
    documentation. Treat mismatches as evidence to resolve, not as proof that

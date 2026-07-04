@@ -28,6 +28,10 @@ All notable changes to this project are tracked here. This changelog follows
 - Renamed the blocking Soperator Slurm job policy from `wait` to
   `wait-to-finish` across managed and external Soperator upgrade, scale-down,
   deploy, and Flux apply surfaces. The old `wait` value is no longer accepted.
+- Fixed the interactive Soperator Slurm job-control screen so selected rows use
+  a high-contrast marker, remaining times tick while the selector is open, and
+  pressing `w` waits in the same screen instead of switching to a separate wait
+  dashboard.
 - Changed `ext-soperator upgrade` output to keep locked-path plans more compact:
   support policy now avoids repeating the explanatory rule text when the locked
   path is printed, MK8s node-upgrade phase wording is shorter, execution

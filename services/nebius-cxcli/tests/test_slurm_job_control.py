@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
 from rich.console import Console
+from rich.text import Text
+from textual.widgets import DataTable
 
 from nebius_cxcli.slurm_job_control import (
     SLURM_JOB_CONTROL_ACTION_PROMPT,
+    SLURM_JOB_CONTROL_WAIT_COMPLETED,
+    SlurmJobControlRefreshError,
     build_slurm_jobs_table,
     create_slurm_job_control_app,
     normalize_slurm_job_control_action,
@@ -13,7 +18,7 @@ from nebius_cxcli.slurm_job_control import (
     slurm_job_control_pending_selected_ids,
     slurm_job_control_selected_ids_for_action,
 )
-from nebius_cxcli.slurm_jobs import AffectedSlurmJob
+from nebius_cxcli.slurm_jobs import AffectedSlurmJob, slurm_remaining_seconds
 
 
 def _job(
@@ -22,6 +27,7 @@ def _job(
     state: str = "RUNNING",
     allocated_nodes: str = "worker-0",
     reason: str = "",
+    remaining: str = "30:00",
     impact_scope: str = "allocated-node",
 ) -> AffectedSlurmJob:
     return AffectedSlurmJob(
@@ -35,7 +41,7 @@ def _job(
         reason=reason,
         elapsed="00:05",
         limit="35:00",
-        remaining="30:00",
+        remaining=remaining,
         name="sop-gpu-job-test-01",
         impact_scope=impact_scope,
     )
@@ -148,6 +154,29 @@ def test_slurm_job_control_tui_failure_falls_back_to_text_prompt() -> None:
     assert "Interactive TUI unavailable" in console.export_text()
 
 
+def test_slurm_job_control_refresh_failure_does_not_fall_back_to_stale_prompt() -> None:
+    prompts: list[str] = []
+
+    def _prompt(message: str, _default: str, _show_default: bool) -> str:
+        prompts.append(message)
+        return ""
+
+    def _broken_refresh(_jobs, _title: str):
+        raise SlurmJobControlRefreshError("squeue failed")
+
+    with pytest.raises(SlurmJobControlRefreshError, match="squeue failed"):
+        prompt_slurm_job_control(
+            (_job("41"),),
+            console=Console(record=True, width=180, color_system=None),
+            table_title="Affected Slurm jobs",
+            is_tty=True,
+            text_prompt=_prompt,
+            tui_runner=_broken_refresh,
+        )
+
+    assert prompts == []
+
+
 def test_slurm_job_control_textual_app_returns_selected_action() -> None:
     async def _run():
         app = create_slurm_job_control_app(
@@ -163,6 +192,101 @@ def test_slurm_job_control_textual_app_returns_selected_action() -> None:
 
     assert result.action == "cancel-selected"
     assert result.selected_job_ids == ("41",)
+
+
+def test_slurm_job_control_textual_app_uses_visible_selection_mark() -> None:
+    async def _run():
+        app = create_slurm_job_control_app(
+            (_job("41"),),
+            title="Affected Slurm jobs",
+        )
+        async with app.run_test(size=(160, 40)) as pilot:
+            table = app.query_one("#jobs", DataTable)
+            unselected = table.get_row("41")[0]
+            await pilot.press("space")
+            selected = table.get_row("41")[0]
+            return unselected, selected
+
+    unselected, selected = asyncio.run(_run())
+
+    assert isinstance(unselected, Text)
+    assert isinstance(selected, Text)
+    assert unselected.plain == "---"
+    assert selected.plain == "YES"
+    assert "white" in str(selected.style)
+    assert "green" in str(selected.style)
+
+
+def test_slurm_job_control_textual_app_ticks_remaining_time() -> None:
+    async def _run():
+        app = create_slurm_job_control_app(
+            (_job("41", remaining="0:05"),),
+            title="Affected Slurm jobs",
+        )
+        async with app.run_test(size=(160, 40)) as pilot:
+            await pilot.pause(1.25)
+            table = app.query_one("#jobs", DataTable)
+            return table.get_row("41")[9]
+
+    remaining = asyncio.run(_run())
+
+    assert isinstance(remaining, str)
+    seconds = slurm_remaining_seconds(remaining)
+    assert seconds is not None
+    assert seconds < 5
+
+
+def test_slurm_job_control_textual_wait_stays_in_app_until_jobs_clear() -> None:
+    snapshots = [
+        (_job("41", remaining="0:03"),),
+        (),
+    ]
+
+    def _jobs_provider() -> tuple[AffectedSlurmJob, ...]:
+        return snapshots.pop(0) if snapshots else ()
+
+    async def _run():
+        app = create_slurm_job_control_app(
+            (_job("41", remaining="0:04"),),
+            title="Affected Slurm jobs",
+            jobs_provider=_jobs_provider,
+            wait_timeout_seconds=5,
+            poll_interval_seconds=1,
+        )
+        async with app.run_test(size=(160, 40)) as pilot:
+            await pilot.press("w")
+            assert app.return_value is None
+            await pilot.pause(2.25)
+        return app.return_value
+
+    result = asyncio.run(_run())
+
+    assert result is not None
+    assert result.action == SLURM_JOB_CONTROL_WAIT_COMPLETED
+    assert result.selected_job_ids == ()
+
+
+def test_slurm_job_control_textual_wait_returns_refresh_errors() -> None:
+    def _jobs_provider() -> tuple[AffectedSlurmJob, ...]:
+        raise RuntimeError("squeue failed")
+
+    async def _run():
+        app = create_slurm_job_control_app(
+            (_job("41"),),
+            title="Affected Slurm jobs",
+            jobs_provider=_jobs_provider,
+            wait_timeout_seconds=5,
+            poll_interval_seconds=1,
+        )
+        async with app.run_test(size=(160, 40)) as pilot:
+            await pilot.press("w")
+        return app.return_value
+
+    result = asyncio.run(_run())
+
+    assert result is not None
+    assert isinstance(result.error, SlurmJobControlRefreshError)
+    assert "squeue failed" in str(result.error)
 
 
 def test_slurm_job_control_textual_app_preserves_display_order_for_selected_jobs() -> None:

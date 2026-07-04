@@ -1191,7 +1191,7 @@ discovered worker NodeSets and partition refs when source evidence exists,
 normalizes source-era runtime settings, and retires legacy source Flux/Helm
 records; validation hold verifies MK8s, target Soperator, configured MK8s GPU
 checks, required Soperator deployment snapshot, protected-state deltas, and the
-shared bounded fast safety verifier; every executed stage runs a targeted fast
+shared bounded fast safety verifier; every executed stage runs a fast
 stage-scoped verification before the next stage starts, prints
 `Phase validation <phase-id>: PASS|FAIL|SKIP - <summary>`, and records
 `phase_state[<stage>].fast_verification`; the full Soperator/Slurm validation

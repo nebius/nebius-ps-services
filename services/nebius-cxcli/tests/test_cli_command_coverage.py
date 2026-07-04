@@ -5367,6 +5367,98 @@ def test_soperator_upgrade_wait_to_finish_policy_waits_until_jobs_clear(
     assert queue_results == []
 
 
+def test_soperator_upgrade_interactive_wait_completed_drains_after_tui_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _soperator_slurm_job(job_id="42")
+    queue_results = [(job,), ()]
+    prompted: list[tuple[str, tuple[str, ...]]] = []
+
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_slurm_nodes_for_rollout",
+        lambda **_kwargs: ("worker-gpu-0-0",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_drain_slurm_nodes",
+        lambda **_kwargs: ("worker-gpu-0-0",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_affected_jobs",
+        lambda **_kwargs: queue_results.pop(0),
+    )
+
+    def _prompt(
+        jobs: Sequence[cli.AffectedSlurmJob],
+        **_kwargs: object,
+    ) -> tuple[str, tuple[str, ...]]:
+        prompted.append(("prompted", tuple(job.job_id for job in jobs)))
+        return cli.SLURM_JOB_CONTROL_WAIT_COMPLETED, ()
+
+    monkeypatch.setattr(cli, "_prompt_soperator_upgrade_job_control", _prompt)
+
+    restored = cli._handle_soperator_upgrade_running_jobs(
+        namespace="soperator",
+        node_group="",
+        policy="interactive",
+        cancel_job_ids=(),
+        requeue_job_ids=(),
+        wait_timeout_seconds=30,
+        refresh_interval_seconds=1,
+        checkpoint_id="checkpoint",
+    )
+
+    assert restored == ("worker-gpu-0-0",)
+    assert prompted == [("prompted", ("42",))]
+    assert queue_results == []
+
+
+def test_soperator_upgrade_interactive_wait_timeout_raises_without_drain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _soperator_slurm_job(job_id="42")
+    drained: list[tuple[str, ...]] = []
+
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_slurm_nodes_for_rollout",
+        lambda **_kwargs: ("worker-gpu-0-0",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_drain_slurm_nodes",
+        lambda **_kwargs: drained.append(("drained",)) or ("worker-gpu-0-0",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_affected_jobs",
+        lambda **_kwargs: (job,),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_prompt_soperator_upgrade_job_control",
+        lambda _jobs, **_kwargs: (cli.SLURM_JOB_CONTROL_WAIT_TIMEOUT, ("42",)),
+    )
+
+    with pytest.raises(RuntimeError, match="Timed out waiting for Slurm jobs"):
+        cli._handle_soperator_upgrade_running_jobs(
+            namespace="soperator",
+            node_group="",
+            policy="interactive",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            wait_timeout_seconds=30,
+            refresh_interval_seconds=1,
+            checkpoint_id="checkpoint",
+        )
+
+    assert drained == []
+
+
 def test_soperator_upgrade_wait_then_cancel_waits_then_cancels_displayed_jobs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

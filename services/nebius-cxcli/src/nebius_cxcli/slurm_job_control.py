@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -57,16 +58,38 @@ SLURM_JOB_CONTROL_HELP = (
 
 TextPrompt = Callable[[str, str, bool], str]
 TuiRunner = Callable[[Sequence[AffectedSlurmJob], str], tuple[str, tuple[str, ...]] | None]
+JobsProvider = Callable[[], Sequence[AffectedSlurmJob]]
+
+SLURM_JOB_CONTROL_WAIT_COMPLETED = "wait-completed"
+SLURM_JOB_CONTROL_WAIT_TIMEOUT = "wait-timeout"
+
+
+class SlurmJobControlRefreshError(RuntimeError):
+    """Raised when the interactive job-control screen cannot refresh Slurm jobs."""
 
 
 @dataclass(frozen=True)
 class SlurmJobControlResult:
     action: str
     selected_job_ids: tuple[str, ...]
+    error: BaseException | None = None
 
 
 def slurm_table_value(value: str) -> str:
     return value if str(value or "").strip() else "-"
+
+
+def _slurm_remaining_display(job: AffectedSlurmJob, *, local_elapsed_seconds: int) -> str:
+    remaining_seconds = slurm_remaining_seconds(job.remaining)
+    if remaining_seconds is None:
+        return "unknown"
+    return format_slurm_duration_seconds(remaining_seconds - local_elapsed_seconds)
+
+
+def _slurm_textual_selection_mark(selected: bool) -> Text:
+    if selected:
+        return Text("YES", style="bold white on green")
+    return Text("---", style="dim")
 
 
 def normalize_slurm_job_control_action(raw_action: str) -> str:
@@ -181,12 +204,6 @@ def build_slurm_wait_dashboard(
         justify = "right" if column in {"Job", "Remaining"} else "left"
         table.add_column(column, justify=justify, overflow="ellipsis")
     for job in jobs:
-        remaining_seconds = slurm_remaining_seconds(job.remaining)
-        countdown = (
-            "unknown"
-            if remaining_seconds is None
-            else format_slurm_duration_seconds(remaining_seconds - local_elapsed_seconds)
-        )
         table.add_row(
             job.job_id,
             job.state,
@@ -194,7 +211,7 @@ def build_slurm_wait_dashboard(
             slurm_table_value(job.allocated_nodes),
             slurm_table_value(job.requested_nodes),
             slurm_table_value(job.reason),
-            countdown,
+            _slurm_remaining_display(job, local_elapsed_seconds=local_elapsed_seconds),
             job.impact_scope,
             job.name,
         )
@@ -209,13 +226,26 @@ def prompt_slurm_job_control(
     is_tty: bool,
     text_prompt: TextPrompt,
     tui_runner: TuiRunner | None = None,
+    jobs_provider: JobsProvider | None = None,
+    wait_timeout_seconds: int = 0,
+    poll_interval_seconds: int = 30,
 ) -> tuple[str, tuple[str, ...]]:
     if is_tty:
         try:
-            runner = tui_runner or run_slurm_job_control_tui
-            result = runner(tuple(jobs), table_title)
+            if tui_runner is not None:
+                result = tui_runner(tuple(jobs), table_title)
+            else:
+                result = run_slurm_job_control_tui(
+                    tuple(jobs),
+                    table_title,
+                    jobs_provider=jobs_provider,
+                    wait_timeout_seconds=wait_timeout_seconds,
+                    poll_interval_seconds=poll_interval_seconds,
+                )
             if result is not None:
                 return result
+        except SlurmJobControlRefreshError:
+            raise
         except Exception as exc:
             console.print(f"[yellow]Interactive TUI unavailable, using text fallback: {exc}[/yellow]")
 
@@ -231,6 +261,9 @@ def create_slurm_job_control_app(
     jobs: Sequence[AffectedSlurmJob],
     *,
     title: str,
+    jobs_provider: JobsProvider | None = None,
+    wait_timeout_seconds: int = 0,
+    poll_interval_seconds: int = 30,
 ) -> Any:
     from textual.app import App, ComposeResult
     from textual.binding import Binding
@@ -247,6 +280,16 @@ def create_slurm_job_control_app(
         }
         #jobs {
             height: 1fr;
+        }
+        #jobs > .datatable--cursor {
+            background: $accent;
+            color: white;
+            text-style: bold;
+        }
+        #jobs > .datatable--fixed-cursor {
+            background: $accent;
+            color: white;
+            text-style: bold;
         }
         #status {
             padding: 0 1;
@@ -277,6 +320,13 @@ def create_slurm_job_control_app(
             self.affected_jobs = tuple(affected_jobs)
             self.screen_title = screen_title
             self.selected_job_ids: set[str] = set()
+            self.jobs_provider = jobs_provider
+            self.wait_timeout_seconds = max(0, int(wait_timeout_seconds))
+            self.poll_interval_seconds = max(1, int(poll_interval_seconds))
+            self.waiting = False
+            self.wait_started_at: float | None = None
+            self.jobs_refreshed_at = time.monotonic()
+            self.last_poll_at = self.jobs_refreshed_at
 
         def compose(self) -> ComposeResult:
             yield Static(self.screen_title, id="title")
@@ -304,24 +354,10 @@ def create_slurm_job_control_app(
                 ("Name", "name"),
             ):
                 table.add_column(header, key=key)
-            for job in self.affected_jobs:
-                table.add_row(
-                    "[ ]",
-                    job.job_id,
-                    job.state,
-                    job.user,
-                    job.partition,
-                    slurm_table_value(job.allocated_nodes),
-                    slurm_table_value(job.requested_nodes),
-                    slurm_table_value(job.scheduled_nodes),
-                    slurm_table_value(job.reason),
-                    job.remaining or "unknown",
-                    job.impact_scope,
-                    job.name,
-                    key=job.job_id,
-                )
+            self._replace_jobs(self.affected_jobs, focus=False)
             table.focus()
             self._refresh_status()
+            self.set_interval(1, self._tick, name="slurm-job-control-tick")
 
         def _current_job(self) -> AffectedSlurmJob | None:
             table = self.query_one("#jobs", DataTable)
@@ -344,15 +380,113 @@ def create_slurm_job_control_app(
         def _refresh_status(self, detail: str = "") -> None:
             self.query_one("#status", Static).update(self._status_text(detail))
 
+        def _job_row_cells(self, job: AffectedSlurmJob) -> tuple[Any, ...]:
+            return (
+                _slurm_textual_selection_mark(job.job_id in self.selected_job_ids),
+                job.job_id,
+                job.state,
+                job.user,
+                job.partition,
+                slurm_table_value(job.allocated_nodes),
+                slurm_table_value(job.requested_nodes),
+                slurm_table_value(job.scheduled_nodes),
+                slurm_table_value(job.reason),
+                _slurm_remaining_display(job, local_elapsed_seconds=self._local_elapsed_seconds()),
+                job.impact_scope,
+                job.name,
+            )
+
+        def _replace_jobs(self, jobs: Sequence[AffectedSlurmJob], *, focus: bool = True) -> None:
+            self.affected_jobs = tuple(jobs)
+            displayed_ids = {job.job_id for job in self.affected_jobs}
+            self.selected_job_ids.intersection_update(displayed_ids)
+            self.jobs_refreshed_at = time.monotonic()
+            table = self.query_one("#jobs", DataTable)
+            table.clear()
+            for job in self.affected_jobs:
+                table.add_row(*self._job_row_cells(job), key=job.job_id)
+            if focus:
+                table.focus()
+            self._refresh_status()
+
+        def _local_elapsed_seconds(self) -> int:
+            return max(0, int(time.monotonic() - self.jobs_refreshed_at))
+
         def _refresh_selection_marks(self) -> None:
             table = self.query_one("#jobs", DataTable)
             for job in self.affected_jobs:
                 table.update_cell(
                     job.job_id,
                     "selected",
-                    "[x]" if job.job_id in self.selected_job_ids else "[ ]",
+                    _slurm_textual_selection_mark(job.job_id in self.selected_job_ids),
                 )
             self._refresh_status()
+
+        def _refresh_remaining_cells(self) -> None:
+            table = self.query_one("#jobs", DataTable)
+            local_elapsed = self._local_elapsed_seconds()
+            for job in self.affected_jobs:
+                table.update_cell(
+                    job.job_id,
+                    "remaining",
+                    _slurm_remaining_display(job, local_elapsed_seconds=local_elapsed),
+                )
+
+        def _wait_timed_out(self) -> bool:
+            if not self.waiting or self.wait_started_at is None or self.wait_timeout_seconds <= 0:
+                return False
+            return time.monotonic() - self.wait_started_at >= self.wait_timeout_seconds
+
+        def _poll_jobs(self) -> None:
+            if self.jobs_provider is None:
+                return
+            try:
+                jobs = tuple(self.jobs_provider())
+            except Exception as exc:
+                self.exit(
+                    SlurmJobControlResult(
+                        action="wait-to-finish",
+                        selected_job_ids=(),
+                        error=SlurmJobControlRefreshError(
+                            f"Could not refresh affected Slurm jobs: {exc}"
+                        ),
+                    )
+                )
+                return
+            self.last_poll_at = time.monotonic()
+            if not jobs:
+                action = (
+                    SLURM_JOB_CONTROL_WAIT_COMPLETED
+                    if self.waiting
+                    else "refresh"
+                )
+                self.exit(SlurmJobControlResult(action=action, selected_job_ids=()))
+                return
+            self._replace_jobs(jobs)
+
+        def _tick(self) -> None:
+            self._refresh_remaining_cells()
+            if not self.waiting:
+                return
+            if self._wait_timed_out():
+                self.exit(
+                    SlurmJobControlResult(
+                        action=SLURM_JOB_CONTROL_WAIT_TIMEOUT,
+                        selected_job_ids=tuple(job.job_id for job in self.affected_jobs),
+                    )
+                )
+                return
+            now = time.monotonic()
+            next_poll_seconds = max(
+                0,
+                self.poll_interval_seconds - int(now - self.last_poll_at),
+            )
+            self._refresh_status(
+                f"Waiting for all affected jobs; next squeue poll in {next_poll_seconds}s. "
+                "Press x to abort."
+            )
+            if now - self.last_poll_at >= self.poll_interval_seconds:
+                self._poll_jobs()
 
         def action_toggle_selected(self) -> None:
             job = self._current_job()
@@ -377,7 +511,32 @@ def create_slurm_job_control_app(
         def action_show_help(self) -> None:
             self._refresh_status(SLURM_JOB_CONTROL_HELP)
 
+        def _start_waiting(self) -> None:
+            if self.jobs_provider is None:
+                selected = tuple(
+                    job.job_id for job in self.affected_jobs if job.job_id in self.selected_job_ids
+                )
+                self.exit(
+                    SlurmJobControlResult(
+                        action="wait-to-finish",
+                        selected_job_ids=selected,
+                    )
+                )
+                return
+            self.waiting = True
+            self.wait_started_at = time.monotonic()
+            self._refresh_status(
+                "Waiting for all affected jobs in this screen. Press x to abort."
+            )
+            self._poll_jobs()
+
         def action_choose(self, action: str) -> None:
+            if action == "refresh" and self.jobs_provider is not None:
+                self._poll_jobs()
+                return
+            if action == "wait-to-finish":
+                self._start_waiting()
+                return
             selected_job_ids = tuple(
                 job.job_id for job in self.affected_jobs if job.job_id in self.selected_job_ids
             )
@@ -407,8 +566,20 @@ def create_slurm_job_control_app(
 def run_slurm_job_control_tui(
     jobs: Sequence[AffectedSlurmJob],
     title: str,
+    *,
+    jobs_provider: JobsProvider | None = None,
+    wait_timeout_seconds: int = 0,
+    poll_interval_seconds: int = 30,
 ) -> tuple[str, tuple[str, ...]] | None:
-    result = create_slurm_job_control_app(tuple(jobs), title=title).run()
+    result = create_slurm_job_control_app(
+        tuple(jobs),
+        title=title,
+        jobs_provider=jobs_provider,
+        wait_timeout_seconds=wait_timeout_seconds,
+        poll_interval_seconds=poll_interval_seconds,
+    ).run()
     if result is None:
         return None
+    if result.error is not None:
+        raise result.error
     return (result.action, result.selected_job_ids)

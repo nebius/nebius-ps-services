@@ -67,6 +67,8 @@ from .quota_checks import (
 )
 from .runtime_config import to_plain_data
 from .slurm_job_control import (
+    SLURM_JOB_CONTROL_WAIT_COMPLETED,
+    SLURM_JOB_CONTROL_WAIT_TIMEOUT,
     build_slurm_jobs_table,
     build_slurm_wait_dashboard,
     prompt_slurm_job_control,
@@ -5707,6 +5709,9 @@ def _prompt_external_upgrade_slurm_job_control(
     jobs: Sequence[AffectedSlurmJob],
     *,
     prompt_pause: Callable[[], Any] | None,
+    jobs_provider: Callable[[], Sequence[AffectedSlurmJob]] | None = None,
+    wait_timeout_seconds: int = 0,
+    refresh_interval_seconds: int = 30,
 ) -> tuple[str, tuple[str, ...]]:
     with _external_upgrade_slurm_prompt_paused(prompt_pause):
         return prompt_slurm_job_control(
@@ -5715,6 +5720,9 @@ def _prompt_external_upgrade_slurm_job_control(
             table_title=_EXTERNAL_UPGRADE_JOBS_TABLE_TITLE,
             is_tty=_external_upgrade_is_tty_session(),
             text_prompt=_external_upgrade_text_prompt,
+            jobs_provider=jobs_provider,
+            wait_timeout_seconds=wait_timeout_seconds,
+            poll_interval_seconds=refresh_interval_seconds,
         )
 
 
@@ -5943,6 +5951,13 @@ def _handle_external_upgrade_slurm_jobs(
             action, selected_ids = _prompt_external_upgrade_slurm_job_control(
                 jobs,
                 prompt_pause=interactive_prompt_pause,
+                jobs_provider=lambda: _external_upgrade_slurm_jobs(
+                    command_runner=command_runner,
+                    kube_context=kube_context,
+                    node_names=selected_nodes,
+                ),
+                wait_timeout_seconds=wait_timeout_seconds,
+                refresh_interval_seconds=refresh_interval_seconds,
             )
             _record("operator-selected", selection=action, job_ids=selected_ids)
             if action == "refresh":
@@ -5955,6 +5970,25 @@ def _handle_external_upgrade_slurm_jobs(
                     _record("no-blocking-jobs-after-refresh", policy=resolved_policy)
                     return ["Slurm job preflight: no affected jobs remain after refresh."]
                 continue
+            if action == SLURM_JOB_CONTROL_WAIT_COMPLETED:
+                _record(
+                    "wait-started",
+                    timeout_seconds=wait_timeout_seconds,
+                    refresh_interval_seconds=refresh_interval_seconds,
+                )
+                _record("wait-completed")
+                return ["Slurm job preflight: waited for affected jobs to finish."]
+            if action == SLURM_JOB_CONTROL_WAIT_TIMEOUT:
+                _record(
+                    "wait-started",
+                    timeout_seconds=wait_timeout_seconds,
+                    refresh_interval_seconds=refresh_interval_seconds,
+                )
+                raise RuntimeError(
+                    "Timed out waiting for Slurm jobs to finish. Rerun with a longer "
+                    "--job-wait-timeout, cancel, requeue, or requeue-hold selected jobs, "
+                    "or use --job-policy wait-then-cancel."
+                )
             if action == "wait-to-finish":
                 _record(
                     "wait-started",

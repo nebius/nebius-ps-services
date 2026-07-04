@@ -6848,6 +6848,81 @@ def test_external_upgrade_wait_to_finish_policy_waits_until_jobs_clear(
     assert queue_outputs == []
 
 
+def test_external_upgrade_interactive_wait_completed_returns_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+    queue_outputs = [
+        "42|alice|RUNNING|gpu|worker-gpu-0-0|00:05|30:00|25:00|restartable-train\n",
+    ]
+    prompted: list[tuple[str, tuple[str, ...]]] = []
+
+    def _prompt(
+        jobs: Sequence[migration.AffectedSlurmJob],
+        **_kwargs: object,
+    ) -> tuple[str, tuple[str, ...]]:
+        prompted.append(("prompted", tuple(job.job_id for job in jobs)))
+        return migration.SLURM_JOB_CONTROL_WAIT_COMPLETED, ()
+
+    monkeypatch.setattr(
+        migration,
+        "_prompt_external_upgrade_slurm_job_control",
+        _prompt,
+    )
+
+    lines = migration._handle_external_upgrade_slurm_jobs(
+        command_runner=_external_upgrade_slurm_runner(
+            queue_outputs=queue_outputs,
+            calls=calls,
+        ),
+        kube_context="external-context",
+        node_names=("worker-gpu-0-0",),
+        policy="interactive",
+        cancel_job_ids=(),
+        requeue_job_ids=(),
+        wait_timeout_seconds=30,
+        refresh_interval_seconds=1,
+        allow_resolved_interactive_job_policy=True,
+    )
+
+    assert lines == ["Slurm job preflight: waited for affected jobs to finish."]
+    assert prompted == [("prompted", ("42",))]
+    assert queue_outputs == []
+
+
+def test_external_upgrade_interactive_wait_timeout_raises_without_cancel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+    queue_outputs = [
+        "42|alice|RUNNING|gpu|worker-gpu-0-0|00:05|30:00|25:00|restartable-train\n",
+    ]
+
+    monkeypatch.setattr(
+        migration,
+        "_prompt_external_upgrade_slurm_job_control",
+        lambda _jobs, **_kwargs: (migration.SLURM_JOB_CONTROL_WAIT_TIMEOUT, ("42",)),
+    )
+
+    with pytest.raises(RuntimeError, match="Timed out waiting for Slurm jobs"):
+        migration._handle_external_upgrade_slurm_jobs(
+            command_runner=_external_upgrade_slurm_runner(
+                queue_outputs=queue_outputs,
+                calls=calls,
+            ),
+            kube_context="external-context",
+            node_names=("worker-gpu-0-0",),
+            policy="interactive",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            wait_timeout_seconds=30,
+            refresh_interval_seconds=1,
+            allow_resolved_interactive_job_policy=True,
+        )
+
+    assert not any(call[8:9] == ("scancel",) for call in calls)
+
+
 def test_external_upgrade_wait_then_cancel_waits_then_cancels_displayed_jobs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -455,6 +455,32 @@ def test_ordinary_skill_policy_must_be_true() -> None:
         )
 
 
+def test_apply_security_policy_can_be_implicit() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_skill(
+            root / "apply-security",
+            "apply-security",
+            (
+                "## Invocation Policy\n\n"
+                "Implicit invocation is allowed. Patch only when the current "
+                "task allows edits and the remediation is low risk.\n"
+            ),
+            description=(
+                "Use as a security reviewer, adviser, and safe remediation "
+                "helper for design, implementation, review, and validation."
+            ),
+            allow_implicit_invocation="true",
+        )
+
+        result = run_validator(root)
+        output = result.stdout + result.stderr
+        if result.returncode != 0:
+            raise AssertionError(output)
+
+        assert_contains(output, "Validated 1 skill(s): 0 failure(s), 0 warning(s)")
+
+
 def test_guardrail_text_does_not_make_whole_skill_explicit_only() -> None:
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -513,6 +539,7 @@ def main() -> int:
         test_description_declared_explicit_policy_must_be_false,
         test_invocation_policy_section_can_require_explicit_only,
         test_ordinary_skill_policy_must_be_true,
+        test_apply_security_policy_can_be_implicit,
         test_guardrail_text_does_not_make_whole_skill_explicit_only,
         test_sdlc_invocation_policy_must_be_explicit_only,
     ]
