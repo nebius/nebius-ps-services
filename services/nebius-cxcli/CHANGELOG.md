@@ -28,10 +28,33 @@ All notable changes to this project are tracked here. This changelog follows
 - Renamed the blocking Soperator Slurm job policy from `wait` to
   `wait-to-finish` across managed and external Soperator upgrade, scale-down,
   deploy, and Flux apply surfaces. The old `wait` value is no longer accepted.
+- Fixed Soperator Slurm job-policy checks after in-place node-template
+  replacement so checkpoint resume skips deleted stale `computeinstance-*`
+  worker nodes instead of failing node-alias mapping or querying all Slurm jobs
+  for an empty affected-node scope.
+- Hardened external Soperator upgrade resume preflight so transient Nebius CLI
+  `Unavailable` transport timeouts while reading MK8s node groups are retried
+  before failing the checkpointed run.
 - Fixed the interactive Soperator Slurm job-control screen so selected rows use
   a high-contrast marker, remaining times tick while the selector is open, and
   pressing `w` waits in the same screen instead of switching to a separate wait
   dashboard.
+- Fixed external Soperator upgrade operator output so backup phase comments and
+  live status lines no longer repeat the top-level stage label, backup
+  checkpoint reuse validates the recorded archive size before mutation resumes
+  and falls back to SHA256 for older metadata, Slurm job preflight is announced
+  before the job-control screen opens, pending runs include an explicit upgrade
+  status summary, and the Slurm job-control screen keeps one concise legend
+  while polling Slurm in a background worker. Read-only Slurm probes now return
+  bounded timeout errors instead of freezing long-running upgrade status checks.
+  MK8s node-template status now also surfaces active Nebius node-group rollout
+  state, event code, outdated count, and reconciling state when Kubernetes nodes
+  are still Ready. Populate-jail refresh status now includes live Kubernetes,
+  Slurm, Soperator, and populate-jail Job signals instead of an unknown
+  no-checks message.
+- Added `examples/slurm-jobs/submit-job-test.sh --check-jobs` to monitor smoke
+  jobs during an upgrade with timestamped `squeue` snapshots and optional
+  `sacct` accounting evidence for observed job IDs.
 - Changed `ext-soperator upgrade` output to keep locked-path plans more compact:
   support policy now avoids repeating the explanatory rule text when the locked
   path is printed, MK8s node-upgrade phase wording is shorter, execution
@@ -329,9 +352,11 @@ All notable changes to this project are tracked here. This changelog follows
   accounting pod scheduling after chart takeover.
 - Fixed external Soperator worker NodeSet rendering for legacy source clusters
   whose NodeSet name and MK8s worker-group role label differ. cxcli now falls
-  back to the single discovered worker group and strips stale static CPU
-  topology when live `lscpu` topology was unavailable, avoiding Slurm
-  `INVALID_REG` workers after upgrade.
+  back to the single discovered worker group, samples Slurm's
+  `slurmd -C --parameters=l3cache_as_socket` topology for GPU workers, and adds
+  `SlurmdParameters=l3cache_as_socket` to generated target values when no
+  explicit Slurm daemon parameters are configured, avoiding GPU GRES affinity
+  `INVAL` workers after upgrade.
 - Fixed external Soperator target cutover to reconcile Slurm worker runtime
   `NodeAddr` and `InstanceId` values from the current worker pods after chart
   takeover, and made zero-downtime safety fail when post-upgrade Slurm workers

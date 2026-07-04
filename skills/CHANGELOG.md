@@ -159,6 +159,9 @@ All notable changes to the reusable Codex skills are tracked here.
 - Refined `align` wording so its child-skill coordination, mandatory
   `apply-security` lane, and high-risk security approval boundaries are clearer
   and less repetitive.
+- Clarified that `align` separates active changed scope from unrelated dirty
+  worktree files and reports unrelated changes instead of silently treating
+  them as alignment scope.
 - Extended `agent-nebius-auth` runtime injection for long-running Bash commands
   by exporting `NEBIUS_AUTH_CREDENTIALS_FILE`, defining a
   `nebius_refresh_token` Bash helper through a restricted temporary `BASH_ENV`

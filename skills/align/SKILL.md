@@ -19,7 +19,8 @@ focused, reviewable changes and finishes with a changed-scope quality gate.
 
 ## Use This Skill For
 
-- Repo-wide, service-wide, package-wide, or subsystem-wide consistency passes
+- Scoped repo-wide, service-wide, package-wide, or subsystem-wide consistency
+  passes where the affected surface is known or can be inferred
 - Requests to reconcile implementation, tests, CI, CLI behavior, config, docs,
   examples, and `--help` output
 - Broken wiring, stale imports, duplicate paths, missing registration, flawed
@@ -79,11 +80,13 @@ Before deciding what to align, synthesize the active context:
 When `align` runs after changes, treat it as the final quality gate for the
 affected project surface.
 
-Determine changed scope from the latest user request, current diff, staged and
-untracked files, touched component roots, generated artifacts, and any relevant
-task state. Expand the scope only to direct dependencies, callers, tests,
-fixtures, docs, help output, workflows, config, schemas, and examples that
-define or consume the changed contract.
+Determine changed scope from the latest user request, touched component roots,
+current diff, staged and untracked files, generated artifacts, and any relevant
+task state. Separate requested or agent-touched changes from unrelated dirty
+worktree files; report unrelated dirty files instead of silently absorbing them
+into the alignment scope. Expand the active scope only to direct dependencies,
+callers, tests, fixtures, docs, help output, workflows, config, schemas, and
+examples that define or consume the changed contract.
 
 Stay incremental and fast. Avoid full-repo scanning by default. Broaden only
 when the change touches shared interfaces, central tooling, security-sensitive
@@ -145,6 +148,8 @@ ambiguous, public-contract, architecture, or security-sensitive changes.
 - Prefer minimal, targeted changes.
 - Preserve intended behavior unless there is clear evidence of a bug,
   inconsistency, stale contract, or broken wiring.
+- Preserve unrelated user changes. Treat unrelated dirty files as context to
+  report, not as permission to edit them.
 - Only change code when the issue is clear and the fix is low risk.
 - Do not perform broad rewrites for style alone.
 - Do not rename public APIs, commands, flags, environment variables, files,
@@ -251,6 +256,8 @@ code so aggressively that wiring becomes harder to trace.
    available. Keep only a concise decision summary in the parent thread or task
    state; do not copy raw discussions, broad memory dumps, logs, secrets, or
    environment-specific values.
+   Identify unrelated dirty files early and keep them out of scope unless the
+   user explicitly broadens the task to include them.
 2. Inspect before editing.
    Map the project layout, runtime entry points, main libraries or services,
    data flow, control flow, dependencies, test strategy, lint or format

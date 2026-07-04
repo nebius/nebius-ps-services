@@ -216,15 +216,15 @@ together so the workflow reads as one lifecycle.
 `align` is the end-to-end repair, consistency, and post-change quality-gate
 skill. Use it when a project needs code, module wiring, tests, CI, CLI
 behavior, config, examples, help output, README/design docs, workflows, and
-applicable project skills reviewed together as a cautious senior code-review
-style alignment pass. It first synthesizes the current thread, relevant Agent
-Memory, and durable task-state context, then verifies that context against
-current repository or runtime evidence before making safe fixes. Before
-completion, it runs mandatory changed-scope lanes for cross-code validation,
-`code-review`, `linter`, `apply-security`, and focused repository-native tests
-or builds. It uses safe-only remediation, reports risky blockers for explicit
-approval, and resolves `apply-security/SKILL.md` directly when the mandatory
-security lane is not visible in the initial skills list.
+applicable project skills reviewed together as a cautious senior alignment
+pass. It synthesizes the current thread, relevant Agent Memory, and durable
+task-state context, separates active scope from unrelated dirty files, and
+verifies that context against current repository or runtime evidence before
+making safe fixes. Before completion, it runs mandatory changed-scope lanes for
+cross-code validation, `code-review`, `linter`, `apply-security`, and focused
+repository-native tests or builds. It uses safe-only remediation, reports risky
+blockers for explicit approval, and resolves `apply-security/SKILL.md` directly
+when the mandatory security lane is not visible in the initial skills list.
 
 ### `align-skill`
 

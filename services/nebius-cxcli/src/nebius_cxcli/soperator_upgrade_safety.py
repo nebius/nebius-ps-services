@@ -501,9 +501,14 @@ def _is_external_source_flux_cleanup_delta(delta: Mapping[str, Any]) -> bool:
             and after == "absent"
             and (name == "soperator-fluxcd" or name.startswith("flux-system-soperator-fluxcd"))
         )
-    if kind == "flux.flux_system_kustomizations" and field == "suspend":
+    if kind == "flux.flux_system_kustomizations":
         name = resource.rsplit("/", 1)[-1]
-        return name == "soperator-fluxcd"
+        if name not in {"soperator-fluxcd", "flux-system"}:
+            return False
+        if field == "suspend":
+            return before.lower() in {"false", "none", ""} and after.lower() == "true"
+        if field == "spec_hash":
+            return True
     return False
 
 
@@ -530,6 +535,14 @@ def _is_external_intentional_migration_delta(
             target_ref=target_ref,
         )
     if kind in {"workloads.deployments", "workloads.daemonsets", "workloads.statefulsets"}:
+        if (
+            kind == "workloads.statefulsets"
+            and name == "soperator-acct-db"
+            and field == "presence"
+            and before == "present"
+            and after == "absent"
+        ):
+            return True
         return (name in _EXTERNAL_MIGRATION_WORKLOAD_NAMES or name.startswith(f"{target_ref}-")) and field in {
             "presence",
             "labels",

@@ -2729,6 +2729,10 @@ bash ./submit-job-test.sh
 
 # Submit 10 CPU jobs to a cpu partition.
 bash ./submit-job-test.sh --part-type cpu --partition cpu --count 10
+
+# In another login-node shell during the upgrade, monitor that the smoke jobs
+# remain visible and uninterrupted for a 15-minute window.
+bash ./submit-job-test.sh --check-jobs --check-duration 900
 ```
 
 By default, Slurm may place multiple sample jobs on one node when the partition
@@ -2736,6 +2740,8 @@ policy permits it. Add `--exclusive` to request one exclusive node allocation
 per job where the cluster policy allows that. Use `--run-minutes` and
 `--wall-minutes` to change the job duration, `--submit-mode array` for compact
 bulk submission, and `--dry-run` to inspect the generated `sbatch` commands.
+Use `--check-jobs` during the upgrade to print timestamped `squeue` snapshots
+and optional `sacct` evidence for the observed smoke job IDs.
 
 During Soperator upgrades, a real terminal defaults to the interactive job
 policy, so human operators can keep the command short and still select wait,
@@ -2997,12 +3003,15 @@ mixed Soperator profile and writes worker-specific
 NodeSet names and partition references instead of creating synthetic worker
 NodeSets from raw node-group ids. Render compiles those placements into
 chart-native `k8sNodeFilters`, `slurmNodes.*.k8sNodeFilterName`, storage
-selectors, partition refs, and worker `nodesets[]`. Onboarding also samples `lscpu -J` from one
-running `slurmd` pod per worker NodeSet and preserves the normalized
-CPU/socket/core/thread topology in the adopted `values.nodesets[].nodeConfig.static`
-values, while leaving chart-owned worker image tags to the target Soperator
-chart defaults. Rerun onboarding before render if the external worker shape
-changes.
+selectors, partition refs, and worker `nodesets[]`. Onboarding also samples
+`slurmd -C --parameters=l3cache_as_socket` from one running `slurmd` pod per
+GPU worker NodeSet, falls back to `lscpu -J` when that probe is unavailable, and
+preserves the normalized CPU/socket/core/thread topology in the adopted
+`values.nodesets[].nodeConfig.static` values, while leaving chart-owned worker
+image tags to the target Soperator chart defaults. External upgrades add
+`SlurmdParameters=l3cache_as_socket` when generated GPU worker values use GRES
+autodetection and no explicit Slurm daemon parameters are configured. Rerun
+onboarding before render if the external worker shape changes.
 Adopted Soperator values also make Pyxis optional and clear the importer path
 so a legacy or incompatible Pyxis importer option does not prevent `slurmd`
 from starting during chart takeover.
@@ -3610,12 +3619,12 @@ because rerunning them can have customer-data or teardown impact.
 Approved `--execute` runs show an interactive spinner while live preflight and
 mutating phases are active, emit concise `External Soperator upgrade phase ...`
 comments for preflight, backup metadata lookup/reuse, backup archive creation,
-protected-state capture, final post-upgrade checks, and report writing, and log
-phase-aware `External Soperator upgrade status` lines in non-interactive
-output. Every status line starts with the elapsed time, canonical phase id,
-operator-facing top-level stage (`MK8s Node Upgrades` or `Soperator Upgrade`),
-human-readable phase label, and overall phase health before component details,
-so a single copied line is enough to identify the active stage and phase.
+Slurm job preflight, protected-state capture, final post-upgrade checks, and
+report writing, and log phase-aware `External Soperator upgrade status` lines
+in non-interactive output. Every status line starts with the elapsed time,
+canonical phase id, human-readable phase label, and overall phase health before
+component details, so a single copied line is enough to identify the active
+phase.
 Storage phases show aligned
 SFS/PVC copy progress plus MK8s and Slurm serving/degradation signals. Compute
 and cutover phases show MK8s status as separate `Node groups:` and `Nodes:`

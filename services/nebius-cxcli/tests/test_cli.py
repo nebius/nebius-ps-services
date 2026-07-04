@@ -1221,14 +1221,17 @@ def _write_old_soperator_migration_config(
 
 
 def _stub_external_soperator_upgrade_backup(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        cli_module,
-        "_create_external_soperator_upgrade_backup",
-        lambda **_kwargs: {
+    def _backup(**kwargs: object) -> dict[str, object]:
+        config_path = Path(kwargs["config_path"])
+        archive = config_path.parent / "backups" / "ext-soperator-upgrade-external-cluster.tar.gz"
+        payload = b"fake external soperator upgrade backup\n"
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        archive.write_bytes(payload)
+        return {
             "required": True,
-            "path": "backups/ext-soperator-upgrade-external-cluster.tar.gz",
-            "size_bytes": 123,
-            "sha256": "backup-sha256",
+            "path": str(archive.relative_to(config_path.parent)),
+            "size_bytes": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
             "manifest_sha256": "manifest-sha256",
             "included_categories": [
                 "accounting",
@@ -1242,7 +1245,12 @@ def _stub_external_soperator_upgrade_backup(monkeypatch: pytest.MonkeyPatch) -> 
             "raw_secret_material": True,
             "accounting_db_dump": True,
             "report_redacted": True,
-        },
+        }
+
+    monkeypatch.setattr(
+        cli_module,
+        "_create_external_soperator_upgrade_backup",
+        _backup,
     )
 
 
@@ -2226,8 +2234,8 @@ spec:
             "login-0",
             "--",
         ):
-            if command[8:11] == ("sinfo", "-h", "-o"):
-                return SoperatorMigrationCommandResult(command, 0, "idle\n", "")
+            if command[8] == "sinfo" and command[-1] == "%N %T":
+                return SoperatorMigrationCommandResult(command, 0, "worker-0 idle\n", "")
             if command[8:] == ("scontrol", "show", "nodes"):
                 return SoperatorMigrationCommandResult(
                     command,
@@ -7700,6 +7708,57 @@ def test_soperator_onboard_override_persists_support_policy_marker(
     assert support_finding["evidence"]["override_used"] is True
 
 
+def test_soperator_upgrade_slurm_node_filter_skips_deleted_computeinstances(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login_calls: list[str] = []
+    cluster_calls: list[tuple[str, ...]] = []
+
+    def login_command(
+        namespace: str,
+        command: str,
+        **_: object,
+    ) -> cli_module._SoperatorUpgradeCommandResult:
+        login_calls.append(command)
+        assert namespace == "soperator"
+        return cli_module._SoperatorUpgradeCommandResult(
+            args=("kubectl", "exec", "login-0"),
+            returncode=0,
+            stdout="\n".join(
+                (
+                    "NodeName=worker-0 NodeHostName=worker-0 Partitions=main",
+                    "   InstanceId=computeinstance-new-0",
+                )
+            ),
+            stderr="",
+        )
+
+    def kubectl_cluster(
+        args: list[str],
+        **_: object,
+    ) -> cli_module._SoperatorUpgradeCommandResult:
+        cluster_calls.append(tuple(args))
+        return cli_module._SoperatorUpgradeCommandResult(
+            args=("kubectl", *args),
+            returncode=0,
+            stdout=json.dumps({"items": [{"metadata": {"name": "computeinstance-new-0"}}]}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(cli_module, "_run_soperator_upgrade_login_command", login_command)
+    monkeypatch.setattr(cli_module, "_run_soperator_upgrade_kubectl_cluster", kubectl_cluster)
+
+    nodes = cli_module._soperator_upgrade_slurm_node_filter(
+        namespace="soperator",
+        node_names=("computeinstance-old-0",),
+        kube_context="external-context",
+    )
+
+    assert nodes == ()
+    assert login_calls == ["scontrol show nodes"]
+    assert cluster_calls == [("get", "nodes", "-o", "json", "--request-timeout=20s")]
+
+
 def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -8568,8 +8627,7 @@ def test_soperator_migration_phase_display_title_is_path_aware(
 def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.MonkeyPatch) -> None:
     styled = cli_module._style_soperator_migration_status_message(
         "External Soperator upgrade status [4s] phase external-node-template-upgrade "
-        "(top-level stage: MK8s Node Upgrades) [External node-template upgrade] "
-        "(degraded): MK8s Node Groups degraded: "
+        "[External node-template upgrade] (degraded): MK8s Node Groups degraded: "
         "Node groups: 4 group(s); gpu-pool:3/4 Ready || "
         "Nodes: 7/8 Ready; in transition gpu-node-a:replacing (down) | "
         "Slurm Workers draining: workers drained=1"
@@ -8577,8 +8635,7 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
 
     assert "[bold cyan]External Soperator upgrade status[/bold cyan]" in styled
     assert "phase external-node-template-upgrade" in styled
-    assert "top-level stage:" in styled
-    assert "MK8s Node Upgrades" in styled
+    assert "top-level stage:" not in styled
     assert "External node-template upgrade" in styled
     assert "([bold yellow]degraded[/bold yellow]):" in styled
     assert "[bold white]MK8s Node Groups[/bold white]" in styled
@@ -8616,8 +8673,7 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
     with cli_module._soperator_migration_status_emitter() as emit:
         emit(
             "External Soperator upgrade status [4s] phase external-node-template-upgrade "
-            "(top-level stage: MK8s Node Upgrades) [External node-template upgrade] "
-            "(degraded): MK8s Node Groups degraded: "
+            "[External node-template upgrade] (degraded): MK8s Node Groups degraded: "
             "Node groups: 4 group(s); gpu-pool:3/4 Ready || Nodes: 7/8 Ready"
         )
 
@@ -8626,12 +8682,26 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
     assert updates
     assert "[bold cyan]External Soperator upgrade status[/bold cyan] [4s] phase " in updates[0]
     assert "external-node-template-upgrade" in updates[0]
-    assert "top-level stage:" in updates[0]
-    assert "MK8s Node Upgrades" in updates[0]
+    assert "top-level stage:" not in updates[0]
     assert "External node-template upgrade" in updates[0]
     assert "[bold white]MK8s Node Groups[/bold white]" in updates[0]
     assert "[bold cyan]Node groups:[/bold cyan]" in updates[0]
     assert "[bold magenta]Nodes:[/bold magenta]" in updates[0]
+
+
+def test_soperator_upgrade_phase_display_omits_top_level_stage() -> None:
+    line = cli_module._soperator_upgrade_phase_display_line(
+        "backup",
+        "creating restore-capable backup archive before mutation.",
+        component="soperator-sop-cluster (soperator/soperator)",
+    )
+
+    assert line == (
+        "Soperator upgrade phase `backup` for "
+        "soperator-sop-cluster (soperator/soperator): "
+        "creating restore-capable backup archive before mutation."
+    )
+    assert "top-level stage:" not in line
 
 
 def test_ext_soperator_upgrade_dry_run_rejects_gpu_reconciliation_only_deploy_route(
@@ -8947,9 +9017,13 @@ def test_ext_soperator_upgrade_execute_reuses_checkpoint_backup_after_mutation_s
         config_path,
         "external-cluster",
     )
+    archive_bytes = b"original checkpoint backup archive\n"
+    archive_path = tmp_path / "backups/original-pre-upgrade.tar.gz"
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    archive_path.write_bytes(archive_bytes)
     original_backup = {
         "path": "backups/original-pre-upgrade.tar.gz",
-        "sha256": "original-sha256",
+        "sha256": hashlib.sha256(archive_bytes).hexdigest(),
         "manifest_sha256": "original-manifest-sha256",
         "included_categories": [
             "accounting",
@@ -9034,6 +9108,9 @@ def test_ext_soperator_upgrade_execute_reuses_checkpoint_backup_after_mutation_s
     assert result.exit_code == 0, result.output
     assert backup_calls == []
     assert observed["backup_metadata"] == original_backup
+    assert "External Soperator upgrade phase backup: checking for reusable" in result.output
+    assert "External Soperator upgrade phase backup: reusing existing" in result.output
+    assert "External Soperator upgrade phase backup (top-level stage:" not in result.output
     assert "reusing restore-capable backup metadata" in result.output
 
 
@@ -9152,8 +9229,7 @@ def test_ext_soperator_upgrade_execute_records_approval_and_worker_groups(
     assert "External Soperator upgrade status" in result.output
     assert "phase target-gpu-stack-remediation" in result.output
     assert "phase create-aligned-sfs" in result.output
-    assert "top-level stage: MK8s Node Upgrades" in result.output
-    assert "top-level stage: Soperator Upgrade" in result.output
+    assert "top-level stage:" not in result.output
     assert (
         "Completed execute phases: discovery-and-plan, customer-approval, "
         "external-node-template-upgrade, target-gpu-stack-remediation, "

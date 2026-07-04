@@ -19,6 +19,12 @@ requeue=0
 output_dir="slurm-smoke-logs"
 dry_run=0
 heartbeat_seconds="30"
+check_jobs=0
+check_once=0
+check_interval_seconds="15"
+check_duration_seconds=""
+check_job_name_pattern="sop-*-job-test*"
+check_job_ids=""
 login_ip=""
 login_remote_dir="/root/testjobs"
 
@@ -45,6 +51,12 @@ Options:
   --account <name>           Pass a Slurm account to sbatch.
   --requeue                  Submit jobs as requeueable.
   --output-dir <path>        Directory for Slurm stdout files. Default: slurm-smoke-logs.
+  --check-jobs               Monitor submitted smoke jobs instead of submitting new jobs.
+  --check-once               Print one monitor snapshot and exit. Used with --check-jobs.
+  --check-interval <seconds> Poll interval for --check-jobs. Default: 15.
+  --check-duration <seconds> Monitor duration for --check-jobs. Default: --run-minutes in seconds.
+  --check-job-name <pattern> Shell pattern for matching smoke job names. Default: sop-*-job-test*.
+  --check-job-ids <ids>      Comma-separated Slurm job IDs to monitor instead of name matching.
   --dry-run                  Print sbatch commands without submitting.
   -h, --help                 Show this help text.
 
@@ -59,6 +71,8 @@ Examples:
   ./submit-job-test.sh --partition main --count 10 --gpus-per-job 1
   ./submit-job-test.sh --part-type cpu --partition cpu --count 10
   ./submit-job-test.sh --partition main --count 10 --submit-mode array --dry-run
+  ./submit-job-test.sh --check-jobs --check-duration 900
+  ./submit-job-test.sh --check-jobs --check-job-ids 12345,12346
 EOF
 }
 
@@ -255,6 +269,34 @@ parse_args() {
         output_dir="$2"
         shift 2
         ;;
+      --check-jobs)
+        check_jobs=1
+        shift
+        ;;
+      --check-once)
+        check_once=1
+        shift
+        ;;
+      --check-interval)
+        require_value "$1" "${2:-}"
+        check_interval_seconds="$2"
+        shift 2
+        ;;
+      --check-duration)
+        require_value "$1" "${2:-}"
+        check_duration_seconds="$2"
+        shift 2
+        ;;
+      --check-job-name)
+        require_value "$1" "${2:-}"
+        check_job_name_pattern="$2"
+        shift 2
+        ;;
+      --check-job-ids)
+        require_value "$1" "${2:-}"
+        check_job_ids="$2"
+        shift 2
+        ;;
       --dry-run)
         dry_run=1
         shift
@@ -298,6 +340,13 @@ validate_args() {
   validate_positive_int "--gpus-per-job" "$gpus_per_job"
   validate_positive_int "--nodes" "$nodes"
   validate_positive_int "--cpus-per-task" "$cpus_per_task"
+  validate_positive_int "--check-interval" "$check_interval_seconds"
+
+  if [[ -z "$check_duration_seconds" ]]; then
+    check_duration_seconds=$((run_minutes * 60))
+  fi
+  validate_positive_int "--check-duration" "$check_duration_seconds"
+  check_job_ids="$(normalize_csv "$check_job_ids")"
 
   if ((wall_minutes < run_minutes)); then
     die "--wall-minutes must be greater than or equal to --run-minutes"
@@ -400,6 +449,340 @@ submit_array_job() {
   build_sbatch_command "$job_name" "0-${array_max}" "$batch_script"
 }
 
+csv_contains() {
+  local csv="$1"
+  local needle="$2"
+  local item
+  local -a items=()
+
+  IFS=',' read -r -a items <<<"$csv"
+  for item in "${items[@]}"; do
+    item="${item//[[:space:]]/}"
+    if [[ "$item" == "$needle" || "$item" == "${needle}_"* || "$needle" == "${item}_"* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+normalize_csv() {
+  local csv="$1"
+  local item
+  local -a items=()
+  local out=""
+
+  IFS=',' read -r -a items <<<"$csv"
+  for item in "${items[@]}"; do
+    item="${item//[[:space:]]/}"
+    if [[ -z "$item" ]]; then
+      continue
+    fi
+    if [[ -n "$out" ]]; then
+      out+=","
+    fi
+    out+="$item"
+  done
+  printf '%s\n' "$out"
+}
+
+job_matches_monitor_filter() {
+  local job_id="$1"
+  local job_name="$2"
+
+  if [[ -n "$check_job_ids" ]]; then
+    csv_contains "$check_job_ids" "$job_id"
+    return
+  fi
+
+  # shellcheck disable=SC2053 # --check-job-name is an intentional shell pattern.
+  [[ "$job_name" == $check_job_name_pattern ]]
+}
+
+append_seen_job_id() {
+  local job_id="$1"
+
+  if [[ -z "$job_id" ]]; then
+    return 0
+  fi
+  case ",${seen_job_ids}," in
+    *",${job_id},"*) ;;
+    *)
+      if [[ -n "$seen_job_ids" ]]; then
+        seen_job_ids+=","
+      fi
+      seen_job_ids+="$job_id"
+      ;;
+  esac
+}
+
+csv_remove() {
+  local csv="$1"
+  local needle="$2"
+  local item
+  local -a items=()
+  local out=""
+
+  IFS=',' read -r -a items <<<"$csv"
+  for item in "${items[@]}"; do
+    item="${item//[[:space:]]/}"
+    if [[ -z "$item" || "$item" == "$needle" ]]; then
+      continue
+    fi
+    if [[ -n "$out" ]]; then
+      out+=","
+    fi
+    out+="$item"
+  done
+  printf '%s\n' "$out"
+}
+
+count_csv_items() {
+  local csv="$1"
+  local item
+  local -a items=()
+  local count=0
+
+  if [[ -z "$csv" ]]; then
+    printf '0\n'
+    return 0
+  fi
+
+  IFS=',' read -r -a items <<<"$csv"
+  for item in "${items[@]}"; do
+    item="${item//[[:space:]]/}"
+    if [[ -n "$item" ]]; then
+      count=$((count + 1))
+    fi
+  done
+  printf '%s\n' "$count"
+}
+
+state_is_interrupted() {
+  case "$1" in
+    BOOT_FAIL* | CANCELLED* | DEADLINE* | FAILED* | NODE_FAIL* | OUT_OF_MEMORY* | PREEMPTED* | REVOKED* | SPECIAL_EXIT* | TIMEOUT*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+state_is_completed() {
+  case "$1" in
+    COMPLETED*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+observed_jobs_completed_in_sacct() {
+  local remaining_ids="$seen_job_ids"
+  local job_id
+  local state
+  local rest
+
+  if [[ -z "$remaining_ids" ]] || ! command -v sacct >/dev/null 2>&1; then
+    return 1
+  fi
+
+  while IFS='|' read -r job_id state rest; do
+    if [[ -z "$job_id" ]] || ! csv_contains "$seen_job_ids" "$job_id"; then
+      continue
+    fi
+    if state_is_interrupted "$state"; then
+      return 2
+    fi
+    if state_is_completed "$state"; then
+      remaining_ids="$(csv_remove "$remaining_ids" "$job_id")"
+    fi
+  done < <(
+    sacct -X -n -P -j "$seen_job_ids" --format=JobIDRaw,State 2>/dev/null || true
+  )
+
+  [[ -z "$remaining_ids" ]]
+}
+
+sacct_state_for_job() {
+  local lookup_job_id="$1"
+  local job_id
+  local state
+  local rest
+
+  if ! command -v sacct >/dev/null 2>&1; then
+    return 1
+  fi
+
+  while IFS='|' read -r job_id state rest; do
+    if [[ "$job_id" == "$lookup_job_id" ]]; then
+      printf '%s\n' "$state"
+      return 0
+    fi
+  done < <(
+    sacct -X -n -P -j "$lookup_job_id" --format=JobIDRaw,State 2>/dev/null || true
+  )
+
+  return 1
+}
+
+verify_explicit_missing_jobs() {
+  local visible_ids="$1"
+  local job_id
+  local state
+  local -a expected_ids=()
+
+  if [[ -z "$check_job_ids" ]]; then
+    return 0
+  fi
+
+  IFS=',' read -r -a expected_ids <<<"$check_job_ids"
+  for job_id in "${expected_ids[@]}"; do
+    job_id="${job_id//[[:space:]]/}"
+    if [[ -z "$job_id" ]] || csv_contains "$visible_ids" "$job_id"; then
+      continue
+    fi
+
+    state="$(sacct_state_for_job "$job_id" || true)"
+    if state_is_completed "$state"; then
+      printf 'job_id=%s state=%s source=sacct terminal=completed\n' "$job_id" "$state"
+      continue
+    fi
+    if state_is_interrupted "$state"; then
+      log_error "Explicit Slurm job id ${job_id} left squeue with interrupted accounting state: ${state}"
+    else
+      log_error "Explicit Slurm job id ${job_id} is not visible in squeue and accounting is not complete."
+    fi
+    monitor_failures=$((monitor_failures + 1))
+  done
+}
+
+print_monitor_sacct_evidence() {
+  local job_id
+  local state
+  local exit_code
+  local elapsed
+  local start_time
+  local end_time
+
+  if [[ -z "$seen_job_ids" ]] || ! command -v sacct >/dev/null 2>&1; then
+    return 0
+  fi
+
+  printf 'Accounting evidence from sacct for observed jobs:\n'
+  while IFS='|' read -r job_id state exit_code elapsed start_time end_time; do
+    if [[ -z "$job_id" ]]; then
+      continue
+    fi
+    printf 'job_id=%s state=%s exit_code=%s elapsed=%s start=%s end=%s\n' \
+      "$job_id" "$state" "$exit_code" "$elapsed" "$start_time" "$end_time"
+    if state_is_interrupted "$state"; then
+      monitor_failures=$((monitor_failures + 1))
+    fi
+  done < <(
+    sacct -X -n -P -j "$seen_job_ids" \
+      --format=JobIDRaw,State,ExitCode,Elapsed,Start,End 2>/dev/null || true
+  )
+}
+
+monitor_slurm_jobs() {
+  local started_at
+  local deadline
+  local sample=0
+  local matching_count
+  local squeue_output
+  local now
+  local job_id
+  local state
+  local elapsed
+  local remaining
+  local partition_name
+  local nodes
+  local job_name
+  local visible_job_ids
+  local sleep_seconds
+  local remaining_seconds
+
+  if ((dry_run)); then
+    print_command squeue -h -o "%i|%T|%M|%L|%P|%N|%j"
+    if [[ -n "$check_job_ids" ]]; then
+      print_command sacct -X -n -P -j "$check_job_ids" \
+        --format=JobIDRaw,State,ExitCode,Elapsed,Start,End
+    fi
+    return 0
+  fi
+
+  require_command squeue
+  started_at="$(date +%s)"
+  deadline=$((started_at + check_duration_seconds))
+  seen_job_ids="$(normalize_csv "$check_job_ids")"
+  monitor_failures=0
+
+  printf 'Slurm job monitor started: duration=%ss interval=%ss name_pattern=%s job_ids=%s\n' \
+    "$check_duration_seconds" "$check_interval_seconds" "$check_job_name_pattern" \
+    "${check_job_ids:-name-filter}"
+
+  while true; do
+    sample=$((sample + 1))
+    now="$(date +%s)"
+    matching_count=0
+    printf '[%s] Slurm job monitor sample %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$sample"
+    if ! squeue_output="$(squeue -h -o "%i|%T|%M|%L|%P|%N|%j")"; then
+      log_error "squeue failed while monitoring Slurm jobs"
+      monitor_failures=$((monitor_failures + 1))
+      break
+    fi
+    visible_job_ids=""
+    while IFS='|' read -r job_id state elapsed remaining partition_name nodes job_name; do
+      if [[ -z "$job_id" ]]; then
+        continue
+      fi
+      if ! job_matches_monitor_filter "$job_id" "$job_name"; then
+        continue
+      fi
+      matching_count=$((matching_count + 1))
+      append_seen_job_id "$job_id"
+      if [[ -n "$visible_job_ids" ]]; then
+        visible_job_ids+=","
+      fi
+      visible_job_ids+="$job_id"
+      printf 'job_id=%s state=%s elapsed=%s remaining=%s partition=%s nodes=%s name=%s\n' \
+        "$job_id" "$state" "$elapsed" "$remaining" "$partition_name" "$nodes" "$job_name"
+      if state_is_interrupted "$state"; then
+        monitor_failures=$((monitor_failures + 1))
+      fi
+    done <<<"$squeue_output"
+    verify_explicit_missing_jobs "$visible_job_ids"
+    if ((matching_count == 0)); then
+      if observed_jobs_completed_in_sacct; then
+        printf 'All observed Slurm smoke jobs left squeue with COMPLETED accounting state.\n'
+        break
+      fi
+      log_error "No matching Slurm smoke jobs are visible in squeue and accounting is not complete."
+      monitor_failures=$((monitor_failures + 1))
+    fi
+    if ((check_once)); then
+      break
+    fi
+    now="$(date +%s)"
+    if ((now >= deadline)); then
+      break
+    fi
+    sleep_seconds="$check_interval_seconds"
+    remaining_seconds=$((deadline - now))
+    if ((remaining_seconds < sleep_seconds)); then
+      sleep_seconds="$remaining_seconds"
+    fi
+    sleep "$sleep_seconds"
+  done
+
+  print_monitor_sacct_evidence
+  if ((monitor_failures > 0)); then
+    log_error "Slurm job monitor result: FAIL - interruption or visibility gap detected."
+    return 1
+  fi
+  printf 'Slurm job monitor result: PASS - observed %s job id(s) across %s sample(s) with no interruption signal.\n' \
+    "$(count_csv_items "$seen_job_ids")" "$sample"
+}
+
 main() {
   if [[ "${1:-}" == "login" ]]; then
     shift
@@ -410,6 +793,11 @@ main() {
 
   parse_args "$@"
   validate_args
+
+  if ((check_jobs)); then
+    monitor_slurm_jobs
+    return $?
+  fi
 
   local batch_script
   batch_script="$(batch_script_path)"

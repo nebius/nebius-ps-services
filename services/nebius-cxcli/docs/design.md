@@ -1085,11 +1085,15 @@ such as `worker-cpu` and `worker-gpu` also select the mixed Soperator profile
 and persist worker-specific `apps.charts[].placements.worker-cpu` and
 `apps.charts[].placements.worker-gpu` entries, so render keeps the adopted
 worker NodeSet names and partition references instead of creating synthetic
-worker NodeSets from raw node-group ids. Onboarding also samples `lscpu -J`
-from one running `slurmd` pod per worker NodeSet and preserves the normalized
-CPU/socket/core/thread topology in adopted
+worker NodeSets from raw node-group ids. Onboarding also samples
+`slurmd -C --parameters=l3cache_as_socket` from one running `slurmd` pod per GPU
+worker NodeSet, falls back to `lscpu -J` when that probe is unavailable, and
+preserves the normalized CPU/socket/core/thread topology in adopted
 `values.nodesets[].nodeConfig.static`, so install/adopt-only rerenders do not
-fall back to compact profile worker topology. Chart-owned worker image tags
+fall back to compact profile worker topology. External upgrades add
+`SlurmdParameters=l3cache_as_socket` when generated GPU worker values use GRES
+autodetection and no explicit Slurm daemon parameters are configured.
+Chart-owned worker image tags
 remain target chart defaults instead of being copied from the adopted source
 NodeSets. Adopted Soperator values also set Pyxis to optional and clear the
 importer path so a legacy or incompatible Pyxis importer option cannot prevent
@@ -1376,11 +1380,10 @@ not complete, and resumes from live state on the next identical execute
 command instead of submitting a duplicate update.
 The executor-owned live status surface uses concise
 `External Soperator upgrade phase ...` comments for preflight, backup metadata
-lookup/reuse, backup archive creation, protected-state capture, final
-post-upgrade checks, and report writing, plus an
+lookup/reuse, backup archive creation, Slurm job preflight, protected-state
+capture, final post-upgrade checks, and report writing, plus an
 interactive spinner backed by phase-aware status snapshots. Storage phases emit
 `External Soperator upgrade status` with the elapsed time, canonical phase id,
-operator-facing top-level stage (`MK8s Node Upgrades` or `Soperator Upgrade`),
 human-readable phase label, and overall phase health before component details.
 Storage phases then show aligned SFS/PVC copy progress plus MK8s and Slurm
 continuity signals, while compute and cutover phases emit MK8s status as

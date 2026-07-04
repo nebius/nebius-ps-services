@@ -135,3 +135,24 @@ nebius-cxcli soperator upgrade CONFIG_YAML --target TARGET \
 Other job policies can still be selected for non-interactive runs when that is
 the desired test. The smoke jobs exit non-zero on `TERM` or `INT`, so
 interruption, cancellation, and requeue behavior are visible in Slurm output.
+
+## Monitor During Upgrade
+
+Use `--check-jobs` from the login node while the upgrade is running to produce
+a timestamped proof stream from Slurm's live queue:
+
+```bash
+./submit-job-test.sh --check-jobs --check-duration 900
+```
+
+The monitor matches `sop-*-job-test*` job names by default, polls `squeue`, and
+prints each observed job ID, state, elapsed time, remaining time, partition,
+nodes, and name. Scope the proof to known IDs when needed:
+
+```bash
+./submit-job-test.sh --check-jobs --check-job-ids 12345,12346 --check-duration 900
+```
+
+Use `--check-once` for a single snapshot. If `sacct` is available, the monitor
+also prints final accounting evidence for observed jobs before reporting pass
+or fail.

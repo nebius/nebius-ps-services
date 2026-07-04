@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 
 import pytest
 from rich.console import Console
 from rich.text import Text
-from textual.widgets import DataTable
+from textual.widgets import DataTable, Footer, Static
 
 from nebius_cxcli.slurm_job_control import (
     SLURM_JOB_CONTROL_ACTION_PROMPT,
+    SLURM_JOB_CONTROL_HELP,
     SLURM_JOB_CONTROL_WAIT_COMPLETED,
     SlurmJobControlRefreshError,
     build_slurm_jobs_table,
@@ -217,6 +219,26 @@ def test_slurm_job_control_textual_app_uses_visible_selection_mark() -> None:
     assert "green" in str(selected.style)
 
 
+def test_slurm_job_control_textual_app_uses_single_concise_legend() -> None:
+    async def _run():
+        app = create_slurm_job_control_app(
+            (_job("41"),),
+            title="Affected Slurm jobs",
+        )
+        async with app.run_test(size=(160, 40)):
+            help_widget = app.query_one("#help", Static)
+            return str(help_widget.content), len(list(app.query(Footer)))
+
+    help_text, footer_count = asyncio.run(_run())
+
+    assert footer_count == 0
+    assert "Actions:" in help_text
+    assert "w wait" in help_text
+    assert "H requeue+hold all active" in help_text
+    assert "Selection:" in help_text
+    assert help_text == SLURM_JOB_CONTROL_HELP
+
+
 def test_slurm_job_control_textual_app_ticks_remaining_time() -> None:
     async def _run():
         app = create_slurm_job_control_app(
@@ -280,6 +302,7 @@ def test_slurm_job_control_textual_wait_returns_refresh_errors() -> None:
         )
         async with app.run_test(size=(160, 40)) as pilot:
             await pilot.press("w")
+            await pilot.pause(0.1)
         return app.return_value
 
     result = asyncio.run(_run())
@@ -287,6 +310,37 @@ def test_slurm_job_control_textual_wait_returns_refresh_errors() -> None:
     assert result is not None
     assert isinstance(result.error, SlurmJobControlRefreshError)
     assert "squeue failed" in str(result.error)
+
+
+def test_slurm_job_control_textual_wait_can_abort_while_poll_is_running() -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    def _jobs_provider() -> tuple[AffectedSlurmJob, ...]:
+        started.set()
+        release.wait(1)
+        return (_job("41"),)
+
+    async def _run():
+        app = create_slurm_job_control_app(
+            (_job("41"),),
+            title="Affected Slurm jobs",
+            jobs_provider=_jobs_provider,
+            wait_timeout_seconds=5,
+            poll_interval_seconds=1,
+        )
+        async with app.run_test(size=(160, 40)) as pilot:
+            await pilot.press("w")
+            assert await asyncio.to_thread(started.wait, 1)
+            await pilot.press("x")
+            release.set()
+            await pilot.pause(0.1)
+        return app.return_value
+
+    result = asyncio.run(_run())
+
+    assert result is not None
+    assert result.action == "abort"
 
 
 def test_slurm_job_control_textual_app_preserves_display_order_for_selected_jobs() -> None:

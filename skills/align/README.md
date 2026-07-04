@@ -10,6 +10,7 @@ changelog entries.
 - Inspects the actual project contract before editing.
 - Synthesizes the active thread, relevant Agent Memory, and task-state context
   before deciding what to align.
+- Separates requested or agent-touched changes from unrelated dirty files.
 - Finds mismatches between code, tests, workflows, docs, and examples.
 - Runs mandatory changed-scope code-review, lint/syntax, security, cross-code,
   and focused test/build validation lanes before completion.
@@ -29,6 +30,9 @@ Gather current thread, memory, and related state context
 Map the relevant project contract
   |
   v
+Separate active scope from unrelated dirty files
+  |
+  v
 Compare code, tests, docs, workflows, and config
   |
   v
@@ -45,17 +49,18 @@ Run focused validation and report residual risk
 
 1. Consolidate the latest user request, current thread, relevant Agent Memory,
    and related task or workflow state.
-2. Inspect the relevant codebase surfaces before changing anything.
-3. Establish the intended behavior from nearby evidence.
-4. Prioritize real bugs, broken wiring, stale docs, missing tests, and unsafe
+2. Separate active scope from unrelated dirty files.
+3. Inspect the relevant codebase surfaces before changing anything.
+4. Establish the intended behavior from nearby evidence.
+5. Prioritize real bugs, broken wiring, stale docs, missing tests, and unsafe
    assumptions.
-5. Patch the smallest responsible surface.
-6. Update tests, docs, examples, help text, and changelog entries when they are
+6. Patch the smallest responsible surface.
+7. Update tests, docs, examples, help text, and changelog entries when they are
    affected.
-7. Validate with mandatory changed-scope gates: cross-code wiring checks,
+8. Validate with mandatory changed-scope gates: cross-code wiring checks,
    `code-review`, `linter`, `apply-security`, and focused repository-native
    tests or builds.
-8. Broaden only when shared contracts, security-sensitive surfaces, or unclear
+9. Broaden only when shared contracts, security-sensitive surfaces, or unclear
    dependency boundaries require it.
 
 `apply-security` may be selected implicitly outside `align`; inside `align`, it
@@ -70,6 +75,8 @@ required-reference and safe-remediation rules.
 - Memory and task state are decision inputs, not proof until verified against
   current repository or runtime evidence.
 - Preserve intended behavior unless a bug or stale contract is proven.
+- Preserve unrelated user changes; report them instead of folding them into
+  scope silently.
 - Prefer one canonical path over compatibility shims unless requested.
 - Keep validation incremental and changed-scope first; do not default to a
   full-repo scan.

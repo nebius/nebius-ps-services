@@ -51,9 +51,10 @@ SLURM_JOB_CONTROL_ACTION_PROMPT = (
     "H requeue-hold all active, x abort]"
 )
 SLURM_JOB_CONTROL_HELP = (
-    "space select | a select/clear all | i invert | r refresh | w wait | "
-    "c cancel selected | C cancel all | q requeue selected | Q requeue all active | "
-    "h requeue-hold selected | H requeue-hold all active | x abort | ? help"
+    "Actions: w wait | c cancel selected | C cancel all | q requeue selected | "
+    "Q requeue all active | h requeue+hold selected | H requeue+hold all active | "
+    "r refresh | x abort\n"
+    "Selection: space toggle | a all | i invert | ? legend"
 )
 
 TextPrompt = Callable[[str, str, bool], str]
@@ -267,7 +268,8 @@ def create_slurm_job_control_app(
 ) -> Any:
     from textual.app import App, ComposeResult
     from textual.binding import Binding
-    from textual.widgets import DataTable, Footer, Static
+    from textual.widgets import DataTable, Static
+    from textual.worker import WorkerState
 
     class SlurmJobControlApp(App[SlurmJobControlResult | None]):
         CSS = """
@@ -325,6 +327,7 @@ def create_slurm_job_control_app(
             self.poll_interval_seconds = max(1, int(poll_interval_seconds))
             self.waiting = False
             self.wait_started_at: float | None = None
+            self.refreshing = False
             self.jobs_refreshed_at = time.monotonic()
             self.last_poll_at = self.jobs_refreshed_at
 
@@ -333,7 +336,6 @@ def create_slurm_job_control_app(
             yield DataTable(id="jobs")
             yield Static(self._status_text(), id="status")
             yield Static(SLURM_JOB_CONTROL_HELP, id="help")
-            yield Footer()
 
         def on_mount(self) -> None:
             table = self.query_one("#jobs", DataTable)
@@ -437,22 +439,52 @@ def create_slurm_job_control_app(
                 return False
             return time.monotonic() - self.wait_started_at >= self.wait_timeout_seconds
 
-        def _poll_jobs(self) -> None:
+        def _poll_jobs_blocking(self) -> tuple[AffectedSlurmJob, ...]:
+            if self.jobs_provider is None:
+                return self.affected_jobs
+            return tuple(self.jobs_provider())
+
+        def _schedule_poll(self, *, reason: str) -> None:
             if self.jobs_provider is None:
                 return
-            try:
-                jobs = tuple(self.jobs_provider())
-            except Exception as exc:
+            if self.refreshing:
+                self._refresh_status("Slurm refresh already in progress.")
+                return
+            self.refreshing = True
+            self._refresh_status("Refreshing affected Slurm jobs...")
+            self.run_worker(
+                self._poll_jobs_blocking,
+                name="slurm-job-control-poll",
+                group="slurm-job-control-poll",
+                description=reason,
+                exclusive=True,
+                thread=True,
+                exit_on_error=False,
+            )
+
+        def on_worker_state_changed(self, event: Any) -> None:
+            if getattr(event.worker, "name", "") != "slurm-job-control-poll":
+                return
+            if event.state not in {WorkerState.CANCELLED, WorkerState.ERROR, WorkerState.SUCCESS}:
+                return
+            self.refreshing = False
+            if event.state == WorkerState.CANCELLED:
+                self._refresh_status("Slurm refresh cancelled.")
+                return
+            if event.state == WorkerState.ERROR:
+                exc = event.worker.error
                 self.exit(
                     SlurmJobControlResult(
-                        action="wait-to-finish",
+                        action="wait-to-finish" if self.waiting else "refresh",
                         selected_job_ids=(),
                         error=SlurmJobControlRefreshError(
-                            f"Could not refresh affected Slurm jobs: {exc}"
+                            "Could not refresh affected Slurm jobs: "
+                            + (str(exc) if exc is not None else "unknown error")
                         ),
                     )
                 )
                 return
+            jobs = tuple(event.worker.result or ())
             self.last_poll_at = time.monotonic()
             if not jobs:
                 action = (
@@ -476,6 +508,9 @@ def create_slurm_job_control_app(
                     )
                 )
                 return
+            if self.refreshing:
+                self._refresh_status("Waiting for all affected jobs; squeue poll in progress.")
+                return
             now = time.monotonic()
             next_poll_seconds = max(
                 0,
@@ -486,7 +521,7 @@ def create_slurm_job_control_app(
                 "Press x to abort."
             )
             if now - self.last_poll_at >= self.poll_interval_seconds:
-                self._poll_jobs()
+                self._schedule_poll(reason="wait-to-finish")
 
         def action_toggle_selected(self) -> None:
             job = self._current_job()
@@ -528,11 +563,11 @@ def create_slurm_job_control_app(
             self._refresh_status(
                 "Waiting for all affected jobs in this screen. Press x to abort."
             )
-            self._poll_jobs()
+            self._schedule_poll(reason="wait-to-finish")
 
         def action_choose(self, action: str) -> None:
             if action == "refresh" and self.jobs_provider is not None:
-                self._poll_jobs()
+                self._schedule_poll(reason="refresh")
                 return
             if action == "wait-to-finish":
                 self._start_waiting()

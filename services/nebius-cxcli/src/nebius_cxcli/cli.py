@@ -4484,6 +4484,18 @@ def _soperator_upgrade_phase_payload(
     return payload
 
 
+def _soperator_upgrade_phase_display_line(
+    phase_id: str,
+    comment: str,
+    *,
+    component: str,
+) -> str:
+    component_text = str(component or "").strip()
+    if component_text:
+        return f"Soperator upgrade phase `{phase_id}` for {component_text}: {comment}"
+    return f"Soperator upgrade phase `{phase_id}`: {comment}"
+
+
 def _write_text_atomic(path: Path, content: str, *, encoding: str = "utf-8") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     data = content.encode(encoding)
@@ -6946,6 +6958,66 @@ def _soperator_upgrade_parse_slurm_node_aliases(output: str) -> dict[str, str]:
     return aliases
 
 
+def _is_nebius_compute_instance_node_name(value: str) -> bool:
+    return bool(re.fullmatch(r"computeinstance-[A-Za-z0-9-]+", value))
+
+
+def _soperator_upgrade_live_kubernetes_node_names(
+    *,
+    kube_context: str | None = None,
+    extra_env: Mapping[str, str] | None = None,
+) -> set[str] | None:
+    result = _run_soperator_upgrade_kubectl_cluster(
+        ["get", "nodes", "-o", "json", "--request-timeout=20s"],
+        kube_context=kube_context,
+        extra_env=extra_env,
+        timeout_seconds=60,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return None
+    items = payload.get("items")
+    if not isinstance(items, list):
+        return None
+    names: set[str] = set()
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        metadata = item.get("metadata")
+        if not isinstance(metadata, Mapping):
+            continue
+        name = str(metadata.get("name", "") or "").strip()
+        if name:
+            names.add(name)
+    return names
+
+
+def _soperator_upgrade_live_unresolved_slurm_nodes(
+    *,
+    nodes: Sequence[str],
+    kube_context: str | None = None,
+    extra_env: Mapping[str, str] | None = None,
+) -> tuple[str, ...]:
+    unresolved = tuple(str(node or "").strip() for node in nodes if str(node or "").strip())
+    if not any(_is_nebius_compute_instance_node_name(node) for node in unresolved):
+        return unresolved
+    live_nodes = _soperator_upgrade_live_kubernetes_node_names(
+        kube_context=kube_context,
+        extra_env=extra_env,
+    )
+    if live_nodes is None:
+        return unresolved
+    return tuple(
+        node
+        for node in unresolved
+        if not _is_nebius_compute_instance_node_name(node) or node in live_nodes
+    )
+
+
 def _soperator_upgrade_slurm_node_filter(
     *,
     namespace: str,
@@ -6980,6 +7052,14 @@ def _soperator_upgrade_slurm_node_filter(
             continue
         if slurm_node not in resolved:
             resolved.append(slurm_node)
+    if unresolved:
+        unresolved = list(
+            _soperator_upgrade_live_unresolved_slurm_nodes(
+                nodes=unresolved,
+                kube_context=kube_context,
+                extra_env=extra_env,
+            )
+        )
     if unresolved:
         raise RuntimeError(
             "Soperator upgrade could not map Kubernetes node or worker pod name(s) to "
@@ -14257,10 +14337,10 @@ def _run_managed_soperator_cluster_upgrade(
         return pending if pending and pending != "none" else ""
 
     def _phase_display(phase_id: str, comment: str) -> str:
-        return (
-            f"Soperator upgrade phase `{phase_id}` "
-            f"(top-level stage: {_soperator_upgrade_top_level_stage(phase_id)}) "
-            f"for {component_label}: {comment}"
+        return _soperator_upgrade_phase_display_line(
+            phase_id,
+            comment,
+            component=component_label,
         )
 
     def _set_phase(phase_id: str, comment: str) -> None:
@@ -54443,9 +54523,7 @@ def soperator_external_upgrade_command(
                 backup_metadata: dict[str, Any] | None = None
                 if approve:
                     emit_status(
-                        "External Soperator upgrade phase backup "
-                        f"(top-level stage: {external_soperator_upgrade_top_level_stage('backup')}): "
-                        "checking for reusable "
+                        "External Soperator upgrade phase backup: checking for reusable "
                         "restore-capable backup metadata."
                     )
                     backup_metadata = external_soperator_upgrade_resume_backup_metadata(
@@ -54454,9 +54532,7 @@ def soperator_external_upgrade_command(
                     )
                     if backup_metadata is not None:
                         emit_status(
-                            "External Soperator upgrade phase backup "
-                            f"(top-level stage: {external_soperator_upgrade_top_level_stage('backup')}): "
-                            "reusing existing "
+                            "External Soperator upgrade phase backup: reusing existing "
                             "restore-capable backup metadata."
                         )
                         console.print(
@@ -54476,9 +54552,7 @@ def soperator_external_upgrade_command(
                             current_segment=current_segment,
                         )
                         emit_status(
-                            "External Soperator upgrade phase backup "
-                            f"(top-level stage: {external_soperator_upgrade_top_level_stage('backup')}): "
-                            "creating "
+                            "External Soperator upgrade phase backup: creating "
                             "restore-capable backup archive before mutation."
                         )
                         backup_metadata = _create_external_soperator_upgrade_backup(

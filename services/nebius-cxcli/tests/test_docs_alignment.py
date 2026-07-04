@@ -2023,11 +2023,11 @@ def test_docs_define_component_selector_contract() -> None:
     assert "resume relies on phase checkpoints" in design_flat
     assert "interactive spinner backed by phase-aware status snapshots" in design_flat
     assert (
-        "canonical phase id, operator-facing top-level stage (`MK8s Node Upgrades` or `Soperator Upgrade`), human-readable phase label"
+        "canonical phase id, human-readable phase label, and overall phase health before component details"
         in readme_flat
     )
     assert (
-        "canonical phase id, operator-facing top-level stage (`MK8s Node Upgrades` or `Soperator Upgrade`), human-readable phase label"
+        "canonical phase id, human-readable phase label, and overall phase health before component details"
         in design_flat
     )
     assert "Storage phases show aligned SFS/PVC copy progress" in readme_flat
@@ -2201,6 +2201,8 @@ def test_readme_guides_soperator_slurm_checks_through_login_service() -> None:
     assert "cd /shared/slurm-jobs" not in section
     assert "bash ./submit-job-test.sh\n" in section
     assert "bash ./submit-job-test.sh --part-type cpu --partition cpu --count 10" in section
+    assert "bash ./submit-job-test.sh --check-jobs --check-duration 900" in section
+    assert "timestamped `squeue` snapshots" in section_flat
     assert "a real terminal defaults to the interactive job policy" in section_flat
     assert "nebius-cxcli soperator upgrade CONFIG_YAML --target TARGET" in section_flat
     assert "--to-chart-version TARGET_VERSION" in section_flat

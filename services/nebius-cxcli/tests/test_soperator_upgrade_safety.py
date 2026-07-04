@@ -745,14 +745,14 @@ def test_activechecks_restored_allows_baseline_suspended_checks() -> None:
     )
 
 
-def test_external_migration_classifier_allows_owned_presence_and_keeps_config_drift() -> None:
+def test_external_migration_classifier_allows_owned_cleanup_and_keeps_config_drift() -> None:
     comparison = {
         "schema": "nebius-cxcli-soperator-upgrade-safety/v1",
         "status": "drift-detected",
         "before_hash": "before",
         "after_hash": "after",
         "blocked_count": 0,
-        "approval_required_count": 2,
+        "approval_required_count": 6,
         "deltas": [
             {
                 "kind": "configmaps",
@@ -785,6 +785,36 @@ def test_external_migration_classifier_allows_owned_presence_and_keeps_config_dr
                 "remediation": "Review and approve this protected Kubernetes resource drift.",
             },
             {
+                "kind": "flux.flux_system_kustomizations",
+                "resource": "flux-system/flux-system",
+                "field": "suspend",
+                "before": False,
+                "after": True,
+                "classification": "remediation_required",
+                "approval_required": True,
+                "remediation": "Review and approve this protected Kubernetes resource drift.",
+            },
+            {
+                "kind": "flux.flux_system_kustomizations",
+                "resource": "flux-system/flux-system",
+                "field": "spec_hash",
+                "before": "old",
+                "after": "new",
+                "classification": "remediation_required",
+                "approval_required": True,
+                "remediation": "Review and approve this protected Kubernetes resource drift.",
+            },
+            {
+                "kind": "workloads.statefulsets",
+                "resource": "soperator/soperator-acct-db",
+                "field": "presence",
+                "before": "present",
+                "after": "absent",
+                "classification": "remediation_required",
+                "approval_required": True,
+                "remediation": "Review and approve this workload template drift.",
+            },
+            {
                 "kind": "configmaps",
                 "resource": "soperator/customer-config",
                 "field": "spec_hash",
@@ -807,6 +837,8 @@ def test_external_migration_classifier_allows_owned_presence_and_keeps_config_dr
     assert by_resource["soperator/cxcli-ext-upg-1223b-slurm-configs"]["approval_required"] is False
     assert by_resource["soperator/sh.helm.release.v1.soperator.v2"]["classification"] == "intentional_upgrade"
     assert by_resource["soperator/cxcli-ext-upg-1223b"]["classification"] == "intentional_upgrade"
+    assert by_resource["flux-system/flux-system"]["classification"] == "intentional_upgrade"
+    assert by_resource["soperator/soperator-acct-db"]["classification"] == "intentional_upgrade"
     assert by_resource["soperator/customer-config"]["classification"] == "remediation_required"
     assert classified["approval_required_count"] == 1
 

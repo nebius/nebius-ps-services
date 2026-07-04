@@ -26,6 +26,12 @@ PUBLIC_FLAGS = (
     "--account <name>",
     "--requeue",
     "--output-dir <path>",
+    "--check-jobs",
+    "--check-once",
+    "--check-interval <seconds>",
+    "--check-duration <seconds>",
+    "--check-job-name <pattern>",
+    "--check-job-ids <ids>",
     "--dry-run",
     "-h, --help",
 )
@@ -77,6 +83,8 @@ def test_example_readme_documents_login_node_copy_flow() -> None:
     assert "./examples/slurm-jobs/submit-job-test.sh login <login-external-ip>" in readme
     assert "login-node SSH session" in readme
     assert "/root/testjobs" in readme
+    assert "./submit-job-test.sh --check-jobs --check-duration 900" in readme
+    assert "timestamped proof stream" in readme
     assert "scp -r examples/slurm-jobs" not in readme
     assert "cd /shared/slurm-jobs" not in readme
 
@@ -199,6 +207,64 @@ def test_array_mode_dry_run_prints_one_sbatch_command() -> None:
     lines = sbatch_lines(result.stdout)
     assert len(lines) == 1
     assert "--array=0-2" in result.stdout
+
+
+def test_check_jobs_dry_run_prints_monitor_command_without_submitting() -> None:
+    result = run_submitter(
+        "--check-jobs",
+        "--check-job-ids",
+        "12345,12346",
+        "--dry-run",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert sbatch_lines(result.stdout) == []
+    assert "squeue -h -o" in result.stdout
+    assert "sacct -X -n -P -j 12345\\,12346" in result.stdout
+
+
+def test_check_jobs_accepts_completed_explicit_job_from_sacct(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    squeue = bin_dir / "squeue"
+    sacct = bin_dir / "sacct"
+    squeue.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' '60|RUNNING|00:10|20:00|main|worker-0|sop-gpu-job-test-01'\n",
+        encoding="utf-8",
+    )
+    sacct.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' '59|COMPLETED|0:0|00:30:04|2026-07-04T05:09:24|2026-07-04T05:39:28'\n"
+        "printf '%s\\n' '60|RUNNING|0:0|00:10|2026-07-04T05:40:00|Unknown'\n",
+        encoding="utf-8",
+    )
+    squeue.chmod(0o755)
+    sacct.chmod(0o755)
+    env = os.environ.copy()
+    env["NO_COLOR"] = "1"
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(SUBMITTER),
+            "--check-jobs",
+            "--check-once",
+            "--check-job-ids",
+            "59,60",
+        ],
+        check=False,
+        cwd=EXAMPLE_DIR,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "job_id=60 state=RUNNING" in result.stdout
+    assert "job_id=59 state=COMPLETED source=sacct terminal=completed" in result.stdout
+    assert "Slurm job monitor result: PASS - observed 2 job id(s)" in result.stdout
 
 
 def test_exclusive_is_only_added_when_requested() -> None:
