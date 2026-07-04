@@ -138,6 +138,14 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Refreshed `align-skill` against current official OpenAI Codex skill guidance,
+  separating the portable `SKILL.md` minimum from this repository's stricter
+  source-owned skill structure, clarifying optional upstream
+  `agents/openai.yaml` versus required repo policy, documenting optional
+  `references/`, `scripts/`, `assets/`, and repo-local `evals/` surfaces, and
+  updating the OpenAI metadata template. The repo standard preserves
+  `agents/openai.yaml` for every source-owned skill so invocation policy and
+  interface metadata stay reviewable.
 - Hardened `config-codex` laptop setup so existing `AGENTS.md` and
   `config.toml` are treated as merge targets by default, exact template checks
   are explicit audit modes, default validation rejects empty or stale managed

@@ -4,7 +4,8 @@ Use this reference when `align-skill` is helping refine, harden, validate,
 complete, or update a scaffolded Codex or Agent Skill folder or draft
 `SKILL.md` file.
 
-Source basis:
+Source basis, verified through the current OpenAI Codex manual before updating
+this reference:
 
 - [OpenAI Codex Agent Skills](https://developers.openai.com/codex/skills)
 - [OpenAI Codex best practices](https://developers.openai.com/codex/learn/best-practices)
@@ -19,12 +20,15 @@ Source basis:
 1. Start from 2-3 concrete use cases, not generic best practices.
 2. Identify the repeatable workflow, inputs, expected outputs, gotchas, and
    validation gates that another agent would otherwise miss.
-3. For a brand-new skill, prefer `skill-creator` for initial scaffold and
-   naming when it is available; use `align-skill` after the scaffold or draft
-   exists to harden the result.
+3. If the workflow is easier to demonstrate than describe, consider OpenAI
+   Codex Record & Replay where available; if describing the skill, prefer
+   `skill-creator` for brand-new scaffolds and naming when it is available.
+   Use `align-skill` after the scaffold or draft exists to harden the result.
 4. For an existing skill, inspect current behavior, trigger metadata, support
    files, scripts, references, and local conventions before editing.
-5. Capture durable, public-safe learnings back into local skill sources only
+5. If a reusable skill should be distributed beyond local or repo scope, keep
+   the skill workflow itself clean first, then package it as a plugin.
+6. Capture durable, public-safe learnings back into local skill sources only
    when they are evidence-backed and in scope.
 
 ## Trigger Design
@@ -32,9 +36,15 @@ Source basis:
 - The front matter `name` must match the folder and stay lowercase hyphen-case.
 - The `description` is the primary trigger surface. It must say what the skill
   does and when to use it.
-- Add or repair `agents/openai.yaml` when the target repository convention
-  expects OpenAI metadata. Use the nested path `agents/openai.yaml`, not a
-  top-level `agents.openai.yaml` file.
+- OpenAI Codex may shorten skill descriptions or omit some skills from the
+  initial list when many skills are installed, so front-load the main job,
+  trigger words, accepted inputs, and boundaries.
+- Add, preserve, or repair `agents/openai.yaml` when the target repository
+  convention expects OpenAI metadata. In this repository, every source-owned
+  skill must keep it. Use the nested path `agents/openai.yaml`, not a top-level
+  `agents.openai.yaml` file.
+- Keep the interface metadata useful: `display_name`, `short_description`, and
+  `default_prompt` should be concise and aligned with the current `SKILL.md`.
 - Prefix skills that are strictly internal to the Agentic SDLC workflow with
   `sdlc-`; use `sdlc-start` for the coordinator. Their descriptions must start
   with `Use only as part of the Agentic SDLC workflow;`.
@@ -54,8 +64,6 @@ Source basis:
   `## Invocation Policy` section that says explicit invocation is required.
   Do not rely on a one-off guardrail such as "run destructive actions only when
   explicitly asked"; that guards one action, not the whole skill trigger.
-- Front-load user intent terms because long descriptions may be shortened in
-  large skill sets.
 - Include realistic inputs and near-boundaries, such as local folder, GitHub
   tree, vendor docs, scripts, live validation, or report-only scope.
 - Avoid descriptions so broad that the skill steals unrelated work from sibling
@@ -66,6 +74,8 @@ Source basis:
 ## Fast Progressive Disclosure
 
 - Keep each skill focused on one coherent job.
+- Treat `SKILL.md` as the only required portable runtime file. It should carry
+  the core workflow that must be available after trigger.
 - Keep `SKILL.md` lean; move long checklists, examples, vendor notes, and
   detailed policy into `references/`.
 - Tell the agent exactly when to load each reference. Avoid vague "see
@@ -141,6 +151,13 @@ For these skills:
 
 - Validate the narrow target first, then broaden only when shared rules,
   templates, or validators changed.
+- When reviewing external skills, separate OpenAI portable minimum failures
+  from this repository's stricter source-owned standards. Missing
+  `agents/openai.yaml`, `evals/`, or the repo learning-loop section may be a
+  repo-standard gap rather than an upstream OpenAI portability failure.
+- When reviewing repo-owned skills in this tree, treat missing
+  `agents/openai.yaml` as a validation failure and restore it with interface
+  metadata plus `policy.allow_implicit_invocation`.
 - For this repository, run:
 
   ```bash

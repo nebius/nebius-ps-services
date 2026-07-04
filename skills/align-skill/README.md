@@ -10,8 +10,10 @@ validation, or validation evidence aligned.
 - Checks `SKILL.md` front matter, scope, trigger quality, and workflow clarity.
 - Helps refine draft or scaffolded skills with safe, secure, fast authoring
   practices.
-- Validates optional `agents/`, `assets/`, `evals/`, `references/`, and
-  `scripts/` surfaces.
+- Separates the OpenAI portable minimum structure from this repository's
+  stricter source-owned skill standard.
+- Validates repo-required `agents/openai.yaml` metadata plus optional
+  `assets/`, `evals/`, `references/`, and `scripts/` surfaces.
 - Creates or repairs `agents/openai.yaml` metadata when the repository
   convention requires it, including the correct
   `policy.allow_implicit_invocation` value for the skill contract.
@@ -31,12 +33,12 @@ validation, or validation evidence aligned.
 ```text
 Skill folder
   |
-  +--> SKILL.md runtime instructions
-  +--> agents/openai.yaml metadata
-  +--> references/ detailed docs
-  +--> assets/ reusable templates
-  +--> evals/ trigger and quality examples
-  `--> scripts/ deterministic helpers
+  +--> SKILL.md required runtime instructions
+  +--> agents/openai.yaml optional upstream metadata, required here
+  +--> references/ optional detailed docs
+  +--> assets/ optional reusable templates
+  +--> evals/ optional repo trigger and quality examples
+  `--> scripts/ optional deterministic helpers
         |
         v
 align-skill checks structure, safety, docs, and validation
@@ -62,12 +64,14 @@ align-skill checks structure, safety, docs, and validation
 ## Core Concepts
 
 - Keep `SKILL.md` concise for progressive disclosure.
+- Treat `SKILL.md` with front matter `name` and `description` as the OpenAI
+  portable minimum.
 - Move detailed references and templates into supporting folders.
 - Use `skill-creator` for new-skill scaffolding when available, then use
   `align-skill` for authoring hardening and validation.
-- Use the exact metadata path `agents/openai.yaml`. In this repository, source
-  skills keep that file even though OpenAI Codex treats it as optional
-  metadata.
+- Use the exact metadata path `agents/openai.yaml`. In this repository, every
+  source-owned skill must keep that file even though OpenAI Codex treats it as
+  optional metadata.
 - Set `policy.allow_implicit_invocation` to `false` for explicit-only,
   mutating, publishing, setup, or Agentic SDLC phase skills; use `true` for
   ordinary reusable skills that Codex may safely select from the description.

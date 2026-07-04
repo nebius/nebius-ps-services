@@ -1,6 +1,6 @@
 ---
 name: align-skill
-description: "Use for reviewing, hardening, validating, aligning, and improving existing or newly scaffolded Codex or Agent Skill folders. Use as a skill-writing helper after skill-creator or a manual scaffold/draft exists: refine SKILL.md front matter, description trigger quality, progressive disclosure, canonical structure, safety/security guardrails, fast validation, scripts/references/assets/evals, official vendor-doc checks, and reusable learning capture. Do not replace skill-creator for initial new-skill scaffolding."
+description: "Use for reviewing, hardening, validating, aligning, and improving existing or newly scaffolded Codex or Agent Skill folders. Use after skill-creator or a manual scaffold/draft exists to refine SKILL.md front matter, trigger descriptions, progressive disclosure, official portable structure, repo metadata, safety guardrails, validation, scripts/references/assets/evals, vendor-doc checks, and reusable learning capture. Do not replace skill-creator for initial new-skill scaffolding."
 ---
 
 # Align Skill
@@ -11,8 +11,10 @@ Use this skill to inspect, review, align, harden, validate, and improve one or
 more Codex or Agent Skill folders. It can help refine skill-writing drafts after
 a target skill folder, scaffold, or `SKILL.md` draft exists. The target is skill
 quality: `SKILL.md`, supporting `references/`, `assets/`, `scripts/`, optional
-`agents/openai.yaml` metadata, optional `evals/` trigger examples, triggering
-behavior, safety/security rules, fast validation, and validation evidence.
+upstream `agents/openai.yaml` metadata, repo-required `agents/openai.yaml`
+metadata when local policy requires it, optional `evals/` trigger examples,
+triggering behavior, safety/security rules, fast validation, and validation
+evidence.
 
 This skill is separate from `align`, which is for end-to-end project/codebase
 alignment.
@@ -61,6 +63,9 @@ Official OpenAI documentation confirms that Codex Skills are available in the
 Codex CLI, IDE extension, and Codex app. It also confirms progressive
 disclosure: Codex starts with each skill's `name`, `description`, and file path,
 then loads the full `SKILL.md` only when it decides the skill is relevant.
+In large skill sets, OpenAI docs state that Codex may shorten descriptions or
+omit some skills from the initial skills list, so front-load the key trigger
+terms and boundaries in the front matter `description`.
 
 Confirmed explicit invocation in CLI/IDE: run `/skills` or type `$` to mention a
 skill. Implicit invocation depends on the front matter `description`.
@@ -102,6 +107,10 @@ For expanded CLI, VS Code-compatible IDE, and Codex app guidance, read
 
 - Evidence-based changes only: use repo evidence, official vendor
   documentation, or explicit user requirements.
+- Distinguish the OpenAI portable baseline from repository-specific policy.
+  The upstream baseline is a skill folder with `SKILL.md` containing `name` and
+  `description`; `agents/openai.yaml`, `assets/`, `evals/`, `references/`, and
+  `scripts/` are optional unless local repository policy requires them.
 - Continuous source learning: before completion, update the locally cloned
   source materials associated with the target skill with durable, reusable
   knowledge discovered during the run. Capture patterns, decisions, best
@@ -139,17 +148,25 @@ newly scaffolded skill folder:
 3. Start from concrete use cases and should-trigger/should-not-trigger prompts.
 4. Keep the skill focused on one repeatable job and front-load the `description`
    with user intent, accepted inputs, and boundaries from adjacent skills.
-5. Create or repair `agents/openai.yaml` when the target repository convention
+5. Apply the correct structure profile:
+   - OpenAI portable minimum: `SKILL.md` with front matter `name` and
+     `description`.
+   - OpenAI optional metadata: `agents/openai.yaml` for UI metadata, invocation
+     policy, and tool dependencies.
+   - This repository's source-owned standard: keep `agents/openai.yaml` on
+     every skill, keep the standard `## Learning Loop`, and add other resource
+     folders only when useful.
+6. Create or repair `agents/openai.yaml` when the target repository convention
    expects OpenAI metadata. Use `agents/openai.yaml`, not `agents.openai.yaml`.
    Add `interface.default_prompt` and a `policy.allow_implicit_invocation`
    value derived from the skill requirements and `SKILL.md`.
-6. Apply safe, secure, and fast skill guidance from
+7. Apply safe, secure, and fast skill guidance from
    `references/skill-authoring-best-practices.md`.
-7. For stateful workflow skills, add explicit `Required Reads`, `Writes`,
+8. For stateful workflow skills, add explicit `Required Reads`, `Writes`,
    `Idempotency`, `Failure Handling`, `Must Not`, and `Completion Criteria`
    sections. Keep private execution state out of committed project files and
    keep hooks as invariant guardrails rather than workflow orchestrators.
-8. Validate locally with the narrowest relevant checks, then broaden only when
+9. Validate locally with the narrowest relevant checks, then broaden only when
    the contract or shared validator changed.
 
 ## Learning Loop Enforcement
@@ -203,25 +220,47 @@ effects.
 
 ## Canonical Skill Structure
 
-Default target structure:
+OpenAI portable minimum:
+
+```text
+skill-name/
+`-- SKILL.md
+```
+
+Portable skill with common optional resources:
 
 ```text
 skill-name/
 |-- SKILL.md
-|-- agents/openai.yaml
+|-- agents/
+|   `-- openai.yaml
+|-- references/
+|-- scripts/
+`-- assets/
+```
+
+This repository's source-owned standard:
+
+```text
+skill-name/
+|-- SKILL.md
+|-- agents/
+|   `-- openai.yaml
 |-- assets/
 |-- evals/
 |-- references/
 `-- scripts/
 ```
 
-Only add optional folders when they serve the skill. Follow existing repository
-conventions when they are clearer or stricter than the generic structure.
-OpenAI Codex treats `agents/openai.yaml` as optional metadata, but this
-repository requires it for source-owned skills so UI metadata, default prompts,
-dependencies, and invocation policy can be validated. In this repository,
-`evals/` is an optional surface for reusable trigger or quality evaluation
-prompts.
+For this repository, keep `agents/openai.yaml` for every source-owned skill;
+do not remove it as an "optional" upstream file. Only add the other optional
+folders when they serve the skill. Follow existing repository conventions when
+they are clearer or stricter than the generic OpenAI baseline.
+OpenAI Codex treats `agents/openai.yaml` as optional metadata for UI metadata,
+invocation policy, and tool dependencies. This repository requires it for
+source-owned skills so UI metadata, default prompts, dependencies, and
+invocation policy can be validated. In this repository, `evals/` is an optional
+surface for reusable trigger or quality evaluation prompts.
 
 ## Invocation Policy Selection
 

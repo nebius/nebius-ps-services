@@ -21,6 +21,8 @@ Official OpenAI Codex documentation confirms:
 - Skills use progressive disclosure. Codex initially sees each skill's `name`,
   `description`, and file path, then loads the full `SKILL.md` only when it
   decides the skill is relevant.
+- The initial skills list has a context budget; when many skills are installed,
+  Codex can shorten descriptions first and may omit some skills from the list.
 - Codex can activate a skill explicitly or implicitly.
 - In CLI/IDE, explicit invocation is available by running `/skills` or typing
   `$` to mention a skill.
@@ -43,6 +45,18 @@ The best trigger strategy is a precise, trigger-rich `description` field:
 - Include boundaries so the skill does not steal general codebase alignment
   tasks from `align` or initial scaffolding tasks from `skill-creator`.
 
+## Discovery Locations
+
+Official OpenAI docs state that Codex reads skills from repository, user,
+admin, and system locations. For repositories, Codex scans `.agents/skills`
+from the current working directory up to the repository root. User skills live
+under `$HOME/.agents/skills`, admin skills can live under `/etc/codex/skills`,
+and system skills are bundled by OpenAI.
+
+When aligning a local repository, inspect the current source tree rather than
+assuming the installed user-skill copy is the source of truth. When aligning a
+user-installed skill, inspect the user-skill folder directly.
+
 ## Codex CLI
 
 In the Codex CLI, start Codex in the repository or folder that can see the
@@ -53,9 +67,10 @@ Use align-skill to review and align `skills/foo`.
 ```
 
 Confirmed CLI/IDE explicit mechanisms are `/skills` or typing `$` to mention a
-skill. Natural prompts can also work when the `description` matches, but the
-most deterministic prompt includes `align-skill` plus the target path, skill
-name, folder, GitHub repository URL, or GitHub tree URL.
+skill. Official docs also describe explicit invocation as including the skill
+directly in the prompt. Natural prompts can also work when the `description`
+matches, but the most deterministic prompt includes `align-skill` plus the
+target path, skill name, folder, GitHub repository URL, or GitHub tree URL.
 
 ## Codex IDE Extension
 

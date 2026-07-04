@@ -114,18 +114,27 @@ workflow, normally starting with `$sdlc-start`.
 
 ## Using Skills in Codex Chat
 
-Use the exact skill name with a leading `$` in the Codex chat box, then add
-the task you want. For example, use `$align` for this project,
-`$shell-scripting` to harden a Bash script, or `$terraform` to scaffold or
-review Terraform code.
+For deterministic explicit invocation, use the exact skill name with a leading
+`$` in the Codex chat box, then add the task you want. For example, use
+`$align` for this project, `$shell-scripting` to harden a Bash script, or
+`$terraform` to scaffold or review Terraform code. Official Codex docs also
+describe explicit invocation as including the skill directly in the prompt;
+using `$skill-name` remains the clearest repo convention.
 
 OpenAI Codex treats `agents/openai.yaml` as optional skill metadata for UI,
 invocation policy, and dependencies. In this repository, every source skill
-has that file so invocation policy can be reviewed and validated. Skills marked
-`Explicit only` in the catalog use `allow_implicit_invocation: false` and
-should be started explicitly with `$skill-name`. Skills marked
-`Implicit allowed` use `allow_implicit_invocation: true` so Codex may select
-them when the task matches their metadata.
+must keep that file so invocation policy and useful interface metadata can be
+reviewed and validated. Skills marked `Explicit only` in the catalog use
+`allow_implicit_invocation: false` and should be started explicitly with
+`$skill-name`. Skills marked `Implicit allowed` use
+`allow_implicit_invocation: true` so Codex may select them when the task
+matches their metadata.
+
+For structure, the OpenAI portable minimum is a skill folder with `SKILL.md`
+containing front matter `name` and `description`. This repository uses a
+stricter source-owned standard: `agents/openai.yaml` for metadata and
+invocation policy, a standard `## Learning Loop`, and optional `references/`,
+`scripts/`, `assets/`, and `evals/` only when they serve the skill.
 
 ### Prompt Examples
 
