@@ -129,7 +129,7 @@ All notable changes to this project are tracked here. This changelog follows
   when the chart must be upgraded first while Kubernetes stays at the staging
   minor.
 - Added locked external Soperator upgrade paths. `ext-soperator onboard` now
-  stores the full accepted discovery-guided path under
+  stores the accepted discovery-guided path under
   `deploy.targets[].soperator_onboarding.upgrade_path` and includes it in the
   accepted onboarding fingerprint. Repeated `ext-soperator upgrade --execute
   --approve` runs now advance one locked segment at a time from checkpoint

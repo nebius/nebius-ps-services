@@ -23547,6 +23547,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "Interactive onboarding defaults to the next discovered minor hop" in (
         normalized_soperator_onboard_help
     )
+    assert "cxcli rejects skipped minor targets" in normalized_soperator_onboard_help
     assert "does not bypass Kubernetes minor-hop, backup, quota, protected-state" in (
         normalized_soperator_onboard_help
     )
@@ -23664,10 +23665,10 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     ) in normalized_ext_soperator_upgrade_help
     assert "runs exactly one locked upgrade-path segment" in (normalized_ext_soperator_upgrade_help)
     assert (
-        "Later Kubernetes minor hops use the same ext-soperator upgrade --execute --approve command"
+        "If an existing accepted locked path already contains more segments"
         in (normalized_ext_soperator_upgrade_help)
     )
-    assert "cxcli advances from the locked path and checkpoint progress" in (
+    assert "new later Kubernetes minor hops start with a fresh ext-soperator onboard decision" in (
         normalized_ext_soperator_upgrade_help
     )
     assert "--worker-rollout-strategy" in normalized_ext_soperator_upgrade_help

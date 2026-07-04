@@ -54235,9 +54235,11 @@ def ext_soperator_scale_up_command(
         "--execute --approve refreshes discovery, creates a restore-capable backup, "
         "then runs exactly one locked upgrade-path segment: one external MK8s "
         "control-plane/node-template hop plus any Soperator/storage/compute/GPU-stack "
-        "work assigned to that segment, validation, and reports. Later Kubernetes "
-        "minor hops use the same ext-soperator upgrade --execute --approve command; "
-        "cxcli advances from the locked path and checkpoint progress."
+        "work assigned to that segment, validation, and reports. If an existing "
+        "accepted locked path already contains more segments, repeat the same "
+        "ext-soperator upgrade --execute --approve command; new later Kubernetes "
+        "minor hops start with a fresh ext-soperator onboard decision after the "
+        "current hop completes."
     ),
 )
 def soperator_external_upgrade_command(
