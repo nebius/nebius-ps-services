@@ -6157,6 +6157,66 @@ def test_soperator_onboard_noninteractive_uses_source_version_for_crds_only_clus
     assert onboarding["node_template_upgrade"]["target_k8s_version"] == "1.32"
 
 
+def test_soperator_onboard_noninteractive_rejects_skipped_k8s_minor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+    config_path = _project_config_path(deployments_root)
+
+    def _snapshot(*, kube_context: str) -> dict[str, object]:
+        assert kube_context == "legacy-context"
+        return _old_soperator_snapshot_with_provider(
+            soperator_version="1.23.3",
+            current_k8s_version="1.32",
+        )
+
+    monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _snapshot)
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "onboard",
+            str(config_path),
+            "--cluster-id",
+            "mk8scluster-legacy",
+            "--target-id",
+            "legacy-cluster",
+            "--kube-context",
+            "legacy-context",
+            "--storage-mode",
+            "keep-existing-storage",
+            "--compute-mode",
+            "keep-existing-compute",
+            "--to-chart-version",
+            _soperator_test_chart_version(),
+            "--to-k8s-version",
+            "1.35",
+            "--no-interactive",
+            "--no-validate-sources",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Invalid external Soperator onboarding Kubernetes target" in result.output
+    assert "Current Kubernetes version: 1.32; requested target: 1.35" in result.output
+    assert "Run the next hop first with --to-k8s-version 1.33" in result.output
+    assert "Soperator onboarding state:" not in result.output
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert payload["deploy"]["targets"] == []
+
+
 def test_soperator_onboard_noninteractive_uses_explicit_target_chart_version(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -7417,6 +7477,67 @@ def test_soperator_onboard_interactive_defaults_node_template_target_to_next_min
     assert onboarding["node_template_upgrade"]["target_k8s_version"] == "1.33"
     assert "Detected Kubernetes version: 1.32" in "\n".join(printed)
     assert "Target Kubernetes version: 1.33" in "\n".join(printed)
+
+
+def test_soperator_onboard_interactive_rejects_skipped_k8s_minor_at_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prompt_labels: list[str] = []
+    snapshot = _old_soperator_snapshot_with_provider(
+        soperator_version="1.23.3",
+        current_k8s_version="1.32",
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "_prompt_project_mk8s_cluster_choice",
+        lambda **_kwargs: cli_module.OptionChoice(
+            value="mk8scluster-external",
+            label="external-cluster  (mk8scluster-external)",
+            metadata={
+                "cluster_id": "mk8scluster-external",
+                "target_ref": "external-cluster",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_collect_soperator_snapshot_for_nebius_mk8s_cluster",
+        lambda *args, **kwargs: (snapshot, "external-context"),
+    )
+
+    def _prompt_scalar(
+        field_label: str,
+        current: object,
+        **_kwargs: object,
+    ) -> tuple[object, bool]:
+        prompt_labels.append(field_label)
+        if field_label.endswith(".target_k8s_version"):
+            return "1.35", False
+        return current, False
+
+    monkeypatch.setattr(cli_module, "_prompt_scalar_override", _prompt_scalar)
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "Invalid external Soperator onboarding Kubernetes target: .*"
+            "Run the next hop first with --to-k8s-version 1\\.33"
+        ),
+    ):
+        cli_module._prompt_soperator_onboarding_target_row(
+            payload={"client_info": {"nebius": {"project_id": "project-123"}}},
+            project_id="project-123",
+            storage_mode="keep-existing-storage",
+            compute_mode="keep-existing-compute",
+            to_chart_version=cli_module._soperator_upgrade_catalog_to_version_default(),
+            worker_rollout_strategy="zero-surge",
+            validate_sources=False,
+        )
+
+    assert prompt_labels == [
+        "deploy.targets[].soperator_onboarding.node_template_upgrade.target_k8s_version"
+    ]
 
 
 def test_soperator_onboard_rejects_discovered_k8s_newer_than_supported_target() -> None:

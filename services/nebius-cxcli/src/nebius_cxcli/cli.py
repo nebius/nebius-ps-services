@@ -19058,6 +19058,31 @@ def _soperator_onboarding_target_k8s_version_default(
     return next_minor or latest_supported
 
 
+def _validate_soperator_onboarding_target_k8s_hop(
+    *,
+    snapshot: Mapping[str, Any] | None,
+    target_k8s_version: str,
+) -> str:
+    target_k8s = _validate_soperator_onboarding_target_k8s_version(target_k8s_version)
+    if not target_k8s:
+        return ""
+    current_k8s = _soperator_onboarding_snapshot_control_plane_k8s_version(snapshot)
+    if not current_k8s:
+        return target_k8s
+    try:
+        require_single_minor_hop(current_k8s, target_k8s)
+    except ValueError as exc:
+        current_text = _validate_soperator_onboarding_target_k8s_version(current_k8s)
+        message = str(exc).replace("--to-version", "--to-k8s-version")
+        raise RuntimeError(
+            "Invalid external Soperator onboarding Kubernetes target: cxcli upgrades "
+            "one Kubernetes minor at a time during external onboarding. "
+            f"Current Kubernetes version: {current_text}; requested target: {target_k8s}. "
+            f"{message}"
+        ) from exc
+    return target_k8s
+
+
 def _resolve_soperator_onboarding_target_k8s_version(
     *,
     to_k8s_version: str | None,
@@ -19087,7 +19112,10 @@ def _resolve_soperator_onboarding_target_k8s_version(
             f"Pass --to-k8s-version with the next Kubernetes minor target, for example {default_version}. "
             "cxcli will not silently choose a Kubernetes target for this accepted upgrade plan."
         )
-    return _validate_soperator_onboarding_target_k8s_version(raw_version or default_version)
+    return _validate_soperator_onboarding_target_k8s_hop(
+        snapshot=snapshot,
+        target_k8s_version=raw_version or default_version,
+    )
 
 
 def _soperator_support_finding_evidence(finding: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -21766,6 +21794,13 @@ def _prompt_soperator_onboarding_target_row(
     approved_chart_version = _soperator_onboarding_target_version_default()
     app_version = _soperator_onboarding_target_app_version_for_chart(chart_version)
     default_target_k8s_version = _soperator_onboarding_target_k8s_version_default(snapshot)
+    explicit_target_k8s_version = _non_empty_text(to_k8s_version)
+    if explicit_target_k8s_version:
+        explicit_target_k8s_version = _validate_soperator_onboarding_target_k8s_hop(
+            snapshot=snapshot,
+            target_k8s_version=explicit_target_k8s_version,
+        )
+    report_target_k8s_version = explicit_target_k8s_version or default_target_k8s_version
     with _soperator_onboarding_status("Building Soperator upgrade profile diff..."):
         report = analyze_soperator_onboarding_snapshot(
             snapshot,
@@ -21773,7 +21808,7 @@ def _prompt_soperator_onboarding_target_row(
             pinned_chart_version=chart_version,
             pinned_app_version=app_version,
             approved_target_chart_version=approved_chart_version,
-            target_k8s_version=to_k8s_version or default_target_k8s_version,
+            target_k8s_version=report_target_k8s_version,
         )
     report = _soperator_onboarding_report_with_source_version(
         report,
@@ -21782,19 +21817,19 @@ def _prompt_soperator_onboarding_target_row(
         pinned_chart_version=chart_version,
         pinned_app_version=app_version,
         approved_target_chart_version=approved_chart_version,
-        target_k8s_version=to_k8s_version or default_target_k8s_version,
+        target_k8s_version=report_target_k8s_version,
         source_version=source_version,
         interactive=True,
     )
     _print_soperator_onboarding_report_summary(report)
     selected_action_ids = {action.id for action in report.actions if action.selected}
     target_k8s_version = _resolve_soperator_onboarding_target_k8s_version(
-        to_k8s_version=to_k8s_version,
+        to_k8s_version=explicit_target_k8s_version,
         interactive=True,
         required=ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE in selected_action_ids,
         snapshot=snapshot,
     )
-    if target_k8s_version != (to_k8s_version or default_target_k8s_version):
+    if target_k8s_version != report_target_k8s_version:
         report = analyze_soperator_onboarding_snapshot(
             snapshot,
             target_ref=target_ref,
@@ -22021,6 +22056,13 @@ def _soperator_onboarding_target_row_from_options(
     approved_chart_version = _soperator_onboarding_target_version_default()
     app_version = _soperator_onboarding_target_app_version_for_chart(chart_version)
     default_target_k8s_version = _soperator_onboarding_target_k8s_version_default(snapshot)
+    explicit_target_k8s_version = _non_empty_text(to_k8s_version)
+    if explicit_target_k8s_version:
+        explicit_target_k8s_version = _validate_soperator_onboarding_target_k8s_hop(
+            snapshot=snapshot,
+            target_k8s_version=explicit_target_k8s_version,
+        )
+    report_target_k8s_version = explicit_target_k8s_version or default_target_k8s_version
     with _soperator_onboarding_status("Building Soperator upgrade profile diff..."):
         report = analyze_soperator_onboarding_snapshot(
             snapshot,
@@ -22028,7 +22070,7 @@ def _soperator_onboarding_target_row_from_options(
             pinned_chart_version=chart_version,
             pinned_app_version=app_version,
             approved_target_chart_version=approved_chart_version,
-            target_k8s_version=to_k8s_version or default_target_k8s_version,
+            target_k8s_version=report_target_k8s_version,
         )
     report = _soperator_onboarding_report_with_source_version(
         report,
@@ -22037,19 +22079,19 @@ def _soperator_onboarding_target_row_from_options(
         pinned_chart_version=chart_version,
         pinned_app_version=app_version,
         approved_target_chart_version=approved_chart_version,
-        target_k8s_version=to_k8s_version or default_target_k8s_version,
+        target_k8s_version=report_target_k8s_version,
         source_version=source_version,
         interactive=interactive,
     )
     _print_soperator_onboarding_report_summary(report)
     selected_action_ids = {action.id for action in report.actions if action.selected}
     target_k8s_version = _resolve_soperator_onboarding_target_k8s_version(
-        to_k8s_version=to_k8s_version,
+        to_k8s_version=explicit_target_k8s_version,
         interactive=interactive,
         required=ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE in selected_action_ids,
         snapshot=snapshot,
     )
-    if target_k8s_version != (to_k8s_version or default_target_k8s_version):
+    if target_k8s_version != report_target_k8s_version:
         report = analyze_soperator_onboarding_snapshot(
             snapshot,
             target_ref=normalized_target,
@@ -51987,7 +52029,7 @@ def ext_soperator_discover_command(
         f"generated/reports/{SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME}/<target>/manifest.json; "
         "reruns refresh read-only source discovery and Nebius provider node-template "
         "inventory by node group before deciding whether external node-template "
-        "upgrade is still needed, then locks the accepted full upgrade path under "
+        "upgrade is still needed, then locks the accepted next-hop upgrade path under "
         "deploy.targets[].soperator_onboarding.upgrade_path. For install/adopt-only targets "
         "with no external-upgrade-owned actions, "
         "run nebius-cxcli deploy <config.yaml> to reconcile the generated desired "
@@ -52139,8 +52181,8 @@ def soperator_onboard_command(
             help=(
                 "Target Kubernetes major.minor version for external node-template upgrade "
                 "analysis. Interactive onboarding defaults to the next discovered minor hop; "
-                "non-interactive runs must pass it when onboarding selects external MK8s "
-                "node-template work."
+                "cxcli rejects skipped minor targets. Non-interactive runs must pass it "
+                "when onboarding selects external MK8s node-template work."
             ),
         ),
     ] = None,
