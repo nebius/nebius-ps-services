@@ -484,6 +484,9 @@ from .soperator_onboarding import (
     write_soperator_onboarding_reports,
     write_source_soperator_discovery_report,
 )
+from .soperator_onboarding import (
+    SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA as _SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA,
+)
 from .soperator_populate_jail import (
     POPULATE_JAIL_REFRESH_PHASE_ID,
     completed_populate_jail_refresh_result,
@@ -1863,7 +1866,6 @@ _SOPERATOR_ONBOARDING_COMPUTE_MODES = (
 )
 _SOPERATOR_ONBOARDING_DEFAULT_COMPUTE_MODE = _SOPERATOR_ONBOARDING_COMPUTE_MODES[0]
 _SOPERATOR_DISCOVERY_REPORT_PRIVATE_KEY = "__soperator_source_discovery_report"
-_SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA = "nebius-cxcli-ext-soperator-upgrade-path/v1"
 _SOPERATOR_SOURCE_VERSION_MANUAL_CHOICE = "__manual_soperator_source_version__"
 _SOPERATOR_REQUIRED_INFRA_COMPONENT_IDS = ("mk8s", "sfs")
 _SOPERATOR_REQUIRED_APP_COMPONENT_IDS = ("cert-manager",)

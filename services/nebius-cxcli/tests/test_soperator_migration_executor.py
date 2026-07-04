@@ -21,6 +21,7 @@ from nebius_cxcli.soperator_migration import (
     execute_soperator_migration as _execute_soperator_migration,
 )
 from nebius_cxcli.soperator_onboarding import (
+    SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA,
     analyze_soperator_onboarding_snapshot,
     soperator_onboarding_fingerprint,
 )
@@ -499,7 +500,7 @@ def _payload(
 
 def _locked_upgrade_path_fixture() -> dict[str, Any]:
     return {
-        "schema": "nebius-cxcli-ext-soperator-upgrade-path/v1",
+        "schema": SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA,
         "locked": True,
         "source_k8s_version": "1.31",
         "target_k8s_version": "1.32",

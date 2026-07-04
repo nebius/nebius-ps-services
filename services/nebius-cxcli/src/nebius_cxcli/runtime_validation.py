@@ -38,7 +38,13 @@ from .observability import observability_dependency_issues
 from .runtime_component_validation import validate_soperator_qos_partition_profiles
 from .runtime_config import read_path_with_catalog
 from .runtime_plugin_validation import run_runtime_validation_plugins
-from .soperator_onboarding import validate_soperator_onboarding_acceptance
+from .soperator_onboarding import (
+    ONBOARDING_ACTION_IDS,
+    ONBOARDING_COMPUTE_MODES,
+    ONBOARDING_STORAGE_MODES,
+    SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA,
+    validate_soperator_onboarding_acceptance,
+)
 
 _ROOT_KEYS = frozenset({"version", "client_info", "deploy", "infra", "apps"})
 _ID_PATTERN = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
@@ -59,6 +65,59 @@ _FOLDED_SOPERATOR_CHILD_APP_IDS = frozenset(
 )
 _FOLDED_SOPERATOR_DEPENDENCY_APP_IDS = frozenset({"k8up"})
 _SOPERATOR_WORKER_ROLLOUT_STRATEGIES = frozenset({"safe-surge", "zero-surge"})
+_SOPERATOR_ONBOARDING_KEYS = frozenset(
+    {
+        "accepted",
+        "actions",
+        "analysis_fingerprint",
+        "collection_errors",
+        "compute_mode",
+        "migration_profile_id",
+        "node_template_upgrade",
+        "source_version",
+        "state",
+        "storage_mode",
+        "support_message",
+        "support_override_used",
+        "support_rule_id",
+        "support_status",
+        "target_version",
+        "upgrade_path",
+    }
+)
+_SOPERATOR_ONBOARDING_NODE_TEMPLATE_KEYS = frozenset(
+    {"target_k8s_version", "target_os", "target_gpu_stack_preset", "rollout"}
+)
+_SOPERATOR_LOCKED_UPGRADE_PATH_KEYS = frozenset(
+    {
+        "locked",
+        "recommended_order",
+        "recommended_order_policy",
+        "schema",
+        "segments",
+        "source_k8s_version",
+        "source_soperator_version",
+        "support_rule_id",
+        "support_status",
+        "target_k8s_version",
+        "target_soperator_version",
+    }
+)
+_SOPERATOR_LOCKED_UPGRADE_PATH_SEGMENT_KEYS = frozenset(
+    {
+        "actions",
+        "current_k8s_version",
+        "id",
+        "index",
+        "k8s_upgrade_required",
+        "kind",
+        "soperator_upgrade_required",
+        "source_soperator_version",
+        "target_k8s_version",
+        "target_soperator_version",
+        "title",
+    }
+)
 
 
 def _get_path(payload: Mapping[str, Any], dotted_path: str, default: Any = None) -> Any:
@@ -130,6 +189,212 @@ def _drain_timeout_for_validation(value: Any, field_label: str) -> None:
             f"{field_label} must be 'none' or an explicit Go-style duration "
             "(for example 30s, 30m, or 1h)"
         ) from exc
+
+
+def _validate_unknown_keys(
+    value: Mapping[str, Any],
+    *,
+    allowed_keys: frozenset[str],
+    field_label: str,
+) -> None:
+    unknown_keys = sorted(str(key) for key in value if str(key) not in allowed_keys)
+    if unknown_keys:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown_keys))
+
+
+def _optional_string_for_validation(value: Any, field_label: str) -> str:
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ValueError(f"{field_label} must be a string")
+    return value.strip()
+
+
+def _required_string_for_validation(value: Any, field_label: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_label} must be a non-empty string")
+    return value.strip()
+
+
+def _validate_k8s_minor_version_for_validation(value: Any, field_label: str) -> None:
+    text = _optional_string_for_validation(value, field_label)
+    if not text:
+        return
+    raw = text.lstrip("v")
+    if not re.fullmatch(r"[0-9]+\.[0-9]+", raw):
+        raise ValueError(f"{field_label} must be a Kubernetes major.minor version")
+
+
+def _validate_soperator_onboarding_actions(value: Any, field_label: str) -> None:
+    if value is None:
+        return
+    if not isinstance(value, list):
+        raise ValueError(f"{field_label} must be a list")
+    for index, raw_action in enumerate(value):
+        if not isinstance(raw_action, str) or not raw_action.strip():
+            raise ValueError(f"{field_label}[{index}] must be a non-empty string")
+        action = raw_action.strip()
+        if action not in ONBOARDING_ACTION_IDS:
+            raise ValueError(
+                f"{field_label}[{index}] has unsupported value '{action}'. "
+                "Rerun `nebius-cxcli ext-soperator onboard` so the accepted config "
+                "uses the current Soperator onboarding action contract."
+            )
+
+
+def _validate_soperator_onboarding_node_template(
+    node_template: Any,
+    field_label: str,
+) -> None:
+    if node_template is None:
+        return
+    if not isinstance(node_template, Mapping):
+        raise ValueError(f"{field_label} must be a mapping")
+    _validate_unknown_keys(
+        node_template,
+        allowed_keys=_SOPERATOR_ONBOARDING_NODE_TEMPLATE_KEYS,
+        field_label=field_label,
+    )
+    _validate_k8s_minor_version_for_validation(
+        node_template.get("target_k8s_version"),
+        f"{field_label}.target_k8s_version",
+    )
+    _optional_string_for_validation(node_template.get("target_os"), f"{field_label}.target_os")
+    _optional_string_for_validation(
+        node_template.get("target_gpu_stack_preset"),
+        f"{field_label}.target_gpu_stack_preset",
+    )
+
+
+def _validate_locked_upgrade_path_segment(segment: Any, field_label: str) -> None:
+    if not isinstance(segment, Mapping):
+        raise ValueError(f"{field_label} must be a mapping")
+    _validate_unknown_keys(
+        segment,
+        allowed_keys=_SOPERATOR_LOCKED_UPGRADE_PATH_SEGMENT_KEYS,
+        field_label=field_label,
+    )
+    for key in ("id", "kind", "title"):
+        _required_string_for_validation(segment.get(key), f"{field_label}.{key}")
+    for key in (
+        "current_k8s_version",
+        "target_k8s_version",
+        "source_soperator_version",
+        "target_soperator_version",
+    ):
+        if key not in segment:
+            raise ValueError(f"{field_label}.{key} is required")
+        _optional_string_for_validation(segment.get(key), f"{field_label}.{key}")
+    for key in ("current_k8s_version", "target_k8s_version"):
+        _validate_k8s_minor_version_for_validation(segment.get(key), f"{field_label}.{key}")
+    for key in ("k8s_upgrade_required", "soperator_upgrade_required"):
+        if not isinstance(segment.get(key), bool):
+            raise ValueError(f"{field_label}.{key} must be true or false")
+    index = segment.get("index")
+    if index is not None and (isinstance(index, bool) or not isinstance(index, int) or index <= 0):
+        raise ValueError(f"{field_label}.index must be a positive integer")
+    if "actions" not in segment:
+        raise ValueError(f"{field_label}.actions is required")
+    _validate_soperator_onboarding_actions(segment.get("actions"), f"{field_label}.actions")
+
+
+def _validate_soperator_locked_upgrade_path(upgrade_path: Any, field_label: str) -> None:
+    if upgrade_path is None:
+        return
+    if not isinstance(upgrade_path, Mapping):
+        raise ValueError(f"{field_label} must be a mapping")
+    _validate_unknown_keys(
+        upgrade_path,
+        allowed_keys=_SOPERATOR_LOCKED_UPGRADE_PATH_KEYS,
+        field_label=field_label,
+    )
+    schema = upgrade_path.get("schema")
+    if schema != SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA:
+        raise ValueError(f"{field_label}.schema must be '{SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA}'")
+    if upgrade_path.get("locked") is not True:
+        raise ValueError(f"{field_label}.locked must be true")
+    for key in (
+        "source_k8s_version",
+        "target_k8s_version",
+        "source_soperator_version",
+        "target_soperator_version",
+        "support_status",
+        "support_rule_id",
+    ):
+        if key not in upgrade_path:
+            raise ValueError(f"{field_label}.{key} is required")
+        _optional_string_for_validation(upgrade_path.get(key), f"{field_label}.{key}")
+    for key in ("source_k8s_version", "target_k8s_version"):
+        _validate_k8s_minor_version_for_validation(upgrade_path.get(key), f"{field_label}.{key}")
+    recommended_order = upgrade_path.get("recommended_order")
+    if recommended_order is not None:
+        if not isinstance(recommended_order, list):
+            raise ValueError(f"{field_label}.recommended_order must be a list")
+        for index, item in enumerate(recommended_order):
+            if not isinstance(item, str):
+                raise ValueError(f"{field_label}.recommended_order[{index}] must be a string")
+    recommended_order_policy = upgrade_path.get("recommended_order_policy")
+    if recommended_order_policy is not None and not isinstance(recommended_order_policy, Mapping):
+        raise ValueError(f"{field_label}.recommended_order_policy must be a mapping")
+    segments = upgrade_path.get("segments")
+    if not isinstance(segments, list):
+        raise ValueError(f"{field_label}.segments must be a list")
+    for index, segment in enumerate(segments):
+        _validate_locked_upgrade_path_segment(segment, f"{field_label}.segments[{index}]")
+
+
+def _validate_soperator_onboarding(onboarding: Mapping[str, Any], field_label: str) -> None:
+    _validate_unknown_keys(
+        onboarding,
+        allowed_keys=_SOPERATOR_ONBOARDING_KEYS,
+        field_label=field_label,
+    )
+    accepted = onboarding.get("accepted")
+    if accepted is not None and not isinstance(accepted, bool):
+        raise ValueError(f"{field_label}.accepted must be true or false")
+    support_override_used = onboarding.get("support_override_used")
+    if support_override_used is not None and not isinstance(support_override_used, bool):
+        raise ValueError(f"{field_label}.support_override_used must be true or false")
+    for key in (
+        "state",
+        "storage_mode",
+        "compute_mode",
+        "target_version",
+        "source_version",
+        "migration_profile_id",
+        "analysis_fingerprint",
+        "support_status",
+        "support_rule_id",
+        "support_message",
+    ):
+        _optional_string_for_validation(onboarding.get(key), f"{field_label}.{key}")
+    storage_mode = _as_text(onboarding.get("storage_mode"))
+    if storage_mode and storage_mode not in ONBOARDING_STORAGE_MODES:
+        raise ValueError(
+            f"{field_label}.storage_mode must be one of: "
+            + ", ".join(sorted(ONBOARDING_STORAGE_MODES))
+        )
+    compute_mode = _as_text(onboarding.get("compute_mode"))
+    if compute_mode and compute_mode not in ONBOARDING_COMPUTE_MODES:
+        raise ValueError(
+            f"{field_label}.compute_mode must be one of: "
+            + ", ".join(sorted(ONBOARDING_COMPUTE_MODES))
+        )
+    collection_errors = onboarding.get("collection_errors")
+    if collection_errors is not None and not isinstance(collection_errors, list):
+        raise ValueError(f"{field_label}.collection_errors must be a list")
+    if "actions" not in onboarding:
+        raise ValueError(f"{field_label}.actions is required")
+    _validate_soperator_onboarding_actions(onboarding.get("actions"), f"{field_label}.actions")
+    _validate_soperator_onboarding_node_template(
+        onboarding.get("node_template_upgrade"),
+        f"{field_label}.node_template_upgrade",
+    )
+    _validate_soperator_onboarding_rollout(onboarding, field_label)
+    _validate_soperator_locked_upgrade_path(
+        onboarding.get("upgrade_path"),
+        f"{field_label}.upgrade_path",
+    )
 
 
 def _validate_soperator_onboarding_rollout(onboarding: Mapping[str, Any], field_label: str) -> None:
@@ -638,7 +903,7 @@ def _validate_deploy(payload: Mapping[str, Any]) -> None:
                         f"deploy.targets[{index}].soperator_onboarding must be a mapping"
                     )
                 if isinstance(onboarding, Mapping):
-                    _validate_soperator_onboarding_rollout(
+                    _validate_soperator_onboarding(
                         onboarding,
                         f"deploy.targets[{index}].soperator_onboarding",
                     )

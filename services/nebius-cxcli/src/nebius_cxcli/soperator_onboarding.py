@@ -29,6 +29,7 @@ from .soperator_discovery import (
 )
 
 ONBOARDING_SCHEMA = "nebius-cxcli-soperator-onboarding/v2"
+SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA = "nebius-cxcli-ext-soperator-upgrade-path/v1"
 ONBOARDING_REPORT_DIR = "reports"
 SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME = SOPERATOR_DISCOVERY_DIR_NAME
 ONBOARDING_STATE_NO_SOPERATOR_DETECTED = "no-soperator-detected"

@@ -6,6 +6,10 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Fixed `nebius-cxcli validate` coverage for external Soperator onboarding
+  configs so malformed `deploy.targets[].soperator_onboarding` sections fail
+  fast even when no enabled Soperator app row reaches the accepted-onboarding
+  semantic gate.
 - Fixed `ext-soperator onboard` Kubernetes target validation so interactive
   wizard entries and non-interactive `--to-k8s-version` values reject skipped
   Kubernetes minor targets immediately, before writing an accepted onboarding

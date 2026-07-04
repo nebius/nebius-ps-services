@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Callable
 
 import pytest
 
@@ -25,6 +26,7 @@ from nebius_cxcli.soperator_onboarding import (
     ONBOARDING_COMPUTE_MODE_KEEP_EXISTING,
     ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS,
     ONBOARDING_STORAGE_MODE_KEEP_EXISTING,
+    SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA,
     SOPERATOR_UPGRADE_SUPPORT_LAYER,
     SOPERATOR_UPGRADE_SUPPORT_STATUS_NOT_VALIDATED,
     SOPERATOR_UPGRADE_SUPPORT_STATUS_SUPPORTED,
@@ -2239,6 +2241,39 @@ def _onboarding_payload() -> dict[str, object]:
     return payload
 
 
+def _locked_upgrade_path_payload() -> dict[str, object]:
+    return {
+        "schema": SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA,
+        "locked": True,
+        "source_k8s_version": "1.32",
+        "target_k8s_version": "1.33",
+        "source_soperator_version": "1.23.3",
+        "target_soperator_version": "4.0.2-ps.3",
+        "support_status": "supported",
+        "support_rule_id": "k8s-1-33-soperator-4-supported",
+        "recommended_order": [],
+        "recommended_order_policy": {},
+        "segments": [
+            {
+                "id": "segment-1-kubernetes-1-32-1-33",
+                "index": 1,
+                "kind": "external-node-template-hop",
+                "title": "Kubernetes 1.32 -> 1.33",
+                "current_k8s_version": "1.32",
+                "target_k8s_version": "1.33",
+                "source_soperator_version": "4.0.2-ps.3",
+                "target_soperator_version": "4.0.2-ps.3",
+                "k8s_upgrade_required": True,
+                "soperator_upgrade_required": False,
+                "actions": [
+                    ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
+                    ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
+                ],
+            }
+        ],
+    }
+
+
 def test_onboarding_acceptance_refuses_stale_analysis() -> None:
     payload = _onboarding_payload()
     validate_soperator_onboarding_acceptance(payload, target_ref="cluster1")
@@ -2371,6 +2406,137 @@ def test_onboarding_fingerprint_ignores_ephemeral_helm_release_metadata() -> Non
 
 def test_runtime_validation_accepts_external_soperator_target_without_mk8s_infra() -> None:
     validate_runtime_payload(_onboarding_payload())
+
+
+def test_runtime_validation_accepts_soperator_onboarding_with_locked_upgrade_path() -> None:
+    payload = _onboarding_payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]  # type: ignore[index]
+    onboarding["actions"] = [  # type: ignore[index]
+        ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
+        ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
+    ]
+    onboarding["storage_mode"] = ONBOARDING_STORAGE_MODE_KEEP_EXISTING  # type: ignore[index]
+    onboarding["node_template_upgrade"] = {  # type: ignore[index]
+        "target_k8s_version": "1.33",
+        "target_os": "ubuntu24.04",
+        "target_gpu_stack_preset": "cuda13.0",
+        "rollout": {
+            "strategy": "zero-surge",
+            "worker_group_strategy": {
+                "max_surge_count": 0,
+                "max_unavailable_count": 1,
+                "drain_timeout": "30m",
+            },
+        },
+    }
+    onboarding["upgrade_path"] = _locked_upgrade_path_payload()  # type: ignore[index]
+    onboarding["analysis_fingerprint"] = soperator_onboarding_fingerprint(  # type: ignore[index]
+        payload,
+        target_ref="cluster1",
+    )
+
+    validate_runtime_payload(payload)
+
+
+def test_runtime_validation_rejects_target_only_bad_soperator_onboarding() -> None:
+    payload = _onboarding_payload()
+    payload["apps"]["charts"] = []  # type: ignore[index]
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]  # type: ignore[index]
+    onboarding["actions"] = "upgrade-soperator"  # type: ignore[index]
+
+    with pytest.raises(ValueError, match=r"soperator_onboarding\.actions must be a list"):
+        validate_runtime_payload(payload)
+
+
+def test_runtime_validation_rejects_soperator_onboarding_missing_actions() -> None:
+    payload = _onboarding_payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]  # type: ignore[index]
+    onboarding.pop("actions")  # type: ignore[union-attr]
+
+    with pytest.raises(ValueError, match=r"soperator_onboarding\.actions is required"):
+        validate_runtime_payload(payload)
+
+
+def test_runtime_validation_rejects_soperator_onboarding_unknown_key() -> None:
+    payload = _onboarding_payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]  # type: ignore[index]
+    onboarding["analysis_report"] = {}  # type: ignore[index]
+
+    with pytest.raises(ValueError, match=r"soperator_onboarding has unsupported field"):
+        validate_runtime_payload(payload)
+
+
+def test_runtime_validation_rejects_soperator_onboarding_actions_string_even_when_fingerprinted() -> None:
+    payload = _onboarding_payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]  # type: ignore[index]
+    onboarding["actions"] = "upgrade-soperator"  # type: ignore[index]
+    onboarding["analysis_fingerprint"] = soperator_onboarding_fingerprint(  # type: ignore[index]
+        payload,
+        target_ref="cluster1",
+    )
+
+    with pytest.raises(ValueError, match=r"soperator_onboarding\.actions must be a list"):
+        validate_runtime_payload(payload)
+
+
+@pytest.mark.parametrize("target_k8s_version", ["not-a-version", "1.33.1"])
+def test_runtime_validation_rejects_soperator_onboarding_bad_target_k8s_version(
+    target_k8s_version: str,
+) -> None:
+    payload = _onboarding_payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]  # type: ignore[index]
+    onboarding["node_template_upgrade"] = {  # type: ignore[index]
+        "target_k8s_version": target_k8s_version,
+    }
+    onboarding["analysis_fingerprint"] = soperator_onboarding_fingerprint(  # type: ignore[index]
+        payload,
+        target_ref="cluster1",
+    )
+
+    with pytest.raises(ValueError, match=r"target_k8s_version must be a Kubernetes major\.minor"):
+        validate_runtime_payload(payload)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "match"),
+    [
+        (
+            lambda path: path.update({"schema": "wrong-schema"}),
+            r"upgrade_path\.schema must be",
+        ),
+        (
+            lambda path: path["segments"][0].update({"actions": ["not-a-current-action"]}),
+            r"upgrade_path\.segments\[0\]\.actions\[0\] has unsupported value",
+        ),
+        (
+            lambda path: path["segments"][0].pop("title"),
+            r"upgrade_path\.segments\[0\]\.title must be a non-empty string",
+        ),
+        (
+            lambda path: path.pop("support_status"),
+            r"upgrade_path\.support_status is required",
+        ),
+    ],
+)
+def test_runtime_validation_rejects_soperator_onboarding_malformed_upgrade_path(
+    mutation: Callable[[dict[str, object]], object],
+    match: str,
+) -> None:
+    payload = _onboarding_payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]  # type: ignore[index]
+    upgrade_path = _locked_upgrade_path_payload()
+    mutation(upgrade_path)
+    onboarding["upgrade_path"] = upgrade_path  # type: ignore[index]
+
+    with pytest.raises(ValueError, match=match):
+        validate_runtime_payload(payload)
 
 
 def test_runtime_validation_accepts_soperator_worker_rollout_config() -> None:

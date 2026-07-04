@@ -7859,6 +7859,66 @@ def test_validate_command_runs_strict_checks_by_default(
     assert quota_called["phase"] == "validate"
 
 
+def test_validate_command_rejects_malformed_soperator_onboarding_before_live_checks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "version": "v1",
+                "client_info": {
+                    "client_name": "client-a",
+                    "nebius": {
+                        "project_id": "project-456",
+                        "region_id": "eu-north1",
+                    },
+                    "notifications": {"email_enabled": False, "email": None},
+                },
+                "deploy": {
+                    "targets": [
+                        {
+                            "instance_id": "external-cluster",
+                            "kind": "external-mk8s",
+                            "ownership": "external",
+                            "kube_context": "external-context",
+                            "soperator_onboarding": {
+                                "accepted": True,
+                                "state": "no-soperator-detected",
+                                "actions": "upgrade-soperator",
+                            },
+                        }
+                    ]
+                },
+                "infra": {"components": []},
+                "apps": {"charts": []},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    later_phases: list[str] = []
+
+    def _unexpected_later_phase(*_args: object, **_kwargs: object) -> None:
+        later_phases.append("called")
+        raise AssertionError("validate must fail during config loading")
+
+    monkeypatch.setattr(cli, "_validate_active_component_sources", _unexpected_later_phase)
+    monkeypatch.setattr(cli, "rendered_module_sources", _unexpected_later_phase)
+    monkeypatch.setattr(cli, "_validate_strict_config", _unexpected_later_phase)
+    monkeypatch.setattr(cli, "validate_vpc_networking_preflight", _unexpected_later_phase)
+    monkeypatch.setattr(cli, "_raise_on_config_live_quota_issues", _unexpected_later_phase)
+
+    result = runner.invoke(cli.app, ["validate", str(config_path)])
+
+    assert result.exit_code != 0
+    output = _plain_output(result.output)
+    assert "deploy.targets[0].soperator_onboarding.actions must be a list" in output
+    assert later_phases == []
+    assert "Validate live Nebius quota/capacity" not in output
+
+
 def test_validate_command_rejects_removed_strict_flag(
     tmp_path: Path,
 ) -> None:
