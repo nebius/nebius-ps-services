@@ -3251,9 +3251,10 @@ External upgrade follows these stages:
    service-role node groups serially, worker node groups with zero-surge or
    safe-surge waves, target GPU stack reconciliation when it is paired with
    upgrade work, aligned SFS creation/attachment, and guarded PVC data-copy
-   phases. External node-template work is one Kubernetes minor hop per
-   `ext-soperator upgrade` run; later Kubernetes hops come from the same locked
-   path and advance with later `ext-soperator upgrade --execute --approve` runs.
+   phases. External node-template work is one Kubernetes minor hop per accepted
+   onboarding plan and `ext-soperator upgrade` run; later Kubernetes hops start
+   with a fresh `ext-soperator onboard` decision after the current hop
+   completes.
 4. Soperator takeover and cutover: apply target Soperator CRDs and chart values,
    preserve discovered worker NodeSets and partition refs when the source proves
    them, normalize source-era runtime settings, suspend or retire legacy source
@@ -3411,10 +3412,10 @@ deploy:
               drain_timeout: 30m
 ```
 
-When onboarding accepts a multi-hop external Kubernetes target, the same target
-also stores the locked path. `node_template_upgrade.target_k8s_version` records
-the accepted final target; `ext-soperator upgrade` derives the per-run effective
-target from the next incomplete segment:
+When onboarding accepts external node-template work, the same target also stores
+the locked next-hop path. `node_template_upgrade.target_k8s_version` records the
+accepted Kubernetes target for that hop; skipped minors are rejected before this
+plan is written:
 
 ```yaml
 deploy:
@@ -3422,12 +3423,12 @@ deploy:
     - instance_id: external-cluster
       soperator_onboarding:
         node_template_upgrade:
-          target_k8s_version: "1.34"
+          target_k8s_version: "1.32"
         upgrade_path:
           schema: nebius-cxcli-ext-soperator-upgrade-path/v1
           locked: true
           source_k8s_version: "1.31"
-          target_k8s_version: "1.34"
+          target_k8s_version: "1.32"
           source_soperator_version: "1.22.3"
           target_soperator_version: "4.0.2-ps.3"
           support_rule_id: k8s-1-33-soperator-4-supported
@@ -3439,18 +3440,6 @@ deploy:
                 - approve-external-soperator-upgrade
                 - upgrade-external-node-template
                 - upgrade-soperator
-            - id: segment-2-kubernetes-1-32-1-33
-              current_k8s_version: "1.32"
-              target_k8s_version: "1.33"
-              actions:
-                - approve-external-soperator-upgrade
-                - upgrade-external-node-template
-            - id: segment-3-kubernetes-1-33-1-34
-              current_k8s_version: "1.33"
-              target_k8s_version: "1.34"
-              actions:
-                - approve-external-soperator-upgrade
-                - upgrade-external-node-template
 ```
 
 For a capacity-preserving safe-surge rollout, set:

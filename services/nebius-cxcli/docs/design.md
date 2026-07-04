@@ -991,7 +991,8 @@ cxcli-pinned target, and the matched Soperator/Kubernetes upgrade-path rule;
 discovery stays read-only and does not gate unsupported paths by itself. When
 external node-template work is selected interactively, the Kubernetes target prompt
 defaults to the next supported minor hop from the discovered live version, not
-the global latest supported minor. Operators can still edit the materialized
+the global latest supported minor, and rejects skipped minor targets before any
+accepted onboarding plan is written. Operators can still edit the materialized
 placements in `config.yaml` before render; render compiles those placements into Soperator
 chart-native
 `k8sNodeFilters`, `slurmNodes.*.k8sNodeFilterName`, storage selectors,
@@ -1247,10 +1248,9 @@ advances the selected accepted external MK8s control-plane/node-template hop,
 target GPU stack reconciliation phase when paired with external upgrade work,
 storage, copy, compute, cutover, populate-jail refresh, validation, and
 retirement phases in order.
-External node-template work is one Kubernetes minor hop per `ext-soperator
-upgrade` run; later Kubernetes hops from the locked path use later invocations
-of the same `ext-soperator upgrade --execute --approve` command without normal
-discovery/onboarding reruns.
+External node-template work is one Kubernetes minor hop per accepted onboarding
+plan and `ext-soperator upgrade` run; later Kubernetes hops start with a fresh
+`ext-soperator onboard` decision after the current hop completes.
 The executor then auto-detects source
 worker node groups from live Nebius MK8s node-group names and Kubernetes
 `slurm.nebius.ai/nodeset` worker labels, such as `worker-gpu` and `worker-cpu`,
@@ -3263,7 +3263,9 @@ The command boundary is intentional:
   versions plus `Upgrade Guidance`, and does not present external upgrade
   phases as actions taken by the onboard command. If external node-template
   work is selected, the interactive Kubernetes target prompt defaults to one
-  provider-supported minor hop from the discovered control-plane version. After
+  provider-supported minor hop from the discovered control-plane version and
+  fails immediately if the operator enters a skipped minor. Non-interactive
+  `--to-k8s-version` values use the same fail-fast next-hop validation. After
   the storage and compute modes are resolved,
   onboarding prints the accepted layout decisions: target-compatible storage
   means no aligned SFS creation or storage data migration is planned, and

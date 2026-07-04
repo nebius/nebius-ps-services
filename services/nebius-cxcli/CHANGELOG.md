@@ -6,6 +6,10 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Fixed `ext-soperator onboard` Kubernetes target validation so interactive
+  wizard entries and non-interactive `--to-k8s-version` values reject skipped
+  Kubernetes minor targets immediately, before writing an accepted onboarding
+  plan. The error now points to the next valid `--to-k8s-version` hop.
 - Changed external Soperator multi-hop execution to persist the accepted locked
   path in v2 checkpoints as `locked_upgrade_path` plus explicit
   `upgrade_path_fingerprint`, `current_segment_id`, `completed_segment_ids`,
