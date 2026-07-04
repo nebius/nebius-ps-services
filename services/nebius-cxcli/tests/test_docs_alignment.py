@@ -2196,12 +2196,12 @@ def test_readme_guides_soperator_slurm_checks_through_login_service() -> None:
     )
     assert "srun -p cpu -N1 -n1 /bin/hostname" in section
     assert "examples/slurm-jobs/" in section
-    assert "./examples/slurm-jobs/submit-job-test.sh login <login-external-ip>" in section
+    assert "./examples/slurm-jobs/submit-job-test.sh --login <login-external-ip>" in section
     assert "scp -r examples/slurm-jobs root@<login-external-ip>:/shared/slurm-jobs" not in section
     assert "cd /shared/slurm-jobs" not in section
     assert "bash ./submit-job-test.sh\n" in section
     assert "bash ./submit-job-test.sh --part-type cpu --partition cpu --count 10" in section
-    assert "bash ./submit-job-test.sh --check-jobs --check-duration 900" in section
+    assert "bash ./submit-job-test.sh --watch-jobs --watch-duration 900" in section
     assert "timestamped `squeue` snapshots" in section_flat
     assert "a real terminal defaults to the interactive job policy" in section_flat
     assert "nebius-cxcli soperator upgrade CONFIG_YAML --target TARGET" in section_flat

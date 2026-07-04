@@ -26,12 +26,13 @@ PUBLIC_FLAGS = (
     "--account <name>",
     "--requeue",
     "--output-dir <path>",
-    "--check-jobs",
-    "--check-once",
-    "--check-interval <seconds>",
-    "--check-duration <seconds>",
-    "--check-job-name <pattern>",
-    "--check-job-ids <ids>",
+    "--login <login-external-ip>",
+    "--watch-jobs",
+    "--watch-once",
+    "--watch-interval <seconds>",
+    "--watch-duration <seconds>",
+    "--watch-job-name <pattern>",
+    "--watch-job-ids <ids>",
     "--dry-run",
     "-h, --help",
 )
@@ -69,8 +70,8 @@ def test_submitter_help_documents_public_flags() -> None:
     result = run_submitter("--help")
 
     assert result.returncode == 0
-    assert "submit-job-test.sh login <login-external-ip>" in result.stdout
-    assert "Copying is part of login mode" in result.stdout
+    assert "submit-job-test.sh --login <login-external-ip>" in result.stdout
+    assert "--login copies this directory" in result.stdout
     assert "Default: auto" in result.stdout
     assert "Examples:\n  ./submit-job-test.sh\n" in result.stdout
     for flag in PUBLIC_FLAGS:
@@ -80,10 +81,10 @@ def test_submitter_help_documents_public_flags() -> None:
 def test_example_readme_documents_login_node_copy_flow() -> None:
     readme = (EXAMPLE_DIR / "README.md").read_text(encoding="utf-8")
 
-    assert "./examples/slurm-jobs/submit-job-test.sh login <login-external-ip>" in readme
+    assert "./examples/slurm-jobs/submit-job-test.sh --login <login-external-ip>" in readme
     assert "login-node SSH session" in readme
     assert "/root/testjobs" in readme
-    assert "./submit-job-test.sh --check-jobs --check-duration 900" in readme
+    assert "./submit-job-test.sh --watch-jobs --watch-duration 900" in readme
     assert "timestamped proof stream" in readme
     assert "scp -r examples/slurm-jobs" not in readme
     assert "cd /shared/slurm-jobs" not in readme
@@ -98,7 +99,7 @@ def test_example_readme_starts_submit_examples_with_bare_command() -> None:
 
 
 def test_login_dry_run_prints_copy_and_remote_shell_commands() -> None:
-    result = run_submitter("login", "203.0.113.10", "--dry-run")
+    result = run_submitter("--login", "203.0.113.10", "--dry-run")
 
     assert result.returncode == 0, result.stderr
     lines = result.stdout.splitlines()
@@ -119,6 +120,27 @@ def test_submitter_rejects_unknown_options() -> None:
 
     assert result.returncode != 0
     assert "Unknown option: --unknown-option" in result.stderr
+
+
+def test_submitter_rejects_old_check_watch_option_names() -> None:
+    result = run_submitter("--check-jobs")
+
+    assert result.returncode != 0
+    assert "Unknown option: --check-jobs" in result.stderr
+
+
+def test_submitter_rejects_old_login_subcommand() -> None:
+    result = run_submitter("login", "203.0.113.10")
+
+    assert result.returncode != 0
+    assert "Unexpected argument: login" in result.stderr
+
+
+def test_login_requires_explicit_ip_before_other_flags() -> None:
+    result = run_submitter("--login", "--dry-run")
+
+    assert result.returncode != 0
+    assert "--login requires <login-external-ip>" in result.stderr
 
 
 def test_submitter_rejects_removed_kind_option() -> None:
@@ -209,10 +231,10 @@ def test_array_mode_dry_run_prints_one_sbatch_command() -> None:
     assert "--array=0-2" in result.stdout
 
 
-def test_check_jobs_dry_run_prints_monitor_command_without_submitting() -> None:
+def test_watch_jobs_dry_run_prints_watch_command_without_submitting() -> None:
     result = run_submitter(
-        "--check-jobs",
-        "--check-job-ids",
+        "--watch-jobs",
+        "--watch-job-ids",
         "12345,12346",
         "--dry-run",
     )
@@ -223,7 +245,7 @@ def test_check_jobs_dry_run_prints_monitor_command_without_submitting() -> None:
     assert "sacct -X -n -P -j 12345\\,12346" in result.stdout
 
 
-def test_check_jobs_accepts_completed_explicit_job_from_sacct(tmp_path: Path) -> None:
+def test_watch_jobs_accepts_completed_explicit_job_from_sacct(tmp_path: Path) -> None:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     squeue = bin_dir / "squeue"
@@ -249,9 +271,9 @@ def test_check_jobs_accepts_completed_explicit_job_from_sacct(tmp_path: Path) ->
         [
             "bash",
             str(SUBMITTER),
-            "--check-jobs",
-            "--check-once",
-            "--check-job-ids",
+            "--watch-jobs",
+            "--watch-once",
+            "--watch-job-ids",
             "59,60",
         ],
         check=False,
@@ -262,9 +284,47 @@ def test_check_jobs_accepts_completed_explicit_job_from_sacct(tmp_path: Path) ->
     )
 
     assert result.returncode == 0, result.stderr
+    assert "\x1b[" not in result.stdout
     assert "job_id=60 state=RUNNING" in result.stdout
     assert "job_id=59 state=COMPLETED source=sacct terminal=completed" in result.stdout
-    assert "Slurm job monitor result: PASS - observed 2 job id(s)" in result.stdout
+    assert "Slurm job watch result: PASS - observed 2 job id(s)" in result.stdout
+
+
+def test_watch_sample_header_uses_color_when_color_is_forced(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    squeue = bin_dir / "squeue"
+    squeue.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' '60|RUNNING|00:10|20:00|main|worker-0|sop-gpu-job-test-01'\n",
+        encoding="utf-8",
+    )
+    squeue.chmod(0o755)
+    env = os.environ.copy()
+    env.pop("NO_COLOR", None)
+    env["CLICOLOR_FORCE"] = "1"
+    env["TERM"] = "xterm-256color"
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(SUBMITTER),
+            "--watch-jobs",
+            "--watch-once",
+            "--watch-job-ids",
+            "60",
+        ],
+        check=False,
+        cwd=EXAMPLE_DIR,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "\x1b[1;36m[" in result.stdout
+    assert "Slurm job watch sample 1\x1b[0m" in result.stdout
 
 
 def test_exclusive_is_only_added_when_requested() -> None:

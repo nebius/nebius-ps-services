@@ -2721,7 +2721,7 @@ can reach the cluster's Slurm controller:
 
 ```bash
 # On your machine, from the local checkout.
-./examples/slurm-jobs/submit-job-test.sh login <login-external-ip>
+./examples/slurm-jobs/submit-job-test.sh --login <login-external-ip>
 
 # In the SSH session opened by the helper.
 # Submit one GPU job to the default Nebius main* partition.
@@ -2730,9 +2730,9 @@ bash ./submit-job-test.sh
 # Submit 10 CPU jobs to a cpu partition.
 bash ./submit-job-test.sh --part-type cpu --partition cpu --count 10
 
-# In another login-node shell during the upgrade, monitor that the smoke jobs
+# In another login-node shell during the upgrade, watch that the smoke jobs
 # remain visible and uninterrupted for a 15-minute window.
-bash ./submit-job-test.sh --check-jobs --check-duration 900
+bash ./submit-job-test.sh --watch-jobs --watch-duration 900
 ```
 
 By default, Slurm may place multiple sample jobs on one node when the partition
@@ -2740,7 +2740,7 @@ policy permits it. Add `--exclusive` to request one exclusive node allocation
 per job where the cluster policy allows that. Use `--run-minutes` and
 `--wall-minutes` to change the job duration, `--submit-mode array` for compact
 bulk submission, and `--dry-run` to inspect the generated `sbatch` commands.
-Use `--check-jobs` during the upgrade to print timestamped `squeue` snapshots
+Use `--watch-jobs` during the upgrade to print timestamped `squeue` snapshots
 and optional `sacct` evidence for the observed smoke job IDs.
 
 During Soperator upgrades, a real terminal defaults to the interactive job

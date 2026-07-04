@@ -52,9 +52,10 @@ All notable changes to this project are tracked here. This changelog follows
   are still Ready. Populate-jail refresh status now includes live Kubernetes,
   Slurm, Soperator, and populate-jail Job signals instead of an unknown
   no-checks message.
-- Added `examples/slurm-jobs/submit-job-test.sh --check-jobs` to monitor smoke
+- Added `examples/slurm-jobs/submit-job-test.sh --watch-jobs` to watch smoke
   jobs during an upgrade with timestamped `squeue` snapshots and optional
-  `sacct` accounting evidence for observed job IDs.
+  `sacct` accounting evidence for observed job IDs. Watch sample headers are
+  highlighted in color on terminals for easier scanning.
 - Changed `ext-soperator upgrade` output to keep locked-path plans more compact:
   support policy now avoids repeating the explanatory rule text when the locked
   path is printed, MK8s node-upgrade phase wording is shorter, execution
@@ -151,8 +152,8 @@ All notable changes to this project are tracked here. This changelog follows
   rerenders over render-owned artifacts still prompt or require `--force`.
 - Added public Soperator Slurm upgrade smoke job examples with a configurable
   submitter for repeated CPU/GPU `sbatch` submissions, array mode, optional
-  exclusive placement, interactive job-policy demonstrations, and a `login`
-  subcommand that stages the examples under `/root/testjobs` before opening a
+  exclusive placement, interactive job-policy demonstrations, and a `--login`
+  flag that stages the examples under `/root/testjobs` before opening a
   login-node SSH session there. The submitter now defaults to the GPU job
   template for the standard Nebius `main*` partition without requiring
   `--part-type`.

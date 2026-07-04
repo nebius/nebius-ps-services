@@ -16,7 +16,7 @@ the example files there, and open an SSH session already landed in that
 directory:
 
 ```bash
-./examples/slurm-jobs/submit-job-test.sh login <login-external-ip>
+./examples/slurm-jobs/submit-job-test.sh --login <login-external-ip>
 ```
 
 Run the submit commands below from that login-node SSH session so `sbatch` can
@@ -136,23 +136,23 @@ Other job policies can still be selected for non-interactive runs when that is
 the desired test. The smoke jobs exit non-zero on `TERM` or `INT`, so
 interruption, cancellation, and requeue behavior are visible in Slurm output.
 
-## Monitor During Upgrade
+## Watch During Upgrade
 
-Use `--check-jobs` from the login node while the upgrade is running to produce
+Use `--watch-jobs` from the login node while the upgrade is running to produce
 a timestamped proof stream from Slurm's live queue:
 
 ```bash
-./submit-job-test.sh --check-jobs --check-duration 900
+./submit-job-test.sh --watch-jobs --watch-duration 900
 ```
 
-The monitor matches `sop-*-job-test*` job names by default, polls `squeue`, and
+The watcher matches `sop-*-job-test*` job names by default, polls `squeue`, and
 prints each observed job ID, state, elapsed time, remaining time, partition,
 nodes, and name. Scope the proof to known IDs when needed:
 
 ```bash
-./submit-job-test.sh --check-jobs --check-job-ids 12345,12346 --check-duration 900
+./submit-job-test.sh --watch-jobs --watch-job-ids 12345,12346 --watch-duration 900
 ```
 
-Use `--check-once` for a single snapshot. If `sacct` is available, the monitor
+Use `--watch-once` for a single snapshot. If `sacct` is available, the watcher
 also prints final accounting evidence for observed jobs before reporting pass
 or fail.
