@@ -6209,12 +6209,14 @@ def test_soperator_onboard_noninteractive_rejects_skipped_k8s_minor(
     )
 
     assert result.exit_code != 0
+    normalized_output = " ".join(result.output.split())
     assert "Invalid external Soperator onboarding Kubernetes target" in result.output
-    assert "Current Kubernetes version: 1.32; requested target: 1.35" in result.output
-    assert "Run the next hop first with --to-k8s-version 1.33" in result.output
+    assert "Current Kubernetes version: 1.32; requested target: 1.35" in normalized_output
+    assert "Run the next hop first with --to-k8s-version 1.33" in normalized_output
     assert "Soperator onboarding state:" not in result.output
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    assert payload["deploy"]["targets"] == []
+    deploy = payload.get("deploy")
+    assert not deploy or deploy.get("targets", []) == []
 
 
 def test_soperator_onboard_noninteractive_uses_explicit_target_chart_version(

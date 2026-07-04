@@ -1548,6 +1548,9 @@ def test_docs_define_component_selector_contract() -> None:
     assert "accepted onboarding actions, node-template rollout, phases, execution controls" in (
         readme_flat
     )
+    assert "new later Kubernetes minor hops start with a fresh `ext-soperator onboard` decision" in (
+        readme_flat
+    )
     assert "`ext-soperator onboard` is read-only against live cluster state" in readme_flat
     assert "The initial discovery summary is read-only" in readme_flat
     assert "does not list future upgrade phases as live onboarding actions" in readme_flat
@@ -1880,7 +1883,7 @@ def test_docs_define_component_selector_contract() -> None:
         in design_flat
     )
     assert (
-        "External node-template work is one Kubernetes minor hop per `ext-soperator upgrade` run"
+        "External node-template work is one Kubernetes minor hop per accepted onboarding plan and `ext-soperator upgrade` run"
         in (design_flat)
     )
     assert "discovered PVC/PV sizes as lower bounds" in design_flat
