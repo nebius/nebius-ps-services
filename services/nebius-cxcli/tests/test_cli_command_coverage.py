@@ -9365,6 +9365,27 @@ def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_by_terminal_m
 ) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text("deploy: {}\n", encoding="utf-8")
+    locked_upgrade_path: dict[str, Any] = {
+        "schema": cli._SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA,
+        "locked": True,
+        "source_k8s_version": "1.32",
+        "target_k8s_version": "1.32",
+        "source_soperator_version": "1.22.3",
+        "target_soperator_version": "4.0.2-ps.3",
+        "segments": [
+            {
+                "id": "segment-1-soperator-1-22-3-4-0-2-ps-3",
+                "title": "Soperator 1.22.3 -> 4.0.2-ps.3",
+                "current_k8s_version": "1.32",
+                "target_k8s_version": "1.32",
+                "source_soperator_version": "1.22.3",
+                "target_soperator_version": "4.0.2-ps.3",
+                "actions": ["upgrade-soperator"],
+                "soperator_upgrade_required": True,
+                "k8s_upgrade_required": False,
+            }
+        ],
+    }
     payload: dict[str, Any] = {
         "deploy": {
             "targets": [
@@ -9375,6 +9396,7 @@ def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_by_terminal_m
                         "actions": ["upgrade-soperator"],
                         "source_version": "1.22.3",
                         "target_version": "4.0.2-ps.3",
+                        "upgrade_path": locked_upgrade_path,
                     },
                 }
             ]
