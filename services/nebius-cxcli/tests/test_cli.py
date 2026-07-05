@@ -1184,7 +1184,14 @@ def _write_old_soperator_migration_config(
                     "enabled": True,
                     "install_mode": "onboard-existing-cluster",
                     "version": _soperator_test_chart_version(),
-                    "values": {},
+                    "values": {
+                        "externalNfs": {
+                            "enabled": True,
+                            "server": "nfs.example.invalid",
+                            "path": "/exports/home",
+                            "mountPath": "/home",
+                        }
+                    },
                 },
                 {
                     "id": "nvidia-gpu-operator",
@@ -1838,6 +1845,17 @@ spec:
                     "labels": {"app.kubernetes.io/component": "login"},
                 },
                 "status": {"phase": "Running"},
+            },
+            {
+                "metadata": {
+                    "name": "worker-0",
+                    "labels": {
+                        "slurm.nebius.ai/nodeset": "worker",
+                        "slurm.nebius.ai/worker": "true",
+                    },
+                },
+                "spec": {"nodeName": "node-a"},
+                "status": {"phase": "Running"},
             }
         ]
         self._populate_jail_refresh_saved_pods: list[dict[str, object]] | None = None
@@ -2253,6 +2271,21 @@ spec:
                 ),
                 "",
             )
+        if (
+            len(command) >= 13
+            and command[:6]
+            == (
+                "kubectl",
+                "--context",
+                "external-context",
+                "-n",
+                "soperator",
+                "exec",
+            )
+            and command[7:10] == ("-c", "slurmd", "--")
+            and command[10:12] == ("/bin/sh", "-ceu")
+        ):
+            return SoperatorMigrationCommandResult(command, 0, "/home sfs-home fuse.sfs\n", "")
         if command[:8] == (
             "kubectl",
             "--context",
@@ -2299,6 +2332,7 @@ spec:
                         (
                             "NodeName=node-a NodeHostName=node-a Partitions=main",
                             "NodeName=node-b NodeHostName=node-b Partitions=main",
+                            "NodeName=worker-0 NodeHostName=worker-0 Partitions=main",
                         )
                     ),
                     "",
@@ -2320,6 +2354,8 @@ spec:
                     "cxcli-soperator-srun-ok\nworker-0\n",
                     "",
                 )
+            if command[8:10] == ("/bin/sh", "-ceu"):
+                return SoperatorMigrationCommandResult(command, 0, "/home sfs-home fuse.sfs\n", "")
             return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
         return SoperatorMigrationCommandResult(command, 0, "{}", "")
 
@@ -9346,6 +9382,7 @@ def test_ext_soperator_upgrade_execute_derives_kube_context_from_cluster_id(
 
     def _execute_with_fake_commands(**kwargs):
         kwargs["command_runner"] = _FakeSoperatorMigrationCommandRunner()
+        kwargs["confirm_jail_rootfs_overwrite"] = True
         return real_execute(**kwargs)
 
     monkeypatch.setattr(cli_module, "execute_soperator_migration", _execute_with_fake_commands)
@@ -9384,6 +9421,7 @@ def test_ext_soperator_upgrade_execute_records_approval_and_worker_groups(
 
     def _execute_with_fake_commands(**kwargs):
         kwargs["command_runner"] = _FakeSoperatorMigrationCommandRunner()
+        kwargs["confirm_jail_rootfs_overwrite"] = True
         return real_execute(**kwargs)
 
     monkeypatch.setattr(cli_module, "execute_soperator_migration", _execute_with_fake_commands)
@@ -9537,6 +9575,7 @@ def test_ext_soperator_upgrade_execute_auto_selects_worker_groups_for_approval(
 
     def _execute_with_fake_commands(**kwargs):
         kwargs["command_runner"] = _FakeSoperatorMigrationCommandRunner()
+        kwargs["confirm_jail_rootfs_overwrite"] = True
         return real_execute(**kwargs)
 
     monkeypatch.setattr(cli_module, "execute_soperator_migration", _execute_with_fake_commands)

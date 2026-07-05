@@ -87,6 +87,21 @@ from .soperator_gpu_driver_jail import (
     ensure_soperator_gpu_driver_jail_values,
     normalize_soperator_gpu_driver_jail_mounts,
 )
+from .soperator_home import (
+    HOME_SFS_KEY,
+    HOME_SFS_MIGRATION_VALUES_KEY,
+    HOME_SFS_MOUNT_TAG,
+    HOME_SFS_SOURCE_PATH,
+    HOME_SFS_SOURCE_PVC,
+    HOME_SFS_SUBMOUNT_NAME,
+    HOME_SFS_TARGET_PATH,
+    HOME_SFS_TARGET_PVC,
+    apply_home_sfs_migration_values,
+    compute_home_sfs_size_gib,
+    normalize_home_sfs_size_multiplier,
+    soperator_home_preservation_status,
+    soperator_home_sfs_migration_enabled,
+)
 from .soperator_onboarding import (
     ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
     ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
@@ -176,6 +191,50 @@ _ORDERED_EXECUTE_PHASE_IDS = (
 )
 _SUPPORTED_EXECUTE_PHASE_IDS = frozenset(_ORDERED_EXECUTE_PHASE_IDS)
 _SOPERATOR_STORAGE_KEYS = ("jail", "controller-spool", "accounting")
+_HOME_SFS_STORAGE_TEMPLATE_PATHS = (
+    "templates/slurm-cluster-storage/local-storageclass.yaml",
+    "templates/slurm-cluster-storage/mount-scripts-configmap.yaml",
+    "templates/slurm-cluster-storage/jail-submounts-pv.yaml",
+    "templates/slurm-cluster-storage/jail-submounts-pvc.yaml",
+    "templates/slurm-cluster-storage/jail-submounts-mount-daemonset.yaml",
+)
+_HOME_MOUNT_PROBE_SCRIPT = r"""
+path=/home
+if command -v findmnt >/dev/null 2>&1; then
+    if output=$(findmnt -T "$path" -n -o TARGET,SOURCE,FSTYPE 2>/dev/null); then
+        printf '%s\n' "$output"
+        exit 0
+    fi
+fi
+best=
+best_line=
+while IFS= read -r line; do
+    left=${line%% - *}
+    set -- $left
+    if [ "$#" -lt 5 ]; then
+        continue
+    fi
+    mount_point=$5
+    case "$path" in
+        "$mount_point"|"$mount_point"/*)
+            if [ ${#mount_point} -gt ${#best} ]; then
+                best=$mount_point
+                best_line=$line
+            fi
+            ;;
+    esac
+done < /proc/self/mountinfo
+if [ -n "$best_line" ]; then
+    right=${best_line#* - }
+    set -- $right
+    fstype=${1:-unknown}
+    source=${2:-unknown}
+    printf '%s %s %s\n' "$best" "$source" "$fstype"
+    exit 0
+fi
+echo "no mount evidence for /home" >&2
+exit 1
+"""
 _SOPERATOR_SERVICE_ROLES = ("system", "controller", "login", "accounting")
 _SOPERATOR_COMPUTE_ROLES = (*_SOPERATOR_SERVICE_ROLES, "worker")
 _TARGET_GPU_STACK_PHASE_ID = "target-gpu-stack-remediation"
@@ -239,9 +298,9 @@ _TARGET_GPU_STACK_APP_ORDER = ("nvidia-gpu-operator", "nvidia-network-operator")
 _SOPERATOR_ROLE_STORAGE_KEYS: Mapping[str, tuple[str, ...]] = {
     "system": ("jail",),
     "controller": ("jail", "controller-spool"),
-    "login": ("jail",),
+    "login": ("jail", HOME_SFS_KEY),
     "accounting": ("jail", "accounting"),
-    "worker": ("jail",),
+    "worker": ("jail", HOME_SFS_KEY),
 }
 _SOPERATOR_ROLE_SOURCE_KIND: Mapping[str, str] = {
     "system": "cpu",
@@ -297,6 +356,13 @@ _SOPERATOR_STORAGE_DEFAULTS: Mapping[str, Mapping[str, Any]] = {
         "block_size_kib": 4,
         "mount_tag": "accounting",
         "forbid_deletion": False,
+        "type": "NETWORK_SSD",
+    },
+    HOME_SFS_KEY: {
+        "size_gib": 1,
+        "block_size_kib": 4,
+        "mount_tag": HOME_SFS_MOUNT_TAG,
+        "forbid_deletion": True,
         "type": "NETWORK_SSD",
     },
 }
@@ -1531,12 +1597,18 @@ def _approved_role_attachment_keys(
     source_report: Mapping[str, Any] | None = None,
 ) -> Mapping[str, tuple[str, ...]]:
     placements = _target_placements(payload, target_ref)
+    home_migration = soperator_home_sfs_migration_enabled(
+        _target_soperator_values(payload, target_ref)
+    )
     result: dict[str, list[str]] = {}
     worker_groups = {
         group for group in (normalize_component_token(item) for item in worker_node_groups) if group
     }
     for group in worker_groups:
-        result.setdefault(group, []).append("jail")
+        keys = result.setdefault(group, [])
+        keys.append("jail")
+        if home_migration and HOME_SFS_KEY not in keys:
+            keys.append(HOME_SFS_KEY)
     for role in _SOPERATOR_SERVICE_ROLES:
         for group in placements.get(role, ()):
             if group in worker_groups:
@@ -1548,6 +1620,8 @@ def _approved_role_attachment_keys(
                 keys.append("controller-spool")
             if role == "accounting" and "accounting" not in keys:
                 keys.append("accounting")
+            if home_migration and role == "login" and HOME_SFS_KEY not in keys:
+                keys.append(HOME_SFS_KEY)
     inventory = _source_node_group_inventory(source_report or {})
     for raw_group_name, raw_group in inventory.items():
         if not isinstance(raw_group, Mapping):
@@ -1563,6 +1637,8 @@ def _approved_role_attachment_keys(
             keys.append("controller-spool")
         if role == "accounting" and "accounting" not in keys:
             keys.append("accounting")
+        if home_migration and role == "login" and HOME_SFS_KEY not in keys:
+            keys.append(HOME_SFS_KEY)
     return {group: tuple(keys) for group, keys in result.items() if keys}
 
 
@@ -1942,6 +2018,164 @@ def _phase_ids_for_actions(
     return phase_ids
 
 
+def _phase_ids_with_home_sfs_prerequisites(
+    *,
+    phase_ids: Sequence[str],
+    payload: Mapping[str, Any],
+    target_ref: str,
+) -> tuple[str, ...]:
+    if not soperator_home_sfs_migration_enabled(_target_soperator_values(payload, target_ref)):
+        return tuple(phase_ids)
+    phases = list(dict.fromkeys(str(phase_id) for phase_id in phase_ids if str(phase_id)))
+    if not phases:
+        phases = ["discovery-and-plan", "customer-approval"]
+    try:
+        insert_at = phases.index("customer-approval") + 1
+    except ValueError:
+        insert_at = min(1, len(phases))
+    for required in ("create-aligned-sfs", "online-bulk-data-sync"):
+        if required not in phases:
+            phases.insert(insert_at, required)
+            insert_at += 1
+        else:
+            insert_at = max(insert_at, phases.index(required) + 1)
+    if POPULATE_JAIL_REFRESH_PHASE_ID in phases:
+        populate_index = phases.index(POPULATE_JAIL_REFRESH_PHASE_ID)
+        for predecessor in ("create-aligned-sfs", "online-bulk-data-sync"):
+            predecessor_index = phases.index(predecessor)
+            if predecessor_index > populate_index:
+                phases.pop(predecessor_index)
+                populate_index = phases.index(POPULATE_JAIL_REFRESH_PHASE_ID)
+                phases.insert(populate_index, predecessor)
+    return tuple(phases)
+
+
+def _payload_with_target_soperator_values(
+    *,
+    payload: Mapping[str, Any],
+    target_ref: str,
+    values: Mapping[str, Any],
+) -> dict[str, Any]:
+    patched = dict(copy.deepcopy(to_plain_data(payload)))
+    apps = patched.get("apps")
+    charts = _mapping(apps).get("charts") if isinstance(apps, Mapping) else None
+    if not isinstance(charts, list):
+        raise RuntimeError("Soperator target values could not be patched: apps.charts is missing.")
+    normalized_target = normalize_component_token(target_ref)
+    for row in charts:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("id", "") or "").strip() != "soperator":
+            continue
+        if normalize_component_token(row.get("instance_id")) != normalized_target:
+            continue
+        row["values"] = copy.deepcopy(dict(to_plain_data(values)))
+        return patched
+    raise RuntimeError(f"Soperator target '{target_ref}' values could not be found for patching.")
+
+
+def _home_usage_bytes_from_login(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+) -> int:
+    result = _kubectl_exec_login(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        args=("bash", "-lc", "du -s -B1 /home | awk '{print $1}'"),
+        check=False,
+        timeout_seconds=900,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
+        raise SoperatorMigrationPhasePending(
+            "Could not measure live /home usage from a login pod before SFS migration: "
+            + detail
+        )
+    token = (result.stdout or "").strip().split(maxsplit=1)[0] if result.stdout.strip() else ""
+    try:
+        usage_bytes = int(token)
+    except ValueError as exc:
+        raise SoperatorMigrationPhasePending(
+            "Could not parse live /home usage from `du -s -B1 /home`: "
+            + (result.stdout or "").strip()
+        ) from exc
+    if usage_bytes < 0:
+        raise SoperatorMigrationPhasePending("Live /home usage returned a negative value.")
+    return usage_bytes
+
+
+def _prepare_home_sfs_migration_payload(
+    *,
+    payload: Mapping[str, Any],
+    target_ref: str,
+    kube_context: str,
+    command_runner: SoperatorMigrationCommandRunner,
+    move_home_out_to_sfs: bool,
+    home_sfs_size_multiplier: float,
+    home_sfs_size_gib: int | None,
+    populate_jail_refresh: str,
+) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+    values = _target_soperator_values(payload, target_ref)
+    status = soperator_home_preservation_status(values)
+    state: dict[str, Any] = {
+        "status": status.status,
+        "reason": status.reason,
+        "source": status.source,
+        "move_home_out_to_sfs": move_home_out_to_sfs,
+        "size_multiplier": home_sfs_size_multiplier,
+        "explicit_size_gib": home_sfs_size_gib,
+    }
+    if status.external or soperator_home_sfs_migration_enabled(values):
+        return payload, state
+    if not move_home_out_to_sfs:
+        state["status"] = "blocked"
+        state["reason"] = (
+            "/home is not external and automatic SFS migration was disabled."
+        )
+        if normalize_populate_jail_refresh_mode(populate_jail_refresh) != "manual":
+            raise SoperatorMigrationPhasePending(
+                "/home is not external. Re-run with --move-home-out-to-sfs, or use "
+                "--populate-jail-refresh manual to stop before destructive jail overwrite."
+            )
+        return payload, state
+    multiplier = normalize_home_sfs_size_multiplier(home_sfs_size_multiplier)
+    usage_bytes = _home_usage_bytes_from_login(
+        command_runner=command_runner,
+        kube_context=kube_context,
+    )
+    size_gib = compute_home_sfs_size_gib(
+        usage_bytes=usage_bytes,
+        multiplier=multiplier,
+        explicit_size_gib=home_sfs_size_gib,
+    )
+    patched_values = apply_home_sfs_migration_values(
+        values,
+        target_ref=target_ref,
+        size_gib=size_gib,
+    )
+    state.update(
+        {
+            "status": "planned",
+            "reason": "/home will be copied from jail-pvc:/home to a dedicated SFS submount.",
+            "source_pvc": HOME_SFS_SOURCE_PVC,
+            "source_path": HOME_SFS_SOURCE_PATH,
+            "target_pvc": HOME_SFS_TARGET_PVC,
+            "target_path": HOME_SFS_TARGET_PATH,
+            "usage_bytes": usage_bytes,
+            "size_gib": size_gib,
+        }
+    )
+    return (
+        _payload_with_target_soperator_values(
+            payload=payload,
+            target_ref=target_ref,
+            values=patched_values,
+        ),
+        state,
+    )
+
+
 def _normalize_worker_node_groups(worker_node_groups: Sequence[str]) -> tuple[str, ...]:
     groups: list[str] = []
     for raw_value in worker_node_groups:
@@ -2198,6 +2432,19 @@ def _nebius_filesystem_type(value: Any) -> str:
     return text if text in allowed else "network_ssd"
 
 
+def _soperator_storage_keys_for_target(
+    *,
+    payload: Mapping[str, Any],
+    target_ref: str,
+) -> tuple[str, ...]:
+    values = _target_soperator_values(payload, target_ref)
+    configured = _mapping(_mapping(values.get("sfs")).get("filesystems"))
+    keys = list(_SOPERATOR_STORAGE_KEYS)
+    if soperator_home_sfs_migration_enabled(values) or HOME_SFS_KEY in configured:
+        keys.append(HOME_SFS_KEY)
+    return tuple(dict.fromkeys(keys))
+
+
 def _aligned_filesystem_specs(
     *,
     payload: Mapping[str, Any],
@@ -2206,7 +2453,7 @@ def _aligned_filesystem_specs(
     values = _target_soperator_values(payload, target_ref)
     configured = _mapping(_mapping(values.get("sfs")).get("filesystems"))
     specs: list[SoperatorAlignedFilesystemSpec] = []
-    for key in _SOPERATOR_STORAGE_KEYS:
+    for key in _soperator_storage_keys_for_target(payload=payload, target_ref=target_ref):
         defaults = _SOPERATOR_STORAGE_DEFAULTS[key]
         configured_spec = _mapping(configured.get(key))
         name_template = str(configured_spec.get("name") or f"{target_ref}-{key}")
@@ -3270,6 +3517,8 @@ def _snapshot_pvc_names(snapshot: Mapping[str, Any]) -> set[str]:
 
 
 def _source_pvc_name_for_storage_key(source_report: Mapping[str, Any], key: str) -> str:
+    if key == HOME_SFS_KEY:
+        return HOME_SFS_SOURCE_PVC
     storage = _snapshot_storage(source_report)
     item = _mapping(storage.get(key))
     source = str(item.get("source", "") or "").strip()
@@ -3280,6 +3529,12 @@ def _source_pvc_name_for_storage_key(source_report: Mapping[str, Any], key: str)
 
 
 def _target_pvc_name_for_storage_key(payload: Mapping[str, Any], target_ref: str, key: str) -> str:
+    if key == HOME_SFS_KEY:
+        values = _target_soperator_values(payload, target_ref)
+        target_pvc = str(
+            _mapping(values.get(HOME_SFS_MIGRATION_VALUES_KEY)).get("targetPvc", "") or ""
+        ).strip()
+        return target_pvc or HOME_SFS_TARGET_PVC
     values = _target_soperator_values(payload, target_ref)
     if key == "jail":
         nodesets = values.get("nodesets")
@@ -3304,6 +3559,49 @@ def _target_pvc_name_for_storage_key(payload: Mapping[str, Any], target_ref: str
     return defaults[key]
 
 
+def _copy_job_paths_for_storage_key(
+    *,
+    payload: Mapping[str, Any],
+    target_ref: str,
+    key: str,
+) -> tuple[str, str]:
+    if key != HOME_SFS_KEY:
+        return "/", "/"
+    values = _target_soperator_values(payload, target_ref)
+    migration = _mapping(values.get(HOME_SFS_MIGRATION_VALUES_KEY))
+    source_path = str(migration.get("sourcePath") or HOME_SFS_SOURCE_PATH).strip()
+    target_path = str(migration.get("targetPath") or HOME_SFS_TARGET_PATH).strip()
+    return source_path, target_path
+
+
+def _validate_copy_job_path(path: str, *, role: str) -> str:
+    normalized = "/" + str(path or "").strip().strip("/")
+    if normalized == "//":
+        normalized = "/"
+    if normalized == "/":
+        return normalized
+    if any(part in {"", ".", ".."} for part in normalized.split("/")[1:]):
+        raise ValueError(f"copy job {role} path contains an unsafe path segment: {path!r}")
+    return normalized
+
+
+def _copy_job_shell_command(
+    *,
+    source_path: str,
+    target_path: str,
+) -> str:
+    source = _validate_copy_job_path(source_path, role="source")
+    target = _validate_copy_job_path(target_path, role="target")
+    source_dir = "/old" if source == "/" else f"/old{source}"
+    target_dir = "/new" if target == "/" else f"/new{target}"
+    return (
+        f"mkdir -p {shlex.quote(target_dir)} && "
+        f"cd {shlex.quote(source_dir)} && "
+        "tar --xattrs --acls --numeric-owner -cpf - . "
+        f"| tar --xattrs --acls --numeric-owner -xpf - -C {shlex.quote(target_dir)}"
+    )
+
+
 def _copy_job_name_for_storage_key(key: str) -> str:
     normalized = normalize_component_token(key) or key.replace("_", "-")
     return f"cxcli-soperator-sync-{normalized}"
@@ -3314,6 +3612,8 @@ def _copy_job_manifest(
     key: str,
     source_pvc: str,
     target_pvc: str,
+    source_path: str = "/",
+    target_path: str = "/",
 ) -> dict[str, Any]:
     return {
         "apiVersion": "batch/v1",
@@ -3339,8 +3639,10 @@ def _copy_job_manifest(
                             "command": [
                                 "/bin/sh",
                                 "-ceu",
-                                "cd /old && tar --xattrs --acls --numeric-owner -cpf - . "
-                                "| tar --xattrs --acls --numeric-owner -xpf - -C /new",
+                                _copy_job_shell_command(
+                                    source_path=source_path,
+                                    target_path=target_path,
+                                ),
                             ],
                             "volumeMounts": [
                                 {"name": "old", "mountPath": "/old", "readOnly": True},
@@ -3356,6 +3658,146 @@ def _copy_job_manifest(
             },
         },
     }
+
+
+def _home_sfs_storage_render_values(values: Mapping[str, Any]) -> dict[str, Any]:
+    patched = copy.deepcopy(dict(to_plain_data(values)))
+    volume = patched.get("volume")
+    if not isinstance(volume, dict):
+        volume = {}
+        patched["volume"] = volume
+    home_submount = None
+    for item in _sequence_of_mappings(volume.get("jailSubMounts")):
+        if str(item.get("name", "") or "").strip() == HOME_SFS_SUBMOUNT_NAME:
+            home_submount = dict(to_plain_data(item))
+            break
+    if home_submount is None:
+        raise SoperatorMigrationPhasePending(
+            "Home SFS migration is enabled, but target values do not contain the /home "
+            "jail submount storage definition."
+        )
+    volume["jailSubMounts"] = [home_submount]
+    return patched
+
+
+def _render_home_sfs_storage_objects(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    values: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], ...]:
+    chart_path = _target_soperator_chart_path()
+    _ensure_soperator_chart_dependencies(command_runner=command_runner, chart_path=chart_path)
+    with tempfile.TemporaryDirectory(prefix="nebius-cxcli-soperator-storage-") as temp_dir:
+        staged_chart_path = Path(temp_dir) / chart_path.name
+        shutil.copytree(
+            chart_path,
+            staged_chart_path,
+            ignore=shutil.ignore_patterns("crds"),
+        )
+        command = [
+            "helm",
+            "template",
+            _SOPERATOR_TARGET_RELEASE_NAME,
+            str(staged_chart_path),
+            "-n",
+            _SOPERATOR_NAMESPACE,
+            "-f",
+            "-",
+        ]
+        for template_path in _HOME_SFS_STORAGE_TEMPLATE_PATHS:
+            command.extend(["--show-only", template_path])
+        result = command_runner(
+            command,
+            input_text=json.dumps(
+                _home_sfs_storage_render_values(values),
+                sort_keys=True,
+            ),
+            timeout_seconds=300,
+        )
+    objects: list[Mapping[str, Any]] = []
+    for item in yaml.safe_load_all(result.stdout or ""):
+        if item is None:
+            continue
+        if not isinstance(item, Mapping):
+            raise RuntimeError("helm template rendered a non-object home SFS storage document.")
+        objects.append(dict(to_plain_data(item)))
+    if not objects:
+        raise SoperatorMigrationPhasePending(
+            "Home SFS migration could not render the chart-owned PV/PVC storage objects."
+        )
+    return tuple(objects)
+
+
+def _live_pvc_names(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+) -> set[str]:
+    result = command_runner(
+        [
+            "kubectl",
+            "--context",
+            kube_context,
+            "-n",
+            _SOPERATOR_NAMESPACE,
+            "get",
+            "pvc",
+            "-o",
+            "json",
+        ],
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
+        raise SoperatorMigrationPhasePending(
+            "Could not verify live Soperator PVCs after preparing /home SFS storage: " + detail
+        )
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        raise SoperatorMigrationPhasePending(
+            "Could not parse live Soperator PVC list after preparing /home SFS storage."
+        ) from exc
+    return _snapshot_pvc_names({"pvcs": _sequence_of_mappings(_mapping(payload).get("items"))})
+
+
+def _ensure_home_sfs_storage_objects(
+    *,
+    phase: dict[str, Any],
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    payload: Mapping[str, Any],
+    target_ref: str,
+) -> set[str] | None:
+    values = _target_soperator_values(payload, target_ref)
+    if not soperator_home_sfs_migration_enabled(values):
+        return None
+    target_pvc = _target_pvc_name_for_storage_key(payload, target_ref, HOME_SFS_KEY)
+    objects = _render_home_sfs_storage_objects(
+        command_runner=command_runner,
+        values=values,
+    )
+    _kubectl_apply_objects(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        objects=objects,
+        timeout_seconds=300,
+    )
+    phase["home_storage_objects"] = [
+        {
+            "kind": str(item.get("kind", "") or ""),
+            "namespace": str(_mapping(item.get("metadata")).get("namespace", "") or ""),
+            "name": str(_mapping(item.get("metadata")).get("name", "") or ""),
+        }
+        for item in objects
+    ]
+    live_pvcs = _live_pvc_names(command_runner=command_runner, kube_context=kube_context)
+    if target_pvc not in live_pvcs:
+        raise SoperatorMigrationPhasePending(
+            "Home SFS migration rendered storage objects, but target PVC "
+            f"{target_pvc!r} is not visible yet. Rerun after the PVC is created."
+        )
+    return live_pvcs
 
 
 def _kubectl_apply_objects(
@@ -6847,7 +7289,7 @@ def _storage_status_expected_pvcs(
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     source_names: list[str] = []
     target_names: list[str] = []
-    for key in _SOPERATOR_STORAGE_KEYS:
+    for key in _soperator_storage_keys_for_target(payload=payload, target_ref=target_ref):
         source_pvc = _source_pvc_name_for_storage_key(source_report, key)
         target_pvc = _target_pvc_name_for_storage_key(payload, target_ref, key)
         if source_pvc:
@@ -6868,7 +7310,11 @@ def _collect_storage_status(
 ) -> SoperatorMigrationStatusSignal:
     create_state = _mapping(_mapping(checkpoint.get("phase_state")).get("create-aligned-sfs"))
     filesystems = _mapping(create_state.get("filesystems"))
-    aligned_summary = f"aligned SFS {len(filesystems)}/{len(_SOPERATOR_STORAGE_KEYS)}"
+    expected_storage_keys = _soperator_storage_keys_for_target(
+        payload=payload,
+        target_ref=target_ref,
+    )
+    aligned_summary = f"aligned SFS {len(filesystems)}/{len(expected_storage_keys)}"
     source_pvcs, target_pvcs = _storage_status_expected_pvcs(
         source_report=source_report,
         payload=payload,
@@ -11537,8 +11983,18 @@ def _execute_online_bulk_data_sync_phase(
     lines: list[str] = []
     manifests: list[dict[str, Any]] = []
     live_pvcs = _snapshot_pvc_names(live_snapshot)
+    refreshed_home_pvcs = _ensure_home_sfs_storage_objects(
+        phase=phase,
+        command_runner=command_runner,
+        kube_context=kube_context,
+        payload=payload,
+        target_ref=target_ref,
+    )
+    if refreshed_home_pvcs is not None:
+        live_pvcs = refreshed_home_pvcs
+        lines.append("Home SFS storage objects applied before /home data sync.")
     missing_pvcs: list[str] = []
-    for key in _SOPERATOR_STORAGE_KEYS:
+    for key in _soperator_storage_keys_for_target(payload=payload, target_ref=target_ref):
         source_pvc = _source_pvc_name_for_storage_key(source_report, key)
         target_pvc = _target_pvc_name_for_storage_key(payload, target_ref, key)
         if not source_pvc:
@@ -11552,8 +12008,26 @@ def _execute_online_bulk_data_sync_phase(
                 f"Data sync {key}: skipped because source and target PVC are {source_pvc}."
             )
             continue
-        manifests.append(_copy_job_manifest(key=key, source_pvc=source_pvc, target_pvc=target_pvc))
-        jobs[key] = {"source_pvc": source_pvc, "target_pvc": target_pvc}
+        source_path, target_path = _copy_job_paths_for_storage_key(
+            payload=payload,
+            target_ref=target_ref,
+            key=key,
+        )
+        manifests.append(
+            _copy_job_manifest(
+                key=key,
+                source_pvc=source_pvc,
+                target_pvc=target_pvc,
+                source_path=source_path,
+                target_path=target_path,
+            )
+        )
+        jobs[key] = {
+            "source_pvc": source_pvc,
+            "target_pvc": target_pvc,
+            "source_path": source_path,
+            "target_path": target_path,
+        }
     if missing_pvcs:
         phase["missing_pvcs"] = missing_pvcs
         raise SoperatorMigrationPhasePending(
@@ -12284,6 +12758,208 @@ def _execute_final_cutover_phase(
     return False, ["Final cutover validated: target Slurm custom resources are present."]
 
 
+def _home_mount_probe_check(name: str, result: SoperatorMigrationCommandResult) -> Mapping[str, str]:
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
+        return _fast_verification_check(name, "failed", detail)
+    line = next((item.strip() for item in (result.stdout or "").splitlines() if item.strip()), "")
+    parts = line.split(maxsplit=2)
+    target = parts[0] if parts else ""
+    source = parts[1] if len(parts) > 1 else "unknown"
+    fstype = parts[2] if len(parts) > 2 else "unknown"
+    normalized_target = "/" + target.strip().strip("/")
+    if normalized_target == "//":
+        normalized_target = "/"
+    if normalized_target == HOME_SFS_SOURCE_PATH or normalized_target.endswith(
+        f"/{HOME_SFS_SOURCE_PATH.strip('/')}"
+    ):
+        return _fast_verification_check(
+            name,
+            "passed",
+            f"{normalized_target} mounted from {source} ({fstype})",
+        )
+    return _fast_verification_check(
+        name,
+        "failed",
+        f"/home resolves through mount target {normalized_target or 'unknown'} "
+        f"from {source} ({fstype})",
+    )
+
+
+def _login_home_mount_probe_check(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+) -> Mapping[str, str]:
+    result = _kubectl_exec_login(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        args=("/bin/sh", "-ceu", _HOME_MOUNT_PROBE_SCRIPT),
+        check=False,
+        timeout_seconds=120,
+    )
+    return _home_mount_probe_check("/home login pod mount", result)
+
+
+def _running_worker_pod_for_home_probe(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+) -> str:
+    payload = _json_from_command(
+        command_runner,
+        [
+            "kubectl",
+            "--context",
+            kube_context,
+            "-n",
+            _SOPERATOR_NAMESPACE,
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ],
+        timeout_seconds=60,
+        check=False,
+    )
+    names: list[str] = []
+    for item in _sequence_of_mappings(_mapping(payload).get("items")):
+        if str(_mapping(item.get("status")).get("phase", "") or "") != "Running":
+            continue
+        metadata = _mapping(item.get("metadata"))
+        name = str(metadata.get("name", "") or "").strip()
+        labels = _mapping(metadata.get("labels"))
+        label_values = tuple(str(value or "").strip().lower() for value in labels.values())
+        nodeset_name = ""
+        for label_key in _SOPERATOR_NODESET_LABEL_KEYS:
+            nodeset_name = str(labels.get(label_key, "") or "").strip()
+            if nodeset_name:
+                break
+        is_worker = (
+            str(labels.get("slurm.nebius.ai/worker", "") or "").strip().lower() == "true"
+            or normalize_component_token(nodeset_name).startswith(_SOURCE_WORKER_NODESET_PREFIX)
+            or "worker" in label_values
+            or name.startswith(f"{_SOURCE_WORKER_NODESET_PREFIX}-")
+        )
+        if name and is_worker:
+            names.append(name)
+    return sorted(dict.fromkeys(names))[0] if names else ""
+
+
+def _worker_home_mount_probe_check(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+) -> Mapping[str, str]:
+    pod_name = _running_worker_pod_for_home_probe(
+        command_runner=command_runner,
+        kube_context=kube_context,
+    )
+    if not pod_name:
+        return _fast_verification_check(
+            "/home worker pod mount",
+            "failed",
+            "worker pod not found",
+        )
+    result = command_runner(
+        [
+            "kubectl",
+            "--context",
+            kube_context,
+            "-n",
+            _SOPERATOR_NAMESPACE,
+            "exec",
+            pod_name,
+            "-c",
+            "slurmd",
+            "--",
+            "/bin/sh",
+            "-ceu",
+            _HOME_MOUNT_PROBE_SCRIPT,
+        ],
+        check=False,
+        timeout_seconds=120,
+    )
+    return _home_mount_probe_check("/home worker pod mount", result)
+
+
+def _live_home_mount_probe_checks(
+    *,
+    kube_context: str,
+    command_runner: SoperatorMigrationCommandRunner,
+) -> tuple[Mapping[str, str], ...]:
+    return (
+        _login_home_mount_probe_check(
+            command_runner=command_runner,
+            kube_context=kube_context,
+        ),
+        _worker_home_mount_probe_check(
+            command_runner=command_runner,
+            kube_context=kube_context,
+        ),
+    )
+
+
+def _home_preservation_overwrite_checks(
+    *,
+    checkpoint: Mapping[str, Any],
+    values: Mapping[str, Any],
+    kube_context: str,
+    command_runner: SoperatorMigrationCommandRunner,
+) -> tuple[Mapping[str, str], ...]:
+    status = soperator_home_preservation_status(values)
+    if not soperator_home_sfs_migration_enabled(values):
+        checks = [
+            _fast_verification_check(
+                "/home external mount",
+                "passed" if status.external else "failed",
+                status.reason,
+            )
+        ]
+        if status.external:
+            checks.extend(
+                _live_home_mount_probe_checks(
+                    kube_context=kube_context,
+                    command_runner=command_runner,
+                )
+            )
+        return tuple(checks)
+    _summary, checks = _online_bulk_data_sync_fast_verification_checks(
+        checkpoint=checkpoint,
+        kube_context=kube_context,
+        command_runner=command_runner,
+    )
+    home_checks = [
+        check
+        for check in checks
+        if str(check.get("name", "") or "").strip().lower() == f"data sync {HOME_SFS_KEY}"
+    ]
+    if not home_checks:
+        home_checks = [
+            _fast_verification_check(
+                "/home SFS data sync",
+                "failed",
+                "home copy job was not recorded in online-bulk-data-sync",
+            )
+        ]
+    home_checks.append(
+        _fast_verification_check(
+            "/home target mount values",
+            "passed" if status.external else "failed",
+            status.reason,
+        )
+    )
+    if status.external:
+        home_checks.extend(
+            _live_home_mount_probe_checks(
+                kube_context=kube_context,
+                command_runner=command_runner,
+            )
+        )
+    return tuple(home_checks)
+
+
 def _execute_populate_jail_refresh_phase(
     *,
     checkpoint: dict[str, Any],
@@ -12294,6 +12970,7 @@ def _execute_populate_jail_refresh_phase(
     kube_context: str,
     command_runner: SoperatorMigrationCommandRunner,
     populate_jail_refresh: str,
+    confirm_jail_rootfs_overwrite: bool,
     job_policy: str,
     cancel_job_ids: Sequence[str],
     requeue_job_ids: Sequence[str],
@@ -12343,6 +13020,33 @@ def _execute_populate_jail_refresh_phase(
         source_report=source_report,
         live_snapshot=live_snapshot,
     )
+    home_checks = _home_preservation_overwrite_checks(
+        checkpoint=checkpoint,
+        values=values,
+        kube_context=kube_context,
+        command_runner=command_runner,
+    )
+    phase["home_preservation"] = {
+        "checks": list(home_checks),
+        "status": "failed" if _fast_verification_failed(home_checks) else "verified",
+    }
+    if _fast_verification_failed(home_checks):
+        if checkpoint_writer is not None:
+            checkpoint_writer()
+        raise SoperatorMigrationPhasePending(
+            "populate-jail overwrite is blocked until /home is verified external. "
+            "Review the populate-jail-refresh.home_preservation checks in the checkpoint."
+        )
+    if not confirm_jail_rootfs_overwrite:
+        phase["rootfs_overwrite_confirmed"] = False
+        if checkpoint_writer is not None:
+            checkpoint_writer()
+        raise SoperatorMigrationPhasePending(
+            "populate-jail overwrite is destructive for the shared jail rootfs. Re-run with "
+            "--confirm-jail-rootfs-overwrite after confirming /home is external and rootfs "
+            "content outside preserved mounts may be recreated."
+        )
+    phase["rootfs_overwrite_confirmed"] = True
     target_version = str(_mapping(source_report.get("report")).get("target_version", "") or "")
     checkpoint_worker_groups = tuple(
         str(group or "") for group in checkpoint.get("worker_node_groups", []) or []
@@ -13121,9 +13825,9 @@ def _phase_report_summary(phase_id: str, phase: Mapping[str, Any]) -> str:
         return f"target GPU stack charts applied or verified: {len(charts)}."
     if phase_id == "create-aligned-sfs":
         filesystems = _mapping(phase.get("filesystems"))
-        return (
-            f"aligned SFS filesystems recorded: {len(filesystems)}/{len(_SOPERATOR_STORAGE_KEYS)}."
-        )
+        expected = len(_SOPERATOR_STORAGE_KEYS) + (1 if HOME_SFS_KEY in filesystems else 0)
+        home_suffix = " including /home" if HOME_SFS_KEY in filesystems else ""
+        return f"aligned SFS filesystems recorded: {len(filesystems)}/{expected}{home_suffix}."
     if phase_id == "online-bulk-data-sync":
         jobs = _mapping(phase.get("jobs"))
         return f"data-copy jobs recorded: {len(jobs)}."
@@ -15979,6 +16683,10 @@ def execute_soperator_migration(
     status_poll_interval_seconds: float = 30.0,
     job_policy: str | None = None,
     populate_jail_refresh: str = "auto",
+    move_home_out_to_sfs: bool = True,
+    home_sfs_size_multiplier: float = 1.3,
+    home_sfs_size_gib: int | None = None,
+    confirm_jail_rootfs_overwrite: bool = False,
     cancel_job_ids: Sequence[str] = (),
     requeue_job_ids: Sequence[str] = (),
     job_wait_timeout_seconds: int = _EXTERNAL_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT_SECONDS,
@@ -16026,6 +16734,10 @@ def execute_soperator_migration(
             status_poll_interval_seconds=status_poll_interval_seconds,
             job_policy=job_policy,
             populate_jail_refresh=populate_jail_refresh,
+            move_home_out_to_sfs=move_home_out_to_sfs,
+            home_sfs_size_multiplier=home_sfs_size_multiplier,
+            home_sfs_size_gib=home_sfs_size_gib,
+            confirm_jail_rootfs_overwrite=confirm_jail_rootfs_overwrite,
             cancel_job_ids=cancel_job_ids,
             requeue_job_ids=requeue_job_ids,
             job_wait_timeout_seconds=job_wait_timeout_seconds,
@@ -16058,6 +16770,10 @@ def _execute_soperator_migration_unlocked(
     status_poll_interval_seconds: float = 30.0,
     job_policy: str | None = None,
     populate_jail_refresh: str = "auto",
+    move_home_out_to_sfs: bool = True,
+    home_sfs_size_multiplier: float = 1.3,
+    home_sfs_size_gib: int | None = None,
+    confirm_jail_rootfs_overwrite: bool = False,
     cancel_job_ids: Sequence[str] = (),
     requeue_job_ids: Sequence[str] = (),
     job_wait_timeout_seconds: int = _EXTERNAL_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT_SECONDS,
@@ -16114,12 +16830,28 @@ def _execute_soperator_migration_unlocked(
     target_version = str(
         onboarding.get("target_version", "") or report.get("target_version", "") or ""
     )
+    kube_context = _target_kube_context(payload, normalized_target)
+    payload, home_preservation_state = _prepare_home_sfs_migration_payload(
+        payload=payload,
+        target_ref=normalized_target,
+        kube_context=kube_context,
+        command_runner=active_command_runner,
+        move_home_out_to_sfs=move_home_out_to_sfs,
+        home_sfs_size_multiplier=home_sfs_size_multiplier,
+        home_sfs_size_gib=home_sfs_size_gib,
+        populate_jail_refresh=populate_jail_refresh,
+    )
+    onboarding = _target_onboarding(payload, normalized_target)
     actions = _onboarding_actions(onboarding)
     phase_ids = _phase_ids_for_actions(report=report, onboarding=onboarding)
     if not phase_ids:
         phase_ids = ("discovery-and-plan",)
+    phase_ids = _phase_ids_with_home_sfs_prerequisites(
+        phase_ids=phase_ids,
+        payload=payload,
+        target_ref=normalized_target,
+    )
 
-    kube_context = _target_kube_context(payload, normalized_target)
     checkpoint_path = soperator_migration_checkpoint_path(config_path, normalized_target)
     existing_checkpoint = _load_checkpoint(checkpoint_path)
     completed_prior_run = (
@@ -16214,6 +16946,20 @@ def _execute_soperator_migration_unlocked(
         upgrade_path_segment_id=upgrade_path_segment_id,
         locked_upgrade_path=locked_upgrade_path,
     )
+    existing_home = dict(_mapping(checkpoint.get("home_preservation")))
+    existing_size = _positive_int(existing_home.get("size_gib"), fallback=0)
+    requested_size = _positive_int(home_preservation_state.get("size_gib"), fallback=0)
+    if existing_size and requested_size and existing_size != requested_size:
+        raise RuntimeError(
+            "External Soperator upgrade checkpoint was started with a different /home SFS "
+            f"size ({existing_size} GiB) than this run requested ({requested_size} GiB). "
+            "Resume with the same --home-sfs-size-gib or remove the checkpoint only after "
+            "deciding to restart."
+        )
+    checkpoint["home_preservation"] = {
+        **existing_home,
+        **dict(to_plain_data(home_preservation_state)),
+    }
     resolved_populate_jail_refresh = normalize_populate_jail_refresh_mode(
         populate_jail_refresh
     )
@@ -16670,6 +17416,7 @@ def _execute_soperator_migration_unlocked(
                 kube_context=kube_context,
                 command_runner=active_command_runner,
                 populate_jail_refresh=resolved_populate_jail_refresh,
+                confirm_jail_rootfs_overwrite=confirm_jail_rootfs_overwrite,
                 job_policy=resolved_job_policy,
                 cancel_job_ids=selected_cancel_job_ids,
                 requeue_job_ids=selected_requeue_job_ids,

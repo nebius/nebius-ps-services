@@ -426,6 +426,11 @@ from .soperator_discovery import (
     soperator_discovery_snapshot_control_plane_k8s_version,
 )
 from .soperator_gpu_driver_jail import ensure_soperator_gpu_driver_jail_values
+from .soperator_home import (
+    HOME_SFS_DEFAULT_SIZE_MULTIPLIER,
+    normalize_home_sfs_size_multiplier,
+    soperator_home_preservation_status,
+)
 from .soperator_migration import (
     SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
     SOPERATOR_WORKER_ROLLOUT_DEFAULT_WAVE_PERCENT,
@@ -11636,6 +11641,10 @@ def _external_soperator_upgrade_command_args(
     target_ref: str,
     backup_dir: Path | None,
     populate_jail_refresh: str,
+    move_home_out_to_sfs: bool,
+    home_sfs_size_multiplier: float,
+    home_sfs_size_gib: int | None,
+    confirm_jail_rootfs_overwrite: bool,
     job_policy: str,
     cancel_job: Sequence[str],
     requeue_job: Sequence[str],
@@ -11658,6 +11667,12 @@ def _external_soperator_upgrade_command_args(
     if backup_dir is not None:
         args.extend(["--backup-dir", str(backup_dir)])
     args.extend(["--populate-jail-refresh", populate_jail_refresh])
+    args.append("--move-home-out-to-sfs" if move_home_out_to_sfs else "--no-move-home-out-to-sfs")
+    args.extend(["--home-sfs-size-multiplier", str(home_sfs_size_multiplier)])
+    if home_sfs_size_gib is not None:
+        args.extend(["--home-sfs-size-gib", str(home_sfs_size_gib)])
+    if confirm_jail_rootfs_overwrite:
+        args.append("--confirm-jail-rootfs-overwrite")
     args.extend(["--job-policy", job_policy])
     for job_id in cancel_job:
         args.extend(["--cancel-job", str(job_id)])
@@ -13420,6 +13435,40 @@ def soperator_upgrade_command(
             help=_SOPERATOR_POPULATE_JAIL_REFRESH_HELP,
         ),
     ] = "auto",
+    move_home_out_to_sfs: Annotated[
+        bool,
+        typer.Option(
+            "--move-home-out-to-sfs/--no-move-home-out-to-sfs",
+            help=(
+                "When /home is still inside the jail rootfs, create a Nebius SFS-backed "
+                "/home submount and copy /home there before destructive populate-jail refresh."
+            ),
+        ),
+    ] = True,
+    home_sfs_size_multiplier: Annotated[
+        float,
+        typer.Option(
+            "--home-sfs-size-multiplier",
+            help="Multiplier applied to measured /home usage when sizing the migrated SFS.",
+        ),
+    ] = HOME_SFS_DEFAULT_SIZE_MULTIPLIER,
+    home_sfs_size_gib: Annotated[
+        int | None,
+        typer.Option(
+            "--home-sfs-size-gib",
+            help="Explicit /home SFS size in GiB. Must be at least measured /home usage.",
+        ),
+    ] = None,
+    confirm_jail_rootfs_overwrite: Annotated[
+        bool,
+        typer.Option(
+            "--confirm-jail-rootfs-overwrite",
+            help=(
+                "Confirm destructive populate-jail rootfs overwrite after /home has been "
+                "verified external or migrated."
+            ),
+        ),
+    ] = False,
     job_policy: Annotated[
         str | None,
         typer.Option(
@@ -13509,6 +13558,10 @@ def soperator_upgrade_command(
             strategy_max_surge_count=strategy_max_surge_count,
             backup_dir=backup_dir,
             populate_jail_refresh=populate_jail_refresh,
+            move_home_out_to_sfs=move_home_out_to_sfs,
+            home_sfs_size_multiplier=home_sfs_size_multiplier,
+            home_sfs_size_gib=home_sfs_size_gib,
+            confirm_jail_rootfs_overwrite=confirm_jail_rootfs_overwrite,
             job_policy=job_policy,
             cancel_job=tuple(cancel_job or ()),
             requeue_job=tuple(requeue_job or ()),
@@ -13539,6 +13592,10 @@ def _run_soperator_upgrade_command(
     strategy_max_surge_count: int | None,
     backup_dir: Path | None,
     populate_jail_refresh: str,
+    move_home_out_to_sfs: bool,
+    home_sfs_size_multiplier: float,
+    home_sfs_size_gib: int | None,
+    confirm_jail_rootfs_overwrite: bool,
     job_policy: str | None,
     cancel_job: Sequence[str],
     requeue_job: Sequence[str],
@@ -13585,6 +13642,11 @@ def _run_soperator_upgrade_command(
         dry_run=dry_run,
         path_prefix="soperator.upgrade",
     )
+    resolved_home_sfs_size_multiplier = normalize_home_sfs_size_multiplier(
+        home_sfs_size_multiplier
+    )
+    if home_sfs_size_gib is not None and home_sfs_size_gib < 1:
+        raise RuntimeError("--home-sfs-size-gib must be a positive integer when provided.")
     _run_managed_soperator_cluster_upgrade(
         config_path=config_path,
         source_payload=source_payload,
@@ -13599,6 +13661,10 @@ def _run_soperator_upgrade_command(
         strategy_max_surge_count=strategy_max_surge_count,
         backup_dir=backup_dir,
         populate_jail_refresh=normalize_populate_jail_refresh_mode(populate_jail_refresh),
+        move_home_out_to_sfs=move_home_out_to_sfs,
+        home_sfs_size_multiplier=resolved_home_sfs_size_multiplier,
+        home_sfs_size_gib=home_sfs_size_gib,
+        confirm_jail_rootfs_overwrite=confirm_jail_rootfs_overwrite,
         job_policy=_soperator_upgrade_job_policy(policy=job_policy, interactive=interactive),
         cancel_job=cancel_job,
         requeue_job=requeue_job,
@@ -13625,6 +13691,10 @@ def _soperator_upgrade_command_args(
     strategy_max_surge_count: int | None,
     backup_dir: Path | None,
     populate_jail_refresh: str,
+    move_home_out_to_sfs: bool,
+    home_sfs_size_multiplier: float,
+    home_sfs_size_gib: int | None,
+    confirm_jail_rootfs_overwrite: bool,
     job_policy: str,
     cancel_job: Sequence[str],
     requeue_job: Sequence[str],
@@ -13660,6 +13730,12 @@ def _soperator_upgrade_command_args(
     if backup_dir is not None:
         args.extend(["--backup-dir", str(backup_dir)])
     args.extend(["--populate-jail-refresh", populate_jail_refresh])
+    args.append("--move-home-out-to-sfs" if move_home_out_to_sfs else "--no-move-home-out-to-sfs")
+    args.extend(["--home-sfs-size-multiplier", str(home_sfs_size_multiplier)])
+    if home_sfs_size_gib is not None:
+        args.extend(["--home-sfs-size-gib", str(home_sfs_size_gib)])
+    if confirm_jail_rootfs_overwrite:
+        args.append("--confirm-jail-rootfs-overwrite")
     args.extend(["--job-policy", job_policy])
     for job_id in cancel_job:
         args.extend(["--cancel-job", str(job_id)])
@@ -13821,6 +13897,10 @@ def _managed_soperator_upgrade_order_issue(
     strategy_max_surge_count: int | None,
     backup_dir: Path | None,
     populate_jail_refresh: str,
+    move_home_out_to_sfs: bool,
+    home_sfs_size_multiplier: float,
+    home_sfs_size_gib: int | None,
+    confirm_jail_rootfs_overwrite: bool,
     job_policy: str,
     cancel_job: Sequence[str],
     requeue_job: Sequence[str],
@@ -13867,6 +13947,10 @@ def _managed_soperator_upgrade_order_issue(
             strategy_max_surge_count=strategy_max_surge_count,
             backup_dir=backup_dir,
             populate_jail_refresh=populate_jail_refresh,
+            move_home_out_to_sfs=move_home_out_to_sfs,
+            home_sfs_size_multiplier=home_sfs_size_multiplier,
+            home_sfs_size_gib=home_sfs_size_gib,
+            confirm_jail_rootfs_overwrite=confirm_jail_rootfs_overwrite,
             job_policy=job_policy,
             cancel_job=cancel_job,
             requeue_job=requeue_job,
@@ -13891,6 +13975,10 @@ def _managed_soperator_upgrade_order_issue(
             strategy_max_surge_count=strategy_max_surge_count,
             backup_dir=backup_dir,
             populate_jail_refresh=populate_jail_refresh,
+            move_home_out_to_sfs=move_home_out_to_sfs,
+            home_sfs_size_multiplier=home_sfs_size_multiplier,
+            home_sfs_size_gib=home_sfs_size_gib,
+            confirm_jail_rootfs_overwrite=confirm_jail_rootfs_overwrite,
             job_policy=job_policy,
             cancel_job=cancel_job,
             requeue_job=requeue_job,
@@ -14066,6 +14154,10 @@ def _run_managed_soperator_cluster_upgrade(
     strategy_max_surge_count: int | None,
     backup_dir: Path | None,
     populate_jail_refresh: str,
+    move_home_out_to_sfs: bool,
+    home_sfs_size_multiplier: float,
+    home_sfs_size_gib: int | None,
+    confirm_jail_rootfs_overwrite: bool,
     job_policy: str,
     cancel_job: Sequence[str],
     requeue_job: Sequence[str],
@@ -14116,6 +14208,10 @@ def _run_managed_soperator_cluster_upgrade(
         strategy_max_surge_count=strategy_max_surge_count,
         backup_dir=backup_dir,
         populate_jail_refresh=populate_jail_refresh,
+        move_home_out_to_sfs=move_home_out_to_sfs,
+        home_sfs_size_multiplier=home_sfs_size_multiplier,
+        home_sfs_size_gib=home_sfs_size_gib,
+        confirm_jail_rootfs_overwrite=confirm_jail_rootfs_overwrite,
         job_policy=job_policy,
         cancel_job=cancel_job,
         requeue_job=requeue_job,
@@ -14137,6 +14233,10 @@ def _run_managed_soperator_cluster_upgrade(
         strategy_max_surge_count=strategy_max_surge_count,
         backup_dir=backup_dir,
         populate_jail_refresh=populate_jail_refresh,
+        move_home_out_to_sfs=move_home_out_to_sfs,
+        home_sfs_size_multiplier=home_sfs_size_multiplier,
+        home_sfs_size_gib=home_sfs_size_gib,
+        confirm_jail_rootfs_overwrite=confirm_jail_rootfs_overwrite,
         job_policy=job_policy,
         cancel_job=cancel_job,
         requeue_job=requeue_job,
@@ -14210,6 +14310,10 @@ def _run_managed_soperator_cluster_upgrade(
             strategy_max_surge_count=strategy_max_surge_count,
             backup_dir=backup_dir,
             populate_jail_refresh=populate_jail_refresh,
+            move_home_out_to_sfs=move_home_out_to_sfs,
+            home_sfs_size_multiplier=home_sfs_size_multiplier,
+            home_sfs_size_gib=home_sfs_size_gib,
+            confirm_jail_rootfs_overwrite=confirm_jail_rootfs_overwrite,
             job_policy=job_policy,
             cancel_job=cancel_job,
             requeue_job=requeue_job,
@@ -15198,6 +15302,35 @@ def _run_managed_soperator_cluster_upgrade(
                 raise RuntimeError(populate_jail_result.detail)
             else:
                 steady_values = _soperator_row_values_snapshot()
+                home_status = soperator_home_preservation_status(steady_values)
+                checkpoint["home_preservation"] = {
+                    "status": home_status.status,
+                    "reason": home_status.reason,
+                    "source": home_status.source,
+                    "move_home_out_to_sfs": move_home_out_to_sfs,
+                    "size_multiplier": home_sfs_size_multiplier,
+                    "explicit_size_gib": home_sfs_size_gib,
+                }
+                if not home_status.external:
+                    _checkpoint(
+                        "populate-jail-refresh-home-preservation-blocked",
+                        reason=home_status.reason,
+                    )
+                    raise RuntimeError(
+                        "populate-jail overwrite is blocked because /home is not proven "
+                        "external in Soperator values. Use --populate-jail-refresh manual, "
+                        "or migrate /home to an SFS-backed jail submount before overwrite."
+                    )
+                if not confirm_jail_rootfs_overwrite:
+                    _checkpoint(
+                        "populate-jail-refresh-rootfs-overwrite-confirmation-missing",
+                        reason="missing --confirm-jail-rootfs-overwrite",
+                    )
+                    raise RuntimeError(
+                        "populate-jail overwrite is destructive for the shared jail rootfs. "
+                        "Re-run with --confirm-jail-rootfs-overwrite after confirming /home "
+                        "is external and rootfs content outside preserved mounts may be recreated."
+                    )
                 refreshed_snapshot = None
                 maintenance_restored = False
                 if not soperator_worker_job_policy_checked:
@@ -54274,6 +54407,40 @@ def soperator_external_upgrade_command(
             help=_SOPERATOR_POPULATE_JAIL_REFRESH_HELP,
         ),
     ] = "auto",
+    move_home_out_to_sfs: Annotated[
+        bool,
+        typer.Option(
+            "--move-home-out-to-sfs/--no-move-home-out-to-sfs",
+            help=(
+                "When /home is still inside the jail rootfs, create a Nebius SFS-backed "
+                "/home submount and copy /home there before destructive populate-jail refresh."
+            ),
+        ),
+    ] = True,
+    home_sfs_size_multiplier: Annotated[
+        float,
+        typer.Option(
+            "--home-sfs-size-multiplier",
+            help="Multiplier applied to measured /home usage when sizing the migrated SFS.",
+        ),
+    ] = HOME_SFS_DEFAULT_SIZE_MULTIPLIER,
+    home_sfs_size_gib: Annotated[
+        int | None,
+        typer.Option(
+            "--home-sfs-size-gib",
+            help="Explicit /home SFS size in GiB. Must be at least measured /home usage.",
+        ),
+    ] = None,
+    confirm_jail_rootfs_overwrite: Annotated[
+        bool,
+        typer.Option(
+            "--confirm-jail-rootfs-overwrite",
+            help=(
+                "Confirm destructive populate-jail rootfs overwrite after /home has been "
+                "verified external or migrated."
+            ),
+        ),
+    ] = False,
     job_policy: Annotated[
         str | None,
         typer.Option(
@@ -54612,6 +54779,11 @@ def soperator_external_upgrade_command(
         resolved_populate_jail_refresh = normalize_populate_jail_refresh_mode(
             populate_jail_refresh
         )
+        resolved_home_sfs_size_multiplier = normalize_home_sfs_size_multiplier(
+            home_sfs_size_multiplier
+        )
+        if home_sfs_size_gib is not None and home_sfs_size_gib < 1:
+            raise RuntimeError("--home-sfs-size-gib must be a positive integer when provided.")
         resolved_job_policy = _soperator_upgrade_job_policy(
             policy=job_policy,
             interactive=interactive,
@@ -54664,6 +54836,10 @@ def soperator_external_upgrade_command(
                     target_ref=target_ref,
                     backup_dir=backup_dir,
                     populate_jail_refresh=resolved_populate_jail_refresh,
+                    move_home_out_to_sfs=move_home_out_to_sfs,
+                    home_sfs_size_multiplier=resolved_home_sfs_size_multiplier,
+                    home_sfs_size_gib=home_sfs_size_gib,
+                    confirm_jail_rootfs_overwrite=confirm_jail_rootfs_overwrite,
                     job_policy=resolved_job_policy,
                     cancel_job=selected_cancel_jobs,
                     requeue_job=selected_requeue_jobs,
@@ -54745,6 +54921,10 @@ def soperator_external_upgrade_command(
                     status_callback=emit_status,
                     job_policy=resolved_job_policy,
                     populate_jail_refresh=resolved_populate_jail_refresh,
+                    move_home_out_to_sfs=move_home_out_to_sfs,
+                    home_sfs_size_multiplier=resolved_home_sfs_size_multiplier,
+                    home_sfs_size_gib=home_sfs_size_gib,
+                    confirm_jail_rootfs_overwrite=confirm_jail_rootfs_overwrite,
                     cancel_job_ids=selected_cancel_jobs,
                     requeue_job_ids=selected_requeue_jobs,
                     job_wait_timeout_seconds=job_wait_timeout_seconds,

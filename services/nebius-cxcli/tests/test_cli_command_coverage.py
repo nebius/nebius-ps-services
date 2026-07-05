@@ -352,6 +352,16 @@ def _stub_soperator_upgrade_runtime(
     monkeypatch.setattr(cli, "inspect_populate_jail", _inspect_populate_jail)
     monkeypatch.setattr(
         cli,
+        "soperator_home_preservation_status",
+        lambda _values: SimpleNamespace(
+            status="verified",
+            reason="/home is test-mode external storage",
+            source="externalNfs:test",
+            external=True,
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
         "wait_for_populate_jail_consumers_down",
         lambda *_args, **_kwargs: PopulateJailSnapshot(
             slurmcluster_name="mk8s",
@@ -445,6 +455,10 @@ def test_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path) -> 
         strategy_max_surge_count=None,
         backup_dir=None,
         populate_jail_refresh="auto",
+        move_home_out_to_sfs=True,
+        home_sfs_size_multiplier=1.3,
+        home_sfs_size_gib=256,
+        confirm_jail_rootfs_overwrite=True,
         job_policy="requeue-selected",
         cancel_job=("17",),
         requeue_job=("42", "43"),
@@ -455,6 +469,10 @@ def test_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path) -> 
     )
 
     assert "--cancel-job" in args
+    assert "--move-home-out-to-sfs" in args
+    assert args[args.index("--home-sfs-size-multiplier") + 1] == "1.3"
+    assert args[args.index("--home-sfs-size-gib") + 1] == "256"
+    assert "--confirm-jail-rootfs-overwrite" in args
     assert args[args.index("--cancel-job") + 1] == "17"
     assert [args[index + 1] for index, item in enumerate(args) if item == "--requeue-job"] == [
         "42",
@@ -642,6 +660,10 @@ def test_ext_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path)
         target_ref="external",
         backup_dir=None,
         populate_jail_refresh="auto",
+        move_home_out_to_sfs=False,
+        home_sfs_size_multiplier=1.5,
+        home_sfs_size_gib=None,
+        confirm_jail_rootfs_overwrite=True,
         job_policy="requeue-hold-selected",
         cancel_job=("17",),
         requeue_job=("42", "43"),
@@ -669,6 +691,10 @@ def test_ext_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path)
         "--target",
     )
     assert "--cancel-job" in args
+    assert "--no-move-home-out-to-sfs" in args
+    assert args[args.index("--home-sfs-size-multiplier") + 1] == "1.5"
+    assert "--home-sfs-size-gib" not in args
+    assert "--confirm-jail-rootfs-overwrite" in args
     assert args[args.index("--target") + 1] == "external"
     assert args[args.index("--cancel-job") + 1] == "17"
     assert [args[index + 1] for index, item in enumerate(args) if item == "--requeue-job"] == [
@@ -690,6 +716,10 @@ def _run_soperator_upgrade_for_test(
     node_group: str = "",
     job_policy: str | None = None,
     populate_jail_refresh: str = "auto",
+    move_home_out_to_sfs: bool = True,
+    home_sfs_size_multiplier: float = 1.3,
+    home_sfs_size_gib: int | None = None,
+    confirm_jail_rootfs_overwrite: bool = True,
     dry_run: bool = False,
     allow_unsupported_soperator_upgrade_path: bool = False,
     interactive: bool = False,
@@ -707,6 +737,10 @@ def _run_soperator_upgrade_for_test(
         strategy_max_surge_count=None,
         backup_dir=None,
         populate_jail_refresh=populate_jail_refresh,
+        move_home_out_to_sfs=move_home_out_to_sfs,
+        home_sfs_size_multiplier=home_sfs_size_multiplier,
+        home_sfs_size_gib=home_sfs_size_gib,
+        confirm_jail_rootfs_overwrite=confirm_jail_rootfs_overwrite,
         job_policy=job_policy,
         cancel_job=(),
         requeue_job=(),
@@ -3409,6 +3443,7 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
         paths.config_path,
         target_ref="mk8s",
         to_chart_version="0.26.0",
+        confirm_jail_rootfs_overwrite=True,
     )
 
     payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
@@ -5879,6 +5914,10 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
         strategy_max_surge_count=None,
         backup_dir=None,
         populate_jail_refresh="auto",
+        move_home_out_to_sfs=True,
+        home_sfs_size_multiplier=1.3,
+        home_sfs_size_gib=None,
+        confirm_jail_rootfs_overwrite=True,
         job_policy=None,
         cancel_job=(),
         requeue_job=(),
@@ -23362,6 +23401,11 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--job-policy" in normalized_managed_soperator_upgrade_help
     assert "--requeue-job" in normalized_managed_soperator_upgrade_help
     assert "--backup-dir" in normalized_managed_soperator_upgrade_help
+    assert "--move-home-out-to-sfs" in normalized_managed_soperator_upgrade_help
+    assert "--no-move-home-out-to-sfs" in normalized_managed_soperator_upgrade_help
+    assert "--home-sfs-size-multiplier" in normalized_managed_soperator_upgrade_help
+    assert "--home-sfs-size-gib" in normalized_managed_soperator_upgrade_help
+    assert "--confirm-jail-rootfs-overwrite" in normalized_managed_soperator_upgrade_help
     assert "--to-version" not in normalized_managed_soperator_upgrade_help
     assert "--dry-run" in normalized_managed_soperator_upgrade_help
     assert "--interactive --no-interactive" in normalized_managed_soperator_upgrade_help
@@ -23668,7 +23712,6 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "Plan or execute an accepted external Soperator upgrade" in (
         normalized_ext_soperator_upgrade_help
     )
-    assert "migrate" not in normalized_ext_soperator_upgrade_help.lower()
     assert "--target" in normalized_ext_soperator_upgrade_help
     assert "--backup-dir" in normalized_ext_soperator_upgrade_help
     assert "--job-policy" in normalized_ext_soperator_upgrade_help
@@ -23676,6 +23719,11 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--requeue-job" in normalized_ext_soperator_upgrade_help
     assert "--job-wait-timeout" in normalized_ext_soperator_upgrade_help
     assert "--job-refresh-interval" in normalized_ext_soperator_upgrade_help
+    assert "--move-home-out-to-sfs" in normalized_ext_soperator_upgrade_help
+    assert "--no-move-home-out-to-sfs" in normalized_ext_soperator_upgrade_help
+    assert "--home-sfs-size-multiplier" in normalized_ext_soperator_upgrade_help
+    assert "--home-sfs-size-gib" in normalized_ext_soperator_upgrade_help
+    assert "--confirm-jail-rootfs-overwrite" in normalized_ext_soperator_upgrade_help
     assert "--dry-run --execute" in normalized_ext_soperator_upgrade_help
     assert "--approve --no-approve" in normalized_ext_soperator_upgrade_help
     assert "--interactive --no-interactive" in normalized_ext_soperator_upgrade_help

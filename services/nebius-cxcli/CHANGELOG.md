@@ -6,6 +6,15 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Added Soperator `/home` preservation controls for populate-jail refresh.
+  Managed `soperator upgrade` and external `ext-soperator upgrade` now expose
+  `--move-home-out-to-sfs/--no-move-home-out-to-sfs`,
+  `--home-sfs-size-multiplier`, `--home-sfs-size-gib`, and
+  `--confirm-jail-rootfs-overwrite`. External upgrade can plan a dedicated
+  SFS-backed `/home` jail submount, copy `jail-pvc:/home` into it, and block
+  destructive rootfs overwrite until `/home` is external or verified migrated
+  with live login/worker pod mount evidence. Managed upgrade now fails closed
+  before populate-jail overwrite when `/home` is not already proven external.
 - Fixed `nebius-cxcli validate` coverage for external Soperator onboarding
   configs so malformed `deploy.targets[].soperator_onboarding` sections fail
   fast even when no enabled Soperator app row reaches the accepted-onboarding

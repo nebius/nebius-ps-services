@@ -419,7 +419,9 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
         "- `soperator upgrade`: `--target`, `--to-chart-version`, `--to-k8s-version`, "
         "`--to-os`, `--to-gpu-stack-preset`, `--node-group`, `--strategy`, "
         "`--strategy-max-surge-count`, `--drain-timeout`, `--backup-dir`, "
-        "`--populate-jail-refresh`, `--job-policy`, `--cancel-job`, `--requeue-job`, "
+        "`--populate-jail-refresh`, `--move-home-out-to-sfs/--no-move-home-out-to-sfs`, "
+        "`--home-sfs-size-multiplier`, `--home-sfs-size-gib`, "
+        "`--confirm-jail-rootfs-overwrite`, `--job-policy`, `--cancel-job`, `--requeue-job`, "
         "`--job-wait-timeout`, `--job-refresh-interval`, `--dry-run`, "
         "`--approve-remediation/--no-approve-remediation`, "
         "`--allow-unsupported-soperator-upgrade-path`, "
@@ -467,7 +469,9 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
     ) in common_flags_flat
     assert (
         "- `ext-soperator upgrade`: `--target`, `--backup-dir`, "
-        "`--populate-jail-refresh`, `--job-policy`, `--cancel-job`, `--requeue-job`, "
+        "`--populate-jail-refresh`, `--move-home-out-to-sfs/--no-move-home-out-to-sfs`, "
+        "`--home-sfs-size-multiplier`, `--home-sfs-size-gib`, "
+        "`--confirm-jail-rootfs-overwrite`, `--job-policy`, `--cancel-job`, `--requeue-job`, "
         "`--job-wait-timeout`, `--job-refresh-interval`, `--dry-run/--execute`, "
         "`--approve/--no-approve`, "
         "`--approve-remediation/--no-approve-remediation`, "
@@ -878,6 +882,8 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "Use `soperator upgrade` instead of the generic Helm path" in upgrade_flat
     assert "SlurmCluster.spec.populateJail.image" in upgrade_flat
     assert "`--populate-jail-refresh auto|force|manual`" in upgrade_flat
+    assert "`--move-home-out-to-sfs/--no-move-home-out-to-sfs`" in soperator_flat
+    assert "`--confirm-jail-rootfs-overwrite`" in soperator_flat
     assert "active `component_sources.yaml` Soperator chart pin as the default target version" in (
         upgrade_flat
     )
@@ -1682,6 +1688,8 @@ def test_docs_define_component_selector_contract() -> None:
     assert "cxcli fails fast rather than assuming a vanilla cluster is safe to adopt" in readme_flat
     assert "ignored by cxcli-managed deployments `.gitignore` files" in readme_flat
     assert "creates or reuses aligned jail, controller-spool, and accounting SFS" in readme_flat
+    assert "also a `home` SFS only when `/home` migration is required" in readme_flat
+    assert "copies `jail-pvc:/home` there before allowing populate-jail overwrite" in readme_flat
     assert (
         "Quota must cover this spare target storage while source storage remains mounted"
         in readme_flat
@@ -1998,6 +2006,8 @@ def test_docs_define_component_selector_contract() -> None:
     assert "configured node-group strategy is restored" in design_flat
     assert "ignored by cxcli-managed deployments `.gitignore` files" in design_flat
     assert "creates or reuses aligned jail, controller-spool, and accounting SFS" in design_flat
+    assert "adds a `home` SFS only for the default `/home` preservation migration" in design_flat
+    assert "path-scoped `jail-pvc:/home` copy for the home migration" in design_flat
     assert "runs Kubernetes data-copy Jobs when old and target PVC pairs exist" in design_flat
     assert "required Soperator deployment snapshot" in design_flat
     assert "does not start Slurm jobs" in design_flat
