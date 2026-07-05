@@ -23762,7 +23762,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--confirm-jail-rootfs-overwrite" not in normalized_ext_soperator_upgrade_help
     assert "Active/passive jail rootfs refresh mode" in normalized_ext_soperator_upgrade_help
     assert "Jail rootfs backing SFS resize policy" in normalized_ext_soperator_upgrade_help
-    assert "Nebius CLI/API" in normalized_ext_soperator_upgrade_help
+    assert "Nebius SDK/API" in normalized_ext_soperator_upgrade_help
     assert "<mountPath>=<localPath>" in normalized_ext_soperator_upgrade_help
     assert "--dry-run --execute" in normalized_ext_soperator_upgrade_help
     assert "--approve --no-approve" in normalized_ext_soperator_upgrade_help
@@ -23813,10 +23813,13 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     ) in normalized_ext_soperator_upgrade_help
     assert "runs exactly one locked upgrade-path segment" in (normalized_ext_soperator_upgrade_help)
     assert (
-        "If an existing accepted locked path already contains more segments"
+        "If the accepted locked path still contains more segments"
         in (normalized_ext_soperator_upgrade_help)
     )
-    assert "new later Kubernetes minor hops start with a fresh ext-soperator onboard decision" in (
+    assert "repeat the same ext-soperator upgrade --execute --approve command until the path is complete" in (
+        normalized_ext_soperator_upgrade_help
+    )
+    assert "use a fresh ext-soperator onboard decision only to plan a new later path" in (
         normalized_ext_soperator_upgrade_help
     )
     assert "--worker-rollout-strategy" in normalized_ext_soperator_upgrade_help
@@ -26404,24 +26407,33 @@ def test_external_jail_sfs_resize_uses_existing_nebius_filesystem_update(
         passive_available_bytes=128 * GIB,
         active_used_bytes=80 * GIB,
     )
-    calls: list[tuple[str, ...]] = []
+    calls: list[tuple[Any, ...]] = []
     resize_records: list[Mapping[str, Any]] = []
     capacity_records: list[Mapping[str, Any]] = []
 
     def _unexpected_terraform(**_kwargs: Any) -> None:
         raise AssertionError("external resize must not call Terraform")
 
-    def _runner(args: Sequence[str], **_kwargs: Any) -> SimpleNamespace:
-        calls.append(tuple(args))
-        if tuple(args[:4]) == ("nebius", "compute", "filesystem", "get"):
-            return SimpleNamespace(
-                returncode=0,
-                stdout=json.dumps({"spec": {"size_gibibytes": 2048}}),
-                stderr="",
+    class _Api:
+        def get_filesystem(self, filesystem_id: str) -> Mapping[str, Any]:
+            calls.append(("get", filesystem_id))
+            return {"spec": {"size_gibibytes": 2048}}
+
+        def resize_filesystem(
+            self,
+            *,
+            filesystem_id: str,
+            target_size_gib: int,
+            resource_version: int | None = None,
+            timeout_seconds: int = 1800,
+        ) -> Mapping[str, Any]:
+            calls.append(
+                ("resize", filesystem_id, target_size_gib, resource_version, timeout_seconds)
             )
-        if tuple(args[:4]) == ("nebius", "compute", "filesystem", "update"):
-            return SimpleNamespace(returncode=0, stdout="", stderr="")
-        raise AssertionError(f"unexpected command: {args!r}")
+            return {"spec": {"size_gibibytes": target_size_gib}}
+
+        def close(self) -> None:
+            calls.append(("close",))
 
     monkeypatch.setattr(cli, "_apply_jail_sfs_resize_with_terraform", _unexpected_terraform)
 
@@ -26433,30 +26445,27 @@ def test_external_jail_sfs_resize_uses_existing_nebius_filesystem_update(
         probe_capacity=lambda: final_preflight,
         record_capacity=lambda value: capacity_records.append(value.as_payload()),
         record_resize=lambda value: resize_records.append(dict(value)),
-        command_runner=_runner,
+        nebius_api=_Api(),
     )
 
     assert result is final_preflight
-    assert (
-        "nebius",
-        "compute",
-        "filesystem",
-        "update",
-        "--id",
-        "filesystem-jail",
-        "--size-gibibytes",
-        "2304",
-    ) in calls
+    assert ("get", "filesystem-jail") in calls
+    assert ("resize", "filesystem-jail", 2304, None, 1800) in calls
     assert resize_records[-1]["status"] == "completed"
     assert resize_records[-1]["nebius_api_status"] == "completed"
     assert capacity_records == [preflight.as_payload(), final_preflight.as_payload()]
 
 
 def test_external_jail_sfs_resize_rejects_missing_or_multiple_candidates() -> None:
+    fail_api = SimpleNamespace(
+        get_filesystem=lambda *_args, **_kwargs: pytest.fail("must not call nebius"),
+        resize_filesystem=lambda *_args, **_kwargs: pytest.fail("must not call nebius"),
+        close=lambda: None,
+    )
     with pytest.raises(RuntimeError, match="could not identify a Nebius shared filesystem"):
         cli._external_jail_sfs_resize_state(  # noqa: SLF001
             source_report={"snapshot": {"storage": {"jail": {"type": "nfs"}}}},
-            command_runner=lambda *_args, **_kwargs: pytest.fail("must not call nebius"),
+            nebius_api=fail_api,
         )
 
     with pytest.raises(RuntimeError, match="multiple candidate Nebius filesystems"):
@@ -26478,20 +26487,23 @@ def test_external_jail_sfs_resize_rejects_missing_or_multiple_candidates() -> No
                     },
                 }
             },
-            command_runner=lambda *_args, **_kwargs: pytest.fail("must not call nebius"),
+            nebius_api=fail_api,
         )
 
 
 def test_external_jail_sfs_resize_state_can_use_node_group_jail_attachment() -> None:
     calls: list[tuple[str, ...]] = []
 
-    def _runner(args: Sequence[str], **_kwargs: Any) -> SimpleNamespace:
-        calls.append(tuple(args))
-        return SimpleNamespace(
-            returncode=0,
-            stdout=json.dumps({"spec": {"size_gibibytes": 2048}}),
-            stderr="",
-        )
+    class _Api:
+        def get_filesystem(self, filesystem_id: str) -> Mapping[str, Any]:
+            calls.append(("get", filesystem_id))
+            return {"spec": {"size_gibibytes": 2048}}
+
+        def resize_filesystem(self, **_kwargs: Any) -> Mapping[str, Any]:
+            raise AssertionError("resize should not run")
+
+        def close(self) -> None:
+            calls.append(("close",))
 
     state = cli._external_jail_sfs_resize_state(  # noqa: SLF001
         source_report={
@@ -26513,23 +26525,12 @@ def test_external_jail_sfs_resize_state_can_use_node_group_jail_attachment() -> 
                 },
             }
         },
-        command_runner=_runner,
+        nebius_api=_Api(),
     )
 
     assert state.filesystem_id == "filesystem-jail"
     assert state.current_size_gib == 2048
-    assert calls == [
-        (
-            "nebius",
-            "compute",
-            "filesystem",
-            "get",
-            "--id",
-            "filesystem-jail",
-            "--format",
-            "json",
-        )
-    ]
+    assert calls == [("get", "filesystem-jail")]
 
 
 def test_soperator_profiles_share_complete_sfs_filesystem_defaults() -> None:

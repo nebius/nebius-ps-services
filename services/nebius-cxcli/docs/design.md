@@ -638,7 +638,7 @@ and chart source-family changes.
   rounded up. If capacity is short, managed `soperator upgrade` expands only
   the cxcli-owned `filesystems.jail.size_gib` through config render plus
   Terraform apply, then re-probes. External `ext-soperator upgrade` may expand
-  only a single identified existing Nebius jail SFS through Nebius CLI/API,
+  only a single identified existing Nebius jail SFS through the Nebius SDK/API,
   then re-probes. Existing NFS, opaque customer submounts, unknown/non-Nebius
   storage, and non-jail SFS rows are preserved and never resized by the rootfs
   refresh.
@@ -1190,7 +1190,7 @@ external-upgrade-required external Soperator onboarding targets before Terraform
 preflight because deploy only applies rendered desired state; the guard checks
 both the rendered manifest runtime config and the current source config so older
 bundles fail closed while external-upgrade-owned actions remain selected.
-`ext-soperator upgrade --execute` owns the ad hoc Nebius API calls,
+`ext-soperator upgrade --execute` owns the Nebius SDK/API calls,
 checkpointing, validation hold, source retirement phases, and target Helm
 cutover value remediation. During target Helm cutover, cxcli normalizes the
 Soperator manager and Soperator checks `kube-rbac-proxy` image values to
@@ -1268,9 +1268,12 @@ advances the selected accepted external MK8s control-plane/node-template hop,
 target GPU stack reconciliation phase when paired with external upgrade work,
 storage, copy, compute, cutover, populate-jail refresh, validation, and
 retirement phases in order.
-External node-template work is one Kubernetes minor hop per accepted onboarding
-plan and `ext-soperator upgrade` run; later Kubernetes hops start with a fresh
-`ext-soperator onboard` decision after the current hop completes.
+External node-template work is one Kubernetes minor hop per accepted locked-path
+segment and `ext-soperator upgrade` run. If the accepted locked path still has
+remaining segments, operators repeat the same `ext-soperator upgrade
+--execute --approve` command until the path is complete; a fresh
+`ext-soperator onboard` decision is only for planning a new later path or an
+intentional repair/replan.
 The executor then auto-detects source
 worker node groups from live Nebius MK8s node-group names and Kubernetes
 `slurm.nebius.ai/nodeset` worker labels, such as `worker-gpu` and `worker-cpu`,
@@ -1283,9 +1286,10 @@ waves when selected, using an
 exact fixed worker-group count or a percent-based wave with an optional cap,
 handles affected Slurm jobs on external node-template workers and all live
 worker NodeSets before target chart reconciliation through the `--job-policy`
-interactive, wait-to-finish, wait-then-cancel, cancel, requeue, or requeue-hold decision
-state, including pending jobs in affected partitions or requested/scheduled on
-affected nodes. TTY managed and external upgrade runs default to `interactive`;
+interactive, wait-to-finish, wait-then-cancel, fail, cancel-selected,
+cancel-all, requeue-selected, requeue-all, requeue-hold-selected, or
+requeue-hold-all decision state, including pending jobs in affected partitions
+or requested/scheduled on affected nodes. TTY managed and external upgrade runs default to `interactive`;
 non-TTY and `--no-interactive` upgrade runs default to `fail`, so automation
 should pass an explicit policy such as `--job-policy wait-to-finish` and
 destructive cancel/requeue or wait-then-cancel policies remain deliberate.

@@ -34,7 +34,7 @@ from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, Protocol, cast
 
 import typer
 import yaml
@@ -323,6 +323,7 @@ from .mysterybox_eso import (
     mysterybox_eso_validation_specs,
     normalize_mysterybox_eso_project_settings,
 )
+from .nebius_api_helpers import sdk_message_to_mapping, wait_nebius_operation
 from .nfs_csi import (
     NFS_CSI_APP_ID,
     ensure_nfs_csi_app_rows,
@@ -2560,6 +2561,79 @@ class _ExternalJailSfsResizeState:
     filesystem_id: str
     current_size_gib: int
     source: str
+    resource_version: int | None = None
+
+
+class _ExternalJailSfsApi(Protocol):
+    def get_filesystem(self, filesystem_id: str) -> Mapping[str, Any]:
+        """Return a Nebius filesystem payload."""
+
+    def resize_filesystem(
+        self,
+        *,
+        filesystem_id: str,
+        target_size_gib: int,
+        resource_version: int | None = None,
+        timeout_seconds: int = 1800,
+    ) -> Mapping[str, Any]:
+        """Resize a Nebius filesystem and return the updated payload."""
+
+    def close(self) -> None:
+        """Release any SDK resources owned by this API object."""
+
+
+class _SdkExternalJailSfsApi:
+    def __init__(self) -> None:
+        sdk = init_nebius_sdk(
+            context="external jail SFS resize",
+            prefer_operator_auth=True,
+        )
+        from nebius.api.nebius.compute.v1 import FilesystemServiceClient
+
+        self._sdk = sdk
+        self._filesystem_client = FilesystemServiceClient(sdk)
+
+    def get_filesystem(self, filesystem_id: str) -> Mapping[str, Any]:
+        from nebius.api.nebius.compute.v1 import GetFilesystemRequest
+
+        with suppress_expected_refresh_logs():
+            filesystem = self._filesystem_client.get(
+                GetFilesystemRequest(id=filesystem_id)
+            ).wait()
+        return sdk_message_to_mapping(filesystem)
+
+    def resize_filesystem(
+        self,
+        *,
+        filesystem_id: str,
+        target_size_gib: int,
+        resource_version: int | None = None,
+        timeout_seconds: int = 1800,
+    ) -> Mapping[str, Any]:
+        from nebius.api.nebius.common.v1 import ResourceMetadata
+        from nebius.api.nebius.compute.v1 import FilesystemSpec, UpdateFilesystemRequest
+        from nebius.base.fieldmask import Mask
+
+        metadata: dict[str, Any] = {"id": filesystem_id}
+        if resource_version is not None:
+            metadata["resource_version"] = resource_version
+        request = UpdateFilesystemRequest(
+            metadata=ResourceMetadata(**metadata),
+            spec=FilesystemSpec(size_gibibytes=target_size_gib),
+        )
+        request.set_mask(Mask.unmarshal("spec.size_gibibytes"))
+        with suppress_expected_refresh_logs():
+            operation = self._filesystem_client.update(request).wait()
+            wait_nebius_operation(
+                operation,
+                timeout_seconds=timeout_seconds,
+                action=f"Nebius filesystem resize {filesystem_id}",
+            )
+        return self.get_filesystem(filesystem_id)
+
+    def close(self) -> None:
+        with suppress(Exception):
+            self._sdk.sync_close()
 
 
 SOPERATOR_UPGRADE_CHECKPOINT_SCHEMA = "nebius-cxcli-soperator-cluster-upgrade/v1"
@@ -2647,7 +2721,7 @@ _SOPERATOR_JAIL_SFS_RESIZE_POLICY_HELP = (
     "Jail rootfs backing SFS resize policy before passive-slot population: fail, prompt, "
     "or apply. Default: prompt in an interactive terminal, fail otherwise. Resizes are "
     "expansion-only. Managed soperator upgrade resizes through rendered Terraform; "
-    "ext-soperator upgrade resizes the existing Nebius jail SFS through Nebius CLI/API."
+    "ext-soperator upgrade resizes the existing Nebius jail SFS through the Nebius SDK/API."
 )
 _SOPERATOR_JAIL_SFS_RESIZE_TO_GIB_HELP = (
     "Explicit target size in GiB for the jail rootfs SFS when capacity is insufficient. "
@@ -21962,7 +22036,7 @@ def _collect_soperator_snapshot_for_nebius_mk8s_cluster(
     except Exception as exc:
         snapshot.setdefault("provider_collection_errors", []).append(
             {
-                "command": "nebius mk8s cluster/node-group inventory",
+                "command": "Nebius MK8s SDK/API inventory",
                 "message": str(exc),
             }
         )
@@ -26939,20 +27013,6 @@ def _external_jail_sfs_candidate_ids(source_report: Mapping[str, Any]) -> Mappin
     return candidates
 
 
-def _default_external_nebius_command(
-    args: Sequence[str],
-    *,
-    timeout_seconds: int = 1800,
-) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        list(args),
-        text=True,
-        capture_output=True,
-        timeout=timeout_seconds,
-        check=False,
-    )
-
-
 def _external_jail_sfs_size_gib_from_payload(payload: Mapping[str, Any]) -> int:
     spec = payload.get("spec")
     spec_map = spec if isinstance(spec, Mapping) else {}
@@ -26971,10 +27031,23 @@ def _external_jail_sfs_size_gib_from_payload(payload: Mapping[str, Any]) -> int:
     raise RuntimeError("Nebius filesystem payload did not include a positive size_gibibytes.")
 
 
+def _external_jail_sfs_resource_version_from_payload(payload: Mapping[str, Any]) -> int | None:
+    metadata = payload.get("metadata")
+    metadata_map = metadata if isinstance(metadata, Mapping) else {}
+    for value in (metadata_map.get("resource_version"), metadata_map.get("resourceVersion")):
+        try:
+            parsed = int(str(value).strip())
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0:
+            return parsed
+    return None
+
+
 def _external_jail_sfs_resize_state(
     *,
     source_report: Mapping[str, Any],
-    command_runner: Callable[..., Any] = _default_external_nebius_command,
+    nebius_api: _ExternalJailSfsApi | None = None,
 ) -> _ExternalJailSfsResizeState:
     candidates = _external_jail_sfs_candidate_ids(source_report)
     if not candidates:
@@ -26990,27 +27063,23 @@ def _external_jail_sfs_resize_state(
             f"filesystems were found: {details}."
         )
     filesystem_id, source = next(iter(candidates.items()))
-    result = command_runner(
-        ("nebius", "compute", "filesystem", "get", "--id", filesystem_id, "--format", "json"),
-        timeout_seconds=300,
-    )
-    if int(getattr(result, "returncode", 0) or 0) != 0:
-        stderr = str(getattr(result, "stderr", "") or getattr(result, "stdout", "") or "").strip()
-        raise RuntimeError(
-            f"Could not read external jail SFS filesystem {filesystem_id}: {stderr or 'unknown error'}"
-        )
+    owned_api = nebius_api is None
+    active_api = nebius_api or _SdkExternalJailSfsApi()
     try:
-        payload = json.loads(str(getattr(result, "stdout", "") or "{}"))
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(
-            f"nebius compute filesystem get returned invalid JSON for {filesystem_id}: {exc}"
-        ) from exc
+        payload = active_api.get_filesystem(filesystem_id)
+    except Exception as exc:
+        if owned_api:
+            active_api.close()
+        raise RuntimeError(f"Could not read external jail SFS filesystem {filesystem_id}: {exc}") from exc
+    if owned_api:
+        active_api.close()
     if not isinstance(payload, Mapping):
-        raise RuntimeError(f"nebius compute filesystem get returned a non-object for {filesystem_id}.")
+        raise RuntimeError(f"Nebius filesystem API returned a non-object for {filesystem_id}.")
     return _ExternalJailSfsResizeState(
         filesystem_id=filesystem_id,
         current_size_gib=_external_jail_sfs_size_gib_from_payload(payload),
         source=source,
+        resource_version=_external_jail_sfs_resource_version_from_payload(payload),
     )
 
 
@@ -27044,15 +27113,22 @@ def _ensure_external_jail_sfs_capacity_or_resize(
     probe_capacity: Callable[[], JailCapacityPreflight],
     record_capacity: Callable[[JailCapacityPreflight], None],
     record_resize: Callable[[Mapping[str, Any]], None],
-    command_runner: Callable[..., Any] = _default_external_nebius_command,
+    nebius_api: _ExternalJailSfsApi | None = None,
 ) -> JailCapacityPreflight:
     record_capacity(preflight)
     if preflight.sufficient:
         return preflight
-    state = _external_jail_sfs_resize_state(
-        source_report=source_report,
-        command_runner=command_runner,
-    )
+    owned_api = nebius_api is None
+    active_api = nebius_api or _SdkExternalJailSfsApi()
+    try:
+        state = _external_jail_sfs_resize_state(
+            source_report=source_report,
+            nebius_api=active_api,
+        )
+    except Exception:
+        if owned_api:
+            active_api.close()
+        raise
     recommended_size_gib = recommend_jail_sfs_size_gib(
         current_size_gib=state.current_size_gib,
         shortage_bytes=preflight.shortage_bytes,
@@ -27073,6 +27149,8 @@ def _ensure_external_jail_sfs_capacity_or_resize(
     }
     record_resize(resize_payload)
     if policy == "fail":
+        if owned_api:
+            active_api.close()
         raise RuntimeError(
             _external_jail_sfs_capacity_failure_message(
                 state=state,
@@ -27086,13 +27164,15 @@ def _ensure_external_jail_sfs_capacity_or_resize(
             (
                 "Passive jail rootfs slot needs more free space. Resize existing Nebius "
                 f"filesystem {state.filesystem_id} from {state.current_size_gib} GiB to "
-                f"{recommended_size_gib} GiB with Nebius CLI/API?"
+                f"{recommended_size_gib} GiB with the Nebius SDK/API?"
             ),
             default=False,
         )
         if not confirmed:
             resize_payload["status"] = "declined"
             record_resize(resize_payload)
+            if owned_api:
+                active_api.close()
             raise RuntimeError(
                 _external_jail_sfs_capacity_failure_message(
                     state=state,
@@ -27104,30 +27184,25 @@ def _ensure_external_jail_sfs_capacity_or_resize(
     resize_payload["status"] = "applying"
     resize_payload["nebius_api_status"] = "running"
     record_resize(resize_payload)
-    result = command_runner(
-        (
-            "nebius",
-            "compute",
-            "filesystem",
-            "update",
-            "--id",
-            state.filesystem_id,
-            "--size-gibibytes",
-            str(recommended_size_gib),
-        ),
-        timeout_seconds=1800,
-    )
-    if int(getattr(result, "returncode", 0) or 0) != 0:
+    try:
+        active_api.resize_filesystem(
+            filesystem_id=state.filesystem_id,
+            target_size_gib=recommended_size_gib,
+            resource_version=state.resource_version,
+            timeout_seconds=1800,
+        )
+    except Exception as exc:
         resize_payload["status"] = "failed"
         resize_payload["nebius_api_status"] = "failed"
-        resize_payload["error"] = str(
-            getattr(result, "stderr", "") or getattr(result, "stdout", "") or "unknown error"
-        ).strip()
+        resize_payload["error"] = str(exc).strip()
         record_resize(resize_payload)
         raise RuntimeError(
             f"External jail SFS resize failed for {state.filesystem_id}: "
             f"{resize_payload['error'] or 'unknown error'}"
-        )
+        ) from exc
+    finally:
+        if owned_api:
+            active_api.close()
     resize_payload["status"] = "applied"
     resize_payload["nebius_api_status"] = "completed"
     record_resize(resize_payload)
@@ -47057,7 +47132,7 @@ def _raise_if_deploy_would_bypass_soperator_migration(
         (
             "Run `nebius-cxcli render` first if config.yaml changed, then use "
             "`ext-soperator upgrade`; deploy only applies the rendered Terraform/Flux "
-            "desired state and cannot perform the required ad hoc Nebius API upgrade "
+            "desired state and cannot perform the required Nebius SDK/API upgrade "
             "phases."
         ),
     ]
@@ -55029,11 +55104,11 @@ def ext_soperator_scale_up_command(
         "--execute --approve refreshes discovery, creates a restore-capable backup, "
         "then runs exactly one locked upgrade-path segment: one external MK8s "
         "control-plane/node-template hop plus any Soperator/storage/compute/GPU-stack "
-        "work assigned to that segment, validation, and reports. If an existing "
-        "accepted locked path already contains more segments, repeat the same "
-        "ext-soperator upgrade --execute --approve command; new later Kubernetes "
-        "minor hops start with a fresh ext-soperator onboard decision after the "
-        "current hop completes."
+        "work assigned to that segment, validation, and reports. If the accepted "
+        "locked path still contains more segments, repeat the same ext-soperator "
+        "upgrade --execute --approve command until the path is complete; use a "
+        "fresh ext-soperator onboard decision only to plan a new later path or "
+        "intentionally repair/replan."
     ),
 )
 def soperator_external_upgrade_command(
@@ -58710,7 +58785,7 @@ def acceptance_test_benchmark_command(
         "(fails on missing service-account credentials instead of refreshing them). "
         "For external Soperator onboarding targets with external-upgrade-owned actions, deploy "
         "fails before Terraform/Flux work and prints the required ext-soperator upgrade "
-        "dry-run/execute commands, because upgrade owns ad hoc Nebius API upgrade phases. "
+        "dry-run/execute commands, because upgrade owns Nebius SDK/API upgrade phases. "
         "When qosConfiguration.enabled=true the Soperator chart runs a post-install Helm hook Job "
         "(kubectl exec into the accounting pod) that reconciles sacctmgr "
         "accounts/QOS/associations."
@@ -58837,7 +58912,7 @@ def deploy_command(
     contains external-upgrade-owned work such as Soperator upgrade, external
     control-plane/node-template upgrade, storage remediation, or compute
     replacement, deploy refuses before preflight and directs the operator to
-    `ext-soperator upgrade`; deploy cannot perform those ad hoc Nebius API
+    `ext-soperator upgrade`; deploy cannot perform those Nebius SDK/API
     upgrade phases. Use `ext-soperator upgrade` for reruns/resume while those
     actions remain selected. If the locked path still has remaining segments,
     repeat the same `ext-soperator upgrade --execute --approve` command; cxcli

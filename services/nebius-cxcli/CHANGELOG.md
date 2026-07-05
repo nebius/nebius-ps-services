@@ -17,7 +17,7 @@ All notable changes to this project are tracked here. This changelog follows
   Managed production Soperator defaults now size the cxcli-owned jail SFS
   backing store at `2048` GiB total capacity, `soperator upgrade` expands that
   store through config render and Terraform apply, and `ext-soperator upgrade`
-  expands only one identified existing Nebius jail SFS through Nebius CLI/API.
+  expands only one identified existing Nebius jail SFS through the Nebius SDK/API.
   Both commands expose `--jail-sfs-resize-policy fail|prompt|apply` plus
   `--jail-sfs-resize-to-gib` before passive-slot population.
 - Fixed `nebius-cxcli validate` coverage for external Soperator onboarding
@@ -39,6 +39,10 @@ All notable changes to this project are tracked here. This changelog follows
   Markdown/JSON reports now include locked-path progress and each segment also
   writes a snapshot under
   `generated/reports/ext-soperator-upgrades/<target>/<segment-id>/`.
+- Clarified `ext-soperator upgrade` help and README wording so operators repeat
+  the same `--execute --approve` command until all accepted locked-path segments
+  are complete; `ext-soperator onboard` is only for a new later path or an
+  intentional repair/replan.
 - Added phase-bounded resume checkpoints for managed `soperator upgrade` and
   hardened the existing external `ext-soperator upgrade --execute` phase
   runner. Both commands now record `planned_phases`, `completed_phases`,
@@ -65,9 +69,9 @@ All notable changes to this project are tracked here. This changelog follows
   replacement so checkpoint resume skips deleted stale `computeinstance-*`
   worker nodes instead of failing node-alias mapping or querying all Slurm jobs
   for an empty affected-node scope.
-- Hardened external Soperator upgrade resume preflight so transient Nebius CLI
-  `Unavailable` transport timeouts while reading MK8s node groups are retried
-  before failing the checkpointed run.
+- Changed external Soperator upgrade MK8s control-plane, node-group, and
+  aligned-SFS reads/mutations to use the Nebius SDK/API directly instead of
+  shelling out to the `nebius` CLI.
 - Fixed the interactive Soperator Slurm job-control screen so selected rows use
   a high-contrast marker, remaining times tick while the selector is open, and
   pressing `w` waits in the same screen instead of switching to a separate wait

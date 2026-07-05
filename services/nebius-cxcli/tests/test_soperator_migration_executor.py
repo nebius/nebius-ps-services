@@ -125,69 +125,43 @@ def test_command_not_found_recognizes_explicit_not_found_status(stderr: str) -> 
     assert migration._command_not_found(result) is True
 
 
-def test_node_group_payload_retries_transient_nebius_transport_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[tuple[str, ...]] = []
-    sleeps: list[float] = []
+def test_node_group_payload_reads_through_nebius_api() -> None:
+    class _Api:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
 
-    def runner(
-        args: Sequence[str],
-        *,
-        input_text: str | None = None,
-        timeout_seconds: int = 300,
-        check: bool = True,
-    ) -> SoperatorMigrationCommandResult:
-        del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
-        calls.append(command)
-        if len(calls) < 3:
-            raise RuntimeError(
-                'nebius mk8s node-group get node-group-1 --format json failed: Error: '
-                'rpc error: code = Unavailable desc = connection error: desc = '
-                '"transport: authentication handshake failed: read: operation timed out"'
-            )
-        return SoperatorMigrationCommandResult(
-            command,
-            0,
-            json.dumps({"metadata": {"id": "node-group-1"}}),
-            "",
-        )
+        def get_node_group(self, node_group_id: str) -> Mapping[str, Any]:
+            self.calls.append(node_group_id)
+            return {"metadata": {"id": node_group_id}}
 
-    monkeypatch.setattr(migration.time, "sleep", lambda seconds: sleeps.append(seconds))
-
+    api = _Api()
     payload = migration._node_group_payload_by_id(  # noqa: SLF001
-        command_runner=runner,
+        nebius_api=api,  # type: ignore[arg-type]
         node_group_id="node-group-1",
     )
 
     assert payload["metadata"]["id"] == "node-group-1"
-    assert len(calls) == 3
-    assert sleeps == [1.0, 2.0]
+    assert api.calls == ["node-group-1"]
 
 
-def test_node_group_payload_does_not_retry_non_transient_nebius_error() -> None:
-    calls: list[tuple[str, ...]] = []
+def test_node_group_payload_propagates_nebius_api_error() -> None:
+    class _Api:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
 
-    def runner(
-        args: Sequence[str],
-        *,
-        input_text: str | None = None,
-        timeout_seconds: int = 300,
-        check: bool = True,
-    ) -> SoperatorMigrationCommandResult:
-        del input_text, timeout_seconds, check
-        command = tuple(str(item) for item in args)
-        calls.append(command)
-        raise RuntimeError("nebius mk8s node-group get failed: PermissionDenied")
+        def get_node_group(self, node_group_id: str) -> Mapping[str, Any]:
+            self.calls.append(node_group_id)
+            raise RuntimeError("Nebius API node-group get failed: PermissionDenied")
+
+    api = _Api()
 
     with pytest.raises(RuntimeError, match="PermissionDenied"):
         migration._node_group_payload_by_id(  # noqa: SLF001
-            command_runner=runner,
+            nebius_api=api,  # type: ignore[arg-type]
             node_group_id="node-group-1",
         )
 
-    assert len(calls) == 1
+    assert api.calls == ["node-group-1"]
 
 
 def test_execution_source_contract_ignores_slurmcluster_secrets_redaction() -> None:
@@ -705,6 +679,240 @@ def _stub_migration_quota_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(migration, "assess_live_quota_requirements", _assess)
 
 
+class _FakeNebiusApi:
+    def __init__(self, runner: _FakeCommandRunner) -> None:
+        self.runner = runner
+        self.calls: list[tuple[Any, ...]] = []
+
+    def get_filesystem_by_name(self, *, project_id: str, name: str) -> Mapping[str, Any]:
+        self.calls.append(("filesystem.get_by_name", project_id, name))
+        result = self.runner(
+            [
+                "nebius",
+                "compute",
+                "filesystem",
+                "get-by-name",
+                "--parent-id",
+                project_id,
+                "--name",
+                name,
+                "--format",
+                "json",
+            ],
+            check=False,
+        )
+        if result.returncode != 0:
+            return {}
+        return json.loads(result.stdout or "{}")
+
+    def create_filesystem(
+        self,
+        *,
+        project_id: str,
+        spec: migration.SoperatorAlignedFilesystemSpec,
+        timeout_seconds: int = 1800,
+    ) -> Mapping[str, Any]:
+        self.calls.append(("filesystem.create", project_id, spec.name, timeout_seconds))
+        args = [
+            "nebius",
+            "compute",
+            "filesystem",
+            "create",
+            "--parent-id",
+            project_id,
+            "--name",
+            spec.name,
+            "--type",
+            spec.filesystem_type,
+            "--size-gibibytes",
+            str(spec.size_gib),
+            "--block-size-bytes",
+            str(spec.block_size_kib * 1024),
+            "--format",
+            "json",
+            "--timeout",
+            "30m",
+        ]
+        if spec.forbid_deletion:
+            args.insert(-4, "--forbid-deletion")
+        result = self.runner(args, timeout_seconds=timeout_seconds)
+        return json.loads(result.stdout or "{}")
+
+    def get_node_group(self, node_group_id: str) -> Mapping[str, Any]:
+        self.calls.append(("node_group.get", node_group_id))
+        result = self.runner(
+            ["nebius", "mk8s", "node-group", "get", node_group_id, "--format", "json"]
+        )
+        return json.loads(result.stdout or "{}")
+
+    def list_node_groups(self, cluster_id: str) -> tuple[Mapping[str, Any], ...]:
+        self.calls.append(("node_group.list", cluster_id))
+        result = self.runner(
+            [
+                "nebius",
+                "mk8s",
+                "node-group",
+                "list",
+                "--parent-id",
+                cluster_id,
+                "--format",
+                "json",
+                "--all",
+            ]
+        )
+        parsed = json.loads(result.stdout or "{}")
+        items = parsed.get("items", []) if isinstance(parsed, dict) else []
+        return tuple(item for item in items if isinstance(item, Mapping))
+
+    def update_node_group(
+        self,
+        *,
+        node_group_id: str,
+        original_node_group: Mapping[str, Any],
+        update_args: Sequence[str],
+        strategy_args: Sequence[str],
+        clear_template_gpu_settings: bool = False,
+        timeout_seconds: int = 2700,
+    ) -> Mapping[str, Any]:
+        self.calls.append(
+            (
+                "node_group.update",
+                node_group_id,
+                tuple(update_args),
+                tuple(strategy_args),
+                clear_template_gpu_settings,
+                timeout_seconds,
+            )
+        )
+        result = self.runner(
+            [
+                "nebius",
+                "mk8s",
+                "node-group",
+                "update",
+                node_group_id,
+                *update_args,
+                *strategy_args,
+                "--format",
+                "json",
+                "--timeout",
+                migration._node_group_rollout_timeout_text(timeout_seconds),  # noqa: SLF001
+            ],
+            timeout_seconds=timeout_seconds,
+        )
+        payload = json.loads(result.stdout or "{}")
+        if clear_template_gpu_settings:
+            for node_group in self.runner.existing_node_groups:
+                metadata = node_group.get("metadata")
+                if isinstance(metadata, dict) and metadata.get("id") == node_group_id:
+                    template = node_group.get("spec", {}).get("template", {})
+                    if isinstance(template, dict):
+                        template.pop("gpu_settings", None)
+                        template.pop("gpuSettings", None)
+                    payload = node_group
+                    break
+        return payload
+
+    def create_node_group(
+        self,
+        *,
+        payload: Mapping[str, Any],
+        timeout_seconds: int = 3600,
+    ) -> Mapping[str, Any]:
+        metadata = dict(payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {})
+        name = str(metadata.get("name", "") or "")
+        parent_id = str(metadata.get("parent_id", "") or metadata.get("parentId", "") or "")
+        self.calls.append(("node_group.create", name, parent_id, timeout_seconds))
+        result = self.runner(
+            [
+                "nebius",
+                "mk8s",
+                "node-group",
+                "create",
+                json.dumps(payload, sort_keys=True),
+                "--format",
+                "json",
+                "--timeout",
+                "60m",
+            ],
+            timeout_seconds=timeout_seconds,
+        )
+        return json.loads(result.stdout or "{}")
+
+    def scale_node_group(
+        self,
+        *,
+        node_group_id: str,
+        count: int,
+        timeout_seconds: int = 3000,
+    ) -> None:
+        self.calls.append(("node_group.scale", node_group_id, count, timeout_seconds))
+        self.runner(
+            [
+                "nebius",
+                "mk8s",
+                "node-group",
+                "update",
+                node_group_id,
+                "--fixed-node-count",
+                str(count),
+                "--format",
+                "json",
+                "--timeout",
+                "45m",
+            ],
+            timeout_seconds=timeout_seconds,
+            check=False,
+        )
+
+    def delete_node_group(
+        self,
+        *,
+        node_group_id: str,
+        timeout_seconds: int = 3000,
+    ) -> None:
+        self.calls.append(("node_group.delete", node_group_id, timeout_seconds))
+        self.runner(
+            ["nebius", "mk8s", "node-group", "delete", node_group_id, "--timeout", "45m"],
+            timeout_seconds=timeout_seconds,
+            check=False,
+        )
+
+    def get_cluster(self, cluster_id: str) -> Mapping[str, Any]:
+        self.calls.append(("cluster.get", cluster_id))
+        result = self.runner(["nebius", "mk8s", "cluster", "get", cluster_id, "--format", "json"])
+        return json.loads(result.stdout or "{}")
+
+    def update_cluster_control_plane(
+        self,
+        *,
+        cluster_id: str,
+        control_plane_version: str,
+        timeout_seconds: int = 3600,
+    ) -> Mapping[str, Any]:
+        self.calls.append(("cluster.update_control_plane", cluster_id, control_plane_version))
+        result = self.runner(
+            [
+                "nebius",
+                "mk8s",
+                "cluster",
+                "update",
+                cluster_id,
+                "--control-plane-version",
+                control_plane_version,
+                "--format",
+                "json",
+                "--timeout",
+                "60m",
+            ],
+            timeout_seconds=timeout_seconds,
+        )
+        return json.loads(result.stdout or "{}")
+
+    def close(self) -> None:
+        self.calls.append(("close",))
+
+
 class _FakeCommandRunner:
     def __init__(
         self,
@@ -931,6 +1139,7 @@ spec:
         self.slurm_queue_returncode = slurm_queue_returncode
         self.file_update_payloads: list[dict[str, Any]] = []
         self._populate_jail_refresh_saved_pods: list[dict[str, Any]] | None = None
+        self.nebius_api = _FakeNebiusApi(self)
 
     def _upsert_helm_release(
         self,
@@ -2638,12 +2847,13 @@ def test_quota_preflight_does_not_count_preserved_worker_groups(
 
     monkeypatch.setattr(migration, "estimate_mk8s_quota_requirements", _record_quota_inputs)
 
+    runner = _FakeCommandRunner()
     requirements, gaps, lines = migration._new_target_node_group_quota_requirements(
         payload=_payload(include_placements=True),
         target_ref="external-cluster",
         source_report=_source_report(snapshot),
         worker_node_groups=("gpu-pool",),
-        command_runner=_FakeCommandRunner(),
+        nebius_api=runner.nebius_api,
     )
 
     assert requirements == []
@@ -2687,12 +2897,13 @@ def test_safe_surge_quota_preflight_counts_service_and_worker_active_groups(
 
     monkeypatch.setattr(migration, "estimate_mk8s_quota_requirements", _record_quota_inputs)
 
+    runner = _FakeCommandRunner()
     requirements, gaps, lines = migration._safe_surge_node_group_quota_requirements(
         payload=payload,
         target_ref="external-cluster",
         source_report=_source_report(snapshot),
         worker_node_groups=("gpu-pool",),
-        command_runner=_FakeCommandRunner(),
+        nebius_api=runner.nebius_api,
         rollout=rollout,
     )
 
@@ -2966,6 +3177,7 @@ def test_external_node_template_completion_recheck_rejects_k8s_downgrade_target(
             source_report=_source_report(),
             target_ref="external-cluster",
             worker_node_groups=(),
+            nebius_api=runner.nebius_api,
             command_runner=runner,
         )
 
@@ -3023,7 +3235,7 @@ def test_sfs_attachment_uses_zero_surge_strategy_and_restores_original() -> None
     assert "jail" not in specs_by_key
 
     changed, attachments = migration._attach_filesystems_to_source_node_groups(
-        command_runner=runner,
+        nebius_api=runner.nebius_api,
         source_report=_source_report(),
         attachment_keys_by_group={"gpu-pool": ("controller-spool",)},
         filesystem_ids_by_key={"controller-spool": "filesystem-controller-spool"},
@@ -3095,7 +3307,7 @@ def test_external_node_template_update_clears_stale_cpu_driver_preset() -> None:
     )
 
 
-def test_zero_surge_full_update_file_clears_cpu_gpu_settings() -> None:
+def test_zero_surge_sdk_update_clears_cpu_gpu_settings() -> None:
     runner = _FakeCommandRunner(
         existing_node_groups=[
             {
@@ -3121,7 +3333,7 @@ def test_zero_surge_full_update_file_clears_cpu_gpu_settings() -> None:
     )
 
     migration._update_node_group_with_zero_surge_strategy(
-        command_runner=runner,
+        nebius_api=runner.nebius_api,
         node_group_id="nodegroup-worker-cpu",
         update_args=("--version", "1.33"),
         original_node_group=runner.existing_node_groups[0],
@@ -3141,13 +3353,8 @@ def test_zero_surge_full_update_file_clears_cpu_gpu_settings() -> None:
         )
     ]
     assert update_calls
-    assert "--file" in update_calls[0]
     assert "--template-gpu-settings-drivers-preset" not in update_calls[0]
     node_group = runner.existing_node_groups[0]
-    assert runner.file_update_payloads
-    file_spec = runner.file_update_payloads[0]["spec"]
-    assert isinstance(file_spec, dict)
-    assert file_spec["strategy"]["drain_timeout"] == "1800s"
     spec = node_group["spec"]
     assert isinstance(spec, dict)
     assert spec["version"] == "1.33"
@@ -8340,6 +8547,7 @@ def test_completed_migration_mk8s_check_fails_when_live_node_template_drifts() -
             target_ref="external-cluster",
             worker_node_groups=("gpu-pool",),
             phase_ids=("external-node-template-upgrade",),
+            nebius_api=runner.nebius_api,
             command_runner=runner,
         )
 
@@ -8373,13 +8581,14 @@ def test_completed_migration_mk8s_check_fails_when_status_is_missing() -> None:
         ],
     )
 
-    with pytest.raises(RuntimeError, match="status not returned by Nebius CLI"):
+    with pytest.raises(RuntimeError, match="status not returned by Nebius API"):
         migration._verify_completed_soperator_migration_mk8s_state(
             payload=_payload(target_k8s_version="1.34"),
             source_report=source_report,
             target_ref="external-cluster",
             worker_node_groups=("gpu-pool",),
             phase_ids=("external-node-template-upgrade",),
+            nebius_api=runner.nebius_api,
             command_runner=runner,
         )
 
@@ -8421,6 +8630,7 @@ def test_completed_migration_mk8s_check_fails_when_status_counts_are_missing() -
             target_ref="external-cluster",
             worker_node_groups=("gpu-pool",),
             phase_ids=("external-node-template-upgrade",),
+            nebius_api=runner.nebius_api,
             command_runner=runner,
         )
 
@@ -9633,6 +9843,7 @@ def test_final_cutover_reconcile_checks_preserved_worker_nodeset_readiness() -> 
         target_ref="external-cluster",
         kube_context="external-context",
         worker_node_groups=("gpu-pool", "cpu-pool"),
+        nebius_api=unavailable_cluster_runner.nebius_api,
         command_runner=unavailable_cluster_runner,
     )
 
@@ -9892,6 +10103,7 @@ def test_mk8s_status_reports_node_groups_and_replacing_nodes() -> None:
     }
 
     signal = migration._collect_mk8s_status(
+        nebius_api=runner.nebius_api,
         command_runner=runner,
         kube_context="external-context",
         checkpoint=checkpoint,
@@ -9974,6 +10186,7 @@ def test_mk8s_status_reports_reconciling_node_group_when_nodes_ready() -> None:
     }
 
     signal = migration._collect_mk8s_status(
+        nebius_api=runner.nebius_api,
         command_runner=runner,
         kube_context="external-context",
         checkpoint=checkpoint,
@@ -10012,6 +10225,7 @@ def test_mk8s_status_keeps_problem_label_for_non_upgrading_notready_nodes() -> N
     )
 
     signal = migration._collect_mk8s_status(
+        nebius_api=runner.nebius_api,
         command_runner=runner,
         kube_context="external-context",
         checkpoint={},
@@ -10067,6 +10281,7 @@ def test_mk8s_status_bounds_many_groups_and_transition_nodes() -> None:
     }
 
     signal = migration._collect_mk8s_status(
+        nebius_api=runner.nebius_api,
         command_runner=runner,
         kube_context="external-context",
         checkpoint=checkpoint,
@@ -10093,6 +10308,7 @@ def test_mk8s_status_sections_empty_node_inventory() -> None:
     runner.live_nodes = []
 
     signal = migration._collect_mk8s_status(
+        nebius_api=runner.nebius_api,
         command_runner=runner,
         kube_context="external-context",
         checkpoint={},
@@ -11378,6 +11594,7 @@ def test_rolling_compute_migration_resumes_slurm_after_post_drain_failure(
     )
 
     with pytest.raises(RuntimeError, match="simulated post-drain failure"):
+        runner = _FakeCommandRunner()
         migration._execute_rolling_compute_migration_phase(
             checkpoint={},
             payload=_payload(),
@@ -11386,7 +11603,8 @@ def test_rolling_compute_migration_resumes_slurm_after_post_drain_failure(
             target_ref="external-cluster",
             kube_context="external-context",
             worker_node_groups=("gpu-pool",),
-            command_runner=_FakeCommandRunner(),
+            nebius_api=runner.nebius_api,
+            command_runner=runner,
         )
 
     assert resumed == ["resumed"]

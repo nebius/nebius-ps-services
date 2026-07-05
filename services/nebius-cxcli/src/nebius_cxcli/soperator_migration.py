@@ -56,6 +56,7 @@ from .mk8s_upgrade import (
     validate_node_template_field_value,
     validate_os_image_value,
 )
+from .nebius_api_helpers import sdk_message_to_mapping, sdk_parse_message, wait_nebius_operation
 from .paths import resolve_project_paths
 from .quota_checks import (
     QuotaCoverageGap,
@@ -66,6 +67,7 @@ from .quota_checks import (
     format_quota_report_lines,
 )
 from .runtime_config import to_plain_data
+from .sdk_auth import init_nebius_sdk, suppress_expected_refresh_logs
 from .slurm_job_control import (
     SLURM_JOB_CONTROL_WAIT_COMPLETED,
     SLURM_JOB_CONTROL_WAIT_TIMEOUT,
@@ -495,6 +497,78 @@ class SoperatorMigrationCommandRunner(Protocol):
         """Run an external command for a live upgrade phase."""
 
 
+class SoperatorMigrationNebiusApi(Protocol):
+    def get_filesystem_by_name(self, *, project_id: str, name: str) -> Mapping[str, Any]:
+        """Return an existing filesystem by project/name, or an empty mapping."""
+
+    def create_filesystem(
+        self,
+        *,
+        project_id: str,
+        spec: SoperatorAlignedFilesystemSpec,
+        timeout_seconds: int = 1800,
+    ) -> Mapping[str, Any]:
+        """Create a filesystem and return its payload."""
+
+    def get_node_group(self, node_group_id: str) -> Mapping[str, Any]:
+        """Return a node-group payload."""
+
+    def list_node_groups(self, cluster_id: str) -> tuple[Mapping[str, Any], ...]:
+        """Return node groups for a cluster."""
+
+    def update_node_group(
+        self,
+        *,
+        node_group_id: str,
+        original_node_group: Mapping[str, Any],
+        update_args: Sequence[str],
+        strategy_args: Sequence[str],
+        clear_template_gpu_settings: bool = False,
+        timeout_seconds: int = 2700,
+    ) -> Mapping[str, Any]:
+        """Update a node group and return its payload."""
+
+    def create_node_group(
+        self,
+        *,
+        payload: Mapping[str, Any],
+        timeout_seconds: int = 3600,
+    ) -> Mapping[str, Any]:
+        """Create a node group and return its payload."""
+
+    def scale_node_group(
+        self,
+        *,
+        node_group_id: str,
+        count: int,
+        timeout_seconds: int = 3000,
+    ) -> None:
+        """Set a node group's fixed node count."""
+
+    def delete_node_group(
+        self,
+        *,
+        node_group_id: str,
+        timeout_seconds: int = 3000,
+    ) -> None:
+        """Delete a node group."""
+
+    def get_cluster(self, cluster_id: str) -> Mapping[str, Any]:
+        """Return a cluster payload."""
+
+    def update_cluster_control_plane(
+        self,
+        *,
+        cluster_id: str,
+        control_plane_version: str,
+        timeout_seconds: int = 3600,
+    ) -> Mapping[str, Any]:
+        """Update a cluster control-plane version and return its payload."""
+
+    def close(self) -> None:
+        """Release any SDK resources owned by this API object."""
+
+
 JailSfsResizeHandler = Callable[
     [
         JailCapacityPreflight,
@@ -566,6 +640,309 @@ class SoperatorMigrationExecutionResult:
     mutation_performed: bool
     lines: tuple[str, ...]
     report_path: Path | None = None
+
+
+def _sdk_not_found_error(error: BaseException) -> bool:
+    text = str(error).lower()
+    return any(
+        marker in text
+        for marker in (
+            "not found",
+            "not_found",
+            "notfound",
+            "statuscode.not_found",
+            "code = not_found",
+        )
+    )
+
+
+def _sdk_field_paths_for_node_group_update(
+    *,
+    update_args: Sequence[str],
+    strategy_args: Sequence[str],
+    clear_template_gpu_settings: bool,
+) -> tuple[str, ...]:
+    command = tuple(str(item) for item in update_args)
+    paths: list[str] = []
+    if "--version" in command:
+        paths.append("spec.version")
+    if "--template-os" in command:
+        paths.append("spec.template.os")
+    if "--template-filesystems" in command:
+        paths.append("spec.template.filesystems")
+    if "--template-gpu-settings-drivers-preset" in command or clear_template_gpu_settings:
+        paths.append("spec.template.gpu_settings")
+    if strategy_args:
+        paths.append("spec.strategy")
+    return tuple(dict.fromkeys(paths))
+
+
+def _sdk_request_mask(paths: Sequence[str]) -> Any:
+    from nebius.base.fieldmask import Mask
+
+    return Mask.unmarshal(",".join(paths))
+
+
+def _filesystem_type_sdk_name(value: str) -> str:
+    normalized = _nebius_filesystem_type(value).upper()
+    return normalized if normalized else "NETWORK_SSD"
+
+
+class _SdkSoperatorMigrationNebiusApi:
+    def __init__(self, *, project_id: str) -> None:
+        sdk = init_nebius_sdk(
+            parent_id=project_id,
+            context="external Soperator migration Nebius API",
+            prefer_operator_auth=True,
+        )
+        from nebius.api.nebius.compute.v1 import FilesystemServiceClient
+        from nebius.api.nebius.mk8s.v1 import ClusterServiceClient, NodeGroupServiceClient
+
+        self._sdk = sdk
+        self._filesystem_client = FilesystemServiceClient(sdk)
+        self._cluster_client = ClusterServiceClient(sdk)
+        self._node_group_client = NodeGroupServiceClient(sdk)
+
+    def get_filesystem_by_name(self, *, project_id: str, name: str) -> Mapping[str, Any]:
+        from nebius.api.nebius.common.v1 import GetByNameRequest
+
+        try:
+            with suppress_expected_refresh_logs():
+                filesystem = self._filesystem_client.get_by_name(
+                    GetByNameRequest(parent_id=project_id, name=name)
+                ).wait()
+        except Exception as exc:
+            if _sdk_not_found_error(exc):
+                return {}
+            raise RuntimeError(f"Could not read aligned SFS filesystem '{name}': {exc}") from exc
+        return sdk_message_to_mapping(filesystem)
+
+    def create_filesystem(
+        self,
+        *,
+        project_id: str,
+        spec: SoperatorAlignedFilesystemSpec,
+        timeout_seconds: int = 1800,
+    ) -> Mapping[str, Any]:
+        from nebius.api.nebius.common.v1 import ResourceMetadata
+        from nebius.api.nebius.compute.v1 import CreateFilesystemRequest, FilesystemSpec
+
+        request = CreateFilesystemRequest(
+            metadata=ResourceMetadata(parent_id=project_id, name=spec.name),
+            spec=FilesystemSpec(
+                size_gibibytes=spec.size_gib,
+                block_size_bytes=spec.block_size_kib * 1024,
+                type=getattr(
+                    FilesystemSpec.FilesystemType,
+                    _filesystem_type_sdk_name(spec.filesystem_type),
+                ),
+                forbid_deletion=spec.forbid_deletion,
+            ),
+        )
+        with suppress_expected_refresh_logs():
+            operation = self._filesystem_client.create(request).wait()
+            wait_nebius_operation(
+                operation,
+                timeout_seconds=timeout_seconds,
+                action=f"Nebius filesystem create {spec.name}",
+            )
+        created = self.get_filesystem_by_name(project_id=project_id, name=spec.name)
+        if not created:
+            raise RuntimeError(f"Aligned SFS filesystem '{spec.name}' was created but not found.")
+        return created
+
+    def get_node_group(self, node_group_id: str) -> Mapping[str, Any]:
+        from nebius.api.nebius.mk8s.v1 import GetNodeGroupRequest
+
+        with suppress_expected_refresh_logs():
+            node_group = self._node_group_client.get(
+                GetNodeGroupRequest(id=node_group_id)
+            ).wait()
+        payload = sdk_message_to_mapping(node_group)
+        if not payload:
+            raise RuntimeError(f"Nebius node group {node_group_id} did not return a payload.")
+        return payload
+
+    def list_node_groups(self, cluster_id: str) -> tuple[Mapping[str, Any], ...]:
+        from nebius.api.nebius.mk8s.v1 import ListNodeGroupsRequest
+
+        items: list[Mapping[str, Any]] = []
+        token = ""
+        while True:
+            with suppress_expected_refresh_logs():
+                response = self._node_group_client.list(
+                    ListNodeGroupsRequest(parent_id=cluster_id, page_token=token or None)
+                ).wait()
+            for item in getattr(response, "items", []) or []:
+                payload = sdk_message_to_mapping(item)
+                if payload:
+                    items.append(payload)
+            token = str(getattr(response, "next_page_token", "") or "").strip()
+            if not token:
+                return tuple(items)
+
+    def update_node_group(
+        self,
+        *,
+        node_group_id: str,
+        original_node_group: Mapping[str, Any],
+        update_args: Sequence[str],
+        strategy_args: Sequence[str],
+        clear_template_gpu_settings: bool = False,
+        timeout_seconds: int = 2700,
+    ) -> Mapping[str, Any]:
+        from nebius.api.nebius.common.v1 import ResourceMetadata
+        from nebius.api.nebius.mk8s.v1 import NodeGroupSpec, UpdateNodeGroupRequest
+
+        mask_paths = _sdk_field_paths_for_node_group_update(
+            update_args=update_args,
+            strategy_args=strategy_args,
+            clear_template_gpu_settings=clear_template_gpu_settings,
+        )
+        if not mask_paths:
+            return self.get_node_group(node_group_id)
+        payload = _node_group_full_update_payload(
+            original_node_group=original_node_group,
+            update_args=update_args,
+            strategy_args=strategy_args,
+            clear_template_gpu_settings=clear_template_gpu_settings,
+        )
+        request = UpdateNodeGroupRequest(
+            metadata=ResourceMetadata(id=node_group_id),
+            spec=sdk_parse_message(NodeGroupSpec, _mapping(payload.get("spec"))),
+        )
+        request.set_mask(_sdk_request_mask(mask_paths))
+        with suppress_expected_refresh_logs():
+            operation = self._node_group_client.update(request).wait()
+            wait_nebius_operation(
+                operation,
+                timeout_seconds=timeout_seconds,
+                action=f"Nebius node-group update {node_group_id}",
+            )
+        return self.get_node_group(node_group_id)
+
+    def create_node_group(
+        self,
+        *,
+        payload: Mapping[str, Any],
+        timeout_seconds: int = 3600,
+    ) -> Mapping[str, Any]:
+        from nebius.api.nebius.common.v1 import GetByNameRequest, ResourceMetadata
+        from nebius.api.nebius.mk8s.v1 import CreateNodeGroupRequest, NodeGroupSpec
+
+        metadata = _mapping(payload.get("metadata"))
+        cluster_id = str(metadata.get("parent_id", metadata.get("parentId", "")) or "").strip()
+        name = str(metadata.get("name", "") or "").strip()
+        if not cluster_id or not name:
+            raise RuntimeError("Nebius node-group create requires metadata.parent_id and name.")
+        request = CreateNodeGroupRequest(
+            metadata=ResourceMetadata(parent_id=cluster_id, name=name),
+            spec=sdk_parse_message(NodeGroupSpec, _mapping(payload.get("spec"))),
+        )
+        with suppress_expected_refresh_logs():
+            operation = self._node_group_client.create(request).wait()
+            wait_nebius_operation(
+                operation,
+                timeout_seconds=timeout_seconds,
+                action=f"Nebius node-group create {name}",
+            )
+            node_group = self._node_group_client.get_by_name(
+                GetByNameRequest(parent_id=cluster_id, name=name)
+            ).wait()
+        return sdk_message_to_mapping(node_group)
+
+    def scale_node_group(
+        self,
+        *,
+        node_group_id: str,
+        count: int,
+        timeout_seconds: int = 3000,
+    ) -> None:
+        from nebius.api.nebius.common.v1 import ResourceMetadata
+        from nebius.api.nebius.mk8s.v1 import NodeGroupSpec, UpdateNodeGroupRequest
+
+        request = UpdateNodeGroupRequest(
+            metadata=ResourceMetadata(id=node_group_id),
+            spec=NodeGroupSpec(fixed_node_count=count),
+        )
+        request.set_mask(_sdk_request_mask(("spec.fixed_node_count",)))
+        try:
+            with suppress_expected_refresh_logs():
+                operation = self._node_group_client.update(request).wait()
+                wait_nebius_operation(
+                    operation,
+                    timeout_seconds=timeout_seconds,
+                    action=f"Nebius node-group scale {node_group_id}",
+                )
+        except Exception as exc:
+            if _sdk_not_found_error(exc):
+                return
+            raise RuntimeError(f"Could not scale node group {node_group_id}: {exc}") from exc
+
+    def delete_node_group(
+        self,
+        *,
+        node_group_id: str,
+        timeout_seconds: int = 3000,
+    ) -> None:
+        from nebius.api.nebius.mk8s.v1 import DeleteNodeGroupRequest
+
+        try:
+            with suppress_expected_refresh_logs():
+                operation = self._node_group_client.delete(
+                    DeleteNodeGroupRequest(id=node_group_id)
+                ).wait()
+                wait_nebius_operation(
+                    operation,
+                    timeout_seconds=timeout_seconds,
+                    action=f"Nebius node-group delete {node_group_id}",
+                )
+        except Exception as exc:
+            if _sdk_not_found_error(exc):
+                return
+            raise RuntimeError(f"Could not delete node group {node_group_id}: {exc}") from exc
+
+    def get_cluster(self, cluster_id: str) -> Mapping[str, Any]:
+        from nebius.api.nebius.mk8s.v1 import GetClusterRequest
+
+        with suppress_expected_refresh_logs():
+            cluster = self._cluster_client.get(GetClusterRequest(id=cluster_id)).wait()
+        payload = sdk_message_to_mapping(cluster)
+        if not payload:
+            raise RuntimeError(f"Nebius MK8s cluster {cluster_id} did not return a payload.")
+        return payload
+
+    def update_cluster_control_plane(
+        self,
+        *,
+        cluster_id: str,
+        control_plane_version: str,
+        timeout_seconds: int = 3600,
+    ) -> Mapping[str, Any]:
+        from nebius.api.nebius.common.v1 import ResourceMetadata
+        from nebius.api.nebius.mk8s.v1 import (
+            ClusterSpec,
+            ControlPlaneSpec,
+            UpdateClusterRequest,
+        )
+
+        request = UpdateClusterRequest(
+            metadata=ResourceMetadata(id=cluster_id),
+            spec=ClusterSpec(control_plane=ControlPlaneSpec(version=control_plane_version)),
+        )
+        request.set_mask(_sdk_request_mask(("spec.control_plane.version",)))
+        with suppress_expected_refresh_logs():
+            operation = self._cluster_client.update(request).wait()
+            wait_nebius_operation(
+                operation,
+                timeout_seconds=timeout_seconds,
+                action=f"Nebius MK8s cluster control-plane update {cluster_id}",
+            )
+        return self.get_cluster(cluster_id)
+
+    def close(self) -> None:
+        with suppress(Exception):
+            self._sdk.sync_close()
 
 
 @dataclass(frozen=True)
@@ -2430,66 +2807,20 @@ def _validate_existing_filesystem(
 
 def _get_filesystem_by_name(
     *,
-    command_runner: SoperatorMigrationCommandRunner,
+    nebius_api: SoperatorMigrationNebiusApi,
     project_id: str,
     name: str,
 ) -> Mapping[str, Any]:
-    result = command_runner(
-        [
-            "nebius",
-            "compute",
-            "filesystem",
-            "get-by-name",
-            "--parent-id",
-            project_id,
-            "--name",
-            name,
-            "--format",
-            "json",
-        ],
-        timeout_seconds=120,
-        check=False,
-    )
-    if result.returncode != 0:
-        return {}
-    try:
-        parsed = json.loads(result.stdout or "{}")
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(
-            f"nebius compute filesystem get-by-name returned invalid JSON: {exc}"
-        ) from exc
-    return parsed if isinstance(parsed, Mapping) else {}
+    return nebius_api.get_filesystem_by_name(project_id=project_id, name=name)
 
 
 def _create_filesystem(
     *,
-    command_runner: SoperatorMigrationCommandRunner,
+    nebius_api: SoperatorMigrationNebiusApi,
     project_id: str,
     spec: SoperatorAlignedFilesystemSpec,
 ) -> Mapping[str, Any]:
-    args = [
-        "nebius",
-        "compute",
-        "filesystem",
-        "create",
-        "--parent-id",
-        project_id,
-        "--name",
-        spec.name,
-        "--type",
-        spec.filesystem_type,
-        "--size-gibibytes",
-        str(spec.size_gib),
-        "--block-size-bytes",
-        str(spec.block_size_kib * 1024),
-        "--format",
-        "json",
-        "--timeout",
-        "30m",
-    ]
-    if spec.forbid_deletion:
-        args.insert(-4, "--forbid-deletion")
-    return _json_from_command(command_runner, args, timeout_seconds=1800)
+    return nebius_api.create_filesystem(project_id=project_id, spec=spec, timeout_seconds=1800)
 
 
 def _source_group_node_group_id(source_group: Mapping[str, Any]) -> str:
@@ -2501,64 +2832,20 @@ def _source_group_node_group_id(source_group: Mapping[str, Any]) -> str:
     return str(source_group.get("node_group_id", "") or source_group.get("id", "") or "").strip()
 
 
-_NEBIUS_CLI_RETRYABLE_ERROR_MARKERS = (
-    "code = unavailable",
-    "connection error",
-    "authentication handshake failed",
-    "operation timed out",
-    "i/o timeout",
-    "deadline exceeded",
-)
-
-
-def _retryable_nebius_cli_error(error: BaseException) -> bool:
-    text = str(error).lower()
-    return any(marker in text for marker in _NEBIUS_CLI_RETRYABLE_ERROR_MARKERS)
-
-
 def _node_group_payload_by_id(
     *,
-    command_runner: SoperatorMigrationCommandRunner,
+    nebius_api: SoperatorMigrationNebiusApi,
     node_group_id: str,
 ) -> Mapping[str, Any]:
-    args = [
-        "nebius",
-        "mk8s",
-        "node-group",
-        "get",
-        node_group_id,
-        "--format",
-        "json",
-    ]
-    attempts = 3
-    for attempt in range(attempts):
-        try:
-            return _json_from_command(command_runner, args, timeout_seconds=120)
-        except RuntimeError as exc:
-            if attempt >= attempts - 1 or not _retryable_nebius_cli_error(exc):
-                raise
-            time.sleep(float(2**attempt))
-    raise RuntimeError(f"nebius mk8s node-group get {node_group_id} did not return a payload")
+    return nebius_api.get_node_group(node_group_id)
 
 
 def _cluster_payload_by_id(
     *,
-    command_runner: SoperatorMigrationCommandRunner,
+    nebius_api: SoperatorMigrationNebiusApi,
     cluster_id: str,
 ) -> Mapping[str, Any]:
-    return _json_from_command(
-        command_runner,
-        [
-            "nebius",
-            "mk8s",
-            "cluster",
-            "get",
-            cluster_id,
-            "--format",
-            "json",
-        ],
-        timeout_seconds=120,
-    )
+    return nebius_api.get_cluster(cluster_id)
 
 
 def _cluster_control_plane_version(cluster: Mapping[str, Any]) -> str:
@@ -2571,40 +2858,15 @@ def _cluster_control_plane_version(cluster: Mapping[str, Any]) -> str:
     ).strip()
 
 
-def _cluster_update_command(
-    cluster_id: str,
-    *,
-    control_plane_version: str,
-    timeout: str,
-) -> list[str]:
-    return [
-        "nebius",
-        "mk8s",
-        "cluster",
-        "update",
-        cluster_id,
-        "--control-plane-version",
-        control_plane_version,
-        "--format",
-        "json",
-        "--timeout",
-        timeout,
-    ]
-
-
 def _update_cluster_control_plane(
     *,
-    command_runner: SoperatorMigrationCommandRunner,
+    nebius_api: SoperatorMigrationNebiusApi,
     cluster_id: str,
     control_plane_version: str,
 ) -> Mapping[str, Any]:
-    return _json_from_command(
-        command_runner,
-        _cluster_update_command(
-            cluster_id,
-            control_plane_version=control_plane_version,
-            timeout="60m",
-        ),
+    return nebius_api.update_cluster_control_plane(
+        cluster_id=cluster_id,
+        control_plane_version=control_plane_version,
         timeout_seconds=3600,
     )
 
@@ -2866,28 +3128,6 @@ def _external_node_template_strategy_cli_args(
     return _soperator_zero_surge_strategy_cli_args(), "zero-surge"
 
 
-def _node_group_update_command(
-    node_group_id: str,
-    *,
-    update_args: Sequence[str],
-    strategy_args: Sequence[str],
-    timeout: str,
-) -> list[str]:
-    return [
-        "nebius",
-        "mk8s",
-        "node-group",
-        "update",
-        node_group_id,
-        *update_args,
-        *strategy_args,
-        "--format",
-        "json",
-        "--timeout",
-        timeout,
-    ]
-
-
 def _set_node_group_strategy_from_args(
     payload: dict[str, Any],
     strategy_args: Sequence[str],
@@ -2972,27 +3212,6 @@ def _node_group_full_update_payload(
     return payload
 
 
-def _node_group_update_file_command(
-    node_group_id: str,
-    *,
-    file_path: Path,
-    timeout: str,
-) -> list[str]:
-    return [
-        "nebius",
-        "mk8s",
-        "node-group",
-        "update",
-        node_group_id,
-        "--file",
-        str(file_path),
-        "--format",
-        "json",
-        "--timeout",
-        timeout,
-    ]
-
-
 def _node_group_strategy_matches_args(
     node_group: Mapping[str, Any],
     strategy_args: Sequence[str],
@@ -3065,7 +3284,7 @@ def _node_group_update_timeout_message(
 
 
 def _reconcile_node_group_update_timeout(
-    command_runner: SoperatorMigrationCommandRunner,
+    nebius_api: SoperatorMigrationNebiusApi,
     *,
     node_group_id: str,
     update_args: Sequence[str],
@@ -3075,7 +3294,7 @@ def _reconcile_node_group_update_timeout(
     timeout: subprocess.TimeoutExpired,
 ) -> Mapping[str, Any]:
     live_node_group = _node_group_payload_by_id(
-        command_runner=command_runner,
+        nebius_api=nebius_api,
         node_group_id=node_group_id,
     )
     if not _node_group_update_request_satisfied(
@@ -3102,40 +3321,6 @@ def _reconcile_node_group_update_timeout(
     return live_node_group
 
 
-def _json_from_node_group_update_file(
-    command_runner: SoperatorMigrationCommandRunner,
-    node_group_id: str,
-    *,
-    payload: Mapping[str, Any],
-    timeout: str,
-    timeout_seconds: int,
-) -> Mapping[str, Any]:
-    temp_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            prefix="nebius-cxcli-node-group-",
-            suffix=".json",
-            delete=False,
-        ) as handle:
-            json.dump(to_plain_data(payload), handle, sort_keys=True)
-            temp_path = Path(handle.name)
-        return _json_from_command(
-            command_runner,
-            _node_group_update_file_command(
-                node_group_id,
-                file_path=temp_path,
-                timeout=timeout,
-            ),
-            timeout_seconds=timeout_seconds,
-        )
-    finally:
-        if temp_path is not None:
-            with suppress(FileNotFoundError):
-                temp_path.unlink()
-
-
 def _node_group_rollout_timeout_seconds(node_group: Mapping[str, Any]) -> int:
     status = _mapping(node_group.get("status"))
     node_count = max(
@@ -3156,7 +3341,7 @@ def _node_group_rollout_timeout_text(timeout_seconds: int) -> str:
 
 def _update_node_group_with_temporary_strategy(
     *,
-    command_runner: SoperatorMigrationCommandRunner,
+    nebius_api: SoperatorMigrationNebiusApi,
     node_group_id: str,
     update_args: Sequence[str],
     strategy_args: Sequence[str],
@@ -3166,7 +3351,7 @@ def _update_node_group_with_temporary_strategy(
     timeout_seconds: int = 2700,
 ) -> Mapping[str, Any]:
     original_node_group = original_node_group or _node_group_payload_by_id(
-        command_runner=command_runner,
+        nebius_api=nebius_api,
         node_group_id=node_group_id,
     )
     original_strategy_args = _node_group_strategy_cli_args(
@@ -3179,52 +3364,25 @@ def _update_node_group_with_temporary_strategy(
     updated = False
     primary_exc: BaseException | None = None
     try:
-        if clear_template_gpu_settings:
-            try:
-                result = _json_from_node_group_update_file(
-                    command_runner,
-                    node_group_id,
-                    payload=_node_group_full_update_payload(
-                        original_node_group=original_node_group,
-                        update_args=update_args,
-                        strategy_args=strategy_args,
-                        clear_template_gpu_settings=True,
-                    ),
-                    timeout=timeout,
-                    timeout_seconds=timeout_seconds,
-                )
-            except subprocess.TimeoutExpired as exc:
-                result = _reconcile_node_group_update_timeout(
-                    command_runner,
-                    node_group_id=node_group_id,
-                    update_args=update_args,
-                    strategy_args=strategy_args,
-                    clear_template_gpu_settings=True,
-                    action="node-template update",
-                    timeout=exc,
-                )
-        else:
-            try:
-                result = _json_from_command(
-                    command_runner,
-                    _node_group_update_command(
-                        node_group_id,
-                        update_args=update_args,
-                        strategy_args=strategy_args,
-                        timeout=timeout,
-                    ),
-                    timeout_seconds=timeout_seconds,
-                )
-            except subprocess.TimeoutExpired as exc:
-                result = _reconcile_node_group_update_timeout(
-                    command_runner,
-                    node_group_id=node_group_id,
-                    update_args=update_args,
-                    strategy_args=strategy_args,
-                    clear_template_gpu_settings=False,
-                    action="node-template update",
-                    timeout=exc,
-                )
+        try:
+            result = nebius_api.update_node_group(
+                node_group_id=node_group_id,
+                original_node_group=original_node_group,
+                update_args=update_args,
+                strategy_args=strategy_args,
+                clear_template_gpu_settings=clear_template_gpu_settings,
+                timeout_seconds=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            result = _reconcile_node_group_update_timeout(
+                nebius_api,
+                node_group_id=node_group_id,
+                update_args=update_args,
+                strategy_args=strategy_args,
+                clear_template_gpu_settings=clear_template_gpu_settings,
+                action="node-template update",
+                timeout=exc,
+            )
         updated = True
         return result
     except Exception as exc:
@@ -3234,19 +3392,17 @@ def _update_node_group_with_temporary_strategy(
         if restore_strategy and not isinstance(primary_exc, SoperatorMigrationPhasePending):
             try:
                 try:
-                    _json_from_command(
-                        command_runner,
-                        _node_group_update_command(
-                            node_group_id,
-                            update_args=(),
-                            strategy_args=original_strategy_args,
-                            timeout=timeout,
-                        ),
+                    nebius_api.update_node_group(
+                        node_group_id=node_group_id,
+                        original_node_group=nebius_api.get_node_group(node_group_id),
+                        update_args=(),
+                        strategy_args=original_strategy_args,
+                        clear_template_gpu_settings=False,
                         timeout_seconds=timeout_seconds,
                     )
                 except subprocess.TimeoutExpired as exc:
                     _reconcile_node_group_update_timeout(
-                        command_runner,
+                        nebius_api,
                         node_group_id=node_group_id,
                         update_args=(),
                         strategy_args=original_strategy_args,
@@ -3265,7 +3421,7 @@ def _update_node_group_with_temporary_strategy(
 
 def _update_node_group_with_zero_surge_strategy(
     *,
-    command_runner: SoperatorMigrationCommandRunner,
+    nebius_api: SoperatorMigrationNebiusApi,
     node_group_id: str,
     update_args: Sequence[str],
     original_node_group: Mapping[str, Any] | None = None,
@@ -3274,7 +3430,7 @@ def _update_node_group_with_zero_surge_strategy(
 ) -> Mapping[str, Any]:
     timeout = _node_group_rollout_timeout_text(timeout_seconds)
     return _update_node_group_with_temporary_strategy(
-        command_runner=command_runner,
+        nebius_api=nebius_api,
         node_group_id=node_group_id,
         update_args=update_args,
         strategy_args=_soperator_zero_surge_strategy_cli_args(),
@@ -3339,7 +3495,7 @@ def _merge_filesystem_attachments(
 
 def _attach_filesystems_to_source_node_groups(
     *,
-    command_runner: SoperatorMigrationCommandRunner,
+    nebius_api: SoperatorMigrationNebiusApi,
     source_report: Mapping[str, Any],
     attachment_keys_by_group: Mapping[str, Sequence[str]],
     filesystem_ids_by_key: Mapping[str, str],
@@ -3373,7 +3529,7 @@ def _attach_filesystems_to_source_node_groups(
             for key in desired_keys
         ]
         node_group = _node_group_payload_by_id(
-            command_runner=command_runner,
+            nebius_api=nebius_api,
             node_group_id=node_group_id,
         )
         existing = _node_group_template_filesystems(node_group)
@@ -3381,7 +3537,7 @@ def _attach_filesystems_to_source_node_groups(
         updated = len(merged) != len(existing)
         if updated:
             _update_node_group_with_zero_surge_strategy(
-                command_runner=command_runner,
+                nebius_api=nebius_api,
                 node_group_id=node_group_id,
                 update_args=("--template-filesystems", json.dumps(merged, sort_keys=True)),
                 original_node_group=node_group,
@@ -3927,7 +4083,7 @@ def _external_migration_cluster_id(
     payload: Mapping[str, Any],
     target_ref: str,
     source_report: Mapping[str, Any],
-    command_runner: SoperatorMigrationCommandRunner,
+    nebius_api: SoperatorMigrationNebiusApi,
 ) -> str:
     cluster_id = _target_cluster_id(payload, target_ref)
     if cluster_id:
@@ -3940,7 +4096,7 @@ def _external_migration_cluster_id(
         if not node_group_id:
             continue
         node_group = _node_group_payload_by_id(
-            command_runner=command_runner,
+            nebius_api=nebius_api,
             node_group_id=node_group_id,
         )
         cluster_id = _node_group_parent_id(node_group)
@@ -3977,33 +4133,10 @@ def _json_value_from_command(
 
 def _list_node_groups(
     *,
-    command_runner: SoperatorMigrationCommandRunner,
+    nebius_api: SoperatorMigrationNebiusApi,
     cluster_id: str,
 ) -> tuple[Mapping[str, Any], ...]:
-    parsed = _json_value_from_command(
-        command_runner,
-        [
-            "nebius",
-            "mk8s",
-            "node-group",
-            "list",
-            "--parent-id",
-            cluster_id,
-            "--format",
-            "json",
-            "--all",
-        ],
-        timeout_seconds=180,
-    )
-    if isinstance(parsed, Mapping):
-        items = parsed.get("items", parsed.get("node_groups", parsed.get("nodeGroups", [])))
-        if isinstance(items, Sequence) and not isinstance(items, (str, bytes, bytearray)):
-            return tuple(item for item in items if isinstance(item, Mapping))
-        if _node_group_id(parsed):
-            return (parsed,)
-    if isinstance(parsed, Sequence) and not isinstance(parsed, (str, bytes, bytearray)):
-        return tuple(item for item in parsed if isinstance(item, Mapping))
-    return ()
+    return nebius_api.list_node_groups(cluster_id)
 
 
 def _kubectl_live_nodes(
@@ -4116,11 +4249,12 @@ def _node_group_is_gpu_from_payload(
 
 def _live_nebius_node_group_inventory(
     *,
+    nebius_api: SoperatorMigrationNebiusApi,
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
     cluster_id: str,
 ) -> Mapping[str, Mapping[str, Any]]:
-    node_groups = _list_node_groups(command_runner=command_runner, cluster_id=cluster_id)
+    node_groups = _list_node_groups(nebius_api=nebius_api, cluster_id=cluster_id)
     if not node_groups:
         return {}
     live_nodes = _kubectl_live_nodes(command_runner=command_runner, kube_context=kube_context)
@@ -4181,12 +4315,14 @@ def _source_report_with_execution_inventory(
     payload: Mapping[str, Any],
     target_ref: str,
     kube_context: str,
+    nebius_api: SoperatorMigrationNebiusApi,
     command_runner: SoperatorMigrationCommandRunner,
 ) -> Mapping[str, Any]:
     cluster_id = _target_cluster_id(payload, target_ref)
     if not cluster_id:
         return source_report
     inventory = _live_nebius_node_group_inventory(
+        nebius_api=nebius_api,
         command_runner=command_runner,
         kube_context=kube_context,
         cluster_id=cluster_id,
@@ -4528,6 +4664,7 @@ def _create_or_reuse_target_node_groups(
     target_ref: str,
     source_report: Mapping[str, Any],
     worker_node_groups: Sequence[str],
+    nebius_api: SoperatorMigrationNebiusApi,
     command_runner: SoperatorMigrationCommandRunner,
 ) -> tuple[bool, list[str]]:
     phase = _phase_state(checkpoint, "rolling-compute-migration")
@@ -4572,7 +4709,7 @@ def _create_or_reuse_target_node_groups(
                 f"rolling-compute-migration requires Nebius node group id for source group '{group_name}'."
             )
         source_payloads[kind] = _node_group_payload_by_id(
-            command_runner=command_runner,
+            nebius_api=nebius_api,
             node_group_id=node_group_id,
         )
     worker_group_ids: dict[str, str] = {}
@@ -4607,7 +4744,7 @@ def _create_or_reuse_target_node_groups(
     specs_by_key = {
         spec.key: spec for spec in _aligned_filesystem_specs(payload=payload, target_ref=target_ref)
     }
-    live_node_groups = _list_node_groups(command_runner=command_runner, cluster_id=cluster_id)
+    live_node_groups = _list_node_groups(nebius_api=nebius_api, cluster_id=cluster_id)
     mutation_performed = False
     lines: list[str] = []
     for role in _SOPERATOR_SERVICE_ROLES:
@@ -4642,7 +4779,7 @@ def _create_or_reuse_target_node_groups(
             if not node_group_id:
                 raise RuntimeError(f"existing target node group '{target_name}' has no id.")
             existing_payload = _node_group_payload_by_id(
-                command_runner=command_runner,
+                nebius_api=nebius_api,
                 node_group_id=node_group_id,
             )
             _validate_reused_target_node_group(
@@ -4672,26 +4809,12 @@ def _create_or_reuse_target_node_groups(
                 "template": expected_template,
             },
         }
-        created = _json_from_command(
-            command_runner,
-            [
-                "nebius",
-                "mk8s",
-                "node-group",
-                "create",
-                json.dumps(create_payload, sort_keys=True),
-                "--format",
-                "json",
-                "--timeout",
-                "60m",
-            ],
-            timeout_seconds=3900,
-        )
+        created = nebius_api.create_node_group(payload=create_payload, timeout_seconds=3900)
         node_group_id = _node_group_id(created)
         if not node_group_id:
             node_group_id = _node_group_id(
                 _find_node_group_by_name(
-                    _list_node_groups(command_runner=command_runner, cluster_id=cluster_id),
+                    _list_node_groups(nebius_api=nebius_api, cluster_id=cluster_id),
                     target_name,
                 )
             )
@@ -4748,7 +4871,7 @@ def _new_aligned_sfs_quota_requirements(
     *,
     payload: Mapping[str, Any],
     target_ref: str,
-    command_runner: SoperatorMigrationCommandRunner,
+    nebius_api: SoperatorMigrationNebiusApi,
 ) -> tuple[list[QuotaRequirement], list[QuotaCoverageGap], list[str]]:
     project_id = _nebius_project_id(payload)
     _tenant_id, _project_id, region = _nebius_identity(payload)
@@ -4757,7 +4880,7 @@ def _new_aligned_sfs_quota_requirements(
     lines: list[str] = []
     for spec in _aligned_filesystem_specs(payload=payload, target_ref=target_ref):
         existing = _get_filesystem_by_name(
-            command_runner=command_runner,
+            nebius_api=nebius_api,
             project_id=project_id,
             name=spec.name,
         )
@@ -4806,7 +4929,7 @@ def _planned_target_node_group_quota_inputs(
     target_ref: str,
     source_report: Mapping[str, Any],
     worker_node_groups: Sequence[str],
-    command_runner: SoperatorMigrationCommandRunner,
+    nebius_api: SoperatorMigrationNebiusApi,
 ) -> tuple[Mapping[str, Any], list[str]]:
     inventory = _source_node_group_inventory(source_report)
     source_groups_by_kind = _source_compute_group_names(
@@ -4826,7 +4949,7 @@ def _planned_target_node_group_quota_inputs(
                 f"quota preflight requires Nebius node group id for source group '{group_name}'."
             )
         source_payloads[kind] = _node_group_payload_by_id(
-            command_runner=command_runner,
+            nebius_api=nebius_api,
             node_group_id=node_group_id,
         )
     cluster_id = _target_cluster_id(payload, target_ref)
@@ -4845,7 +4968,7 @@ def _planned_target_node_group_quota_inputs(
             "or source node-group metadata."
         )
 
-    live_node_groups = _list_node_groups(command_runner=command_runner, cluster_id=cluster_id)
+    live_node_groups = _list_node_groups(nebius_api=nebius_api, cluster_id=cluster_id)
     planned_groups: dict[str, Any] = {}
     lines: list[str] = []
     for role in _SOPERATOR_SERVICE_ROLES:
@@ -4867,7 +4990,7 @@ def _planned_target_node_group_quota_inputs(
             node_group_id = _node_group_id(existing)
             existing_payload = (
                 _node_group_payload_by_id(
-                    command_runner=command_runner,
+                    nebius_api=nebius_api,
                     node_group_id=node_group_id,
                 )
                 if node_group_id
@@ -4912,7 +5035,7 @@ def _new_target_node_group_quota_requirements(
     target_ref: str,
     source_report: Mapping[str, Any],
     worker_node_groups: Sequence[str],
-    command_runner: SoperatorMigrationCommandRunner,
+    nebius_api: SoperatorMigrationNebiusApi,
 ) -> tuple[list[QuotaRequirement], list[QuotaCoverageGap], list[str]]:
     _tenant_id, project_id, region = _nebius_identity(payload)
     planned_groups, lines = _planned_target_node_group_quota_inputs(
@@ -4920,7 +5043,7 @@ def _new_target_node_group_quota_requirements(
         target_ref=target_ref,
         source_report=source_report,
         worker_node_groups=worker_node_groups,
-        command_runner=command_runner,
+        nebius_api=nebius_api,
     )
     if not planned_groups:
         return [], [], lines
@@ -4973,7 +5096,7 @@ def _safe_surge_node_group_quota_requirements(
     target_ref: str,
     source_report: Mapping[str, Any],
     worker_node_groups: Sequence[str],
-    command_runner: SoperatorMigrationCommandRunner,
+    nebius_api: SoperatorMigrationNebiusApi,
     rollout: SoperatorExternalNodeTemplateRollout,
 ) -> tuple[list[QuotaRequirement], list[QuotaCoverageGap], list[str]]:
     _tenant_id, project_id, region = _nebius_identity(payload)
@@ -5034,7 +5157,7 @@ def _safe_surge_node_group_quota_requirements(
                     f"group '{group_name}'."
                 )
             node_group = _node_group_payload_by_id(
-                command_runner=command_runner,
+                nebius_api=nebius_api,
                 node_group_id=node_group_id,
             )
             template = _mapping(_mapping(node_group.get("spec")).get("template"))
@@ -5433,6 +5556,7 @@ def _run_soperator_migration_quota_preflight(
     target_ref: str,
     source_report: Mapping[str, Any],
     worker_node_groups: Sequence[str],
+    nebius_api: SoperatorMigrationNebiusApi,
     command_runner: SoperatorMigrationCommandRunner,
     rollout: SoperatorExternalNodeTemplateRollout,
 ) -> list[str]:
@@ -5445,7 +5569,7 @@ def _run_soperator_migration_quota_preflight(
         storage_requirements, storage_gaps, storage_lines = _new_aligned_sfs_quota_requirements(
             payload=payload,
             target_ref=target_ref,
-            command_runner=command_runner,
+            nebius_api=nebius_api,
         )
         requirements.extend(storage_requirements)
         gaps.extend(storage_gaps)
@@ -5463,7 +5587,7 @@ def _run_soperator_migration_quota_preflight(
                 target_ref=target_ref,
                 source_report=source_report,
                 worker_node_groups=worker_node_groups,
-                command_runner=command_runner,
+                nebius_api=nebius_api,
             )
         )
         requirements.extend(compute_requirements)
@@ -5480,7 +5604,7 @@ def _run_soperator_migration_quota_preflight(
                 target_ref=target_ref,
                 source_report=source_report,
                 worker_node_groups=worker_node_groups,
-                command_runner=command_runner,
+                nebius_api=nebius_api,
                 rollout=rollout,
             )
         )
@@ -6826,7 +6950,7 @@ def _updating_external_node_template_groups(
 
 def _active_external_node_template_rollout_statuses(
     *,
-    command_runner: SoperatorMigrationCommandRunner,
+    nebius_api: SoperatorMigrationNebiusApi,
     checkpoint: Mapping[str, Any],
     phase_id: str,
 ) -> tuple[tuple[str, ...], bool]:
@@ -6852,7 +6976,7 @@ def _active_external_node_template_rollout_statuses(
             continue
         try:
             node_group = _node_group_payload_by_id(
-                command_runner=command_runner,
+                nebius_api=nebius_api,
                 node_group_id=node_group_id,
             )
         except Exception as exc:
@@ -6919,6 +7043,7 @@ def _format_problem_node_details(
 
 def _collect_mk8s_status(
     *,
+    nebius_api: SoperatorMigrationNebiusApi,
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
     checkpoint: Mapping[str, Any],
@@ -7005,7 +7130,7 @@ def _collect_mk8s_status(
     if group_summary:
         group_parts.append(group_summary)
     rollout_details, rollout_active = _active_external_node_template_rollout_statuses(
-        command_runner=command_runner,
+        nebius_api=nebius_api,
         checkpoint=checkpoint,
         phase_id=phase_id,
     )
@@ -7408,6 +7533,7 @@ class SoperatorMigrationStatusReporter:
         self,
         *,
         emit: Callable[[str], None] | None,
+        nebius_api: SoperatorMigrationNebiusApi,
         command_runner: SoperatorMigrationCommandRunner,
         kube_context: str,
         checkpoint: Mapping[str, Any],
@@ -7419,6 +7545,7 @@ class SoperatorMigrationStatusReporter:
         repeat_interval_seconds: float = 60.0,
     ) -> None:
         self._emit = emit
+        self._nebius_api = nebius_api
         self._command_runner = command_runner
         self._kube_context = kube_context
         self._checkpoint = checkpoint
@@ -7501,6 +7628,7 @@ class SoperatorMigrationStatusReporter:
             if scope.get("mk8s"):
                 signals.append(
                     _collect_mk8s_status(
+                        nebius_api=self._nebius_api,
                         command_runner=self._command_runner,
                         kube_context=self._kube_context,
                         checkpoint=self._checkpoint,
@@ -10901,55 +11029,19 @@ def _resume_slurm_after_cutover(
 
 def _scale_node_group(
     *,
-    command_runner: SoperatorMigrationCommandRunner,
+    nebius_api: SoperatorMigrationNebiusApi,
     node_group_id: str,
     count: int,
 ) -> None:
-    result = command_runner(
-        [
-            "nebius",
-            "mk8s",
-            "node-group",
-            "update",
-            node_group_id,
-            "--fixed-node-count",
-            str(count),
-            "--format",
-            "json",
-            "--timeout",
-            "45m",
-        ],
-        timeout_seconds=3000,
-        check=False,
-    )
-    if result.returncode != 0 and not _command_not_found(result):
-        raise RuntimeError(
-            f"{_command_text(result.args)} failed: {result.stderr.strip() or result.stdout.strip()}"
-        )
+    nebius_api.scale_node_group(node_group_id=node_group_id, count=count, timeout_seconds=3000)
 
 
 def _delete_node_group(
     *,
-    command_runner: SoperatorMigrationCommandRunner,
+    nebius_api: SoperatorMigrationNebiusApi,
     node_group_id: str,
 ) -> None:
-    result = command_runner(
-        [
-            "nebius",
-            "mk8s",
-            "node-group",
-            "delete",
-            node_group_id,
-            "--timeout",
-            "45m",
-        ],
-        timeout_seconds=3000,
-        check=False,
-    )
-    if result.returncode != 0 and not _command_not_found(result):
-        raise RuntimeError(
-            f"{_command_text(result.args)} failed: {result.stderr.strip() or result.stdout.strip()}"
-        )
+    nebius_api.delete_node_group(node_group_id=node_group_id, timeout_seconds=3000)
 
 
 def _command_not_found(result: SoperatorMigrationCommandResult) -> bool:
@@ -10992,6 +11084,7 @@ def _execute_external_node_template_upgrade_phase(
     target_ref: str,
     kube_context: str,
     worker_node_groups: Sequence[str],
+    nebius_api: SoperatorMigrationNebiusApi,
     command_runner: SoperatorMigrationCommandRunner,
     checkpoint_writer: Callable[[], None] | None = None,
     rollout: SoperatorExternalNodeTemplateRollout,
@@ -11009,7 +11102,7 @@ def _execute_external_node_template_upgrade_phase(
         payload=payload,
         target_ref=target_ref,
         source_report=source_report,
-        command_runner=command_runner,
+        nebius_api=nebius_api,
     )
     phase["cluster_id"] = cluster_id
     mutation_performed = False
@@ -11021,12 +11114,12 @@ def _execute_external_node_template_upgrade_phase(
             "External Soperator upgrade checkpoint external-node-template-upgrade.control_plane "
             "must be a mapping."
         )
-    cluster = _cluster_payload_by_id(command_runner=command_runner, cluster_id=cluster_id)
+    cluster = _cluster_payload_by_id(nebius_api=nebius_api, cluster_id=cluster_id)
     current_version = _minor_version_text_or_empty(_cluster_control_plane_version(cluster))
     if not current_version:
         raise SoperatorMigrationPhasePending(
             "external-node-template-upgrade could not detect the live MK8s control-plane "
-            "version. Rerun onboarding after confirming `nebius mk8s cluster get` works."
+            "version. Rerun onboarding after confirming Nebius API access works."
         )
     control_plane["current_version"] = current_version
     control_plane["target_version"] = target.k8s_version
@@ -11071,7 +11164,7 @@ def _execute_external_node_template_upgrade_phase(
             checkpoint_writer()
         try:
             cluster = _update_cluster_control_plane(
-                command_runner=command_runner,
+                nebius_api=nebius_api,
                 cluster_id=cluster_id,
                 control_plane_version=hop.to_version,
             )
@@ -11139,7 +11232,7 @@ def _execute_external_node_template_upgrade_phase(
                 "against a Nebius MK8s target."
             )
         node_group = _node_group_payload_by_id(
-            command_runner=command_runner,
+            nebius_api=nebius_api,
             node_group_id=node_group_id,
         )
         update_args = _external_node_template_update_args(
@@ -11217,19 +11310,17 @@ def _execute_external_node_template_upgrade_phase(
             if _node_group_strategy_matches_args(current_node_group, original_strategy_args):
                 return False
             try:
-                _json_from_command(
-                    command_runner,
-                    _node_group_update_command(
-                        node_group_id,
-                        update_args=(),
-                        strategy_args=original_strategy_args,
-                        timeout=timeout,
-                    ),
+                nebius_api.update_node_group(
+                    node_group_id=node_group_id,
+                    original_node_group=current_node_group,
+                    update_args=(),
+                    strategy_args=original_strategy_args,
+                    clear_template_gpu_settings=False,
                     timeout_seconds=timeout_seconds,
                 )
             except subprocess.TimeoutExpired as exc:
                 _reconcile_node_group_update_timeout(
-                    command_runner,
+                    nebius_api,
                     node_group_id=node_group_id,
                     update_args=(),
                     strategy_args=original_strategy_args,
@@ -11379,7 +11470,7 @@ def _execute_external_node_template_upgrade_phase(
             checkpoint_writer()
         try:
             _update_node_group_with_temporary_strategy(
-                command_runner=command_runner,
+                nebius_api=nebius_api,
                 node_group_id=str(work["node_group_id"]),
                 update_args=work["update_args"],
                 strategy_args=work["strategy_args"],
@@ -11630,6 +11721,7 @@ def _execute_create_aligned_sfs_phase(
     source_report: Mapping[str, Any],
     target_ref: str,
     worker_node_groups: Sequence[str],
+    nebius_api: SoperatorMigrationNebiusApi,
     command_runner: SoperatorMigrationCommandRunner,
 ) -> tuple[bool, list[str]]:
     project_id = _nebius_project_id(payload)
@@ -11646,7 +11738,7 @@ def _execute_create_aligned_sfs_phase(
     filesystem_ids_by_key: dict[str, str] = {}
     for spec in specs:
         existing = _get_filesystem_by_name(
-            command_runner=command_runner,
+            nebius_api=nebius_api,
             project_id=project_id,
             name=spec.name,
         )
@@ -11654,7 +11746,7 @@ def _execute_create_aligned_sfs_phase(
         filesystem = existing
         if not _filesystem_id(filesystem):
             filesystem = _create_filesystem(
-                command_runner=command_runner,
+                nebius_api=nebius_api,
                 project_id=project_id,
                 spec=spec,
             )
@@ -11681,7 +11773,7 @@ def _execute_create_aligned_sfs_phase(
             f"Aligned SFS {spec.key}: {'created' if created else 'reused'} {spec.name} ({filesystem_id})"
         )
     attached, attachments = _attach_filesystems_to_source_node_groups(
-        command_runner=command_runner,
+        nebius_api=nebius_api,
         source_report=source_report,
         attachment_keys_by_group=_approved_role_attachment_keys(
             payload=payload,
@@ -11817,6 +11909,7 @@ def _execute_rolling_compute_migration_phase(
     target_ref: str,
     kube_context: str,
     worker_node_groups: Sequence[str],
+    nebius_api: SoperatorMigrationNebiusApi,
     command_runner: SoperatorMigrationCommandRunner,
     checkpoint_writer: Callable[[], None] | None = None,
     job_policy: str | None = None,
@@ -11849,6 +11942,7 @@ def _execute_rolling_compute_migration_phase(
         target_ref=target_ref,
         source_report=source_report,
         worker_node_groups=worker_node_groups,
+        nebius_api=nebius_api,
         command_runner=command_runner,
     )
     if checkpoint_writer is not None:
@@ -13444,6 +13538,7 @@ def _execute_retire_old_resources_phase(
     source_report: Mapping[str, Any],
     live_snapshot: Mapping[str, Any],
     kube_context: str,
+    nebius_api: SoperatorMigrationNebiusApi,
     command_runner: SoperatorMigrationCommandRunner,
     checkpoint_writer: Callable[[], None] | None = None,
 ) -> tuple[bool, list[str]]:
@@ -13491,7 +13586,7 @@ def _execute_retire_old_resources_phase(
         if not node_group_id:
             continue
         _scale_node_group(
-            command_runner=command_runner,
+            nebius_api=nebius_api,
             node_group_id=node_group_id,
             count=0,
         )
@@ -13499,7 +13594,7 @@ def _execute_retire_old_resources_phase(
         if checkpoint_writer is not None:
             checkpoint_writer()
         _delete_node_group(
-            command_runner=command_runner,
+            nebius_api=nebius_api,
             node_group_id=node_group_id,
         )
         retired.append({"source_group": str(group_name), "node_group_id": node_group_id})
@@ -15351,6 +15446,7 @@ def _external_node_template_upgrade_satisfied(
     source_report: Mapping[str, Any],
     target_ref: str,
     worker_node_groups: Sequence[str],
+    nebius_api: SoperatorMigrationNebiusApi,
     command_runner: SoperatorMigrationCommandRunner,
 ) -> bool:
     onboarding = _target_onboarding(payload, target_ref)
@@ -15359,9 +15455,9 @@ def _external_node_template_upgrade_satisfied(
         payload=payload,
         target_ref=target_ref,
         source_report=source_report,
-        command_runner=command_runner,
+        nebius_api=nebius_api,
     )
-    cluster = _cluster_payload_by_id(command_runner=command_runner, cluster_id=cluster_id)
+    cluster = _cluster_payload_by_id(nebius_api=nebius_api, cluster_id=cluster_id)
     current_version = _minor_version_text_or_empty(_cluster_control_plane_version(cluster))
     if not current_version:
         return False
@@ -15379,7 +15475,7 @@ def _external_node_template_upgrade_satisfied(
         if not node_group_id:
             return False
         node_group = _node_group_payload_by_id(
-            command_runner=command_runner,
+            nebius_api=nebius_api,
             node_group_id=node_group_id,
         )
         update_args = _external_node_template_update_args(
@@ -15423,7 +15519,7 @@ def _node_group_readiness_summary(node_group: Mapping[str, Any]) -> tuple[bool, 
     if not status:
         return (
             False,
-            f"{name}: status not returned by Nebius CLI; rollout readiness cannot be verified",
+            f"{name}: status not returned by Nebius API; rollout readiness cannot be verified",
         )
     ready = _int_or_none(_first_mapping_value(status, "ready_node_count", "readyNodeCount"))
     target = _int_or_none(_first_mapping_value(status, "target_node_count", "targetNodeCount"))
@@ -15468,15 +15564,16 @@ def _verify_completed_soperator_migration_mk8s_state(
     target_ref: str,
     worker_node_groups: Sequence[str],
     phase_ids: Sequence[str],
+    nebius_api: SoperatorMigrationNebiusApi,
     command_runner: SoperatorMigrationCommandRunner,
 ) -> list[str]:
     cluster_id = _external_migration_cluster_id(
         payload=payload,
         target_ref=target_ref,
         source_report=source_report,
-        command_runner=command_runner,
+        nebius_api=nebius_api,
     )
-    cluster = _cluster_payload_by_id(command_runner=command_runner, cluster_id=cluster_id)
+    cluster = _cluster_payload_by_id(nebius_api=nebius_api, cluster_id=cluster_id)
     current_version = _minor_version_text_or_empty(_cluster_control_plane_version(cluster))
     errors: list[str] = []
     if not current_version:
@@ -15487,6 +15584,7 @@ def _verify_completed_soperator_migration_mk8s_state(
             source_report=source_report,
             target_ref=target_ref,
             worker_node_groups=worker_node_groups,
+            nebius_api=nebius_api,
             command_runner=command_runner,
             current_version=current_version,
             errors=errors,
@@ -15498,7 +15596,7 @@ def _verify_completed_soperator_migration_mk8s_state(
     for group_name, raw_group in groups:
         node_group_id = _source_group_node_group_id(raw_group)
         node_group = _node_group_payload_by_id(
-            command_runner=command_runner,
+            nebius_api=nebius_api,
             node_group_id=node_group_id,
         )
         ready, readiness_summary = _node_group_readiness_summary(node_group)
@@ -15524,6 +15622,7 @@ def _verify_completed_soperator_migration_node_template_state(
     source_report: Mapping[str, Any],
     target_ref: str,
     worker_node_groups: Sequence[str],
+    nebius_api: SoperatorMigrationNebiusApi,
     command_runner: SoperatorMigrationCommandRunner,
     current_version: str,
     errors: list[str],
@@ -15554,7 +15653,7 @@ def _verify_completed_soperator_migration_node_template_state(
             errors.append(f"{group_name}: missing Nebius node group id")
             continue
         node_group = _node_group_payload_by_id(
-            command_runner=command_runner,
+            nebius_api=nebius_api,
             node_group_id=node_group_id,
         )
         update_args = _external_node_template_update_args(
@@ -15618,6 +15717,7 @@ def _create_aligned_sfs_satisfied(
     source_report: Mapping[str, Any],
     target_ref: str,
     worker_node_groups: Sequence[str],
+    nebius_api: SoperatorMigrationNebiusApi,
     command_runner: SoperatorMigrationCommandRunner,
 ) -> bool:
     project_id = _nebius_project_id(payload)
@@ -15626,7 +15726,7 @@ def _create_aligned_sfs_satisfied(
     filesystem_ids_by_key: dict[str, str] = {}
     for spec in specs:
         filesystem = _get_filesystem_by_name(
-            command_runner=command_runner,
+            nebius_api=nebius_api,
             project_id=project_id,
             name=spec.name,
         )
@@ -15659,7 +15759,7 @@ def _create_aligned_sfs_satisfied(
         if not node_group_id:
             return False
         node_group = _node_group_payload_by_id(
-            command_runner=command_runner,
+            nebius_api=nebius_api,
             node_group_id=node_group_id,
         )
         existing = _filesystem_identity_set(_node_group_template_filesystems(node_group))
@@ -16116,6 +16216,7 @@ def _run_external_upgrade_phase_fast_verification(
     target_ref: str,
     kube_context: str,
     worker_node_groups: Sequence[str],
+    nebius_api: SoperatorMigrationNebiusApi,
     command_runner: SoperatorMigrationCommandRunner,
 ) -> list[str]:
     try:
@@ -16126,6 +16227,7 @@ def _run_external_upgrade_phase_fast_verification(
                 target_ref=target_ref,
                 worker_node_groups=worker_node_groups,
                 phase_ids=(phase_id,),
+                nebius_api=nebius_api,
                 command_runner=command_runner,
             )
             summary = verification_lines[0] if verification_lines else "node-template verified."
@@ -16161,6 +16263,7 @@ def _run_external_upgrade_phase_fast_verification(
                 source_report=source_report,
                 target_ref=target_ref,
                 worker_node_groups=worker_node_groups,
+                nebius_api=nebius_api,
                 command_runner=command_runner,
             )
             summary = (
@@ -16335,6 +16438,7 @@ def _reconcile_completed_action_phases(
     target_ref: str,
     kube_context: str,
     worker_node_groups: Sequence[str],
+    nebius_api: SoperatorMigrationNebiusApi,
     command_runner: SoperatorMigrationCommandRunner,
 ) -> list[str]:
     checks: Mapping[str, Callable[[], bool]] = {
@@ -16343,6 +16447,7 @@ def _reconcile_completed_action_phases(
             source_report=source_report,
             target_ref=target_ref,
             worker_node_groups=worker_node_groups,
+            nebius_api=nebius_api,
             command_runner=command_runner,
         ),
         _TARGET_GPU_STACK_PHASE_ID: lambda: _target_gpu_stack_remediation_satisfied(
@@ -16356,6 +16461,7 @@ def _reconcile_completed_action_phases(
             source_report=source_report,
             target_ref=target_ref,
             worker_node_groups=worker_node_groups,
+            nebius_api=nebius_api,
             command_runner=command_runner,
         ),
         "final-control-plane-cutover": lambda: _final_cutover_satisfied(
@@ -16404,6 +16510,7 @@ def _reconcile_completed_action_phases(
                 target_ref=target_ref,
                 worker_node_groups=worker_node_groups,
                 phase_ids=phase_ids,
+                nebius_api=nebius_api,
                 command_runner=command_runner,
             )
         ),
@@ -16478,6 +16585,7 @@ def execute_soperator_migration(
     snapshot_collector: Callable[..., Mapping[str, Any]],
     approved: bool = False,
     approve_remediation: bool = False,
+    nebius_api: SoperatorMigrationNebiusApi | None = None,
     command_runner: SoperatorMigrationCommandRunner | None = None,
     status_callback: Callable[[str], None] | None = None,
     status_poll_interval_seconds: float = 30.0,
@@ -16518,37 +16626,51 @@ def execute_soperator_migration(
     with SoperatorMigrationExecutionLock(
         soperator_migration_lock_path(config_path, normalized_target)
     ):
-        return _execute_soperator_migration_unlocked(
-            config_path=config_path,
-            target_ref=normalized_target,
-            payload=payload,
-            source_report=source_report,
-            backup_metadata=backup_metadata,
-            snapshot_collector=snapshot_collector,
-            approved=approved,
-            approve_remediation=approve_remediation,
-            command_runner=command_runner,
-            status_callback=status_callback,
-            status_poll_interval_seconds=status_poll_interval_seconds,
-            job_policy=job_policy,
-            populate_jail_refresh=populate_jail_refresh,
-            jail_persistent_mounts=jail_persistent_mounts,
-            cancel_job_ids=cancel_job_ids,
-            requeue_job_ids=requeue_job_ids,
-            job_wait_timeout_seconds=job_wait_timeout_seconds,
-            job_refresh_interval_seconds=job_refresh_interval_seconds,
-            jail_sfs_resize_handler=jail_sfs_resize_handler,
-            worker_rollout_strategy=worker_rollout_strategy,
-            worker_wave_groups=worker_wave_groups,
-            worker_wave_percent=worker_wave_percent,
-            max_parallel_worker_groups=max_parallel_worker_groups,
-            strategy_max_surge_count=strategy_max_surge_count,
-            strategy_max_unavailable_count=strategy_max_unavailable_count,
-            strategy_drain_timeout=strategy_drain_timeout,
-            upgrade_path_fingerprint=upgrade_path_fingerprint,
-            upgrade_path_segment_id=upgrade_path_segment_id,
-            locked_upgrade_path=locked_upgrade_path,
-        )
+        active_command_runner = command_runner or _default_command_runner
+        attached_nebius_api = getattr(active_command_runner, "nebius_api", None)
+        owned_nebius_api: SoperatorMigrationNebiusApi | None = None
+        active_nebius_api = nebius_api or attached_nebius_api
+        if active_nebius_api is None:
+            owned_nebius_api = _SdkSoperatorMigrationNebiusApi(
+                project_id=_nebius_project_id(payload)
+            )
+            active_nebius_api = owned_nebius_api
+        try:
+            return _execute_soperator_migration_unlocked(
+                config_path=config_path,
+                target_ref=normalized_target,
+                payload=payload,
+                source_report=source_report,
+                backup_metadata=backup_metadata,
+                snapshot_collector=snapshot_collector,
+                approved=approved,
+                approve_remediation=approve_remediation,
+                nebius_api=active_nebius_api,
+                command_runner=active_command_runner,
+                status_callback=status_callback,
+                status_poll_interval_seconds=status_poll_interval_seconds,
+                job_policy=job_policy,
+                populate_jail_refresh=populate_jail_refresh,
+                jail_persistent_mounts=jail_persistent_mounts,
+                cancel_job_ids=cancel_job_ids,
+                requeue_job_ids=requeue_job_ids,
+                job_wait_timeout_seconds=job_wait_timeout_seconds,
+                job_refresh_interval_seconds=job_refresh_interval_seconds,
+                jail_sfs_resize_handler=jail_sfs_resize_handler,
+                worker_rollout_strategy=worker_rollout_strategy,
+                worker_wave_groups=worker_wave_groups,
+                worker_wave_percent=worker_wave_percent,
+                max_parallel_worker_groups=max_parallel_worker_groups,
+                strategy_max_surge_count=strategy_max_surge_count,
+                strategy_max_unavailable_count=strategy_max_unavailable_count,
+                strategy_drain_timeout=strategy_drain_timeout,
+                upgrade_path_fingerprint=upgrade_path_fingerprint,
+                upgrade_path_segment_id=upgrade_path_segment_id,
+                locked_upgrade_path=locked_upgrade_path,
+            )
+        finally:
+            if owned_nebius_api is not None:
+                owned_nebius_api.close()
 
 
 def _execute_soperator_migration_unlocked(
@@ -16561,6 +16683,7 @@ def _execute_soperator_migration_unlocked(
     snapshot_collector: Callable[..., Mapping[str, Any]],
     approved: bool = False,
     approve_remediation: bool = False,
+    nebius_api: SoperatorMigrationNebiusApi | None = None,
     command_runner: SoperatorMigrationCommandRunner | None = None,
     status_callback: Callable[[str], None] | None = None,
     status_poll_interval_seconds: float = 30.0,
@@ -16587,6 +16710,10 @@ def _execute_soperator_migration_unlocked(
     if not normalized_target:
         raise RuntimeError("External Soperator upgrade execute requires a target ref.")
     active_command_runner = command_runner or _default_command_runner
+    attached_nebius_api = getattr(active_command_runner, "nebius_api", None)
+    active_nebius_api = nebius_api or attached_nebius_api
+    if active_nebius_api is None:
+        raise RuntimeError("External Soperator upgrade execution requires a Nebius API adapter.")
 
     def _emit_phase_comment(phase_id: str, comment: str) -> None:
         if status_callback is None:
@@ -16719,6 +16846,7 @@ def _execute_soperator_migration_unlocked(
         payload=payload,
         target_ref=normalized_target,
         kube_context=kube_context,
+        nebius_api=active_nebius_api,
         command_runner=active_command_runner,
     )
     checkpoint = _checkpoint_for_run(
@@ -16890,6 +17018,7 @@ def _execute_soperator_migration_unlocked(
                 target_ref=normalized_target,
                 source_report=execution_source_report,
                 worker_node_groups=preflight_worker_groups,
+                nebius_api=active_nebius_api,
                 command_runner=active_command_runner,
                 rollout=rollout,
             )
@@ -17047,6 +17176,7 @@ def _execute_soperator_migration_unlocked(
     if effective_approval and status_callback is not None:
         status_reporter = SoperatorMigrationStatusReporter(
             emit=status_callback,
+            nebius_api=active_nebius_api,
             command_runner=active_command_runner,
             kube_context=kube_context,
             checkpoint=checkpoint,
@@ -17120,6 +17250,7 @@ def _execute_soperator_migration_unlocked(
             target_ref=normalized_target,
             kube_context=kube_context,
             worker_node_groups=approved_worker_groups,
+            nebius_api=active_nebius_api,
             command_runner=active_command_runner,
         )
         if action_reconcile_lines:
@@ -17133,6 +17264,7 @@ def _execute_soperator_migration_unlocked(
                 target_ref=normalized_target,
                 kube_context=kube_context,
                 worker_node_groups=approved_worker_groups,
+                nebius_api=active_nebius_api,
                 command_runner=active_command_runner,
                 checkpoint_writer=_checkpoint_progress,
                 rollout=rollout,
@@ -17151,6 +17283,7 @@ def _execute_soperator_migration_unlocked(
                 source_report=execution_source_report,
                 target_ref=normalized_target,
                 worker_node_groups=approved_worker_groups,
+                nebius_api=active_nebius_api,
                 command_runner=active_command_runner,
             ),
             "online-bulk-data-sync": lambda: _execute_online_bulk_data_sync_phase(
@@ -17170,6 +17303,7 @@ def _execute_soperator_migration_unlocked(
                 target_ref=normalized_target,
                 kube_context=kube_context,
                 worker_node_groups=approved_worker_groups,
+                nebius_api=active_nebius_api,
                 command_runner=active_command_runner,
                 checkpoint_writer=_checkpoint_progress,
                 job_policy=resolved_job_policy,
@@ -17224,6 +17358,7 @@ def _execute_soperator_migration_unlocked(
                 source_report=execution_source_report,
                 live_snapshot=live_snapshot,
                 kube_context=kube_context,
+                nebius_api=active_nebius_api,
                 command_runner=active_command_runner,
                 checkpoint_writer=_checkpoint_progress,
             ),
@@ -17266,6 +17401,7 @@ def _execute_soperator_migration_unlocked(
                         target_ref=normalized_target,
                         kube_context=kube_context,
                         worker_node_groups=approved_worker_groups,
+                        nebius_api=active_nebius_api,
                         command_runner=active_command_runner,
                     )
             except SoperatorMigrationPhasePending as exc:
@@ -17349,6 +17485,7 @@ def _execute_soperator_migration_unlocked(
                 target_ref=normalized_target,
                 worker_node_groups=approved_worker_groups,
                 phase_ids=phase_ids,
+                nebius_api=active_nebius_api,
                 command_runner=active_command_runner,
             )
         except RuntimeError as exc:

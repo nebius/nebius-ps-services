@@ -5,7 +5,7 @@ import json
 import re
 import shlex
 import subprocess
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -1780,8 +1780,172 @@ def test_deploy_owned_soperator_adoption_cleanup_skips_migration_owned_work(
     )
 
 
+class _FakeSoperatorMigrationNebiusApi:
+    def __init__(self, runner: _FakeSoperatorMigrationCommandRunner) -> None:
+        self.runner = runner
+
+    def get_filesystem_by_name(self, *, project_id: str, name: str) -> Mapping[str, object]:
+        del project_id
+        return dict(self.runner.filesystems.get(name) or {})
+
+    def create_filesystem(
+        self,
+        *,
+        project_id: str,
+        spec: soperator_migration_module.SoperatorAlignedFilesystemSpec,
+        timeout_seconds: int = 1800,
+    ) -> Mapping[str, object]:
+        del project_id, timeout_seconds
+        filesystem = {
+            "metadata": {"id": f"filesystem-{spec.name}", "name": spec.name},
+            "spec": {
+                "size_gibibytes": spec.size_gib,
+                "block_size_bytes": spec.block_size_kib * 1024,
+                "type": spec.filesystem_type,
+            },
+        }
+        self.runner.filesystems[spec.name] = filesystem
+        return dict(filesystem)
+
+    def get_node_group(self, node_group_id: str) -> Mapping[str, object]:
+        return dict(
+            self.runner.node_groups.get(node_group_id)
+            or {
+                "metadata": {"id": node_group_id, "parent_id": "cluster-123"},
+                "spec": {"template": {"filesystems": []}},
+                "status": {
+                    "ready_node_count": 1,
+                    "target_node_count": 1,
+                    "node_count": 1,
+                    "outdated_node_count": 0,
+                    "reconciling": False,
+                },
+            }
+        )
+
+    def list_node_groups(self, cluster_id: str) -> tuple[Mapping[str, object], ...]:
+        del cluster_id
+        return tuple(dict(item) for item in self.runner.node_groups.values())
+
+    def update_node_group(
+        self,
+        *,
+        node_group_id: str,
+        original_node_group: Mapping[str, object],
+        update_args: Sequence[str],
+        strategy_args: Sequence[str],
+        clear_template_gpu_settings: bool = False,
+        timeout_seconds: int = 2700,
+    ) -> Mapping[str, object]:
+        del timeout_seconds
+        node_group = soperator_migration_module._node_group_full_update_payload(  # noqa: SLF001
+            original_node_group=original_node_group,
+            update_args=update_args,
+            strategy_args=strategy_args,
+            clear_template_gpu_settings=clear_template_gpu_settings,
+        )
+        node_group.setdefault(
+            "status",
+            {
+                "ready_node_count": 1,
+                "target_node_count": 1,
+                "node_count": 1,
+                "outdated_node_count": 0,
+                "reconciling": False,
+            },
+        )
+        self.runner.node_groups[node_group_id] = node_group
+        return dict(node_group)
+
+    def create_node_group(
+        self,
+        *,
+        payload: Mapping[str, object],
+        timeout_seconds: int = 3600,
+    ) -> Mapping[str, object]:
+        del timeout_seconds
+        node_group = dict(to_plain_data(dict(payload)))
+        metadata = node_group.setdefault("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+            node_group["metadata"] = metadata
+        name = str(metadata.get("name", "") or f"node-group-{len(self.runner.node_groups) + 1}")
+        node_group_id = str(metadata.get("id", "") or f"nodegroup-{name}")
+        metadata.setdefault("id", node_group_id)
+        metadata.setdefault("parent_id", self.runner.cluster.get("metadata", {}).get("id", "cluster-123"))
+        node_group.setdefault(
+            "status",
+            {
+                "ready_node_count": 1,
+                "target_node_count": 1,
+                "node_count": 1,
+                "outdated_node_count": 0,
+                "reconciling": False,
+            },
+        )
+        self.runner.node_groups[node_group_id] = node_group
+        return dict(node_group)
+
+    def scale_node_group(
+        self,
+        *,
+        node_group_id: str,
+        count: int,
+        timeout_seconds: int = 3000,
+    ) -> None:
+        del timeout_seconds
+        node_group = dict(self.get_node_group(node_group_id))
+        spec = node_group.setdefault("spec", {})
+        if not isinstance(spec, dict):
+            spec = {}
+            node_group["spec"] = spec
+        spec["fixed_node_count"] = count
+        status = node_group.setdefault("status", {})
+        if isinstance(status, dict):
+            status["ready_node_count"] = count
+            status["target_node_count"] = count
+            status["node_count"] = count
+        self.runner.node_groups[node_group_id] = node_group
+
+    def delete_node_group(
+        self,
+        *,
+        node_group_id: str,
+        timeout_seconds: int = 3000,
+    ) -> None:
+        del timeout_seconds
+        self.runner.node_groups.pop(node_group_id, None)
+
+    def get_cluster(self, cluster_id: str) -> Mapping[str, object]:
+        del cluster_id
+        return dict(self.runner.cluster)
+
+    def update_cluster_control_plane(
+        self,
+        *,
+        cluster_id: str,
+        control_plane_version: str,
+        timeout_seconds: int = 3600,
+    ) -> Mapping[str, object]:
+        del cluster_id, timeout_seconds
+        spec = self.runner.cluster.setdefault("spec", {})
+        if not isinstance(spec, dict):
+            spec = {}
+            self.runner.cluster["spec"] = spec
+        control_plane = spec.setdefault("control_plane", {})
+        if not isinstance(control_plane, dict):
+            control_plane = {}
+            spec["control_plane"] = control_plane
+        control_plane["version"] = control_plane_version
+        return dict(self.runner.cluster)
+
+    def close(self) -> None:
+        return None
+
+
 class _FakeSoperatorMigrationCommandRunner:
     def __init__(self) -> None:
+        self.nebius_api = _FakeSoperatorMigrationNebiusApi(self)
         self.cluster: dict[str, object] = {
             "metadata": {"id": "cluster-123", "name": "external-cluster"},
             "spec": {"control_plane": {"version": "1.31"}},
