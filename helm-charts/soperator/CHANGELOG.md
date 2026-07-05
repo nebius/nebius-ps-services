@@ -4,6 +4,16 @@ All notable changes to this chart are tracked here.
 
 ## [Unreleased]
 
+- Added the active/passive jail rootfs storage contract. The chart now renders
+  `jail-rootfs-slot-a`, `jail-rootfs-slot-b`, and generated
+  `jailPersistentMounts` PVC-backed volume sources, defaults login replicas to
+  2, mounts managed `/home` at `/mnt/jail-store/shared/home`, and supports
+  external single-SFS adoption by pointing `/home` at `/mnt/jail/home` plus
+  explicit customer paths such as `/data` without copying data.
+- Clarified `volume.jail.size` as the total backing-store capacity for the
+  SFS-mounted active/passive jail store; the local-path PV/PVC requests are
+  informational and do not represent per-slot quota.
+
 ## [soperator-chart-v4.0.2-ps.3] - 2026-06-24
 
 - Added the chart-owned `gpuDriverJail` contract for GPU NodeSets. The chart

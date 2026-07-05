@@ -13,6 +13,7 @@ import pytest
 
 from nebius_cxcli import soperator_migration as migration
 from nebius_cxcli.quota_checks import QuotaCheck, QuotaReport, QuotaRequirement
+from nebius_cxcli.soperator_jail_capacity import GIB, evaluate_jail_capacity
 from nebius_cxcli.soperator_migration import (
     SoperatorMigrationCommandResult,
     soperator_migration_checkpoint_path,
@@ -582,7 +583,6 @@ def _backup_metadata_with_existing_archive(
 
 
 def execute_soperator_migration(*args: Any, **kwargs: Any):
-    kwargs.setdefault("confirm_jail_rootfs_overwrite", True)
     if kwargs.get("approved") is True:
         raw_config_path = kwargs.get("config_path") if "config_path" in kwargs else args[0]
         config_path = Path(raw_config_path)
@@ -888,8 +888,34 @@ spec:
                         "updatedReplicas": 1,
                     },
                 },
+                (
+                    "StatefulSet",
+                    "soperator",
+                    "login",
+                ): {
+                    "metadata": {"generation": 1},
+                    "spec": {"replicas": 2},
+                    "status": {
+                        "observedGeneration": 1,
+                        "readyReplicas": 2,
+                        "updatedReplicas": 2,
+                    },
+                },
             }
         )
+        self.live_services = [
+            {"metadata": {"name": "login", "namespace": "soperator"}},
+        ]
+        self.live_endpoint_slices = [
+            {
+                "metadata": {
+                    "name": "login-ready",
+                    "namespace": "soperator",
+                    "labels": {"kubernetes.io/service-name": "login"},
+                },
+                "endpoints": [{"conditions": {"ready": True}}],
+            }
+        ]
         self.live_kubernetes_resources = {
             key: list(value) for key, value in (live_kubernetes_resources or {}).items()
         }
@@ -1229,22 +1255,22 @@ metadata:
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: jail-submount-home-pv
+  name: jail-persistent-home-pv
 spec:
   claimRef:
     namespace: {namespace}
-    name: jail-submount-home-pvc
+    name: jail-persistent-home-pvc
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: jail-submount-home-pvc
+  name: jail-persistent-home-pvc
   namespace: {namespace}
 ---
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: jail-submount-home-mount
+  name: jail-mount
   namespace: {namespace}
 """,
                 "",
@@ -1352,28 +1378,6 @@ spec:
                 chart="soperator-4.0.1-ps.1",
                 app_version="4.0.1",
             )
-            try:
-                values = json.loads(input_text or "{}")
-            except json.JSONDecodeError:
-                values = {}
-            populate = values.get("populateJail") if isinstance(values, dict) else None
-            if (
-                isinstance(values, dict)
-                and values.get("maintenance") == "downscaleAndOverwritePopulateJail"
-                and isinstance(populate, dict)
-                and populate.get("overwrite") is True
-            ):
-                self._populate_jail_refresh_saved_pods = list(self.live_pods)
-                self.live_pods = []
-            elif (
-                isinstance(values, dict)
-                and values.get("maintenance") == "none"
-                and isinstance(populate, dict)
-                and populate.get("overwrite") is False
-                and self._populate_jail_refresh_saved_pods is not None
-            ):
-                self.live_pods = self._populate_jail_refresh_saved_pods
-                self._populate_jail_refresh_saved_pods = None
             return SoperatorMigrationCommandResult(command, 0, "{}", "")
         if command[:7] == (
             "kubectl",
@@ -1435,6 +1439,20 @@ spec:
                 command,
                 0,
                 json.dumps({"status": {"conditions": [{"type": "Complete", "status": "True"}]}}),
+                "",
+            )
+        if (
+            len(command) >= 7
+            and command[:3] == ("kubectl", "--context", "external-context")
+            and command[3] == "-n"
+            and command[4] == "soperator"
+            and command[5] == "logs"
+            and command[6].endswith("-jail-capacity-probe")
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "active_used_kib=83886080\npassive_available_kib=134217728\n",
                 "",
             )
         if command == ("kubectl", "--context", "external-context", "apply", "-f", "-"):
@@ -1672,11 +1690,38 @@ spec:
                 "deployment": "Deployment",
                 "deploy": "Deployment",
                 "statefulset": "StatefulSet",
+                "statefulset.apps.kruise.io": "StatefulSet",
+                "statefulsets.apps.kruise.io": "StatefulSet",
                 "daemonset": "DaemonSet",
             }
             resource = command[command.index("get") + 1]
-            name = command[command.index("get") + 2]
             namespace = command[command.index("-n") + 1]
+            if resource in {"service", "services", "svc"}:
+                return SoperatorMigrationCommandResult(
+                    command,
+                    0,
+                    json.dumps({"items": self.live_services}),
+                    "",
+                )
+            if resource.startswith("endpointslices"):
+                selector = command[command.index("-l") + 1] if "-l" in command else ""
+                service_name = selector.removeprefix("kubernetes.io/service-name=")
+                items = [
+                    item
+                    for item in self.live_endpoint_slices
+                    if not service_name
+                    or item.get("metadata", {}).get("labels", {}).get(
+                        "kubernetes.io/service-name"
+                    )
+                    == service_name
+                ]
+                return SoperatorMigrationCommandResult(
+                    command,
+                    0,
+                    json.dumps({"items": items}),
+                    "",
+                )
+            name = command[command.index("get") + 2]
             kind = kind_by_resource.get(resource)
             workload = self.live_workloads.get((kind or "", namespace, name))
             if workload is not None:
@@ -2975,12 +3020,13 @@ def test_sfs_attachment_uses_zero_surge_strategy_and_restores_original() -> None
         target_ref="external-cluster",
     )
     specs_by_key = {spec.key: spec for spec in specs}
+    assert "jail" not in specs_by_key
 
     changed, attachments = migration._attach_filesystems_to_source_node_groups(
         command_runner=runner,
         source_report=_source_report(),
-        attachment_keys_by_group={"gpu-pool": ("jail",)},
-        filesystem_ids_by_key={"jail": "filesystem-jail"},
+        attachment_keys_by_group={"gpu-pool": ("controller-spool",)},
+        filesystem_ids_by_key={"controller-spool": "filesystem-controller-spool"},
         specs_by_key=specs_by_key,
     )
 
@@ -2989,7 +3035,7 @@ def test_sfs_attachment_uses_zero_surge_strategy_and_restores_original() -> None
         {
             "source_group": "gpu-pool",
             "node_group_id": "nodegroup-gpu-pool",
-            "filesystem_keys": ["jail"],
+            "filesystem_keys": ["controller-spool"],
             "strategy": "zero-surge",
             "strategy_restored": True,
             "updated": True,
@@ -3166,7 +3212,6 @@ def test_execute_records_approval_and_runs_checkpointed_mutators(tmp_path: Path)
     assert checkpoint["worker_node_groups"] == ["gpu-pool"]
     assert "customer-approval-recorded" in {event["event"] for event in checkpoint["events"]}
     assert set(checkpoint["phase_state"]["create-aligned-sfs"]["filesystems"]) == {
-        "jail",
         "controller-spool",
         "accounting",
     }
@@ -3225,25 +3270,19 @@ def test_execute_records_approval_and_runs_checkpointed_mutators(tmp_path: Path)
             return {}
         return parsed if isinstance(parsed, dict) else {}
 
-    overwrite_indices = [
+    refresh_indices = [
         index
         for index, (command, _input_text) in enumerate(runner.calls)
         if command
         and command[0] == "helm"
         and "upgrade" in command
-        and _helm_input_values(index).get("maintenance") == "downscaleAndOverwritePopulateJail"
+        and _helm_input_values(index).get("jailRootfs", {}).get("refresh", {}).get("mode")
+        == "populatePassiveSlot"
     ]
-    assert overwrite_indices
-    overwrite_index = overwrite_indices[-1]
-    steady_index = next(
-        index
-        for index in range(overwrite_index + 1, len(runner.calls))
-        if runner.calls[index][0]
-        and runner.calls[index][0][0] == "helm"
-        and "upgrade" in runner.calls[index][0]
-        and _helm_input_values(index).get("maintenance") == "none"
-        and _helm_input_values(index).get("populateJail", {}).get("overwrite") is False
-    )
+    assert refresh_indices
+    refresh_index = refresh_indices[-1]
+    assert populate_phase["active_slot"] == "slot-b"
+    assert populate_phase["rollback_slot"] == "legacy-rootfs"
     drain_indices = [
         index
         for index, (command, _input_text) in enumerate(runner.calls)
@@ -3254,15 +3293,15 @@ def test_execute_records_approval_and_runs_checkpointed_mutators(tmp_path: Path)
         for index, (command, _input_text) in enumerate(runner.calls)
         if command[8:] == ("scontrol", "update", "PartitionName=ALL", "State=UP")
     ]
-    last_drain_before_overwrite = max(
-        index for index in drain_indices if index < overwrite_index
+    last_drain_before_refresh = max(
+        index for index in drain_indices if index < refresh_index
     )
-    last_resume_before_overwrite = max(
-        (index for index in resume_indices if index < overwrite_index),
+    last_resume_before_refresh = max(
+        (index for index in resume_indices if index < refresh_index),
         default=-1,
     )
-    assert last_drain_before_overwrite > last_resume_before_overwrite
-    assert any(index > steady_index for index in resume_indices)
+    assert last_drain_before_refresh > last_resume_before_refresh
+    assert any(index > refresh_index for index in resume_indices)
 
     runner.calls.clear()
     resumed = execute_soperator_migration(
@@ -5310,7 +5349,6 @@ def test_external_node_template_quiesces_zero_surge_service_roles(
         snapshot_collector=lambda *, kube_context: snapshot,
         approved=True,
         command_runner=runner,
-        confirm_jail_rootfs_overwrite=True,
     )
 
     assert result.pending_phase == "none"
@@ -7438,7 +7476,6 @@ def test_populate_jail_refresh_phase_job_policy_fail_blocks_before_helm_overwrit
             kube_context="external-context",
             command_runner=runner,
             populate_jail_refresh="force",
-            confirm_jail_rootfs_overwrite=True,
             job_policy="fail",
             cancel_job_ids=(),
             requeue_job_ids=(),
@@ -7456,65 +7493,130 @@ def test_populate_jail_refresh_phase_job_policy_fail_blocks_before_helm_overwrit
     )
 
 
-def test_prepare_home_sfs_migration_payload_patches_target_values(
+def test_populate_jail_refresh_phase_capacity_fail_blocks_before_slurm_and_helm(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    runner = _FakeCommandRunner(
+        live_pods=[
+            {"metadata": {"name": "login-0"}, "status": {"phase": "Running"}},
+            {
+                "metadata": {
+                    "name": "worker-gpu-0",
+                    "labels": {"slurm.nebius.ai/nodeset-name": "worker-gpu"},
+                },
+                "status": {"phase": "Running"},
+            },
+        ],
+        slurm_queue_output=(
+            "42|alice|RUNNING|gpu|worker-gpu-0|worker-gpu-0||None|"
+            "00:05|30:00|25:00|active\n"
+        ),
+    )
+    helm_calls: list[Mapping[str, Any]] = []
     monkeypatch.setattr(
         migration,
-        "_home_usage_bytes_from_login",
-        lambda **_kwargs: 10 * 1024**3,
+        "_patch_target_values_for_compute",
+        lambda **_kwargs: {
+            "populateJail": {"overwrite": False},
+            "externalNfs": {
+                "enabled": True,
+                "server": "nfs.example.invalid",
+                "path": "/exports/home",
+                "mountPath": "/home",
+            },
+        },
     )
+    monkeypatch.setattr(
+        migration,
+        "probe_active_passive_jail_capacity",
+        lambda *_args, **_kwargs: evaluate_jail_capacity(
+            passive_available_bytes=8 * GIB,
+            active_used_bytes=80 * GIB,
+        ),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_helm_upgrade_target_soperator",
+        lambda **kwargs: helm_calls.append(kwargs),
+    )
+    checkpoint: dict[str, Any] = {
+        "phase_state": {},
+        "worker_node_groups": ["gpu-pool"],
+    }
+
+    with pytest.raises(migration.SoperatorMigrationPhasePending, match="passive jail rootfs"):
+        migration._execute_populate_jail_refresh_phase(  # noqa: SLF001
+            checkpoint=checkpoint,
+            payload={},
+            source_report={"report": {"target_version": "4.0.1"}},
+            live_snapshot={},
+            target_ref="external-cluster",
+            kube_context="external-context",
+            command_runner=runner,
+            populate_jail_refresh="force",
+            job_policy="fail",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            job_wait_timeout_seconds=0,
+            job_refresh_interval_seconds=1,
+        )
+
+    populate_phase = checkpoint["phase_state"]["populate-jail-refresh"]
+    assert populate_phase["capacity_preflight"]["status"] == "failed"
+    assert checkpoint["populate_jail_refresh"]["capacity_preflight"]["shortage_gib"] == 92
+    assert helm_calls == []
+    assert not any("squeue" in " ".join(command) for command, _input_text in runner.calls)
+
+
+def test_prepare_jail_persistent_mount_payload_patches_target_values() -> None:
     payload = _payload()
     payload["apps"]["charts"][0]["values"] = {"nodesets": [{"name": "worker"}]}
 
-    patched, state = migration._prepare_home_sfs_migration_payload(  # noqa: SLF001
+    patched, state = migration._prepare_jail_persistent_mount_payload(  # noqa: SLF001
         payload=payload,
         target_ref="external-cluster",
-        kube_context="external-context",
-        command_runner=_FakeCommandRunner(),
-        move_home_out_to_sfs=True,
-        home_sfs_size_multiplier=1.3,
-        home_sfs_size_gib=None,
+        jail_persistent_mounts=("/data=/mnt/jail/data",),
         populate_jail_refresh="auto",
     )
 
     values = patched["apps"]["charts"][0]["values"]
     assert state["status"] == "planned"
-    assert state["usage_bytes"] == 10 * 1024**3
-    assert state["size_gib"] == 13
-    assert values["homeSfsMigration"]["targetPvc"] == "jail-submount-home-pvc"
-    assert values["sfs"]["filesystems"]["home"]["size_gib"] == 13
-    phase_ids = migration._phase_ids_with_home_sfs_prerequisites(  # noqa: SLF001
+    assert state["copy_required"] is False
+    assert values["jailPersistentMounts"] == [
+        {"mountPath": "/home", "localPath": "/mnt/jail/home"},
+        {"mountPath": "/data", "localPath": "/mnt/jail/data"},
+    ]
+    assert values["jailRootfs"]["store"]["rootfsPath"] == "/mnt/jail/.cxcli/rootfs"
+    assert values["jailRootfs"]["adoption"]["activeSource"] == "legacy-rootfs"
+    assert "sfs" not in values
+    phase_ids = migration._phase_ids_with_jail_persistent_mount_prerequisites(  # noqa: SLF001
         phase_ids=("customer-approval", "populate-jail-refresh"),
         payload=patched,
         target_ref="external-cluster",
     )
-    assert phase_ids == (
-        "customer-approval",
-        "create-aligned-sfs",
-        "online-bulk-data-sync",
-        "populate-jail-refresh",
+    assert phase_ids == ("customer-approval", "populate-jail-refresh")
+
+
+def test_prepare_jail_persistent_mount_payload_preserves_existing_external_home() -> None:
+    payload = _payload()
+    payload["apps"]["charts"][0]["values"] = {
+        "externalNfs": {
+            "enabled": True,
+            "mountPath": "/home",
+            "server": "nfs.example.invalid",
+            "path": "/exports/home",
+        }
+    }
+
+    patched, state = migration._prepare_jail_persistent_mount_payload(  # noqa: SLF001
+        payload=payload,
+        target_ref="external-cluster",
+        jail_persistent_mounts=(),
+        populate_jail_refresh="auto",
     )
 
-
-def test_prepare_home_sfs_migration_payload_blocks_disabled_auto_refresh() -> None:
-    payload = _payload()
-    payload["apps"]["charts"][0]["values"] = {}
-
-    with pytest.raises(
-        migration.SoperatorMigrationPhasePending,
-        match="/home is not external",
-    ):
-        migration._prepare_home_sfs_migration_payload(  # noqa: SLF001
-            payload=payload,
-            target_ref="external-cluster",
-            kube_context="external-context",
-            command_runner=_FakeCommandRunner(),
-            move_home_out_to_sfs=False,
-            home_sfs_size_multiplier=1.3,
-            home_sfs_size_gib=None,
-            populate_jail_refresh="auto",
-        )
+    assert state["status"] == "verified"
+    assert patched["apps"]["charts"][0]["values"]["jailPersistentMounts"] == []
 
 
 def test_external_upgrade_cancel_selected_policy_cancels_jobs() -> None:
@@ -10133,12 +10235,20 @@ def test_execute_runs_data_copy_jobs_when_source_storage_exists(tmp_path: Path) 
         for call in runner.calls
         if call[0] == ("kubectl", "--context", "external-context", "apply", "-f", "-")
     ]
-    assert len(apply_calls) == 1
-    assert apply_calls[0][1] is not None
-    applied = json.loads(apply_calls[0][1])
+    sync_apply_calls = []
+    for call in apply_calls:
+        try:
+            applied_payload = json.loads(call[1] or "{}")
+        except json.JSONDecodeError:
+            continue
+        names = {item["metadata"]["name"] for item in applied_payload.get("items", [])}
+        if names and all(name.startswith("cxcli-soperator-sync-") for name in names):
+            sync_apply_calls.append(call)
+    assert len(sync_apply_calls) == 1
+    assert sync_apply_calls[0][1] is not None
+    applied = json.loads(sync_apply_calls[0][1])
     job_names = {item["metadata"]["name"] for item in applied["items"]}
     assert job_names == {
-        "cxcli-soperator-sync-jail",
         "cxcli-soperator-sync-controller-spool",
         "cxcli-soperator-sync-accounting",
     }
@@ -10154,39 +10264,20 @@ def test_execute_runs_data_copy_jobs_when_source_storage_exists(tmp_path: Path) 
             "soperator",
             "get",
         )
-        and call[0][6].startswith("job/")
+        and call[0][6].startswith("job/cxcli-soperator-sync-")
     ]
-    assert len(job_status_calls) == 9
+    assert len(job_status_calls) == 6
 
 
-def test_home_copy_job_manifest_copies_only_home_path() -> None:
-    manifest = migration._copy_job_manifest(
-        key="home",
-        source_pvc="jail-pvc",
-        target_pvc="jail-submount-home-pvc",
-        source_path="/home",
-        target_path="/",
-    )
-
-    command = manifest["spec"]["template"]["spec"]["containers"][0]["command"][-1]
-    assert "cd /old/home" in command
-    assert " -C /new" in command
-    assert "cd /old &&" not in command
-    assert manifest["spec"]["template"]["spec"]["volumes"] == [
-        {"name": "old", "persistentVolumeClaim": {"claimName": "jail-pvc"}},
-        {"name": "new", "persistentVolumeClaim": {"claimName": "jail-submount-home-pvc"}},
-    ]
-
-
-def test_home_data_sync_prepares_target_storage_before_copy() -> None:
+def test_jail_data_sync_skips_single_sfs_rootfs_copy() -> None:
     snapshot = _snapshot()
     snapshot["storage"] = {"jail": {"source": "pvc/jail-pvc"}}
     snapshot["pvcs"] = [{"metadata": {"name": "jail-pvc", "namespace": "soperator"}}]
     payload = _payload()
-    payload["apps"]["charts"][0]["values"] = migration.apply_home_sfs_migration_values(
+    payload["apps"]["charts"][0]["values"] = migration.apply_jail_persistent_mount_values(
         {"nodesets": [{"name": "worker"}]},
         target_ref="external-cluster",
-        size_gib=13,
+        layout="external",
     )
     source_report = _source_report(snapshot)
     checkpoint: dict[str, Any] = {"phase_state": {}}
@@ -10202,102 +10293,52 @@ def test_home_data_sync_prepares_target_storage_before_copy() -> None:
         command_runner=runner,
     )
 
-    assert mutated is True
-    assert "Home SFS storage objects applied before /home data sync." in lines
+    assert mutated is False
+    assert "Data sync skipped: no PVC copy pairs were detected." in lines
     apply_calls = [
         call
         for call in runner.calls
         if call[0] == ("kubectl", "--context", "external-context", "apply", "-f", "-")
     ]
-    assert len(apply_calls) == 2
-    storage_apply = json.loads(apply_calls[0][1] or "{}")
-    storage_kinds = {item["kind"] for item in storage_apply["items"]}
-    assert {
-        "StorageClass",
-        "ConfigMap",
-        "PersistentVolume",
-        "PersistentVolumeClaim",
-        "DaemonSet",
-    } <= storage_kinds
-    copy_apply = json.loads(apply_calls[1][1] or "{}")
-    assert [item["metadata"]["name"] for item in copy_apply["items"]] == [
-        "cxcli-soperator-sync-home"
-    ]
+    assert apply_calls == []
     phase = checkpoint["phase_state"]["online-bulk-data-sync"]
-    assert phase["jobs"]["home"]["source_path"] == "/home"
-    assert phase["jobs"]["home"]["target_path"] == "/"
-    assert any(
-        item["metadata"]["name"] == "jail-submount-home-pvc"
-        for item in runner.live_pvcs
-        if isinstance(item.get("metadata"), dict)
-    )
+    assert "jail" not in phase["jobs"]
 
 
-def test_home_overwrite_checks_capture_login_and_worker_mount_evidence() -> None:
+def test_persistent_mount_overwrite_checks_accept_configured_mounts() -> None:
     runner = _FakeCommandRunner()
 
-    checks = migration._home_preservation_overwrite_checks(  # noqa: SLF001
+    checks = migration._persistent_mount_overwrite_checks(  # noqa: SLF001
         checkpoint={"phase_state": {}},
         values={
-            "externalNfs": {
-                "enabled": True,
-                "server": "nfs.example.invalid",
-                "path": "/exports/home",
-                "mountPath": "/home",
-            }
+            "jailPersistentMounts": [
+                {"mountPath": "/home", "localPath": "/mnt/jail/home"},
+            ]
         },
         kube_context="external-context",
         command_runner=runner,
     )
 
     by_name = {check["name"]: check for check in checks}
-    assert by_name["/home external mount"]["status"] == "passed"
-    assert by_name["/home login pod mount"]["status"] == "passed"
-    assert by_name["/home worker pod mount"]["status"] == "passed"
-    assert any(call[0][6:10] == ("login-0", "--", "/bin/sh", "-ceu") for call in runner.calls)
-    assert any(
-        call[0][6:12] == ("worker-0", "-c", "slurmd", "--", "/bin/sh", "-ceu")
-        for call in runner.calls
-    )
+    assert by_name["persistent jail mounts"]["status"] == "passed"
+    assert runner.calls == []
 
 
-def test_home_overwrite_checks_fail_when_worker_mount_evidence_missing() -> None:
-    runner = _FakeCommandRunner(
-        live_pods=[
-            {
-                "metadata": {
-                    "name": "login-0",
-                    "labels": {"app.kubernetes.io/component": "login"},
-                },
-                "status": {"phase": "Running"},
-            }
-        ]
-    )
+def test_persistent_mount_overwrite_checks_fail_without_home() -> None:
+    runner = _FakeCommandRunner()
 
-    checks = migration._home_preservation_overwrite_checks(  # noqa: SLF001
+    checks = migration._persistent_mount_overwrite_checks(  # noqa: SLF001
         checkpoint={"phase_state": {}},
-        values={
-            "externalNfs": {
-                "enabled": True,
-                "server": "nfs.example.invalid",
-                "path": "/exports/home",
-                "mountPath": "/home",
-            }
-        },
+        values={"jailPersistentMounts": [{"mountPath": "/data", "localPath": "/mnt/jail/data"}]},
         kube_context="external-context",
         command_runner=runner,
     )
 
     by_name = {check["name"]: check for check in checks}
-    assert by_name["/home login pod mount"]["status"] == "passed"
-    assert by_name["/home worker pod mount"] == {
-        "name": "/home worker pod mount",
-        "status": "failed",
-        "summary": "worker pod not found",
-    }
+    assert by_name["persistent jail mounts"]["status"] == "failed"
 
 
-def test_execute_blocks_data_copy_when_target_pvc_is_missing(tmp_path: Path) -> None:
+def test_execute_does_not_block_data_copy_for_missing_target_jail_pvc(tmp_path: Path) -> None:
     snapshot = _snapshot()
     snapshot["storage"] = {"jail": {"source": "pvc/old-jail"}}
     snapshot["pvcs"] = [{"metadata": {"name": "old-jail", "namespace": "soperator"}}]
@@ -10312,8 +10353,7 @@ def test_execute_blocks_data_copy_when_target_pvc_is_missing(tmp_path: Path) -> 
         command_runner=_FakeCommandRunner(),
     )
 
-    assert result.pending_phase == "online-bulk-data-sync"
-    assert "Missing PVCs: target:jail:jail-pvc" in result.pending_reason
+    assert result.pending_phase != "online-bulk-data-sync"
 
 
 def test_online_data_sync_deletes_failed_job_before_reapply() -> None:
@@ -10545,7 +10585,7 @@ def test_execute_does_not_attach_sfs_to_unmapped_node_groups(tmp_path: Path) -> 
         if call[0][:4] == ("nebius", "mk8s", "node-group", "update")
         and "--template-filesystems" in call[0]
     ]
-    assert set(updated_node_groups) == {"nodegroup-cpu-pool", "nodegroup-gpu-pool"}
+    assert set(updated_node_groups) == {"nodegroup-cpu-pool"}
     assert "nodegroup-monitoring" not in updated_node_groups
 
 
@@ -10768,10 +10808,10 @@ def test_execute_runs_completion_safety_when_plan_omits_validation_phase(
 def test_execute_rejects_incompatible_existing_aligned_sfs(tmp_path: Path) -> None:
     runner = _FakeCommandRunner(
         existing_filesystems={
-            "external-cluster-jail": {
-                "metadata": {"id": "filesystem-existing-jail"},
+            "external-cluster-controller-spool": {
+                "metadata": {"id": "filesystem-existing-controller-spool"},
                 "spec": {
-                    "size_gibibytes": "128",
+                    "size_gibibytes": "64",
                     "block_size_bytes": "4096",
                     "type": "NETWORK_SSD",
                 },
@@ -10790,8 +10830,9 @@ def test_execute_rejects_incompatible_existing_aligned_sfs(tmp_path: Path) -> No
     )
 
     assert result.pending_phase == "create-aligned-sfs"
-    assert "existing aligned SFS filesystem 'external-cluster-jail' is incompatible" in (
-        result.pending_reason
+    assert (
+        "existing aligned SFS filesystem 'external-cluster-controller-spool' is incompatible"
+        in result.pending_reason
     )
 
 
@@ -11291,8 +11332,7 @@ def test_execute_recovers_partial_cutover_without_login_pod(tmp_path: Path) -> N
         command_runner=runner,
     )
 
-    assert result.pending_phase == "populate-jail-refresh"
-    assert "blocked until /home is verified external" in result.pending_reason
+    assert result.pending_phase == "none"
     assert "Slurm quiet window check skipped for partial cutover recovery" in "\n".join(
         result.lines
     )
@@ -12269,16 +12309,16 @@ def test_execute_allows_premutation_checkpoint_source_report_refresh(tmp_path: P
         encoding="utf-8",
     )
 
-    with pytest.raises(RuntimeError) as exc_info:
-        execute_soperator_migration(
-            config_path=config_path,
-            target_ref="external-cluster",
-            payload=payload,
-            source_report=source_report,
-            snapshot_collector=lambda *, kube_context: _snapshot(),
-            approved=True,
-        )
-    assert "checkpoint is stale" not in str(exc_info.value)
+    result = execute_soperator_migration(
+        config_path=config_path,
+        target_ref="external-cluster",
+        payload=payload,
+        source_report=source_report,
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        approved=True,
+        command_runner=_FakeCommandRunner(),
+    )
+    assert result.pending_phase == "none"
 
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert checkpoint["source_report_fingerprint"] == migration._source_report_checkpoint_fingerprint(
@@ -12288,8 +12328,10 @@ def test_execute_allows_premutation_checkpoint_source_report_refresh(tmp_path: P
         config_path,
         "test-pre-upgrade",
     )
-    assert checkpoint["events"][-1]["event"] == "backup-metadata-checkpointed"
-    assert checkpoint["events"][-2]["event"] == "execute-checkpoint-source-report-refreshed"
+    events = [event["event"] for event in checkpoint["events"]]
+    refresh_index = events.index("execute-checkpoint-source-report-refreshed")
+    backup_index = events.index("backup-metadata-checkpointed")
+    assert refresh_index < backup_index
 
 
 def test_execute_rejects_retired_migration_checkpoint_path(tmp_path: Path) -> None:

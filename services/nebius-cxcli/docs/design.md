@@ -608,33 +608,40 @@ and chart source-family changes.
   Slurm partition/config, accounting policy, desired values, and stable
   node-to-partition/features/GRES mapping.
   A chart upgrade updates the desired `SlurmCluster.spec.populateJail.image`,
-  but Soperator skips rewriting an already-completed shared jail rootfs unless
-  the maintenance overwrite path is used. Managed `soperator upgrade` therefore
-  treats `populate-jail-refresh` as a first-class stage after target chart
-  apply and before postflight validation. The default
-  `--populate-jail-refresh auto` refreshes when the target populate-jail image
-  changed or the target chart changed and rootfs compatibility is unproven;
-  `force` always refreshes; `manual` stops before the refresh and prints the
-  required maintenance overwrite action. The in-place refresh first applies the
-  selected `--job-policy` to affected worker NodeSets, then temporarily sets
-  `maintenance=downscaleAndOverwritePopulateJail` and
-  `populateJail.overwrite=true`, waits for login/worker consumers to stop,
-  waits for the refreshed `populate-jail` Job to complete with the target
-  image, then restores `maintenance=none` and `populateJail.overwrite=false`.
-  This avoids full cluster recreation for supported upgrades, but it is not
-  zero downtime for login/worker pods during the rootfs refresh window.
-  Populate-jail overwrite also requires `/home` preservation evidence. Existing
-  external `/home` mounts are preserved as-is. For external upgrade, the default
-  `--move-home-out-to-sfs` path treats an unprotected `/home` directory inside
-  the jail rootfs as a prerequisite migration: measure live `/home` usage from a
-  login pod, size a dedicated Nebius SFS with `1.3x` headroom unless
-  `--home-sfs-size-gib` is provided, mount that SFS as a `/home` jail submount
-  for login and worker pods, copy only `jail-pvc:/home`, and block destructive
-  rootfs overwrite until the copy and external mount are verified with live
-  login/worker pod mount evidence. Managed upgrade does not create
-  Terraform-owned SFS resources in this in-place path; it fails closed before
-  overwrite unless `/home` is already external. Non-interactive overwrite
-  requires explicit `--confirm-jail-rootfs-overwrite`.
+  but an already-populated rootfs slot does not refresh by image change alone.
+  Managed `soperator upgrade` therefore treats `populate-jail-refresh` as a
+  first-class stage after target chart apply and before postflight validation.
+  The default `--populate-jail-refresh auto` refreshes when the target
+  populate-jail image changed or the target chart changed and rootfs
+  compatibility is unproven; `force` always refreshes; `manual` stops before
+  refresh and prints passive-slot instructions. The active/passive refresh
+  populates the passive rootfs slot with the target populate-jail image, applies
+  the selected `--job-policy` before worker NodeSet mutation, switches
+  consumers to the populated slot only while the login Service has ready
+  EndpointSlice endpoints during the login StatefulSet rollout, and keeps the
+  previous slot as rollback until postflight passes. Managed greenfield uses one
+  SFS-backed jail store with
+  `/mnt/jail-store/rootfs/slot-a`, `/mnt/jail-store/rootfs/slot-b`, and
+  `/mnt/jail-store/shared/home`; the production profile defaults that backing
+  store to `2048` GiB total capacity for both rootfs slots plus persistent
+  mounts, not a per-slot quota. External adoption keeps the existing physical
+  jail SFS, creates only logical slot directories under
+  `/mnt/jail/.cxcli/rootfs`, treats legacy `/mnt/jail` as the active rootfs
+  until first switch, and automatically preserves `/home` as a persistent jail
+  mount from `/mnt/jail/home`. Additional customer paths such as `/data` or
+  `/checkpoints` must be declared explicitly with `--jail-persistent-mount`;
+  cxcli does not infer, copy, or migrate them.
+  Before passive-slot values or the populate Job are applied, cxcli probes
+  physical jail SFS capacity, measuring legacy rootfs usage while excluding
+  `.cxcli` and configured persistent jail mount local paths. Required passive
+  free space is the larger of `64` GiB and `measured_rootfs_used * 1.25`,
+  rounded up. If capacity is short, managed `soperator upgrade` expands only
+  the cxcli-owned `filesystems.jail.size_gib` through config render plus
+  Terraform apply, then re-probes. External `ext-soperator upgrade` may expand
+  only a single identified existing Nebius jail SFS through Nebius CLI/API,
+  then re-probes. Existing NFS, opaque customer submounts, unknown/non-Nebius
+  storage, and non-jail SFS rows are preserved and never resized by the rootfs
+  refresh.
   Managed `soperator scale-up` and `soperator scale-down` are narrower worker
   capacity commands. Ephemeral worker NodeSets change active ordinals through
   `NodeSetPowerState`; non-ephemeral worker scale updates the cxcli-owned
@@ -653,8 +660,9 @@ and chart source-family changes.
   requested/scheduled on affected nodes, and waits for
   Terraform-managed control-plane/node-group readiness; chart apply updates the
   Soperator app row, rerenders, validates, applies Flux/static manifests, and
-  verifies live chart identity; populate-jail refresh uses the Soperator
-  maintenance overwrite path when required; fast stage gates record
+  verifies live chart identity; populate-jail refresh populates the passive
+  active/passive rootfs slot and switches consumers when required; fast stage
+  gates record
   `fast_verification` after each completed managed upgrade stage, including the
   post-MK8s validation and populate-jail refresh boundaries, before advancing;
   postflight restores Slurm and
@@ -1286,13 +1294,12 @@ table with persistent controls: `a` selects or clears all rows, `i` inverts the
 selection, lowercase selected-action keys such as `c`/`q`/`h` operate on the
 selected rows, and uppercase `C`/`Q`/`H` operate on all displayed or all active
 displayed jobs as appropriate. When the target chart/rootfs changed, the
-populate-jail refresh phase first requires `/home` to be external or migrated
-to a dedicated SFS-backed jail submount, then applies the same job-policy gate to
-affected worker NodeSets before it applies the target chart with
-`maintenance=downscaleAndOverwritePopulateJail` and
-`populateJail.overwrite=true`, waits for login/worker consumers to stop and for
-the refreshed `populate-jail` Job to complete with the target image, then
-restores `maintenance=none` and `populateJail.overwrite=false`,
+populate-jail refresh phase first verifies persistent jail mounts, then applies
+the same job-policy gate to affected worker NodeSets, populates the passive
+rootfs slot with the target populate-jail image, switches consumers to that
+populated slot only while the login Service has ready EndpointSlice endpoints
+during the login StatefulSet rollout, and keeps the previous slot available for
+rollback,
 provides ad hoc `ext-soperator scale-up` and `ext-soperator scale-down`
 commands for external maintenance without onboarding, requiring both Nebius
 `--project-id`/`--cluster-id` for node-group lookup and `--kube-context` for
@@ -1303,11 +1310,12 @@ controller/accounting workloads, and known drain-blocking webhook replicas only
 for zero-surge service rollouts, applies
 target-scoped GPU Operator and Network Operator app rows plus the same
 catalog-owned post-render patches that Flux would apply,
-creates or reuses aligned jail, controller-spool, and accounting SFS
-filesystems, adds a `home` SFS only for the default `/home` preservation
-migration, attaches them to discovered Nebius node groups, runs Kubernetes
-data-copy Jobs when old and target PVC pairs exist, including a path-scoped
-`jail-pvc:/home` copy for the home migration, normalizes target Slurm
+creates or reuses aligned controller-spool and accounting SFS
+filesystems, keeps the existing physical jail SFS for single-SFS rootfs slot
+adoption, preserves `/home` and declared customer paths as persistent jail
+mounts without live data copy, attaches required storage to discovered Nebius
+node groups, runs Kubernetes data-copy Jobs when old and target PVC pairs exist
+for non-jail storage, normalizes target Slurm
 plugin runtime settings, recreates target worker Kruise StatefulSets when
 source-era specs cannot be updated in place, validates Soperator
 reconciliation, runs the required MK8s node inventory smoke, runs the

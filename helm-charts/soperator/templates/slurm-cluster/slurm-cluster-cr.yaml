@@ -1,5 +1,6 @@
 {{- include "validateAccountingConfig" . -}}
 {{- include "validateDependencyConfig" . -}}
+{{- include "validateJailRootfsConfig" . -}}
 {{- include "validateCxcliRenderedConfig" . -}}
 {{- include "validatePartitionConfig" . -}}
 {{- include "validateK8sNodeFilters" . -}}
@@ -124,6 +125,19 @@ spec:
       configMap:
         name: {{ include "slurm-cluster.slurmScriptsConfigMapName" . | quote }}
         defaultMode: 0755
+    {{- if eq (include "slurm-cluster-storage.jailRootfs.activePassive.enabled" .) "true" }}
+    {{- range $slotName := list "slot-a" "slot-b" }}
+    - name: {{ include "slurm-cluster-storage.jailRootfs.slot.volumeSourceName" (list $ $slotName) | quote }}
+      persistentVolumeClaim:
+        claimName: {{ include "slurm-cluster-storage.jailRootfs.slot.pvc" (list $ $slotName) }}
+        readOnly: false
+    {{- end }}
+    {{- range $mount := .Values.jailPersistentMounts }}
+    - name: {{ include "slurm-cluster-storage.jailPersistentMount.name" (list $ $mount) | quote }}
+      persistentVolumeClaim:
+        claimName: {{ include "slurm-cluster-storage.jailPersistentMount.pvc" (list $ $mount) }}
+    {{- end }}
+    {{- end }}
     {{- range .Values.volumeSources }}
     - name: {{ .name | quote }}
       {{- omit . "name" "createPVC" "storageClassName" "size" | toYaml | nindent 6 }}
@@ -474,9 +488,29 @@ spec:
         jail:
           {{- required ".Values.slurmNodes.login.volumes.jail must be provided." .Values.slurmNodes.login.volumes.jail | toYaml | nindent 10 }}
         {{- $loginJailSubMounts := default list .Values.slurmNodes.login.volumes.jailSubMounts }}
+        {{- $loginExistingMounts := dict }}
+        {{- range $mount := $loginJailSubMounts }}
+        {{- $mountPath := trimSuffix "/" (default "" $mount.mountPath) }}
+        {{- if $mountPath }}
+        {{- $_ := set $loginExistingMounts $mountPath true }}
+        {{- end }}
+        {{- end }}
+        {{- if .Values.externalNfs.enabled }}
+        {{- $_ := set $loginExistingMounts (trimSuffix "/" (required ".Values.externalNfs.mountPath is required when externalNfs.enabled=true." .Values.externalNfs.mountPath)) true }}
+        {{- end }}
         jailSubMounts:
           {{- if $loginJailSubMounts }}
           {{- $loginJailSubMounts | toYaml | nindent 10 }}
+          {{- end }}
+          {{- if eq (include "slurm-cluster-storage.jailRootfs.activePassive.enabled" .) "true" }}
+          {{- range $mount := .Values.jailPersistentMounts }}
+          {{- $mountPath := trimSuffix "/" (required "jailPersistentMounts[].mountPath is required." $mount.mountPath) }}
+          {{- if not (hasKey $loginExistingMounts $mountPath) }}
+          - name: {{ include "slurm-cluster-storage.jailPersistentMount.name" (list $ $mount) | quote }}
+            mountPath: {{ $mountPath | quote }}
+            volumeSourceName: {{ include "slurm-cluster-storage.jailPersistentMount.name" (list $ $mount) | quote }}
+          {{- end }}
+          {{- end }}
           {{- end }}
           {{- if .Values.externalNfs.enabled }}
           - name: external-home
@@ -484,7 +518,7 @@ spec:
             volumeSourceName: external-home
             readOnly: {{ .Values.externalNfs.readOnly }}
           {{- end }}
-          {{- if and (not $loginJailSubMounts) (not .Values.externalNfs.enabled) }}
+          {{- if and (not $loginJailSubMounts) (not .Values.externalNfs.enabled) (not .Values.jailPersistentMounts) }}
           []
           {{- end }}
         customMounts:

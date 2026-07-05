@@ -6,15 +6,20 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
-- Added Soperator `/home` preservation controls for populate-jail refresh.
-  Managed `soperator upgrade` and external `ext-soperator upgrade` now expose
-  `--move-home-out-to-sfs/--no-move-home-out-to-sfs`,
-  `--home-sfs-size-multiplier`, `--home-sfs-size-gib`, and
-  `--confirm-jail-rootfs-overwrite`. External upgrade can plan a dedicated
-  SFS-backed `/home` jail submount, copy `jail-pvc:/home` into it, and block
-  destructive rootfs overwrite until `/home` is external or verified migrated
-  with live login/worker pod mount evidence. Managed upgrade now fails closed
-  before populate-jail overwrite when `/home` is not already proven external.
+- Added single-SFS active/passive Soperator jail rootfs refresh. Managed
+  installs now use `slot-a`/`slot-b` rootfs PVCs plus generic
+  `jailPersistentMounts` from day one, with two login replicas by default.
+  External upgrade keeps the existing physical jail SFS, creates logical slots
+  under `/mnt/jail/.cxcli/rootfs`, treats legacy `/mnt/jail` as the rollback
+  source during first adoption, and preserves `/home` plus explicitly declared
+  customer paths as persistent jail mounts without copying live data.
+- Added a pre-populate active/passive jail capacity gate and expansion workflow.
+  Managed production Soperator defaults now size the cxcli-owned jail SFS
+  backing store at `2048` GiB total capacity, `soperator upgrade` expands that
+  store through config render and Terraform apply, and `ext-soperator upgrade`
+  expands only one identified existing Nebius jail SFS through Nebius CLI/API.
+  Both commands expose `--jail-sfs-resize-policy fail|prompt|apply` plus
+  `--jail-sfs-resize-to-gib` before passive-slot population.
 - Fixed `nebius-cxcli validate` coverage for external Soperator onboarding
   configs so malformed `deploy.targets[].soperator_onboarding` sections fail
   fast even when no enabled Soperator app row reaches the accepted-onboarding
@@ -91,10 +96,10 @@ All notable changes to this project are tracked here. This changelog follows
   accepted source chart/Kubernetes versions in transition names.
 - Added Soperator populate-jail refresh handling to managed `soperator upgrade`
   and external `ext-soperator upgrade`. Chart upgrades now report a
-  `populate-jail-refresh` stage that can run the upstream maintenance overwrite
-  path, defaults non-TTY upgrade job handling to `fail` unless a disruptive
-  policy is selected explicitly, and extends Soperator backup archives with
-  recreation coverage evidence for new/replacement-cluster runbooks.
+  `populate-jail-refresh` stage, defaults non-TTY upgrade job handling to
+  `fail` unless a disruptive policy is selected explicitly, and extends
+  Soperator backup archives with recreation coverage evidence for
+  new/replacement-cluster runbooks.
 - Changed managed and external Soperator backup/restore archives to fail fast
   when required controller/accounting recreation material is missing, record
   sanitized retained PV/PVC restore manifests that preserve PV `claimRef` and

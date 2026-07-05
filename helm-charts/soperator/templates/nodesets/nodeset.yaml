@@ -152,12 +152,35 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
 
-      {{- with (.jailSubMounts | default list) }}
-      jailSubMounts:
-        {{- toYaml . | nindent 8 }}
+      {{- $jailSubMounts := (.jailSubMounts | default list) }}
+      {{- $existingMounts := dict }}
+      {{- range $mount := $jailSubMounts }}
+      {{- $mountPath := trimSuffix "/" (default "" $mount.mountPath) }}
+      {{- if $mountPath }}
+      {{- $_ := set $existingMounts $mountPath true }}
+      {{- end }}
       {{- end }}
       {{- if $.Values.externalNfs.enabled }}
-      {{- if not (.jailSubMounts | default list) }}
+      {{- $_ := set $existingMounts (trimSuffix "/" (required ".Values.externalNfs.mountPath is required when externalNfs.enabled=true." $.Values.externalNfs.mountPath)) true }}
+      {{- end }}
+      {{- if or $jailSubMounts $.Values.jailPersistentMounts }}
+      jailSubMounts:
+        {{- if $jailSubMounts }}
+        {{- toYaml $jailSubMounts | nindent 8 }}
+        {{- end }}
+        {{- if eq (include "slurm-cluster-storage.jailRootfs.activePassive.enabled" $) "true" }}
+        {{- range $mount := $.Values.jailPersistentMounts }}
+        {{- $mountPath := trimSuffix "/" (required "jailPersistentMounts[].mountPath is required." $mount.mountPath) }}
+        {{- if not (hasKey $existingMounts $mountPath) }}
+        - name: {{ include "slurm-cluster-storage.jailPersistentMount.name" (list $ $mount) | quote }}
+          mountPath: {{ $mountPath | quote }}
+          volumeSourceName: {{ include "slurm-cluster-storage.jailPersistentMount.name" (list $ $mount) | quote }}
+        {{- end }}
+        {{- end }}
+        {{- end }}
+      {{- end }}
+      {{- if $.Values.externalNfs.enabled }}
+      {{- if and (not $jailSubMounts) (not $.Values.jailPersistentMounts) }}
       jailSubMounts:
       {{- end }}
         - name: external-home

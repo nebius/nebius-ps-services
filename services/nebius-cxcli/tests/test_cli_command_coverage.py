@@ -50,6 +50,7 @@ from nebius_cxcli.quota_checks import (
     QuotaRequirement,
     RegionalQuotaAvailability,
 )
+from nebius_cxcli.soperator_jail_capacity import GIB, evaluate_jail_capacity
 from nebius_cxcli.soperator_populate_jail import PopulateJailSnapshot
 
 runner = CliRunner()
@@ -352,41 +353,69 @@ def _stub_soperator_upgrade_runtime(
     monkeypatch.setattr(cli, "inspect_populate_jail", _inspect_populate_jail)
     monkeypatch.setattr(
         cli,
-        "soperator_home_preservation_status",
+        "jail_persistent_mount_status",
         lambda _values: SimpleNamespace(
             status="verified",
-            reason="/home is test-mode external storage",
-            source="externalNfs:test",
-            external=True,
+            reason="persistent mounts are test-mode storage",
+            verified=True,
+            as_payload=lambda: {
+                "status": "verified",
+                "reason": "persistent mounts are test-mode storage",
+                "mounts": [],
+            },
         ),
     )
     monkeypatch.setattr(
         cli,
-        "wait_for_populate_jail_consumers_down",
+        "wait_for_active_passive_populate_jail_job",
         lambda *_args, **_kwargs: PopulateJailSnapshot(
             slurmcluster_name="mk8s",
             image=target_populate_jail_image,
-            job_name="mk8s-populate-jail",
-            job_uid="old-job",
-            job_complete=True,
-            job_image="registry.example/populate-jail:old",
-            active_consumer_pods=(),
-            status="collected",
-        ),
-    )
-    monkeypatch.setattr(
-        cli,
-        "wait_for_populate_jail_refresh",
-        lambda *_args, **_kwargs: PopulateJailSnapshot(
-            slurmcluster_name="mk8s",
-            image=target_populate_jail_image,
-            job_name="mk8s-populate-jail",
+            job_name="mk8s-populate-jail-passive-slotb",
             job_uid="new-job",
             job_complete=True,
             job_image=target_populate_jail_image,
             status="collected",
         ),
     )
+    monkeypatch.setattr(
+        cli,
+        "wait_for_login_service_ready_endpoints",
+        lambda *_args, **_kwargs: {
+            "service_names": ["login"],
+            "ready_endpoints": 1,
+        },
+    )
+    monkeypatch.setattr(
+        cli,
+        "wait_for_login_statefulset_rollout_with_ready_endpoint_guard",
+        lambda *_args, **_kwargs: {
+            "service_names": ["login"],
+            "ready_endpoints": 1,
+        },
+    )
+
+    def _run_upgrade_process(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 120,
+        check: bool = True,
+        extra_env: Mapping[str, str] | None = None,
+    ) -> cli._SoperatorUpgradeCommandResult:
+        del input_text, timeout_seconds, check, extra_env
+        arg_text = tuple(str(arg) for arg in args)
+        stdout = ""
+        if "logs" in arg_text and any("jail-capacity-probe" in arg for arg in arg_text):
+            stdout = "active_used_kib=1048576\npassive_available_kib=209715200\n"
+        return cli._SoperatorUpgradeCommandResult(
+            args=arg_text,
+            returncode=0,
+            stdout=stdout,
+            stderr="",
+        )
+
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_process", _run_upgrade_process)
 
 
 def test_soperator_upgrade_config_fingerprint_ignores_transient_node_state(
@@ -455,10 +484,8 @@ def test_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path) -> 
         strategy_max_surge_count=None,
         backup_dir=None,
         populate_jail_refresh="auto",
-        move_home_out_to_sfs=True,
-        home_sfs_size_multiplier=1.3,
-        home_sfs_size_gib=256,
-        confirm_jail_rootfs_overwrite=True,
+        jail_sfs_resize_policy="fail",
+        jail_sfs_resize_to_gib=None,
         job_policy="requeue-selected",
         cancel_job=("17",),
         requeue_job=("42", "43"),
@@ -469,10 +496,12 @@ def test_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path) -> 
     )
 
     assert "--cancel-job" in args
-    assert "--move-home-out-to-sfs" in args
-    assert args[args.index("--home-sfs-size-multiplier") + 1] == "1.3"
-    assert args[args.index("--home-sfs-size-gib") + 1] == "256"
-    assert "--confirm-jail-rootfs-overwrite" in args
+    assert "--preserve-jail-home" not in args
+    assert "--jail-sfs-resize-policy" in args
+    assert args[args.index("--jail-sfs-resize-policy") + 1] == "fail"
+    assert "--home-sfs-size-multiplier" not in args
+    assert "--home-sfs-size-gib" not in args
+    assert "--confirm-jail-rootfs-overwrite" not in args
     assert args[args.index("--cancel-job") + 1] == "17"
     assert [args[index + 1] for index, item in enumerate(args) if item == "--requeue-job"] == [
         "42",
@@ -660,10 +689,9 @@ def test_ext_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path)
         target_ref="external",
         backup_dir=None,
         populate_jail_refresh="auto",
-        move_home_out_to_sfs=False,
-        home_sfs_size_multiplier=1.5,
-        home_sfs_size_gib=None,
-        confirm_jail_rootfs_overwrite=True,
+        jail_persistent_mounts=("/data=/mnt/jail/data",),
+        jail_sfs_resize_policy="apply",
+        jail_sfs_resize_to_gib=2304,
         job_policy="requeue-hold-selected",
         cancel_job=("17",),
         requeue_job=("42", "43"),
@@ -691,10 +719,13 @@ def test_ext_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path)
         "--target",
     )
     assert "--cancel-job" in args
-    assert "--no-move-home-out-to-sfs" in args
-    assert args[args.index("--home-sfs-size-multiplier") + 1] == "1.5"
+    assert "--preserve-jail-home" not in args
+    assert args[args.index("--jail-persistent-mount") + 1] == "/data=/mnt/jail/data"
+    assert args[args.index("--jail-sfs-resize-policy") + 1] == "apply"
+    assert args[args.index("--jail-sfs-resize-to-gib") + 1] == "2304"
+    assert "--home-sfs-size-multiplier" not in args
     assert "--home-sfs-size-gib" not in args
-    assert "--confirm-jail-rootfs-overwrite" in args
+    assert "--confirm-jail-rootfs-overwrite" not in args
     assert args[args.index("--target") + 1] == "external"
     assert args[args.index("--cancel-job") + 1] == "17"
     assert [args[index + 1] for index, item in enumerate(args) if item == "--requeue-job"] == [
@@ -716,10 +747,6 @@ def _run_soperator_upgrade_for_test(
     node_group: str = "",
     job_policy: str | None = None,
     populate_jail_refresh: str = "auto",
-    move_home_out_to_sfs: bool = True,
-    home_sfs_size_multiplier: float = 1.3,
-    home_sfs_size_gib: int | None = None,
-    confirm_jail_rootfs_overwrite: bool = True,
     dry_run: bool = False,
     allow_unsupported_soperator_upgrade_path: bool = False,
     interactive: bool = False,
@@ -737,10 +764,8 @@ def _run_soperator_upgrade_for_test(
         strategy_max_surge_count=None,
         backup_dir=None,
         populate_jail_refresh=populate_jail_refresh,
-        move_home_out_to_sfs=move_home_out_to_sfs,
-        home_sfs_size_multiplier=home_sfs_size_multiplier,
-        home_sfs_size_gib=home_sfs_size_gib,
-        confirm_jail_rootfs_overwrite=confirm_jail_rootfs_overwrite,
+        jail_sfs_resize_policy=None,
+        jail_sfs_resize_to_gib=None,
         job_policy=job_policy,
         cancel_job=(),
         requeue_job=(),
@@ -3443,11 +3468,16 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
         paths.config_path,
         target_ref="mk8s",
         to_chart_version="0.26.0",
-        confirm_jail_rootfs_overwrite=True,
     )
 
     payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
     assert payload["apps"]["charts"][0]["version"] == "0.26.0"
+    values = payload["apps"]["charts"][0]["values"]
+    assert values["jailPersistentMounts"] == [
+        {"mountPath": "/home", "localPath": "/mnt/jail-store/shared/home"}
+    ]
+    assert "jail_home" not in values
+    assert "home" not in values["jailRootfs"]
     assert calls == [
         "migration-guard",
         ("validate", "Soperator cluster upgrade preflight"),
@@ -3462,7 +3492,7 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
         ),
         "soperator-static-ready",
         "render",
-        ("validate", "Validate rendered Soperator populate-jail overwrite maintenance"),
+        ("validate", "Validate rendered Soperator active/passive jail rootfs refresh"),
         (
             "flux-apply",
             (paths.generated_dir,),
@@ -3470,7 +3500,7 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
         ),
         "soperator-static-ready",
         "render",
-        ("validate", "Validate rendered Soperator populate-jail steady-state restore"),
+        ("validate", "Validate rendered Soperator jail rootfs active slot switch"),
         (
             "flux-apply",
             (paths.generated_dir,),
@@ -4752,7 +4782,7 @@ def test_soperator_upgrade_force_populate_jail_refresh_job_policy_fail_blocks_be
     assert ("slurm-gate", ("worker-gpu-0-0",), "fail") in calls
     assert (
         "validate",
-        "Validate rendered Soperator populate-jail overwrite maintenance",
+        "Validate rendered Soperator active/passive jail rootfs refresh",
     ) not in calls
     assert not any(isinstance(call, tuple) and call[0] == "flux-apply" for call in calls)
 
@@ -5914,10 +5944,8 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
         strategy_max_surge_count=None,
         backup_dir=None,
         populate_jail_refresh="auto",
-        move_home_out_to_sfs=True,
-        home_sfs_size_multiplier=1.3,
-        home_sfs_size_gib=None,
-        confirm_jail_rootfs_overwrite=True,
+        jail_sfs_resize_policy=None,
+        jail_sfs_resize_to_gib=None,
         job_policy=None,
         cancel_job=(),
         requeue_job=(),
@@ -5955,7 +5983,7 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
         ),
         "soperator-static-ready",
         "render",
-        ("validate", "Validate rendered Soperator populate-jail overwrite maintenance"),
+        ("validate", "Validate rendered Soperator active/passive jail rootfs refresh"),
         (
             "flux-apply",
             (paths.generated_dir,),
@@ -5963,7 +5991,7 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
         ),
         "soperator-static-ready",
         "render",
-        ("validate", "Validate rendered Soperator populate-jail steady-state restore"),
+        ("validate", "Validate rendered Soperator jail rootfs active slot switch"),
         (
             "flux-apply",
             (paths.generated_dir,),
@@ -23401,11 +23429,16 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--job-policy" in normalized_managed_soperator_upgrade_help
     assert "--requeue-job" in normalized_managed_soperator_upgrade_help
     assert "--backup-dir" in normalized_managed_soperator_upgrade_help
-    assert "--move-home-out-to-sfs" in normalized_managed_soperator_upgrade_help
-    assert "--no-move-home-out-to-sfs" in normalized_managed_soperator_upgrade_help
-    assert "--home-sfs-size-multiplier" in normalized_managed_soperator_upgrade_help
-    assert "--home-sfs-size-gib" in normalized_managed_soperator_upgrade_help
-    assert "--confirm-jail-rootfs-overwrite" in normalized_managed_soperator_upgrade_help
+    assert "--preserve-jail-home" not in normalized_managed_soperator_upgrade_help
+    assert "--no-preserve-jail-home" not in normalized_managed_soperator_upgrade_help
+    assert "--jail-sfs-resize-policy" in normalized_managed_soperator_upgrade_help
+    assert "--jail-sfs-resize-to-gib" in normalized_managed_soperator_upgrade_help
+    assert "--home-sfs-size-multiplier" not in normalized_managed_soperator_upgrade_help
+    assert "--home-sfs-size-gib" not in normalized_managed_soperator_upgrade_help
+    assert "--confirm-jail-rootfs-overwrite" not in normalized_managed_soperator_upgrade_help
+    assert "Active/passive jail rootfs refresh mode" in normalized_managed_soperator_upgrade_help
+    assert "Jail rootfs backing SFS resize policy" in normalized_managed_soperator_upgrade_help
+    assert "Terraform" in normalized_managed_soperator_upgrade_help
     assert "--to-version" not in normalized_managed_soperator_upgrade_help
     assert "--dry-run" in normalized_managed_soperator_upgrade_help
     assert "--interactive --no-interactive" in normalized_managed_soperator_upgrade_help
@@ -23719,11 +23752,18 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--requeue-job" in normalized_ext_soperator_upgrade_help
     assert "--job-wait-timeout" in normalized_ext_soperator_upgrade_help
     assert "--job-refresh-interval" in normalized_ext_soperator_upgrade_help
-    assert "--move-home-out-to-sfs" in normalized_ext_soperator_upgrade_help
-    assert "--no-move-home-out-to-sfs" in normalized_ext_soperator_upgrade_help
-    assert "--home-sfs-size-multiplier" in normalized_ext_soperator_upgrade_help
-    assert "--home-sfs-size-gib" in normalized_ext_soperator_upgrade_help
-    assert "--confirm-jail-rootfs-overwrite" in normalized_ext_soperator_upgrade_help
+    assert "--jail-persistent-mount" in normalized_ext_soperator_upgrade_help
+    assert "--preserve-jail-home" not in normalized_ext_soperator_upgrade_help
+    assert "--no-preserve-jail-home" not in normalized_ext_soperator_upgrade_help
+    assert "--jail-sfs-resize-policy" in normalized_ext_soperator_upgrade_help
+    assert "--jail-sfs-resize-to-gib" in normalized_ext_soperator_upgrade_help
+    assert "--home-sfs-size-multiplier" not in normalized_ext_soperator_upgrade_help
+    assert "--home-sfs-size-gib" not in normalized_ext_soperator_upgrade_help
+    assert "--confirm-jail-rootfs-overwrite" not in normalized_ext_soperator_upgrade_help
+    assert "Active/passive jail rootfs refresh mode" in normalized_ext_soperator_upgrade_help
+    assert "Jail rootfs backing SFS resize policy" in normalized_ext_soperator_upgrade_help
+    assert "Nebius CLI/API" in normalized_ext_soperator_upgrade_help
+    assert "<mountPath>=<localPath>" in normalized_ext_soperator_upgrade_help
     assert "--dry-run --execute" in normalized_ext_soperator_upgrade_help
     assert "--approve --no-approve" in normalized_ext_soperator_upgrade_help
     assert "--interactive --no-interactive" in normalized_ext_soperator_upgrade_help
@@ -25968,7 +26008,7 @@ def test_soperator_selection_seeds_required_infra_and_defaults() -> None:
     }
     assert soperator_values["slurmNodes"]["login"]["sshRootPublicKeys"] == []
     assert soperator_values["sfs"]["filesystems"]["jail"]["mount_tag"] == "cluster1-jail"
-    assert soperator_values["volume"]["jail"]["size"] == "1024Gi"
+    assert soperator_values["volume"]["jail"]["size"] == "2048Gi"
     assert soperator_values["volume"]["accounting"]["enabled"] is True
     assert soperator_values["volume"]["accounting"]["size"] == "128Gi"
     assert soperator_values["volume"]["controllerSpool"]["filestoreDeviceName"] == (
@@ -26209,6 +26249,289 @@ def test_soperator_sfs_mirror_values_replace_stale_generated_values() -> None:
     assert values["volume"]["accounting"]["filestoreDeviceName"] == "cxcli-slurm-accounting"
 
 
+def test_soperator_jail_sfs_resize_state_rejects_existing_filesystem() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "sfs",
+                    "instance_id": "cxcli-slurm",
+                    "enabled": True,
+                    "inputs": {
+                        "filesystems": {
+                            "jail": {
+                                "name": "existing-jail",
+                                "existing_id": "filesystem-existing",
+                                "size_gib": 2048,
+                            }
+                        }
+                    },
+                }
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cxcli-slurm",
+                    "enabled": True,
+                    "values": {},
+                }
+            ]
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="Only cxcli-owned SFS rows"):
+        cli._soperator_jail_sfs_resize_state(payload, target_ref="cxcli-slurm")
+
+
+def test_set_soperator_jail_sfs_size_gib_updates_sfs_and_chart_values() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "sfs",
+                    "instance_id": "cxcli-slurm",
+                    "enabled": True,
+                    "inputs": {
+                        "filesystems": {
+                            "jail": {
+                                "name": "cxcli-slurm-jail",
+                                "size_gib": 2048,
+                                "mount_tag": "cxcli-slurm-jail",
+                            }
+                        }
+                    },
+                }
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cxcli-slurm",
+                    "enabled": True,
+                    "values": {"volume": {"jail": {"size": "2048Gi"}}},
+                }
+            ]
+        },
+    }
+
+    cli._set_soperator_jail_sfs_size_gib(payload, target_ref="cxcli-slurm", size_gib=2304)
+
+    sfs_inputs = payload["infra"]["components"][0]["inputs"]
+    values = payload["apps"]["charts"][0]["values"]
+    assert sfs_inputs["filesystems"]["jail"]["size_gib"] == 2304
+    assert values["sfs"]["filesystems"]["jail"]["size_gib"] == 2304
+    assert values["volume"]["jail"]["size"] == "2304Gi"
+
+
+def test_soperator_jail_sfs_resize_records_failed_terraform_apply(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "sfs",
+                    "instance_id": "cxcli-slurm",
+                    "enabled": True,
+                    "inputs": {
+                        "filesystems": {
+                            "jail": {
+                                "name": "cxcli-slurm-jail",
+                                "size_gib": 2048,
+                                "mount_tag": "cxcli-slurm-jail",
+                            }
+                        }
+                    },
+                }
+            ]
+        },
+    }
+    preflight = evaluate_jail_capacity(
+        passive_available_bytes=32 * GIB,
+        active_used_bytes=80 * GIB,
+    )
+    capacity_records: list[Mapping[str, Any]] = []
+    resize_records: list[Mapping[str, Any]] = []
+
+    def _fail_apply(**_kwargs: Any) -> None:
+        raise RuntimeError("terraform apply failed")
+
+    monkeypatch.setattr(cli, "_apply_jail_sfs_resize_with_terraform", _fail_apply)
+
+    with pytest.raises(RuntimeError, match="terraform apply failed"):
+        cli._ensure_jail_sfs_capacity_or_resize(  # noqa: SLF001
+            config_path=tmp_path / "config.yaml",
+            source_payload=payload,
+            target_ref="cxcli-slurm",
+            policy="apply",
+            resize_to_gib=2304,
+            preflight=preflight,
+            probe_capacity=lambda: pytest.fail("capacity should not be rechecked"),
+            record_capacity=lambda value: capacity_records.append(value.as_payload()),
+            record_resize=lambda value: resize_records.append(dict(value)),
+            stage_label="populate-jail-refresh",
+        )
+
+    assert capacity_records == [preflight.as_payload()]
+    assert resize_records[-2]["status"] == "applying"
+    assert resize_records[-2]["terraform_apply_status"] == "running"
+    assert resize_records[-1]["status"] == "failed"
+    assert resize_records[-1]["terraform_apply_status"] == "failed"
+    assert resize_records[-1]["error"] == "terraform apply failed"
+
+
+def test_external_jail_sfs_resize_uses_existing_nebius_filesystem_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_report = {
+        "snapshot": {
+            "storage": {
+                "jail": {
+                    "filesystem_id": "filesystem-jail",
+                }
+            }
+        }
+    }
+    preflight = evaluate_jail_capacity(
+        passive_available_bytes=32 * GIB,
+        active_used_bytes=80 * GIB,
+    )
+    final_preflight = evaluate_jail_capacity(
+        passive_available_bytes=128 * GIB,
+        active_used_bytes=80 * GIB,
+    )
+    calls: list[tuple[str, ...]] = []
+    resize_records: list[Mapping[str, Any]] = []
+    capacity_records: list[Mapping[str, Any]] = []
+
+    def _unexpected_terraform(**_kwargs: Any) -> None:
+        raise AssertionError("external resize must not call Terraform")
+
+    def _runner(args: Sequence[str], **_kwargs: Any) -> SimpleNamespace:
+        calls.append(tuple(args))
+        if tuple(args[:4]) == ("nebius", "compute", "filesystem", "get"):
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"spec": {"size_gibibytes": 2048}}),
+                stderr="",
+            )
+        if tuple(args[:4]) == ("nebius", "compute", "filesystem", "update"):
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        raise AssertionError(f"unexpected command: {args!r}")
+
+    monkeypatch.setattr(cli, "_apply_jail_sfs_resize_with_terraform", _unexpected_terraform)
+
+    result = cli._ensure_external_jail_sfs_capacity_or_resize(  # noqa: SLF001
+        source_report=source_report,
+        policy="apply",
+        resize_to_gib=2304,
+        preflight=preflight,
+        probe_capacity=lambda: final_preflight,
+        record_capacity=lambda value: capacity_records.append(value.as_payload()),
+        record_resize=lambda value: resize_records.append(dict(value)),
+        command_runner=_runner,
+    )
+
+    assert result is final_preflight
+    assert (
+        "nebius",
+        "compute",
+        "filesystem",
+        "update",
+        "--id",
+        "filesystem-jail",
+        "--size-gibibytes",
+        "2304",
+    ) in calls
+    assert resize_records[-1]["status"] == "completed"
+    assert resize_records[-1]["nebius_api_status"] == "completed"
+    assert capacity_records == [preflight.as_payload(), final_preflight.as_payload()]
+
+
+def test_external_jail_sfs_resize_rejects_missing_or_multiple_candidates() -> None:
+    with pytest.raises(RuntimeError, match="could not identify a Nebius shared filesystem"):
+        cli._external_jail_sfs_resize_state(  # noqa: SLF001
+            source_report={"snapshot": {"storage": {"jail": {"type": "nfs"}}}},
+            command_runner=lambda *_args, **_kwargs: pytest.fail("must not call nebius"),
+        )
+
+    with pytest.raises(RuntimeError, match="multiple candidate Nebius filesystems"):
+        cli._external_jail_sfs_resize_state(  # noqa: SLF001
+            source_report={
+                "snapshot": {
+                    "storage": {"jail": {"filesystem_id": "filesystem-a"}},
+                    "node_groups": {
+                        "worker": {
+                            "template": {
+                                "filesystems": [
+                                    {
+                                        "mount_tag": "jail",
+                                        "filesystem_id": "filesystem-b",
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                }
+            },
+            command_runner=lambda *_args, **_kwargs: pytest.fail("must not call nebius"),
+        )
+
+
+def test_external_jail_sfs_resize_state_can_use_node_group_jail_attachment() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def _runner(args: Sequence[str], **_kwargs: Any) -> SimpleNamespace:
+        calls.append(tuple(args))
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"spec": {"size_gibibytes": 2048}}),
+            stderr="",
+        )
+
+    state = cli._external_jail_sfs_resize_state(  # noqa: SLF001
+        source_report={
+            "snapshot": {
+                "storage": {"jail": {"source": "pvc/jail-pvc"}},
+                "node_groups": {
+                    "login": {
+                        "spec": {
+                            "template": {
+                                "filesystems": [
+                                    {
+                                        "mount_tag": "jail",
+                                        "existing_filesystem": {"id": "filesystem-jail"},
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                },
+            }
+        },
+        command_runner=_runner,
+    )
+
+    assert state.filesystem_id == "filesystem-jail"
+    assert state.current_size_gib == 2048
+    assert calls == [
+        (
+            "nebius",
+            "compute",
+            "filesystem",
+            "get",
+            "--id",
+            "filesystem-jail",
+            "--format",
+            "json",
+        )
+    ]
+
+
 def test_soperator_profiles_share_complete_sfs_filesystem_defaults() -> None:
     _default_profile, profiles = cli._soperator_nodesets_profiles()
 
@@ -26217,7 +26540,7 @@ def test_soperator_profiles_share_complete_sfs_filesystem_defaults() -> None:
         assert set(filesystems) == {"jail", "controller-spool", "accounting"}
         assert filesystems["jail"] == {
             "name": "{target}-jail",
-            "size_gib": 1024,
+            "size_gib": 2048,
             "block_size_kib": 4,
             "mount_tag": "{target}-jail",
             "forbid_deletion": False,

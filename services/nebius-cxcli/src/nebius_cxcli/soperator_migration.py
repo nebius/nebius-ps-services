@@ -87,20 +87,18 @@ from .soperator_gpu_driver_jail import (
     ensure_soperator_gpu_driver_jail_values,
     normalize_soperator_gpu_driver_jail_mounts,
 )
-from .soperator_home import (
-    HOME_SFS_KEY,
-    HOME_SFS_MIGRATION_VALUES_KEY,
-    HOME_SFS_MOUNT_TAG,
-    HOME_SFS_SOURCE_PATH,
-    HOME_SFS_SOURCE_PVC,
-    HOME_SFS_SUBMOUNT_NAME,
-    HOME_SFS_TARGET_PATH,
-    HOME_SFS_TARGET_PVC,
-    apply_home_sfs_migration_values,
-    compute_home_sfs_size_gib,
-    normalize_home_sfs_size_multiplier,
-    soperator_home_preservation_status,
-    soperator_home_sfs_migration_enabled,
+from .soperator_jail_capacity import (
+    JailCapacityPreflight,
+    capacity_preflight_check_payload,
+    probe_active_passive_jail_capacity,
+)
+from .soperator_jail_mounts import (
+    JAIL_LEGACY_ROOT_PATH,
+    apply_jail_persistent_mount_values,
+    jail_persistent_mount_exclude_paths,
+    jail_persistent_mount_status,
+    jail_rootfs_uses_legacy_active_source,
+    parse_jail_persistent_mount_specs,
 )
 from .soperator_onboarding import (
     ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
@@ -120,16 +118,20 @@ from .soperator_onboarding import (
 )
 from .soperator_populate_jail import (
     POPULATE_JAIL_REFRESH_PHASE_ID,
+    active_passive_jail_rootfs_slots,
+    active_passive_populate_jail_job_manifest,
+    active_passive_populate_jail_job_scheduling,
     completed_populate_jail_refresh_result,
     inspect_populate_jail,
     manual_populate_jail_refresh_result,
     normalize_populate_jail_refresh_mode,
     plan_populate_jail_refresh,
     populate_jail_refresh_values,
-    populate_jail_steady_state_values,
     skipped_populate_jail_refresh_result,
-    wait_for_populate_jail_consumers_down,
-    wait_for_populate_jail_refresh,
+    switch_active_passive_jail_rootfs_values,
+    wait_for_active_passive_populate_jail_job,
+    wait_for_login_service_ready_endpoints,
+    wait_for_login_statefulset_rollout_with_ready_endpoint_guard,
 )
 from .soperator_upgrade_safety import (
     ProtectedCustomerState,
@@ -191,13 +193,6 @@ _ORDERED_EXECUTE_PHASE_IDS = (
 )
 _SUPPORTED_EXECUTE_PHASE_IDS = frozenset(_ORDERED_EXECUTE_PHASE_IDS)
 _SOPERATOR_STORAGE_KEYS = ("jail", "controller-spool", "accounting")
-_HOME_SFS_STORAGE_TEMPLATE_PATHS = (
-    "templates/slurm-cluster-storage/local-storageclass.yaml",
-    "templates/slurm-cluster-storage/mount-scripts-configmap.yaml",
-    "templates/slurm-cluster-storage/jail-submounts-pv.yaml",
-    "templates/slurm-cluster-storage/jail-submounts-pvc.yaml",
-    "templates/slurm-cluster-storage/jail-submounts-mount-daemonset.yaml",
-)
 _HOME_MOUNT_PROBE_SCRIPT = r"""
 path=/home
 if command -v findmnt >/dev/null 2>&1; then
@@ -298,9 +293,9 @@ _TARGET_GPU_STACK_APP_ORDER = ("nvidia-gpu-operator", "nvidia-network-operator")
 _SOPERATOR_ROLE_STORAGE_KEYS: Mapping[str, tuple[str, ...]] = {
     "system": ("jail",),
     "controller": ("jail", "controller-spool"),
-    "login": ("jail", HOME_SFS_KEY),
+    "login": ("jail",),
     "accounting": ("jail", "accounting"),
-    "worker": ("jail", HOME_SFS_KEY),
+    "worker": ("jail",),
 }
 _SOPERATOR_ROLE_SOURCE_KIND: Mapping[str, str] = {
     "system": "cpu",
@@ -356,13 +351,6 @@ _SOPERATOR_STORAGE_DEFAULTS: Mapping[str, Mapping[str, Any]] = {
         "block_size_kib": 4,
         "mount_tag": "accounting",
         "forbid_deletion": False,
-        "type": "NETWORK_SSD",
-    },
-    HOME_SFS_KEY: {
-        "size_gib": 1,
-        "block_size_kib": 4,
-        "mount_tag": HOME_SFS_MOUNT_TAG,
-        "forbid_deletion": True,
         "type": "NETWORK_SSD",
     },
 }
@@ -505,6 +493,18 @@ class SoperatorMigrationCommandRunner(Protocol):
         check: bool = True,
     ) -> SoperatorMigrationCommandResult:
         """Run an external command for a live upgrade phase."""
+
+
+JailSfsResizeHandler = Callable[
+    [
+        JailCapacityPreflight,
+        Callable[[], JailCapacityPreflight],
+        dict[str, Any],
+        dict[str, Any],
+        Callable[[], None] | None,
+    ],
+    JailCapacityPreflight,
+]
 
 
 @dataclass(frozen=True)
@@ -1597,9 +1597,6 @@ def _approved_role_attachment_keys(
     source_report: Mapping[str, Any] | None = None,
 ) -> Mapping[str, tuple[str, ...]]:
     placements = _target_placements(payload, target_ref)
-    home_migration = soperator_home_sfs_migration_enabled(
-        _target_soperator_values(payload, target_ref)
-    )
     result: dict[str, list[str]] = {}
     worker_groups = {
         group for group in (normalize_component_token(item) for item in worker_node_groups) if group
@@ -1607,8 +1604,6 @@ def _approved_role_attachment_keys(
     for group in worker_groups:
         keys = result.setdefault(group, [])
         keys.append("jail")
-        if home_migration and HOME_SFS_KEY not in keys:
-            keys.append(HOME_SFS_KEY)
     for role in _SOPERATOR_SERVICE_ROLES:
         for group in placements.get(role, ()):
             if group in worker_groups:
@@ -1620,8 +1615,6 @@ def _approved_role_attachment_keys(
                 keys.append("controller-spool")
             if role == "accounting" and "accounting" not in keys:
                 keys.append("accounting")
-            if home_migration and role == "login" and HOME_SFS_KEY not in keys:
-                keys.append(HOME_SFS_KEY)
     inventory = _source_node_group_inventory(source_report or {})
     for raw_group_name, raw_group in inventory.items():
         if not isinstance(raw_group, Mapping):
@@ -1637,8 +1630,6 @@ def _approved_role_attachment_keys(
             keys.append("controller-spool")
         if role == "accounting" and "accounting" not in keys:
             keys.append("accounting")
-        if home_migration and role == "login" and HOME_SFS_KEY not in keys:
-            keys.append(HOME_SFS_KEY)
     return {group: tuple(keys) for group, keys in result.items() if keys}
 
 
@@ -2018,36 +2009,16 @@ def _phase_ids_for_actions(
     return phase_ids
 
 
-def _phase_ids_with_home_sfs_prerequisites(
+def _phase_ids_with_jail_persistent_mount_prerequisites(
     *,
     phase_ids: Sequence[str],
     payload: Mapping[str, Any],
     target_ref: str,
 ) -> tuple[str, ...]:
-    if not soperator_home_sfs_migration_enabled(_target_soperator_values(payload, target_ref)):
+    status = jail_persistent_mount_status(_target_soperator_values(payload, target_ref))
+    if not status.verified:
         return tuple(phase_ids)
-    phases = list(dict.fromkeys(str(phase_id) for phase_id in phase_ids if str(phase_id)))
-    if not phases:
-        phases = ["discovery-and-plan", "customer-approval"]
-    try:
-        insert_at = phases.index("customer-approval") + 1
-    except ValueError:
-        insert_at = min(1, len(phases))
-    for required in ("create-aligned-sfs", "online-bulk-data-sync"):
-        if required not in phases:
-            phases.insert(insert_at, required)
-            insert_at += 1
-        else:
-            insert_at = max(insert_at, phases.index(required) + 1)
-    if POPULATE_JAIL_REFRESH_PHASE_ID in phases:
-        populate_index = phases.index(POPULATE_JAIL_REFRESH_PHASE_ID)
-        for predecessor in ("create-aligned-sfs", "online-bulk-data-sync"):
-            predecessor_index = phases.index(predecessor)
-            if predecessor_index > populate_index:
-                phases.pop(predecessor_index)
-                populate_index = phases.index(POPULATE_JAIL_REFRESH_PHASE_ID)
-                phases.insert(populate_index, predecessor)
-    return tuple(phases)
+    return tuple(dict.fromkeys(str(phase_id) for phase_id in phase_ids if str(phase_id)))
 
 
 def _payload_with_target_soperator_values(
@@ -2074,98 +2045,36 @@ def _payload_with_target_soperator_values(
     raise RuntimeError(f"Soperator target '{target_ref}' values could not be found for patching.")
 
 
-def _home_usage_bytes_from_login(
-    *,
-    command_runner: SoperatorMigrationCommandRunner,
-    kube_context: str,
-) -> int:
-    result = _kubectl_exec_login(
-        command_runner=command_runner,
-        kube_context=kube_context,
-        args=("bash", "-lc", "du -s -B1 /home | awk '{print $1}'"),
-        check=False,
-        timeout_seconds=900,
-    )
-    if result.returncode != 0:
-        detail = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
-        raise SoperatorMigrationPhasePending(
-            "Could not measure live /home usage from a login pod before SFS migration: "
-            + detail
-        )
-    token = (result.stdout or "").strip().split(maxsplit=1)[0] if result.stdout.strip() else ""
-    try:
-        usage_bytes = int(token)
-    except ValueError as exc:
-        raise SoperatorMigrationPhasePending(
-            "Could not parse live /home usage from `du -s -B1 /home`: "
-            + (result.stdout or "").strip()
-        ) from exc
-    if usage_bytes < 0:
-        raise SoperatorMigrationPhasePending("Live /home usage returned a negative value.")
-    return usage_bytes
-
-
-def _prepare_home_sfs_migration_payload(
+def _prepare_jail_persistent_mount_payload(
     *,
     payload: Mapping[str, Any],
     target_ref: str,
-    kube_context: str,
-    command_runner: SoperatorMigrationCommandRunner,
-    move_home_out_to_sfs: bool,
-    home_sfs_size_multiplier: float,
-    home_sfs_size_gib: int | None,
+    jail_persistent_mounts: Sequence[str] = (),
     populate_jail_refresh: str,
 ) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
     values = _target_soperator_values(payload, target_ref)
-    status = soperator_home_preservation_status(values)
+    explicit_mounts = parse_jail_persistent_mount_specs(jail_persistent_mounts)
+    patched_values = apply_jail_persistent_mount_values(
+        values,
+        target_ref=target_ref,
+        persistent_mounts=explicit_mounts,
+        layout="external",
+    )
+    status = jail_persistent_mount_status(patched_values)
     state: dict[str, Any] = {
         "status": status.status,
         "reason": status.reason,
-        "source": status.source,
-        "move_home_out_to_sfs": move_home_out_to_sfs,
-        "size_multiplier": home_sfs_size_multiplier,
-        "explicit_size_gib": home_sfs_size_gib,
+        "mounts": [mount.as_payload() for mount in status.mounts],
+        "copy_required": False,
+        "rootfs_path": "/mnt/jail/.cxcli/rootfs",
+        "legacy_active_rootfs": True,
     }
-    if status.external or soperator_home_sfs_migration_enabled(values):
-        return payload, state
-    if not move_home_out_to_sfs:
-        state["status"] = "blocked"
-        state["reason"] = (
-            "/home is not external and automatic SFS migration was disabled."
+    if not status.verified and normalize_populate_jail_refresh_mode(populate_jail_refresh) != "manual":
+        raise SoperatorMigrationPhasePending(
+            "jail rootfs refresh is blocked until /home is configured as a persistent "
+            "jail mount or provided by an existing customer-owned jail submount. Use "
+            "--populate-jail-refresh manual to stop before rootfs slot refresh."
         )
-        if normalize_populate_jail_refresh_mode(populate_jail_refresh) != "manual":
-            raise SoperatorMigrationPhasePending(
-                "/home is not external. Re-run with --move-home-out-to-sfs, or use "
-                "--populate-jail-refresh manual to stop before destructive jail overwrite."
-            )
-        return payload, state
-    multiplier = normalize_home_sfs_size_multiplier(home_sfs_size_multiplier)
-    usage_bytes = _home_usage_bytes_from_login(
-        command_runner=command_runner,
-        kube_context=kube_context,
-    )
-    size_gib = compute_home_sfs_size_gib(
-        usage_bytes=usage_bytes,
-        multiplier=multiplier,
-        explicit_size_gib=home_sfs_size_gib,
-    )
-    patched_values = apply_home_sfs_migration_values(
-        values,
-        target_ref=target_ref,
-        size_gib=size_gib,
-    )
-    state.update(
-        {
-            "status": "planned",
-            "reason": "/home will be copied from jail-pvc:/home to a dedicated SFS submount.",
-            "source_pvc": HOME_SFS_SOURCE_PVC,
-            "source_path": HOME_SFS_SOURCE_PATH,
-            "target_pvc": HOME_SFS_TARGET_PVC,
-            "target_path": HOME_SFS_TARGET_PATH,
-            "usage_bytes": usage_bytes,
-            "size_gib": size_gib,
-        }
-    )
     return (
         _payload_with_target_soperator_values(
             payload=payload,
@@ -2437,12 +2346,8 @@ def _soperator_storage_keys_for_target(
     payload: Mapping[str, Any],
     target_ref: str,
 ) -> tuple[str, ...]:
-    values = _target_soperator_values(payload, target_ref)
-    configured = _mapping(_mapping(values.get("sfs")).get("filesystems"))
-    keys = list(_SOPERATOR_STORAGE_KEYS)
-    if soperator_home_sfs_migration_enabled(values) or HOME_SFS_KEY in configured:
-        keys.append(HOME_SFS_KEY)
-    return tuple(dict.fromkeys(keys))
+    _ = (payload, target_ref)
+    return tuple(key for key in _SOPERATOR_STORAGE_KEYS if key != "jail")
 
 
 def _aligned_filesystem_specs(
@@ -3517,8 +3422,6 @@ def _snapshot_pvc_names(snapshot: Mapping[str, Any]) -> set[str]:
 
 
 def _source_pvc_name_for_storage_key(source_report: Mapping[str, Any], key: str) -> str:
-    if key == HOME_SFS_KEY:
-        return HOME_SFS_SOURCE_PVC
     storage = _snapshot_storage(source_report)
     item = _mapping(storage.get(key))
     source = str(item.get("source", "") or "").strip()
@@ -3529,12 +3432,6 @@ def _source_pvc_name_for_storage_key(source_report: Mapping[str, Any], key: str)
 
 
 def _target_pvc_name_for_storage_key(payload: Mapping[str, Any], target_ref: str, key: str) -> str:
-    if key == HOME_SFS_KEY:
-        values = _target_soperator_values(payload, target_ref)
-        target_pvc = str(
-            _mapping(values.get(HOME_SFS_MIGRATION_VALUES_KEY)).get("targetPvc", "") or ""
-        ).strip()
-        return target_pvc or HOME_SFS_TARGET_PVC
     values = _target_soperator_values(payload, target_ref)
     if key == "jail":
         nodesets = values.get("nodesets")
@@ -3565,13 +3462,8 @@ def _copy_job_paths_for_storage_key(
     target_ref: str,
     key: str,
 ) -> tuple[str, str]:
-    if key != HOME_SFS_KEY:
-        return "/", "/"
-    values = _target_soperator_values(payload, target_ref)
-    migration = _mapping(values.get(HOME_SFS_MIGRATION_VALUES_KEY))
-    source_path = str(migration.get("sourcePath") or HOME_SFS_SOURCE_PATH).strip()
-    target_path = str(migration.get("targetPath") or HOME_SFS_TARGET_PATH).strip()
-    return source_path, target_path
+    _ = (payload, target_ref, key)
+    return "/", "/"
 
 
 def _validate_copy_job_path(path: str, *, role: str) -> str:
@@ -3658,146 +3550,6 @@ def _copy_job_manifest(
             },
         },
     }
-
-
-def _home_sfs_storage_render_values(values: Mapping[str, Any]) -> dict[str, Any]:
-    patched = copy.deepcopy(dict(to_plain_data(values)))
-    volume = patched.get("volume")
-    if not isinstance(volume, dict):
-        volume = {}
-        patched["volume"] = volume
-    home_submount = None
-    for item in _sequence_of_mappings(volume.get("jailSubMounts")):
-        if str(item.get("name", "") or "").strip() == HOME_SFS_SUBMOUNT_NAME:
-            home_submount = dict(to_plain_data(item))
-            break
-    if home_submount is None:
-        raise SoperatorMigrationPhasePending(
-            "Home SFS migration is enabled, but target values do not contain the /home "
-            "jail submount storage definition."
-        )
-    volume["jailSubMounts"] = [home_submount]
-    return patched
-
-
-def _render_home_sfs_storage_objects(
-    *,
-    command_runner: SoperatorMigrationCommandRunner,
-    values: Mapping[str, Any],
-) -> tuple[Mapping[str, Any], ...]:
-    chart_path = _target_soperator_chart_path()
-    _ensure_soperator_chart_dependencies(command_runner=command_runner, chart_path=chart_path)
-    with tempfile.TemporaryDirectory(prefix="nebius-cxcli-soperator-storage-") as temp_dir:
-        staged_chart_path = Path(temp_dir) / chart_path.name
-        shutil.copytree(
-            chart_path,
-            staged_chart_path,
-            ignore=shutil.ignore_patterns("crds"),
-        )
-        command = [
-            "helm",
-            "template",
-            _SOPERATOR_TARGET_RELEASE_NAME,
-            str(staged_chart_path),
-            "-n",
-            _SOPERATOR_NAMESPACE,
-            "-f",
-            "-",
-        ]
-        for template_path in _HOME_SFS_STORAGE_TEMPLATE_PATHS:
-            command.extend(["--show-only", template_path])
-        result = command_runner(
-            command,
-            input_text=json.dumps(
-                _home_sfs_storage_render_values(values),
-                sort_keys=True,
-            ),
-            timeout_seconds=300,
-        )
-    objects: list[Mapping[str, Any]] = []
-    for item in yaml.safe_load_all(result.stdout or ""):
-        if item is None:
-            continue
-        if not isinstance(item, Mapping):
-            raise RuntimeError("helm template rendered a non-object home SFS storage document.")
-        objects.append(dict(to_plain_data(item)))
-    if not objects:
-        raise SoperatorMigrationPhasePending(
-            "Home SFS migration could not render the chart-owned PV/PVC storage objects."
-        )
-    return tuple(objects)
-
-
-def _live_pvc_names(
-    *,
-    command_runner: SoperatorMigrationCommandRunner,
-    kube_context: str,
-) -> set[str]:
-    result = command_runner(
-        [
-            "kubectl",
-            "--context",
-            kube_context,
-            "-n",
-            _SOPERATOR_NAMESPACE,
-            "get",
-            "pvc",
-            "-o",
-            "json",
-        ],
-        check=False,
-    )
-    if result.returncode != 0:
-        detail = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
-        raise SoperatorMigrationPhasePending(
-            "Could not verify live Soperator PVCs after preparing /home SFS storage: " + detail
-        )
-    try:
-        payload = json.loads(result.stdout or "{}")
-    except json.JSONDecodeError as exc:
-        raise SoperatorMigrationPhasePending(
-            "Could not parse live Soperator PVC list after preparing /home SFS storage."
-        ) from exc
-    return _snapshot_pvc_names({"pvcs": _sequence_of_mappings(_mapping(payload).get("items"))})
-
-
-def _ensure_home_sfs_storage_objects(
-    *,
-    phase: dict[str, Any],
-    command_runner: SoperatorMigrationCommandRunner,
-    kube_context: str,
-    payload: Mapping[str, Any],
-    target_ref: str,
-) -> set[str] | None:
-    values = _target_soperator_values(payload, target_ref)
-    if not soperator_home_sfs_migration_enabled(values):
-        return None
-    target_pvc = _target_pvc_name_for_storage_key(payload, target_ref, HOME_SFS_KEY)
-    objects = _render_home_sfs_storage_objects(
-        command_runner=command_runner,
-        values=values,
-    )
-    _kubectl_apply_objects(
-        command_runner=command_runner,
-        kube_context=kube_context,
-        objects=objects,
-        timeout_seconds=300,
-    )
-    phase["home_storage_objects"] = [
-        {
-            "kind": str(item.get("kind", "") or ""),
-            "namespace": str(_mapping(item.get("metadata")).get("namespace", "") or ""),
-            "name": str(_mapping(item.get("metadata")).get("name", "") or ""),
-        }
-        for item in objects
-    ]
-    live_pvcs = _live_pvc_names(command_runner=command_runner, kube_context=kube_context)
-    if target_pvc not in live_pvcs:
-        raise SoperatorMigrationPhasePending(
-            "Home SFS migration rendered storage objects, but target PVC "
-            f"{target_pvc!r} is not visible yet. Rerun after the PVC is created."
-        )
-    return live_pvcs
 
 
 def _kubectl_apply_objects(
@@ -11983,16 +11735,6 @@ def _execute_online_bulk_data_sync_phase(
     lines: list[str] = []
     manifests: list[dict[str, Any]] = []
     live_pvcs = _snapshot_pvc_names(live_snapshot)
-    refreshed_home_pvcs = _ensure_home_sfs_storage_objects(
-        phase=phase,
-        command_runner=command_runner,
-        kube_context=kube_context,
-        payload=payload,
-        target_ref=target_ref,
-    )
-    if refreshed_home_pvcs is not None:
-        live_pvcs = refreshed_home_pvcs
-        lines.append("Home SFS storage objects applied before /home data sync.")
     missing_pvcs: list[str] = []
     for key in _soperator_storage_keys_for_target(payload=payload, target_ref=target_ref):
         source_pvc = _source_pvc_name_for_storage_key(source_report, key)
@@ -12770,9 +12512,7 @@ def _home_mount_probe_check(name: str, result: SoperatorMigrationCommandResult) 
     normalized_target = "/" + target.strip().strip("/")
     if normalized_target == "//":
         normalized_target = "/"
-    if normalized_target == HOME_SFS_SOURCE_PATH or normalized_target.endswith(
-        f"/{HOME_SFS_SOURCE_PATH.strip('/')}"
-    ):
+    if normalized_target == "/home" or normalized_target.endswith("/home"):
         return _fast_verification_check(
             name,
             "passed",
@@ -12901,63 +12641,22 @@ def _live_home_mount_probe_checks(
     )
 
 
-def _home_preservation_overwrite_checks(
+def _persistent_mount_overwrite_checks(
     *,
     checkpoint: Mapping[str, Any],
     values: Mapping[str, Any],
     kube_context: str,
     command_runner: SoperatorMigrationCommandRunner,
 ) -> tuple[Mapping[str, str], ...]:
-    status = soperator_home_preservation_status(values)
-    if not soperator_home_sfs_migration_enabled(values):
-        checks = [
-            _fast_verification_check(
-                "/home external mount",
-                "passed" if status.external else "failed",
-                status.reason,
-            )
-        ]
-        if status.external:
-            checks.extend(
-                _live_home_mount_probe_checks(
-                    kube_context=kube_context,
-                    command_runner=command_runner,
-                )
-            )
-        return tuple(checks)
-    _summary, checks = _online_bulk_data_sync_fast_verification_checks(
-        checkpoint=checkpoint,
-        kube_context=kube_context,
-        command_runner=command_runner,
-    )
-    home_checks = [
-        check
-        for check in checks
-        if str(check.get("name", "") or "").strip().lower() == f"data sync {HOME_SFS_KEY}"
-    ]
-    if not home_checks:
-        home_checks = [
-            _fast_verification_check(
-                "/home SFS data sync",
-                "failed",
-                "home copy job was not recorded in online-bulk-data-sync",
-            )
-        ]
-    home_checks.append(
+    status = jail_persistent_mount_status(values)
+    _ = (checkpoint, kube_context, command_runner)
+    return (
         _fast_verification_check(
-            "/home target mount values",
-            "passed" if status.external else "failed",
+            "persistent jail mounts",
+            "passed" if status.verified else "failed",
             status.reason,
-        )
+        ),
     )
-    if status.external:
-        home_checks.extend(
-            _live_home_mount_probe_checks(
-                kube_context=kube_context,
-                command_runner=command_runner,
-            )
-        )
-    return tuple(home_checks)
 
 
 def _execute_populate_jail_refresh_phase(
@@ -12970,7 +12669,6 @@ def _execute_populate_jail_refresh_phase(
     kube_context: str,
     command_runner: SoperatorMigrationCommandRunner,
     populate_jail_refresh: str,
-    confirm_jail_rootfs_overwrite: bool,
     job_policy: str,
     cancel_job_ids: Sequence[str],
     requeue_job_ids: Sequence[str],
@@ -12980,6 +12678,7 @@ def _execute_populate_jail_refresh_phase(
     interactive_prompt_pause: Callable[[], Any] | None = None,
     allow_resolved_interactive_job_policy: bool = False,
     checkpoint_writer: Callable[[], None] | None = None,
+    jail_sfs_resize_handler: JailSfsResizeHandler | None = None,
 ) -> tuple[bool, list[str]]:
     phase = _phase_state(checkpoint, POPULATE_JAIL_REFRESH_PHASE_ID)
     before = inspect_populate_jail(
@@ -13020,34 +12719,98 @@ def _execute_populate_jail_refresh_phase(
         source_report=source_report,
         live_snapshot=live_snapshot,
     )
-    home_checks = _home_preservation_overwrite_checks(
+    persistent_mount_checks = _persistent_mount_overwrite_checks(
         checkpoint=checkpoint,
         values=values,
         kube_context=kube_context,
         command_runner=command_runner,
     )
-    phase["home_preservation"] = {
-        "checks": list(home_checks),
-        "status": "failed" if _fast_verification_failed(home_checks) else "verified",
+    phase["persistent_jail_mounts"] = {
+        "checks": list(persistent_mount_checks),
+        "status": "failed" if _fast_verification_failed(persistent_mount_checks) else "verified",
     }
-    if _fast_verification_failed(home_checks):
+    if _fast_verification_failed(persistent_mount_checks):
         if checkpoint_writer is not None:
             checkpoint_writer()
         raise SoperatorMigrationPhasePending(
-            "populate-jail overwrite is blocked until /home is verified external. "
-            "Review the populate-jail-refresh.home_preservation checks in the checkpoint."
+            "jail rootfs refresh is blocked until persistent jail mounts are verified. "
+            "Review the populate-jail-refresh.persistent_jail_mounts checks in the checkpoint."
         )
-    if not confirm_jail_rootfs_overwrite:
-        phase["rootfs_overwrite_confirmed"] = False
-        if checkpoint_writer is not None:
-            checkpoint_writer()
-        raise SoperatorMigrationPhasePending(
-            "populate-jail overwrite is destructive for the shared jail rootfs. Re-run with "
-            "--confirm-jail-rootfs-overwrite after confirming /home is external and rootfs "
-            "content outside preserved mounts may be recreated."
-        )
-    phase["rootfs_overwrite_confirmed"] = True
+    slots = active_passive_jail_rootfs_slots(values)
+    job_scheduling = active_passive_populate_jail_job_scheduling(
+        values,
+        target_ref=target_ref,
+    )
+    phase["rootfs_strategy"] = "activePassive"
+    phase["rootfs_slots"] = slots.as_payload()
+    legacy_active_rootfs = jail_rootfs_uses_legacy_active_source(values)
+    phase["legacy_active_rootfs"] = legacy_active_rootfs
     target_version = str(_mapping(source_report.get("report")).get("target_version", "") or "")
+    populate_image = before.image or plan.after_chart.image
+    if not populate_image:
+        raise SoperatorMigrationPhasePending(
+            "Could not resolve a populate-jail image for passive-slot rootfs population."
+        )
+
+    def _probe_jail_capacity() -> JailCapacityPreflight:
+        active_pvc = (
+            _target_pvc_name_for_storage_key(payload, target_ref, "jail")
+            if legacy_active_rootfs
+            else slots.active_pvc
+        )
+        active_rootfs_path = JAIL_LEGACY_ROOT_PATH if legacy_active_rootfs else ""
+        return probe_active_passive_jail_capacity(
+            command_runner,
+            namespace=_SOPERATOR_NAMESPACE,
+            target_ref=target_ref,
+            image=populate_image,
+            active_pvc=active_pvc,
+            passive_pvc=slots.passive_pvc,
+            active_rootfs_path=active_rootfs_path,
+            exclude_paths=jail_persistent_mount_exclude_paths(values),
+            scheduling=job_scheduling,
+            kube_context=kube_context,
+        )
+
+    capacity_preflight = _probe_jail_capacity()
+    phase["capacity_preflight"] = capacity_preflight.as_payload()
+    checkpoint["populate_jail_refresh"] = {
+        **dict(_mapping(checkpoint.get("populate_jail_refresh"))),
+        "capacity_preflight": capacity_preflight.as_payload(),
+    }
+    if checkpoint_writer is not None:
+        checkpoint_writer()
+    if not capacity_preflight.sufficient:
+        if jail_sfs_resize_handler is None:
+            phase["capacity_preflight_check"] = dict(
+                capacity_preflight_check_payload(capacity_preflight)
+            )
+            if checkpoint_writer is not None:
+                checkpoint_writer()
+            raise SoperatorMigrationPhasePending(
+                "passive jail rootfs slot does not have enough free space. "
+                "Review populate-jail-refresh.capacity_preflight in the checkpoint "
+                "and resize the existing Nebius jail SFS before retrying."
+            )
+        capacity_preflight = jail_sfs_resize_handler(
+            capacity_preflight,
+            _probe_jail_capacity,
+            phase,
+            checkpoint,
+            checkpoint_writer,
+        )
+    phase["capacity_preflight"] = capacity_preflight.as_payload()
+    phase["capacity_preflight_check"] = dict(capacity_preflight_check_payload(capacity_preflight))
+    checkpoint["populate_jail_refresh"] = {
+        **dict(_mapping(checkpoint.get("populate_jail_refresh"))),
+        "capacity_preflight": capacity_preflight.as_payload(),
+    }
+    if checkpoint_writer is not None:
+        checkpoint_writer()
+    if not capacity_preflight.sufficient:
+        raise SoperatorMigrationPhasePending(
+            "passive jail rootfs slot does not have enough free space after resize recheck."
+        )
     checkpoint_worker_groups = tuple(
         str(group or "") for group in checkpoint.get("worker_node_groups", []) or []
     )
@@ -13070,9 +12833,6 @@ def _execute_populate_jail_refresh_phase(
     phase["slurm_job_scope"] = (
         "live-worker-nodesets" if live_worker_slurm_nodes else "source-worker-node-groups"
     )
-    refreshed = None
-    maintenance_restored = False
-    mutation_performed = False
     quiet_lines = _ensure_slurm_quiet(
         command_runner=command_runner,
         kube_context=kube_context,
@@ -13091,75 +12851,113 @@ def _execute_populate_jail_refresh_phase(
     phase["slurm_quiet_lines"] = list(quiet_lines)
     if checkpoint_writer is not None:
         checkpoint_writer()
-    slurm_resume_lines: list[str] = []
-    try:
-        _helm_upgrade_target_soperator(
-            command_runner=command_runner,
-            kube_context=kube_context,
-            values=populate_jail_refresh_values(values),
-            expected_version=target_version,
-            wait=False,
+    mutation_performed = False
+    maintenance_restored = True
+    refresh_values = populate_jail_refresh_values(values)
+    _helm_upgrade_target_soperator(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        values=refresh_values,
+        expected_version=target_version,
+        wait=False,
+    )
+    mutation_performed = True
+    phase["passive_slot_refresh_values_applied_at"] = _utc_now()
+    if checkpoint_writer is not None:
+        checkpoint_writer()
+    manifest = active_passive_populate_jail_job_manifest(
+        namespace=_SOPERATOR_NAMESPACE,
+        target_ref=target_ref,
+        image=populate_image,
+        passive_slot=slots.passive_slot,
+        passive_pvc=slots.passive_pvc,
+        image_pull_policy=str(
+            _mapping(values.get("populateJail")).get("imagePullPolicy") or "IfNotPresent"
+        ),
+        scheduling=job_scheduling,
+    )
+    job_name = str(_mapping(manifest.get("metadata")).get("name", "") or "")
+    if job_name:
+        command_runner(
+            [
+                "kubectl",
+                "--context",
+                kube_context,
+                "-n",
+                _SOPERATOR_NAMESPACE,
+                "delete",
+                "job",
+                job_name,
+                "--ignore-not-found",
+                "--wait=false",
+            ],
+            timeout_seconds=300,
         )
-        mutation_performed = True
-        phase["overwrite_maintenance_applied_at"] = _utc_now()
-        if checkpoint_writer is not None:
-            checkpoint_writer()
-        consumers_down = wait_for_populate_jail_consumers_down(
+    _kubectl_apply_objects(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        objects=(manifest,),
+        timeout_seconds=300,
+    )
+    phase["passive_slot_populate_job"] = {
+        "name": job_name,
+        "slot": slots.passive_slot,
+        "pvc": slots.passive_pvc,
+        "image": populate_image,
+    }
+    if checkpoint_writer is not None:
+        checkpoint_writer()
+    refreshed = wait_for_active_passive_populate_jail_job(
+        command_runner,
+        namespace=_SOPERATOR_NAMESPACE,
+        job_name=job_name,
+        expected_image=populate_image,
+        kube_context=kube_context,
+    )
+    phase["job_completed_at"] = _utc_now()
+    if checkpoint_writer is not None:
+        checkpoint_writer()
+    phase["login_service_ready_before_switch"] = wait_for_login_service_ready_endpoints(
+        command_runner,
+        namespace=_SOPERATOR_NAMESPACE,
+        target_ref=target_ref,
+        kube_context=kube_context,
+    )
+    if checkpoint_writer is not None:
+        checkpoint_writer()
+    switched_values = switch_active_passive_jail_rootfs_values(values)
+    _helm_upgrade_target_soperator(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        values=switched_values,
+        expected_version=target_version,
+        wait=False,
+    )
+    phase["consumer_switch_applied_at"] = _utc_now()
+    phase["rollback_slot"] = "legacy-rootfs" if legacy_active_rootfs else slots.active_slot
+    phase["active_slot"] = slots.passive_slot
+    phase["login_service_ready_after_switch"] = (
+        wait_for_login_statefulset_rollout_with_ready_endpoint_guard(
             command_runner,
             namespace=_SOPERATOR_NAMESPACE,
             target_ref=target_ref,
             kube_context=kube_context,
         )
-        phase["consumers_down_at"] = _utc_now()
-        phase["active_consumer_pods"] = list(consumers_down.active_consumer_pods)
-        if checkpoint_writer is not None:
-            checkpoint_writer()
-        refreshed = wait_for_populate_jail_refresh(
-            command_runner,
-            namespace=_SOPERATOR_NAMESPACE,
-            target_ref=target_ref,
-            previous_job_uid=before.job_uid,
-            expected_image=before.image,
-            kube_context=kube_context,
-        )
-        phase["job_completed_at"] = _utc_now()
-        if checkpoint_writer is not None:
-            checkpoint_writer()
-    finally:
-        _helm_upgrade_target_soperator(
-            command_runner=command_runner,
-            kube_context=kube_context,
-            values=populate_jail_steady_state_values(values),
-            expected_version=target_version,
-            wait=False,
-        )
-        _kubectl_rollout_status(
-            command_runner=command_runner,
-            kube_context=kube_context,
-            namespace=_SOPERATOR_NAMESPACE,
-            resource="deployment/soperator-manager",
-            timeout="15m",
-        )
-        maintenance_restored = True
-        mutation_performed = True
-        phase["steady_state_applied_at"] = _utc_now()
-        if checkpoint_writer is not None:
-            checkpoint_writer()
-        _resume_slurm_partitions(
-            command_runner=command_runner,
-            kube_context=kube_context,
-        )
-        phase["slurm_resumed_at"] = _utc_now()
-        slurm_resume_lines = ["Slurm partitions resumed after populate-jail refresh."]
-        if checkpoint_writer is not None:
-            checkpoint_writer()
-    if refreshed is None:
-        refreshed = inspect_populate_jail(
-            command_runner,
-            namespace=_SOPERATOR_NAMESPACE,
-            target_ref=target_ref,
-            kube_context=kube_context,
-        )
+    )
+    if checkpoint_writer is not None:
+        checkpoint_writer()
+    _kubectl_rollout_status(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        namespace=_SOPERATOR_NAMESPACE,
+        resource="deployment/soperator-manager",
+        timeout="15m",
+    )
+    _resume_slurm_partitions(
+        command_runner=command_runner,
+        kube_context=kube_context,
+    )
+    phase["slurm_resumed_at"] = _utc_now()
     result = completed_populate_jail_refresh_result(
         mode=plan.mode,
         reason=plan.reason,
@@ -13171,8 +12969,11 @@ def _execute_populate_jail_refresh_phase(
     if checkpoint_writer is not None:
         checkpoint_writer()
     return mutation_performed, [
-        *slurm_resume_lines,
-        f"Populate-jail refreshed with image {result.job_image or result.target_image or 'unknown'}.",
+        "Slurm partitions resumed after active/passive jail rootfs refresh.",
+        (
+            "Jail rootfs passive slot populated and consumers switched "
+            f"from {slots.active_slot} to {slots.passive_slot}."
+        ),
     ]
 
 
@@ -13825,9 +13626,8 @@ def _phase_report_summary(phase_id: str, phase: Mapping[str, Any]) -> str:
         return f"target GPU stack charts applied or verified: {len(charts)}."
     if phase_id == "create-aligned-sfs":
         filesystems = _mapping(phase.get("filesystems"))
-        expected = len(_SOPERATOR_STORAGE_KEYS) + (1 if HOME_SFS_KEY in filesystems else 0)
-        home_suffix = " including /home" if HOME_SFS_KEY in filesystems else ""
-        return f"aligned SFS filesystems recorded: {len(filesystems)}/{expected}{home_suffix}."
+        expected = len(_soperator_storage_keys_for_target(payload={}, target_ref=""))
+        return f"aligned SFS filesystems recorded: {len(filesystems)}/{expected}."
     if phase_id == "online-bulk-data-sync":
         jobs = _mapping(phase.get("jobs"))
         return f"data-copy jobs recorded: {len(jobs)}."
@@ -16683,14 +16483,12 @@ def execute_soperator_migration(
     status_poll_interval_seconds: float = 30.0,
     job_policy: str | None = None,
     populate_jail_refresh: str = "auto",
-    move_home_out_to_sfs: bool = True,
-    home_sfs_size_multiplier: float = 1.3,
-    home_sfs_size_gib: int | None = None,
-    confirm_jail_rootfs_overwrite: bool = False,
+    jail_persistent_mounts: Sequence[str] = (),
     cancel_job_ids: Sequence[str] = (),
     requeue_job_ids: Sequence[str] = (),
     job_wait_timeout_seconds: int = _EXTERNAL_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT_SECONDS,
     job_refresh_interval_seconds: int = _EXTERNAL_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL_SECONDS,
+    jail_sfs_resize_handler: JailSfsResizeHandler | None = None,
     worker_rollout_strategy: str | None = None,
     worker_wave_groups: int | None = None,
     worker_wave_percent: int | None = None,
@@ -16734,14 +16532,12 @@ def execute_soperator_migration(
             status_poll_interval_seconds=status_poll_interval_seconds,
             job_policy=job_policy,
             populate_jail_refresh=populate_jail_refresh,
-            move_home_out_to_sfs=move_home_out_to_sfs,
-            home_sfs_size_multiplier=home_sfs_size_multiplier,
-            home_sfs_size_gib=home_sfs_size_gib,
-            confirm_jail_rootfs_overwrite=confirm_jail_rootfs_overwrite,
+            jail_persistent_mounts=jail_persistent_mounts,
             cancel_job_ids=cancel_job_ids,
             requeue_job_ids=requeue_job_ids,
             job_wait_timeout_seconds=job_wait_timeout_seconds,
             job_refresh_interval_seconds=job_refresh_interval_seconds,
+            jail_sfs_resize_handler=jail_sfs_resize_handler,
             worker_rollout_strategy=worker_rollout_strategy,
             worker_wave_groups=worker_wave_groups,
             worker_wave_percent=worker_wave_percent,
@@ -16770,14 +16566,12 @@ def _execute_soperator_migration_unlocked(
     status_poll_interval_seconds: float = 30.0,
     job_policy: str | None = None,
     populate_jail_refresh: str = "auto",
-    move_home_out_to_sfs: bool = True,
-    home_sfs_size_multiplier: float = 1.3,
-    home_sfs_size_gib: int | None = None,
-    confirm_jail_rootfs_overwrite: bool = False,
+    jail_persistent_mounts: Sequence[str] = (),
     cancel_job_ids: Sequence[str] = (),
     requeue_job_ids: Sequence[str] = (),
     job_wait_timeout_seconds: int = _EXTERNAL_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT_SECONDS,
     job_refresh_interval_seconds: int = _EXTERNAL_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL_SECONDS,
+    jail_sfs_resize_handler: JailSfsResizeHandler | None = None,
     worker_rollout_strategy: str | None = None,
     worker_wave_groups: int | None = None,
     worker_wave_percent: int | None = None,
@@ -16831,14 +16625,10 @@ def _execute_soperator_migration_unlocked(
         onboarding.get("target_version", "") or report.get("target_version", "") or ""
     )
     kube_context = _target_kube_context(payload, normalized_target)
-    payload, home_preservation_state = _prepare_home_sfs_migration_payload(
+    payload, persistent_mount_state = _prepare_jail_persistent_mount_payload(
         payload=payload,
         target_ref=normalized_target,
-        kube_context=kube_context,
-        command_runner=active_command_runner,
-        move_home_out_to_sfs=move_home_out_to_sfs,
-        home_sfs_size_multiplier=home_sfs_size_multiplier,
-        home_sfs_size_gib=home_sfs_size_gib,
+        jail_persistent_mounts=jail_persistent_mounts,
         populate_jail_refresh=populate_jail_refresh,
     )
     onboarding = _target_onboarding(payload, normalized_target)
@@ -16846,7 +16636,7 @@ def _execute_soperator_migration_unlocked(
     phase_ids = _phase_ids_for_actions(report=report, onboarding=onboarding)
     if not phase_ids:
         phase_ids = ("discovery-and-plan",)
-    phase_ids = _phase_ids_with_home_sfs_prerequisites(
+    phase_ids = _phase_ids_with_jail_persistent_mount_prerequisites(
         phase_ids=phase_ids,
         payload=payload,
         target_ref=normalized_target,
@@ -16946,19 +16736,10 @@ def _execute_soperator_migration_unlocked(
         upgrade_path_segment_id=upgrade_path_segment_id,
         locked_upgrade_path=locked_upgrade_path,
     )
-    existing_home = dict(_mapping(checkpoint.get("home_preservation")))
-    existing_size = _positive_int(existing_home.get("size_gib"), fallback=0)
-    requested_size = _positive_int(home_preservation_state.get("size_gib"), fallback=0)
-    if existing_size and requested_size and existing_size != requested_size:
-        raise RuntimeError(
-            "External Soperator upgrade checkpoint was started with a different /home SFS "
-            f"size ({existing_size} GiB) than this run requested ({requested_size} GiB). "
-            "Resume with the same --home-sfs-size-gib or remove the checkpoint only after "
-            "deciding to restart."
-        )
-    checkpoint["home_preservation"] = {
-        **existing_home,
-        **dict(to_plain_data(home_preservation_state)),
+    existing_mounts = dict(_mapping(checkpoint.get("persistent_jail_mounts")))
+    checkpoint["persistent_jail_mounts"] = {
+        **existing_mounts,
+        **dict(to_plain_data(persistent_mount_state)),
     }
     resolved_populate_jail_refresh = normalize_populate_jail_refresh_mode(
         populate_jail_refresh
@@ -17416,7 +17197,6 @@ def _execute_soperator_migration_unlocked(
                 kube_context=kube_context,
                 command_runner=active_command_runner,
                 populate_jail_refresh=resolved_populate_jail_refresh,
-                confirm_jail_rootfs_overwrite=confirm_jail_rootfs_overwrite,
                 job_policy=resolved_job_policy,
                 cancel_job_ids=selected_cancel_job_ids,
                 requeue_job_ids=selected_requeue_job_ids,
@@ -17426,6 +17206,7 @@ def _execute_soperator_migration_unlocked(
                 interactive_prompt_pause=status_prompt_pause,
                 allow_resolved_interactive_job_policy=allow_resolved_interactive_job_policy,
                 checkpoint_writer=_checkpoint_progress,
+                jail_sfs_resize_handler=jail_sfs_resize_handler,
             ),
             "validation-and-rollback-hold": lambda: _execute_validation_hold_phase(
                 config_path=config_path,

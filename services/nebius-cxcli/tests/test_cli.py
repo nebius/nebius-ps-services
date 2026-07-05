@@ -2083,15 +2083,14 @@ spec:
             except json.JSONDecodeError:
                 values = {}
             populate = values.get("populateJail") if isinstance(values, dict) else None
+            jail_rootfs = values.get("jailRootfs") if isinstance(values, dict) else None
+            refresh = jail_rootfs.get("refresh") if isinstance(jail_rootfs, dict) else None
             if (
                 release_name == "soperator"
                 and isinstance(values, dict)
-                and values.get("maintenance") == "downscaleAndOverwritePopulateJail"
-                and isinstance(populate, dict)
-                and populate.get("overwrite") is True
+                and isinstance(refresh, dict)
+                and refresh.get("mode") == "populatePassiveSlot"
             ):
-                self._populate_jail_refresh_saved_pods = list(self.live_pods)
-                self.live_pods = []
                 self.populate_jail_job_uid = "populate-jail-job-new"
             elif (
                 release_name == "soperator"
@@ -2129,6 +2128,61 @@ spec:
                 ),
                 "",
             )
+        if command[:8] == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "services",
+            "-o",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {
+                                    "name": "login",
+                                    "namespace": "soperator",
+                                },
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:7] == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "endpointslices.discovery.k8s.io",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {
+                                    "name": "login-abc",
+                                    "namespace": "soperator",
+                                    "labels": {"kubernetes.io/service-name": "login"},
+                                },
+                                "endpoints": [{"conditions": {"ready": True}}],
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
         if (
             command
             and command[0] == "kubectl"
@@ -2159,6 +2213,33 @@ spec:
                                 "readyReplicas": 1,
                                 "availableReplicas": 1,
                                 "updatedReplicas": 1,
+                            },
+                        }
+                    ),
+                    "",
+                )
+            if resource in {
+                "statefulset",
+                "sts",
+                "statefulset.apps.kruise.io",
+                "statefulsets.apps.kruise.io",
+            }:
+                return SoperatorMigrationCommandResult(
+                    command,
+                    0,
+                    json.dumps(
+                        {
+                            "kind": "StatefulSet",
+                            "metadata": {
+                                "name": name,
+                                "namespace": namespace,
+                                "generation": 1,
+                            },
+                            "spec": {"replicas": 2},
+                            "status": {
+                                "observedGeneration": 1,
+                                "readyReplicas": 2,
+                                "updatedReplicas": 2,
                             },
                         }
                     ),
@@ -2202,6 +2283,26 @@ spec:
                         "status": {"phase": "Available"},
                     }
                 ),
+                "",
+            )
+        if (
+            len(command) >= 7
+            and command[:6]
+            == (
+                "kubectl",
+                "--context",
+                "external-context",
+                "-n",
+                "soperator",
+                "logs",
+            )
+            and command[6].startswith("job/")
+            and command[6].endswith("jail-capacity-probe")
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "active_used_kib=83886080\npassive_available_kib=104857600\n",
                 "",
             )
         if command[:7] == (
@@ -9382,7 +9483,6 @@ def test_ext_soperator_upgrade_execute_derives_kube_context_from_cluster_id(
 
     def _execute_with_fake_commands(**kwargs):
         kwargs["command_runner"] = _FakeSoperatorMigrationCommandRunner()
-        kwargs["confirm_jail_rootfs_overwrite"] = True
         return real_execute(**kwargs)
 
     monkeypatch.setattr(cli_module, "execute_soperator_migration", _execute_with_fake_commands)
@@ -9421,7 +9521,6 @@ def test_ext_soperator_upgrade_execute_records_approval_and_worker_groups(
 
     def _execute_with_fake_commands(**kwargs):
         kwargs["command_runner"] = _FakeSoperatorMigrationCommandRunner()
-        kwargs["confirm_jail_rootfs_overwrite"] = True
         return real_execute(**kwargs)
 
     monkeypatch.setattr(cli_module, "execute_soperator_migration", _execute_with_fake_commands)
@@ -9575,7 +9674,6 @@ def test_ext_soperator_upgrade_execute_auto_selects_worker_groups_for_approval(
 
     def _execute_with_fake_commands(**kwargs):
         kwargs["command_runner"] = _FakeSoperatorMigrationCommandRunner()
-        kwargs["confirm_jail_rootfs_overwrite"] = True
         return real_execute(**kwargs)
 
     monkeypatch.setattr(cli_module, "execute_soperator_migration", _execute_with_fake_commands)

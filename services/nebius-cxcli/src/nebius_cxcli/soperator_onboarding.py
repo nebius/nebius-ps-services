@@ -2702,7 +2702,7 @@ def analyze_soperator_onboarding_snapshot(
                     "storage layout is incomplete. Missing required storage keys: "
                     f"{', '.join(missing_storage_keys)}. Select create-aligned-sfs to "
                     "plan aligned Nebius SFS creation, or keep-existing-storage to "
-                    "preserve the discovered storage contract without an SFS migration plan."
+                    "preserve the discovered storage contract without storage realignment."
                 ),
                 action_id=ONBOARDING_ACTION_CONFIGURE_STORAGE,
                 evidence={

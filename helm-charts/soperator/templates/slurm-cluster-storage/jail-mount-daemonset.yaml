@@ -1,4 +1,25 @@
 {{- $type := include "slurm-cluster-storage.volume.jail.type" . }}
+{{- $activePassive := eq (include "slurm-cluster-storage.jailRootfs.activePassive.enabled" .) "true" }}
+{{- $mountPath := include "slurm-cluster-storage.volume.jail.path" . }}
+{{- $createDirList := list }}
+{{- if $activePassive }}
+{{- $mountPath = include "slurm-cluster-storage.jailRootfs.store.path" . }}
+{{- $rootfsPath := include "slurm-cluster-storage.jailRootfs.rootfs.path" . }}
+{{- $allPaths := list (printf "%s/slot-a" $rootfsPath) (printf "%s/slot-b" $rootfsPath) }}
+{{- range $mount := .Values.jailPersistentMounts }}
+{{- $allPaths = append $allPaths (include "slurm-cluster-storage.jailPersistentMount.path" (list $ $mount)) }}
+{{- end }}
+{{- range $path := $allPaths }}
+{{- if eq $path $mountPath }}
+{{- fail "active/passive jail rootfs and persistent mount paths must be below jailRootfs.store.mountPath, not equal to it." }}
+{{- end }}
+{{- if not (hasPrefix (printf "%s/" $mountPath) $path) }}
+{{- fail (printf "active/passive jail path %q must be below jailRootfs.store.mountPath %q." $path $mountPath) }}
+{{- end }}
+{{- $createDirList = append $createDirList (trimPrefix (printf "%s/" $mountPath) $path) }}
+{{- end }}
+{{- end }}
+{{- $createDirs := join " " $createDirList }}
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -30,11 +51,11 @@ spec:
             - /bin/sh
             - -c
 {{- if eq $type "filestore" }}
-            - /mount-scripts/ensure_mounted_filestore.sh -d {{ include "slurm-cluster-storage.volume.jail.device" . }} -p /mnt/jail -s 60
+            - /mount-scripts/ensure_mounted_filestore.sh -d {{ include "slurm-cluster-storage.volume.jail.device" . }} -p {{ $mountPath }} -s 60{{- if $createDirs }} -c "{{ $createDirs }}"{{- end }}
 {{- else if eq $type "local" }}
-            - mkdir -m 755 -p /host{{ include "slurm-cluster-storage.volume.jail.path" . }} && while true; do sleep 3600; done
+            - mkdir -m 755 -p /host{{ $mountPath }}{{- range $path := $createDirList }} /host{{ $mountPath }}/{{ $path }}{{- end }} && while true; do sleep 3600; done
 {{- else }}
-            - /mount-scripts/ensure_mounted_glusterfs.sh -g {{ include "slurm-cluster-storage.volume.jail.hostname" . }} -p /mnt/jail -s 60
+            - /mount-scripts/ensure_mounted_glusterfs.sh -g {{ include "slurm-cluster-storage.volume.jail.hostname" . }} -p {{ $mountPath }} -s 60{{- if $createDirs }} -c "{{ $createDirs }}"{{- end }}
 {{- end }}
           securityContext:
             privileged: true

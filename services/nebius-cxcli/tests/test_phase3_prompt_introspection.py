@@ -2876,13 +2876,13 @@ def test_app_chart_skip_defaults_preview_lines_are_concise_and_redacted() -> Non
                 "partitionProfile": "shape-default",
                 "topologyProfile": "disabled",
                 "volume": {
-                    "jail": {"size": "1024Gi"},
+                    "jail": {"size": "2048Gi"},
                     "controllerSpool": {"size": "128Gi"},
                     "accounting": {"enabled": True, "size": "128Gi"},
                 },
                 "sfs": {
                     "filesystems": {
-                        "jail": {"size_gib": 1024},
+                        "jail": {"size_gib": 2048},
                         "controller-spool": {"size_gib": 128},
                         "accounting": {"size_gib": 128},
                     }
@@ -2897,10 +2897,10 @@ def test_app_chart_skip_defaults_preview_lines_are_concise_and_redacted() -> Non
     assert "namespace=soperator" in preview
     assert "install_mode=production-cluster" in preview
     assert "timeout=90m" in preview
-    assert "values.volume={jail.size=1024Gi" in preview
+    assert "values.volume={jail.size=2048Gi" in preview
     assert "controllerSpool.size=128Gi" in preview
     assert "accounting.size=128Gi" in preview
-    assert "values.sfs={jail.size_gib=1024" in preview
+    assert "values.sfs={jail.size_gib=2048" in preview
     assert "secret-url" not in preview
 
 

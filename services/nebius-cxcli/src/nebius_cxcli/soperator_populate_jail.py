@@ -9,11 +9,16 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from .soperator_jail_mounts import JAIL_LEGACY_ACTIVE_SOURCE
+
 POPULATE_JAIL_REFRESH_PHASE_ID = "populate-jail-refresh"
 POPULATE_JAIL_REFRESH_MODES = frozenset({"auto", "force", "manual"})
-POPULATE_JAIL_OVERWRITE_MAINTENANCE = "downscaleAndOverwritePopulateJail"
+POPULATE_JAIL_PASSIVE_SLOT_REFRESH = "populatePassiveSlot"
 POPULATE_JAIL_STEADY_MAINTENANCE = "none"
 POPULATE_JAIL_JOB_SUFFIX = "populate-jail"
+JAIL_ROOTFS_STRATEGY_ACTIVE_PASSIVE = "activePassive"
+JAIL_ROOTFS_SLOT_A = "slot-a"
+JAIL_ROOTFS_SLOT_B = "slot-b"
 
 
 class PopulateJailCommandResult(Protocol):
@@ -108,6 +113,26 @@ class PopulateJailRefreshResult:
         }
 
 
+@dataclass(frozen=True)
+class ActivePassiveJailRootfsSlots:
+    active_slot: str
+    passive_slot: str
+    active_volume_source: str
+    passive_volume_source: str
+    active_pvc: str
+    passive_pvc: str
+
+    def as_payload(self) -> dict[str, str]:
+        return {
+            "active_slot": self.active_slot,
+            "passive_slot": self.passive_slot,
+            "active_volume_source": self.active_volume_source,
+            "passive_volume_source": self.passive_volume_source,
+            "active_pvc": self.active_pvc,
+            "passive_pvc": self.passive_pvc,
+        }
+
+
 def normalize_populate_jail_refresh_mode(value: str | None) -> str:
     mode = str(value or "").strip().lower() or "auto"
     if mode not in POPULATE_JAIL_REFRESH_MODES:
@@ -120,12 +145,29 @@ def normalize_populate_jail_refresh_mode(value: str | None) -> str:
 
 def populate_jail_refresh_values(values: Mapping[str, Any]) -> dict[str, Any]:
     patched = copy.deepcopy(dict(values))
-    patched["maintenance"] = POPULATE_JAIL_OVERWRITE_MAINTENANCE
+    patched["maintenance"] = POPULATE_JAIL_STEADY_MAINTENANCE
     populate = patched.get("populateJail")
     if not isinstance(populate, dict):
         populate = {}
         patched["populateJail"] = populate
-    populate["overwrite"] = True
+    populate["overwrite"] = False
+    jail_rootfs = patched.get("jailRootfs")
+    if not isinstance(jail_rootfs, dict):
+        jail_rootfs = {}
+        patched["jailRootfs"] = jail_rootfs
+    slots = active_passive_jail_rootfs_slots(patched)
+    refresh = jail_rootfs.get("refresh")
+    if not isinstance(refresh, dict):
+        refresh = {}
+        jail_rootfs["refresh"] = refresh
+    refresh.update(
+        {
+            "mode": POPULATE_JAIL_PASSIVE_SLOT_REFRESH,
+            "targetSlot": slots.passive_slot,
+            "rollbackSlot": slots.active_slot,
+            "status": "planned",
+        }
+    )
     return patched
 
 
@@ -143,13 +185,237 @@ def populate_jail_steady_state_values(values: Mapping[str, Any]) -> dict[str, An
 def populate_jail_manual_instruction(*, namespace: str, slurmcluster_name: str) -> str:
     target = slurmcluster_name or "<slurmcluster>"
     return (
-        "Refresh the shared jail rootfs by applying the target chart with "
-        "values.maintenance=downscaleAndOverwritePopulateJail and "
-        "values.populateJail.overwrite=true, wait for "
-        f"job/{target}-{POPULATE_JAIL_JOB_SUFFIX} to complete in namespace {namespace}, "
-        "then reapply the target chart with maintenance=none and "
-        "populateJail.overwrite=false before resuming login/worker pods."
+        "Refresh the jail rootfs by populating the passive active/passive slot with "
+        "the target populate-jail image, switching login and worker consumers to that "
+        f"slot, and keeping the previous slot available for rollback. Wait for "
+        f"job/{target}-{POPULATE_JAIL_JOB_SUFFIX}-passive-<slot> to complete in "
+        f"namespace {namespace}, then roll consumers without letting the login Service "
+        "reach zero ready endpoints."
     )
+
+
+def _mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _mutable_mapping(parent: dict[str, Any], key: str) -> dict[str, Any]:
+    value = parent.get(key)
+    if isinstance(value, dict):
+        return value
+    replacement: dict[str, Any] = {}
+    parent[key] = replacement
+    return replacement
+
+
+def _slot_name(value: Any, fallback: str) -> str:
+    slot = str(value or "").strip() or fallback
+    if slot not in {JAIL_ROOTFS_SLOT_A, JAIL_ROOTFS_SLOT_B}:
+        raise RuntimeError(f"jailRootfs slot must be slot-a or slot-b; got {slot!r}.")
+    return slot
+
+
+def _other_slot(slot: str) -> str:
+    return JAIL_ROOTFS_SLOT_B if slot == JAIL_ROOTFS_SLOT_A else JAIL_ROOTFS_SLOT_A
+
+
+def _slot_config(values: Mapping[str, Any], slot: str) -> Mapping[str, Any]:
+    jail_rootfs = _mapping(values.get("jailRootfs"))
+    slots = _mapping(jail_rootfs.get("slots"))
+    return _mapping(slots.get(slot))
+
+
+def _slot_volume_source(values: Mapping[str, Any], slot: str) -> str:
+    return str(_slot_config(values, slot).get("volumeSourceName") or f"jail-rootfs-{slot}").strip()
+
+
+def _slot_pvc(values: Mapping[str, Any], slot: str) -> str:
+    return str(_slot_config(values, slot).get("pvcName") or f"jail-rootfs-{slot}-pvc").strip()
+
+
+def active_passive_jail_rootfs_slots(values: Mapping[str, Any]) -> ActivePassiveJailRootfsSlots:
+    jail_rootfs = _mapping(values.get("jailRootfs"))
+    strategy = str(jail_rootfs.get("strategy") or JAIL_ROOTFS_STRATEGY_ACTIVE_PASSIVE).strip()
+    if strategy != JAIL_ROOTFS_STRATEGY_ACTIVE_PASSIVE:
+        raise RuntimeError("jailRootfs.strategy must be activePassive for rootfs refresh.")
+    active_slot = _slot_name(jail_rootfs.get("activeSlot"), JAIL_ROOTFS_SLOT_A)
+    passive_slot = _slot_name(jail_rootfs.get("passiveSlot"), _other_slot(active_slot))
+    if active_slot == passive_slot:
+        raise RuntimeError("jailRootfs.activeSlot and jailRootfs.passiveSlot must differ.")
+    return ActivePassiveJailRootfsSlots(
+        active_slot=active_slot,
+        passive_slot=passive_slot,
+        active_volume_source=_slot_volume_source(values, active_slot),
+        passive_volume_source=_slot_volume_source(values, passive_slot),
+        active_pvc=_slot_pvc(values, active_slot),
+        passive_pvc=_slot_pvc(values, passive_slot),
+    )
+
+
+def _mapping_items(value: Any) -> tuple[Mapping[str, Any], ...]:
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        return tuple(item for item in value if isinstance(item, Mapping))
+    return ()
+
+
+def _copy_mapping_field(source: Mapping[str, Any], key: str, target: dict[str, Any]) -> None:
+    value = source.get(key)
+    if isinstance(value, Mapping) and value:
+        target[key] = copy.deepcopy(dict(value))
+
+
+def _copy_sequence_field(source: Mapping[str, Any], key: str, target: dict[str, Any]) -> None:
+    value = source.get(key)
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray) and value:
+        target[key] = copy.deepcopy(list(value))
+
+
+def active_passive_pod_scheduling_fields(
+    scheduling: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Return Kubernetes pod scheduling fields safe to place on a generated Job."""
+
+    if not isinstance(scheduling, Mapping):
+        return {}
+    fields: dict[str, Any] = {}
+    _copy_mapping_field(scheduling, "affinity", fields)
+    _copy_mapping_field(scheduling, "nodeSelector", fields)
+    _copy_sequence_field(scheduling, "tolerations", fields)
+    priority_class_name = str(
+        scheduling.get("priorityClassName") or scheduling.get("priorityClass") or ""
+    ).strip()
+    if priority_class_name:
+        fields["priorityClassName"] = priority_class_name
+    return fields
+
+
+def active_passive_populate_jail_job_scheduling(
+    values: Mapping[str, Any],
+    *,
+    target_ref: str = "",
+) -> dict[str, Any]:
+    populate_jail = _mapping(values.get("populateJail"))
+    filter_name = str(populate_jail.get("k8sNodeFilterName") or "").strip()
+    scheduling: dict[str, Any] = {}
+    if filter_name:
+        for item in _mapping_items(values.get("k8sNodeFilters")):
+            if str(item.get("name") or "").strip() != filter_name:
+                continue
+            _copy_mapping_field(item, "affinity", scheduling)
+            _copy_mapping_field(item, "nodeSelector", scheduling)
+            _copy_sequence_field(item, "tolerations", scheduling)
+            break
+
+    priority_class = str(
+        populate_jail.get("priorityClass") or populate_jail.get("priorityClassName") or ""
+    ).strip()
+    if not priority_class:
+        # target_ref is a cxcli target selector, not necessarily the Helm clusterName.
+        del target_ref
+        cluster_name = str(values.get("clusterName") or "soperator").strip()
+        if cluster_name:
+            priority_class = f"{cluster_name[:63].rstrip('-')}-slurm-populate-jail"
+    if priority_class:
+        scheduling["priorityClassName"] = priority_class
+    return active_passive_pod_scheduling_fields(scheduling)
+
+
+def switch_active_passive_jail_rootfs_values(values: Mapping[str, Any]) -> dict[str, Any]:
+    patched = copy.deepcopy(dict(values))
+    slots = active_passive_jail_rootfs_slots(patched)
+    jail_rootfs = _mutable_mapping(patched, "jailRootfs")
+    jail_rootfs["strategy"] = JAIL_ROOTFS_STRATEGY_ACTIVE_PASSIVE
+    jail_rootfs["activeSlot"] = slots.passive_slot
+    jail_rootfs["passiveSlot"] = slots.active_slot
+    adoption = jail_rootfs.get("adoption")
+    if isinstance(adoption, dict) and adoption.get("activeSource") == JAIL_LEGACY_ACTIVE_SOURCE:
+        adoption["rollbackSource"] = JAIL_LEGACY_ACTIVE_SOURCE
+        adoption["activeSource"] = "slot"
+    refresh = _mutable_mapping(jail_rootfs, "refresh")
+    refresh.update(
+        {
+            "mode": POPULATE_JAIL_PASSIVE_SLOT_REFRESH,
+            "targetSlot": slots.passive_slot,
+            "rollbackSlot": slots.active_slot,
+            "status": "switching-consumers",
+        }
+    )
+
+    slurm_nodes = _mutable_mapping(patched, "slurmNodes")
+    for role in ("controller", "login", "rest"):
+        role_values = _mutable_mapping(slurm_nodes, role)
+        volumes = _mutable_mapping(role_values, "volumes")
+        jail = _mutable_mapping(volumes, "jail")
+        jail["volumeSourceName"] = slots.passive_volume_source
+
+    nodesets = patched.get("nodesets")
+    if isinstance(nodesets, list):
+        for nodeset in nodesets:
+            if not isinstance(nodeset, dict):
+                continue
+            slurmd = _mutable_mapping(nodeset, "slurmd")
+            volumes = _mutable_mapping(slurmd, "volumes")
+            jail = _mutable_mapping(volumes, "jail")
+            pvc = _mutable_mapping(jail, "persistentVolumeClaim")
+            pvc["claimName"] = slots.passive_pvc
+    return patched
+
+
+def active_passive_populate_jail_job_manifest(
+    *,
+    namespace: str,
+    target_ref: str,
+    image: str,
+    passive_slot: str,
+    passive_pvc: str,
+    image_pull_policy: str = "IfNotPresent",
+    scheduling: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    target = str(target_ref or "soperator").strip() or "soperator"
+    slot_suffix = passive_slot.replace("-", "")
+    pod_spec = {
+        "restartPolicy": "Never",
+        "automountServiceAccountToken": False,
+        "containers": [
+            {
+                "name": "populate-jail",
+                "image": image,
+                "imagePullPolicy": image_pull_policy,
+                "volumeMounts": [{"name": "jail-rootfs", "mountPath": "/mnt/jail"}],
+            }
+        ],
+        "volumes": [
+            {
+                "name": "jail-rootfs",
+                "persistentVolumeClaim": {"claimName": passive_pvc},
+            }
+        ],
+    }
+    pod_spec.update(active_passive_pod_scheduling_fields(scheduling))
+    return {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {
+            "namespace": namespace,
+            "name": f"{target}-{POPULATE_JAIL_JOB_SUFFIX}-passive-{slot_suffix}",
+            "labels": {
+                "app.kubernetes.io/component": "populate-jail",
+                "slurm.nebius.ai/jail-rootfs-refresh": "active-passive",
+                "slurm.nebius.ai/jail-rootfs-slot": passive_slot,
+            },
+        },
+        "spec": {
+            "backoffLimit": 0,
+            "template": {
+                "metadata": {
+                    "labels": {
+                        "app.kubernetes.io/component": "populate-jail",
+                        "slurm.nebius.ai/jail-rootfs-slot": passive_slot,
+                    }
+                },
+                "spec": pod_spec,
+            },
+        },
+    }
 
 
 def plan_populate_jail_refresh(
@@ -506,6 +772,245 @@ def wait_for_populate_jail_refresh(
             raise RuntimeError(
                 "Timed out waiting for populate-jail refresh to complete"
                 + (f": {detail}" if detail else "")
+            )
+        time.sleep(max(poll_interval_seconds, 1))
+
+
+def wait_for_active_passive_populate_jail_job(
+    runner: PopulateJailCommandRunner,
+    *,
+    namespace: str,
+    job_name: str,
+    expected_image: str,
+    kube_context: str | None = None,
+    timeout_seconds: int = 2700,
+    poll_interval_seconds: int = 10,
+) -> PopulateJailSnapshot:
+    deadline = time.monotonic() + max(timeout_seconds, 0)
+    job_name = str(job_name or "").strip()
+    while True:
+        job, detail = _run_json(
+            runner,
+            _kubectl_args(
+                kube_context=kube_context,
+                namespace=namespace,
+                args=("get", "job", job_name, "-o", "json"),
+            ),
+            timeout_seconds=120,
+            check=False,
+        )
+        snapshot = PopulateJailSnapshot(
+            job_name=job_name,
+            job_uid=_metadata_uid(job),
+            job_complete=_job_complete(job),
+            job_failed=_job_failed(job),
+            job_image=_job_container_image(job),
+            status="collected" if job else "not_collected",
+            detail=detail,
+        )
+        if snapshot.job_failed:
+            raise RuntimeError(f"active/passive populate-jail job {job_name} failed.")
+        image_ok = not expected_image or snapshot.job_image == expected_image
+        if snapshot.job_complete and image_ok:
+            return snapshot
+        if time.monotonic() >= deadline:
+            reason = snapshot.detail or "timed out waiting for passive-slot populate Job"
+            raise RuntimeError(
+                f"Timed out waiting for active/passive populate-jail job {job_name}: {reason}"
+            )
+        time.sleep(max(poll_interval_seconds, 1))
+
+
+def _items(payload: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
+    items = payload.get("items")
+    if not isinstance(items, Sequence) or isinstance(items, (str, bytes, bytearray)):
+        return ()
+    return tuple(item for item in items if isinstance(item, Mapping))
+
+
+def _login_service_names(payload: Mapping[str, Any]) -> tuple[str, ...]:
+    names = []
+    for item in _items(payload):
+        name = _metadata_name(item)
+        if name and "login" in name:
+            names.append(name)
+    return tuple(sorted(dict.fromkeys(names)))
+
+
+def _ready_endpoint_count(payload: Mapping[str, Any]) -> int:
+    ready = 0
+    for item in _items(payload):
+        endpoints = item.get("endpoints")
+        if not isinstance(endpoints, Sequence) or isinstance(endpoints, (str, bytes, bytearray)):
+            continue
+        for endpoint in endpoints:
+            if not isinstance(endpoint, Mapping):
+                continue
+            conditions = endpoint.get("conditions")
+            if isinstance(conditions, Mapping) and conditions.get("ready") is True:
+                ready += 1
+    return ready
+
+
+def _statefulset_rollout_ready(payload: Mapping[str, Any]) -> bool:
+    metadata = _mapping(payload.get("metadata"))
+    spec = _mapping(payload.get("spec"))
+    status = _mapping(payload.get("status"))
+    try:
+        generation = int(metadata.get("generation") or 0)
+        observed_generation = int(status.get("observedGeneration") or 0)
+        replicas = int(spec.get("replicas") if spec.get("replicas") is not None else 1)
+        ready_replicas = int(status.get("readyReplicas") or 0)
+        updated_replicas = int(status.get("updatedReplicas") or 0)
+    except (TypeError, ValueError):
+        return False
+    return (
+        observed_generation >= generation
+        and ready_replicas >= replicas
+        and updated_replicas >= replicas
+    )
+
+
+def _discover_login_service_names(
+    runner: PopulateJailCommandRunner,
+    *,
+    namespace: str,
+    target_ref: str,
+    kube_context: str | None,
+) -> tuple[str, ...]:
+    services, detail = _run_json(
+        runner,
+        _kubectl_args(
+            kube_context=kube_context,
+            namespace=namespace,
+            args=("get", "services", "-o", "json"),
+        ),
+        timeout_seconds=120,
+        check=False,
+    )
+    names = _login_service_names(services)
+    if not names:
+        target = str(target_ref or "").strip() or "<unknown>"
+        raise RuntimeError(
+            f"Could not find a login Service for SlurmCluster {target} in namespace {namespace}"
+            + (f": {detail}" if detail else "")
+        )
+    return names
+
+
+def login_service_ready_endpoint_count(
+    runner: PopulateJailCommandRunner,
+    *,
+    namespace: str,
+    service_names: Sequence[str],
+    kube_context: str | None = None,
+) -> int:
+    ready = 0
+    for service_name in service_names:
+        endpoint_slices, _detail = _run_json(
+            runner,
+            _kubectl_args(
+                kube_context=kube_context,
+                namespace=namespace,
+                args=(
+                    "get",
+                    "endpointslices.discovery.k8s.io",
+                    "-l",
+                    f"kubernetes.io/service-name={service_name}",
+                    "-o",
+                    "json",
+                ),
+            ),
+            timeout_seconds=120,
+            check=False,
+        )
+        ready += _ready_endpoint_count(endpoint_slices)
+    return ready
+
+
+def wait_for_login_service_ready_endpoints(
+    runner: PopulateJailCommandRunner,
+    *,
+    namespace: str,
+    target_ref: str,
+    kube_context: str | None = None,
+    min_ready_endpoints: int = 1,
+    timeout_seconds: int = 600,
+    poll_interval_seconds: int = 5,
+) -> dict[str, Any]:
+    service_names = _discover_login_service_names(
+        runner,
+        namespace=namespace,
+        target_ref=target_ref,
+        kube_context=kube_context,
+    )
+    deadline = time.monotonic() + max(timeout_seconds, 0)
+    while True:
+        ready = login_service_ready_endpoint_count(
+            runner,
+            namespace=namespace,
+            service_names=service_names,
+            kube_context=kube_context,
+        )
+        if ready >= min_ready_endpoints:
+            return {"service_names": list(service_names), "ready_endpoints": ready}
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                "Timed out waiting for login Service ready endpoints"
+                f": services={', '.join(service_names)}, ready={ready}, required={min_ready_endpoints}"
+            )
+        time.sleep(max(poll_interval_seconds, 1))
+
+
+def wait_for_login_statefulset_rollout_with_ready_endpoint_guard(
+    runner: PopulateJailCommandRunner,
+    *,
+    namespace: str,
+    target_ref: str,
+    kube_context: str | None = None,
+    statefulset_name: str = "login",
+    min_ready_endpoints: int = 1,
+    timeout_seconds: int = 900,
+    poll_interval_seconds: int = 5,
+) -> dict[str, Any]:
+    service_names = _discover_login_service_names(
+        runner,
+        namespace=namespace,
+        target_ref=target_ref,
+        kube_context=kube_context,
+    )
+    deadline = time.monotonic() + max(timeout_seconds, 0)
+    last_ready = 0
+    while True:
+        last_ready = login_service_ready_endpoint_count(
+            runner,
+            namespace=namespace,
+            service_names=service_names,
+            kube_context=kube_context,
+        )
+        if last_ready < min_ready_endpoints:
+            raise RuntimeError(
+                "Login Service ready endpoints dropped below the active/passive guard"
+                f": services={', '.join(service_names)}, ready={last_ready}, "
+                f"required={min_ready_endpoints}"
+            )
+        statefulset, detail = _run_json(
+            runner,
+            _kubectl_args(
+                kube_context=kube_context,
+                namespace=namespace,
+                args=("get", "statefulsets.apps.kruise.io", statefulset_name, "-o", "json"),
+            ),
+            timeout_seconds=120,
+            check=False,
+        )
+        if _statefulset_rollout_ready(statefulset):
+            return {"service_names": list(service_names), "ready_endpoints": last_ready}
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"Timed out waiting for StatefulSet/{statefulset_name} while guarding "
+                "login Service ready endpoints"
+                + (f": {detail}" if detail else f": ready={last_ready}")
             )
         time.sleep(max(poll_interval_seconds, 1))
 

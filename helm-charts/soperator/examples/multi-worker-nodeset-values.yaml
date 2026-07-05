@@ -52,7 +52,7 @@ nodesets:
           emptyDir: {}
         jail:
           persistentVolumeClaim:
-            claimName: jail-pvc
+            claimName: jail-rootfs-slot-a-pvc
         sharedMemorySize: 64Gi
       security:
         appArmorProfile: unconfined
@@ -112,7 +112,7 @@ nodesets:
           emptyDir: {}
         jail:
           persistentVolumeClaim:
-            claimName: jail-pvc
+            claimName: jail-rootfs-slot-a-pvc
         sharedMemorySize: 64Gi
       security:
         appArmorProfile: unconfined

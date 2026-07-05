@@ -187,8 +187,17 @@ Default role selectors:
 
 Default storage expectations:
 
-- The shared jail uses SFS/Filestore device `jail`, host path `/mnt/jail`, and
-  PVC `jail-pvc`.
+- The shared jail rootfs uses active/passive slots on SFS/Filestore device
+  `jail`: `/mnt/jail-store/rootfs/slot-a` and
+  `/mnt/jail-store/rootfs/slot-b`, rendered as `jail-rootfs-slot-a-pvc` and
+  `jail-rootfs-slot-b-pvc`. `volume.jail.size` describes the total backing
+  store capacity for the SFS-mounted jail store; active/passive local-path
+  PV/PVC requests are informational and do not allocate a per-slot quota.
+- `jailPersistentMounts` renders writable PVC-backed jail submounts for
+  customer-owned paths that stay outside rootfs generation slots. Managed
+  greenfield defaults `/home` to `/mnt/jail-store/shared/home`; external
+  single-SFS adoption can point `/home` at `/mnt/jail/home` and add explicit
+  customer paths such as `/data` without copying data.
 - Nodes that should mount the jail must match
   `storage.jail.matchExpressions`, which defaults to
   `slurm.nebius.ai/jail=true`.
@@ -587,7 +596,7 @@ spec:
         defaultMode: 0755
     - name: jail
       persistentVolumeClaim:
-        claimName: jail-pvc
+        claimName: jail-rootfs-slot-a-pvc
         readOnly: false
     - name: controller-spool
       persistentVolumeClaim:
@@ -608,7 +617,7 @@ spec:
         spool:
           volumeSourceName: controller-spool
         jail:
-          volumeSourceName: jail
+          volumeSourceName: jail-rootfs-slot-a
 
     login:
       size: 1
@@ -618,7 +627,7 @@ spec:
       sshRootPublicKeys: []
       volumes:
         jail:
-          volumeSourceName: jail
+          volumeSourceName: jail-rootfs-slot-a
 
     accounting:
       enabled: true
@@ -726,7 +735,7 @@ spec:
         emptyDir: {}
       jail:
         persistentVolumeClaim:
-          claimName: jail-pvc
+          claimName: jail-rootfs-slot-a-pvc
 
     customVolumeMounts:
       - name: slurm-scripts
@@ -1082,9 +1091,19 @@ volumeSources:
       claimName: controller-spool-pvc
       readOnly: false
 
-  - name: jail
+  - name: jail-rootfs-slot-a
     persistentVolumeClaim:
-      claimName: jail-pvc
+      claimName: jail-rootfs-slot-a-pvc
+      readOnly: false
+
+  - name: jail-rootfs-slot-b
+    persistentVolumeClaim:
+      claimName: jail-rootfs-slot-b-pvc
+      readOnly: false
+
+  - name: jail-persistent-home
+    persistentVolumeClaim:
+      claimName: jail-persistent-home-pvc
       readOnly: false
 ```
 
@@ -1482,7 +1501,7 @@ nodesets:
           emptyDir: {}
         jail:
           persistentVolumeClaim:
-            claimName: jail-pvc
+            claimName: jail-rootfs-slot-a-pvc
     nodeSelector:
       slurm.nebius.ai/nodeset-name: worker-cpu
 ```
@@ -1567,7 +1586,7 @@ nodesets:
           emptyDir: {}
         jail:
           persistentVolumeClaim:
-            claimName: jail-pvc
+            claimName: jail-rootfs-slot-a-pvc
     nodeSelector:
       slurm.nebius.ai/nodeset-name: worker
     tolerations:
