@@ -2449,72 +2449,7 @@ same shared paths into each newly active slot; they do not copy `/home`,
 rootfs and old in-rootfs data remain untouched for rollback until an explicit
 cleanup policy is added.
 
-Infographic prompt for ChatGPT:
-
-```text
-Create a multi-step technical infographic as six sequential panels. Use one
-outer storage boundary labeled "Physical jail SFS /mnt/jail-store". Inside that
-same boundary, draw rootfs/slot-a, rootfs/slot-b, and shared/ containing home,
-data, and scripts. Do not draw /home, /data, or /scripts as a separate box,
-cylinder, storage service, or external NFS volume outside this SFS boundary.
-Use dashed lines only to show submounts from shared/home, shared/data, and
-shared/scripts into the active rootfs. Do not show a single pod with two active
-rootfs mounts. Show that old and new pods may coexist during rollout.
-
-Context: Soperator jail rootfs upgrade with active/passive slots. There are two
-login pods and four worker pods. At the start, all consumers mount outdated
-rootfs/slot-a as /mnt/jail. The same physical jail SFS also contains
-shared/home, shared/data, and shared/scripts. Those directories stay inside the
-SFS and are mounted back into whichever rootfs slot is active. For first
-adoption from a legacy rootfs, show a one-time migration job that copies
-/store/home, /store/data, and /store/scripts into /store/shared/home,
-/store/shared/data, and /store/shared/scripts before passive rootfs population.
-
-Panel 1: "Before refresh". Draw one physical jail SFS outer box. Inside it,
-draw rootfs/slot-a marked Active / outdated-rootfs, rootfs/slot-b marked
-Passive / empty or old standby, and a shared/ directory containing home, data,
-and scripts as sibling persistent directories. Draw two login pods and four
-worker pods connected to rootfs/slot-a. Draw dashed submount lines from
-shared/home, shared/data, and shared/scripts into the active rootfs. Do not
-place the shared/ directory outside the physical SFS outer box.
-
-Panel 2: "First adoption migration". Show Slurm drained and login/worker
-writers held. Draw a Kubernetes Job named persistent-mount-migration that
-mounts the existing jail PVC once at /store and copies /store/home,
-/store/data, and /store/scripts into /store/shared/home, /store/shared/data,
-and /store/shared/scripts. Show completion markers under
-/store/.cxcli/persistent-migrations/. Keep old rootfs contents untouched for
-rollback.
-
-Panel 3: "Populate passive slot". Draw a Kubernetes Job named populate-jail
-using the new target image. The job mounts only slot-b at /mnt/jail and writes
-updated-rootfs into slot-b. Existing consumers either remain on slot-a for
-ordinary refresh or are held during the first-adoption copy window.
-
-Panel 4: "Switch desired active slot". Show Helm/Soperator desired state
-changing activeSlot from slot-a to slot-b. Mark slot-b as Active /
-updated-rootfs and slot-a as Rollback / previous-rootfs. Include guard badges:
-Slurm job policy passed, capacity covers passive rootfs plus copied shared
-data, persistent mounts verified, and login readiness verified or deferred
-until writer restore for first adoption.
-
-Panel 5: "Consumer rollout". Show old login/worker pods on slot-a fading out
-and replacement pods mounting slot-b. Show that the cluster may briefly have
-some old pods and some new pods, but each pod has only one active /mnt/jail
-rootfs. Keep /home, /data, and /scripts mounted into the new rootfs from the
-shared/ directory inside the same physical SFS.
-
-Panel 6: "After validation". Show all two login pods and four worker pods
-connected to rootfs/slot-b updated-rootfs. Show shared/home, shared/data, and
-shared/scripts still inside the same physical SFS, mounted into slot-b. Show
-slot-a retained as rollback until validation passes, and Slurm partitions
-resumed.
-
-Style: clean cloud-native diagram, white background, blue and green accents,
-clear labels, no marketing copy, no decorative blobs, no fictional product
-logos. Use short captions and arrows. Make the diagrams understandable to
-Kubernetes and Slurm operators.
-```
+![Soperator jail upgrade workflow](docs/jail-upgrade-workflow.png)
 
 ### CXCLI Managed Soperator Clusters
 

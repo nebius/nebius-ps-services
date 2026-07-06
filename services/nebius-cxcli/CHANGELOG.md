@@ -27,8 +27,8 @@ All notable changes to this project are tracked here. This changelog follows
   permissions, symlinks, ACLs, and xattrs preserved where supported.
 - Documented the Soperator jail upgrade process, active/passive rootfs
   switch-over semantics, same-SFS shared persistent mounts, the one-time
-  rootfs-to-shared migration flow, and reusable ChatGPT infographic prompt in
-  the README and design guide.
+  rootfs-to-shared migration flow, and checked-in workflow infographic in the
+  README and design guide.
 - Added a pre-populate active/passive jail capacity gate and expansion workflow.
   Managed production Soperator defaults now size the cxcli-owned jail SFS
   backing store at `2048` GiB total capacity, `soperator upgrade` expands that

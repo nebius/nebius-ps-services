@@ -3271,42 +3271,7 @@ shared paths into each newly active slot. The old legacy rootfs and old
 in-rootfs data remain untouched for rollback until an explicit cleanup policy is
 added.
 
-Prompt for a ChatGPT-generated infographic:
-
-```text
-Create a six-panel technical infographic for a Soperator jail rootfs upgrade.
-Show two login pods and four worker pods. Use one physical jail SFS containing
-rootfs/slot-a, rootfs/slot-b, and a shared area with persistent directories such
-as /home, /data, and /scripts. slot-a starts as Active / outdated-rootfs and
-slot-b starts as Passive. Show the shared directories as separate persistent
-mounts that are attached back into whichever slot is active. Do not show a
-single pod with both slot-a and slot-b mounted as two active root filesystems.
-For first adoption from a legacy rootfs, show a one-time migration job that
-mounts the existing jail PVC once at /store and copies /store/home, /store/data,
-and /store/scripts into /store/shared/home, /store/shared/data, and
-/store/shared/scripts before passive rootfs population.
-
-Panel 1: before refresh, all login and worker pods mount slot-a.
-Panel 2: first-adoption migration drains Slurm, holds login/worker writers,
-runs a persistent-mount-migration Job at /store, writes markers under
-/store/.cxcli/persistent-migrations/, and leaves old rootfs data untouched for
-rollback.
-Panel 3: a populate-jail Kubernetes Job runs the target image and mounts only
-slot-b at /mnt/jail to write updated-rootfs. Show capacity covering both the
-passive rootfs and copied shared data.
-Panel 4: Helm/Soperator desired state switches activeSlot from slot-a to
-slot-b; slot-a becomes rollback.
-Panel 5: consumer rollout shows old pods fading out on slot-a and replacement
-pods mounting slot-b; the cluster may briefly have both generations. Keep
-/home, /data, and /scripts mounted from the shared area into the active rootfs.
-Panel 6: after validation, two login pods and four worker pods use slot-b,
-the shared persistent directories are still on the same physical SFS, Slurm
-partitions are resumed, and slot-a remains as rollback until validation passes.
-
-Style: clean Kubernetes/Slurm operator diagram, white background, blue and
-green accents, short captions, clear arrows, no decorative blobs, no marketing
-copy, no fictional logos.
-```
+![Soperator jail upgrade workflow](jail-upgrade-workflow.png)
 
 ## Config Model
 

@@ -77,9 +77,11 @@ def test_design_architecture_summary_matches_upgrade_surface() -> None:
         "The switch-over is not a live bind-mount flip inside an already-running "
         "login or worker container"
     ) in design_flat
-    assert "Create a six-panel technical infographic for a Soperator jail rootfs upgrade" in (
-        design_flat
-    )
+    assert "Prompt for a ChatGPT-generated infographic" not in design
+    assert "![Soperator jail upgrade workflow](jail-upgrade-workflow.png)" in design
+    infographic = REPO_ROOT / "docs" / "jail-upgrade-workflow.png"
+    assert infographic.is_file()
+    assert infographic.stat().st_size > 0
 
 
 def test_readme_documents_redacted_guided_create_prefill_example() -> None:
@@ -801,22 +803,13 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
         "A single login or worker pod is not expected to run with both slot-a and "
         "slot-b mounted as two active root filesystems"
     ) in soperator_flat
-    assert "Infographic prompt for ChatGPT" in soperator
-    assert "Create a multi-step technical infographic as six sequential panels" in (
+    assert "Infographic prompt for ChatGPT" not in soperator
+    assert "Create a multi-step technical infographic as six sequential panels" not in (
         soperator_flat
     )
-    assert 'outer storage boundary labeled "Physical jail SFS /mnt/jail-store"' in (
-        soperator_flat
+    assert "![Soperator jail upgrade workflow](docs/jail-upgrade-workflow.png)" in (
+        soperator
     )
-    assert "Do not draw /home, /data, or /scripts as a separate box" in soperator_flat
-    assert "shared/home, shared/data, and shared/scripts. Those directories stay inside the SFS" in (
-        soperator_flat
-    )
-    assert "populate the passive active/passive jail rootfs slot with the target image" in (
-        soperator_flat
-    )
-    assert "login Service has ready EndpointSlice endpoints" in soperator_flat
-    assert "keep the previous rootfs slot available for rollback" in soperator_flat
     assert (
         "operator-facing top-level stage (`MK8s Node Upgrades`, `Soperator Upgrade`, "
         "or `Jail Upgrade`)"
