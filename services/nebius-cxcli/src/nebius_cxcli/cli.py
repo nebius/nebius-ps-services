@@ -2721,7 +2721,8 @@ _SOPERATOR_POPULATE_JAIL_REFRESH_HELP = (
     "Active/passive jail rootfs refresh mode: auto refreshes the passive slot when "
     "the target populate-jail image or selected chart/rootfs evidence requires it, "
     "force refreshes even when unchanged, and "
-    "manual stops with passive-slot instructions instead of proceeding."
+    "manual stops before persistent migration or rootfs mutation and prints passive-slot "
+    "instructions."
 )
 _SOPERATOR_JAIL_SFS_RESIZE_POLICY_HELP = (
     "Jail rootfs backing SFS resize policy before passive-slot population: fail, prompt, "
@@ -56034,7 +56035,7 @@ def soperator_external_upgrade_command(
             "--jail-persistent-mount",
             help=(
                 "Persistent in-jail path to mount back into each active/passive rootfs "
-                "slot as <mountPath>=<localPath>, for example /data=/mnt/jail/data. "
+                "slot as <mountPath>=<localPath>, for example /data=/mnt/jail/shared/data. "
                 "/home is added automatically unless an existing customer-owned /home "
                 "submount is already configured."
             ),

@@ -44,14 +44,27 @@ def test_evaluate_jail_capacity_reports_shortage() -> None:
     assert result.shortage_gib == 10
 
 
+def test_evaluate_jail_capacity_adds_persistent_migration_bytes() -> None:
+    result = evaluate_jail_capacity(
+        passive_available_bytes=115 * GIB,
+        active_used_bytes=80 * GIB,
+        extra_required_bytes=20 * GIB,
+    )
+
+    assert result.status == "failed"
+    assert result.required_gib == 120
+    assert result.shortage_gib == 5
+    assert result.as_payload()["extra_required_gib"] == 20
+
+
 def test_parse_capacity_probe_output_marks_unknown_active_usage_degraded() -> None:
     result = parse_capacity_probe_output(
-        "active_used_kib=\npassive_available_kib=33554432\n"
+        "active_used_kib=\nextra_required_kib=10485760\npassive_available_kib=33554432\n"
     )
 
     assert result.status == "failed"
     assert result.degraded is True
-    assert result.required_gib == 64
+    assert result.required_gib == 74
     assert result.passive_available_gib == 32
 
 
@@ -108,6 +121,7 @@ def test_probe_active_passive_jail_capacity_uses_kubectl_job_and_parses_logs() -
         passive_pvc="jail-rootfs-slot-b-pvc",
         active_rootfs_path="/mnt/jail",
         exclude_paths=("/mnt/jail/.cxcli", "/mnt/jail/home"),
+        extra_required_paths=("/mnt/jail/home",),
         scheduling={
             "nodeSelector": {"slurm.nebius.ai/nodeset-name": "system"},
             "tolerations": [
@@ -144,6 +158,7 @@ def test_probe_active_passive_jail_capacity_uses_kubectl_job_and_parses_logs() -
     probe_script = applied["items"][0]["spec"]["template"]["spec"]["containers"][0]["command"][2]
     assert "subtract_path /mnt/active/.cxcli" in probe_script
     assert "subtract_path /mnt/active/home" in probe_script
+    assert "add_extra_required_path /mnt/active/home" in probe_script
     assert "priorityClassName: prod-slurm-populate-jail" in str(calls[1][1])
     assert "slurm.nebius.ai/nodeset-name: system" in str(calls[1][1])
     assert "effect: NoSchedule" in str(calls[1][1])

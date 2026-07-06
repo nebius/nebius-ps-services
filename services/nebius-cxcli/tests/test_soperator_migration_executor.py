@@ -1336,6 +1336,7 @@ class _FakeCommandRunner:
             ]
         )
         self.live_pvcs = list(live_pvcs or [])
+        self.live_jobs: dict[tuple[str, str], dict[str, Any]] = {}
         self.live_slurmclusters = list(
             live_slurmclusters
             or [
@@ -1976,6 +1977,10 @@ spec:
             and command[6].startswith("job/")
             and command[-2:] == ("-o", "json")
         ):
+            name = command[6].split("/", 1)[1]
+            stored = self.live_jobs.get(("soperator", name))
+            if stored is not None:
+                return SoperatorMigrationCommandResult(command, 0, json.dumps(stored), "")
             return SoperatorMigrationCommandResult(
                 command,
                 0,
@@ -2004,7 +2009,7 @@ spec:
             items = payload.get("items") if isinstance(payload, dict) else None
             if isinstance(items, list):
                 for item in items:
-                    if not isinstance(item, dict) or item.get("kind") != "PersistentVolumeClaim":
+                    if not isinstance(item, dict):
                         continue
                     metadata = item.get("metadata")
                     if not isinstance(metadata, dict):
@@ -2012,6 +2017,16 @@ spec:
                     name = str(metadata.get("name", "") or "")
                     namespace = str(metadata.get("namespace", "") or "soperator")
                     if not name:
+                        continue
+                    if item.get("kind") == "Job":
+                        stored_job = json.loads(json.dumps(item))
+                        stored_job.setdefault("status", {}).setdefault(
+                            "conditions", [{"type": "Complete", "status": "True"}]
+                        )
+                        stored_job.setdefault("status", {}).setdefault("succeeded", 1)
+                        self.live_jobs[(namespace, name)] = stored_job
+                        continue
+                    if item.get("kind") != "PersistentVolumeClaim":
                         continue
                     self.live_pvcs = [
                         pvc
@@ -2351,6 +2366,9 @@ spec:
             )
             and command[-2:] == ("-o", "json")
         ):
+            stored = self.live_jobs.get(("soperator", command[7]))
+            if stored is not None:
+                return SoperatorMigrationCommandResult(command, 0, json.dumps(stored), "")
             return SoperatorMigrationCommandResult(
                 command,
                 0,
@@ -8380,6 +8398,504 @@ def test_populate_jail_refresh_phase_capacity_fail_blocks_before_slurm_and_helm(
     assert not any("squeue" in " ".join(command) for command, _input_text in runner.calls)
 
 
+def test_populate_jail_refresh_phase_completed_migration_does_not_reserve_copy_space(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _payload()
+    target_values = migration.apply_jail_persistent_mount_values(
+        {"nodesets": [{"name": "worker"}]},
+        target_ref="external-cluster",
+        layout="external",
+    )
+    payload["apps"]["charts"][0]["values"] = target_values
+    runner = _FakeCommandRunner()
+    probe_kwargs: dict[str, Any] = {}
+    monkeypatch.setattr(
+        migration,
+        "_patch_target_values_for_compute",
+        lambda **_kwargs: target_values,
+    )
+
+    def _fake_probe_active_passive_jail_capacity(*_args: Any, **kwargs: Any) -> Any:
+        probe_kwargs.update(kwargs)
+        return evaluate_jail_capacity(
+            passive_available_bytes=8 * GIB,
+            active_used_bytes=80 * GIB,
+        )
+
+    monkeypatch.setattr(
+        migration,
+        "probe_active_passive_jail_capacity",
+        _fake_probe_active_passive_jail_capacity,
+    )
+    checkpoint: dict[str, Any] = {
+        "phase_state": {
+            "populate-jail-refresh": {
+                "legacy_persistent_mount_migration": {
+                    "status": "completed",
+                    "entries": [
+                        {
+                            "mount_path": "/home",
+                            "source_path": "/mnt/jail/home",
+                            "target_local_path": "/mnt/jail/shared/home",
+                            "status": "completed",
+                        }
+                    ],
+                }
+            }
+        },
+        "worker_node_groups": ["gpu-pool"],
+    }
+
+    with pytest.raises(migration.SoperatorMigrationPhasePending, match="passive jail rootfs"):
+        migration._execute_populate_jail_refresh_phase(  # noqa: SLF001
+            checkpoint=checkpoint,
+            payload=payload,
+            source_report={"report": {"target_version": "4.0.1"}},
+            live_snapshot={},
+            target_ref="external-cluster",
+            kube_context="external-context",
+            command_runner=runner,
+            populate_jail_refresh="force",
+            job_policy="fail",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            job_wait_timeout_seconds=0,
+            job_refresh_interval_seconds=1,
+        )
+
+    populate_phase = checkpoint["phase_state"]["populate-jail-refresh"]
+    assert populate_phase["legacy_persistent_mount_migration"]["status"] == "completed"
+    assert probe_kwargs["extra_required_paths"] == ()
+    assert probe_kwargs["exclude_paths"] == (
+        "/mnt/jail/.cxcli",
+        "/mnt/jail/shared/home",
+        "/mnt/jail/home",
+    )
+
+
+def test_populate_jail_refresh_phase_migrates_legacy_persistent_mounts_before_populate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _payload()
+    target_values = migration.apply_jail_persistent_mount_values(
+        {
+            "nodesets": [
+                {
+                    "name": "worker",
+                    "slurmd": {
+                        "volumes": {
+                            "jail": {
+                                "persistentVolumeClaim": {"claimName": "jail-pvc"},
+                            }
+                        }
+                    },
+                }
+            ],
+        },
+        target_ref="external-cluster",
+        persistent_mounts=migration.parse_jail_persistent_mount_specs(
+            ("/data=/mnt/jail/shared/data",)
+        ),
+        layout="external",
+    )
+    payload["apps"]["charts"][0]["values"] = target_values
+    runner = _FakeCommandRunner()
+    helm_calls: list[Mapping[str, Any]] = []
+    monkeypatch.setattr(
+        migration,
+        "_patch_target_values_for_compute",
+        lambda **_kwargs: target_values,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_helm_upgrade_target_soperator",
+        lambda **kwargs: helm_calls.append(kwargs),
+    )
+    checkpoint: dict[str, Any] = {
+        "phase_state": {},
+        "worker_node_groups": ["gpu-pool"],
+    }
+
+    mutated, lines = migration._execute_populate_jail_refresh_phase(  # noqa: SLF001
+        checkpoint=checkpoint,
+        payload=payload,
+        source_report=_source_report(),
+        live_snapshot={},
+        target_ref="external-cluster",
+        kube_context="external-context",
+        command_runner=runner,
+        populate_jail_refresh="force",
+        job_policy="fail",
+        cancel_job_ids=(),
+        requeue_job_ids=(),
+        job_wait_timeout_seconds=0,
+        job_refresh_interval_seconds=1,
+    )
+
+    assert mutated is True
+    assert any(line.startswith("Persistent mount migration job completed:") for line in lines)
+    assert len(helm_calls) == 2
+    populate_phase = checkpoint["phase_state"]["populate-jail-refresh"]
+    migration_state = populate_phase["legacy_persistent_mount_migration"]
+    assert migration_state["status"] == "completed"
+    assert [entry["status"] for entry in migration_state["entries"]] == [
+        "completed",
+        "completed",
+    ]
+    assert populate_phase["persistent_migration_writer_hold"]["status"] == "restored"
+    assert populate_phase["login_service_ready_before_switch"]["status"] == "skipped"
+    assert checkpoint["populate_jail_refresh"]["legacy_persistent_mount_migration"][
+        "status"
+    ] == "completed"
+
+    applied_jobs: list[tuple[int, Mapping[str, Any]]] = []
+    for index, (command, input_text) in enumerate(runner.calls):
+        if command != ("kubectl", "--context", "external-context", "apply", "-f", "-"):
+            continue
+        try:
+            payload_text = json.loads(input_text or "{}")
+        except json.JSONDecodeError:
+            payload_text = migration.yaml.safe_load(input_text or "{}") or {}
+        for item in payload_text.get("items", []):
+            if isinstance(item, Mapping) and item.get("kind") == "Job":
+                applied_jobs.append((index, item))
+
+    capacity_job_index, capacity_job = next(
+        (index, job)
+        for index, job in applied_jobs
+        if str(job["metadata"]["name"]).endswith("-jail-capacity-probe")
+    )
+    migration_job_index, migration_job = next(
+        (index, job)
+        for index, job in applied_jobs
+        if job["metadata"]["labels"]["app.kubernetes.io/component"]
+        == "jail-persistent-migration"
+    )
+    populate_job_index, populate_job = next(
+        (index, job)
+        for index, job in applied_jobs
+        if job["metadata"]["labels"]["app.kubernetes.io/component"] == "populate-jail"
+    )
+    assert capacity_job_index < migration_job_index < populate_job_index
+
+    capacity_script = capacity_job["spec"]["template"]["spec"]["containers"][0]["command"][-1]
+    assert "subtract_path /mnt/active/home" in capacity_script
+    assert "subtract_path /mnt/active/data" in capacity_script
+    assert "add_extra_required_path /mnt/active/home" in capacity_script
+    assert "add_extra_required_path /mnt/active/data" in capacity_script
+
+    migration_spec = migration_job["spec"]["template"]["spec"]
+    assert migration_spec["volumes"] == [
+        {"name": "jail-store", "persistentVolumeClaim": {"claimName": "jail-pvc"}}
+    ]
+    container = migration_spec["containers"][0]
+    assert container["volumeMounts"] == [{"name": "jail-store", "mountPath": "/store"}]
+    script = container["command"][-1]
+    assert "copy_entry /store/home /store/shared/home" in script
+    assert "copy_entry /store/data /store/shared/data" in script
+    assert "/store/.cxcli/persistent-migrations/home.json" in script
+    assert "/store/.cxcli/persistent-migrations/data.json" in script
+    assert "marker_matches()" in script
+    assert "return 1" in script
+    assert "source_missing marker is stale" in script
+    assert '\\"source_path\\":\\"$source_path\\"' in script
+    assert "marker does not match this copy" in script
+    assert "tar --xattrs --acls --numeric-owner -cpf - ." in script
+    assert "target is non-empty without marker" in script
+
+    populate_spec = populate_job["spec"]["template"]["spec"]
+    assert populate_spec["volumes"] == [
+        {
+            "name": "jail-rootfs",
+            "persistentVolumeClaim": {"claimName": "jail-rootfs-slot-b-pvc"},
+        }
+    ]
+
+
+def test_persistent_mount_migration_marker_requires_valid_status(tmp_path: Path) -> None:
+    store = tmp_path / "store"
+    source = store / "home"
+    target = store / "shared" / "home"
+    marker = store / ".cxcli" / "persistent-migrations" / "home.json"
+    source.mkdir(parents=True)
+    target.mkdir(parents=True)
+    marker.parent.mkdir(parents=True)
+    marker.write_text(
+        json.dumps(
+            {
+                "status": "started",
+                "mount_path": "/home",
+                "source_path": str(source),
+                "target_path": str(target),
+            },
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    script = migration._persistent_mount_migration_shell_command(  # noqa: SLF001
+        [
+            {
+                "mount_path": "/home",
+                "source_store_path": "/home",
+                "target_store_path": "/shared/home",
+                "marker_store_path": "/.cxcli/persistent-migrations/home.json",
+            }
+        ]
+    ).replace("/store", str(store))
+
+    result = subprocess.run(["bash", "-c", script], check=False, capture_output=True, text=True)
+
+    assert result.returncode == 16
+    assert "marker does not match this copy" in result.stderr
+
+
+def test_persistent_mount_migration_source_missing_marker_fails_if_source_appears(
+    tmp_path: Path,
+) -> None:
+    store = tmp_path / "store"
+    source = store / "home"
+    target = store / "shared" / "home"
+    marker = store / ".cxcli" / "persistent-migrations" / "home.json"
+    source.mkdir(parents=True)
+    target.mkdir(parents=True)
+    marker.parent.mkdir(parents=True)
+    marker.write_text(
+        json.dumps(
+            {
+                "status": "source_missing",
+                "mount_path": "/home",
+                "source_path": str(source),
+                "target_path": str(target),
+            },
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    script = migration._persistent_mount_migration_shell_command(  # noqa: SLF001
+        [
+            {
+                "mount_path": "/home",
+                "source_store_path": "/home",
+                "target_store_path": "/shared/home",
+                "marker_store_path": "/.cxcli/persistent-migrations/home.json",
+            }
+        ]
+    ).replace("/store", str(store))
+
+    result = subprocess.run(["bash", "-c", script], check=False, capture_output=True, text=True)
+
+    assert result.returncode == 18
+    assert "source_missing marker is stale" in result.stderr
+
+
+def test_populate_jail_refresh_phase_restores_writers_when_migration_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _payload()
+    target_values = migration.apply_jail_persistent_mount_values(
+        {
+            "nodesets": [
+                {
+                    "name": "worker",
+                    "slurmd": {
+                        "volumes": {
+                            "jail": {
+                                "persistentVolumeClaim": {"claimName": "jail-pvc"},
+                            }
+                        }
+                    },
+                }
+            ],
+        },
+        target_ref="external-cluster",
+        layout="external",
+    )
+    payload["apps"]["charts"][0]["values"] = target_values
+    runner = _FakeCommandRunner()
+    monkeypatch.setattr(
+        migration,
+        "_patch_target_values_for_compute",
+        lambda **_kwargs: target_values,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_helm_upgrade_target_soperator",
+        lambda **_kwargs: pytest.fail("populate values must not apply after copy failure"),
+    )
+
+    def _fail_persistent_migration_job(*_args: Any, **kwargs: Any) -> None:
+        if kwargs.get("job_label") == "Soperator persistent mount migration Job":
+            raise RuntimeError("persistent copy failed")
+
+    monkeypatch.setattr(
+        migration,
+        "_wait_for_job_complete_or_failed",
+        _fail_persistent_migration_job,
+    )
+    checkpoint: dict[str, Any] = {
+        "phase_state": {},
+        "worker_node_groups": ["gpu-pool"],
+    }
+
+    with pytest.raises(RuntimeError, match="persistent copy failed"):
+        migration._execute_populate_jail_refresh_phase(  # noqa: SLF001
+            checkpoint=checkpoint,
+            payload=payload,
+            source_report=_source_report(),
+            live_snapshot={},
+            target_ref="external-cluster",
+            kube_context="external-context",
+            command_runner=runner,
+            populate_jail_refresh="force",
+            job_policy="fail",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            job_wait_timeout_seconds=0,
+            job_refresh_interval_seconds=1,
+        )
+
+    populate_phase = checkpoint["phase_state"]["populate-jail-refresh"]
+    assert populate_phase["persistent_migration_writer_hold"]["status"] == "restored"
+    assert "slurm_resumed_after_failure_at" in populate_phase
+    commands = [call for call, _input_text in runner.calls]
+    assert (
+        "kubectl",
+        "--context",
+        "external-context",
+        "-n",
+        "soperator",
+        "scale",
+        "statefulsets.apps.kruise.io/login",
+        "--replicas",
+        "0",
+    ) in commands
+    assert (
+        "kubectl",
+        "--context",
+        "external-context",
+        "-n",
+        "soperator",
+        "scale",
+        "statefulsets.apps.kruise.io/login",
+        "--replicas",
+        "1",
+    ) in commands
+    assert (
+        "kubectl",
+        "--context",
+        "external-context",
+        "-n",
+        "soperator",
+        "patch",
+        "nodeset/worker",
+        "--type",
+        "merge",
+        "-p",
+        '{"spec": {"replicas": 2}}',
+    ) in commands
+    assert any(
+        command[8:] == ("scontrol", "update", "PartitionName=ALL", "State=UP")
+        for command in commands
+    )
+
+
+def test_populate_jail_refresh_phase_keeps_writers_held_after_completed_copy_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _payload()
+    target_values = migration.apply_jail_persistent_mount_values(
+        {
+            "nodesets": [
+                {
+                    "name": "worker",
+                    "slurmd": {
+                        "volumes": {
+                            "jail": {
+                                "persistentVolumeClaim": {"claimName": "jail-pvc"},
+                            }
+                        }
+                    },
+                }
+            ],
+        },
+        target_ref="external-cluster",
+        layout="external",
+    )
+    payload["apps"]["charts"][0]["values"] = target_values
+    runner = _FakeCommandRunner()
+    monkeypatch.setattr(
+        migration,
+        "_patch_target_values_for_compute",
+        lambda **_kwargs: target_values,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_helm_upgrade_target_soperator",
+        lambda **_kwargs: None,
+    )
+
+    def _fail_passive_populate_job(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("passive populate failed after persistent copy")
+
+    monkeypatch.setattr(
+        migration,
+        "wait_for_active_passive_populate_jail_job",
+        _fail_passive_populate_job,
+    )
+    checkpoint: dict[str, Any] = {
+        "phase_state": {},
+        "worker_node_groups": ["gpu-pool"],
+    }
+
+    with pytest.raises(RuntimeError, match="passive populate failed after persistent copy"):
+        migration._execute_populate_jail_refresh_phase(  # noqa: SLF001
+            checkpoint=checkpoint,
+            payload=payload,
+            source_report=_source_report(),
+            live_snapshot={},
+            target_ref="external-cluster",
+            kube_context="external-context",
+            command_runner=runner,
+            populate_jail_refresh="force",
+            job_policy="fail",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            job_wait_timeout_seconds=0,
+            job_refresh_interval_seconds=1,
+        )
+
+    populate_phase = checkpoint["phase_state"]["populate-jail-refresh"]
+    assert populate_phase["legacy_persistent_mount_migration"]["status"] == "completed"
+    assert populate_phase["persistent_migration_writer_hold"]["status"] == "held"
+    assert populate_phase["persistent_migration_failure_boundary"] == {
+        "status": "writers_held",
+        "reason": (
+            "persistent mount migration already completed; keeping legacy writers "
+            "stopped so the shared copy cannot become stale"
+        ),
+    }
+    assert populate_phase["slurm_resume_after_failure"]["status"] == "skipped"
+    commands = [call for call, _input_text in runner.calls]
+    assert (
+        "kubectl",
+        "--context",
+        "external-context",
+        "-n",
+        "soperator",
+        "scale",
+        "statefulsets.apps.kruise.io/login",
+        "--replicas",
+        "1",
+    ) not in commands
+    assert not any(
+        command[8:] == ("scontrol", "update", "PartitionName=ALL", "State=UP")
+        for command in commands
+    )
+
+
 def test_prepare_jail_persistent_mount_payload_patches_target_values() -> None:
     payload = _payload()
     payload["apps"]["charts"][0]["values"] = {"nodesets": [{"name": "worker"}]}
@@ -8387,22 +8903,51 @@ def test_prepare_jail_persistent_mount_payload_patches_target_values() -> None:
     patched, state = migration._prepare_jail_persistent_mount_payload(  # noqa: SLF001
         payload=payload,
         target_ref="external-cluster",
-        jail_persistent_mounts=("/data=/mnt/jail/data",),
+        jail_persistent_mounts=("/data=/mnt/jail/shared/data",),
         populate_jail_refresh="auto",
     )
 
     values = patched["apps"]["charts"][0]["values"]
     assert state["status"] == "planned"
-    assert state["copy_required"] is False
+    assert state["copy_required"] is True
     assert values["jailPersistentMounts"] == [
-        {"mountPath": "/home", "localPath": "/mnt/jail/home"},
-        {"mountPath": "/data", "localPath": "/mnt/jail/data"},
+        {"mountPath": "/home", "localPath": "/mnt/jail/shared/home"},
+        {"mountPath": "/data", "localPath": "/mnt/jail/shared/data"},
+    ]
+    assert state["migration"]["status"] == "planned"
+    assert state["migration"]["entries"] == [
+        {
+            "name": "jail-persistent-migration-home",
+            "mount_path": "/home",
+            "source_path": "/mnt/jail/home",
+            "source_store_path": "/home",
+            "target_local_path": "/mnt/jail/shared/home",
+            "target_store_path": "/shared/home",
+            "marker_path": "/mnt/jail/.cxcli/persistent-migrations/home.json",
+            "marker_store_path": "/.cxcli/persistent-migrations/home.json",
+            "bytes_planned": None,
+            "pvc_name": "",
+            "status": "planned",
+        },
+        {
+            "name": "jail-persistent-migration-data",
+            "mount_path": "/data",
+            "source_path": "/mnt/jail/data",
+            "source_store_path": "/data",
+            "target_local_path": "/mnt/jail/shared/data",
+            "target_store_path": "/shared/data",
+            "marker_path": "/mnt/jail/.cxcli/persistent-migrations/data.json",
+            "marker_store_path": "/.cxcli/persistent-migrations/data.json",
+            "bytes_planned": None,
+            "pvc_name": "",
+            "status": "planned",
+        },
     ]
     assert values["jailRootfs"]["store"]["rootfsPath"] == "/mnt/jail/.cxcli/rootfs"
     assert values["jailRootfs"]["adoption"]["activeSource"] == "legacy-rootfs"
     assert "sfs" not in values
     phase_ids = migration._phase_ids_with_jail_persistent_mount_prerequisites(  # noqa: SLF001
-        phase_ids=("customer-approval", "populate-jail-refresh"),
+        phase_ids=("customer-approval",),
         payload=patched,
         target_ref="external-cluster",
     )
@@ -8428,6 +8973,8 @@ def test_prepare_jail_persistent_mount_payload_preserves_existing_external_home(
     )
 
     assert state["status"] == "verified"
+    assert state["copy_required"] is False
+    assert state["migration"]["status"] == "not_required"
     assert patched["apps"]["charts"][0]["values"]["jailPersistentMounts"] == []
 
 
@@ -11133,7 +11680,7 @@ def test_persistent_mount_overwrite_checks_accept_configured_mounts() -> None:
         checkpoint={"phase_state": {}},
         values={
             "jailPersistentMounts": [
-                {"mountPath": "/home", "localPath": "/mnt/jail/home"},
+                {"mountPath": "/home", "localPath": "/mnt/jail/shared/home"},
             ]
         },
         kube_context="external-context",
@@ -11150,7 +11697,11 @@ def test_persistent_mount_overwrite_checks_fail_without_home() -> None:
 
     checks = migration._persistent_mount_overwrite_checks(  # noqa: SLF001
         checkpoint={"phase_state": {}},
-        values={"jailPersistentMounts": [{"mountPath": "/data", "localPath": "/mnt/jail/data"}]},
+        values={
+            "jailPersistentMounts": [
+                {"mountPath": "/data", "localPath": "/mnt/jail/shared/data"}
+            ]
+        },
         kube_context="external-context",
         command_runner=runner,
     )

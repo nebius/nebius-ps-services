@@ -623,15 +623,18 @@ and chart source-family changes.
   previous slot as rollback until postflight passes. Managed greenfield uses one
   SFS-backed jail store with
   `/mnt/jail-store/rootfs/slot-a`, `/mnt/jail-store/rootfs/slot-b`, and
-  `/mnt/jail-store/shared/home`; the production profile defaults that backing
-  store to `2048` GiB total capacity for both rootfs slots plus persistent
-  mounts, not a per-slot quota. External adoption keeps the existing physical
-  jail SFS, creates only logical slot directories under
-  `/mnt/jail/.cxcli/rootfs`, treats legacy `/mnt/jail` as the active rootfs
-  until first switch, and automatically preserves `/home` as a persistent jail
-  mount from `/mnt/jail/home`. Additional customer paths such as `/data` or
-  `/checkpoints` must be declared explicitly with `--jail-persistent-mount`;
-  cxcli does not infer, copy, or migrate them.
+  `/mnt/jail-store/shared/home`; additional customer paths such as `/data` or
+  `/scripts` belong under sibling shared directories such as
+  `/mnt/jail-store/shared/data` or `/mnt/jail-store/shared/scripts`. The
+  production profile defaults that backing store to `2048` GiB total capacity
+  for both rootfs slots plus persistent mounts, not a per-slot quota. External
+  adoption keeps the existing physical jail SFS, creates only logical slot
+  directories under `/mnt/jail/.cxcli/rootfs`, treats legacy `/mnt/jail` as the
+  active rootfs until first switch, and models `/home` plus explicitly declared
+  customer paths as persistent jail mounts on that same physical SFS. During
+  first adoption, cxcli migrates rootfs-owned `/home`, `/data`, `/scripts`, or
+  similar declared paths into `/mnt/jail/shared/...` with ownership,
+  permissions, symlinks, ACLs, and xattrs preserved where supported.
   Before passive-slot values or the populate Job are applied, cxcli probes
   physical jail SFS capacity, measuring legacy rootfs usage while excluding
   `.cxcli` and configured persistent jail mount local paths. Required passive
@@ -1325,10 +1328,11 @@ target-scoped GPU Operator and Network Operator app rows plus the same
 catalog-owned post-render patches that Flux would apply,
 creates or reuses aligned controller-spool and accounting SFS
 filesystems, keeps the existing physical jail SFS for single-SFS rootfs slot
-adoption, preserves `/home` and declared customer paths as persistent jail
-mounts without live data copy, attaches required storage to discovered Nebius
-node groups, runs Kubernetes data-copy Jobs when old and target PVC pairs exist
-for non-jail storage, normalizes target Slurm
+adoption, models `/home` plus explicitly declared customer paths as persistent
+jail mounts on the same physical jail SFS, migrates legacy in-rootfs data into
+those shared mount paths during first adoption, attaches required storage to
+discovered Nebius node groups, runs Kubernetes data-copy Jobs when old and
+target PVC pairs exist for non-jail storage, normalizes target Slurm
 plugin runtime settings, recreates target worker Kruise StatefulSets when
 source-era specs cannot be updated in place, validates Soperator
 reconciliation, runs the required MK8s node inventory smoke, runs the
@@ -3179,23 +3183,30 @@ been populated. cxcli therefore treats jail refresh as a separate
 `populate-jail-refresh` phase in both managed `soperator upgrade` and external
 `ext-soperator upgrade`.
 
-The jail refresh design uses active/passive rootfs slots:
+The jail refresh design uses active/passive rootfs slots plus a shared
+persistent-mount area on the same physical jail SFS:
 
 - the physical jail backing store contains `slot-a` and `slot-b`;
 - exactly one slot is the active rootfs that login and worker consumers mount;
 - the other slot is passive and can be repopulated with the target image;
-- customer-owned paths such as `/home` live outside the replaceable rootfs
-  slots and are mounted back into whichever slot is active.
+- customer-owned paths such as `/home`, `/data`, and `/scripts` live outside
+  the replaceable rootfs slots and are mounted back into whichever slot is
+  active.
 
 Managed clusters use `/mnt/jail-store/rootfs/slot-a` and
 `/mnt/jail-store/rootfs/slot-b`, with `/home` under
-`/mnt/jail-store/shared/home`. External single-SFS adoption keeps the existing
-physical jail SFS, creates logical slots under `/mnt/jail/.cxcli/rootfs`, and
-treats the legacy `/mnt/jail` root as the active source until the first
-successful switch. In both layouts, `/home` is automatically modeled as a
-persistent jail mount. Additional paths such as `/data` or `/checkpoints` must
-be declared with `--jail-persistent-mount <mountPath>=<localPath>` because
-cxcli does not infer or migrate arbitrary customer data paths.
+`/mnt/jail-store/shared/home`. Additional persistent mounts use the same shared
+area, for example `/mnt/jail-store/shared/data` or
+`/mnt/jail-store/shared/scripts`. These are not additional rootfs slots and do
+not require separate physical SFS filesystems; each path is a stable
+submount/PV/PVC backed by the same jail SFS. External single-SFS adoption keeps
+the existing physical jail SFS, creates logical slots under
+`/mnt/jail/.cxcli/rootfs`, and treats the legacy `/mnt/jail` root as the active
+source until the first successful switch. In both layouts, `/home` is
+automatically modeled as a persistent jail mount. Additional paths such as
+`/data`, `/scripts`, or `/checkpoints` must be declared with
+`--jail-persistent-mount <mountPath>=<localPath>` because cxcli does not infer
+arbitrary customer data paths.
 
 The refresh sequence is deliberately ordered:
 
@@ -3205,25 +3216,41 @@ The refresh sequence is deliberately ordered:
    mutation.
 2. Verify persistent mounts and passive-slot capacity. For external adoption,
    the capacity probe measures the physical jail SFS while excluding `.cxcli`
-   and persistent-mount paths so customer data does not become part of the
-   rootfs-copy estimate.
-3. Apply refresh values and run a Kubernetes Job named like
+   and persistent-mount source paths from the rootfs-copy estimate, measures
+   persistent-mount data separately, and requires enough free space for both
+   the passive rootfs slot and the one-time shared-data copy.
+3. During first adoption from a legacy rootfs, drain Slurm with the selected
+   job policy, hold login and worker writers, and run a Kubernetes persistent
+   migration Job before passive-slot population. The Job mounts the existing
+   jail PVC once at `/store`, copies `/store/home`, `/store/data`,
+   `/store/scripts`, and other declared paths into `/store/shared/...`, writes
+   markers under `/store/.cxcli/persistent-migrations/`, skips only matching
+   completed markers on rerun, and fails closed on source/target overlap,
+   top-level source symlinks, target symlinks, or unmarked non-empty targets.
+   If a later refresh step fails after the copy is marked complete, cxcli keeps
+   login/worker writers held and Slurm quiet instead of reopening legacy-rootfs
+   writes that would make the shared copy stale.
+4. Apply refresh values and run a Kubernetes Job named like
    `<target>-populate-jail-passive-<slot>`. The Job runs the target
    populate-jail image and mounts the passive slot PVC at `/mnt/jail`. Existing
    login and worker pods still use the old active slot while this Job writes
    the new rootfs generation.
-4. Wait for the passive-slot Job to complete with the expected image.
-5. Verify that the login Service has at least one ready EndpointSlice backend
-   before switching consumers.
-6. Switch values so the passive slot becomes the active slot. For service
+5. Wait for the passive-slot Job to complete with the expected image.
+6. Verify that the login Service has at least one ready EndpointSlice backend
+   before switching consumers. First-adoption migration holds consumers during
+   the copy window, so cxcli defers this check until writer restore after the
+   slot switch.
+7. Switch values so the passive slot becomes the active slot. For service
    roles, the jail `volumeSourceName` changes to the refreshed slot. For worker
    NodeSets, the `slurmd.volumes.jail.persistentVolumeClaim.claimName` changes
    to the refreshed slot PVC. The previous active slot becomes the rollback
    slot.
-7. Let Soperator reconcile the changed SlurmCluster and NodeSet desired state.
-   New or restarted consumers mount the refreshed rootfs, and persistent
-   submounts such as `/home` are attached back into that rootfs.
-8. Resume Slurm partitions and run postflight verification before considering
+8. Let Soperator reconcile the changed SlurmCluster and NodeSet desired state.
+   For first adoption, restore the recorded login and worker sizes after the
+   switch. New or restarted consumers mount the refreshed rootfs, and
+   persistent submounts such as `/home`, `/data`, and `/scripts` are attached
+   back into that rootfs.
+9. Resume Slurm partitions and run postflight verification before considering
    the refresh complete.
 
 The switch-over is not a live bind-mount flip inside an already-running
@@ -3232,31 +3259,49 @@ SlurmCluster volume sources, and the physical backing store has both slot
 directories, but each consumer pod has one main jail rootfs mount. During the
 rollout the cluster can temporarily contain old pods still using the previous
 slot and replacement pods using the refreshed slot. Persistent submounts such
-as `/home` are the pieces shared across generations; the rootfs slots
-themselves remain separate.
+as `/home`, `/data`, and `/scripts` are the pieces shared across generations;
+the rootfs slots themselves remain separate.
+
+The one-time migration runs only while
+`jailRootfs.adoption.activeSource == "legacy-rootfs"`. After cxcli has copied
+declared persistent paths into the shared area and switched consumers to a
+slot-backed rootfs, those paths are external to the rootfs lifecycle. Future
+Jail Upgrade runs repopulate only the passive rootfs slot and remount the same
+shared paths into each newly active slot. The old legacy rootfs and old
+in-rootfs data remain untouched for rollback until an explicit cleanup policy is
+added.
 
 Prompt for a ChatGPT-generated infographic:
 
 ```text
 Create a six-panel technical infographic for a Soperator jail rootfs upgrade.
-Show two login pods and four worker pods. Use active/passive rootfs slots:
-slot-a starts as Active / outdated-rootfs and slot-b starts as Passive. Show
-/home as a separate persistent mount that is attached back into whichever slot
-is active. Do not show a single pod with both slot-a and slot-b mounted as two
-active root filesystems.
+Show two login pods and four worker pods. Use one physical jail SFS containing
+rootfs/slot-a, rootfs/slot-b, and a shared area with persistent directories such
+as /home, /data, and /scripts. slot-a starts as Active / outdated-rootfs and
+slot-b starts as Passive. Show the shared directories as separate persistent
+mounts that are attached back into whichever slot is active. Do not show a
+single pod with both slot-a and slot-b mounted as two active root filesystems.
+For first adoption from a legacy rootfs, show a one-time migration job that
+mounts the existing jail PVC once at /store and copies /store/home, /store/data,
+and /store/scripts into /store/shared/home, /store/shared/data, and
+/store/shared/scripts before passive rootfs population.
 
 Panel 1: before refresh, all login and worker pods mount slot-a.
-Panel 2: a populate-jail Kubernetes Job runs the target image and mounts only
-slot-b at /mnt/jail to write updated-rootfs.
-Panel 3: cxcli checks Slurm job policy, passive capacity, persistent mounts,
-and at least one ready login Service endpoint.
+Panel 2: first-adoption migration drains Slurm, holds login/worker writers,
+runs a persistent-mount-migration Job at /store, writes markers under
+/store/.cxcli/persistent-migrations/, and leaves old rootfs data untouched for
+rollback.
+Panel 3: a populate-jail Kubernetes Job runs the target image and mounts only
+slot-b at /mnt/jail to write updated-rootfs. Show capacity covering both the
+passive rootfs and copied shared data.
 Panel 4: Helm/Soperator desired state switches activeSlot from slot-a to
 slot-b; slot-a becomes rollback.
 Panel 5: consumer rollout shows old pods fading out on slot-a and replacement
-pods mounting slot-b; the cluster may briefly have both generations.
+pods mounting slot-b; the cluster may briefly have both generations. Keep
+/home, /data, and /scripts mounted from the shared area into the active rootfs.
 Panel 6: after validation, two login pods and four worker pods use slot-b,
-/home is still persistent, Slurm partitions are resumed, and slot-a remains as
-rollback until validation passes.
+the shared persistent directories are still on the same physical SFS, Slurm
+partitions are resumed, and slot-a remains as rollback until validation passes.
 
 Style: clean Kubernetes/Slurm operator diagram, white background, blue and
 green accents, short captions, clear arrows, no decorative blobs, no marketing

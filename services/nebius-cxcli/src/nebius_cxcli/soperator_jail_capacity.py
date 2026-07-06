@@ -33,6 +33,7 @@ class JailCapacityPreflight:
     shortage_bytes: int
     degraded: bool
     reason: str
+    extra_required_bytes: int = 0
 
     @property
     def sufficient(self) -> bool:
@@ -62,6 +63,8 @@ class JailCapacityPreflight:
         }
         if self.active_used_bytes is not None:
             payload["active_used_gib"] = _ceil_gib(self.active_used_bytes)
+        if self.extra_required_bytes > 0:
+            payload["extra_required_gib"] = _ceil_gib(self.extra_required_bytes)
         return payload
 
 
@@ -103,8 +106,11 @@ def evaluate_jail_capacity(
     *,
     passive_available_bytes: int,
     active_used_bytes: int | None,
+    extra_required_bytes: int = 0,
 ) -> JailCapacityPreflight:
     required, source, degraded = required_passive_rootfs_bytes(active_used_bytes)
+    extra_required_bytes = max(0, extra_required_bytes)
+    required += extra_required_bytes
     shortage = max(0, required - max(0, passive_available_bytes))
     status = "passed" if shortage == 0 else "failed"
     reason = (
@@ -112,6 +118,8 @@ def evaluate_jail_capacity(
         if shortage == 0
         else "passive rootfs slot does not have enough free space"
     )
+    if extra_required_bytes > 0:
+        reason += "; includes one-time persistent mount migration data"
     if degraded:
         reason += "; active slot usage could not be measured, so the minimum was used"
     return JailCapacityPreflight(
@@ -123,6 +131,7 @@ def evaluate_jail_capacity(
         shortage_bytes=shortage,
         degraded=degraded,
         reason=reason,
+        extra_required_bytes=extra_required_bytes,
     )
 
 
@@ -163,9 +172,11 @@ def parse_capacity_probe_output(output: str) -> JailCapacityPreflight:
     if passive_kib is None:
         raise RuntimeError("jail capacity probe did not report passive_available_kib.")
     active_kib = _positive_int(values.get("active_used_kib"))
+    extra_kib = _positive_int(values.get("extra_required_kib"))
     return evaluate_jail_capacity(
         passive_available_bytes=passive_kib * KIB,
         active_used_bytes=active_kib * KIB if active_kib is not None else None,
+        extra_required_bytes=extra_kib * KIB if extra_kib is not None else 0,
     )
 
 
@@ -219,6 +230,7 @@ def _capacity_probe_job_manifest(
     passive_pvc: str,
     active_rootfs_path: str = "",
     exclude_paths: Sequence[str] = (),
+    extra_required_paths: Sequence[str] = (),
     scheduling: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     name = f"{_safe_name(target_ref)}-jail-capacity-probe"
@@ -233,18 +245,36 @@ def _capacity_probe_job_manifest(
     exclude_script = "\n".join(
         f"subtract_path {sh_quote(path)}" for path in exclude_mount_paths
     )
+    extra_required_mount_paths = tuple(
+        _active_mount_exclude_path(path, active_rootfs_path=active_rootfs_path)
+        for path in extra_required_paths
+    )
+    extra_required_mount_paths = tuple(dict.fromkeys(path for path in extra_required_mount_paths if path))
+    extra_required_script = "\n".join(
+        f"add_extra_required_path {sh_quote(path)}" for path in extra_required_mount_paths
+    )
     script = r"""
     set -eu
     active_used_kib=""
-    subtract_path() {
+    path_used_kib() {
       path="$1"
-      [ -e "$path" ] || return 0
+      [ -e "$path" ] || { printf '0'; return 0; }
       used="$(du -sk "$path" 2>/dev/null | awk '{print $1}' || true)"
       case "$used" in
         ''|*[!0-9]*) used=0 ;;
       esac
+      printf '%s' "$used"
+    }
+    subtract_path() {
+      used="$(path_used_kib "$1")"
       exclude_used_kib=$((exclude_used_kib + used))
     }
+    add_extra_required_path() {
+      used="$(path_used_kib "$1")"
+      extra_required_kib=$((extra_required_kib + used))
+    }
+    extra_required_kib=0
+__EXTRA_REQUIRED_SCRIPT__
     if active_total_line="$(du -sk __ACTIVE_MOUNT_PATH__ 2>/tmp/active-du.err | awk '{print $1}')" && [ -n "$active_total_line" ]; then
       exclude_used_kib=0
 __EXCLUDE_SCRIPT__
@@ -255,12 +285,14 @@ __EXCLUDE_SCRIPT__
     fi
     passive_available_kib="$(df -Pk __PASSIVE_MOUNT_PATH__ | awk 'NR==2 {print $4}')"
     printf 'active_used_kib=%s\n' "$active_used_kib"
+    printf 'extra_required_kib=%s\n' "$extra_required_kib"
     printf 'passive_available_kib=%s\n' "$passive_available_kib"
     """
     script = (
         script.replace("__ACTIVE_MOUNT_PATH__", sh_quote(active_mount_path))
         .replace("__PASSIVE_MOUNT_PATH__", sh_quote(passive_mount_path))
         .replace("__EXCLUDE_SCRIPT__", exclude_script)
+        .replace("__EXTRA_REQUIRED_SCRIPT__", extra_required_script)
     )
     volume_mounts = [
         {"name": "active-rootfs", "mountPath": active_mount_path, "readOnly": True},
@@ -329,6 +361,7 @@ def probe_active_passive_jail_capacity(
     passive_pvc: str,
     active_rootfs_path: str = "",
     exclude_paths: Sequence[str] = (),
+    extra_required_paths: Sequence[str] = (),
     scheduling: Mapping[str, Any] | None = None,
     kube_context: str = "",
     timeout_seconds: int = 300,
@@ -343,6 +376,7 @@ def probe_active_passive_jail_capacity(
         passive_pvc=passive_pvc,
         active_rootfs_path=active_rootfs_path,
         exclude_paths=exclude_paths,
+        extra_required_paths=extra_required_paths,
         scheduling=scheduling,
     )
     metadata = manifest["metadata"]

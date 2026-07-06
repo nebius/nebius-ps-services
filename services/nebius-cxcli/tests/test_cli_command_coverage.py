@@ -690,7 +690,7 @@ def test_ext_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path)
         target_ref="external",
         backup_dir=None,
         populate_jail_refresh="auto",
-        jail_persistent_mounts=("/data=/mnt/jail/data",),
+        jail_persistent_mounts=("/data=/mnt/jail/shared/data",),
         jail_sfs_resize_policy="apply",
         jail_sfs_resize_to_gib=2304,
         job_policy="requeue-hold-selected",
@@ -721,7 +721,7 @@ def test_ext_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path)
     )
     assert "--cancel-job" in args
     assert "--preserve-jail-home" not in args
-    assert args[args.index("--jail-persistent-mount") + 1] == "/data=/mnt/jail/data"
+    assert args[args.index("--jail-persistent-mount") + 1] == "/data=/mnt/jail/shared/data"
     assert args[args.index("--jail-sfs-resize-policy") + 1] == "apply"
     assert args[args.index("--jail-sfs-resize-to-gib") + 1] == "2304"
     assert "--home-sfs-size-multiplier" not in args

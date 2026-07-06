@@ -67,6 +67,12 @@ def test_design_architecture_summary_matches_upgrade_surface() -> None:
     assert "- [Jail Upgrade](#jail-upgrade)" in design
     assert "## Jail Upgrade" in design
     assert "active/passive rootfs slots" in design_flat
+    assert "shared persistent-mount area on the same physical jail SFS" in design_flat
+    assert "/mnt/jail-store/shared/data" in design_flat
+    assert "The one-time migration runs only while" in design_flat
+    assert "permissions, symlinks, ACLs, and xattrs preserved where supported" in (
+        design_flat
+    )
     assert (
         "The switch-over is not a live bind-mount flip inside an already-running "
         "login or worker container"
@@ -773,6 +779,20 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "Jail Upgrade: when the target populate-jail image changed" in soperator_flat
     assert "The Soperator jail is the shared Linux root filesystem" in soperator_flat
     assert "The refresh uses an active/passive rootfs model" in soperator_flat
+    assert "contains two logical rootfs slots plus one shared persistent-mount area" in (
+        soperator_flat
+    )
+    assert "/mnt/jail-store/shared/data" in soperator_flat
+    assert "/mnt/jail-store/shared/scripts" in soperator_flat
+    assert "requires enough space on the same physical jail SFS for both the passive rootfs slot" in (
+        soperator_flat
+    )
+    assert "Completion markers live under `/store/.cxcli/persistent-migrations/`" in (
+        soperator_flat
+    )
+    assert "instead of reopening legacy-rootfs writes that would make the shared copy stale" in (
+        soperator_flat
+    )
     assert "creates a Kubernetes Job named like `<target>-populate-jail-passive-<slot>`" in (
         soperator_flat
     )
@@ -783,6 +803,13 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     ) in soperator_flat
     assert "Infographic prompt for ChatGPT" in soperator
     assert "Create a multi-step technical infographic as six sequential panels" in (
+        soperator_flat
+    )
+    assert 'outer storage boundary labeled "Physical jail SFS /mnt/jail-store"' in (
+        soperator_flat
+    )
+    assert "Do not draw /home, /data, or /scripts as a separate box" in soperator_flat
+    assert "shared/home, shared/data, and shared/scripts. Those directories stay inside the SFS" in (
         soperator_flat
     )
     assert "populate the passive active/passive jail rootfs slot with the target image" in (
@@ -1734,7 +1761,8 @@ def test_docs_define_component_selector_contract() -> None:
     assert "ignored by cxcli-managed deployments `.gitignore` files" in readme_flat
     assert "creates or reuses aligned controller-spool and accounting SFS" in readme_flat
     assert "keeps the existing physical jail SFS for single-SFS active/passive rootfs adoption" in readme_flat
-    assert "automatically preserves `/home` as a persistent jail mount" in readme_flat
+    assert "automatically models `/home` as a persistent jail mount" in readme_flat
+    assert "First adoption migrates data out of legacy in-rootfs directories" in readme_flat
     assert (
         "Quota must cover spare target storage for non-jail storage while source storage remains mounted"
         in readme_flat
@@ -2000,7 +2028,9 @@ def test_docs_define_component_selector_contract() -> None:
     assert "explicit policy such as `--job-policy wait-to-finish`" in design_flat
     assert "populates the passive rootfs slot with the target populate-jail image" in design_flat
     assert "login Service has ready EndpointSlice endpoints" in design_flat
-    assert "preserves `/home` and declared customer paths as persistent jail mounts" in design_flat
+    assert "models `/home` plus explicitly declared customer paths as persistent jail mounts" in (
+        design_flat
+    )
     assert "provides ad hoc `ext-soperator scale-up` and `ext-soperator scale-down`" in (
         design_flat
     )
@@ -2067,8 +2097,15 @@ def test_docs_define_component_selector_contract() -> None:
     assert "ignored by cxcli-managed deployments `.gitignore` files" in design_flat
     assert "creates or reuses aligned controller-spool and accounting SFS" in design_flat
     assert "keeps the existing physical jail SFS for single-SFS rootfs slot adoption" in design_flat
-    assert "preserves `/home` and declared customer paths as persistent jail mounts" in design_flat
-    assert "without live data copy" in design_flat
+    assert "models `/home` plus explicitly declared customer paths as persistent jail mounts" in (
+        design_flat
+    )
+    assert "migrates legacy in-rootfs data into those shared mount paths during first adoption" in (
+        design_flat
+    )
+    assert "instead of reopening legacy-rootfs writes that would make the shared copy stale" in (
+        design_flat
+    )
     assert "runs Kubernetes data-copy Jobs when old and target PVC pairs exist" in design_flat
     assert "required Soperator deployment snapshot" in design_flat
     assert "does not start Slurm jobs" in design_flat

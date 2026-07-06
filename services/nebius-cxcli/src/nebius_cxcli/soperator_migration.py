@@ -95,7 +95,9 @@ from .soperator_jail_capacity import (
     probe_active_passive_jail_capacity,
 )
 from .soperator_jail_mounts import (
+    JAIL_EXTERNAL_SYSTEM_PATH,
     JAIL_LEGACY_ROOT_PATH,
+    JAIL_PERSISTENT_MOUNTS_VALUES_KEY,
     apply_jail_persistent_mount_values,
     jail_persistent_mount_exclude_paths,
     jail_persistent_mount_status,
@@ -122,6 +124,7 @@ from .soperator_onboarding import (
 from .soperator_populate_jail import (
     POPULATE_JAIL_REFRESH_PHASE_ID,
     active_passive_jail_rootfs_slots,
+    active_passive_pod_scheduling_fields,
     active_passive_populate_jail_job_manifest,
     active_passive_populate_jail_job_scheduling,
     completed_populate_jail_refresh_result,
@@ -2615,7 +2618,92 @@ def _phase_ids_with_jail_persistent_mount_prerequisites(
     status = jail_persistent_mount_status(_target_soperator_values(payload, target_ref))
     if not status.verified:
         return tuple(phase_ids)
-    return tuple(dict.fromkeys(str(phase_id) for phase_id in phase_ids if str(phase_id)))
+    phases = [str(phase_id) for phase_id in phase_ids if str(phase_id)]
+    if _legacy_persistent_mount_migration_required(_target_soperator_values(payload, target_ref)):
+        insert_at = len(phases)
+        for predecessor in ("final-control-plane-cutover", "rolling-compute-migration"):
+            if predecessor in phases:
+                insert_at = phases.index(predecessor) + 1
+                break
+        phases.insert(insert_at, POPULATE_JAIL_REFRESH_PHASE_ID)
+    return tuple(dict.fromkeys(phases))
+
+
+def _path_contains_posix(parent: str, child: str) -> bool:
+    parent = "/" + str(parent or "").strip().strip("/")
+    child = "/" + str(child or "").strip().strip("/")
+    if parent == "/":
+        return True
+    return child == parent or child.startswith(f"{parent}/")
+
+
+def _paths_overlap_posix(first: str, second: str) -> bool:
+    return _path_contains_posix(first, second) or _path_contains_posix(second, first)
+
+
+def _store_relative_path(path: str, *, store_path: str = JAIL_LEGACY_ROOT_PATH) -> str:
+    normalized = "/" + str(path or "").strip().strip("/")
+    store = "/" + str(store_path or "").strip().strip("/")
+    if normalized == store:
+        raise ValueError("persistent mount migration path must not be the jail store root.")
+    if not normalized.startswith(f"{store}/"):
+        raise ValueError(
+            f"persistent mount migration path must be below {store}; got {normalized}."
+        )
+    return "/" + normalized.removeprefix(f"{store}/").strip("/")
+
+
+def _legacy_persistent_mount_migration_entries(
+    values: Mapping[str, Any],
+) -> tuple[dict[str, Any], ...]:
+    if not jail_rootfs_uses_legacy_active_source(values):
+        return ()
+    entries: list[dict[str, Any]] = []
+    for mount in _sequence_of_mappings(values.get(JAIL_PERSISTENT_MOUNTS_VALUES_KEY)):
+        mount_path = "/" + str(mount.get("mountPath") or "").strip().strip("/")
+        local_path = "/" + str(mount.get("localPath") or "").strip().strip("/")
+        if mount_path in {"", "/"} or local_path in {"", "/"}:
+            continue
+        for field, value in (
+            ("mountPath", mount_path),
+            ("localPath", local_path),
+        ):
+            if any(character in value for character in ('"', "\n", "\r")):
+                raise SoperatorMigrationPhasePending(
+                    "persistent mount migration paths must not contain quotes or newlines: "
+                    f"{field}={value!r}."
+                )
+        source_path = f"{JAIL_LEGACY_ROOT_PATH}{mount_path}"
+        if _paths_overlap_posix(source_path, local_path):
+            raise SoperatorMigrationPhasePending(
+                "persistent mount migration source and target overlap: "
+                f"{source_path} -> {local_path}. Use a shared target such as "
+                f"{JAIL_LEGACY_ROOT_PATH}/shared{mount_path}."
+            )
+        relative_target = _store_relative_path(local_path)
+        marker_name = normalize_component_token(mount_path.strip("/")) or "root"
+        entries.append(
+            {
+                "name": f"jail-persistent-migration-{marker_name}",
+                "mount_path": mount_path,
+                "source_path": source_path,
+                "source_store_path": _store_relative_path(source_path),
+                "target_local_path": local_path,
+                "target_store_path": relative_target,
+                "marker_path": (
+                    f"{JAIL_EXTERNAL_SYSTEM_PATH}/persistent-migrations/{marker_name}.json"
+                ),
+                "marker_store_path": f"/.cxcli/persistent-migrations/{marker_name}.json",
+                "bytes_planned": None,
+                "pvc_name": str(mount.get("pvcName") or ""),
+                "status": "planned",
+            }
+        )
+    return tuple(entries)
+
+
+def _legacy_persistent_mount_migration_required(values: Mapping[str, Any]) -> bool:
+    return bool(_legacy_persistent_mount_migration_entries(values))
 
 
 def _payload_with_target_soperator_values(
@@ -2658,13 +2746,19 @@ def _prepare_jail_persistent_mount_payload(
         layout="external",
     )
     status = jail_persistent_mount_status(patched_values)
+    migration_entries = _legacy_persistent_mount_migration_entries(patched_values)
     state: dict[str, Any] = {
         "status": status.status,
         "reason": status.reason,
         "mounts": [mount.as_payload() for mount in status.mounts],
-        "copy_required": False,
+        "copy_required": bool(migration_entries),
+        "migration": {
+            "status": "planned" if migration_entries else "not_required",
+            "source_rootfs": JAIL_LEGACY_ROOT_PATH,
+            "entries": [dict(entry) for entry in migration_entries],
+        },
         "rootfs_path": "/mnt/jail/.cxcli/rootfs",
-        "legacy_active_rootfs": True,
+        "legacy_active_rootfs": jail_rootfs_uses_legacy_active_source(patched_values),
     }
     if not status.verified and normalize_populate_jail_refresh_mode(populate_jail_refresh) != "manual":
         raise SoperatorMigrationPhasePending(
@@ -3923,6 +4017,164 @@ def _copy_job_manifest(
                         {"name": "new", "persistentVolumeClaim": {"claimName": target_pvc}},
                     ],
                 }
+            },
+        },
+    }
+
+
+def _store_mount_path(relative_path: str) -> str:
+    normalized = _validate_copy_job_path(relative_path, role="persistent migration")
+    return "/store" if normalized == "/" else f"/store{normalized}"
+
+
+def _persistent_mount_migration_job_name(target_ref: str) -> str:
+    base = normalize_component_token(f"{target_ref}-jail-persistent-migration")
+    return (base or "jail-persistent-migration")[:63].rstrip("-")
+
+
+def _persistent_mount_migration_shell_command(
+    entries: Sequence[Mapping[str, Any]],
+) -> str:
+    blocks: list[str] = [
+        "set -eu",
+        "copy_entry() {",
+        "  source_path=\"$1\"",
+        "  target_path=\"$2\"",
+        "  marker_path=\"$3\"",
+        "  mount_path=\"$4\"",
+        "  marker_matches() {",
+        "    marker_status=\"\"",
+        "    if grep -Fq '\"status\":\"copied\"' \"$marker_path\"; then",
+        "      marker_status=\"copied\"",
+        "    elif grep -Fq '\"status\":\"source_missing\"' \"$marker_path\"; then",
+        "      marker_status=\"source_missing\"",
+        "    else",
+        "      return 1",
+        "    fi",
+        "    grep -Fq \"\\\"mount_path\\\":\\\"$mount_path\\\"\" \"$marker_path\" || return 1",
+        "    grep -Fq \"\\\"source_path\\\":\\\"$source_path\\\"\" \"$marker_path\" || return 1",
+        "    grep -Fq \"\\\"target_path\\\":\\\"$target_path\\\"\" \"$marker_path\" || return 1",
+        "  }",
+        "  write_marker() {",
+        "    status=\"$1\"",
+        "    printf '{\"status\":\"%s\",\"mount_path\":\"%s\",\"source_path\":\"%s\",\"target_path\":\"%s\"}\\n' "
+        "\"$status\" \"$mount_path\" \"$source_path\" \"$target_path\" > \"$marker_path\"",
+        "  }",
+        "  if [ -f \"$marker_path\" ]; then",
+        "    if ! marker_matches; then",
+        "      printf 'persistent mount migration marker does not match this copy: %s\\n' \"$marker_path\" >&2",
+        "      exit 16",
+        "    fi",
+        "    if [ \"$marker_status\" = \"source_missing\" ] && [ -e \"$source_path\" ]; then",
+        "      printf 'persistent mount migration source_missing marker is stale; source now exists: %s\\n' \"$source_path\" >&2",
+        "      exit 18",
+        "    fi",
+        "    printf 'persistent mount migration skipped: %s marker exists\\n' \"$mount_path\"",
+        "    return 0",
+        "  fi",
+        "  if [ -L \"$source_path\" ]; then",
+        "    printf 'persistent mount migration source is a symlink: %s\\n' \"$source_path\" >&2",
+        "    exit 12",
+        "  fi",
+        "  if [ -L \"$target_path\" ]; then",
+        "    printf 'persistent mount migration target is a symlink: %s\\n' \"$target_path\" >&2",
+        "    exit 13",
+        "  fi",
+        "  if [ -e \"$target_path\" ] && [ ! -d \"$target_path\" ]; then",
+        "    printf 'persistent mount migration target is not a directory: %s\\n' \"$target_path\" >&2",
+        "    exit 17",
+        "  fi",
+        "  if [ -d \"$target_path\" ] && [ -n \"$(find \"$target_path\" -mindepth 1 -maxdepth 1 -print -quit)\" ]; then",
+        "    printf 'persistent mount migration target is non-empty without marker: %s\\n' \"$target_path\" >&2",
+        "    exit 15",
+        "  fi",
+        "  marker_dir=$(dirname \"$marker_path\")",
+        "  if [ ! -e \"$source_path\" ]; then",
+        "    mkdir -p \"$target_path\" \"$marker_dir\"",
+        "    write_marker source_missing",
+        "    printf 'persistent mount migration source missing: %s\\n' \"$mount_path\"",
+        "    return 0",
+        "  fi",
+        "  if [ ! -d \"$source_path\" ]; then",
+        "    printf 'persistent mount migration source is not a directory: %s\\n' \"$source_path\" >&2",
+        "    exit 14",
+        "  fi",
+        "  mkdir -p \"$target_path\"",
+        "  if [ -n \"$(find \"$target_path\" -mindepth 1 -maxdepth 1 -print -quit)\" ]; then",
+        "    printf 'persistent mount migration target is non-empty without marker: %s\\n' \"$target_path\" >&2",
+        "    exit 15",
+        "  fi",
+        "  mkdir -p \"$marker_dir\"",
+        "  (cd \"$source_path\" && tar --xattrs --acls --numeric-owner -cpf - .) | "
+        "tar --xattrs --acls --numeric-owner -xpf - -C \"$target_path\"",
+        "  write_marker copied",
+        "  printf 'persistent mount migration copied: %s\\n' \"$mount_path\"",
+        "}",
+    ]
+    for entry in entries:
+        blocks.append(
+            "copy_entry "
+            f"{shlex.quote(_store_mount_path(str(entry.get('source_store_path') or '')))} "
+            f"{shlex.quote(_store_mount_path(str(entry.get('target_store_path') or '')))} "
+            f"{shlex.quote(_store_mount_path(str(entry.get('marker_store_path') or '')))} "
+            f"{shlex.quote(str(entry.get('mount_path') or ''))}"
+        )
+    return "\n".join(blocks)
+
+
+def _persistent_mount_migration_job_manifest(
+    *,
+    target_ref: str,
+    image: str,
+    jail_pvc: str,
+    entries: Sequence[Mapping[str, Any]],
+    scheduling: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    pod_spec = {
+        "restartPolicy": "Never",
+        "automountServiceAccountToken": False,
+        "containers": [
+            {
+                "name": "persistent-mount-migration",
+                "image": image,
+                "imagePullPolicy": "IfNotPresent",
+                "command": [
+                    "/bin/sh",
+                    "-ceu",
+                    _persistent_mount_migration_shell_command(entries),
+                ],
+                "volumeMounts": [{"name": "jail-store", "mountPath": "/store"}],
+            }
+        ],
+        "volumes": [
+            {
+                "name": "jail-store",
+                "persistentVolumeClaim": {"claimName": jail_pvc},
+            }
+        ],
+    }
+    pod_spec.update(active_passive_pod_scheduling_fields(scheduling))
+    return {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {
+            "namespace": _SOPERATOR_NAMESPACE,
+            "name": _persistent_mount_migration_job_name(target_ref),
+            "labels": {
+                "app.kubernetes.io/managed-by": "nebius-cxcli",
+                "app.kubernetes.io/component": "jail-persistent-migration",
+                "nebius-cxcli.io/soperator-migration": "true",
+            },
+        },
+        "spec": {
+            "backoffLimit": 0,
+            "template": {
+                "metadata": {
+                    "labels": {
+                        "app.kubernetes.io/component": "jail-persistent-migration",
+                    }
+                },
+                "spec": pod_spec,
             },
         },
     }
@@ -13018,6 +13270,193 @@ def _persistent_mount_overwrite_checks(
     )
 
 
+def _nodeset_replicas(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    name: str,
+) -> tuple[bool, int]:
+    payload = _json_from_command(
+        command_runner,
+        [
+            "kubectl",
+            "--context",
+            kube_context,
+            "-n",
+            _SOPERATOR_NAMESPACE,
+            "get",
+            "nodeset",
+            name,
+            "-o",
+            "json",
+        ],
+        timeout_seconds=120,
+        check=False,
+    )
+    if not _mapping(payload.get("metadata")):
+        return False, 0
+    return True, _resource_replicas(payload, default=0)
+
+
+def _hold_persistent_migration_writers(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    values: Mapping[str, Any],
+    state: dict[str, Any],
+) -> list[str]:
+    if state.get("status") == "held":
+        return []
+    resources: list[dict[str, Any]] = []
+    login_state = _quiesce_scale_resource(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        resource="statefulsets.apps.kruise.io/login",
+        namespace=_SOPERATOR_NAMESPACE,
+        replicas=0,
+        action="scale",
+    )
+    resources.append({"kind": "login", **login_state})
+    for name in _target_worker_nodeset_names(values):
+        exists, replicas = _nodeset_replicas(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            name=name,
+        )
+        item = {
+            "kind": "nodeset",
+            "name": name,
+            "exists": exists,
+            "replicas": replicas,
+            "target_replicas": 0,
+        }
+        if exists and replicas != 0:
+            _kubectl_patch_namespace_resource(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                resource=f"nodeset/{name}",
+                patch={"spec": {"replicas": 0}},
+            )
+        resources.append(item)
+    state.update(
+        {
+            "status": "held",
+            "held_at": state.get("held_at") or _utc_now(),
+            "resources": resources,
+        }
+    )
+    return ["Held login and worker consumers for one-time persistent mount migration."]
+
+
+def _restore_persistent_migration_writers(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    state: dict[str, Any],
+) -> list[str]:
+    if state.get("status") != "held":
+        return []
+    for item in reversed(_sequence_of_mappings(state.get("resources"))):
+        if not _bool_value(item.get("exists"), fallback=False):
+            continue
+        kind = str(item.get("kind") or "").strip()
+        if kind == "nodeset":
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            _kubectl_patch_namespace_resource(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                resource=f"nodeset/{name}",
+                patch={"spec": {"replicas": _non_negative_int(item.get("replicas"), fallback=0)}},
+            )
+        elif kind == "login":
+            resource = str(item.get("resource") or "statefulsets.apps.kruise.io/login")
+            namespace = str(item.get("namespace") or _SOPERATOR_NAMESPACE)
+            _kubectl_scale_namespace_resource(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                resource=resource,
+                namespace=namespace,
+                replicas=_non_negative_int(item.get("replicas"), fallback=1),
+            )
+    state["status"] = "restored"
+    state["restored_at"] = _utc_now()
+    return ["Restored login and worker consumers after persistent mount migration."]
+
+
+def _execute_legacy_persistent_mount_migration(
+    *,
+    phase: dict[str, Any],
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    target_ref: str,
+    image: str,
+    jail_pvc: str,
+    entries: Sequence[Mapping[str, Any]],
+    scheduling: Mapping[str, Any] | None,
+    checkpoint_writer: Callable[[], None] | None = None,
+) -> tuple[bool, list[str]]:
+    migration_state = phase.setdefault("legacy_persistent_mount_migration", {})
+    if not isinstance(migration_state, dict):
+        raise RuntimeError(
+            "populate-jail-refresh.legacy_persistent_mount_migration must be a mapping."
+        )
+    if not entries:
+        migration_state["status"] = "not_required"
+        return False, []
+    if migration_state.get("status") == "completed":
+        return False, ["Persistent mount migration already completed in checkpoint."]
+    manifest = _persistent_mount_migration_job_manifest(
+        target_ref=target_ref,
+        image=image,
+        jail_pvc=jail_pvc,
+        entries=entries,
+        scheduling=scheduling,
+    )
+    job_name = str(_mapping(manifest.get("metadata")).get("name") or "")
+    migration_state.update(
+        {
+            "status": "running",
+            "job": {
+                "name": job_name,
+                "pvc": jail_pvc,
+                "image": image,
+            },
+            "entries": [dict(to_plain_data(entry)) for entry in entries],
+        }
+    )
+    if checkpoint_writer is not None:
+        checkpoint_writer()
+    if job_name:
+        _delete_failed_job_before_reapply(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            name=job_name,
+        )
+    _kubectl_apply_objects(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        objects=(manifest,),
+        timeout_seconds=300,
+    )
+    _wait_for_job_complete_or_failed(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        name=job_name,
+        timeout_seconds=3900,
+        job_label="Soperator persistent mount migration Job",
+    )
+    for entry in migration_state["entries"]:
+        if isinstance(entry, dict):
+            entry["status"] = "completed"
+    migration_state["status"] = "completed"
+    migration_state["completed_at"] = _utc_now()
+    if checkpoint_writer is not None:
+        checkpoint_writer()
+    return True, [f"Persistent mount migration job completed: {job_name}."]
+
+
 def _execute_populate_jail_refresh_phase(
     *,
     checkpoint: dict[str, Any],
@@ -13114,6 +13553,24 @@ def _execute_populate_jail_refresh_phase(
     phase["rootfs_slots"] = slots.as_payload()
     legacy_active_rootfs = jail_rootfs_uses_legacy_active_source(values)
     phase["legacy_active_rootfs"] = legacy_active_rootfs
+    legacy_migration_entries = _legacy_persistent_mount_migration_entries(values)
+    existing_migration_state = dict(_mapping(phase.get("legacy_persistent_mount_migration")))
+    migration_status = str(existing_migration_state.get("status") or "").strip()
+    if migration_status != "completed":
+        migration_status = "planned" if legacy_migration_entries else "not_required"
+    phase["legacy_persistent_mount_migration"] = {
+        **existing_migration_state,
+        "status": migration_status,
+        "entries": existing_migration_state.get("entries")
+        if migration_status == "completed"
+        else [dict(to_plain_data(entry)) for entry in legacy_migration_entries],
+    }
+    checkpoint["populate_jail_refresh"] = {
+        **dict(_mapping(checkpoint.get("populate_jail_refresh"))),
+        "legacy_persistent_mount_migration": dict(
+            _mapping(phase.get("legacy_persistent_mount_migration"))
+        ),
+    }
     target_version = str(_mapping(source_report.get("report")).get("target_version", "") or "")
     populate_image = before.image or plan.after_chart.image
     if not populate_image:
@@ -13129,6 +13586,18 @@ def _execute_populate_jail_refresh_phase(
         )
         passive_pvc = active_pvc if legacy_active_rootfs else slots.passive_pvc
         active_rootfs_path = JAIL_LEGACY_ROOT_PATH if legacy_active_rootfs else ""
+        exclude_paths = (
+            *jail_persistent_mount_exclude_paths(values),
+            *(str(entry.get("source_path") or "") for entry in legacy_migration_entries),
+        )
+        extra_required_paths = (
+            ()
+            if str(
+                _mapping(phase.get("legacy_persistent_mount_migration")).get("status") or ""
+            ).strip()
+            == "completed"
+            else tuple(str(entry.get("source_path") or "") for entry in legacy_migration_entries)
+        )
         return probe_active_passive_jail_capacity(
             command_runner,
             namespace=_SOPERATOR_NAMESPACE,
@@ -13137,7 +13606,8 @@ def _execute_populate_jail_refresh_phase(
             active_pvc=active_pvc,
             passive_pvc=passive_pvc,
             active_rootfs_path=active_rootfs_path,
-            exclude_paths=jail_persistent_mount_exclude_paths(values),
+            exclude_paths=exclude_paths,
+            extra_required_paths=extra_required_paths,
             scheduling=job_scheduling,
             kube_context=kube_context,
         )
@@ -13222,112 +13692,235 @@ def _execute_populate_jail_refresh_phase(
     if checkpoint_writer is not None:
         checkpoint_writer()
     mutation_performed = False
-    maintenance_restored = True
-    refresh_values = populate_jail_refresh_values(values)
-    _helm_upgrade_target_soperator(
-        command_runner=command_runner,
-        kube_context=kube_context,
-        values=refresh_values,
-        expected_version=target_version,
-        wait=False,
-    )
-    mutation_performed = True
-    phase["passive_slot_refresh_values_applied_at"] = _utc_now()
-    if checkpoint_writer is not None:
-        checkpoint_writer()
-    manifest = active_passive_populate_jail_job_manifest(
-        namespace=_SOPERATOR_NAMESPACE,
-        target_ref=target_ref,
-        image=populate_image,
-        passive_slot=slots.passive_slot,
-        passive_pvc=slots.passive_pvc,
-        image_pull_policy=str(
-            _mapping(values.get("populateJail")).get("imagePullPolicy") or "IfNotPresent"
-        ),
-        scheduling=job_scheduling,
-    )
-    job_name = str(_mapping(manifest.get("metadata")).get("name", "") or "")
-    if job_name:
-        command_runner(
-            [
-                "kubectl",
-                "--context",
-                kube_context,
-                "-n",
-                _SOPERATOR_NAMESPACE,
-                "delete",
-                "job",
-                job_name,
-                "--ignore-not-found",
-                "--wait=false",
-            ],
-            timeout_seconds=300,
+    migration_lines: list[str] = []
+    writer_hold_state = phase.setdefault("persistent_migration_writer_hold", {})
+    if not isinstance(writer_hold_state, dict):
+        raise RuntimeError("populate-jail-refresh.persistent_migration_writer_hold must be a mapping.")
+
+    def _restore_after_refresh_failure() -> None:
+        cleanup_errors: list[str] = []
+        migration_completed = (
+            str(
+                _mapping(phase.get("legacy_persistent_mount_migration")).get("status")
+                or ""
+            ).strip()
+            == "completed"
         )
-    _kubectl_apply_objects(
-        command_runner=command_runner,
-        kube_context=kube_context,
-        objects=(manifest,),
-        timeout_seconds=300,
-    )
-    phase["passive_slot_populate_job"] = {
-        "name": job_name,
-        "slot": slots.passive_slot,
-        "pvc": slots.passive_pvc,
-        "image": populate_image,
-    }
-    if checkpoint_writer is not None:
-        checkpoint_writer()
-    refreshed = wait_for_active_passive_populate_jail_job(
-        command_runner,
-        namespace=_SOPERATOR_NAMESPACE,
-        job_name=job_name,
-        expected_image=populate_image,
-        kube_context=kube_context,
-    )
-    phase["job_completed_at"] = _utc_now()
-    if checkpoint_writer is not None:
-        checkpoint_writer()
-    phase["login_service_ready_before_switch"] = wait_for_login_service_ready_endpoints(
-        command_runner,
-        namespace=_SOPERATOR_NAMESPACE,
-        target_ref=target_ref,
-        kube_context=kube_context,
-    )
-    if checkpoint_writer is not None:
-        checkpoint_writer()
-    switched_values = switch_active_passive_jail_rootfs_values(values)
-    _helm_upgrade_target_soperator(
-        command_runner=command_runner,
-        kube_context=kube_context,
-        values=switched_values,
-        expected_version=target_version,
-        wait=False,
-    )
-    phase["consumer_switch_applied_at"] = _utc_now()
-    phase["rollback_slot"] = "legacy-rootfs" if legacy_active_rootfs else slots.active_slot
-    phase["active_slot"] = slots.passive_slot
-    phase["login_service_ready_after_switch"] = (
-        wait_for_login_statefulset_rollout_with_ready_endpoint_guard(
-            command_runner,
+        keep_writers_held = bool(
+            legacy_migration_entries
+            and writer_hold_state.get("status") == "held"
+            and migration_completed
+        )
+        if keep_writers_held:
+            phase["persistent_migration_failure_boundary"] = {
+                "status": "writers_held",
+                "reason": (
+                    "persistent mount migration already completed; keeping legacy "
+                    "writers stopped so the shared copy cannot become stale"
+                ),
+            }
+        if (
+            legacy_migration_entries
+            and writer_hold_state.get("status") == "held"
+            and not keep_writers_held
+        ):
+            try:
+                migration_lines.extend(
+                    _restore_persistent_migration_writers(
+                        command_runner=command_runner,
+                        kube_context=kube_context,
+                        state=writer_hold_state,
+                    )
+                )
+                phase["persistent_migration_writer_hold"] = dict(writer_hold_state)
+            except Exception as exc:  # pragma: no cover - best-effort operational cleanup
+                cleanup_errors.append(f"persistent writer restore failed: {exc}")
+        if phase.get("slurm_quiet_at") and not phase.get("slurm_resumed_at"):
+            if keep_writers_held:
+                phase["slurm_resume_after_failure"] = {
+                    "status": "skipped",
+                    "reason": (
+                        "persistent mount migration already completed and legacy writers "
+                        "remain stopped"
+                    ),
+                }
+            else:
+                try:
+                    _resume_slurm_partitions(
+                        command_runner=command_runner,
+                        kube_context=kube_context,
+                    )
+                    phase["slurm_resumed_after_failure_at"] = _utc_now()
+                except Exception as exc:  # pragma: no cover - best-effort operational cleanup
+                    cleanup_errors.append(f"Slurm resume after failure failed: {exc}")
+        if cleanup_errors:
+            phase["refresh_failure_cleanup_errors"] = cleanup_errors
+        if checkpoint_writer is not None:
+            checkpoint_writer()
+
+    if legacy_migration_entries:
+        migration_lines.extend(
+            _hold_persistent_migration_writers(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                values=values,
+                state=writer_hold_state,
+            )
+        )
+        if checkpoint_writer is not None:
+            checkpoint_writer()
+        try:
+            migration_mutation, lines = _execute_legacy_persistent_mount_migration(
+                phase=phase,
+                command_runner=command_runner,
+                kube_context=kube_context,
+                target_ref=target_ref,
+                image="ubuntu:24.04",
+                jail_pvc=_target_pvc_name_for_storage_key(payload, target_ref, "jail"),
+                entries=legacy_migration_entries,
+                scheduling=job_scheduling,
+                checkpoint_writer=checkpoint_writer,
+            )
+        except Exception:
+            _restore_after_refresh_failure()
+            raise
+        mutation_performed = mutation_performed or migration_mutation
+        migration_lines.extend(lines)
+        checkpoint["populate_jail_refresh"] = {
+            **dict(_mapping(checkpoint.get("populate_jail_refresh"))),
+            "legacy_persistent_mount_migration": dict(
+                _mapping(phase.get("legacy_persistent_mount_migration"))
+            ),
+        }
+        if checkpoint_writer is not None:
+            checkpoint_writer()
+    try:
+        maintenance_restored = True
+        refresh_values = populate_jail_refresh_values(values)
+        _helm_upgrade_target_soperator(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            values=refresh_values,
+            expected_version=target_version,
+            wait=False,
+        )
+        mutation_performed = True
+        phase["passive_slot_refresh_values_applied_at"] = _utc_now()
+        if checkpoint_writer is not None:
+            checkpoint_writer()
+        manifest = active_passive_populate_jail_job_manifest(
             namespace=_SOPERATOR_NAMESPACE,
             target_ref=target_ref,
+            image=populate_image,
+            passive_slot=slots.passive_slot,
+            passive_pvc=slots.passive_pvc,
+            image_pull_policy=str(
+                _mapping(values.get("populateJail")).get("imagePullPolicy") or "IfNotPresent"
+            ),
+            scheduling=job_scheduling,
+        )
+        job_name = str(_mapping(manifest.get("metadata")).get("name", "") or "")
+        if job_name:
+            command_runner(
+                [
+                    "kubectl",
+                    "--context",
+                    kube_context,
+                    "-n",
+                    _SOPERATOR_NAMESPACE,
+                    "delete",
+                    "job",
+                    job_name,
+                    "--ignore-not-found",
+                    "--wait=false",
+                ],
+                timeout_seconds=300,
+            )
+        _kubectl_apply_objects(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            objects=(manifest,),
+            timeout_seconds=300,
+        )
+        phase["passive_slot_populate_job"] = {
+            "name": job_name,
+            "slot": slots.passive_slot,
+            "pvc": slots.passive_pvc,
+            "image": populate_image,
+        }
+        if checkpoint_writer is not None:
+            checkpoint_writer()
+        refreshed = wait_for_active_passive_populate_jail_job(
+            command_runner,
+            namespace=_SOPERATOR_NAMESPACE,
+            job_name=job_name,
+            expected_image=populate_image,
             kube_context=kube_context,
         )
-    )
-    if checkpoint_writer is not None:
-        checkpoint_writer()
-    _kubectl_rollout_status(
-        command_runner=command_runner,
-        kube_context=kube_context,
-        namespace=_SOPERATOR_NAMESPACE,
-        resource="deployment/soperator-manager",
-        timeout="15m",
-    )
-    _resume_slurm_partitions(
-        command_runner=command_runner,
-        kube_context=kube_context,
-    )
-    phase["slurm_resumed_at"] = _utc_now()
+        phase["job_completed_at"] = _utc_now()
+        if checkpoint_writer is not None:
+            checkpoint_writer()
+        if legacy_migration_entries:
+            phase["login_service_ready_before_switch"] = {
+                "status": "skipped",
+                "reason": "login consumers are held during one-time persistent mount migration",
+            }
+        else:
+            phase["login_service_ready_before_switch"] = wait_for_login_service_ready_endpoints(
+                command_runner,
+                namespace=_SOPERATOR_NAMESPACE,
+                target_ref=target_ref,
+                kube_context=kube_context,
+            )
+        if checkpoint_writer is not None:
+            checkpoint_writer()
+        switched_values = switch_active_passive_jail_rootfs_values(values)
+        _helm_upgrade_target_soperator(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            values=switched_values,
+            expected_version=target_version,
+            wait=False,
+        )
+        phase["consumer_switch_applied_at"] = _utc_now()
+        phase["rollback_slot"] = "legacy-rootfs" if legacy_active_rootfs else slots.active_slot
+        phase["active_slot"] = slots.passive_slot
+        if legacy_migration_entries:
+            migration_lines.extend(
+                _restore_persistent_migration_writers(
+                    command_runner=command_runner,
+                    kube_context=kube_context,
+                    state=writer_hold_state,
+                )
+            )
+            phase["persistent_migration_writer_hold"] = dict(writer_hold_state)
+            if checkpoint_writer is not None:
+                checkpoint_writer()
+        phase["login_service_ready_after_switch"] = (
+            wait_for_login_statefulset_rollout_with_ready_endpoint_guard(
+                command_runner,
+                namespace=_SOPERATOR_NAMESPACE,
+                target_ref=target_ref,
+                kube_context=kube_context,
+            )
+        )
+        if checkpoint_writer is not None:
+            checkpoint_writer()
+        _kubectl_rollout_status(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            namespace=_SOPERATOR_NAMESPACE,
+            resource="deployment/soperator-manager",
+            timeout="15m",
+        )
+        _resume_slurm_partitions(
+            command_runner=command_runner,
+            kube_context=kube_context,
+        )
+        phase["slurm_resumed_at"] = _utc_now()
+    except Exception:
+        _restore_after_refresh_failure()
+        raise
     result = completed_populate_jail_refresh_result(
         mode=plan.mode,
         reason=plan.reason,
@@ -13340,6 +13933,7 @@ def _execute_populate_jail_refresh_phase(
         checkpoint_writer()
     return mutation_performed, [
         *topology_lines,
+        *migration_lines,
         "Slurm partitions resumed after active/passive jail rootfs refresh.",
         (
             "Jail rootfs passive slot populated and consumers switched "

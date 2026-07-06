@@ -20,7 +20,7 @@ JAIL_MANAGED_ROOTFS_PATH = "/mnt/jail-store/rootfs"
 JAIL_MANAGED_HOME_LOCAL_PATH = "/mnt/jail-store/shared/home"
 JAIL_EXTERNAL_ROOTFS_PATH = "/mnt/jail/.cxcli/rootfs"
 JAIL_EXTERNAL_SYSTEM_PATH = "/mnt/jail/.cxcli"
-JAIL_EXTERNAL_HOME_LOCAL_PATH = "/mnt/jail/home"
+JAIL_EXTERNAL_HOME_LOCAL_PATH = "/mnt/jail/shared/home"
 JAIL_ROOTFS_SLOT_A = "slot-a"
 JAIL_ROOTFS_SLOT_B = "slot-b"
 JAIL_LEGACY_ACTIVE_SOURCE = "legacy-rootfs"
@@ -161,7 +161,7 @@ def parse_jail_persistent_mount_spec(value: str) -> JailPersistentMount:
     if "=" not in raw:
         raise ValueError(
             "--jail-persistent-mount must use <mountPath>=<localPath>, "
-            f"for example /data=/mnt/jail/data; got {value!r}."
+            f"for example /data=/mnt/jail/shared/data; got {value!r}."
         )
     mount_path, local_path = raw.split("=", 1)
     return JailPersistentMount(

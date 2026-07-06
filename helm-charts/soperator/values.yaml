@@ -1315,7 +1315,8 @@ jailPersistentMounts:
   # Writable customer-owned paths that stay outside rootfs generation slots and
   # are mounted back into every active rootfs. cxcli-managed clusters default
   # /home to /mnt/jail-store/shared/home; external single-SFS adoption defaults
-  # /home to /mnt/jail/home and accepts explicit additional mounts.
+  # /home to /mnt/jail/shared/home and accepts explicit additional mounts under
+  # the same physical jail SFS shared area.
   - mountPath: /home
     localPath: /mnt/jail-store/shared/home
 volume:

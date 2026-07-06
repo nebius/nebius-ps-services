@@ -20,11 +20,15 @@ All notable changes to this project are tracked here. This changelog follows
   `jailPersistentMounts` from day one, with two login replicas by default.
   External upgrade keeps the existing physical jail SFS, creates logical slots
   under `/mnt/jail/.cxcli/rootfs`, treats legacy `/mnt/jail` as the rollback
-  source during first adoption, and preserves `/home` plus explicitly declared
-  customer paths as persistent jail mounts without copying live data.
+  source during first adoption, and models `/home` plus explicitly declared
+  customer paths as persistent jail mounts on the same physical jail SFS. First
+  adoption now migrates legacy in-rootfs `/home`, `/data`, `/scripts`, and
+  other declared persistent paths into `/mnt/jail/shared/...` with ownership,
+  permissions, symlinks, ACLs, and xattrs preserved where supported.
 - Documented the Soperator jail upgrade process, active/passive rootfs
-  switch-over semantics, and reusable ChatGPT infographic prompt in the README
-  and design guide.
+  switch-over semantics, same-SFS shared persistent mounts, the one-time
+  rootfs-to-shared migration flow, and reusable ChatGPT infographic prompt in
+  the README and design guide.
 - Added a pre-populate active/passive jail capacity gate and expansion workflow.
   Managed production Soperator defaults now size the cxcli-owned jail SFS
   backing store at `2048` GiB total capacity, `soperator upgrade` expands that

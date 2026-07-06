@@ -10,7 +10,7 @@ from nebius_cxcli.soperator_jail_mounts import (
 )
 
 
-def test_apply_external_persistent_mount_values_adds_home_without_copy() -> None:
+def test_apply_external_persistent_mount_values_adds_home_in_shared_area() -> None:
     values = apply_jail_persistent_mount_values(
         {"nodesets": [{"name": "worker"}]},
         target_ref="external-cluster",
@@ -21,7 +21,7 @@ def test_apply_external_persistent_mount_values_adds_home_without_copy() -> None
     assert values["jailRootfs"]["store"]["rootfsPath"] == "/mnt/jail/.cxcli/rootfs"
     assert values["jailRootfs"]["adoption"]["activeSource"] == "legacy-rootfs"
     assert values["jailPersistentMounts"] == [
-        {"mountPath": "/home", "localPath": "/mnt/jail/home"}
+        {"mountPath": "/home", "localPath": "/mnt/jail/shared/home"}
     ]
     assert "jail_home" not in values
     assert "home" not in values["jailRootfs"]
@@ -42,11 +42,19 @@ def test_apply_managed_persistent_mount_values_uses_same_store_home() -> None:
 
 
 def test_parse_explicit_persistent_mount_spec() -> None:
-    mount = parse_jail_persistent_mount_spec("/data=/mnt/jail/data")
+    mount = parse_jail_persistent_mount_spec("/data=/mnt/jail/shared/data")
 
     assert mount.mount_path == "/data"
-    assert mount.local_path == "/mnt/jail/data"
+    assert mount.local_path == "/mnt/jail/shared/data"
     assert mount.name == "jail-persistent-data"
+
+
+def test_parse_multiple_shared_persistent_mount_specs() -> None:
+    data = parse_jail_persistent_mount_spec("/data=/mnt/jail/shared/data")
+    scripts = parse_jail_persistent_mount_spec("/scripts=/mnt/jail/shared/scripts")
+
+    assert data.local_path == "/mnt/jail/shared/data"
+    assert scripts.local_path == "/mnt/jail/shared/scripts"
 
 
 def test_explicit_home_persistent_mount_replaces_default_home() -> None:
@@ -84,7 +92,7 @@ def test_persistent_mount_validation_rejects_bad_paths() -> None:
     with pytest.raises(ValueError, match="duplicate"):
         normalize_jail_persistent_mounts(
             [
-                {"mountPath": "/data", "localPath": "/mnt/jail/data"},
+                {"mountPath": "/data", "localPath": "/mnt/jail/shared/data"},
                 {"mountPath": "/data", "localPath": "/mnt/jail/other"},
             ],
             include_home=False,
