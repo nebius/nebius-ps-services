@@ -20,7 +20,9 @@
   - [Operational Notes](#operational-notes)
   - [Onboarding Workflow](#onboarding-workflow)
 - [Soperator](#soperator)
-- [Jail Upgrade](#jail-upgrade)
+  - [Soperator Lifecycle Boundaries](#soperator-lifecycle-boundaries)
+  - [Soperator Profile Model](#soperator-profile-model)
+  - [Jail Upgrade](#jail-upgrade)
 - [Config Model](#config-model)
 - [Command Workflow](#command-workflow)
 - [Generator-side Commands](#generator-side-commands)
@@ -1189,7 +1191,7 @@ interactive terminals, the dry-run plan groups target discovery, versions, the
 full locked path, completed/current/remaining segments, locked path source, the
 accepted one-minor Kubernetes hop for the current segment, support policy, accepted onboarding
 actions, external node-template rollout, phases, execution controls, and
-execution guarantees so operators can scan the plan before accepting live work.
+execution contracts so operators can scan the plan before accepting live work.
 The route
 is driven by
 `deploy.targets[].soperator_onboarding.actions`, not by storage and compute
@@ -3040,6 +3042,34 @@ existing external target; if that same request also includes new `mk8s` or `sfs`
 infra rows, cxcli drops those newly selected Terraform infra rows and keeps only
 pre-existing infra rows.
 
+### Soperator Lifecycle Boundaries
+
+The Soperator lifecycle surface is split by ownership:
+
+- cxcli-managed Soperator targets use the `soperator` command group. Backup and
+  restore are archive-driven DR/new-empty-target workflows, while
+  `soperator upgrade` owns the managed maintenance window for Soperator chart
+  changes, optional MK8s node-template changes, Slurm job policy, protected-state
+  comparison, Jail Upgrade, and local
+  `.nebius-cxcli/soperator-upgrades/<target>/checkpoint.json` resume state.
+- External Nebius MK8s clusters start with `ext-soperator onboard`. Onboarding
+  is live read-only and writes local target, inventory, discovery, placement,
+  and accepted-action state without taking Terraform ownership of the cluster.
+- External upgrade-owned work stays under `ext-soperator upgrade`. The accepted
+  onboarding state locks the full upgrade path; each approved run executes one
+  locked segment, writes local
+  `.nebius-cxcli/ext-soperator-upgrades/<target>/checkpoint.json` progress, and
+  keeps the target on the same command until all locked segments complete.
+- After a completed external upgrade refreshes the target into the deploy-owned
+  shape, normal day-2 changes return to `validate`, `render`, `deploy`, and,
+  for later Soperator chart work, the managed `soperator upgrade` path.
+
+Jail Upgrade is a shared Soperator lifecycle boundary, not a generic MK8s
+upgrade concept. It is described below because both managed and external
+Soperator upgrade flows can require the same active/passive jail rootfs refresh.
+
+### Soperator Profile Model
+
 The catalog split is intentional. `component_sources.yaml` keeps the app source,
 release, stable chart defaults, and `wizard_profile: soperator`. The built-in
 Soperator wizard profile lives in `src/nebius_cxcli/wizard_profiles.py` so the
@@ -3050,8 +3080,6 @@ partition profiles, topology profiles, and generated chart values. Runtime code
 consumes the resolved `HelmChartSource.wizard_fields` and
 `HelmChartSource.soperator_nodesets` surfaces, so moving the prompt map out of
 YAML does not change `config.yaml`.
-
-Profile concepts:
 
 - NodeSet profile chooses the Slurm worker layout. `nebius-gpu-v1` is the
   default production GPU shape with service roles `system`, `controller`,
@@ -3173,7 +3201,7 @@ Enabling the rebooter does not add a chart-owned reboot schedule or trigger
 install-time node reboots; an operator workflow must explicitly request drain
 or reboot behavior, and those paths are separate.
 
-## Jail Upgrade
+### Jail Upgrade
 
 Soperator uses a shared jail rootfs as the Linux filesystem that Slurm login and
 worker pods mount at `/mnt/jail`. The target jail content comes from
@@ -3408,7 +3436,7 @@ The command boundary is intentional:
   provider-supported minor hop from the discovered control-plane version, but
   the operator may choose a later supported final target. Onboarding locks every
   sequential minor hop in `upgrade_path`, and `ext-soperator upgrade` executes
-  one locked hop per run. After the storage and compute modes are resolved,
+  one locked segment per run. After the storage and compute modes are resolved,
   onboarding prints the accepted layout decisions: target-compatible storage
   means no aligned SFS creation or storage data migration is planned, and
   target-compatible compute means no replacement compute node groups or compute

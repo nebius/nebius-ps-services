@@ -35,12 +35,12 @@ Use this guide by task:
   - [NCCL Suite Selection](#nccl-suite-selection)
 - [Soperator Commands](#soperator-commands)
   - [Soperator Command Map](#soperator-command-map)
-  - [Jail Upgrade](#jail-upgrade)
   - [CXCLI Managed Soperator Clusters](#cxcli-managed-soperator-clusters)
-  - [Soperator Slurm Scheduling And Command Examples](#soperator-slurm-scheduling-and-command-examples)
+  - [CXCLI Managed Soperator Upgrade](#cxcli-managed-soperator-upgrade)
   - [External Soperator Onboarding](#external-soperator-onboarding)
   - [External Soperator Upgrade](#external-soperator-upgrade)
-  - [Soperator Cluster Upgrade](#soperator-cluster-upgrade)
+  - [Jail Upgrade](#jail-upgrade)
+  - [Soperator Slurm Scheduling And Command Examples](#soperator-slurm-scheduling-and-command-examples)
   - [Soperator Rules and Safety Checks](#soperator-rules-and-safety-checks)
 - [Upgrade](#upgrade)
   - [When To Use upgrade](#when-to-use-upgrade)
@@ -2256,12 +2256,13 @@ Managed Soperator service exposed through the Nebius Console.
 For an existing external Nebius MK8s cluster, use `ext-soperator onboard`
 first. If onboarding finds no external-upgrade-owned work, the next path is normal
 `render` and `deploy`. If onboarding records external-upgrade-owned work, run
-`ext-soperator upgrade` before deploy. Onboarding locks the accepted next-hop
+`ext-soperator upgrade` before deploy. Onboarding locks the accepted full
 upgrade path in `deploy.targets[].soperator_onboarding.upgrade_path`; each
-accepted external node-template target must be the current Kubernetes minor or
-the next minor. After the locked hop completes and the target refreshes into
-the deploy-owned shape, rerun `ext-soperator onboard` for any later Kubernetes
-minor hop. Future cxcli-managed Soperator chart upgrades can use
+locked segment still advances at most one Kubernetes minor. Keep rerunning
+`ext-soperator upgrade` until all locked segments are complete. After the final
+locked segment completes and the target refreshes into the deploy-owned shape,
+rerun `ext-soperator onboard` only to plan a new later path or intentionally
+repair/replan. Future cxcli-managed Soperator chart upgrades can use
 `nebius-cxcli soperator upgrade`; the external MK8s cluster still remains
 outside Terraform ownership.
 
@@ -2307,7 +2308,7 @@ to render/apply the Soperator app and to run guarded external upgrade phases.
 | `nebius-cxcli ext-soperator backup [<config.yaml>] --target <target>` or `nebius-cxcli ext-soperator backup --project-id <project-id> --cluster-id <mk8scluster-id>` | Create the same restore-capable archive for an external Soperator source cluster, either from an accepted onboarded target or directly before onboarding. | The config form validates the accepted external onboarding target and uses the stored kube context or temporary Nebius kubeconfig handoff for `cluster_id` targets. The standalone form requires `--project-id` with `--cluster-id`, accepts `--kube-context` for local kubeconfig access, and reads live Helm release evidence before planning so the source version is recorded. With standalone `--cluster-id`, `--access external` selects the public control-plane endpoint and `--access internal` selects the private endpoint; cxcli does not create VPN/routing and expects private reachability to already exist. `--access` is rejected with standalone `--kube-context` because the kubeconfig context already selects its API endpoint. Both forms write `external-soperator-backup-*.tar.gz` archives under the config parent `backups/` directory or `./backups` in standalone mode unless `--backup-dir` is provided, and run the same sensitive archive, retained controller/accounting PV/PVC restore manifest, and recreation-coverage flow as managed backup. Chart-managed MariaDB is backed up when present; `externalDB.enabled=true` fails fast before mutation. |
 | `nebius-cxcli ext-soperator restore <backup.tar.gz> --kube-context <new-context> --execute --approve` | DR restore a Soperator archive onto a new empty external target cluster. | Archive-driven and dry-run by default. This is not same-cluster rollback: do not target the original/source cluster or an existing Soperator namespace. With approval, validates archive checksums, recreation coverage, and required CRD/API availability, restores cluster-scoped retained PV bindings before namespaced resources, applies restore-ready Kubernetes manifests, and imports the chart-managed MariaDB accounting dump into the selected kube context when the archive contains one. VM/NFS retention and final Terraform convergence remain operator runbook steps. |
 | `nebius-cxcli ext-soperator scale-down --project-id <project-id> --cluster-id <mk8scluster-id> --kube-context <context> --nodeset <worker> --to-workers <count> --execute --approve` and `ext-soperator scale-up` | Ad hoc maintenance scaling for an external Soperator cluster without onboarding it. | Dry-run by default. `--project-id` and `--cluster-id` identify Nebius MK8s node groups; `--kube-context` is still required for Kubernetes and Slurm access. Ephemeral workers patch `NodeSetPowerState`; non-ephemeral workers patch the live NodeSet. Scale-down uses the same `--job-policy` choices before removing affected worker ordinals. Explicit non-ephemeral ordinal removal is tail-only until a tested controller-safe `reserveOrdinals` path is added. cxcli updates the mapped Nebius node group when it can uniquely map the worker pods to one group; otherwise it fails closed for ambiguous capacity changes. This is the supported helper for external “scale workers to zero, replace worker node groups externally, scale back up” maintenance. |
-| `nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>` | Register one existing Nebius MK8s cluster by `cluster_id`, discover source Soperator state, choose storage/compute onboarding modes, and write the accepted onboarding plan. | Read-only against live cluster state; writes local `config.yaml` and the canonical discovery bundle at `generated/reports/soperator-discovery/<target>/manifest.json`. Interactive runs show the discovered Kubernetes version, default external MK8s node-template work to the next minor hop, reject skipped Kubernetes minor targets immediately at the prompt, and print the matched Soperator/Kubernetes upgrade-path rule during the decision summary. When selected actions require a Soperator chart package change or target populate-jail image refresh, the onboarding migration plan includes the `Jail Upgrade` phase so operators can see the future active/passive rootfs refresh before execution. Non-interactive runs use `--cluster-id` and optional `--target-id`; pass the next Kubernetes minor target with `--to-k8s-version` when external node-template work is selected. Skipped minors fail fast with the next valid `--to-k8s-version` hop. The accepted next-hop path is stored under `deploy.targets[].soperator_onboarding.upgrade_path` and is included in the accepted onboarding fingerprint. Unsupported accepted plans still require `--allow-unsupported-soperator-upgrade-path`. No-op reruns preserve stable discovery content so unchanged onboarding does not invalidate external upgrade checkpoints. |
+| `nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>` | Register one existing Nebius MK8s cluster by `cluster_id`, discover source Soperator state, choose storage/compute onboarding modes, and write the accepted onboarding plan. | Read-only against live cluster state; writes local `config.yaml` and the canonical discovery bundle at `generated/reports/soperator-discovery/<target>/manifest.json`. Interactive runs show the discovered Kubernetes version, default external MK8s node-template work to the next minor hop, reject unsupported Kubernetes target jumps immediately at the prompt, and print the matched Soperator/Kubernetes upgrade-path rule during the decision summary. When selected actions require a Soperator chart package change or target populate-jail image refresh, the onboarding migration plan includes the `Jail Upgrade` phase so operators can see the future active/passive rootfs refresh before execution. Non-interactive runs use `--cluster-id` and optional `--target-id`; pass the supported final Kubernetes target with `--to-k8s-version` when external node-template work is selected. Unsupported target jumps fail fast with the next valid hop guidance. The accepted full locked upgrade path is stored under `deploy.targets[].soperator_onboarding.upgrade_path` and is included in the accepted onboarding fingerprint, while `ext-soperator upgrade` still executes one locked Kubernetes minor segment per run. Unsupported accepted plans still require `--allow-unsupported-soperator-upgrade-path`. No-op reruns preserve stable discovery content so unchanged onboarding does not invalidate external upgrade checkpoints. |
 | `nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run` | Inspect the accepted external-cluster upgrade plan before any live mutation. | Read-only; refreshes discovery for the next incomplete locked segment, validates accepted onboarding or resumes from a v2 checkpoint `locked_upgrade_path` snapshot, shows the matched Soperator/Kubernetes upgrade-path rule, refuses deploy-owned/no-upgrade action sets with render/deploy guidance, and prints a color-highlighted sectioned plan covering target discovery, locked path source, the full locked path, completed/current/remaining segments, the accepted one-minor Kubernetes hop for the current segment, accepted onboarding actions, node-template rollout, phases including `Jail Upgrade` when selected chart/rootfs image evidence requires a refresh, execution controls, and execution contracts in interactive terminals. Existing locked-path resumption stays on the same upgrade command until all locked segments are complete; use a fresh `ext-soperator onboard` decision only to plan a new later path or intentionally repair/replan. |
 | `nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --execute --approve` | Execute one approved locked external-upgrade segment: one MK8s control-plane/node-template hop plus any target GPU stack, storage, compute, Soperator Helm cutover, persistent jail mount adoption, Jail Upgrade active/passive rootfs refresh when required, configured MK8s GPU deployment testing, and required Soperator/Slurm smoke validation assigned to that segment. | Creates a restore-capable backup before mutation for DR restore to a new/replacement cluster only, rejects sparse reused backup metadata before mutation, captures protected customer state before approved mutation, fails unsupported or not-validated Soperator upgrade paths unless the run also passes `--allow-unsupported-soperator-upgrade-path`, mutates only supported external upgrade surfaces, handles affected Slurm jobs, including running, completing, and pending jobs in affected partitions or requested/scheduled on affected nodes, through `--job-policy`, writes a local v2 checkpoint with immutable `locked_upgrade_path`, `upgrade_path_fingerprint`, `current_segment_id`, `completed_segment_ids`, `pending_phase`, top-level `segment_state`, persistent jail mount evidence, and segment report/backup metadata, rejects old progress-only checkpoints, enforces one Kubernetes minor hop per run, rechecks completed selected actions against live state on rerun, runs a fast stage-scoped verification after each executed stage before advancing within the segment, verifies external MK8s node-template state, normalizes target `kube-rbac-proxy` image values to `registry.k8s.io/kubebuilder/kube-rbac-proxy:v0.15.0`, verifies target Helm chart workloads, models `/home` and declared customer paths such as `/data` or `/scripts` as persistent jail mounts on the same physical jail SFS, migrates legacy in-rootfs data into those shared mount paths during first adoption, refreshes the jail rootfs by populating the passive active/passive slot on the existing jail SFS and switching consumers when the target populate-jail image or selected chart/rootfs evidence requires it, suspends old source-family Flux Kustomization desired state, deletes suspended old source-family Flux HelmRelease records, retires stale profile-derived source-family Helm release records while preserving shared/storage resources, writes validation detail reports under `generated/reports/`, runs the shared bounded read-only fast safety checks in validation hold, writes stage verification, locked-path progress, MK8s GPU deployment-testing, Soperator/Slurm validation, and protected-state rollups into `generated/reports/ext-soperator-upgrade-report.md` and `.json`, writes segment snapshots under `generated/reports/ext-soperator-upgrades/<target>/<segment-id>/`, refreshes `deploy-report.md` as a secondary deploy-compatible MK8s GPU summary only after protected comparison passes, keeps accepted onboarding while locked segments remain, prints the next same-command invocation, and stops at guarded pending gates. |
 | `nebius-cxcli upgrade node-template` and `upgrade node-group` | Upgrade Terraform-managed MK8s infrastructure underneath a cxcli-managed deployment. | `node-template` owns Kubernetes version, OS, and Nebius-image GPU stack rolling updates and writes `generated/reports/upgrade-node-template-report.md` / `.json` after verification. Node-group hardware, preset, CPU/GPU kind, GPU cluster, or fabric changes require the approved `upgrade node-group` planner; current execute writes `generated/reports/upgrade-node-group-report.md` / `.json` with the approved pre-mutation checkpoint and then stops before live replacement/cutover/retirement. |
@@ -2339,117 +2340,6 @@ Rerun the same command from
 the same workdir: cxcli restarts the pending phase from its beginning,
 reconciles live/config state, skips only completed phases that still verify,
 and never marks a phase complete until the handler and fast verification pass.
-
-### Jail Upgrade
-
-The Soperator jail is the shared Linux root filesystem mounted by Slurm login
-and worker pods. The desired jail content comes from
-`SlurmCluster.spec.populateJail.image`, but changing that image or upgrading the
-Helm chart does not rewrite an already-populated jail by itself. cxcli handles
-that boundary through the `populate-jail-refresh` phase in `soperator upgrade`
-and `ext-soperator upgrade`.
-Discovery calls the Jail rootfs version the populate-jail image tag for human
-readability, while planning compares full image references.
-
-The refresh uses an active/passive rootfs model. One physical jail backing store
-contains two logical rootfs slots plus one shared persistent-mount area:
-
-- `slot-a`: one rootfs generation.
-- `slot-b`: the other rootfs generation.
-- the active slot: the slot currently mounted as `/mnt/jail` by login and
-  worker consumers.
-- the passive slot: the inactive slot that cxcli can safely repopulate with the
-  target populate-jail image.
-- the shared area: customer-owned paths such as `/home`, `/data`, or `/scripts`
-  that must survive rootfs replacement.
-
-For cxcli-managed clusters, the default store is
-`/mnt/jail-store/rootfs/slot-a` and `/mnt/jail-store/rootfs/slot-b`, with
-persistent mounts under the same physical SFS, for example
-`/mnt/jail-store/shared/home`, `/mnt/jail-store/shared/data`, and
-`/mnt/jail-store/shared/scripts`. Those directories are not additional rootfs
-slots and do not need separate physical SFS filesystems; the chart models each
-one as a stable persistent mount and attaches it back into whichever rootfs slot
-is active. For external single-SFS adoption, cxcli keeps the existing physical
-jail SFS, creates logical slots under `/mnt/jail/.cxcli/rootfs`, and treats the
-legacy `/mnt/jail` root as the active rootfs until the first switch succeeds.
-
-The Jail Upgrade rootfs-refresh process is:
-
-1. cxcli plans whether a refresh is required. `auto` refreshes when the target
-   populate-jail image changed, or when selected chart/rootfs evidence means
-   compatibility cannot be proven. `force` always refreshes. `manual` stops and
-   prints passive-slot instructions.
-2. cxcli verifies persistent jail mounts before any destructive overwrite.
-   `/home` is automatically modeled as a persistent jail mount. Other
-   customer-owned paths, such as `/data`, `/scripts`, or `/checkpoints`, must
-   be declared with `--jail-persistent-mount <mountPath>=<localPath>`.
-3. cxcli runs a passive-slot capacity preflight. For external adoption it
-   excludes `.cxcli` and configured persistent-mount source paths from the
-   active rootfs estimate, measures the persistent-mount data separately, and
-   requires enough space on the same physical jail SFS for both the passive
-   rootfs slot and the one-time shared-data copy. If capacity is short, the
-   existing jail SFS resize handler runs before any copy or rootfs mutation.
-4. During first adoption from a legacy rootfs, cxcli drains Slurm with the
-   selected `--job-policy`, holds login and worker consumers at zero writers,
-   and runs a Kubernetes migration Job before passive-slot population. The Job
-   mounts the existing jail PVC once at `/store`, copies paths such as
-   `/store/home`, `/store/data`, and `/store/scripts` into
-   `/store/shared/home`, `/store/shared/data`, and `/store/shared/scripts`, and
-   preserves ownership, permissions, symlinks, ACLs, and xattrs where the
-   runtime supports them. Completion markers live under
-   `/store/.cxcli/persistent-migrations/`; reruns skip only marked completed
-   paths and fail closed on source/target overlap, top-level source symlinks,
-   target symlinks, or unmarked non-empty targets.
-   If a later refresh step fails after the copy is marked complete, cxcli keeps
-   login/worker writers held and Slurm quiet instead of reopening legacy-rootfs
-   writes that would make the shared copy stale.
-5. cxcli applies temporary refresh values and creates a Kubernetes Job named
-   like `<target>-populate-jail-passive-<slot>`. That Job runs the target
-   populate-jail image and mounts only the passive slot PVC at `/mnt/jail`,
-   so it writes the new rootfs generation without changing current login or
-   worker consumers.
-6. After the Job completes with the expected image, cxcli verifies that the
-   login Service still has at least one ready EndpointSlice backend before
-   switching consumers. During the first-adoption migration window, login and
-   worker consumers are held for the copy and this pre-switch endpoint check is
-   skipped until consumers are restored after the switch.
-7. cxcli switches Helm values so the passive slot becomes the active slot:
-   login/controller/rest jail `volumeSourceName` values and worker NodeSet jail
-   PVC references are updated to the refreshed slot. The previous active slot
-   becomes the rollback slot.
-8. Soperator reconciles the changed SlurmCluster/NodeSet desired state. For a
-   first-adoption migration, cxcli restores the recorded login and worker sizes
-   after the switch. New or restarted login and worker pods mount the refreshed
-   rootfs, and persistent mounts such as `/home`, `/data`, and `/scripts` are
-   mounted back into the new rootfs so user data stays outside the replaceable
-   rootfs slots.
-9. cxcli resumes Slurm partitions and runs postflight validation. The previous
-   slot remains available for rollback until the guarded validation path has
-   passed.
-
-During switch-over, the physical backing store contains both rootfs generations,
-and the chart exposes both slot volumes as possible `volumeSources`. The
-populate Job is connected to the passive slot while existing login and worker
-pods still use the old active slot. During the consumer rollout, the cluster can
-briefly contain old pods using the old slot and replacement pods using the new
-slot. A single login or worker pod is not expected to run with both slot-a and
-slot-b mounted as two active root filesystems. Each consumer has one main jail
-rootfs mount; persistent submounts such as `/home`, `/data`, and `/scripts`
-are separate overlays from the shared area and are preserved across both rootfs
-generations.
-
-The one-time migration happens only while
-`jailRootfs.adoption.activeSource == "legacy-rootfs"`. After cxcli has copied
-the declared persistent paths into the shared area and switched consumers to a
-slot-backed rootfs, those paths are external to the rootfs lifecycle. Later
-Jail Upgrade runs repopulate only the passive rootfs slot and keep mounting the
-same shared paths into each newly active slot; they do not copy `/home`,
-`/data`, `/scripts`, or other declared persistent paths again. The old legacy
-rootfs and old in-rootfs data remain untouched for rollback until an explicit
-cleanup policy is added.
-
-![Soperator jail upgrade workflow](docs/jail-upgrade-workflow.png)
 
 ### CXCLI Managed Soperator Clusters
 
@@ -2618,284 +2508,256 @@ They do not have `--yes`; `--dry-run` is the non-mutating preview path. See
 [Upgrade](#upgrade) for the full upgrade command contract, upgrade strategies,
 and examples.
 
-### Soperator Slurm Scheduling And Command Examples
+### CXCLI Managed Soperator Upgrade
 
-This section is for self-managed Soperator clusters deployed by cxcli. The
-Soperator Helm chart remains the owner of `SlurmCluster`, `NodeSet`, partitions,
-and rendered `slurm.conf`; make persistent changes in `config.yaml` / Helm
-values, then `render` and `deploy` again. Do not edit rendered ConfigMaps for a
-durable change because the operator can reconcile them back. For Managed
-Soperator, use the Nebius Console or Nebius support workflow for settings that
-are not exposed in the managed service UI.
+A cxcli-managed Soperator cluster upgrade can involve the underlying MK8s
+cluster/node groups, the Soperator Helm chart/app row, or both. Use
+`nebius-cxcli soperator upgrade` as the canonical maintenance-window command:
+pass `--to-k8s-version`, `--to-os`, or `--to-gpu-stack-preset` only when the
+MK8s node-template should change, and pass `--to-chart-version` only when the
+Soperator chart should change.
 
-Slurm concepts used by the bundled profiles:
-
-The important split is ownership. The Helm chart owns persistent Slurm
-resources and `slurm.conf` rendering. cxcli selects bundled profiles and writes
-Helm values into `config.yaml`. Slurm users still own per-job choices such as
-`--qos`, `--nice`, `--time`, and `--requeue`.
-For production clusters, cxcli keeps raw profile-owned `inputs.node_groups.*`
-prompts hidden but exposes `inputs.soperator.*_node_count` helpers for CPU
-service-role counts and `inputs.soperator.*_autoscaling` helpers for every
-Soperator-managed role. The `system` service role defaults to autoscaling from
-3 to 5 nodes; disabling that helper falls back to three fixed nodes.
-`controller`, `login`, and `accounting` default to two fixed nodes each, with
-their autoscaling helpers disabled unless the operator enables them. Worker
-fixed sizing is shape-specific:
-`soperator.worker_cpu_total_nodes` / `worker_cpu_nodes_per_group` for CPU
-workers and `soperator.worker_gpu_total_nodes` /
-`worker_gpu_nodes_per_group` for GPU workers. cxcli writes
-`soperator.worker_node_groups.<worker>` entries for the generated shards, with
-canonical `autoscaling` and `ephemeral_nodes` controls ready to edit. The
-selected profile's per-group limit is enforced before materialization; Nebius
-production profiles cap worker shards at 100 MK8s nodes per generated group.
-The `create` wizard uses `autoscaling.enabled` as the per-shard Infra/MK8s worker
-autoscaling toggle: answering `true` also writes same-shard
-`ephemeral_nodes.enabled=true` and asks min/max, with max defaulting to that
-shard's generated capacity, while answering `false` clears same-shard
-autoscaling bounds and writes `ephemeral_nodes.enabled=false`. When more than
-one generated worker shard exists, the wizard first offers a synthetic bulk
-apply-to-all choice for all CPU worker shards, all GPU worker shards, or all CPU
-and GPU worker shards. The mixed CPU+GPU helper is shown as
-`all_worker_shards_apply_to_all` and defaults to `true`; accepting it asks one
-`autoscaling.enabled` prompt and writes only canonical per-shard controls, while
-declining keeps the per-shard prompts. No bulk key is saved. The wizard asks
-`worker_ephemeral_nodes.suspend_time_seconds` only after at least one shard has
-autoscaling-backed ephemeral nodes enabled. In hand-authored config, enabling a
-shard's `autoscaling` block renders K8s autoscaling min/max values instead of
-fixed `node_count`, and preserves an explicit `0..0` scale-to-zero range. Each
-`worker_*_total_nodes` value is a Kubernetes worker host count for that shape,
-not total GPU count: Soperator worker replicas match the worker hosts, and GPU
-count per host is written to `slurmd.resources.gpu`.
-Current worker autoscaling remains maximum-capacity materialization unless
-that same shard's `ephemeral_nodes.enabled=true`. In that mode cxcli derives
-`initialNumberEphemeralNodes` from the shard's autoscaling `min_node_count` for
-CPU workers, raises GPU worker shards to at least one initial active worker when
-max capacity is positive so Soperator can seed GPU libraries into the jail,
-writes global `slurmConfig.suspendTime` from
-`worker_ephemeral_nodes.suspend_time_seconds`, and leaves day-2 active-node
-changes to Slurm power control / `NodeSetPowerState`.
-CPU service-role counts are independent of worker sharding. CPU service-role
-autoscaling must keep `max_node_count` at least `1`.
-
-| Concept | Meaning | Handled by the Helm chart | Handled by cxcli | If not fully handled, why and how to cover it |
-| --- | --- | --- | --- | --- |
-| `SlurmCluster` | The root Soperator custom resource. It is the object Soperator reconciles into controller, login, accounting, worker, partition, storage, and `slurm.conf` state. | Yes. The chart renders the `SlurmCluster` CR and feeds it `slurmConfig`, `customSlurmConfig`, `partitionConfiguration`, NodeSets, filters, and storage values. | Indirectly. cxcli does not render `SlurmCluster` itself; it materializes profile choices and Helm values that the chart renders. | Do not edit the rendered CR or ConfigMaps for durable policy. Add or override chart values in `config.yaml`; if the chart lacks a common durable field, add a typed chart value first, then let cxcli profiles use it. |
-| `NodeSet` | Slurm worker capacity, usually mapped to Kubernetes node groups such as `worker`, `worker-cpu`, or `worker-gpu`. | Yes. The chart renders NodeSet CRs, worker filters, features, GPU/GRES metadata, and role placement. | Yes. The selected `values.nodesetsProfile` materializes the worker layout, node-group mapping, and generated MK8s node groups for production mode. | Physical capacity is still Terraform/MK8s-owned. Use cxcli profiles for standard layouts, or direct Helm values for custom worker shapes. |
-| `NodeConfigurator` | Soperator host-preparation machinery. The chart also exposes an optional rebooter helper for maintenance workflows. | Yes. The chart renders the NodeConfigurator resources and keeps the host-setup carrier valid even when the rebooter is disabled. | Yes for gates/defaults. cxcli leaves rebooter-style maintenance behavior off unless the operator opts in. | This is not Slurm scheduling policy. Do not use it to express job restart or preemption behavior. |
-| `Partition` | A Slurm queue plus policy. It selects one or more NodeSets and carries settings such as `Default`, `Hidden`, `State`, `DefaultTime`, `MaxTime`, `PriorityTier`, `PreemptMode`, `AllowQos`, and resource defaults. | Yes. The chart renders `values.partitionConfiguration` into `SlurmCluster.spec.partitionConfiguration`; typed `partitions[].policy` fields are preferred, with per-partition `config` as the escape hatch. | Yes. `values.partitionProfile` selects bundled layouts such as `shape-default`, `with-debug-long`, and `with-qos-preemption`. | If a partition token is missing from typed `policy`, use the partition `config` escape hatch for a one-off. Add a typed chart field when the token should become a supported contract. |
-| `PriorityTier` | Partition scheduling tier. Higher tiers are evaluated before lower tiers. With `PreemptType=preempt/partition_prio`, it also becomes the tier used for partition-priority preemption between jobs that share resources. | Yes. Use `partitionConfiguration.partitions[].policy.priorityTier`. | Yes. Bundled partition profiles set tiers for hidden, shape, debug, long, and QOS-style queues. | A tier alone does not enable preemption. It gives deterministic queue ordering; preemption also requires a matching cluster-wide `PreemptType` and compatible `PreemptMode`. |
-| `PriorityJobFactor` and `PriorityWeightPartition` | Numeric multifactor priority inputs for the partition factor. They are different from `PriorityTier`; they only matter when the partition priority weight is nonzero. | Partially. The chart types `schedulingConfig.priorityWeights.partition` as `PriorityWeightPartition`, but does not currently type per-partition `PriorityJobFactor`. | Not in bundled profiles. The profiles use `PriorityTier` for partition policy and leave `PriorityWeightPartition` unset unless the operator overrides it. | Use per-partition `config: PriorityJobFactor=<n>` today. If partition-factor priority becomes a standard profile need, add a typed `policy.priorityJobFactor` field and chart tests. |
-| `PriorityWeight*` | Cluster-wide weights for Slurm multifactor priority components: age, association, fairshare, partition, job size, QOS, and TRES. A zero weight makes that factor inert. | Yes. Use `values.schedulingConfig.priorityWeights.*`. | Yes for QOS profiles. `with-qos-preemption` sets nonzero QOS and fairshare weights; baseline and debug/long profiles intentionally avoid multifactor tuning. | Keep this as explicit policy. cxcli should not guess weights for a tenant because the right values depend on queue economics and accounting policy. |
-| Fairshare | Slurm accounting fairness based on account/user associations and historical usage. It affects priority only when `PriorityWeightFairshare` is nonzero. | Yes. The chart can render `PriorityWeightFairshare` through `schedulingConfig.priorityWeights.fairshare` and can reconcile association `fairshare` values under `qosConfiguration.associations`. | Partially. QOS-capable profiles enable the fairshare priority weight, but only seed smoke-test-style defaults. | Real fairshare is tenant policy: users, accounts, shares, and reset behavior are not inferable from a node profile. Add accounts/associations in `config.yaml`; for Managed Soperator, coordinate through the managed-service path. |
-| QOS | SlurmDBD quality-of-service objects. QOS can affect priority, limits, and preemption, but QOS priority by itself does not define preemption. With `preempt/qos`, explicit QOS `Preempt` relationships are required. | Yes for self-managed clusters when `values.qosConfiguration.enabled=true`; the hook reconciles accounts, QOS rows, and associations, while partition `AllowQos` remains chart-rendered partition policy. The chart also types `PriorityWeightQOS` and QOS preemption settings. | Yes for the `with-qos-preemption` profile. cxcli writes values for standard `debug`, `eval`, `train`, and `data` QOS objects and fails fast if QOS reconciliation is not enabled. | Managed Soperator cannot run this self-managed chart hook in the managed operator namespace. Keep QOS profiles off there and use the Nebius Console/support workflow for managed-service QOS policy. |
-| `PreemptType` | Cluster-wide plugin that decides which running jobs are eligible as victims, for example `preempt/partition_prio`, `preempt/qos`, or `preempt/none`. | Yes. Use `values.schedulingConfig.preemptType`. | Yes for QOS profiles. `with-qos-preemption` sets `preempt/qos`. Partition-only profiles set tiers but do not need SlurmDBD QOS objects. | If you want actual tier-based victim selection for debug/long queues, add `schedulingConfig.preemptType: preempt/partition_prio` plus an intentional `PreemptMode` policy. |
-| `PreemptMode` and `JobRequeue` | What happens to selected victims: `OFF`, `CANCEL`, `REQUEUE`, `SUSPEND`, `GANG`, or combinations. `REQUEUE` only works for jobs that are requeueable. | Yes. Use `schedulingConfig.preemptMode`, per-partition `policy.preemptMode`, QOS `preemptMode`, and optional `schedulingConfig.jobRequeue`. | Yes where a bundled QOS profile needs it. The QOS profile uses `REQUEUE`; the internal `hidden` ActiveChecks partition can opt out with partition-level `OFF`. | Do not enable `REQUEUE` blindly for long GPU jobs. Use it for checkpointed or restartable work, or submit jobs explicitly with `--requeue`. |
-| Niceness / `--nice` | Per-job user modifier applied directly to job priority. It is useful for voluntarily lowering or adjusting a submitted job's priority. | No persistent chart field. | No profile field. | This is intentionally a submit-time job option, not cluster policy. Put it in `sbatch`/`srun` commands, job wrappers, or team runbooks; there is no `PriorityWeightNice` setting to model in Helm. |
-| `AccountingStorageEnforce` and `EnforcePartLimits` | Slurm.conf enforcement knobs often paired with QOS/accounting policy. `AccountingStorageEnforce` controls association, limit, QOS, and related accounting enforcement; `EnforcePartLimits` controls whether invalid partition requests fail at submit time. | Yes. Use `values.schedulingConfig.accountingStorageEnforce` and `values.schedulingConfig.enforcePartLimits`; the chart renders the matching Slurm.conf lines and rejects typed/raw overlap. | Yes for QOS profiles. `with-qos-preemption` sets `associations,limits,qos` enforcement and `EnforcePartLimits=ANY` through the typed chart surface. | Keep these values explicit. The chart can type and validate the Slurm.conf keys, but operators still own the accounts, associations, QOS objects, and partition limits that enforcement applies to. |
-
-For raw Slurm behavior, cross-check the official Slurm documentation for
-[preemption](https://slurm.schedmd.com/preempt.html),
-[QOS](https://slurm.schedmd.com/qos.html),
-[multifactor priority](https://slurm.schedmd.com/priority_multifactor.html),
-[fair tree / fairshare](https://slurm.schedmd.com/fair_tree.html), and
-[sacctmgr](https://slurm.schedmd.com/sacctmgr.html).
-
-The guided partition profiles are intentionally policy-sized:
-
-- `shape-default` creates the default visible worker partition for the selected
-  CPU, GPU, or mixed worker layout. It does not add QOS/fairshare policy. When
-  ActiveChecks are enabled, cxcli derives their readiness partition and any
-  needed internal hidden partition from the selected profile during render
-  instead of exposing another queue choice.
-- `with-debug-long` adds short `debug` and long `long` queues on the same
-  worker capacity. The live validation profile rendered `debug` as the high
-  tier short queue and `long` as the low tier seven-day queue. This is a Slurm
-  partition policy, not part of the ActiveChecks child chart.
-- `with-qos-preemption` adds `debug`, `eval`, `train`, and `data` policy queues
-  with QOS/fairshare/preemption settings. Select this only when
-  `values.qosConfiguration.enabled=true` is also enabled so the chart hook can
-  reconcile the required SlurmDBD QOS rows, accounts, and associations.
-
-After the cluster is provisioned, connect to the Slurm login service and run
-Slurm commands from the login node. cxcli-generated bundles set the chart
-`clusterName` from the MK8s target id. The examples below use target id
-`soperator-cluster1`, namespace `soperator`, and login SSH service
-`soperator-cluster1-login-svc`. If your target id or `clusterName` differs,
-replace `soperator-cluster1` with that value.
+Use `upgrade node-template` separately only when you intentionally want a
+standalone Terraform-managed MK8s upgrade outside the Soperator maintenance
+window:
 
 ```bash
-# Get the LoadBalancer address for the login SSH service.
-kubectl get svc soperator-cluster1-login-svc -n soperator
+nebius-cxcli upgrade node-template <config.yaml> infra:mk8s@<target> \
+  --to-version <major.minor> \
+  --to-os <os> \
+  --to-gpu-stack-preset <cuda...> \
+  --dry-run
+nebius-cxcli upgrade node-template <config.yaml> infra:mk8s@<target> \
+  --to-version <major.minor> \
+  --to-os <os> \
+  --to-gpu-stack-preset <cuda...>
 ```
 
-Example output; use the `EXTERNAL-IP` value:
-
-```text
-NAME                            TYPE           CLUSTER-IP      EXTERNAL-IP    PORT(S)
-soperator-cluster1-login-svc    LoadBalancer   10.100.46.154   203.0.113.10   22:31010/TCP
-```
-
-Then SSH to the login node with the private key that matches the configured
-`slurmNodes.login.sshRootPublicKeys` value. Add `-i <path-to-private-key>` if
-that key is not the default key loaded by your SSH agent. When cxcli creates or
-adds a Soperator target, it seeds this value from the configured MK8s node-group
-SSH public key for the same target, preferring the node group mapped to the
-Soperator `login` role. If no MK8s node-group public key is configured, set
-`apps.charts[].values.slurmNodes.login.sshRootPublicKeys` in `config.yaml`
-before rendering so the chart does not rely on upstream defaults:
+Use `soperator upgrade` when cxcli already manages the Soperator app row and the
+target is already part of the rendered bundle. It owns the full two-layer
+maintenance window when MK8s target flags are supplied:
 
 ```bash
-ssh root@<login-external-ip>
+nebius-cxcli soperator upgrade <config.yaml> \
+  --target <target> \
+  --to-chart-version <chart-version> \
+  --to-k8s-version <major.minor> \
+  --dry-run
+nebius-cxcli soperator upgrade <config.yaml> \
+  --target <target> \
+  --to-chart-version <chart-version> \
+  --to-k8s-version <major.minor>
 ```
 
-Once connected, run the Slurm inspection commands directly:
+For Kubernetes minor changes, run provider-supported hops rather than skipping
+intermediate target versions. For example, upgrade a managed cluster from
+`1.31` to `1.34` as `soperator upgrade --to-k8s-version 1.32`, then
+`--to-k8s-version 1.33`, then `--to-k8s-version 1.34`. cxcli rejects
+`1.31 -> 1.33` and `1.31 -> 1.34` requests and prints the next valid hop.
+Managed upgrades do not persist a locked multi-run path because `config.yaml`
+plus live MK8s state are the source of truth for each requested run. cxcli does
+still enforce the committed Soperator/Kubernetes recommended order: if a
+cluster is already at the Soperator staging Kubernetes minor, for example
+`1.32`, and the next requested hop would cross to `1.33` while the Soperator
+chart is still old, `soperator upgrade` blocks the combined run and prints a
+chart-first command. Run the Soperator chart upgrade while Kubernetes stays at
+`1.32`, then rerun `soperator upgrade --to-k8s-version 1.33`, and later
+`--to-k8s-version 1.34` as separate provider-supported hops.
 
-```bash
-# List Slurm partitions and their policies.
-# Use this first to confirm which queues exist and which NodeSets they target.
-scontrol show partition
+Before mutation, managed and external Soperator upgrade flows evaluate the
+committed Soperator/Kubernetes support policy from
+`soperator_migration_profiles.yaml`. `unsupported` and `not_validated` paths
+fail fast unless `--allow-unsupported-soperator-upgrade-path` is passed; the
+override is recorded in reports and checkpoints, and does not bypass
+Kubernetes minor-hop validation or other safety preflights. Paths marked
+`supported_with_warning` continue without the override but keep the warning in
+the dry-run and execution plans. Paths with no committed support rule are
+treated as `not_validated`.
 
-# Inspect one partition in detail.
-# Look for Nodes, PriorityTier, PreemptMode, DefaultTime, MaxTime, Hidden, and AllowQos.
-scontrol show partition debug
+CXCLI-managed Soperator upgrade follows these stages:
 
-# Show global scheduling and preemption settings rendered by Soperator.
-# This confirms whether the cluster is using partition-priority or QOS preemption.
-scontrol show config | egrep "AccountingStorageEnforce|EnforcePartLimits|PreemptType|PreemptMode|PriorityType|PriorityWeight|JobRequeue|SelectTypeParameters"
+1. Plan and dry run: resolve the target Soperator row, requested chart version,
+   requested MK8s node-template fields, active source-catalog pins, and repeatable
+   dry-run/execute command from the current generated bundle.
+2. Preflight and backup: validate the current bundle, inspect live Soperator and
+   Slurm state, create a restore-capable backup with raw Kubernetes restore
+   material and chart-managed MariaDB accounting dump, capture protected customer
+   state and config fingerprints, and checkpoint any cxcli-owned ActiveChecks
+   suspension.
+3. Slurm and MK8s rollout: when MK8s target flags are supplied, identify affected
+   node groups and Slurm nodes, drain only cxcli-owned Slurm nodes, apply
+   `--job-policy` (`wait-to-finish`, `wait-then-cancel`, `cancel-selected`,
+   `cancel-all`, `requeue-selected`, `requeue-all`, `requeue-hold-selected`, or
+   `requeue-hold-all`), run the Terraform-managed node-template workflow, and
+   wait for stable control-plane and node-group readiness.
+4. Soperator chart apply: when a chart target is requested, update the Soperator
+   app row, rerender and validate the bundle, apply the target Flux/static
+   Soperator manifests, and verify the live chart identity on Kubernetes objects.
+5. Jail Upgrade: when the target populate-jail image changed, selected
+   chart/rootfs evidence requires refresh, or `--populate-jail-refresh force`
+   is selected, apply the selected
+   `--job-policy` to affected worker NodeSets, populate the passive
+   active/passive jail rootfs slot with the target image, switch consumers to
+   the refreshed slot only while the login Service has ready EndpointSlice
+   endpoints during the login StatefulSet rollout, and keep the previous rootfs
+   slot available for rollback until postflight validation passes.
+6. Fast stage verification gates: after ActiveChecks suspension and every
+   completed runtime boundary, including post-MK8s validation, Soperator chart
+   apply, Jail Upgrade, postflight validation, and shared safety verification,
+   record a stage-scoped `fast_verification` result before the next stage
+   starts. Setup phases validate evidence only, such as generated-bundle
+   preflight, discovery-bundle path, backup hashes, protected-state baseline,
+   and preflight-validation completion. No-op phases are recorded as `SKIP`;
+   failed gates print the stage validation summary, write the checkpoint/report,
+   and stop the run.
+7. Postflight validation and restore: restore Slurm node state and cxcli-owned
+   ActiveChecks, compare protected config and shared protected-state hashes while
+   ignoring cxcli-owned temporary drain/replacement churn, run required
+   Soperator/Slurm smoke validation, run the shared bounded fast safety verifier,
+   and write `soperator-upgrade-report.md` plus JSON detail.
+8. Resume behavior: rerun the same command from the same workdir when a phase is
+   interrupted. The checkpoint names the active `pending_phase`; rerun restarts
+   that phase from its beginning and uses phase idempotency plus live/config
+   reconciliation to pass already-satisfied work. Completed phases are skipped
+   only after their recorded state still verifies. If the target is already
+   current, the command still performs the verification/report path without
+   replaying unnecessary mutations.
 
-# Show Slurm nodes as the scheduler sees them.
-# This is useful when a partition exists but jobs stay pending because no nodes are ready.
-sinfo -N -l
+`upgrade node-template` validates the live compatibility matrix, updates
+`config.yaml`, rerenders, validates, applies the staged Terraform changes, waits
+for the MK8s control plane and selected node groups, and writes
+`generated/reports/upgrade-node-template-report.md` /
+`generated/reports/upgrade-node-template-report.json`. Use `upgrade node-group`
+instead when the change is hardware platform, hardware preset, CPU/GPU kind, GPU
+cluster, or InfiniBand fabric; current `upgrade node-group --execute --approve`
+writes the approved pre-mutation checkpoint/report and then stops before live
+replacement/cutover/retirement.
 
-# Show the queue with job state, partition, node count, and pending reasons.
-# Run this while testing preemption or QOS policy.
-squeue -l
+`soperator upgrade` is the cxcli-managed full Soperator cluster upgrade. It
+validates the current generated bundle, writes a restore-capable backup with
+raw Secrets and an optional chart-managed MariaDB accounting DB dump, captures shared
+protected customer state before mutation, handles Slurm worker drain and
+affected-job policy for affected MK8s nodes, runs the node-template workflow when
+requested with stable node-group readiness confirmation, applies the Soperator
+chart when requested, verifies the static Soperator chart version on live
+Kubernetes objects, compares protected customer config fingerprints plus shared
+protected-state before/after hashes while excluding cxcli-owned temporary drain
+state and replacement instance churn, reruns the required Soperator/Slurm smoke
+validation at postflight, runs the same bounded read-only fast safety verifier
+used by external upgrades, gates each completed managed upgrade phase with a
+targeted stage-scoped `fast_verification`, and writes command-owned validation details
+plus the Markdown `Stage Fast Verification` rollup and JSON `stage_verification`
+details in
+`generated/reports/soperator-upgrade-report.md` /
+`generated/reports/soperator-upgrade-report.json`.
+The command prints and checkpoints the current phase with the operator-facing
+top-level stage (`MK8s Node Upgrades`, `Soperator Upgrade`, or `Jail Upgrade`), component label,
+and a concise operator comment from preflight through backup, protected-state
+capture, rollout, postflight, shared safety verification, and final report
+writing. Quiet terminal phases such as discovery, backup, protected-state
+capture, live ActiveChecks patching, Slurm restore, shared safety verification,
+and report writing keep a spinner active. The Markdown and JSON reports include
+the final `current_phase`, its top-level stage, and phase history.
+Use `--approve-remediation` only to record approval for
+`remediation_required` protected-state deltas; blocked data-loss or downtime
+deltas still stop the run.
+`upgrade helm-chart` is intentionally non-Soperator-only and fails fast for
+`apps:soperator@<target>` with the canonical `soperator upgrade` command. The
+cxcli-managed upgrade path does not run the external source-cluster upgrade
+analyzer, does not use
+the external source-cluster `generated/reports/soperator-discovery/<target>/`
+bundle, and
+does not perform external source-cluster storage-copy actions.
 
-# Show QOS rows from SlurmDBD.
-# This should show only normal for non-QOS profiles and debug/eval/train/data for the QOS profile.
-sacctmgr -nP show qos format=Name,Priority,MaxWall,MaxTRES,MaxTRESPerJob,Preempt,PreemptMode
+If the existing Soperator row uses `repo: ''`, it is pinned to static local
+chart rendering for that project config. To upgrade by the published parent OCI
+package instead, edit that same Soperator row to the OCI repo and target version
+explicitly, for example:
 
-# Show account/user associations, default QOS access, and fairshare values.
-# Use this when a job is rejected, pending, or unexpectedly deprioritized.
-sacctmgr -nP show assoc format=User,Account,DefaultQOS,QOS,Fairshare
-
-# Show multifactor priority breakdown when the sprio command is available.
-# This helps explain why one pending job is ordered ahead of another within the same tier.
-sprio -l
-
-# Show a specific job's effective partition, QOS, priority, nice value, and requeue state.
-scontrol show job <JOBID>
-
-# Show completed-job accounting.
-# Use this after a smoke test or preemption test to confirm partition, QOS, priority, start, and end data.
-sacct -j <JOBID> --format=JobID,JobName,Partition,Account,QOS,Priority,Start,End,State
+```yaml
+repo: oci://cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/charts/soperator
+version: 4.0.2-ps.3
 ```
 
-Run these smoke checks from the same SSH session on the Slurm login node:
-
-```bash
-# CPU profile smoke test. Expected hostname is a worker-cpu pod/node name.
-srun -p cpu -N1 -n1 /bin/hostname
-
-# GPU profile smoke test. Use this after GPU workers are ready.
-srun -p gpu -N1 -n1 --gres=gpu:1 /bin/hostname
-
-# Debug queue smoke test for the QOS profile.
-# This verifies both the debug partition and the debug QOS association.
-srun -p debug --qos=debug -N1 -n1 /bin/hostname
-
-# Long queue example. Use --requeue only for jobs that can safely restart.
-sbatch -p long --requeue --time=7-00:00:00 --wrap 'hostname; sleep 60'
-
-# QOS policy example for a training queue.
-# The requested QOS must exist in SlurmDBD and be allowed for the association.
-sbatch -p train --qos=train --requeue --time=04:00:00 --wrap 'hostname; sleep 60'
-```
-
-For longer upgrade-policy demonstrations, use the public sample jobs in
-[`examples/slurm-jobs/`](examples/slurm-jobs/). These examples are generic:
-they test Slurm allocation, job visibility, interruption, wait, cancellation,
-and requeue behavior rather than CPU or GPU performance. Use the helper to
-copy the examples to `/root/testjobs` on the Slurm login node and open an SSH
-session there, then submit the jobs from that login-node session so `sbatch`
-can reach the cluster's Slurm controller:
-
-```bash
-# On your machine, from the local checkout.
-./examples/slurm-jobs/submit-job-test.sh --login <login-external-ip>
-
-# In the SSH session opened by the helper.
-# Submit one GPU job to the default Nebius main* partition.
-bash ./submit-job-test.sh
-
-# Submit 10 CPU jobs to a cpu partition.
-bash ./submit-job-test.sh --part-type cpu --partition cpu --count 10
-
-# In another login-node shell during the upgrade, watch that the smoke jobs
-# remain visible and uninterrupted for a 15-minute window.
-bash ./submit-job-test.sh --watch-jobs --watch-duration 900
-```
-
-By default, Slurm may place multiple sample jobs on one node when the partition
-policy permits it. Add `--exclusive` to request one exclusive node allocation
-per job where the cluster policy allows that. Use `--run-minutes` and
-`--wall-minutes` to change the job duration, `--submit-mode array` for compact
-bulk submission, and `--dry-run` to inspect the generated `sbatch` commands.
-Use `--watch-jobs` during the upgrade to print timestamped `squeue` snapshots
-and optional `sacct` evidence for the observed smoke job IDs.
-
-During Soperator upgrades, a real terminal defaults to the interactive job
-policy, so human operators can keep the command short and still select wait,
-cancellation, requeue, or other available handling for each displayed affected
-job:
-
-```bash
-nebius-cxcli soperator upgrade CONFIG_YAML --target TARGET \
-  --to-chart-version TARGET_VERSION
-```
-
-How to read the common outputs:
-
-- `shape-default` should show only the selected worker-shape partitions:
-  CPU-only shows `cpu*`, GPU-only shows `gpu*`, and mixed CPU+GPU shows `cpu*`
-  plus `gpu`. The baseline profile does not add QOS/fairshare policy or QOS
-  objects; if your cluster shows extra `PreemptType`, `PriorityWeight*`, or QOS
-  rows, those came from explicit chart values, image defaults, or
-  operator-managed settings. When ActiveChecks are enabled for GPU-capable
-  profiles, cxcli can add an internal `hidden` readiness partition during
-  render; that partition is profile plumbing, not a user queue.
-- `with-debug-long` should add `debug` and `long` partitions. `debug` is the
-  high-tier short queue; `long` is the low-tier seven-day queue. Because these
-  are partition policies, `sacctmgr show qos` still does not need to show
-  `debug` or `long` QOS rows for this profile. Actual preemption for these
-  queues requires an explicit `schedulingConfig.preemptType` such as
-  `preempt/partition_prio`.
-- `with-qos-preemption` should show nonzero `PriorityWeightQOS` and
-  `PriorityWeightFairshare`, `PreemptType=preempt/qos`, QOS rows such as
-  `debug`, `eval`, `train`, and `data`, and associations that allow users to
-  request those QOS values.
-- Preemption only works between jobs that compete for the same resources. If
-  two partitions map to disjoint NodeSets, they will not preempt each other just
-  because one has a higher tier. Use overlapping partitions or QOS policy when
-  that behavior is intentional.
-- Be careful with `REQUEUE` for long GPU jobs. It is useful for checkpointed or
-  restartable work, but it can waste expensive training time for jobs that do
-  not handle restart cleanly.
-
-For operator changes, prefer profile-level config first:
-
-- Use `values.partitionProfile` for the bundled baseline, debug/long, or QOS
-  policy layouts.
-- Use `values.qosConfiguration.enabled=true` only with QOS-capable profiles
-  where the chart should manage SlurmDBD accounts, QOS rows, and associations.
-- Use direct `config.yaml` Helm values only for advanced overrides that the
-  guided profile intentionally does not expose.
-- Use `scontrol reconfigure` only for temporary/manual Slurm experiments. If a
-  plugin-level change reports that a daemon restart is required, plan a
-  maintenance window and make the persistent change through Soperator values.
+Then run `nebius-cxcli soperator upgrade <config.yaml> --target <target> --to-chart-version <chart-version>`
+or, for manual desired-state changes, `nebius-cxcli render <config.yaml>` and
+`nebius-cxcli deploy <config.yaml>`.
+The rendered Soperator output remains a static post-Flux manifest even when the
+source is OCI; this avoids the Helm release Secret size limit for the Soperator
+umbrella chart.
 
 ### External Soperator Onboarding
+
+For external Soperator clusters, start with onboarding instead of the
+Terraform-managed MK8s upgrade commands:
+
+```bash
+nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>
+nebius-cxcli validate <config.yaml>
+nebius-cxcli render <config.yaml>
+```
+
+If onboarding records no external-upgrade-owned actions, use the normal deploy path:
+
+```bash
+nebius-cxcli deploy <config.yaml>
+```
+
+If onboarding records external-upgrade-owned actions, run `ext-soperator upgrade`
+as the guarded upgrade/adoption workflow:
+
+```bash
+nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run
+nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --execute --approve
+```
+
+Use `ext-soperator onboard` plus `ext-soperator upgrade` when the source cluster
+is not yet under cxcli Soperator management or when onboarding found a source
+Soperator that must be upgraded while adopting or changing layout. In that case
+the accepted upgrade profile can combine adoption, Soperator chart upgrade to
+the cxcli-pinned target, external MK8s control-plane and node-template upgrade,
+storage remediation, compute remediation, target GPU stack reconciliation when
+paired with external upgrade work, and final cutover in one guarded workflow. That is
+why external upgrade reads the source discovery bundle and accepted action plan, prints
+external node-template and target GPU stack reconciliation as their own required
+actions when present, and checkpoints phase state instead of acting like a plain
+Helm chart bump.
+
+Underlying MK8s upgrade ownership is different for managed and external targets:
+
+- `upgrade node-template` and `upgrade node-group` operate on Terraform-managed `infra:mk8s`
+  rows.
+- Onboarded external MK8s clusters are not Terraform-managed, so those commands
+  do not upgrade the external cluster or its node groups.
+- External Soperator upgrade owns external Kubernetes minor, node OS image, and
+  Nebius-image GPU-stack upgrades selected by onboarding. It uses direct Nebius
+  SDK/API cluster and node-group update calls, upgrades the
+  control plane first, then updates service-role node groups serially and
+  worker node groups with zero-surge by default, or safe-surge when selected.
+  Service groups run serially; worker safe-surge runs in bounded waves. It does
+  not report completion until the live control plane and selected node groups
+  match the requested Kubernetes version, OS image, and Nebius `drivers_preset`
+  / CUDA stack.
+- For external node-group template updates, upgrade snapshots each original
+  node-group strategy and restores it after that group finishes. Service-role
+  groups use the selected temporary strategy one group at a time. zero-surge
+  sets `max_surge=0`, `max_unavailable=1`, `drain_timeout=30m` and quiesces
+  login workloads, one-node service workloads, and known drain-blocking webhook
+  replicas. Worker groups also default to zero-surge; safe-surge
+  (`max_surge=1`, `max_unavailable=0`,
+  `drain_timeout=30m`) applies to service groups and runs workers in bounded
+  waves only when selected, after
+  quota/capacity, worker-node health, and Slurm queue preflights pass. Set
+  `drain_timeout: none` when
+  waiting indefinitely is safer than provider drain fallback. CPU node groups
+  that carry stale GPU driver presets are reset to the CPU-supported empty
+  preset before rollout, and login plus one-node controller/accounting groups
+  temporarily quiesce their Soperator workloads and known drain-blocking webhook
+  replicas, then restore them after the matching node-group update.
+- After an external target has been onboarded and deployed under cxcli app
+  management with no external-upgrade-owned work remaining, future Soperator chart
+  upgrades can use `soperator upgrade --target <target>`; the external cluster
+  lifecycle still remains outside Terraform ownership.
 
 Use onboarding when the cluster already exists in Nebius MK8s and should not be
 Terraform-owned by cxcli:
@@ -3534,9 +3396,10 @@ deploy:
 ```
 
 When onboarding accepts external node-template work, the same target also stores
-the locked next-hop path. `node_template_upgrade.target_k8s_version` records the
-accepted Kubernetes target for that hop; skipped minors are rejected before this
-plan is written:
+the locked upgrade path. `node_template_upgrade.target_k8s_version` records the
+accepted Kubernetes target requested by onboarding, while `upgrade_path`
+records the ordered one-minor segments that `ext-soperator upgrade` executes;
+unsupported target jumps are rejected before this plan is written:
 
 ```yaml
 deploy:
@@ -3797,254 +3660,393 @@ Phases complete only when their live prerequisites are absent or satisfied;
 otherwise cxcli writes the pending phase and reason to the checkpoint for the
 next explicit action.
 
-### Soperator Cluster Upgrade
+### Jail Upgrade
 
-A cxcli-managed Soperator cluster upgrade can involve the underlying MK8s
-cluster/node groups, the Soperator Helm chart/app row, or both. Use
-`nebius-cxcli soperator upgrade` as the canonical maintenance-window command:
-pass `--to-k8s-version`, `--to-os`, or `--to-gpu-stack-preset` only when the
-MK8s node-template should change, and pass `--to-chart-version` only when the
-Soperator chart should change.
+The Soperator jail is the shared Linux root filesystem mounted by Slurm login
+and worker pods. The desired jail content comes from
+`SlurmCluster.spec.populateJail.image`, but changing that image or upgrading the
+Helm chart does not rewrite an already-populated jail by itself. cxcli handles
+that boundary through the `populate-jail-refresh` phase in `soperator upgrade`
+and `ext-soperator upgrade`.
+Discovery calls the Jail rootfs version the populate-jail image tag for human
+readability, while planning compares full image references.
 
-Use `upgrade node-template` separately only when you intentionally want a
-standalone Terraform-managed MK8s upgrade outside the Soperator maintenance
-window:
+The refresh uses an active/passive rootfs model. One physical jail backing store
+contains two logical rootfs slots plus one shared persistent-mount area:
+
+- `slot-a`: one rootfs generation.
+- `slot-b`: the other rootfs generation.
+- the active slot: the slot currently mounted as `/mnt/jail` by login and
+  worker consumers.
+- the passive slot: the inactive slot that cxcli can safely repopulate with the
+  target populate-jail image.
+- the shared area: customer-owned paths such as `/home`, `/data`, or `/scripts`
+  that must survive rootfs replacement.
+
+For cxcli-managed clusters, the default store is
+`/mnt/jail-store/rootfs/slot-a` and `/mnt/jail-store/rootfs/slot-b`, with
+persistent mounts under the same physical SFS, for example
+`/mnt/jail-store/shared/home`, `/mnt/jail-store/shared/data`, and
+`/mnt/jail-store/shared/scripts`. Those directories are not additional rootfs
+slots and do not need separate physical SFS filesystems; the chart models each
+one as a stable persistent mount and attaches it back into whichever rootfs slot
+is active. For external single-SFS adoption, cxcli keeps the existing physical
+jail SFS, creates logical slots under `/mnt/jail/.cxcli/rootfs`, and treats the
+legacy `/mnt/jail` root as the active rootfs until the first switch succeeds.
+
+The Jail Upgrade rootfs-refresh process is:
+
+1. cxcli plans whether a refresh is required. `auto` refreshes when the target
+   populate-jail image changed, or when selected chart/rootfs evidence means
+   compatibility cannot be proven. `force` always refreshes. `manual` stops and
+   prints passive-slot instructions.
+2. cxcli verifies persistent jail mounts before any destructive overwrite.
+   `/home` is automatically modeled as a persistent jail mount. Other
+   customer-owned paths, such as `/data`, `/scripts`, or `/checkpoints`, must
+   be declared with `--jail-persistent-mount <mountPath>=<localPath>`.
+3. cxcli runs a passive-slot capacity preflight. For external adoption it
+   excludes `.cxcli` and configured persistent-mount source paths from the
+   active rootfs estimate, measures the persistent-mount data separately, and
+   requires enough space on the same physical jail SFS for both the passive
+   rootfs slot and the one-time shared-data copy. If capacity is short, the
+   existing jail SFS resize handler runs before any copy or rootfs mutation.
+4. During first adoption from a legacy rootfs, cxcli drains Slurm with the
+   selected `--job-policy`, holds login and worker consumers at zero writers,
+   and runs a Kubernetes migration Job before passive-slot population. The Job
+   mounts the existing jail PVC once at `/store`, copies paths such as
+   `/store/home`, `/store/data`, and `/store/scripts` into
+   `/store/shared/home`, `/store/shared/data`, and `/store/shared/scripts`, and
+   preserves ownership, permissions, symlinks, ACLs, and xattrs where the
+   runtime supports them. Completion markers live under
+   `/store/.cxcli/persistent-migrations/`; reruns skip only marked completed
+   paths and fail closed on source/target overlap, top-level source symlinks,
+   target symlinks, or unmarked non-empty targets.
+   If a later refresh step fails after the copy is marked complete, cxcli keeps
+   login/worker writers held and Slurm quiet instead of reopening legacy-rootfs
+   writes that would make the shared copy stale.
+5. cxcli applies temporary refresh values and creates a Kubernetes Job named
+   like `<target>-populate-jail-passive-<slot>`. That Job runs the target
+   populate-jail image and mounts only the passive slot PVC at `/mnt/jail`,
+   so it writes the new rootfs generation without changing current login or
+   worker consumers.
+6. After the Job completes with the expected image, cxcli verifies that the
+   login Service still has at least one ready EndpointSlice backend before
+   switching consumers. During the first-adoption migration window, login and
+   worker consumers are held for the copy and this pre-switch endpoint check is
+   skipped until consumers are restored after the switch.
+7. cxcli switches Helm values so the passive slot becomes the active slot:
+   login/controller/rest jail `volumeSourceName` values and worker NodeSet jail
+   PVC references are updated to the refreshed slot. The previous active slot
+   becomes the rollback slot.
+8. Soperator reconciles the changed SlurmCluster/NodeSet desired state. For a
+   first-adoption migration, cxcli restores the recorded login and worker sizes
+   after the switch. New or restarted login and worker pods mount the refreshed
+   rootfs, and persistent mounts such as `/home`, `/data`, and `/scripts` are
+   mounted back into the new rootfs so user data stays outside the replaceable
+   rootfs slots.
+9. cxcli resumes Slurm partitions and runs postflight validation. The previous
+   slot remains available for rollback until the guarded validation path has
+   passed.
+
+During switch-over, the physical backing store contains both rootfs generations,
+and the chart exposes both slot volumes as possible `volumeSources`. The
+populate Job is connected to the passive slot while existing login and worker
+pods still use the old active slot. During the consumer rollout, the cluster can
+briefly contain old pods using the old slot and replacement pods using the new
+slot. A single login or worker pod is not expected to run with both slot-a and
+slot-b mounted as two active root filesystems. Each consumer has one main jail
+rootfs mount; persistent submounts such as `/home`, `/data`, and `/scripts`
+are separate overlays from the shared area and are preserved across both rootfs
+generations.
+
+The one-time migration happens only while
+`jailRootfs.adoption.activeSource == "legacy-rootfs"`. After cxcli has copied
+the declared persistent paths into the shared area and switched consumers to a
+slot-backed rootfs, those paths are external to the rootfs lifecycle. Later
+Jail Upgrade runs repopulate only the passive rootfs slot and keep mounting the
+same shared paths into each newly active slot; they do not copy `/home`,
+`/data`, `/scripts`, or other declared persistent paths again. The old legacy
+rootfs and old in-rootfs data remain untouched for rollback until an explicit
+cleanup policy is added.
+
+![Soperator jail upgrade workflow](docs/jail-upgrade-workflow.png)
+
+### Soperator Slurm Scheduling And Command Examples
+
+This section is for self-managed Soperator clusters deployed by cxcli. The
+Soperator Helm chart remains the owner of `SlurmCluster`, `NodeSet`, partitions,
+and rendered `slurm.conf`; make persistent changes in `config.yaml` / Helm
+values, then `render` and `deploy` again. Do not edit rendered ConfigMaps for a
+durable change because the operator can reconcile them back. For Managed
+Soperator, use the Nebius Console or Nebius support workflow for settings that
+are not exposed in the managed service UI.
+
+Slurm concepts used by the bundled profiles:
+
+The important split is ownership. The Helm chart owns persistent Slurm
+resources and `slurm.conf` rendering. cxcli selects bundled profiles and writes
+Helm values into `config.yaml`. Slurm users still own per-job choices such as
+`--qos`, `--nice`, `--time`, and `--requeue`.
+For production clusters, cxcli keeps raw profile-owned `inputs.node_groups.*`
+prompts hidden but exposes `inputs.soperator.*_node_count` helpers for CPU
+service-role counts and `inputs.soperator.*_autoscaling` helpers for every
+Soperator-managed role. The `system` service role defaults to autoscaling from
+3 to 5 nodes; disabling that helper falls back to three fixed nodes.
+`controller`, `login`, and `accounting` default to two fixed nodes each, with
+their autoscaling helpers disabled unless the operator enables them. Worker
+fixed sizing is shape-specific:
+`soperator.worker_cpu_total_nodes` / `worker_cpu_nodes_per_group` for CPU
+workers and `soperator.worker_gpu_total_nodes` /
+`worker_gpu_nodes_per_group` for GPU workers. cxcli writes
+`soperator.worker_node_groups.<worker>` entries for the generated shards, with
+canonical `autoscaling` and `ephemeral_nodes` controls ready to edit. The
+selected profile's per-group limit is enforced before materialization; Nebius
+production profiles cap worker shards at 100 MK8s nodes per generated group.
+The `create` wizard uses `autoscaling.enabled` as the per-shard Infra/MK8s worker
+autoscaling toggle: answering `true` also writes same-shard
+`ephemeral_nodes.enabled=true` and asks min/max, with max defaulting to that
+shard's generated capacity, while answering `false` clears same-shard
+autoscaling bounds and writes `ephemeral_nodes.enabled=false`. When more than
+one generated worker shard exists, the wizard first offers a synthetic bulk
+apply-to-all choice for all CPU worker shards, all GPU worker shards, or all CPU
+and GPU worker shards. The mixed CPU+GPU helper is shown as
+`all_worker_shards_apply_to_all` and defaults to `true`; accepting it asks one
+`autoscaling.enabled` prompt and writes only canonical per-shard controls, while
+declining keeps the per-shard prompts. No bulk key is saved. The wizard asks
+`worker_ephemeral_nodes.suspend_time_seconds` only after at least one shard has
+autoscaling-backed ephemeral nodes enabled. In hand-authored config, enabling a
+shard's `autoscaling` block renders K8s autoscaling min/max values instead of
+fixed `node_count`, and preserves an explicit `0..0` scale-to-zero range. Each
+`worker_*_total_nodes` value is a Kubernetes worker host count for that shape,
+not total GPU count: Soperator worker replicas match the worker hosts, and GPU
+count per host is written to `slurmd.resources.gpu`.
+Current worker autoscaling remains maximum-capacity materialization unless
+that same shard's `ephemeral_nodes.enabled=true`. In that mode cxcli derives
+`initialNumberEphemeralNodes` from the shard's autoscaling `min_node_count` for
+CPU workers, raises GPU worker shards to at least one initial active worker when
+max capacity is positive so Soperator can seed GPU libraries into the jail,
+writes global `slurmConfig.suspendTime` from
+`worker_ephemeral_nodes.suspend_time_seconds`, and leaves day-2 active-node
+changes to Slurm power control / `NodeSetPowerState`.
+CPU service-role counts are independent of worker sharding. CPU service-role
+autoscaling must keep `max_node_count` at least `1`.
+
+| Concept | Meaning | Handled by the Helm chart | Handled by cxcli | If not fully handled, why and how to cover it |
+| --- | --- | --- | --- | --- |
+| `SlurmCluster` | The root Soperator custom resource. It is the object Soperator reconciles into controller, login, accounting, worker, partition, storage, and `slurm.conf` state. | Yes. The chart renders the `SlurmCluster` CR and feeds it `slurmConfig`, `customSlurmConfig`, `partitionConfiguration`, NodeSets, filters, and storage values. | Indirectly. cxcli does not render `SlurmCluster` itself; it materializes profile choices and Helm values that the chart renders. | Do not edit the rendered CR or ConfigMaps for durable policy. Add or override chart values in `config.yaml`; if the chart lacks a common durable field, add a typed chart value first, then let cxcli profiles use it. |
+| `NodeSet` | Slurm worker capacity, usually mapped to Kubernetes node groups such as `worker`, `worker-cpu`, or `worker-gpu`. | Yes. The chart renders NodeSet CRs, worker filters, features, GPU/GRES metadata, and role placement. | Yes. The selected `values.nodesetsProfile` materializes the worker layout, node-group mapping, and generated MK8s node groups for production mode. | Physical capacity is still Terraform/MK8s-owned. Use cxcli profiles for standard layouts, or direct Helm values for custom worker shapes. |
+| `NodeConfigurator` | Soperator host-preparation machinery. The chart also exposes an optional rebooter helper for maintenance workflows. | Yes. The chart renders the NodeConfigurator resources and keeps the host-setup carrier valid even when the rebooter is disabled. | Yes for gates/defaults. cxcli leaves rebooter-style maintenance behavior off unless the operator opts in. | This is not Slurm scheduling policy. Do not use it to express job restart or preemption behavior. |
+| `Partition` | A Slurm queue plus policy. It selects one or more NodeSets and carries settings such as `Default`, `Hidden`, `State`, `DefaultTime`, `MaxTime`, `PriorityTier`, `PreemptMode`, `AllowQos`, and resource defaults. | Yes. The chart renders `values.partitionConfiguration` into `SlurmCluster.spec.partitionConfiguration`; typed `partitions[].policy` fields are preferred, with per-partition `config` as the escape hatch. | Yes. `values.partitionProfile` selects bundled layouts such as `shape-default`, `with-debug-long`, and `with-qos-preemption`. | If a partition token is missing from typed `policy`, use the partition `config` escape hatch for a one-off. Add a typed chart field when the token should become a supported contract. |
+| `PriorityTier` | Partition scheduling tier. Higher tiers are evaluated before lower tiers. With `PreemptType=preempt/partition_prio`, it also becomes the tier used for partition-priority preemption between jobs that share resources. | Yes. Use `partitionConfiguration.partitions[].policy.priorityTier`. | Yes. Bundled partition profiles set tiers for hidden, shape, debug, long, and QOS-style queues. | A tier alone does not enable preemption. It gives deterministic queue ordering; preemption also requires a matching cluster-wide `PreemptType` and compatible `PreemptMode`. |
+| `PriorityJobFactor` and `PriorityWeightPartition` | Numeric multifactor priority inputs for the partition factor. They are different from `PriorityTier`; they only matter when the partition priority weight is nonzero. | Partially. The chart types `schedulingConfig.priorityWeights.partition` as `PriorityWeightPartition`, but does not currently type per-partition `PriorityJobFactor`. | Not in bundled profiles. The profiles use `PriorityTier` for partition policy and leave `PriorityWeightPartition` unset unless the operator overrides it. | Use per-partition `config: PriorityJobFactor=<n>` today. If partition-factor priority becomes a standard profile need, add a typed `policy.priorityJobFactor` field and chart tests. |
+| `PriorityWeight*` | Cluster-wide weights for Slurm multifactor priority components: age, association, fairshare, partition, job size, QOS, and TRES. A zero weight makes that factor inert. | Yes. Use `values.schedulingConfig.priorityWeights.*`. | Yes for QOS profiles. `with-qos-preemption` sets nonzero QOS and fairshare weights; baseline and debug/long profiles intentionally avoid multifactor tuning. | Keep this as explicit policy. cxcli should not guess weights for a tenant because the right values depend on queue economics and accounting policy. |
+| Fairshare | Slurm accounting fairness based on account/user associations and historical usage. It affects priority only when `PriorityWeightFairshare` is nonzero. | Yes. The chart can render `PriorityWeightFairshare` through `schedulingConfig.priorityWeights.fairshare` and can reconcile association `fairshare` values under `qosConfiguration.associations`. | Partially. QOS-capable profiles enable the fairshare priority weight, but only seed smoke-test-style defaults. | Real fairshare is tenant policy: users, accounts, shares, and reset behavior are not inferable from a node profile. Add accounts/associations in `config.yaml`; for Managed Soperator, coordinate through the managed-service path. |
+| QOS | SlurmDBD quality-of-service objects. QOS can affect priority, limits, and preemption, but QOS priority by itself does not define preemption. With `preempt/qos`, explicit QOS `Preempt` relationships are required. | Yes for self-managed clusters when `values.qosConfiguration.enabled=true`; the hook reconciles accounts, QOS rows, and associations, while partition `AllowQos` remains chart-rendered partition policy. The chart also types `PriorityWeightQOS` and QOS preemption settings. | Yes for the `with-qos-preemption` profile. cxcli writes values for standard `debug`, `eval`, `train`, and `data` QOS objects and fails fast if QOS reconciliation is not enabled. | Managed Soperator cannot run this self-managed chart hook in the managed operator namespace. Keep QOS profiles off there and use the Nebius Console/support workflow for managed-service QOS policy. |
+| `PreemptType` | Cluster-wide plugin that decides which running jobs are eligible as victims, for example `preempt/partition_prio`, `preempt/qos`, or `preempt/none`. | Yes. Use `values.schedulingConfig.preemptType`. | Yes for QOS profiles. `with-qos-preemption` sets `preempt/qos`. Partition-only profiles set tiers but do not need SlurmDBD QOS objects. | If you want actual tier-based victim selection for debug/long queues, add `schedulingConfig.preemptType: preempt/partition_prio` plus an intentional `PreemptMode` policy. |
+| `PreemptMode` and `JobRequeue` | What happens to selected victims: `OFF`, `CANCEL`, `REQUEUE`, `SUSPEND`, `GANG`, or combinations. `REQUEUE` only works for jobs that are requeueable. | Yes. Use `schedulingConfig.preemptMode`, per-partition `policy.preemptMode`, QOS `preemptMode`, and optional `schedulingConfig.jobRequeue`. | Yes where a bundled QOS profile needs it. The QOS profile uses `REQUEUE`; the internal `hidden` ActiveChecks partition can opt out with partition-level `OFF`. | Do not enable `REQUEUE` blindly for long GPU jobs. Use it for checkpointed or restartable work, or submit jobs explicitly with `--requeue`. |
+| Niceness / `--nice` | Per-job user modifier applied directly to job priority. It is useful for voluntarily lowering or adjusting a submitted job's priority. | No persistent chart field. | No profile field. | This is intentionally a submit-time job option, not cluster policy. Put it in `sbatch`/`srun` commands, job wrappers, or team runbooks; there is no `PriorityWeightNice` setting to model in Helm. |
+| `AccountingStorageEnforce` and `EnforcePartLimits` | Slurm.conf enforcement knobs often paired with QOS/accounting policy. `AccountingStorageEnforce` controls association, limit, QOS, and related accounting enforcement; `EnforcePartLimits` controls whether invalid partition requests fail at submit time. | Yes. Use `values.schedulingConfig.accountingStorageEnforce` and `values.schedulingConfig.enforcePartLimits`; the chart renders the matching Slurm.conf lines and rejects typed/raw overlap. | Yes for QOS profiles. `with-qos-preemption` sets `associations,limits,qos` enforcement and `EnforcePartLimits=ANY` through the typed chart surface. | Keep these values explicit. The chart can type and validate the Slurm.conf keys, but operators still own the accounts, associations, QOS objects, and partition limits that enforcement applies to. |
+
+For raw Slurm behavior, cross-check the official Slurm documentation for
+[preemption](https://slurm.schedmd.com/preempt.html),
+[QOS](https://slurm.schedmd.com/qos.html),
+[multifactor priority](https://slurm.schedmd.com/priority_multifactor.html),
+[fair tree / fairshare](https://slurm.schedmd.com/fair_tree.html), and
+[sacctmgr](https://slurm.schedmd.com/sacctmgr.html).
+
+The guided partition profiles are intentionally policy-sized:
+
+- `shape-default` creates the default visible worker partition for the selected
+  CPU, GPU, or mixed worker layout. It does not add QOS/fairshare policy. When
+  ActiveChecks are enabled, cxcli derives their readiness partition and any
+  needed internal hidden partition from the selected profile during render
+  instead of exposing another queue choice.
+- `with-debug-long` adds short `debug` and long `long` queues on the same
+  worker capacity. The live validation profile rendered `debug` as the high
+  tier short queue and `long` as the low tier seven-day queue. This is a Slurm
+  partition policy, not part of the ActiveChecks child chart.
+- `with-qos-preemption` adds `debug`, `eval`, `train`, and `data` policy queues
+  with QOS/fairshare/preemption settings. Select this only when
+  `values.qosConfiguration.enabled=true` is also enabled so the chart hook can
+  reconcile the required SlurmDBD QOS rows, accounts, and associations.
+
+After the cluster is provisioned, connect to the Slurm login service and run
+Slurm commands from the login node. cxcli-generated bundles set the chart
+`clusterName` from the MK8s target id. The examples below use target id
+`soperator-cluster1`, namespace `soperator`, and login SSH service
+`soperator-cluster1-login-svc`. If your target id or `clusterName` differs,
+replace `soperator-cluster1` with that value.
 
 ```bash
-nebius-cxcli upgrade node-template <config.yaml> infra:mk8s@<target> \
-  --to-version <major.minor> \
-  --to-os <os> \
-  --to-gpu-stack-preset <cuda...> \
-  --dry-run
-nebius-cxcli upgrade node-template <config.yaml> infra:mk8s@<target> \
-  --to-version <major.minor> \
-  --to-os <os> \
-  --to-gpu-stack-preset <cuda...>
+# Get the LoadBalancer address for the login SSH service.
+kubectl get svc soperator-cluster1-login-svc -n soperator
 ```
 
-Use `soperator upgrade` when cxcli already manages the Soperator app row and the
-target is already part of the rendered bundle. It owns the full two-layer
-maintenance window when MK8s target flags are supplied:
+Example output; use the `EXTERNAL-IP` value:
+
+```text
+NAME                            TYPE           CLUSTER-IP      EXTERNAL-IP    PORT(S)
+soperator-cluster1-login-svc    LoadBalancer   10.100.46.154   203.0.113.10   22:31010/TCP
+```
+
+Then SSH to the login node with the private key that matches the configured
+`slurmNodes.login.sshRootPublicKeys` value. Add `-i <path-to-private-key>` if
+that key is not the default key loaded by your SSH agent. When cxcli creates or
+adds a Soperator target, it seeds this value from the configured MK8s node-group
+SSH public key for the same target, preferring the node group mapped to the
+Soperator `login` role. If no MK8s node-group public key is configured, set
+`apps.charts[].values.slurmNodes.login.sshRootPublicKeys` in `config.yaml`
+before rendering so the chart does not rely on upstream defaults:
 
 ```bash
-nebius-cxcli soperator upgrade <config.yaml> \
-  --target <target> \
-  --to-chart-version <chart-version> \
-  --to-k8s-version <major.minor> \
-  --dry-run
-nebius-cxcli soperator upgrade <config.yaml> \
-  --target <target> \
-  --to-chart-version <chart-version> \
-  --to-k8s-version <major.minor>
+ssh root@<login-external-ip>
 ```
 
-For Kubernetes minor changes, run provider-supported hops rather than skipping
-intermediate target versions. For example, upgrade a managed cluster from
-`1.31` to `1.34` as `soperator upgrade --to-k8s-version 1.32`, then
-`--to-k8s-version 1.33`, then `--to-k8s-version 1.34`. cxcli rejects
-`1.31 -> 1.33` and `1.31 -> 1.34` requests and prints the next valid hop.
-Managed upgrades do not persist a locked multi-run path because `config.yaml`
-plus live MK8s state are the source of truth for each requested run. cxcli does
-still enforce the committed Soperator/Kubernetes recommended order: if a
-cluster is already at the Soperator staging Kubernetes minor, for example
-`1.32`, and the next requested hop would cross to `1.33` while the Soperator
-chart is still old, `soperator upgrade` blocks the combined run and prints a
-chart-first command. Run the Soperator chart upgrade while Kubernetes stays at
-`1.32`, then rerun `soperator upgrade --to-k8s-version 1.33`, and later
-`--to-k8s-version 1.34` as separate provider-supported hops.
-
-Before mutation, managed and external Soperator upgrade flows evaluate the
-committed Soperator/Kubernetes support policy from
-`soperator_migration_profiles.yaml`. `unsupported` and `not_validated` paths
-fail fast unless `--allow-unsupported-soperator-upgrade-path` is passed; the
-override is recorded in reports and checkpoints, and does not bypass
-Kubernetes minor-hop validation or other safety preflights. Paths marked
-`supported_with_warning` continue without the override but keep the warning in
-the dry-run and execution plans. Paths with no committed support rule are
-treated as `not_validated`.
-
-CXCLI-managed Soperator upgrade follows these stages:
-
-1. Plan and dry run: resolve the target Soperator row, requested chart version,
-   requested MK8s node-template fields, active source-catalog pins, and repeatable
-   dry-run/execute command from the current generated bundle.
-2. Preflight and backup: validate the current bundle, inspect live Soperator and
-   Slurm state, create a restore-capable backup with raw Kubernetes restore
-   material and chart-managed MariaDB accounting dump, capture protected customer
-   state and config fingerprints, and checkpoint any cxcli-owned ActiveChecks
-   suspension.
-3. Slurm and MK8s rollout: when MK8s target flags are supplied, identify affected
-   node groups and Slurm nodes, drain only cxcli-owned Slurm nodes, apply
-   `--job-policy` (`wait-to-finish`, `wait-then-cancel`, `cancel-selected`,
-   `cancel-all`, `requeue-selected`, `requeue-all`, `requeue-hold-selected`, or
-   `requeue-hold-all`), run the Terraform-managed node-template workflow, and
-   wait for stable control-plane and node-group readiness.
-4. Soperator chart apply: when a chart target is requested, update the Soperator
-   app row, rerender and validate the bundle, apply the target Flux/static
-   Soperator manifests, and verify the live chart identity on Kubernetes objects.
-5. Jail Upgrade: when the target populate-jail image changed, selected
-   chart/rootfs evidence requires refresh, or `--populate-jail-refresh force`
-   is selected, apply the selected
-   `--job-policy` to affected worker NodeSets, populate the passive
-   active/passive jail rootfs slot with the target image, switch consumers to
-   the refreshed slot only while the login Service has ready EndpointSlice
-   endpoints during the login StatefulSet rollout, and keep the previous rootfs
-   slot available for rollback until postflight validation passes.
-6. Fast stage verification gates: after ActiveChecks suspension and every
-   completed runtime boundary, including post-MK8s validation, Soperator chart
-   apply, Jail Upgrade, and final post-upgrade MK8s and Helm readiness
-   checks, record a stage-scoped `fast_verification` result before the next
-   stage starts. Setup phases validate evidence only, such as generated-bundle
-   preflight, discovery-bundle path, backup hashes, protected-state baseline,
-   and preflight-validation completion. No-op phases are recorded as `SKIP`;
-   failed gates print the stage validation summary, write the checkpoint/report,
-   and stop the run.
-7. Postflight validation and restore: restore Slurm node state and cxcli-owned
-   ActiveChecks, compare protected config and shared protected-state hashes while
-   ignoring cxcli-owned temporary drain/replacement churn, run required
-   Soperator/Slurm smoke validation, run the shared bounded fast safety verifier,
-   and write `soperator-upgrade-report.md` plus JSON detail.
-8. Resume behavior: rerun the same command from the same workdir when a phase is
-   interrupted. The checkpoint names the active `pending_phase`; rerun restarts
-   that phase from its beginning and uses phase idempotency plus live/config
-   reconciliation to pass already-satisfied work. Completed phases are skipped
-   only after their recorded state still verifies. If the target is already
-   current, the command still performs the verification/report path without
-   replaying unnecessary mutations.
-
-`upgrade node-template` validates the live compatibility matrix, updates
-`config.yaml`, rerenders, validates, applies the staged Terraform changes, waits
-for the MK8s control plane and selected node groups, and writes
-`generated/reports/upgrade-node-template-report.md` /
-`generated/reports/upgrade-node-template-report.json`. Use `upgrade node-group`
-instead when the change is hardware platform, hardware preset, CPU/GPU kind, GPU
-cluster, or InfiniBand fabric; current `upgrade node-group --execute --approve`
-writes the approved pre-mutation checkpoint/report and then stops before live
-replacement/cutover/retirement.
-
-`soperator upgrade` is the cxcli-managed full Soperator cluster upgrade. It
-validates the current generated bundle, writes a restore-capable backup with
-raw Secrets and an optional chart-managed MariaDB accounting DB dump, captures shared
-protected customer state before mutation, handles Slurm worker drain and
-affected-job policy for affected MK8s nodes, runs the node-template workflow when
-requested with stable node-group readiness confirmation, applies the Soperator
-chart when requested, verifies the static Soperator chart version on live
-Kubernetes objects, compares protected customer config fingerprints plus shared
-protected-state before/after hashes while excluding cxcli-owned temporary drain
-state and replacement instance churn, reruns the required Soperator/Slurm smoke
-validation at postflight, runs the same bounded read-only fast safety verifier
-used by external upgrades, gates each completed managed upgrade phase with a
-targeted stage-scoped `fast_verification`, and writes command-owned validation details
-plus the Markdown `Stage Fast Verification` rollup and JSON `stage_verification`
-details in
-`generated/reports/soperator-upgrade-report.md` /
-`generated/reports/soperator-upgrade-report.json`.
-The command prints and checkpoints the current phase with the operator-facing
-top-level stage (`MK8s Node Upgrades`, `Soperator Upgrade`, or `Jail Upgrade`), component label,
-and a concise operator comment from preflight through backup, protected-state
-capture, rollout, postflight, shared safety verification, and final report
-writing. Quiet terminal phases such as discovery, backup, protected-state
-capture, live ActiveChecks patching, Slurm restore, shared safety verification,
-and report writing keep a spinner active. The Markdown and JSON reports include
-the final `current_phase`, its top-level stage, and phase history.
-Use `--approve-remediation` only to record approval for
-`remediation_required` protected-state deltas; blocked data-loss or downtime
-deltas still stop the run.
-`upgrade helm-chart` is intentionally non-Soperator-only and fails fast for
-`apps:soperator@<target>` with the canonical `soperator upgrade` command. The
-cxcli-managed upgrade path does not run the external source-cluster upgrade
-analyzer, does not use
-the external source-cluster `generated/reports/soperator-discovery/<target>/`
-bundle, and
-does not perform external source-cluster storage-copy actions.
-
-If the existing Soperator row uses `repo: ''`, it is pinned to static local
-chart rendering for that project config. To upgrade by the published parent OCI
-package instead, edit that same Soperator row to the OCI repo and target version
-explicitly, for example:
-
-```yaml
-repo: oci://cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/charts/soperator
-version: 4.0.2-ps.3
-```
-
-Then run `nebius-cxcli soperator upgrade <config.yaml> --target <target> --to-chart-version <chart-version>`
-or, for manual desired-state changes, `nebius-cxcli render <config.yaml>` and
-`nebius-cxcli deploy <config.yaml>`.
-The rendered Soperator output remains a static post-Flux manifest even when the
-source is OCI; this avoids the Helm release Secret size limit for the Soperator
-umbrella chart.
-
-For external Soperator clusters, start with onboarding instead of the
-Terraform-managed MK8s upgrade commands:
+Once connected, run the Slurm inspection commands directly:
 
 ```bash
-nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>
-nebius-cxcli validate <config.yaml>
-nebius-cxcli render <config.yaml>
+# List Slurm partitions and their policies.
+# Use this first to confirm which queues exist and which NodeSets they target.
+scontrol show partition
+
+# Inspect one partition in detail.
+# Look for Nodes, PriorityTier, PreemptMode, DefaultTime, MaxTime, Hidden, and AllowQos.
+scontrol show partition debug
+
+# Show global scheduling and preemption settings rendered by Soperator.
+# This confirms whether the cluster is using partition-priority or QOS preemption.
+scontrol show config | egrep "AccountingStorageEnforce|EnforcePartLimits|PreemptType|PreemptMode|PriorityType|PriorityWeight|JobRequeue|SelectTypeParameters"
+
+# Show Slurm nodes as the scheduler sees them.
+# This is useful when a partition exists but jobs stay pending because no nodes are ready.
+sinfo -N -l
+
+# Show the queue with job state, partition, node count, and pending reasons.
+# Run this while testing preemption or QOS policy.
+squeue -l
+
+# Show QOS rows from SlurmDBD.
+# This should show only normal for non-QOS profiles and debug/eval/train/data for the QOS profile.
+sacctmgr -nP show qos format=Name,Priority,MaxWall,MaxTRES,MaxTRESPerJob,Preempt,PreemptMode
+
+# Show account/user associations, default QOS access, and fairshare values.
+# Use this when a job is rejected, pending, or unexpectedly deprioritized.
+sacctmgr -nP show assoc format=User,Account,DefaultQOS,QOS,Fairshare
+
+# Show multifactor priority breakdown when the sprio command is available.
+# This helps explain why one pending job is ordered ahead of another within the same tier.
+sprio -l
+
+# Show a specific job's effective partition, QOS, priority, nice value, and requeue state.
+scontrol show job <JOBID>
+
+# Show completed-job accounting.
+# Use this after a smoke test or preemption test to confirm partition, QOS, priority, start, and end data.
+sacct -j <JOBID> --format=JobID,JobName,Partition,Account,QOS,Priority,Start,End,State
 ```
 
-If onboarding records no external-upgrade-owned actions, use the normal deploy path:
+Run these smoke checks from the same SSH session on the Slurm login node:
 
 ```bash
-nebius-cxcli deploy <config.yaml>
+# CPU profile smoke test. Expected hostname is a worker-cpu pod/node name.
+srun -p cpu -N1 -n1 /bin/hostname
+
+# GPU profile smoke test. Use this after GPU workers are ready.
+srun -p gpu -N1 -n1 --gres=gpu:1 /bin/hostname
+
+# Debug queue smoke test for the QOS profile.
+# This verifies both the debug partition and the debug QOS association.
+srun -p debug --qos=debug -N1 -n1 /bin/hostname
+
+# Long queue example. Use --requeue only for jobs that can safely restart.
+sbatch -p long --requeue --time=7-00:00:00 --wrap 'hostname; sleep 60'
+
+# QOS policy example for a training queue.
+# The requested QOS must exist in SlurmDBD and be allowed for the association.
+sbatch -p train --qos=train --requeue --time=04:00:00 --wrap 'hostname; sleep 60'
 ```
 
-If onboarding records external-upgrade-owned actions, run `ext-soperator upgrade`
-as the guarded upgrade/adoption workflow:
+For longer upgrade-policy demonstrations, use the public sample jobs in
+[`examples/slurm-jobs/`](examples/slurm-jobs/). These examples are generic:
+they test Slurm allocation, job visibility, interruption, wait, cancellation,
+and requeue behavior rather than CPU or GPU performance. Use the helper to
+copy the examples to `/root/testjobs` on the Slurm login node and open an SSH
+session there, then submit the jobs from that login-node session so `sbatch`
+can reach the cluster's Slurm controller:
 
 ```bash
-nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run
-nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --execute --approve
+# On your machine, from the local checkout.
+./examples/slurm-jobs/submit-job-test.sh --login <login-external-ip>
+
+# In the SSH session opened by the helper.
+# Submit one GPU job to the default Nebius main* partition.
+bash ./submit-job-test.sh
+
+# Submit 10 CPU jobs to a cpu partition.
+bash ./submit-job-test.sh --part-type cpu --partition cpu --count 10
+
+# In another login-node shell during the upgrade, watch that the smoke jobs
+# remain visible and uninterrupted for a 15-minute window.
+bash ./submit-job-test.sh --watch-jobs --watch-duration 900
 ```
 
-Use `ext-soperator onboard` plus `ext-soperator upgrade` when the source cluster
-is not yet under cxcli Soperator management or when onboarding found a source
-Soperator that must be upgraded while adopting or changing layout. In that case
-the accepted upgrade profile can combine adoption, Soperator chart upgrade to
-the cxcli-pinned target, external MK8s control-plane and node-template upgrade,
-storage remediation, compute remediation, target GPU stack reconciliation when
-paired with external upgrade work, and final cutover in one guarded workflow. That is
-why external upgrade reads the source discovery bundle and accepted action plan, prints
-external node-template and target GPU stack reconciliation as their own required
-actions when present, and checkpoints phase state instead of acting like a plain
-Helm chart bump.
+By default, Slurm may place multiple sample jobs on one node when the partition
+policy permits it. Add `--exclusive` to request one exclusive node allocation
+per job where the cluster policy allows that. Use `--run-minutes` and
+`--wall-minutes` to change the job duration, `--submit-mode array` for compact
+bulk submission, and `--dry-run` to inspect the generated `sbatch` commands.
+Use `--watch-jobs` during the upgrade to print timestamped `squeue` snapshots
+and optional `sacct` evidence for the observed smoke job IDs.
 
-Underlying MK8s upgrade ownership is different for managed and external targets:
+During Soperator upgrades, a real terminal defaults to the interactive job
+policy, so human operators can keep the command short and still select wait,
+cancellation, requeue, or other available handling for each displayed affected
+job:
 
-- `upgrade node-template` and `upgrade node-group` operate on Terraform-managed `infra:mk8s`
-  rows.
-- Onboarded external MK8s clusters are not Terraform-managed, so those commands
-  do not upgrade the external cluster or its node groups.
-- External Soperator upgrade owns external Kubernetes minor, node OS image, and
-  Nebius-image GPU-stack upgrades selected by onboarding. It uses direct Nebius
-  SDK/API cluster and node-group update calls, upgrades the
-  control plane first, then updates service-role node groups serially and
-  worker node groups with zero-surge by default, or safe-surge when selected.
-  Service groups run serially; worker safe-surge runs in bounded waves. It does
-  not report completion until the live control plane and selected node groups
-  match the requested Kubernetes version, OS image, and Nebius `drivers_preset`
-  / CUDA stack.
-- For external node-group template updates, upgrade snapshots each original
-  node-group strategy and restores it after that group finishes. Service-role
-  groups use the selected temporary strategy one group at a time. zero-surge
-  sets `max_surge=0`, `max_unavailable=1`, `drain_timeout=30m` and quiesces
-  login workloads, one-node service workloads, and known drain-blocking webhook
-  replicas. Worker groups also default to zero-surge; safe-surge
-  (`max_surge=1`, `max_unavailable=0`,
-  `drain_timeout=30m`) applies to service groups and runs workers in bounded
-  waves only when selected, after
-  quota/capacity, worker-node health, and Slurm queue preflights pass. Set
-  `drain_timeout: none` when
-  waiting indefinitely is safer than provider drain fallback. CPU node groups
-  that carry stale GPU driver presets are reset to the CPU-supported empty
-  preset before rollout, and login plus one-node controller/accounting groups
-  temporarily quiesce their Soperator workloads and known drain-blocking webhook
-  replicas, then restore them after the matching node-group update.
-- After an external target has been onboarded and deployed under cxcli app
-  management with no external-upgrade-owned work remaining, future Soperator chart
-  upgrades can use `soperator upgrade --target <target>`; the external cluster
-  lifecycle still remains outside Terraform ownership.
+```bash
+nebius-cxcli soperator upgrade CONFIG_YAML --target TARGET \
+  --to-chart-version TARGET_VERSION
+```
+
+How to read the common outputs:
+
+- `shape-default` should show only the selected worker-shape partitions:
+  CPU-only shows `cpu*`, GPU-only shows `gpu*`, and mixed CPU+GPU shows `cpu*`
+  plus `gpu`. The baseline profile does not add QOS/fairshare policy or QOS
+  objects; if your cluster shows extra `PreemptType`, `PriorityWeight*`, or QOS
+  rows, those came from explicit chart values, image defaults, or
+  operator-managed settings. When ActiveChecks are enabled for GPU-capable
+  profiles, cxcli can add an internal `hidden` readiness partition during
+  render; that partition is profile plumbing, not a user queue.
+- `with-debug-long` should add `debug` and `long` partitions. `debug` is the
+  high-tier short queue; `long` is the low-tier seven-day queue. Because these
+  are partition policies, `sacctmgr show qos` still does not need to show
+  `debug` or `long` QOS rows for this profile. Actual preemption for these
+  queues requires an explicit `schedulingConfig.preemptType` such as
+  `preempt/partition_prio`.
+- `with-qos-preemption` should show nonzero `PriorityWeightQOS` and
+  `PriorityWeightFairshare`, `PreemptType=preempt/qos`, QOS rows such as
+  `debug`, `eval`, `train`, and `data`, and associations that allow users to
+  request those QOS values.
+- Preemption only works between jobs that compete for the same resources. If
+  two partitions map to disjoint NodeSets, they will not preempt each other just
+  because one has a higher tier. Use overlapping partitions or QOS policy when
+  that behavior is intentional.
+- Be careful with `REQUEUE` for long GPU jobs. It is useful for checkpointed or
+  restartable work, but it can waste expensive training time for jobs that do
+  not handle restart cleanly.
+
+For operator changes, prefer profile-level config first:
+
+- Use `values.partitionProfile` for the bundled baseline, debug/long, or QOS
+  policy layouts.
+- Use `values.qosConfiguration.enabled=true` only with QOS-capable profiles
+  where the chart should manage SlurmDBD accounts, QOS rows, and associations.
+- Use direct `config.yaml` Helm values only for advanced overrides that the
+  guided profile intentionally does not expose.
+- Use `scontrol reconfigure` only for temporary/manual Slurm experiments. If a
+  plugin-level change reports that a daemon restart is required, plan a
+  maintenance window and make the persistent change through Soperator values.
 
 ### Soperator Rules and Safety Checks
 

@@ -45,6 +45,14 @@ All notable changes to this project are tracked here. This changelog follows
   supported sequential final target such as `1.32 -> 1.33 -> 1.34`, while
   `ext-soperator upgrade` still executes one locked Kubernetes minor hop per
   run.
+- Aligned Soperator upgrade README, design, and docs-alignment assertions so
+  external onboarding describes the full locked upgrade path with one segment
+  executed per `ext-soperator upgrade` run, and managed upgrade docs name the
+  actual postflight/shared-safety verification boundaries.
+- Focused Soperator README and design navigation so managed setup/upgrade,
+  external onboarding/upgrade, shared Jail Upgrade, Slurm examples, and safety
+  checks are grouped in the same operator-facing order, with matching TOC
+  entries and docs-alignment assertions.
 - Fixed `ext-soperator upgrade --populate-jail-refresh force|manual` so
   node-template-only locked segments still schedule and display the
   `populate-jail-refresh` phase.

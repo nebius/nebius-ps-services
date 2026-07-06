@@ -64,8 +64,10 @@ def test_design_architecture_summary_matches_upgrade_surface() -> None:
     )
     assert "pending ActiveChecks restore is still completed" in design_flat
     assert "External Soperator adoption, storage/compute remediation" in design_flat
-    assert "- [Jail Upgrade](#jail-upgrade)" in design
-    assert "## Jail Upgrade" in design
+    assert "  - [Soperator Lifecycle Boundaries](#soperator-lifecycle-boundaries)" in design
+    assert "  - [Soperator Profile Model](#soperator-profile-model)" in design
+    assert "  - [Jail Upgrade](#jail-upgrade)" in design
+    assert "### Jail Upgrade" in design
     assert "active/passive rootfs slots" in design_flat
     assert "shared persistent-mount area on the same physical jail SFS" in design_flat
     assert "/mnt/jail-store/shared/data" in design_flat
@@ -569,15 +571,15 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
         "- [Soperator Commands](#soperator-commands)"
     )
     assert "  - [Soperator Command Map](#soperator-command-map)" in toc
-    assert "  - [Jail Upgrade](#jail-upgrade)" in toc
     assert "  - [CXCLI Managed Soperator Clusters](#cxcli-managed-soperator-clusters)" in toc
+    assert "  - [CXCLI Managed Soperator Upgrade](#cxcli-managed-soperator-upgrade)" in toc
+    assert "  - [External Soperator Onboarding](#external-soperator-onboarding)" in toc
+    assert "  - [External Soperator Upgrade](#external-soperator-upgrade)" in toc
+    assert "  - [Jail Upgrade](#jail-upgrade)" in toc
     assert (
         "  - [Soperator Slurm Scheduling And Command Examples](#soperator-slurm-scheduling-and-command-examples)"
         in toc
     )
-    assert "  - [External Soperator Onboarding](#external-soperator-onboarding)" in toc
-    assert "  - [External Soperator Upgrade](#external-soperator-upgrade)" in toc
-    assert "  - [Soperator Cluster Upgrade](#soperator-cluster-upgrade)" in toc
     assert "  - [Soperator Rules and Safety Checks](#soperator-rules-and-safety-checks)" in toc
     assert "- [Upgrade](#upgrade)" in toc
     assert "  - [When To Use upgrade](#when-to-use-upgrade)" in toc
@@ -598,13 +600,31 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "Soperator Slurm Scheduling" not in catalog_toc
 
     assert "### Soperator Command Map" in soperator
-    assert "### Jail Upgrade" in soperator
     assert "### CXCLI Managed Soperator Clusters" in soperator
-    assert "### Soperator Slurm Scheduling And Command Examples" in soperator
+    assert "### CXCLI Managed Soperator Upgrade" in soperator
     assert "### External Soperator Onboarding" in soperator
     assert "### External Soperator Upgrade" in soperator
-    assert "### Soperator Cluster Upgrade" in soperator
+    assert "### Jail Upgrade" in soperator
+    assert "### Soperator Slurm Scheduling And Command Examples" in soperator
     assert "### Soperator Rules and Safety Checks" in soperator
+    managed_upgrade_section = _section(
+        soperator,
+        "### CXCLI Managed Soperator Upgrade",
+        "### External Soperator Onboarding",
+    )
+    external_onboarding_section = _section(
+        soperator,
+        "### External Soperator Onboarding",
+        "### External Soperator Upgrade",
+    )
+    assert "For external Soperator clusters" not in managed_upgrade_section
+    assert "`ext-soperator onboard` plus `ext-soperator upgrade`" not in (
+        managed_upgrade_section
+    )
+    assert "For external Soperator clusters, start with onboarding" in (
+        external_onboarding_section
+    )
+    assert "Underlying MK8s upgrade ownership is different" in external_onboarding_section
     assert "`nebius-cxcli soperator` is for Soperator app rows that cxcli already manages" in (
         soperator_flat
     )
@@ -676,15 +696,26 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert soperator.index("`nebius-cxcli soperator upgrade") < soperator.index(
         "`nebius-cxcli ext-soperator onboard"
     )
-    assert soperator.index("### Soperator Command Map") < soperator.index("### Jail Upgrade")
-    assert soperator.index("### Jail Upgrade") < soperator.index(
+    assert soperator.index("### Soperator Command Map") < soperator.index(
         "### CXCLI Managed Soperator Clusters"
     )
     assert soperator.index("### CXCLI Managed Soperator Clusters") < soperator.index(
+        "### CXCLI Managed Soperator Upgrade"
+    )
+    assert soperator.index("### CXCLI Managed Soperator Upgrade") < (
+        soperator.index("### External Soperator Onboarding")
+    )
+    assert soperator.index("### External Soperator Onboarding") < soperator.index(
+        "### External Soperator Upgrade"
+    )
+    assert soperator.index("### External Soperator Upgrade") < soperator.index(
+        "### Jail Upgrade"
+    )
+    assert soperator.index("### Jail Upgrade") < soperator.index(
         "### Soperator Slurm Scheduling And Command Examples"
     )
     assert soperator.index("### Soperator Slurm Scheduling And Command Examples") < (
-        soperator.index("### External Soperator Onboarding")
+        soperator.index("### Soperator Rules and Safety Checks")
     )
     assert "Read-only against live cluster state" in soperator
     assert "`--worker-rollout-strategy`, `--worker-wave-groups`" in soperator
@@ -816,7 +847,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     ) in soperator_flat
     assert "Fast stage verification gates: after ActiveChecks suspension" in soperator_flat
     assert "post-MK8s validation, Soperator chart apply, Jail Upgrade" in soperator_flat
-    assert "final post-upgrade MK8s and Helm readiness checks" in soperator_flat
+    assert "postflight validation, and shared safety verification" in soperator_flat
     assert "Postflight validation and restore: restore Slurm node state" in soperator_flat
     assert "JSON `stage_verification` details" in soperator_flat
     assert (
@@ -994,6 +1025,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "move Soperator Slurm scheduling guidance under `Soperator Commands`" in (
         unreleased_flat
     )
+    assert "Focused Soperator README and design navigation" in unreleased_flat
 
 
 def test_docs_define_discover_and_bootstrap_ci_boundaries() -> None:
@@ -1582,6 +1614,7 @@ def test_docs_define_component_selector_contract() -> None:
         in readme_flat
     )
     assert "`deploy.targets[].soperator_onboarding.upgrade_path`" in readme_flat
+    assert "accepted full locked upgrade path" in readme_flat
     assert (
         "Each `ext-soperator upgrade --execute --approve` run advances one locked segment"
         in readme_flat
@@ -1922,6 +1955,7 @@ def test_docs_define_component_selector_contract() -> None:
         "dry-run plan groups target discovery, versions, the full locked path, completed/current/remaining segments"
     ) in design_flat
     assert "external node-template rollout, phases, execution controls" in design_flat
+    assert "execution contracts so operators can scan the plan" in design_flat
     assert (
         "`--execute --approve` refreshes discovery, validates the accepted onboarding analysis"
         in design_flat
@@ -2198,6 +2232,11 @@ def test_design_defines_soperator_profile_policy_model() -> None:
     design_flat = _squash(design)
 
     assert "## Soperator" in design
+    assert "### Soperator Lifecycle Boundaries" in design
+    assert "### Soperator Profile Model" in design
+    assert "The Soperator lifecycle surface is split by ownership" in design
+    assert "External upgrade-owned work stays under `ext-soperator upgrade`" in design
+    assert "Jail Upgrade is a shared Soperator lifecycle boundary" in design
     assert "`component_sources.yaml` keeps the app source" in design
     assert "A non-empty `repo` is an explicit Helm source override in the config row" in (
         design_flat
