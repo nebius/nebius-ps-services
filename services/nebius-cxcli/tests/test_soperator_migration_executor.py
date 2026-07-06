@@ -774,21 +774,58 @@ def _payload(
 
 
 def _locked_upgrade_path_fixture() -> dict[str, Any]:
+    jail_rootfs = {
+        "current_image": "cr.example/populate_jail:3.0.5-slurm-cuda12.8.0",
+        "current_version": "3.0.5-slurm-cuda12.8.0",
+        "current_source": "completed-populate-jail-job",
+        "current_job_name": "mk8s-populate-jail",
+        "live_desired_image": "cr.example/populate_jail:3.0.5-slurm-cuda12.8.0",
+        "live_desired_version": "3.0.5-slurm-cuda12.8.0",
+        "live_desired_source": "slurmcluster.spec.populateJail.image",
+        "slurmcluster_name": "mk8s",
+        "target_image": "cr.example/populate_jail:4.0.1-slurm-cuda12.9.0",
+        "target_version": "4.0.1-slurm-cuda12.9.0",
+        "target_source": "pinned-chart-defaults",
+        "refresh_required": True,
+        "reason": "target populate-jail image differs from current jail rootfs image",
+    }
     return {
         "schema": SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA,
         "locked": True,
         "source_k8s_version": "1.31",
         "target_k8s_version": "1.32",
-        "source_soperator_version": "3.0.5",
-        "target_soperator_version": "4.0.1-ps.1",
+        "soperator_app": {
+            "current_version": "3.0.5",
+            "target_version": "4.0.1",
+            "upgrade_required": True,
+        },
+        "soperator_chart": {
+            "current_version": "3.0.5",
+            "target_version": "4.0.1-ps.1",
+            "upgrade_required": True,
+        },
+        "jail_rootfs": jail_rootfs,
         "segments": [
             {
                 "id": "segment-1-kubernetes-1-31-1-32-soperator",
                 "title": "Kubernetes 1.31 -> 1.32 plus Soperator",
+                "index": 1,
+                "kind": "external-upgrade",
                 "current_k8s_version": "1.31",
                 "target_k8s_version": "1.32",
-                "source_soperator_version": "3.0.5",
-                "target_soperator_version": "4.0.1-ps.1",
+                "soperator_app": {
+                    "current_version": "3.0.5",
+                    "target_version": "4.0.1",
+                    "upgrade_required": True,
+                },
+                "soperator_chart": {
+                    "current_version": "3.0.5",
+                    "target_version": "4.0.1-ps.1",
+                    "upgrade_required": True,
+                },
+                "jail_rootfs": jail_rootfs,
+                "k8s_upgrade_required": True,
+                "soperator_upgrade_required": True,
                 "actions": [
                     "approve-external-soperator-upgrade",
                     "upgrade-external-node-template",
@@ -13145,6 +13182,36 @@ def test_phase_ids_force_populate_jail_refresh_for_node_template_segment() -> No
     assert populate_index < force_phase_ids.index("post-upgrade-mk8s-check")
 
 
+def test_phase_ids_auto_populate_jail_refresh_for_jail_only_segment() -> None:
+    payload = _payload(target_k8s_version="1.32")
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]  # type: ignore[index]
+    report = _source_report(target_k8s_version="1.32")["report"]
+    assert isinstance(onboarding, dict)
+    assert isinstance(report, dict)
+    onboarding["actions"] = ["approve-external-soperator-upgrade"]
+    report["migration_plan"] = []
+    report["jail_rootfs"] = {
+        "current_version": "4.0.2-slurm25.11.3-cuda12.8.0",
+        "target_version": "4.0.2-slurm25.11.3-cuda12.9.0",
+        "refresh_required": True,
+    }
+
+    phase_ids = migration._phase_ids_for_actions(
+        report=report,
+        onboarding=onboarding,
+        populate_jail_refresh="auto",
+    )
+
+    assert phase_ids[:3] == (
+        "discovery-and-plan",
+        "customer-approval",
+        migration.POPULATE_JAIL_REFRESH_PHASE_ID,
+    )
+    assert "external-node-template-upgrade" not in phase_ids
+    assert "rolling-compute-migration" not in phase_ids
+    assert "post-upgrade-mk8s-check" in phase_ids
+
+
 def test_execute_rejects_retired_migration_checkpoint_path(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     checkpoint_path = migration.legacy_soperator_migration_checkpoint_path(
@@ -13315,6 +13382,9 @@ def test_checkpoint_allows_report_refresh_when_resume_plan_omits_terminal_phases
         "validation-and-rollback-hold",
         "retire-old-resources",
     )
+    locked_path = _locked_upgrade_path_fixture()
+    locked_path["segments"][0]["id"] = "segment-1"
+    locked_path["segments"][0]["title"] = "Segment 1"
     checkpoint = migration._checkpoint_for_run(
         existing={
             "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
@@ -13324,10 +13394,7 @@ def test_checkpoint_allows_report_refresh_when_resume_plan_omits_terminal_phases
             "target_version": "4.0.2-ps.3",
             "planned_phases": list(planned_phases),
             "completed_phases": ["rolling-compute-migration"],
-            "locked_upgrade_path": {
-                "schema": SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA,
-                "segments": [{"id": "segment-1", "title": "Segment 1"}],
-            },
+            "locked_upgrade_path": locked_path,
             "upgrade_path_fingerprint": "locked-path-fingerprint",
             "current_segment_id": "segment-1",
             "segment_state": {"segment-1": {"started_at": "old"}},
@@ -13371,6 +13438,9 @@ def test_external_upgrade_reports_checkpoint_planned_populate_jail_when_current_
         "post-upgrade-helm-check",
     )
     segment_id = "segment-1"
+    locked_path = _locked_upgrade_path_fixture()
+    locked_path["segments"][0]["id"] = segment_id
+    locked_path["segments"][0]["title"] = "Segment 1 with Jail Upgrade"
     checkpoint = {
         "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
         "target_ref": "external-cluster",
@@ -13393,10 +13463,7 @@ def test_external_upgrade_reports_checkpoint_planned_populate_jail_when_current_
                 }
             },
         },
-        "locked_upgrade_path": {
-            "schema": SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA,
-            "segments": [{"id": segment_id, "title": "Segment 1 with Jail Upgrade"}],
-        },
+        "locked_upgrade_path": locked_path,
         "upgrade_path_fingerprint": "locked-path-fingerprint",
         "current_segment_id": segment_id,
         "completed_segment_ids": [segment_id],

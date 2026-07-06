@@ -90,17 +90,18 @@ _SOPERATOR_ONBOARDING_NODE_TEMPLATE_KEYS = frozenset(
 )
 _SOPERATOR_LOCKED_UPGRADE_PATH_KEYS = frozenset(
     {
+        "jail_rootfs",
         "locked",
         "recommended_order",
         "recommended_order_policy",
         "schema",
         "segments",
         "source_k8s_version",
-        "source_soperator_version",
+        "soperator_app",
+        "soperator_chart",
         "support_rule_id",
         "support_status",
         "target_k8s_version",
-        "target_soperator_version",
     }
 )
 _SOPERATOR_LOCKED_UPGRADE_PATH_SEGMENT_KEYS = frozenset(
@@ -109,13 +110,34 @@ _SOPERATOR_LOCKED_UPGRADE_PATH_SEGMENT_KEYS = frozenset(
         "current_k8s_version",
         "id",
         "index",
+        "jail_rootfs",
         "k8s_upgrade_required",
         "kind",
+        "soperator_app",
+        "soperator_chart",
         "soperator_upgrade_required",
-        "source_soperator_version",
         "target_k8s_version",
-        "target_soperator_version",
         "title",
+    }
+)
+_SOPERATOR_LOCKED_VERSION_RECORD_KEYS = frozenset(
+    {"current_version", "target_version", "upgrade_required"}
+)
+_SOPERATOR_LOCKED_JAIL_ROOTFS_KEYS = frozenset(
+    {
+        "current_image",
+        "current_job_name",
+        "current_source",
+        "current_version",
+        "live_desired_image",
+        "live_desired_source",
+        "live_desired_version",
+        "reason",
+        "refresh_required",
+        "slurmcluster_name",
+        "target_image",
+        "target_source",
+        "target_version",
     }
 )
 
@@ -266,6 +288,50 @@ def _validate_soperator_onboarding_node_template(
     )
 
 
+def _validate_locked_version_record(record: Any, field_label: str) -> None:
+    if not isinstance(record, Mapping):
+        raise ValueError(f"{field_label} must be a mapping")
+    _validate_unknown_keys(
+        record,
+        allowed_keys=_SOPERATOR_LOCKED_VERSION_RECORD_KEYS,
+        field_label=field_label,
+    )
+    for key in ("current_version", "target_version"):
+        if key not in record:
+            raise ValueError(f"{field_label}.{key} is required")
+        _optional_string_for_validation(record.get(key), f"{field_label}.{key}")
+    if not isinstance(record.get("upgrade_required"), bool):
+        raise ValueError(f"{field_label}.upgrade_required must be true or false")
+
+
+def _validate_locked_jail_rootfs_record(record: Any, field_label: str) -> None:
+    if not isinstance(record, Mapping):
+        raise ValueError(f"{field_label} must be a mapping")
+    _validate_unknown_keys(
+        record,
+        allowed_keys=_SOPERATOR_LOCKED_JAIL_ROOTFS_KEYS,
+        field_label=field_label,
+    )
+    for key in (
+        "current_image",
+        "current_job_name",
+        "current_source",
+        "current_version",
+        "live_desired_image",
+        "live_desired_source",
+        "live_desired_version",
+        "reason",
+        "slurmcluster_name",
+        "target_image",
+        "target_source",
+        "target_version",
+    ):
+        if key in record:
+            _optional_string_for_validation(record.get(key), f"{field_label}.{key}")
+    if not isinstance(record.get("refresh_required"), bool):
+        raise ValueError(f"{field_label}.refresh_required must be true or false")
+
+
 def _validate_locked_upgrade_path_segment(segment: Any, field_label: str) -> None:
     if not isinstance(segment, Mapping):
         raise ValueError(f"{field_label} must be a mapping")
@@ -279,12 +345,22 @@ def _validate_locked_upgrade_path_segment(segment: Any, field_label: str) -> Non
     for key in (
         "current_k8s_version",
         "target_k8s_version",
-        "source_soperator_version",
-        "target_soperator_version",
     ):
         if key not in segment:
             raise ValueError(f"{field_label}.{key} is required")
         _optional_string_for_validation(segment.get(key), f"{field_label}.{key}")
+    _validate_locked_version_record(
+        segment.get("soperator_app"),
+        f"{field_label}.soperator_app",
+    )
+    _validate_locked_version_record(
+        segment.get("soperator_chart"),
+        f"{field_label}.soperator_chart",
+    )
+    _validate_locked_jail_rootfs_record(
+        segment.get("jail_rootfs"),
+        f"{field_label}.jail_rootfs",
+    )
     for key in ("current_k8s_version", "target_k8s_version"):
         _validate_k8s_minor_version_for_validation(segment.get(key), f"{field_label}.{key}")
     for key in ("k8s_upgrade_required", "soperator_upgrade_required"):
@@ -316,14 +392,24 @@ def _validate_soperator_locked_upgrade_path(upgrade_path: Any, field_label: str)
     for key in (
         "source_k8s_version",
         "target_k8s_version",
-        "source_soperator_version",
-        "target_soperator_version",
         "support_status",
         "support_rule_id",
     ):
         if key not in upgrade_path:
             raise ValueError(f"{field_label}.{key} is required")
         _optional_string_for_validation(upgrade_path.get(key), f"{field_label}.{key}")
+    _validate_locked_version_record(
+        upgrade_path.get("soperator_app"),
+        f"{field_label}.soperator_app",
+    )
+    _validate_locked_version_record(
+        upgrade_path.get("soperator_chart"),
+        f"{field_label}.soperator_chart",
+    )
+    _validate_locked_jail_rootfs_record(
+        upgrade_path.get("jail_rootfs"),
+        f"{field_label}.jail_rootfs",
+    )
     for key in ("source_k8s_version", "target_k8s_version"):
         _validate_k8s_minor_version_for_validation(upgrade_path.get(key), f"{field_label}.{key}")
     recommended_order = upgrade_path.get("recommended_order")

@@ -770,7 +770,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "CXCLI-managed Soperator upgrade follows these stages:" in soperator_flat
     assert "Preflight and backup: validate the current bundle" in soperator_flat
     assert "Slurm and MK8s rollout: when MK8s target flags are supplied" in soperator_flat
-    assert "Jail Upgrade: when the target chart/rootfs changed" in soperator_flat
+    assert "Jail Upgrade: when the target populate-jail image changed" in soperator_flat
     assert "The Soperator jail is the shared Linux root filesystem" in soperator_flat
     assert "The refresh uses an active/passive rootfs model" in soperator_flat
     assert "creates a Kubernetes Job named like `<target>-populate-jail-passive-<slot>`" in (
@@ -1623,9 +1623,10 @@ def test_docs_define_component_selector_contract() -> None:
     assert "does not jump straight to the latest supported minor" in readme_flat
     assert "`summary.md` includes `Upgrade Guidance` without gating discovery" in readme_flat
     assert (
-        "that section shows Kubernetes minor hops, the one-shot Soperator hop "
-        "to the cxcli-pinned target"
+        "that section shows Kubernetes minor hops, the current/target Soperator "
+        "chart package state"
     ) in readme_flat
+    assert "Support-policy evidence validates the path but does not by itself mean" in readme_flat
     assert "canonical ordering across the Kubernetes `1.33+` boundary" in readme_flat
     assert (
         "print the matched Soperator/Kubernetes upgrade-path rule during the decision summary"
@@ -1803,9 +1804,11 @@ def test_docs_define_component_selector_contract() -> None:
     assert "The discovery summary printed during onboarding is read-only" in design_flat
     assert "includes the discovered/current and target Kubernetes minor versions" in design_flat
     assert "plus `Upgrade Guidance`" in design_flat
-    assert "Kubernetes minor hops, the one-shot Soperator hop" in design_flat
+    assert "Kubernetes minor hops, current/target Soperator chart package state" in design_flat
+    assert "current/target Jail rootfs image-tag state" in design_flat
     assert "canonical ordering across the Kubernetes `1.33+` boundary" in design_flat
-    assert "Soperator `1.22.3 -> 4.0.2-ps.3`" in design_flat
+    assert "Soperator chart `1.22.3 -> 4.0.2-ps.3`" in design_flat
+    assert "Jail rootfs image tag `1.22.3-slurm23.11.6-cuda12.4.0 ->" in design_flat
     assert "This ordering is intentional" in design_flat
     assert "where the required Nebius GPU image/CUDA stack targets" in design_flat
     assert "before the cluster reaches the Kubernetes `1.33+` boundary" in design_flat

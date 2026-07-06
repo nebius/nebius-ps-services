@@ -424,6 +424,7 @@ from .soperator_child_charts import (
 )
 from .soperator_discovery import (
     load_soperator_discovery_bundle,
+    soperator_discovery_jail_rootfs_record,
     soperator_discovery_report_k8s_versions,
     soperator_discovery_snapshot_control_plane_k8s_version,
 )
@@ -2091,7 +2092,7 @@ ext_soperator_app = typer.Typer(
         "Terraform-owning it. backup/restore move restore-capable Soperator "
         "state to new empty target clusters only. upgrade is only for accepted "
         "onboarding plans that contain external-upgrade-owned actions, including "
-        "Jail Upgrade when Soperator chart/rootfs work is selected."
+        "Jail Upgrade when target image/action evidence requires a rootfs refresh."
     ),
     epilog=(
         "Workflow: nebius-cxcli ext-soperator discover --project-id PROJECT "
@@ -2718,7 +2719,8 @@ _SOPERATOR_UPGRADE_JOB_POLICY_HELP = (
 )
 _SOPERATOR_POPULATE_JAIL_REFRESH_HELP = (
     "Active/passive jail rootfs refresh mode: auto refreshes the passive slot when "
-    "the target chart/rootfs requires it, force refreshes even when unchanged, and "
+    "the target populate-jail image or selected chart/rootfs evidence requires it, "
+    "force refreshes even when unchanged, and "
     "manual stops with passive-slot instructions instead of proceeding."
 )
 _SOPERATOR_JAIL_SFS_RESIZE_POLICY_HELP = (
@@ -9619,8 +9621,43 @@ def _write_soperator_upgrade_report(
     safety = checkpoint.get("upgrade_safety")
     safety_map = safety if isinstance(safety, Mapping) else {}
     stage_verification_reports = _soperator_upgrade_stage_verification_reports(checkpoint)
+    current_chart_version = _non_empty_text(checkpoint.get("current_version"))
+    target_chart_version = _non_empty_text(checkpoint.get("target_version"))
+    current_app_version = normalize_soperator_release_version(current_chart_version)
+    target_app_version = normalize_soperator_release_version(target_chart_version)
+    soperator_app_record = _locked_upgrade_path_version_record(
+        current_version=current_app_version,
+        target_version=target_app_version,
+    )
+    soperator_chart_record = _locked_upgrade_path_version_record(
+        current_version=current_chart_version,
+        target_version=target_chart_version,
+    )
+    target_jail_rootfs = _soperator_target_jail_rootfs_versions()
+    populate_state = checkpoint.get("populate_jail_refresh")
+    populate_state_map = populate_state if isinstance(populate_state, Mapping) else {}
+    populate_result = populate_state_map.get("result")
+    populate_result_map = populate_result if isinstance(populate_result, Mapping) else {}
+    jail_target_image = _non_empty_text(
+        populate_result_map.get("target_image")
+    ) or _non_empty_text(target_jail_rootfs.get("target_image"))
+    jail_rootfs_record = {
+        "current_image": "",
+        "current_version": "",
+        "current_source": "not-detected",
+        "target_image": jail_target_image,
+        "target_version": _soperator_container_image_version(jail_target_image),
+        "target_source": _non_empty_text(target_jail_rootfs.get("target_source")),
+        "refresh_required": bool(populate_state_map.get("required")),
+        "reason": _non_empty_text(populate_result_map.get("reason"))
+        or _non_empty_text(populate_state_map.get("reason"))
+        or "populate-jail image evidence is incomplete",
+    }
     json_payload = dict(checkpoint)
     json_payload["stage_verification"] = stage_verification_reports
+    json_payload["soperator_app"] = soperator_app_record
+    json_payload["soperator_chart"] = soperator_chart_record
+    json_payload["jail_rootfs"] = jail_rootfs_record
     for key in (
         "protected_customer_state",
         "remediation_approvals",
@@ -9809,6 +9846,9 @@ def _write_soperator_upgrade_report(
             f"- Target: `{checkpoint.get('target_ref', '')}`",
             f"- Release: `{checkpoint.get('namespace', 'default')}/{checkpoint.get('release_name', '')}`",
             f"- Chart version: `{checkpoint.get('current_version') or 'unset'}` -> `{checkpoint.get('target_version') or 'unset'}`",
+            f"- Soperator app version: `{soperator_app_record.get('current_version') or 'unknown'}` -> `{soperator_app_record.get('target_version') or 'unknown'}`",
+            f"- Soperator chart package: `{soperator_chart_record.get('current_version') or 'unknown'}` -> `{soperator_chart_record.get('target_version') or 'unknown'}`",
+            f"- Jail rootfs version: `{jail_rootfs_record.get('current_version') or 'unknown'}` -> `{jail_rootfs_record.get('target_version') or 'unknown'}`",
             f"- Status: `{checkpoint.get('status', 'unknown')}`",
             f"- Current phase: `{current_phase_id}`"
             f"{current_phase_stage_text}{current_phase_component_text} - {current_phase_comment}",
@@ -12057,12 +12097,12 @@ def _external_soperator_upgrade_backup_transition(
     segment = current_segment if isinstance(current_segment, Mapping) else {}
     return _ExternalSoperatorUpgradeBackupTransition(
         source_chart_version=(
-            _non_empty_text(segment.get("source_soperator_version"))
+            _locked_upgrade_path_record_value(segment, "soperator_chart", "current_version")
             or _non_empty_text(onboarding.get("source_version"))
             or _non_empty_text(report.get("source_version"))
         ),
         target_chart_version=(
-            _non_empty_text(segment.get("target_soperator_version"))
+            _locked_upgrade_path_record_value(segment, "soperator_chart", "target_version")
             or _non_empty_text(onboarding.get("target_version"))
             or _non_empty_text(report.get("target_version"))
         ),
@@ -12777,6 +12817,20 @@ def _write_soperator_discovery_bundle_from_snapshot(
         namespace=namespace_value,
         kube_context=kube_context,
     )
+    target_versions = {
+        "chart_version": _non_empty_text(to_chart_version),
+        "k8s_version": _non_empty_text(to_k8s_version),
+        "os": _non_empty_text(to_os),
+        "gpu_stack_preset": _non_empty_text(to_gpu_stack_preset),
+        "jail_rootfs": _soperator_target_jail_rootfs_versions(),
+    }
+    report_payload = report.to_dict() if hasattr(report, "to_dict") else dict(report)
+    report_payload["jail_rootfs"] = soperator_discovery_jail_rootfs_record(
+        snapshot=snapshot,
+        report=report_payload,
+        target_versions=target_versions,
+    )
+    _apply_soperator_discovery_version_decision(report_payload)
     command_args = _soperator_discovery_command_args(
         command_group=command_group,
         config_path=config_path,
@@ -12800,7 +12854,7 @@ def _write_soperator_discovery_bundle_from_snapshot(
         project_dir,
         target_ref=target_ref,
         snapshot=snapshot,
-        report=report,
+        report=report_payload,
         cluster_id=cluster_id,
         cluster_name=cluster_name,
         source_kind=source_kind,
@@ -12811,13 +12865,8 @@ def _write_soperator_discovery_bundle_from_snapshot(
         chart_values=chart_values,
         slurm_snapshot=slurm_snapshot,
         accounting_snapshot=accounting_snapshot,
-        target_versions={
-            "chart_version": _non_empty_text(to_chart_version),
-            "k8s_version": _non_empty_text(to_k8s_version),
-            "os": _non_empty_text(to_os),
-            "gpu_stack_preset": _non_empty_text(to_gpu_stack_preset),
-        },
-        guidance_lines=_soperator_discovery_upgrade_guidance_lines(report),
+        target_versions=target_versions,
+        guidance_lines=_soperator_discovery_upgrade_guidance_lines(report_payload),
         output_dir=output_dir,
         redaction=normalized_redaction,
     )
@@ -13192,6 +13241,14 @@ def _print_soperator_discovery_result(path: Path) -> None:
             console.print(f"Soperator chart version: {chart_version}")
         if app_version and app_version not in {source_version, chart_version}:
             console.print(f"Soperator app version: {app_version}")
+        jail_rootfs = payload.get("jail_rootfs")
+        jail_rootfs_version = (
+            _non_empty_text(jail_rootfs.get("current_version"))
+            if isinstance(jail_rootfs, Mapping)
+            else ""
+        )
+        if jail_rootfs_version:
+            console.print(f"Jail rootfs version: {jail_rootfs_version}")
         report = payload.get("report")
         if isinstance(report, Mapping):
             for line in _soperator_discovery_upgrade_guidance_lines(report):
@@ -19413,6 +19470,75 @@ def _soperator_catalog_pinned_versions() -> tuple[str, str]:
     return chart_version, app_version
 
 
+def _soperator_catalog_chart_values() -> Mapping[str, Any]:
+    chart = helm_chart_source_by_id(_SOPERATOR_APP_ID)
+    local_source = getattr(chart, "local_source", None)
+    local_path = _non_empty_text(getattr(local_source, "path", ""))
+    if not local_path:
+        return {}
+    values_yaml = (resolve_component_sources_file().parent / local_path / "values.yaml").resolve()
+    if not values_yaml.exists():
+        return {}
+    with suppress(Exception):
+        payload = yaml.safe_load(values_yaml.read_text(encoding="utf-8")) or {}
+        if isinstance(payload, Mapping):
+            return payload
+    return {}
+
+
+def _soperator_chart_value(
+    values: Mapping[str, Any],
+    defaults: Mapping[str, Any],
+    path: Sequence[str],
+) -> str:
+    value = _non_empty_text(_mapping_path_value(values, ".".join(path)))
+    if value:
+        return value
+    return _non_empty_text(_mapping_path_value(defaults, ".".join(path)))
+
+
+def _soperator_container_image_version(image: Any) -> str:
+    text = _non_empty_text(image)
+    if not text:
+        return ""
+    without_digest, _separator, digest = text.partition("@")
+    last_slash = without_digest.rfind("/")
+    last_colon = without_digest.rfind(":")
+    if last_colon > last_slash:
+        return without_digest[last_colon + 1 :]
+    return digest if digest else ""
+
+
+def _soperator_target_jail_rootfs_versions(
+    chart_values: Mapping[str, Any] | None = None,
+) -> dict[str, str]:
+    values = chart_values if isinstance(chart_values, Mapping) else {}
+    defaults = _soperator_catalog_chart_values()
+    image = _soperator_chart_value(values, defaults, ("images", "populateJail"))
+    values_define_image = bool(
+        _mapping_path_value(values, "images.populateJail")
+        or _mapping_path_value(values, "images.populateJailRepository")
+        or _mapping_path_value(values, "images.populateJailTag")
+        or _mapping_path_value(values, "cudaVersion")
+    )
+    source = "chart-values" if values_define_image else "pinned-chart-defaults"
+    if not image:
+        repository = _soperator_chart_value(
+            values,
+            defaults,
+            ("images", "populateJailRepository"),
+        )
+        tag = _soperator_chart_value(values, defaults, ("images", "populateJailTag"))
+        cuda_version = _soperator_chart_value(values, defaults, ("cudaVersion",)) or "12.9.0"
+        if repository and tag:
+            image = f"{repository}:{tag}-cuda{cuda_version}"
+    return {
+        "target_image": image,
+        "target_version": _soperator_container_image_version(image),
+        "target_source": source if image else "",
+    }
+
+
 def _soperator_onboarding_target_version_default() -> str:
     default_version = _soperator_upgrade_catalog_to_version_default()
     if default_version:
@@ -19854,6 +19980,195 @@ def _soperator_discovery_support_path_values(
     return source_soperator, target_soperator, current_k8s, target_k8s
 
 
+def _soperator_discovery_findings(report: Mapping[str, Any] | Any) -> tuple[Mapping[str, Any], ...]:
+    findings: Any
+    if isinstance(report, Mapping):
+        findings = report.get("findings")
+    else:
+        findings = getattr(report, "findings", ())
+    if not isinstance(findings, Sequence) or isinstance(findings, (str, bytes, bytearray)):
+        return ()
+    return tuple(finding for finding in findings if isinstance(finding, Mapping))
+
+
+def _soperator_discovery_selected_action_ids(report: Mapping[str, Any] | Any) -> set[str]:
+    actions: Any
+    if isinstance(report, Mapping):
+        actions = report.get("actions")
+    else:
+        actions = getattr(report, "actions", ())
+    result: set[str] = set()
+    if not isinstance(actions, Sequence) or isinstance(actions, (str, bytes, bytearray)):
+        return result
+    for action in actions:
+        if isinstance(action, str):
+            action_id = _non_empty_text(action)
+            selected = True
+        elif isinstance(action, Mapping):
+            action_id = _non_empty_text(action.get("id"))
+            selected = action.get("selected") is not False
+        else:
+            continue
+        if action_id and selected:
+            result.add(action_id)
+    return result
+
+
+def _soperator_discovery_live_chart_version(report: Mapping[str, Any] | Any) -> str:
+    if isinstance(report, Mapping):
+        soperator_chart = report.get("soperator_chart")
+        if isinstance(soperator_chart, Mapping):
+            chart_version = _non_empty_text(soperator_chart.get("current_version"))
+            if chart_version:
+                return chart_version
+        chart_version = _non_empty_text(report.get("chart_version"))
+        if chart_version:
+            return chart_version
+    for finding in _soperator_discovery_findings(report):
+        evidence = finding.get("evidence")
+        if not isinstance(evidence, Mapping):
+            continue
+        live_chart = _non_empty_text(evidence.get("live_chart"))
+        if live_chart:
+            return live_chart
+        release = evidence.get("release")
+        if isinstance(release, Mapping):
+            chart_version = _non_empty_text(release.get("chart_version"))
+            if chart_version:
+                return chart_version
+    return ""
+
+
+def _soperator_discovery_target_chart_version(report: Mapping[str, Any] | Any) -> str:
+    target = _soperator_discovery_report_value(report, "target_version")
+    if target:
+        return target
+    evidence = _soperator_discovery_support_evidence(report)
+    return _non_empty_text(evidence.get("target_chart_version")) or _non_empty_text(
+        evidence.get("target_version")
+    )
+
+
+def _soperator_discovery_chart_hops(report: Mapping[str, Any] | Any) -> tuple[str, ...]:
+    target_chart = _soperator_discovery_target_chart_version(report)
+    live_chart = _soperator_discovery_live_chart_version(report)
+    action_ids = _soperator_discovery_selected_action_ids(report)
+    chart_change_required = ONBOARDING_ACTION_UPGRADE_SOPERATOR in action_ids
+    if live_chart and target_chart and live_chart != target_chart:
+        chart_change_required = True
+    if not chart_change_required:
+        return ()
+    source_chart = live_chart or _soperator_discovery_report_value(report, "source_version")
+    if not source_chart:
+        source_chart = _non_empty_text(_soperator_discovery_support_evidence(report).get("source_version"))
+    values = [_non_empty_text(source_chart), _non_empty_text(target_chart)]
+    return tuple(dict.fromkeys(value for value in values if value))
+
+
+def _soperator_discovery_chart_line(report: Mapping[str, Any] | Any) -> str:
+    target_chart = _soperator_discovery_target_chart_version(report)
+    live_chart = _soperator_discovery_live_chart_version(report)
+    hops = _soperator_discovery_chart_hops(report)
+    if len(hops) > 1:
+        return f"  - Soperator chart: {' -> '.join(hops)}"
+    current = live_chart or target_chart
+    if current and target_chart and current == target_chart:
+        return f"  - Soperator chart: {target_chart} (current; no chart upgrade required)"
+    if current:
+        return f"  - Soperator chart: {current}"
+    return ""
+
+
+def _soperator_discovery_jail_rootfs_line(report: Mapping[str, Any] | Any) -> str:
+    jail_rootfs: Any
+    if isinstance(report, Mapping):
+        jail_rootfs = report.get("jail_rootfs")
+    else:
+        jail_rootfs = getattr(report, "jail_rootfs", None)
+    if not isinstance(jail_rootfs, Mapping):
+        return ""
+    current = _non_empty_text(jail_rootfs.get("current_version"))
+    target = _non_empty_text(jail_rootfs.get("target_version"))
+    refresh_required = jail_rootfs.get("refresh_required") is True
+    if current and target and current != target:
+        status = "refresh required" if refresh_required else "no refresh required"
+        return f"  - Jail rootfs: {current} -> {target} ({status})"
+    version = current or target
+    if not version:
+        return ""
+    if refresh_required:
+        return f"  - Jail rootfs: {version} (refresh required)"
+    return f"  - Jail rootfs: {version} (current; no refresh required)"
+
+
+def _soperator_discovery_soperator_app_record(
+    report: Mapping[str, Any] | Any,
+) -> dict[str, Any]:
+    current = normalize_soperator_release_version(
+        _soperator_discovery_report_value(report, "source_version")
+    )
+    live_chart = _soperator_discovery_live_chart_version(report)
+    if not current and live_chart:
+        current = normalize_soperator_release_version(live_chart)
+    target_chart = _soperator_discovery_target_chart_version(report)
+    target = normalize_soperator_release_version(target_chart)
+    if not target:
+        _catalog_chart, catalog_app = _soperator_catalog_pinned_versions()
+        target = normalize_soperator_release_version(catalog_app)
+    if not target:
+        target = current
+    return {
+        "current_version": current,
+        "target_version": target,
+        "upgrade_required": bool(current and target and current != target),
+    }
+
+
+def _soperator_discovery_soperator_chart_record(
+    report: Mapping[str, Any] | Any,
+) -> dict[str, Any]:
+    hops = _soperator_discovery_chart_hops(report)
+    live_chart = _soperator_discovery_live_chart_version(report)
+    target_chart = _soperator_discovery_target_chart_version(report)
+    current = live_chart or (hops[0] if hops else "")
+    target = target_chart or (hops[-1] if hops else current)
+    if not current:
+        current = target
+    return {
+        "current_version": current,
+        "target_version": target,
+        "upgrade_required": bool(hops and len(hops) > 1),
+    }
+
+
+def _soperator_discovery_jail_rootfs_record_from_report(
+    report: Mapping[str, Any] | Any,
+) -> dict[str, Any]:
+    jail_rootfs: Any
+    if isinstance(report, Mapping):
+        jail_rootfs = report.get("jail_rootfs")
+    else:
+        jail_rootfs = getattr(report, "jail_rootfs", None)
+    if isinstance(jail_rootfs, Mapping):
+        payload = to_plain_data(dict(jail_rootfs))
+        return dict(payload) if isinstance(payload, Mapping) else {}
+    return {}
+
+
+def _soperator_discovery_version_decision(
+    report: Mapping[str, Any] | Any,
+) -> dict[str, Any]:
+    return {
+        "soperator_app": _soperator_discovery_soperator_app_record(report),
+        "soperator_chart": _soperator_discovery_soperator_chart_record(report),
+        "jail_rootfs": _soperator_discovery_jail_rootfs_record_from_report(report),
+    }
+
+
+def _apply_soperator_discovery_version_decision(report: MutableMapping[str, Any]) -> None:
+    report.update(_soperator_discovery_version_decision(report))
+
+
 def _soperator_discovery_soperator_hops(
     *,
     source_soperator: str,
@@ -19874,7 +20189,7 @@ def _soperator_discovery_upgrade_order_steps(
     if not soperator_after_k8s_min or len(soperator_hops) < 2:
         steps: list[str] = []
         if len(soperator_hops) > 1:
-            steps.append(f"Soperator {' -> '.join(soperator_hops)}")
+            steps.append(f"Soperator chart {' -> '.join(soperator_hops)}")
         if len(k8s_hops) > 1:
             steps.append(f"Kubernetes {' -> '.join(k8s_hops)}")
         if not steps:
@@ -19900,7 +20215,9 @@ def _soperator_discovery_upgrade_order_steps(
     steps: list[str] = []
     if len(k8s_before_soperator) > 1:
         steps.append(f"Kubernetes {' -> '.join(k8s_before_soperator)}")
-    steps.append(f"Soperator {' -> '.join(soperator_hops)} while Kubernetes stays {staging_k8s}")
+    steps.append(
+        f"Soperator chart {' -> '.join(soperator_hops)} while Kubernetes stays {staging_k8s}"
+    )
     if len(k8s_after_soperator) > 1:
         steps.append(f"Kubernetes {' -> '.join(k8s_after_soperator)}")
     if not steps:
@@ -19927,6 +20244,7 @@ def _locked_upgrade_path_action_ids(
     *,
     include_one_time_actions: bool,
     include_node_template: bool,
+    include_jail_refresh: bool = False,
 ) -> tuple[str, ...]:
     base_actions = tuple(
         dict.fromkeys(
@@ -19958,9 +20276,75 @@ def _locked_upgrade_path_action_ids(
         ]
     if include_one_time_actions:
         has_one_time = any(action not in one_time_exclusions for action in selected)
-        if not has_one_time and not include_node_template:
+        if not has_one_time and not include_node_template and not include_jail_refresh:
             return ()
     return tuple(dict.fromkeys(action for action in selected if action))
+
+
+def _locked_upgrade_path_record_value(
+    owner: Mapping[str, Any],
+    record_name: str,
+    key: str,
+) -> str:
+    record = owner.get(record_name)
+    if not isinstance(record, Mapping):
+        return ""
+    return _non_empty_text(record.get(key))
+
+
+def _locked_upgrade_path_bool_value(
+    owner: Mapping[str, Any],
+    record_name: str,
+    key: str,
+) -> bool:
+    record = owner.get(record_name)
+    return isinstance(record, Mapping) and record.get(key) is True
+
+
+def _locked_upgrade_path_version_record(
+    *,
+    current_version: str,
+    target_version: str,
+) -> dict[str, Any]:
+    current = _non_empty_text(current_version)
+    target = _non_empty_text(target_version) or current
+    return {
+        "current_version": current,
+        "target_version": target,
+        "upgrade_required": bool(current and target and current != target),
+    }
+
+
+def _locked_upgrade_path_jail_rootfs_record(
+    jail_rootfs: Mapping[str, Any],
+    *,
+    refresh_required: bool,
+) -> dict[str, Any]:
+    payload = to_plain_data(dict(jail_rootfs))
+    record = dict(payload) if isinstance(payload, Mapping) else {}
+    if not record:
+        record = {
+            "current_image": "",
+            "current_version": "",
+            "current_source": "not-detected",
+            "current_job_name": "",
+            "live_desired_image": "",
+            "live_desired_version": "",
+            "live_desired_source": "",
+            "slurmcluster_name": "",
+            "target_image": "",
+            "target_version": "",
+            "target_source": "",
+            "refresh_required": False,
+            "reason": "populate-jail image evidence is incomplete",
+        }
+    original_refresh_required = record.get("refresh_required") is True
+    record["refresh_required"] = bool(refresh_required)
+    if refresh_required and not original_refresh_required:
+        record["reason"] = "Soperator chart/rootfs work is selected for this locked segment"
+    elif original_refresh_required and not record["refresh_required"]:
+        record["reason"] = "jail rootfs refresh is not scheduled for this locked segment"
+    return record
 
 
 def _locked_upgrade_path_segment(
@@ -19968,17 +20352,26 @@ def _locked_upgrade_path_segment(
     index: int,
     current_k8s_version: str,
     target_k8s_version: str,
-    source_soperator_version: str,
-    target_soperator_version: str,
+    source_app_version: str,
+    target_app_version: str,
+    source_chart_version: str,
+    target_chart_version: str,
+    jail_rootfs: Mapping[str, Any],
     action_ids: Sequence[str],
     include_soperator_change: bool,
+    include_jail_refresh: bool,
     include_k8s_change: bool,
 ) -> dict[str, Any]:
     title_parts: list[str] = []
     if include_k8s_change and current_k8s_version and target_k8s_version:
         title_parts.append(f"Kubernetes {current_k8s_version} -> {target_k8s_version}")
-    if include_soperator_change and source_soperator_version and target_soperator_version:
-        title_parts.append(f"Soperator {source_soperator_version} -> {target_soperator_version}")
+    if include_soperator_change and source_chart_version and target_chart_version:
+        title_parts.append(
+            f"Soperator chart {source_chart_version} -> {target_chart_version}"
+        )
+    if include_jail_refresh:
+        jail_target = _non_empty_text(jail_rootfs.get("target_version"))
+        title_parts.append(f"Jail rootfs {jail_target}" if jail_target else "Jail rootfs refresh")
     if not title_parts:
         title_parts.append("Soperator external upgrade work")
     kind = "external-upgrade"
@@ -19994,8 +20387,18 @@ def _locked_upgrade_path_segment(
         "title": " plus ".join(title_parts),
         "current_k8s_version": current_k8s_version,
         "target_k8s_version": target_k8s_version,
-        "source_soperator_version": source_soperator_version,
-        "target_soperator_version": target_soperator_version,
+        "soperator_app": _locked_upgrade_path_version_record(
+            current_version=source_app_version,
+            target_version=target_app_version,
+        ),
+        "soperator_chart": _locked_upgrade_path_version_record(
+            current_version=source_chart_version,
+            target_version=target_chart_version,
+        ),
+        "jail_rootfs": _locked_upgrade_path_jail_rootfs_record(
+            jail_rootfs,
+            refresh_required=include_jail_refresh,
+        ),
         "k8s_upgrade_required": bool(include_k8s_change),
         "soperator_upgrade_required": bool(include_soperator_change),
         "actions": list(action_ids),
@@ -20012,13 +20415,27 @@ def _locked_upgrade_path_from_report(
         for action in onboarding.get("actions", []) or []
         if str(action or "").strip()
     )
+    version_decision = _soperator_discovery_version_decision(report)
+    jail_rootfs = version_decision.get("jail_rootfs")
+    if not isinstance(jail_rootfs, Mapping):
+        jail_rootfs = {}
+    jail_refresh_required = jail_rootfs.get("refresh_required") is True
     if not (set(action_ids) & _SOPERATOR_MIGRATION_ACTIONS):
-        return {}
+        if not jail_refresh_required:
+            return {}
+        action_ids = (*action_ids, ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE)
     source_soperator, target_soperator, current_k8s, target_k8s = (
         _soperator_discovery_support_path_values(report)
     )
-    source_soperator = _non_empty_text(onboarding.get("source_version")) or source_soperator
-    target_soperator = _non_empty_text(onboarding.get("target_version")) or target_soperator
+    source_app = normalize_soperator_release_version(
+        _non_empty_text(onboarding.get("source_version"))
+        or _soperator_discovery_report_value(report, "source_version")
+        or source_soperator
+    )
+    target_chart = _non_empty_text(onboarding.get("target_version")) or (
+        _soperator_discovery_target_chart_version(report) or target_soperator
+    )
+    target_app = normalize_soperator_release_version(target_chart) or source_app
     node_template = onboarding.get("node_template_upgrade")
     if isinstance(node_template, Mapping):
         target_k8s = _non_empty_text(node_template.get("target_k8s_version")) or target_k8s
@@ -20028,14 +20445,38 @@ def _locked_upgrade_path_from_report(
     support_status = _non_empty_text(support_finding.get("status"))
     recommended_order = _soperator_discovery_support_recommended_order(report)
     soperator_after_k8s_min = _non_empty_text(recommended_order.get("soperator_after_k8s_min"))
+    live_chart = _soperator_discovery_live_chart_version(report)
+    source_chart = live_chart or _non_empty_text(
+        _mapping_path_value(version_decision, "soperator_chart.current_version")
+    )
+    if (
+        live_chart
+        and target_chart
+        and live_chart != target_chart
+        and ONBOARDING_ACTION_UPGRADE_SOPERATOR not in set(action_ids)
+    ):
+        action_ids = (*action_ids, ONBOARDING_ACTION_UPGRADE_SOPERATOR)
     k8s_hops = _soperator_discovery_k8s_hops(current_k8s, target_k8s)
     k8s_pairs = tuple(zip(k8s_hops, k8s_hops[1:], strict=False))
     soperator_change_required = ONBOARDING_ACTION_UPGRADE_SOPERATOR in set(action_ids)
+    jail_refresh_required = jail_refresh_required or soperator_change_required
+    if soperator_change_required:
+        chart_hops = _soperator_discovery_chart_hops(report)
+        if chart_hops:
+            source_chart = chart_hops[0]
+            target_chart = chart_hops[-1]
+    else:
+        source_chart = live_chart or source_chart or target_chart
+        target_chart = target_chart or live_chart or source_chart
+    if not source_app:
+        source_app = normalize_soperator_release_version(source_chart)
+    if not target_app:
+        target_app = normalize_soperator_release_version(target_chart) or source_app
     one_time_actions = set(action_ids) - {
         ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
         ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
     }
-    one_time_required = bool(one_time_actions)
+    one_time_required = bool(one_time_actions) or jail_refresh_required
     one_time_hop_index = 0
     if one_time_required and k8s_hops:
         if soperator_change_required and soperator_after_k8s_min:
@@ -20069,6 +20510,7 @@ def _locked_upgrade_path_from_report(
             action_ids,
             include_one_time_actions=include_one_time_actions,
             include_node_template=include_node_template,
+            include_jail_refresh=include_one_time_actions and jail_refresh_required,
         )
         if not segment_actions:
             return
@@ -20077,10 +20519,16 @@ def _locked_upgrade_path_from_report(
                 index=segment_index,
                 current_k8s_version=current_k8s_version,
                 target_k8s_version=target_k8s_version,
-                source_soperator_version=source_version,
-                target_soperator_version=target_version,
+                source_app_version=normalize_soperator_release_version(source_version)
+                or source_app,
+                target_app_version=normalize_soperator_release_version(target_version)
+                or target_app,
+                source_chart_version=source_version,
+                target_chart_version=target_version,
+                jail_rootfs=jail_rootfs,
                 action_ids=segment_actions,
                 include_soperator_change=include_soperator_change,
+                include_jail_refresh=include_one_time_actions and jail_refresh_required,
                 include_k8s_change=include_k8s_change,
             )
         )
@@ -20092,8 +20540,8 @@ def _locked_upgrade_path_from_report(
             _append_segment(
                 current_k8s_version=staging_k8s,
                 target_k8s_version=staging_k8s,
-                source_version=source_soperator,
-                target_version=target_soperator,
+                source_version=source_chart,
+                target_version=target_chart,
                 include_one_time_actions=True,
                 include_node_template=False,
                 include_soperator_change=soperator_change_required,
@@ -20109,14 +20557,14 @@ def _locked_upgrade_path_from_report(
                 one_time_required and one_time_hop_index > 0 and pair_index < one_time_hop_index - 1
             )
             if before_one_time:
-                source_version = source_soperator
-                target_version = source_soperator
+                source_version = source_chart
+                target_version = source_chart
             elif is_one_time_hop:
-                source_version = source_soperator
-                target_version = target_soperator
+                source_version = source_chart
+                target_version = target_chart
             else:
-                source_version = target_soperator
-                target_version = target_soperator
+                source_version = target_chart
+                target_version = target_chart
             _append_segment(
                 current_k8s_version=hop_current,
                 target_k8s_version=hop_target,
@@ -20131,8 +20579,8 @@ def _locked_upgrade_path_from_report(
             _append_segment(
                 current_k8s_version=k8s_hops[-1],
                 target_k8s_version=k8s_hops[-1],
-                source_version=source_soperator,
-                target_version=target_soperator,
+                source_version=source_chart,
+                target_version=target_chart,
                 include_one_time_actions=True,
                 include_node_template=False,
                 include_soperator_change=soperator_change_required,
@@ -20144,8 +20592,8 @@ def _locked_upgrade_path_from_report(
         _append_segment(
             current_k8s_version=current_version,
             target_k8s_version=target_k8s or current_version,
-            source_version=source_soperator,
-            target_version=target_soperator,
+            source_version=source_chart,
+            target_version=target_chart,
             include_one_time_actions=one_time_required,
             include_node_template=include_node_template,
             include_soperator_change=soperator_change_required,
@@ -20157,9 +20605,13 @@ def _locked_upgrade_path_from_report(
         line.removeprefix("  - Recommended order: ").removesuffix(".")
         for line in _soperator_discovery_upgrade_order_steps(
             k8s_hops=k8s_hops,
-            soperator_hops=_soperator_discovery_soperator_hops(
-                source_soperator=source_soperator,
-                target_soperator=target_soperator,
+            soperator_hops=(
+                _soperator_discovery_soperator_hops(
+                    source_soperator=source_chart,
+                    target_soperator=target_chart,
+                )
+                if soperator_change_required
+                else ()
             ),
             soperator_after_k8s_min=soperator_after_k8s_min,
         )
@@ -20169,8 +20621,18 @@ def _locked_upgrade_path_from_report(
         "locked": True,
         "source_k8s_version": current_k8s,
         "target_k8s_version": target_k8s,
-        "source_soperator_version": source_soperator,
-        "target_soperator_version": target_soperator,
+        "soperator_app": _locked_upgrade_path_version_record(
+            current_version=source_app,
+            target_version=target_app,
+        ),
+        "soperator_chart": _locked_upgrade_path_version_record(
+            current_version=source_chart,
+            target_version=target_chart,
+        ),
+        "jail_rootfs": _locked_upgrade_path_jail_rootfs_record(
+            jail_rootfs,
+            refresh_required=jail_refresh_required,
+        ),
         "support_status": support_status,
         "support_rule_id": support_rule_id,
         "recommended_order": list(recommended_steps),
@@ -20182,28 +20644,24 @@ def _locked_upgrade_path_from_report(
 def _soperator_discovery_upgrade_path_lines(
     report: Mapping[str, Any] | Any,
 ) -> tuple[str, ...]:
-    source_soperator, target_soperator, current_k8s, target_k8s = (
+    _source_soperator, _target_soperator, current_k8s, target_k8s = (
         _soperator_discovery_support_path_values(report)
     )
     k8s_hops = _soperator_discovery_k8s_hops(current_k8s, target_k8s)
     recommended_order = _soperator_discovery_support_recommended_order(report)
     soperator_after_k8s_min = _non_empty_text(recommended_order.get("soperator_after_k8s_min"))
-    soperator_hops = _soperator_discovery_soperator_hops(
-        source_soperator=source_soperator,
-        target_soperator=target_soperator,
-    )
-    if not k8s_hops and not soperator_hops:
+    soperator_hops = _soperator_discovery_chart_hops(report)
+    chart_line = _soperator_discovery_chart_line(report)
+    jail_line = _soperator_discovery_jail_rootfs_line(report)
+    if not k8s_hops and not chart_line and not jail_line:
         return ()
     lines = ["- Upgrade path evaluation:"]
     if k8s_hops:
         lines.append(f"  - Kubernetes: {' -> '.join(k8s_hops)}")
-    if soperator_hops:
-        lines.append(f"  - Soperator: {' -> '.join(soperator_hops)}")
-        if len(soperator_hops) > 1:
-            lines.append(
-                "  - Jail Upgrade: refresh active/passive jail rootfs after the "
-                "Soperator chart/rootfs hop."
-            )
+    if chart_line:
+        lines.append(chart_line)
+    if jail_line:
+        lines.append(jail_line)
     lines.extend(
         _soperator_discovery_upgrade_order_steps(
             k8s_hops=k8s_hops,
@@ -21203,14 +21661,26 @@ def _soperator_onboarding_target_defaults(
             ),
         }
     onboarding = target_row["soperator_onboarding"]
+    enriched_report, _target_versions = _soperator_onboarding_enriched_report_payload(
+        snapshot=snapshot,
+        report=adjusted_report.to_dict(),
+        onboarding=onboarding if isinstance(onboarding, Mapping) else None,
+    )
+    if isinstance(onboarding, dict):
+        _ensure_soperator_onboarding_jail_refresh_action(
+            report=enriched_report,
+            onboarding=onboarding,
+        )
+    report_material = target_row.get(_SOPERATOR_DISCOVERY_REPORT_PRIVATE_KEY)
+    if isinstance(report_material, dict):
+        report_material["report"] = enriched_report
     if isinstance(onboarding, dict):
         locked_upgrade_path = _locked_upgrade_path_from_report(
-            report=adjusted_report.to_dict(),
+            report=enriched_report,
             onboarding=onboarding,
         )
         if locked_upgrade_path:
             onboarding["upgrade_path"] = locked_upgrade_path
-            report_material = target_row.get(_SOPERATOR_DISCOVERY_REPORT_PRIVATE_KEY)
             if isinstance(report_material, dict):
                 report_payload = report_material.get("report")
                 if isinstance(report_payload, dict):
@@ -21334,7 +21804,7 @@ def _soperator_onboarding_report_target_versions(
     *,
     report: Mapping[str, Any],
     onboarding: Mapping[str, Any] | None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     evidence: Mapping[str, Any] = {}
     for status in ("target-compatible", "remediation-planned"):
         finding = _soperator_onboarding_find_report_finding(
@@ -21366,7 +21836,70 @@ def _soperator_onboarding_report_target_versions(
             )
         )
         or _non_empty_text(evidence.get("target_gpu_stack_preset")),
+        "jail_rootfs": _soperator_target_jail_rootfs_versions(),
     }
+
+
+def _soperator_onboarding_enriched_report_payload(
+    *,
+    snapshot: Mapping[str, Any],
+    report: Mapping[str, Any] | Any,
+    onboarding: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    raw_report = report.to_dict() if hasattr(report, "to_dict") else dict(report)
+    plain_report = to_plain_data(raw_report)
+    report_payload = dict(plain_report) if isinstance(plain_report, Mapping) else {}
+    target_versions = _soperator_onboarding_report_target_versions(
+        report=report_payload,
+        onboarding=onboarding,
+    )
+    report_payload["jail_rootfs"] = soperator_discovery_jail_rootfs_record(
+        snapshot=snapshot,
+        report=report_payload,
+        target_versions=target_versions,
+    )
+    _apply_soperator_discovery_version_decision(report_payload)
+    return report_payload, target_versions
+
+
+def _soperator_report_jail_rootfs_refresh_required(report: Mapping[str, Any]) -> bool:
+    jail_rootfs = report.get("jail_rootfs")
+    return isinstance(jail_rootfs, Mapping) and jail_rootfs.get("refresh_required") is True
+
+
+def _ensure_soperator_onboarding_jail_refresh_action(
+    *,
+    report: MutableMapping[str, Any],
+    onboarding: MutableMapping[str, Any],
+) -> None:
+    if onboarding.get("accepted") is not True:
+        return
+    if not _soperator_report_jail_rootfs_refresh_required(report):
+        return
+    actions = onboarding.get("actions")
+    if not isinstance(actions, list):
+        return
+    selected = {str(action or "").strip() for action in actions if str(action or "").strip()}
+    if selected & _SOPERATOR_MIGRATION_ACTIONS:
+        return
+    actions.append(ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE)
+    report_actions = report.get("actions")
+    if not isinstance(report_actions, list):
+        return
+    if any(
+        isinstance(action, Mapping)
+        and _non_empty_text(action.get("id")) == ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE
+        for action in report_actions
+    ):
+        return
+    report_actions.append(
+        {
+            "id": ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
+            "title": "Approve external Soperator upgrade plan",
+            "selected": True,
+            "description": "Approve the external-upgrade-owned Jail rootfs refresh.",
+        }
+    )
 
 
 def _write_soperator_source_discovery_report_from_target_row(
@@ -21382,8 +21915,12 @@ def _write_soperator_source_discovery_report_from_target_row(
     report = report_material.get("report")
     if not isinstance(snapshot, Mapping) or not isinstance(report, Mapping):
         return None
-    report = dict(report)
     onboarding = target_row.get("soperator_onboarding")
+    report, target_versions = _soperator_onboarding_enriched_report_payload(
+        snapshot=snapshot,
+        report=report,
+        onboarding=onboarding if isinstance(onboarding, Mapping) else None,
+    )
     if isinstance(onboarding, Mapping):
         upgrade_path = onboarding.get("upgrade_path")
         if isinstance(upgrade_path, Mapping):
@@ -21406,10 +21943,7 @@ def _write_soperator_source_discovery_report_from_target_row(
             target_row=target_row,
         ),
         kube_context=_non_empty_text(target_row.get("kube_context")),
-        target_versions=_soperator_onboarding_report_target_versions(
-            report=report,
-            onboarding=onboarding if isinstance(onboarding, Mapping) else None,
-        ),
+        target_versions=target_versions,
         guidance_lines=_soperator_discovery_upgrade_guidance_lines(report),
     )
 
@@ -52903,7 +53437,7 @@ def ext_soperator_restore_command(
         "runtime-auth cache profile. Discovery writes "
         "generated/reports/soperator-discovery/<target>/manifest.json and does not back up "
         "raw restore material. Target-version flags preview upgrade findings and name the "
-        "Jail Upgrade rootfs-refresh boundary when Soperator chart/rootfs work is in scope."
+        "Jail Upgrade rootfs-refresh boundary only when image/action evidence requires it."
     ),
 )
 def ext_soperator_discover_command(
@@ -53986,6 +54520,10 @@ def _require_soperator_migration_actions(
 ) -> None:
     if _soperator_migration_action_flags(onboarding)["migration_required"]:
         return
+    locked_path = _locked_upgrade_path_from_onboarding(onboarding)
+    locked_jail_rootfs = locked_path.get("jail_rootfs") if locked_path else None
+    if isinstance(locked_jail_rootfs, Mapping) and locked_jail_rootfs.get("refresh_required") is True:
+        return
     selected_actions = sorted(
         {
             str(action or "").strip()
@@ -54023,12 +54561,17 @@ def _soperator_migration_output_phases(
     *,
     phases: Any,
     onboarding: Mapping[str, Any],
+    report: Mapping[str, Any] | None = None,
     populate_jail_refresh: str = "auto",
 ) -> list[Mapping[str, Any]]:
     flags = _soperator_migration_action_flags(onboarding)
     explicit_populate_jail_refresh = normalize_populate_jail_refresh_mode(
         populate_jail_refresh
     ) in {"force", "manual"}
+    jail_rootfs = report.get("jail_rootfs") if isinstance(report, Mapping) else None
+    jail_rootfs_refresh_required = (
+        isinstance(jail_rootfs, Mapping) and jail_rootfs.get("refresh_required") is True
+    )
     output_phases = (
         [phase for phase in phases if isinstance(phase, Mapping)]
         if isinstance(phases, list)
@@ -54042,7 +54585,12 @@ def _soperator_migration_output_phases(
             flags,
         )
     ]
-    if output_phases and not flags["soperator_upgrade_required"] and not explicit_populate_jail_refresh:
+    if (
+        output_phases
+        and not flags["soperator_upgrade_required"]
+        and not explicit_populate_jail_refresh
+        and not jail_rootfs_refresh_required
+    ):
         output_phases = [
             phase
             for phase in output_phases
@@ -54050,9 +54598,10 @@ def _soperator_migration_output_phases(
         ]
     if (
         not output_phases
-        and flags["migration_required"]
+        and (flags["migration_required"] or jail_rootfs_refresh_required)
         and (
             flags["external_node_template_upgrade_required"] or flags["soperator_upgrade_required"]
+            or jail_rootfs_refresh_required
         )
     ):
         output_phases = [
@@ -54143,7 +54692,11 @@ def _soperator_migration_output_phases(
         output_phases.insert(insert_at, soperator_upgrade_phase)
     if (
         output_phases
-        and (flags["soperator_upgrade_required"] or explicit_populate_jail_refresh)
+        and (
+            flags["soperator_upgrade_required"]
+            or explicit_populate_jail_refresh
+            or jail_rootfs_refresh_required
+        )
         and not any(
             str(phase.get("id", "") or "").strip() == POPULATE_JAIL_REFRESH_PHASE_ID
             for phase in output_phases
@@ -54210,11 +54763,14 @@ def _soperator_migration_phase_display_title(
         _non_empty_text(segment.get("target_k8s_version")) or target_k8s_version
     )
     soperator_hop = _soperator_upgrade_hop_text(
-        _non_empty_text(segment.get("source_soperator_version")) or source_soperator_version,
-        _non_empty_text(segment.get("target_soperator_version")) or target_soperator_version,
+        _locked_upgrade_path_record_value(segment, "soperator_chart", "current_version")
+        or source_soperator_version,
+        _locked_upgrade_path_record_value(segment, "soperator_chart", "target_version")
+        or target_soperator_version,
     )
     target_soperator = _soperator_known_upgrade_version(
-        _non_empty_text(segment.get("target_soperator_version")) or target_soperator_version
+        _locked_upgrade_path_record_value(segment, "soperator_chart", "target_version")
+        or target_soperator_version
     )
 
     if phase_id == "customer-approval":
@@ -54269,7 +54825,14 @@ def _locked_upgrade_path_from_onboarding(onboarding: Mapping[str, Any]) -> dict[
     upgrade_path = onboarding.get("upgrade_path")
     if not isinstance(upgrade_path, Mapping):
         return {}
-    if _non_empty_text(upgrade_path.get("schema")) != _SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA:
+    schema = _non_empty_text(upgrade_path.get("schema"))
+    if schema and schema != _SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA:
+        raise RuntimeError(
+            "External Soperator upgrade path schema is "
+            f"{schema}, but this cxcli requires {_SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA}. "
+            "Rerun `nebius-cxcli ext-soperator onboard` as an intentional repair/replan path."
+        )
+    if schema != _SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA:
         return {}
     if upgrade_path.get("locked") is not True:
         return {}
@@ -54490,12 +55053,12 @@ def _soperator_effective_upgrade_payload_for_segment(
     onboarding["actions"] = list(segment_actions)
     onboarding["upgrade_path"] = copy.deepcopy(to_plain_data(upgrade_path))
     onboarding["upgrade_path_current_segment_id"] = _non_empty_text(segment.get("id"))
-    source_soperator = _non_empty_text(segment.get("source_soperator_version"))
-    target_soperator = _non_empty_text(segment.get("target_soperator_version"))
-    if source_soperator:
-        onboarding["source_version"] = source_soperator
-    if target_soperator:
-        onboarding["target_version"] = target_soperator
+    source_app = _locked_upgrade_path_record_value(segment, "soperator_app", "current_version")
+    target_chart = _locked_upgrade_path_record_value(segment, "soperator_chart", "target_version")
+    if source_app:
+        onboarding["source_version"] = source_app
+    if target_chart:
+        onboarding["target_version"] = target_chart
     node_template = onboarding.get("node_template_upgrade")
     if not isinstance(node_template, MutableMapping):
         node_template = {}
@@ -54533,14 +55096,23 @@ def _source_report_for_locked_upgrade_segment(
         return effective
     report["upgrade_path"] = copy.deepcopy(to_plain_data(upgrade_path))
     report["upgrade_path_current_segment_id"] = _non_empty_text(segment.get("id"))
-    source_soperator = _non_empty_text(segment.get("source_soperator_version"))
-    target_soperator = _non_empty_text(segment.get("target_soperator_version"))
+    source_app = _locked_upgrade_path_record_value(segment, "soperator_app", "current_version")
+    target_chart = _locked_upgrade_path_record_value(segment, "soperator_chart", "target_version")
+    soperator_app = segment.get("soperator_app")
+    soperator_chart = segment.get("soperator_chart")
+    jail_rootfs = segment.get("jail_rootfs")
     current_k8s = _non_empty_text(segment.get("current_k8s_version"))
     target_k8s = _non_empty_text(segment.get("target_k8s_version"))
-    if source_soperator:
-        report["source_version"] = source_soperator
-    if target_soperator:
-        report["target_version"] = target_soperator
+    if source_app:
+        report["source_version"] = source_app
+    if target_chart:
+        report["target_version"] = target_chart
+    if isinstance(soperator_app, Mapping):
+        report["soperator_app"] = copy.deepcopy(to_plain_data(dict(soperator_app)))
+    if isinstance(soperator_chart, Mapping):
+        report["soperator_chart"] = copy.deepcopy(to_plain_data(dict(soperator_chart)))
+    if isinstance(jail_rootfs, Mapping):
+        report["jail_rootfs"] = copy.deepcopy(to_plain_data(dict(jail_rootfs)))
     findings = report.get("findings")
     if isinstance(findings, list):
         for finding in findings:
@@ -54556,10 +55128,18 @@ def _source_report_for_locked_upgrade_segment(
             if layer == SOPERATOR_UPGRADE_SUPPORT_LAYER:
                 evidence["current_k8s_version"] = current_k8s
                 evidence["target_k8s_version"] = target_k8s
-                if source_soperator:
-                    evidence["source_version"] = source_soperator
-                if target_soperator:
-                    evidence["target_version"] = target_soperator
+                if source_app:
+                    evidence["source_version"] = source_app
+                if target_chart:
+                    evidence["target_version"] = target_chart
+                    evidence["target_chart_version"] = target_chart
+                current_chart = _locked_upgrade_path_record_value(
+                    segment,
+                    "soperator_chart",
+                    "current_version",
+                )
+                if current_chart:
+                    evidence["live_chart"] = current_chart
             control_plane = evidence.get("control_plane")
             if isinstance(control_plane, dict):
                 control_plane["current_k8s_version"] = current_k8s
@@ -54591,6 +55171,27 @@ def _locked_upgrade_path_plan_lines(
     fingerprint = _non_empty_text(progress.get("fingerprint")) or _locked_upgrade_path_fingerprint(
         upgrade_path
     )
+    app_current = _locked_upgrade_path_record_value(
+        upgrade_path,
+        "soperator_app",
+        "current_version",
+    )
+    app_target = _locked_upgrade_path_record_value(
+        upgrade_path,
+        "soperator_app",
+        "target_version",
+    )
+    chart_current = _locked_upgrade_path_record_value(
+        upgrade_path,
+        "soperator_chart",
+        "current_version",
+    )
+    chart_target = _locked_upgrade_path_record_value(
+        upgrade_path,
+        "soperator_chart",
+        "target_version",
+    )
+    jail_line = _soperator_discovery_jail_rootfs_line(upgrade_path).removeprefix("  - ")
     lines = [
         "",
         "Locked upgrade path:",
@@ -54601,10 +55202,23 @@ def _locked_upgrade_path_plan_lines(
         "Kubernetes path: "
         f"{_non_empty_text(upgrade_path.get('source_k8s_version')) or 'unknown'} -> "
         f"{_non_empty_text(upgrade_path.get('target_k8s_version')) or 'unknown'}",
-        "Soperator path: "
-        f"{_non_empty_text(upgrade_path.get('source_soperator_version')) or 'unknown'} -> "
-        f"{_non_empty_text(upgrade_path.get('target_soperator_version')) or 'unknown'}",
     ]
+    if app_current or app_target:
+        if app_current and app_target and app_current != app_target:
+            lines.append(f"Soperator app path: {app_current} -> {app_target}")
+        else:
+            lines.append(f"Soperator app path: {app_target or app_current or 'unknown'}")
+    if chart_current or chart_target:
+        if chart_current and chart_target and chart_current != chart_target:
+            lines.append(f"Soperator chart path: {chart_current} -> {chart_target}")
+        else:
+            lines.append(
+                "Soperator chart path: "
+                f"{chart_target or chart_current or 'unknown'} "
+                "(current; no chart upgrade required)"
+            )
+    if jail_line:
+        lines.append(jail_line)
     support_rule = _non_empty_text(upgrade_path.get("support_rule_id"))
     support_status = _non_empty_text(upgrade_path.get("support_status"))
     if support_rule or support_status:
@@ -54684,6 +55298,7 @@ def _format_soperator_migration_plan_lines(
     phases = _soperator_migration_output_phases(
         phases=report.get("migration_plan"),
         onboarding=onboarding,
+        report=report,
         populate_jail_refresh=populate_jail_refresh,
     )
     current_k8s_version, target_k8s_version = soperator_discovery_report_k8s_versions(report)

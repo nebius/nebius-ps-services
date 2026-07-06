@@ -1351,13 +1351,17 @@ def test_locked_ext_soperator_upgrade_path_generates_three_segments_for_131_to_1
         "plan-soperator-compute-migration",
         "upgrade-soperator",
     }
-    assert segments[0]["source_soperator_version"] == "1.22.3"
-    assert segments[0]["target_soperator_version"] == _soperator_test_chart_version()
+    assert segments[0]["soperator_app"]["current_version"] == "1.22.3"
+    assert segments[0]["soperator_app"]["target_version"] == "4.0.2"
+    assert segments[0]["soperator_chart"]["current_version"] == "1.22.3"
+    assert segments[0]["soperator_chart"]["target_version"] == _soperator_test_chart_version()
+    assert segments[0]["jail_rootfs"]["refresh_required"] is True
     assert segments[1]["actions"] == [
         "approve-external-soperator-upgrade",
         "upgrade-external-node-template",
     ]
-    assert segments[1]["source_soperator_version"] == _soperator_test_chart_version()
+    assert segments[1]["soperator_chart"]["current_version"] == _soperator_test_chart_version()
+    assert segments[1]["soperator_chart"]["target_version"] == _soperator_test_chart_version()
     assert segments[2]["current_k8s_version"] == "1.33"
 
 
@@ -1374,6 +1378,8 @@ def test_locked_ext_soperator_upgrade_path_generates_two_node_hops_for_pinned_so
     )
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]
+    onboarding["accepted"] = True
+    onboarding["state"] = "existing-soperator-supported"
     onboarding["actions"] = [
         "approve-external-soperator-upgrade",
         "upgrade-external-node-template",
@@ -1396,6 +1402,11 @@ def test_locked_ext_soperator_upgrade_path_generates_two_node_hops_for_pinned_so
         for segment in segments
     )
     assert all(segment["soperator_upgrade_required"] is False for segment in segments)
+    assert all(
+        segment["soperator_chart"]["current_version"] == _soperator_test_chart_version()
+        for segment in segments
+    )
+    assert all(segment["jail_rootfs"]["refresh_required"] is False for segment in segments)
 
 
 def test_ext_soperator_upgrade_dry_run_forces_populate_jail_for_node_template_segment(
@@ -1454,6 +1465,152 @@ def test_ext_soperator_upgrade_dry_run_forces_populate_jail_for_node_template_se
     assert "[Jail Upgrade] populate-jail-refresh: planned" in forced.output
     assert forced.output.index("external-node-template-upgrade") < forced.output.index(
         "populate-jail-refresh"
+    )
+
+
+def test_ext_soperator_upgrade_dry_run_auto_populate_jail_for_changed_rootfs_without_soperator_hop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = _write_old_soperator_migration_config(
+        tmp_path,
+        source_soperator_version=_soperator_test_chart_version(),
+        current_k8s_version="1.32",
+        target_k8s_version="1.33",
+        storage_mode="keep-existing-storage",
+        compute_mode="keep-existing-compute",
+    )
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]
+    onboarding["accepted"] = True
+    onboarding["state"] = "existing-soperator-supported"
+    onboarding["actions"] = [
+        "approve-external-soperator-upgrade",
+        "upgrade-external-node-template",
+    ]
+    source_report = cli_module.load_soperator_discovery_bundle(
+        _soperator_discovery_manifest_path(config_path)
+    )
+    report_payload = dict(source_report["report"])
+    report_payload["jail_rootfs"] = {
+        "current_image": "cr.example/populate_jail:4.0.2-slurm25.11.3-cuda12.8.0",
+        "current_version": "4.0.2-slurm25.11.3-cuda12.8.0",
+        "current_source": "completed-populate-jail-job",
+        "current_job_name": "mk8s-populate-jail",
+        "live_desired_image": "cr.example/populate_jail:4.0.2-slurm25.11.3-cuda12.8.0",
+        "live_desired_version": "4.0.2-slurm25.11.3-cuda12.8.0",
+        "live_desired_source": "slurmcluster.spec.populateJail.image",
+        "slurmcluster_name": "mk8s",
+        "target_image": "cr.example/populate_jail:4.0.2-slurm25.11.3-cuda12.9.0",
+        "target_version": "4.0.2-slurm25.11.3-cuda12.9.0",
+        "target_source": "pinned-chart-defaults",
+        "refresh_required": True,
+        "reason": "target populate-jail image differs from current jail rootfs image",
+    }
+    cli_module._apply_soperator_discovery_version_decision(report_payload)
+    onboarding["upgrade_path"] = cli_module._locked_upgrade_path_from_report(
+        report=report_payload,
+        onboarding=onboarding,
+    )
+    fingerprint_payload = yaml.safe_load(yaml.safe_dump(payload))
+    cli_module._materialize_soperator_component_defaults(fingerprint_payload)
+    onboarding["analysis_fingerprint"] = cli_module.soperator_onboarding_fingerprint(
+        fingerprint_payload,
+        target_ref="external-cluster",
+    )
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    monkeypatch.setattr(
+        cli_module,
+        "collect_kubectl_soperator_snapshot",
+        lambda **_kwargs: _old_soperator_snapshot_with_provider(
+            soperator_version=_soperator_test_chart_version(),
+            current_k8s_version="1.32",
+        ),
+    )
+
+    result = runner.invoke(app, ["ext-soperator", "upgrade", str(config_path), "--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert "Soperator upgrade required: no" in result.output
+    assert "Soperator hop" not in result.output
+    assert "[Jail Upgrade] populate-jail-refresh: planned" in result.output
+    assert "Jail rootfs: 4.0.2-slurm25.11.3-cuda12.8.0 -> 4.0.2-slurm25.11.3-cuda12.9.0 (refresh required)" in result.output
+
+
+def test_soperator_onboarding_defaults_lock_changed_jail_rootfs_without_soperator_hop() -> None:
+    current_image = (
+        "cr.eu-north1.nebius.cloud/soperator/populate_jail:"
+        "4.0.2-slurm25.11.3-cuda12.8.0"
+    )
+    snapshot = _post_migration_soperator_snapshot()
+    resources = snapshot["soperator_resources"]
+    assert isinstance(resources, list)
+    slurm_cluster = resources[0]
+    assert isinstance(slurm_cluster, dict)
+    slurm_cluster["spec"] = {"populateJail": {"image": current_image}}
+
+    target = cli_module._soperator_onboarding_target_defaults(
+        "external-cluster",
+        kube_context="external-context",
+        storage_mode="keep-existing-storage",
+        compute_mode="keep-existing-compute",
+        pinned_chart_version=_soperator_test_chart_version(),
+        pinned_app_version=_soperator_test_app_version(),
+        target_k8s_version="1.33",
+        snapshot=snapshot,
+    )
+
+    onboarding = target["soperator_onboarding"]
+    assert "upgrade-soperator" not in onboarding["actions"]
+    locked_path = onboarding["upgrade_path"]
+    assert locked_path["soperator_chart"]["upgrade_required"] is False
+    assert locked_path["jail_rootfs"]["refresh_required"] is True
+    assert locked_path["jail_rootfs"]["current_image"] == current_image
+    assert any(segment["jail_rootfs"]["refresh_required"] is True for segment in locked_path["segments"])
+    report = target[cli_module._SOPERATOR_DISCOVERY_REPORT_PRIVATE_KEY]["report"]
+    assert report["jail_rootfs"]["refresh_required"] is True
+
+
+def test_soperator_onboarding_defaults_lock_jail_rootfs_without_chart_or_k8s_hop() -> None:
+    current_image = (
+        "cr.eu-north1.nebius.cloud/soperator/populate_jail:"
+        "4.0.2-slurm25.11.3-cuda12.8.0"
+    )
+    snapshot = _post_migration_soperator_snapshot()
+    resources = snapshot["soperator_resources"]
+    assert isinstance(resources, list)
+    slurm_cluster = resources[0]
+    assert isinstance(slurm_cluster, dict)
+    slurm_cluster["spec"] = {"populateJail": {"image": current_image}}
+
+    target = cli_module._soperator_onboarding_target_defaults(
+        "external-cluster",
+        kube_context="external-context",
+        storage_mode="keep-existing-storage",
+        compute_mode="keep-existing-compute",
+        pinned_chart_version=_soperator_test_chart_version(),
+        pinned_app_version=_soperator_test_app_version(),
+        target_k8s_version="1.32",
+        snapshot=snapshot,
+    )
+
+    onboarding = target["soperator_onboarding"]
+    assert "upgrade-soperator" not in onboarding["actions"]
+    assert "upgrade-external-node-template" not in onboarding["actions"]
+    assert "approve-external-soperator-upgrade" in onboarding["actions"]
+    locked_path = onboarding["upgrade_path"]
+    assert locked_path["soperator_chart"]["upgrade_required"] is False
+    assert locked_path["jail_rootfs"]["refresh_required"] is True
+    segments = locked_path["segments"]
+    assert len(segments) == 1
+    assert segments[0]["current_k8s_version"] == "1.32"
+    assert segments[0]["target_k8s_version"] == "1.32"
+    assert segments[0]["k8s_upgrade_required"] is False
+    assert segments[0]["soperator_upgrade_required"] is False
+    assert segments[0]["jail_rootfs"]["refresh_required"] is True
+    report = target[cli_module._SOPERATOR_DISCOVERY_REPORT_PRIVATE_KEY]["report"]
+    assert any(
+        action["id"] == "approve-external-soperator-upgrade" for action in report["actions"]
     )
 
 
@@ -8522,7 +8679,7 @@ def test_ext_soperator_upgrade_dry_run_prints_full_locked_path(
     assert "Kubernetes path: 1.31 -> 1.34" in result.output
     assert (
         "Recommended order: Kubernetes 1.31 -> 1.32; "
-        f"Soperator 1.22.3 -> {_soperator_test_chart_version()} while Kubernetes stays 1.32; "
+        f"Soperator chart 1.22.3 -> {_soperator_test_chart_version()} while Kubernetes stays 1.32; "
         "Kubernetes 1.32 -> 1.33 -> 1.34"
     ) in result.output
     assert "segment-1-kubernetes-1-31-1-32-soperator" not in result.output
@@ -8532,7 +8689,7 @@ def test_ext_soperator_upgrade_dry_run_prints_full_locked_path(
     assert "Completed segments: none" in result.output
     assert (
         "Current segment: Kubernetes 1.31 -> 1.32 plus "
-        f"Soperator 1.22.3 -> {_soperator_test_chart_version()}"
+        f"Soperator chart 1.22.3 -> {_soperator_test_chart_version()}"
     ) in result.output
     assert (
         "[MK8s Node Upgrades] external-node-template-upgrade: planned - "
@@ -8813,7 +8970,7 @@ def test_ext_soperator_upgrade_execute_advances_locked_path_segments(
         "approve-external-soperator-upgrade",
         "upgrade-external-node-template",
     )
-    assert observed[1][3] == _soperator_test_chart_version()
+    assert observed[1][3] == _soperator_test_app_version()
     assert observed[1][4] == _soperator_test_chart_version()
     assert "Next locked upgrade segment: Kubernetes 1.33 -> 1.34" in second.output
 
@@ -9141,8 +9298,11 @@ def test_soperator_migration_plan_styles_topic_labels() -> None:
             {
                 "current_k8s_version": "1.31",
                 "target_k8s_version": "1.32",
-                "source_soperator_version": "1.22.3",
-                "target_soperator_version": "4.0.2-ps.3",
+                "soperator_chart": {
+                    "current_version": "1.22.3",
+                    "target_version": "4.0.2-ps.3",
+                    "upgrade_required": True,
+                },
             },
             (
                 "Customer approval for Kubernetes hop 1.31 -> 1.32 and "
@@ -9177,8 +9337,11 @@ def test_soperator_migration_plan_styles_topic_labels() -> None:
                 "soperator_upgrade_required": True,
             },
             {
-                "source_soperator_version": "1.22.3",
-                "target_soperator_version": "4.0.2-ps.3",
+                "soperator_chart": {
+                    "current_version": "1.22.3",
+                    "target_version": "4.0.2-ps.3",
+                    "upgrade_required": True,
+                },
             },
             "Soperator hop 1.22.3 -> 4.0.2-ps.3: upgrade chart with existing compute layout",
         ),
@@ -9190,14 +9353,26 @@ def test_soperator_migration_plan_styles_topic_labels() -> None:
                 "compute_migration_required": False,
                 "soperator_upgrade_required": True,
             },
-            {"target_soperator_version": "4.0.2-ps.3"},
+            {
+                "soperator_chart": {
+                    "current_version": "4.0.2-ps.3",
+                    "target_version": "4.0.2-ps.3",
+                    "upgrade_required": False,
+                },
+            },
             "Soperator 4.0.2-ps.3 cutover: final Soperator chart cutover",
         ),
         (
             "populate-jail-refresh",
             "Jail Upgrade: refresh shared Soperator jail rootfs",
             {},
-            {"target_soperator_version": "4.0.2-ps.3"},
+            {
+                "soperator_chart": {
+                    "current_version": "4.0.2-ps.3",
+                    "target_version": "4.0.2-ps.3",
+                    "upgrade_required": False,
+                },
+            },
             "Jail Upgrade: refresh shared Soperator jail rootfs",
         ),
         (
@@ -9213,7 +9388,7 @@ def test_soperator_migration_phase_display_title_is_path_aware(
     phase_id: str,
     title: str,
     flags: dict[str, bool],
-    segment: dict[str, str],
+    segment: dict[str, object],
     expected: str,
 ) -> None:
     assert (
@@ -10176,7 +10351,19 @@ def test_soperator_discovery_result_prints_k8s_versions(
             "source_version": "1.22.3",
             "chart_version": "1.22.3",
             "app_version": "1.22.3",
+            "jail_rootfs": {
+                "current_version": "1.22.3-slurm23.11.6-cuda12.4.0",
+                "target_version": "4.0.2-slurm25.11.3-cuda12.9.0",
+                "refresh_required": True,
+            },
             "report": {
+                "target_version": "4.0.2-ps.3",
+                "actions": [{"id": "upgrade-soperator", "selected": True}],
+                "jail_rootfs": {
+                    "current_version": "1.22.3-slurm23.11.6-cuda12.4.0",
+                    "target_version": "4.0.2-slurm25.11.3-cuda12.9.0",
+                    "refresh_required": True,
+                },
                 "findings": [
                     {
                         "layer": "soperator-upgrade-support",
@@ -10209,13 +10396,14 @@ def test_soperator_discovery_result_prints_k8s_versions(
         "Target Kubernetes version: 1.34",
         "Soperator status: installed",
         "Soperator version: 1.22.3",
+        "Jail rootfs version: 1.22.3-slurm23.11.6-cuda12.4.0",
         "- Upgrade path evaluation:",
         "  - Kubernetes: 1.32 -> 1.33 -> 1.34",
-        "  - Soperator: 1.22.3 -> 4.0.2-ps.3",
-        "  - Jail Upgrade: refresh active/passive jail rootfs after the "
-        "Soperator chart/rootfs hop.",
-        "  - Recommended order: Soperator 1.22.3 -> 4.0.2-ps.3 while Kubernetes stays "
-        "1.32; Kubernetes 1.32 -> 1.33 -> 1.34.",
+        "  - Soperator chart: 1.22.3 -> 4.0.2-ps.3",
+        "  - Jail rootfs: 1.22.3-slurm23.11.6-cuda12.4.0 -> "
+        "4.0.2-slurm25.11.3-cuda12.9.0 (refresh required)",
+        "  - Recommended order: Soperator chart 1.22.3 -> 4.0.2-ps.3 while Kubernetes "
+        "stays 1.32; Kubernetes 1.32 -> 1.33 -> 1.34.",
         "- Soperator upgrade path: status=supported, rule=k8s-1-33-soperator-4-supported, "
         "source Soperator=1.22.3, target Soperator=4.0.2-ps.3, target Kubernetes=1.34",
         "  - The cxcli-pinned Soperator target on Kubernetes 1.33+ matches the "
@@ -10261,6 +10449,13 @@ def test_soperator_discovery_result_prints_soperator_not_installed(
 def test_soperator_discovery_upgrade_guidance_uses_direct_soperator_hop() -> None:
     guidance = cli_module._soperator_discovery_upgrade_guidance_lines(
         {
+            "target_version": "4.0.2-ps.3",
+            "actions": [{"id": "upgrade-soperator", "selected": True}],
+            "jail_rootfs": {
+                "current_version": "1.23.3-slurm23.11.6-cuda12.4.0",
+                "target_version": "4.0.2-slurm25.11.3-cuda12.9.0",
+                "refresh_required": True,
+            },
             "findings": [
                 {
                     "layer": "soperator-upgrade-support",
@@ -10280,21 +10475,144 @@ def test_soperator_discovery_upgrade_guidance_uses_direct_soperator_hop() -> Non
     )
 
     assert "  - Kubernetes: 1.32 -> 1.33 -> 1.34" in guidance
-    assert "  - Soperator: 1.23.3 -> 4.0.2-ps.3" in guidance
     assert (
-        "  - Jail Upgrade: refresh active/passive jail rootfs after the "
-        "Soperator chart/rootfs hop."
+        "  - Soperator chart: 1.23.3 -> 4.0.2-ps.3"
+    ) in guidance
+    assert (
+        "  - Jail rootfs: 1.23.3-slurm23.11.6-cuda12.4.0 -> "
+        "4.0.2-slurm25.11.3-cuda12.9.0 (refresh required)"
     ) in guidance
     assert not any("Required gate" in line for line in guidance)
     assert (
-        "  - Recommended order: Soperator 1.23.3 -> 4.0.2-ps.3 while Kubernetes "
+        "  - Recommended order: Soperator chart 1.23.3 -> 4.0.2-ps.3 while Kubernetes "
         "stays 1.32; Kubernetes 1.32 -> 1.33 -> 1.34."
     ) in guidance
+
+
+def test_soperator_discovery_upgrade_guidance_does_not_infer_chart_hop_from_app_version() -> None:
+    guidance = cli_module._soperator_discovery_upgrade_guidance_lines(
+        {
+            "source_version": "4.0.2",
+            "target_version": "4.0.2-ps.3",
+            "actions": [
+                {"id": "upgrade-external-node-template", "selected": True},
+                {"id": "approve-external-soperator-upgrade", "selected": True},
+            ],
+            "jail_rootfs": {
+                "current_version": "4.0.2-slurm25.11.3-cuda12.9.0",
+                "target_version": "4.0.2-slurm25.11.3-cuda12.9.0",
+                "refresh_required": False,
+            },
+            "findings": [
+                {
+                    "layer": "versions",
+                    "status": "target-version",
+                    "severity": "info",
+                    "message": "Existing Soperator version matches the cxcli-pinned target.",
+                    "evidence": {"live_chart": "4.0.2-ps.3", "live_app": "4.0.2"},
+                },
+                {
+                    "layer": "soperator-upgrade-support",
+                    "status": "supported",
+                    "message": "This path is in the support matrix.",
+                    "evidence": {
+                        "rule_id": "k8s-1-33-soperator-4-supported",
+                        "source_version": "4.0.2",
+                        "target_version": "4.0.2-ps.3",
+                        "target_chart_version": "4.0.2-ps.3",
+                        "current_k8s_version": "1.33",
+                        "target_k8s_version": "1.34",
+                        "recommended_order": {"soperator_after_k8s_min": "1.32"},
+                    },
+                },
+            ],
+        }
+    )
+
+    assert "  - Kubernetes: 1.33 -> 1.34" in guidance
+    assert "  - Soperator chart: 4.0.2-ps.3 (current; no chart upgrade required)" in guidance
+    assert (
+        "  - Jail rootfs: 4.0.2-slurm25.11.3-cuda12.9.0 "
+        "(current; no refresh required)"
+    ) in guidance
+    assert not any("Soperator chart: 4.0.2 -> 4.0.2-ps.3" in line for line in guidance)
+    assert not any("Jail Upgrade: refresh active/passive" in line for line in guidance)
+    assert "  - Recommended order: Kubernetes 1.33 -> 1.34." in guidance
+
+
+def test_soperator_discovery_upgrade_guidance_uses_chart_package_comparison() -> None:
+    guidance = cli_module._soperator_discovery_upgrade_guidance_lines(
+        {
+            "source_version": "4.0.2",
+            "chart_version": "4.0.2-ps.2",
+            "target_version": "4.0.2-ps.3",
+            "actions": [
+                {"id": "upgrade-external-node-template", "selected": True},
+                {"id": "approve-external-soperator-upgrade", "selected": True},
+            ],
+            "jail_rootfs": {
+                "current_version": "4.0.2-slurm25.11.3-cuda12.9.0",
+                "target_version": "4.0.2-slurm25.11.3-cuda12.9.0",
+                "refresh_required": False,
+            },
+            "findings": [
+                {
+                    "layer": "soperator-upgrade-support",
+                    "status": "supported",
+                    "message": "This path is in the support matrix.",
+                    "evidence": {
+                        "rule_id": "k8s-1-33-soperator-4-supported",
+                        "source_version": "4.0.2",
+                        "target_version": "4.0.2-ps.3",
+                        "target_chart_version": "4.0.2-ps.3",
+                        "current_k8s_version": "1.33",
+                        "target_k8s_version": "1.34",
+                        "recommended_order": {"soperator_after_k8s_min": "1.32"},
+                    },
+                },
+            ],
+        }
+    )
+
+    assert "  - Soperator chart: 4.0.2-ps.2 -> 4.0.2-ps.3" in guidance
+    assert not any("Soperator chart: 4.0.2 -> 4.0.2-ps.3" in line for line in guidance)
+    assert (
+        "  - Recommended order: Soperator chart 4.0.2-ps.2 -> 4.0.2-ps.3 "
+        "while Kubernetes stays 1.33; Kubernetes 1.33 -> 1.34."
+    ) in guidance
+
+
+def test_soperator_target_jail_rootfs_versions_use_pinned_chart_defaults() -> None:
+    versions = cli_module._soperator_target_jail_rootfs_versions()
+
+    assert versions["target_image"] == (
+        "cr.eu-north1.nebius.cloud/soperator/populate_jail:"
+        "4.0.2-slurm25.11.3-cuda12.9.0"
+    )
+    assert versions["target_version"] == "4.0.2-slurm25.11.3-cuda12.9.0"
+    assert versions["target_source"] == "pinned-chart-defaults"
+
+
+def test_soperator_target_jail_rootfs_versions_accept_explicit_target_values() -> None:
+    versions = cli_module._soperator_target_jail_rootfs_versions(
+        {"images": {"populateJail": "registry.example.test/populate-jail:target-tag"}}
+    )
+
+    assert versions["target_image"] == "registry.example.test/populate-jail:target-tag"
+    assert versions["target_version"] == "target-tag"
+    assert versions["target_source"] == "chart-values"
 
 
 def test_soperator_discovery_upgrade_guidance_stages_after_pre_133_k8s_hop() -> None:
     guidance = cli_module._soperator_discovery_upgrade_guidance_lines(
         {
+            "target_version": "4.0.2-ps.3",
+            "actions": [{"id": "upgrade-soperator", "selected": True}],
+            "jail_rootfs": {
+                "current_version": "1.22.3-slurm23.11.6-cuda12.4.0",
+                "target_version": "4.0.2-slurm25.11.3-cuda12.9.0",
+                "refresh_required": True,
+            },
             "findings": [
                 {
                     "layer": "soperator-upgrade-support",
@@ -10314,14 +10632,16 @@ def test_soperator_discovery_upgrade_guidance_stages_after_pre_133_k8s_hop() -> 
     )
 
     assert "  - Kubernetes: 1.31 -> 1.32 -> 1.33 -> 1.34" in guidance
-    assert "  - Soperator: 1.22.3 -> 4.0.2-ps.3" in guidance
     assert (
-        "  - Jail Upgrade: refresh active/passive jail rootfs after the "
-        "Soperator chart/rootfs hop."
+        "  - Soperator chart: 1.22.3 -> 4.0.2-ps.3"
+    ) in guidance
+    assert (
+        "  - Jail rootfs: 1.22.3-slurm23.11.6-cuda12.4.0 -> "
+        "4.0.2-slurm25.11.3-cuda12.9.0 (refresh required)"
     ) in guidance
     assert not any("1.23.0" in line for line in guidance)
     assert (
-        "  - Recommended order: Kubernetes 1.31 -> 1.32; Soperator "
+        "  - Recommended order: Kubernetes 1.31 -> 1.32; Soperator chart "
         "1.22.3 -> 4.0.2-ps.3 while Kubernetes stays 1.32; Kubernetes "
         "1.32 -> 1.33 -> 1.34."
     ) in guidance
@@ -10330,6 +10650,13 @@ def test_soperator_discovery_upgrade_guidance_stages_after_pre_133_k8s_hop() -> 
 def test_soperator_discovery_upgrade_guidance_runs_132_hop_before_soperator() -> None:
     guidance = cli_module._soperator_discovery_upgrade_guidance_lines(
         {
+            "target_version": "4.0.2-ps.3",
+            "actions": [{"id": "upgrade-soperator", "selected": True}],
+            "jail_rootfs": {
+                "current_version": "1.22.3-slurm23.11.6-cuda12.4.0",
+                "target_version": "4.0.2-slurm25.11.3-cuda12.9.0",
+                "refresh_required": True,
+            },
             "findings": [
                 {
                     "layer": "soperator-upgrade-support",
@@ -10349,13 +10676,15 @@ def test_soperator_discovery_upgrade_guidance_runs_132_hop_before_soperator() ->
     )
 
     assert "  - Kubernetes: 1.31 -> 1.32" in guidance
-    assert "  - Soperator: 1.22.3 -> 4.0.2-ps.3" in guidance
     assert (
-        "  - Jail Upgrade: refresh active/passive jail rootfs after the "
-        "Soperator chart/rootfs hop."
+        "  - Soperator chart: 1.22.3 -> 4.0.2-ps.3"
     ) in guidance
     assert (
-        "  - Recommended order: Kubernetes 1.31 -> 1.32; Soperator "
+        "  - Jail rootfs: 1.22.3-slurm23.11.6-cuda12.4.0 -> "
+        "4.0.2-slurm25.11.3-cuda12.9.0 (refresh required)"
+    ) in guidance
+    assert (
+        "  - Recommended order: Kubernetes 1.31 -> 1.32; Soperator chart "
         "1.22.3 -> 4.0.2-ps.3 while Kubernetes stays 1.32."
     ) in guidance
 
@@ -11630,7 +11959,7 @@ def test_soperator_onboard_prints_target_compatible_layout_decisions(
     assert "## Upgrade Guidance" in summary
     assert "- Upgrade path evaluation:" in summary
     assert "  - Kubernetes: 1.34" in summary
-    assert "  - Soperator: 1.23.3 -> 4.0.2-ps.3" in summary
+    assert "  - Soperator chart: 1.23.3 -> 4.0.2-ps.3" in summary
     assert "Soperator upgrade path: status=supported" in summary
 
 

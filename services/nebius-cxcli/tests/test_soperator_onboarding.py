@@ -427,7 +427,7 @@ def test_collect_snapshot_records_worker_nodeset_topology(
                 "--context",
                 "ctx",
                 "get",
-                "deployments,statefulsets,daemonsets,pods,services,configmaps,secrets",
+                "deployments,statefulsets,daemonsets,pods,jobs,services,configmaps,secrets",
             ]
             and "-n" in cmd
         ):
@@ -2246,13 +2246,37 @@ def _onboarding_payload() -> dict[str, object]:
 
 
 def _locked_upgrade_path_payload() -> dict[str, object]:
+    jail_rootfs = {
+        "current_image": "cr.example/populate_jail:4.0.2-slurm25.11.3-cuda12.9.0",
+        "current_version": "4.0.2-slurm25.11.3-cuda12.9.0",
+        "current_source": "completed-populate-jail-job",
+        "current_job_name": "mk8s-populate-jail",
+        "live_desired_image": "cr.example/populate_jail:4.0.2-slurm25.11.3-cuda12.9.0",
+        "live_desired_version": "4.0.2-slurm25.11.3-cuda12.9.0",
+        "live_desired_source": "slurmcluster.spec.populateJail.image",
+        "slurmcluster_name": "mk8s",
+        "target_image": "cr.example/populate_jail:4.0.2-slurm25.11.3-cuda12.9.0",
+        "target_version": "4.0.2-slurm25.11.3-cuda12.9.0",
+        "target_source": "pinned-chart-defaults",
+        "refresh_required": False,
+        "reason": "current populate-jail image matches target chart image",
+    }
     return {
         "schema": SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA,
         "locked": True,
         "source_k8s_version": "1.32",
         "target_k8s_version": "1.33",
-        "source_soperator_version": "1.23.3",
-        "target_soperator_version": "4.0.2-ps.3",
+        "soperator_app": {
+            "current_version": "1.23.3",
+            "target_version": "4.0.2",
+            "upgrade_required": True,
+        },
+        "soperator_chart": {
+            "current_version": "1.23.3",
+            "target_version": "4.0.2-ps.3",
+            "upgrade_required": True,
+        },
+        "jail_rootfs": jail_rootfs,
         "support_status": "supported",
         "support_rule_id": "k8s-1-33-soperator-4-supported",
         "recommended_order": [],
@@ -2265,8 +2289,17 @@ def _locked_upgrade_path_payload() -> dict[str, object]:
                 "title": "Kubernetes 1.32 -> 1.33",
                 "current_k8s_version": "1.32",
                 "target_k8s_version": "1.33",
-                "source_soperator_version": "4.0.2-ps.3",
-                "target_soperator_version": "4.0.2-ps.3",
+                "soperator_app": {
+                    "current_version": "4.0.2",
+                    "target_version": "4.0.2",
+                    "upgrade_required": False,
+                },
+                "soperator_chart": {
+                    "current_version": "4.0.2-ps.3",
+                    "target_version": "4.0.2-ps.3",
+                    "upgrade_required": False,
+                },
+                "jail_rootfs": jail_rootfs,
                 "k8s_upgrade_required": True,
                 "soperator_upgrade_required": False,
                 "actions": [
@@ -2681,6 +2714,10 @@ def test_source_discovery_report_writer_persists_full_snapshot(tmp_path) -> None
 
 def test_source_discovery_report_writer_treats_output_dir_as_root(tmp_path) -> None:
     output_root = tmp_path / "custom-root"
+    jail_image = (
+        "cr.eu-north1.nebius.cloud/soperator/populate_jail:"
+        "4.0.2-slurm25.11.3-cuda12.9.0"
+    )
     snapshot = _snapshot(
         release={
             "name": "soperator",
@@ -2704,6 +2741,13 @@ def test_source_discovery_report_writer_treats_output_dir_as_root(tmp_path) -> N
             },
         }
     ]
+    snapshot["soperator_resources"] += [
+        {
+            "kind": "SlurmCluster",
+            "metadata": {"name": "mk8s", "namespace": "soperator"},
+            "spec": {"populateJail": {"image": jail_image}},
+        }
+    ]
     report = analyze_soperator_onboarding_snapshot(
         snapshot,
         target_ref="cluster1",
@@ -2717,6 +2761,12 @@ def test_source_discovery_report_writer_treats_output_dir_as_root(tmp_path) -> N
         snapshot=snapshot,
         report=report,
         output_dir=output_root,
+        target_versions={
+            "jail_rootfs": {
+                "target_image": jail_image,
+                "target_source": "test-target",
+            }
+        },
     )
 
     assert path == (
@@ -2732,8 +2782,141 @@ def test_source_discovery_report_writer_treats_output_dir_as_root(tmp_path) -> N
     assert "- Soperator status: `installed`" in summary
     assert "- Source version: `4.0.2`" in summary
     assert "- Soperator chart version: `4.0.2-ps.3`" in summary
+    assert "- Jail rootfs version: `4.0.2-slurm25.11.3-cuda12.9.0`" in summary
+    payload = load_soperator_discovery_bundle(path)
+    assert payload["jail_rootfs"]["current_image"] == jail_image
+    assert payload["jail_rootfs"]["current_version"] == "4.0.2-slurm25.11.3-cuda12.9.0"
+    assert payload["jail_rootfs"]["target_image"] == jail_image
+    assert payload["jail_rootfs"]["refresh_required"] is False
+    assert payload["report"]["jail_rootfs"]["refresh_required"] is False
     kubernetes = json.loads((path.parent / "kubernetes.json").read_text(encoding="utf-8"))
     assert [item["metadata"]["name"] for item in kubernetes["nodesets"]] == ["worker"]
+
+
+def test_source_discovery_report_writer_marks_jail_refresh_when_target_image_changes(
+    tmp_path,
+) -> None:
+    current_image = (
+        "cr.eu-north1.nebius.cloud/soperator/populate_jail:"
+        "4.0.2-slurm25.11.3-cuda12.8.0"
+    )
+    target_image = (
+        "cr.eu-north1.nebius.cloud/soperator/populate_jail:"
+        "4.0.2-slurm25.11.3-cuda12.9.0"
+    )
+    snapshot = _snapshot(
+        release={
+            "name": "soperator",
+            "namespace": "soperator",
+            "chart": "soperator-4.0.2-ps.3",
+            "app_version": "4.0.2",
+        }
+    )
+    snapshot["soperator_resources"] = [
+        {
+            "kind": "SlurmCluster",
+            "metadata": {"name": "mk8s", "namespace": "soperator"},
+            "spec": {"populateJail": {"image": current_image}},
+        }
+    ]
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref="cluster1",
+        pinned_chart_version="4.0.2-ps.3",
+        pinned_app_version="4.0.2",
+    )
+
+    path = write_source_soperator_discovery_report(
+        tmp_path,
+        target_ref="cluster1",
+        snapshot=snapshot,
+        report=report,
+        target_versions={
+            "jail_rootfs": {
+                "target_image": target_image,
+                "target_source": "test-target",
+            }
+        },
+    )
+
+    payload = load_soperator_discovery_bundle(path)
+    jail_rootfs = payload["jail_rootfs"]
+    assert jail_rootfs["current_image"] == current_image
+    assert jail_rootfs["current_version"] == "4.0.2-slurm25.11.3-cuda12.8.0"
+    assert jail_rootfs["target_image"] == target_image
+    assert jail_rootfs["target_version"] == "4.0.2-slurm25.11.3-cuda12.9.0"
+    assert jail_rootfs["refresh_required"] is True
+    assert "differs" in jail_rootfs["reason"]
+    summary = (path.parent / "summary.md").read_text(encoding="utf-8")
+    assert "- Target Jail rootfs version: `4.0.2-slurm25.11.3-cuda12.9.0`" in summary
+
+
+def test_source_discovery_report_writer_prefers_completed_populate_jail_job_image(
+    tmp_path,
+) -> None:
+    live_image = (
+        "cr.eu-north1.nebius.cloud/soperator/populate_jail:"
+        "4.0.2-slurm25.11.3-cuda12.8.0"
+    )
+    completed_job_image = (
+        "cr.eu-north1.nebius.cloud/soperator/populate_jail:"
+        "4.0.2-slurm25.11.3-cuda12.9.0"
+    )
+    snapshot = _snapshot(
+        release={
+            "name": "soperator",
+            "namespace": "soperator",
+            "chart": "soperator-4.0.2-ps.3",
+            "app_version": "4.0.2",
+        }
+    )
+    snapshot["soperator_resources"] = [
+        {
+            "kind": "SlurmCluster",
+            "metadata": {"name": "mk8s", "namespace": "soperator"},
+            "spec": {"populateJail": {"image": live_image}},
+        }
+    ]
+    snapshot["soperator_namespace_resources"] = [
+        {
+            "kind": "Job",
+            "metadata": {
+                "name": "mk8s-populate-jail",
+                "namespace": "soperator",
+                "creationTimestamp": "2026-07-05T10:00:00Z",
+            },
+            "status": {"succeeded": 1, "completionTime": "2026-07-05T10:03:00Z"},
+            "containers": [{"name": "populate-jail", "image": completed_job_image}],
+        }
+    ]
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref="cluster1",
+        pinned_chart_version="4.0.2-ps.3",
+        pinned_app_version="4.0.2",
+    )
+
+    path = write_source_soperator_discovery_report(
+        tmp_path,
+        target_ref="cluster1",
+        snapshot=snapshot,
+        report=report,
+        target_versions={
+            "jail_rootfs": {
+                "target_image": completed_job_image,
+                "target_source": "test-target",
+            }
+        },
+    )
+
+    payload = load_soperator_discovery_bundle(path)
+    jail_rootfs = payload["jail_rootfs"]
+    assert jail_rootfs["current_image"] == completed_job_image
+    assert jail_rootfs["current_source"] == "completed-populate-jail-job"
+    assert jail_rootfs["current_job_name"] == "mk8s-populate-jail"
+    assert jail_rootfs["live_desired_image"] == live_image
+    assert jail_rootfs["target_image"] == completed_job_image
+    assert jail_rootfs["refresh_required"] is False
 
 
 def test_source_discovery_report_writer_filters_resource_labels_by_namespace(tmp_path) -> None:

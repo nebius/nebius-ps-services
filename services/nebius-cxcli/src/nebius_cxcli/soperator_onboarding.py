@@ -30,7 +30,7 @@ from .soperator_discovery import (
 from .soperator_populate_jail import POPULATE_JAIL_REFRESH_PHASE_ID
 
 ONBOARDING_SCHEMA = "nebius-cxcli-soperator-onboarding/v2"
-SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA = "nebius-cxcli-ext-soperator-upgrade-path/v1"
+SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA = "nebius-cxcli-ext-soperator-upgrade-path/v2"
 ONBOARDING_REPORT_DIR = "reports"
 SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME = SOPERATOR_DISCOVERY_DIR_NAME
 ONBOARDING_STATE_NO_SOPERATOR_DETECTED = "no-soperator-detected"
@@ -3735,7 +3735,7 @@ def collect_kubectl_soperator_snapshot(
                 "--context",
                 context,
                 "get",
-                "deployments,statefulsets,daemonsets,pods,services,configmaps,secrets",
+                "deployments,statefulsets,daemonsets,pods,jobs,services,configmaps,secrets",
                 "-n",
                 "soperator",
                 "-o",
@@ -3944,6 +3944,25 @@ def _sanitize_namespace_resource_items(items: Any) -> list[dict[str, Any]]:
             row["data_keys"] = sorted(str(key) for key in data) if isinstance(data, Mapping) else []
         elif kind in {"Deployment", "StatefulSet", "DaemonSet", "Pod"}:
             row["status"] = item.get("status") if isinstance(item.get("status"), Mapping) else {}
+        elif kind == "Job":
+            row["status"] = item.get("status") if isinstance(item.get("status"), Mapping) else {}
+            spec = item.get("spec") if isinstance(item.get("spec"), Mapping) else {}
+            template = spec.get("template") if isinstance(spec.get("template"), Mapping) else {}
+            pod_spec = template.get("spec") if isinstance(template.get("spec"), Mapping) else {}
+            containers = pod_spec.get("containers")
+            if isinstance(containers, Sequence) and not isinstance(
+                containers, (str, bytes, bytearray)
+            ):
+                row["containers"] = [
+                    {
+                        "name": container.get("name"),
+                        "image": container.get("image"),
+                    }
+                    for container in containers
+                    if isinstance(container, Mapping)
+                ]
+            else:
+                row["containers"] = []
         elif kind == "Service":
             spec = item.get("spec") if isinstance(item.get("spec"), Mapping) else {}
             row["spec"] = {

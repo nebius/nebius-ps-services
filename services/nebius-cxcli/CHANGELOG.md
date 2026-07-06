@@ -6,6 +6,11 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Fixed Soperator discovery guidance so app version, chart package version, and
+  Jail rootfs image-tag version are reported separately. Discovery now records
+  current and target populate-jail image evidence and only reports a Soperator
+  chart upgrade or Jail refresh when selected actions or image comparisons
+  require it.
 - Promoted Soperator jail rootfs refresh to a visible `Jail Upgrade` phase
   across managed discovery guidance, external discovery/onboarding plans, and
   managed/external upgrade reports while keeping the durable

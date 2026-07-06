@@ -613,7 +613,7 @@ and chart source-family changes.
   Managed `soperator upgrade` therefore treats `populate-jail-refresh` as a
   first-class stage after target chart apply and before postflight validation.
   The default `--populate-jail-refresh auto` refreshes when the target
-  populate-jail image changed or the target chart changed and rootfs
+  populate-jail image changed or selected chart/rootfs evidence means
   compatibility is unproven; `force` always refreshes; `manual` stops before
   refresh and prints passive-slot instructions. The active/passive refresh
   populates the passive rootfs slot with the target populate-jail image, applies
@@ -1006,10 +1006,14 @@ discovered live groups under
 `apps.charts[].placements` from discovered inventory and the selected profile
 instead of Terraform-owning the existing cluster or adding role-named host
 pools. The onboarding discovery summary includes the discovered Kubernetes
-control-plane version, target Kubernetes version, and an `Upgrade Guidance`
-section with Kubernetes minor hops, the one-shot Soperator hop to the
-cxcli-pinned target, and the matched Soperator/Kubernetes upgrade-path rule;
-discovery stays read-only and does not gate unsupported paths by itself. When
+control-plane version, target Kubernetes version, Soperator app version,
+Soperator chart package version, Jail rootfs image-tag version when available,
+and an `Upgrade Guidance` section with Kubernetes minor hops, current/target
+Soperator chart package state, current/target Jail rootfs image-tag state, and
+the matched Soperator/Kubernetes upgrade-path rule; discovery stays read-only
+and does not gate unsupported paths by itself. Support-policy evidence validates
+the path but does not by itself mean a chart upgrade or Jail refresh is
+required. When
 external node-template work is selected interactively, the Kubernetes target prompt
 defaults to the next supported minor hop from the discovered live version, not
 the global latest supported minor, and rejects skipped minor targets before any
@@ -1041,16 +1045,19 @@ is the current working directory; `--output-dir` selects a different root while
 still preserving `generated/reports/soperator-discovery/<target>/` below that
 root. Managed and external discovery share the same status and upgrade guidance
 formatter: the console footer and `summary.md` show the discovered Kubernetes
-version, Soperator install status, detected Soperator version when available,
-and an explicit not-installed status when no Soperator installation is found.
-When Helm release metadata is unavailable but live Soperator resources carry
-chart/app labels, discovery uses those labels as version evidence. When current
-and target versions are known, the formatter also shows Kubernetes minor hops,
-the one-shot Soperator hop to the cxcli-pinned target, the matched upgrade-path
-rule, and the canonical ordering across the Kubernetes `1.33+` boundary. For
-the tested old-source path, that renders Kubernetes
-`1.31 -> 1.32`, then Soperator `1.22.3 -> 4.0.2-ps.3`, then Kubernetes
-`1.32 -> 1.33 -> 1.34`. This ordering is intentional. The first Kubernetes hop
+version, Soperator install status, detected app version, detected chart package
+version, Jail rootfs image-tag version when available, and an explicit
+not-installed status when no Soperator installation is found. When Helm release
+metadata is unavailable but live Soperator resources carry chart/app labels,
+discovery uses those labels as version evidence. When current and target
+versions are known, the formatter also shows Kubernetes minor hops, current or
+target Soperator chart package state, current or target Jail rootfs image-tag
+state, the matched upgrade-path rule, and the canonical ordering across the
+Kubernetes `1.33+` boundary. For the tested old-source path, that renders
+Kubernetes `1.31 -> 1.32`, then Soperator chart
+`1.22.3 -> 4.0.2-ps.3`, then Jail rootfs image tag
+`1.22.3-slurm23.11.6-cuda12.4.0 -> 4.0.2-slurm25.11.3-cuda12.9.0`, then
+Kubernetes `1.32 -> 1.33 -> 1.34`. This ordering is intentional. The first Kubernetes hop
 gets the external MK8s control plane and node-template compatibility to the
 provider-supported `1.32` surface where the required Nebius GPU image/CUDA stack
 targets, including CUDA 13-era driver presets, can be selected. The Soperator
@@ -1298,10 +1305,11 @@ Prompt-capable interactive runs render the affected jobs in an aligned Textual
 table with persistent controls: `a` selects or clears all rows, `i` inverts the
 selection, lowercase selected-action keys such as `c`/`q`/`h` operate on the
 selected rows, and uppercase `C`/`Q`/`H` operate on all displayed or all active
-displayed jobs as appropriate. When the target chart/rootfs changed, the
-Jail Upgrade phase first verifies persistent jail mounts, then applies
-the same job-policy gate to affected worker NodeSets, populates the passive
-rootfs slot with the target populate-jail image, switches consumers to that
+displayed jobs as appropriate. When the target populate-jail image changed or
+selected chart/rootfs evidence requires refresh, the Jail Upgrade phase first
+verifies persistent jail mounts, then applies the same job-policy gate to
+affected worker NodeSets, populates the passive rootfs slot with the target
+populate-jail image, switches consumers to that
 populated slot only while the login Service has ready EndpointSlice endpoints
 during the login StatefulSet rollout, and keeps the previous slot available for
 rollback,
@@ -3192,7 +3200,7 @@ cxcli does not infer or migrate arbitrary customer data paths.
 The refresh sequence is deliberately ordered:
 
 1. Plan the refresh. `auto` refreshes when the populate-jail image changed, or
-   when the chart changed and rootfs compatibility cannot be proven. `force`
+   when selected chart/rootfs evidence means compatibility cannot be proven. `force`
    always refreshes. `manual` records the required action and stops before
    mutation.
 2. Verify persistent mounts and passive-slot capacity. For external adoption,

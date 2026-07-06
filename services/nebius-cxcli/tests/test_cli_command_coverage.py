@@ -9503,16 +9503,64 @@ def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_by_terminal_m
         "locked": True,
         "source_k8s_version": "1.32",
         "target_k8s_version": "1.32",
-        "source_soperator_version": "1.22.3",
-        "target_soperator_version": "4.0.2-ps.3",
+        "soperator_app": {
+            "current_version": "1.22.3",
+            "target_version": "4.0.2",
+            "upgrade_required": True,
+        },
+        "soperator_chart": {
+            "current_version": "1.22.3",
+            "target_version": "4.0.2-ps.3",
+            "upgrade_required": True,
+        },
+        "jail_rootfs": {
+            "current_image": "",
+            "current_version": "",
+            "current_source": "not-detected",
+            "current_job_name": "",
+            "live_desired_image": "",
+            "live_desired_version": "",
+            "live_desired_source": "",
+            "slurmcluster_name": "",
+            "target_image": "",
+            "target_version": "",
+            "target_source": "",
+            "refresh_required": False,
+            "reason": "populate-jail image evidence is incomplete",
+        },
         "segments": [
             {
                 "id": "segment-1-soperator-1-22-3-4-0-2-ps-3",
-                "title": "Soperator 1.22.3 -> 4.0.2-ps.3",
+                "title": "Soperator chart 1.22.3 -> 4.0.2-ps.3",
+                "index": 1,
+                "kind": "soperator-upgrade",
                 "current_k8s_version": "1.32",
                 "target_k8s_version": "1.32",
-                "source_soperator_version": "1.22.3",
-                "target_soperator_version": "4.0.2-ps.3",
+                "soperator_app": {
+                    "current_version": "1.22.3",
+                    "target_version": "4.0.2",
+                    "upgrade_required": True,
+                },
+                "soperator_chart": {
+                    "current_version": "1.22.3",
+                    "target_version": "4.0.2-ps.3",
+                    "upgrade_required": True,
+                },
+                "jail_rootfs": {
+                    "current_image": "",
+                    "current_version": "",
+                    "current_source": "not-detected",
+                    "current_job_name": "",
+                    "live_desired_image": "",
+                    "live_desired_version": "",
+                    "live_desired_source": "",
+                    "slurmcluster_name": "",
+                    "target_image": "",
+                    "target_version": "",
+                    "target_source": "",
+                    "refresh_required": False,
+                    "reason": "populate-jail image evidence is incomplete",
+                },
                 "actions": ["upgrade-soperator"],
                 "soperator_upgrade_required": True,
                 "k8s_upgrade_required": False,
@@ -23610,7 +23658,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         "upgrade is only for accepted onboarding plans that contain external-upgrade-owned actions"
         in (normalized_soperator_help)
     )
-    assert "including Jail Upgrade when Soperator chart/rootfs work is selected" in (
+    assert "including Jail Upgrade when target image/action evidence requires a rootfs refresh" in (
         normalized_soperator_help
     )
     assert (

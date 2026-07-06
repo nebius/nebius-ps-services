@@ -112,6 +112,7 @@ from .soperator_onboarding import (
     ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_GPU_STACK_PRESET,
     ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION,
     ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS,
+    SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA,
     SOPERATOR_MIGRATION_PROFILE_DATA_FILE,
     analyze_soperator_onboarding_snapshot,
     normalize_soperator_release_version,
@@ -1054,6 +1055,14 @@ def _checkpoint_locked_upgrade_path(checkpoint: Mapping[str, Any] | None) -> dic
     locked_path = (checkpoint or {}).get("locked_upgrade_path")
     if not isinstance(locked_path, Mapping):
         return {}
+    schema = str(locked_path.get("schema", "") or "").strip()
+    if schema and schema != SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA:
+        raise RuntimeError(
+            "External Soperator upgrade checkpoint contains locked_upgrade_path schema "
+            f"{schema}, but this cxcli requires {SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA}. "
+            "Rerun `nebius-cxcli ext-soperator onboard` as an intentional repair/replan path, "
+            "or remove the checkpoint after reviewing recovery state."
+        )
     segments = locked_path.get("segments")
     if not isinstance(segments, list) or not segments:
         return {}
@@ -1167,12 +1176,9 @@ def _locked_upgrade_path_segment_history(
                 "status": status,
                 "current_k8s_version": str(raw_segment.get("current_k8s_version", "") or ""),
                 "target_k8s_version": str(raw_segment.get("target_k8s_version", "") or ""),
-                "source_soperator_version": str(
-                    raw_segment.get("source_soperator_version", "") or ""
-                ),
-                "target_soperator_version": str(
-                    raw_segment.get("target_soperator_version", "") or ""
-                ),
+                "soperator_app": to_plain_data(_mapping(raw_segment.get("soperator_app"))),
+                "soperator_chart": to_plain_data(_mapping(raw_segment.get("soperator_chart"))),
+                "jail_rootfs": to_plain_data(_mapping(raw_segment.get("jail_rootfs"))),
                 "report_path": str(state.get("segment_report_path", "") or report_path),
                 "json_report_path": str(
                     state.get("segment_json_report_path", "") or json_report_path
@@ -2480,6 +2486,10 @@ def _phase_ids_for_actions(
     explicit_populate_jail_refresh = normalize_populate_jail_refresh_mode(
         populate_jail_refresh
     ) in {"force", "manual"}
+    jail_rootfs = report.get("jail_rootfs")
+    jail_rootfs_refresh_required = (
+        isinstance(jail_rootfs, Mapping) and jail_rootfs.get("refresh_required") is True
+    )
     phase_ids = tuple(
         phase_id
         for phase_id in _phase_ids(report)
@@ -2489,6 +2499,7 @@ def _phase_ids_for_actions(
         phase_ids
         and ONBOARDING_ACTION_UPGRADE_SOPERATOR not in actions
         and not explicit_populate_jail_refresh
+        and not jail_rootfs_refresh_required
     ):
         phase_ids = tuple(
             phase_id for phase_id in phase_ids if phase_id != POPULATE_JAIL_REFRESH_PHASE_ID
@@ -2497,6 +2508,7 @@ def _phase_ids_for_actions(
         ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE in actions
         or ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK in actions
         or ONBOARDING_ACTION_UPGRADE_SOPERATOR in actions
+        or jail_rootfs_refresh_required
     ):
         phase_ids = ("discovery-and-plan", "customer-approval")
     if (
@@ -2520,7 +2532,10 @@ def _phase_ids_for_actions(
         phase_ids = tuple(phases)
     if (
         phase_ids
-        and ONBOARDING_ACTION_UPGRADE_SOPERATOR in actions
+        and (
+            ONBOARDING_ACTION_UPGRADE_SOPERATOR in actions
+            or jail_rootfs_refresh_required
+        )
         and POPULATE_JAIL_REFRESH_PHASE_ID not in phase_ids
     ):
         phases = list(phase_ids)
@@ -14163,6 +14178,13 @@ def _write_soperator_migrate_report(
         checkpoint=checkpoint,
         locked_upgrade_path=locked_upgrade_path,
     )
+    locked_soperator_chart = _mapping(locked_upgrade_path.get("soperator_chart"))
+    locked_jail_rootfs = _mapping(locked_upgrade_path.get("jail_rootfs"))
+    locked_chart_current = str(locked_soperator_chart.get("current_version", "") or "").strip()
+    locked_chart_target = str(locked_soperator_chart.get("target_version", "") or "").strip()
+    locked_jail_current = str(locked_jail_rootfs.get("current_version", "") or "").strip()
+    locked_jail_target = str(locked_jail_rootfs.get("target_version", "") or "").strip()
+    locked_jail_refresh = locked_jail_rootfs.get("refresh_required") is True
     lines = [
         "# External Soperator Upgrade Report",
         "",
@@ -14196,6 +14218,18 @@ def _write_soperator_migrate_report(
                 f"- Current segment: `{current_segment_id or 'none'}`",
                 f"- Completed segments: `{completed_count}`",
                 f"- Remaining segments: `{remaining_count}`",
+                "- Soperator chart: `"
+                + (locked_chart_current or "unknown")
+                + "` -> `"
+                + (locked_chart_target or "unknown")
+                + "`",
+                "- Jail rootfs: `"
+                + (locked_jail_current or "unknown")
+                + "` -> `"
+                + (locked_jail_target or "unknown")
+                + "` ("
+                + ("refresh required" if locked_jail_refresh else "no refresh required")
+                + ")",
                 "",
                 "| Segment | Status | Snapshot | Backup |",
                 "| --- | --- | --- | --- |",

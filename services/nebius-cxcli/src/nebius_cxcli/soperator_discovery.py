@@ -317,6 +317,204 @@ def _soperator_status(identity: Mapping[str, Any]) -> str:
     return "unknown"
 
 
+def _nested_text(mapping: Mapping[str, Any], path: Sequence[str]) -> str:
+    current: Any = mapping
+    for key in path:
+        if not isinstance(current, Mapping):
+            return ""
+        current = current.get(key)
+    return _text(current)
+
+
+def _container_image_version(image: Any) -> str:
+    text = _text(image)
+    if not text:
+        return ""
+    without_digest, _sep, digest = text.partition("@")
+    last_slash = without_digest.rfind("/")
+    last_colon = without_digest.rfind(":")
+    if last_colon > last_slash:
+        return without_digest[last_colon + 1 :]
+    return digest if digest else ""
+
+
+def _pod_template_container_image(resource: Mapping[str, Any]) -> str:
+    containers = resource.get("containers")
+    if not isinstance(containers, Sequence) or isinstance(containers, (str, bytes, bytearray)):
+        containers = _nested_container_sequence(resource, ("spec", "template", "spec", "containers"))
+    for container in containers:
+        if not isinstance(container, Mapping):
+            continue
+        name = _text(container.get("name")).lower()
+        image = _text(container.get("image"))
+        if image and ("populate" in name and "jail" in name):
+            return image
+    for container in containers:
+        if isinstance(container, Mapping) and _text(container.get("image")):
+            return _text(container.get("image"))
+    return ""
+
+
+def _nested_container_sequence(
+    mapping: Mapping[str, Any],
+    path: Sequence[str],
+) -> Sequence[Any]:
+    current: Any = mapping
+    for key in path:
+        if not isinstance(current, Mapping):
+            return ()
+        current = current.get(key)
+    if isinstance(current, Sequence) and not isinstance(current, (str, bytes, bytearray)):
+        return current
+    return ()
+
+
+def _job_is_complete(resource: Mapping[str, Any]) -> bool:
+    status = resource.get("status")
+    if not isinstance(status, Mapping):
+        return False
+    succeeded = status.get("succeeded")
+    if isinstance(succeeded, int) and succeeded > 0:
+        return True
+    if isinstance(succeeded, str) and succeeded.isdigit() and int(succeeded) > 0:
+        return True
+    conditions = status.get("conditions")
+    if not isinstance(conditions, Sequence) or isinstance(conditions, (str, bytes, bytearray)):
+        return False
+    for condition in conditions:
+        if not isinstance(condition, Mapping):
+            continue
+        if _text(condition.get("type")).lower() == "complete" and _text(
+            condition.get("status")
+        ).lower() == "true":
+            return True
+    return False
+
+
+def _populate_jail_completed_job_image(snapshot: Mapping[str, Any]) -> tuple[str, str]:
+    candidates: list[tuple[str, str, str]] = []
+    resources = snapshot.get("soperator_namespace_resources")
+    if not isinstance(resources, Sequence) or isinstance(resources, (str, bytes, bytearray)):
+        return "", ""
+    for resource in resources:
+        if not isinstance(resource, Mapping):
+            continue
+        if _text(resource.get("kind")) != "Job":
+            continue
+        name = _object_name(resource)
+        if "populate-jail" not in name:
+            continue
+        if not _job_is_complete(resource):
+            continue
+        image = _pod_template_container_image(resource)
+        if not image:
+            continue
+        completed_at = _nested_text(resource, ("status", "completionTime"))
+        created_at = _nested_text(resource, ("metadata", "creationTimestamp"))
+        candidates.append((completed_at or created_at, name, image))
+    if not candidates:
+        return "", ""
+    _timestamp, name, image = sorted(candidates, key=lambda item: item[0], reverse=True)[0]
+    return name, image
+
+
+def _live_populate_jail_image(snapshot: Mapping[str, Any]) -> tuple[str, str]:
+    for item in _resource_items(snapshot, "slurmclusters"):
+        image = _nested_text(item, ("spec", "populateJail", "image"))
+        if image:
+            return _object_name(item), image
+    return "", ""
+
+
+def _report_selected_action_ids(report: Mapping[str, Any]) -> set[str]:
+    result: set[str] = set()
+    actions = report.get("actions")
+    if not isinstance(actions, Sequence) or isinstance(actions, (str, bytes, bytearray)):
+        return result
+    for action in actions:
+        if isinstance(action, str):
+            action_id = _text(action)
+            selected = True
+        elif isinstance(action, Mapping):
+            action_id = _text(action.get("id"))
+            selected = action.get("selected") is not False
+        else:
+            continue
+        if action_id and selected:
+            result.add(action_id)
+    return result
+
+
+def _target_jail_rootfs_image(target_versions: Mapping[str, Any] | None) -> tuple[str, str]:
+    if not isinstance(target_versions, Mapping):
+        return "", ""
+    jail_rootfs = target_versions.get("jail_rootfs")
+    if isinstance(jail_rootfs, Mapping):
+        return _text(jail_rootfs.get("target_image")), _text(jail_rootfs.get("target_source"))
+    return "", ""
+
+
+def _jail_rootfs_record(
+    *,
+    snapshot: Mapping[str, Any],
+    report: Mapping[str, Any],
+    target_versions: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    job_name, job_image = _populate_jail_completed_job_image(snapshot)
+    slurmcluster_name, live_desired_image = _live_populate_jail_image(snapshot)
+    current_image = job_image or live_desired_image
+    current_source = (
+        "completed-populate-jail-job"
+        if job_image
+        else "slurmcluster.spec.populateJail.image"
+        if live_desired_image
+        else "not-detected"
+    )
+    target_image, target_source = _target_jail_rootfs_image(target_versions)
+    action_ids = _report_selected_action_ids(report)
+    chart_upgrade_selected = "upgrade-soperator" in action_ids
+    if current_image and target_image and current_image != target_image:
+        refresh_required = True
+        reason = "target populate-jail image differs from current jail rootfs image"
+    elif chart_upgrade_selected:
+        refresh_required = True
+        reason = "Soperator chart upgrade is selected; jail rootfs compatibility is unproven"
+    elif current_image and target_image:
+        refresh_required = False
+        reason = "current populate-jail image matches target chart image"
+    else:
+        refresh_required = False
+        reason = "populate-jail image evidence is incomplete"
+    return {
+        "current_image": current_image,
+        "current_version": _container_image_version(current_image),
+        "current_source": current_source,
+        "current_job_name": job_name,
+        "live_desired_image": live_desired_image,
+        "live_desired_version": _container_image_version(live_desired_image),
+        "live_desired_source": "slurmcluster.spec.populateJail.image" if live_desired_image else "",
+        "slurmcluster_name": slurmcluster_name,
+        "target_image": target_image,
+        "target_version": _container_image_version(target_image),
+        "target_source": target_source,
+        "refresh_required": refresh_required,
+        "reason": reason,
+    }
+
+
+def soperator_discovery_jail_rootfs_record(
+    *,
+    snapshot: Mapping[str, Any],
+    report: Mapping[str, Any],
+    target_versions: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    return _jail_rootfs_record(
+        snapshot=snapshot,
+        report=report,
+        target_versions=target_versions,
+    )
+
+
 _SOPERATOR_RESOURCE_KIND_BY_KEY = {
     "activechecks": "ActiveCheck",
     "nodeconfigurators": "NodeConfigurator",
@@ -419,6 +617,15 @@ def _identity_section(
         "helm_release": _redact(release),
         "crd_versions": _redact(snapshot.get("crds", [])),
     }
+    jail_rootfs = report.get("jail_rootfs")
+    if isinstance(jail_rootfs, Mapping):
+        identity["jail_rootfs"] = _redact(jail_rootfs)
+    soperator_app = report.get("soperator_app")
+    if isinstance(soperator_app, Mapping):
+        identity["soperator_app"] = _redact(soperator_app)
+    soperator_chart = report.get("soperator_chart")
+    if isinstance(soperator_chart, Mapping):
+        identity["soperator_chart"] = _redact(soperator_chart)
     identity["soperator_status"] = _soperator_status(identity)
     return identity
 
@@ -699,6 +906,17 @@ def _summary_markdown(
     soperator_status = str(identity.get("soperator_status", "") or "").strip() or "unknown"
     chart_version = str(identity.get("chart_version", "") or "").strip()
     app_version = str(identity.get("app_version", "") or "").strip()
+    jail_rootfs = identity.get("jail_rootfs")
+    jail_rootfs_version = (
+        str(jail_rootfs.get("current_version", "") or "").strip()
+        if isinstance(jail_rootfs, Mapping)
+        else ""
+    )
+    target_jail_rootfs_version = (
+        str(jail_rootfs.get("target_version", "") or "").strip()
+        if isinstance(jail_rootfs, Mapping)
+        else ""
+    )
     lines = [
         "# Soperator Discovery Summary",
         "",
@@ -715,6 +933,10 @@ def _summary_markdown(
         lines.append(f"- Soperator chart version: `{chart_version}`")
     if app_version:
         lines.append(f"- Soperator app version: `{app_version}`")
+    if jail_rootfs_version:
+        lines.append(f"- Jail rootfs version: `{jail_rootfs_version}`")
+    if target_jail_rootfs_version and target_jail_rootfs_version != jail_rootfs_version:
+        lines.append(f"- Target Jail rootfs version: `{target_jail_rootfs_version}`")
     if current_k8s_version:
         lines.append(f"- Current Kubernetes version: `{current_k8s_version}`")
     if target_k8s_version:
@@ -871,6 +1093,11 @@ def write_soperator_discovery_bundle(
     plain_snapshot = to_plain_data(snapshot)
     if not isinstance(plain_snapshot, Mapping):
         plain_snapshot = {}
+    report_payload["jail_rootfs"] = _jail_rootfs_record(
+        snapshot=plain_snapshot,
+        report=report_payload,
+        target_versions=target_versions,
+    )
     identity = _identity_section(
         target_ref=normalized_target,
         source_kind=source_kind,
@@ -996,6 +1223,7 @@ def load_soperator_discovery_bundle(path: Path) -> dict[str, Any]:
             "target_k8s_version",
             "state",
             "soperator_status",
+            "jail_rootfs",
         ):
             payload[key] = identity.get(key, "")
     payload.update(
