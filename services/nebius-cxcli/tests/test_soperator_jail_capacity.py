@@ -148,3 +148,51 @@ def test_probe_active_passive_jail_capacity_uses_kubectl_job_and_parses_logs() -
     assert "slurm.nebius.ai/nodeset-name: system" in str(calls[1][1])
     assert "effect: NoSchedule" in str(calls[1][1])
     assert calls[-1][2] is False
+
+
+def test_probe_active_passive_jail_capacity_mounts_shared_legacy_pvc_once() -> None:
+    calls: list[tuple[tuple[str, ...], str | None, bool]] = []
+
+    def runner(
+        args: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SimpleNamespace:
+        del timeout_seconds
+        calls.append((tuple(args), input_text, check))
+        if "logs" in args:
+            return SimpleNamespace(
+                stdout="active_used_kib=83886080\npassive_available_kib=104857600\n"
+            )
+        return SimpleNamespace(stdout="")
+
+    result = probe_active_passive_jail_capacity(
+        runner,
+        namespace="soperator",
+        target_ref="prod",
+        image="populate:jail",
+        active_pvc="jail-pvc",
+        passive_pvc="jail-pvc",
+        active_rootfs_path="/mnt/jail",
+        exclude_paths=("/mnt/jail/.cxcli", "/mnt/jail/home"),
+        kube_context="ctx",
+    )
+
+    assert result.sufficient is True
+    applied = yaml.safe_load(calls[1][1] or "{}")
+    pod_spec = applied["items"][0]["spec"]["template"]["spec"]
+    container = pod_spec["containers"][0]
+    probe_script = container["command"][2]
+    assert pod_spec["volumes"] == [
+        {
+            "name": "active-rootfs",
+            "persistentVolumeClaim": {"claimName": "jail-pvc", "readOnly": True},
+        }
+    ]
+    assert container["volumeMounts"] == [
+        {"name": "active-rootfs", "mountPath": "/mnt/active", "readOnly": True}
+    ]
+    assert "df -Pk /mnt/active" in probe_script
+    assert "/mnt/passive" not in probe_script

@@ -1398,6 +1398,64 @@ def test_locked_ext_soperator_upgrade_path_generates_two_node_hops_for_pinned_so
     assert all(segment["soperator_upgrade_required"] is False for segment in segments)
 
 
+def test_ext_soperator_upgrade_dry_run_forces_populate_jail_for_node_template_segment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = _write_old_soperator_migration_config(
+        tmp_path,
+        source_soperator_version="1.22.3",
+        current_k8s_version="1.31",
+        target_k8s_version="1.34",
+    )
+    upgrade_path = _locked_upgrade_path_from_config(config_path)
+    segments = upgrade_path["segments"]
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    payload["deploy"]["targets"][0]["soperator_onboarding"].pop("upgrade_path", None)
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    _write_locked_ext_soperator_checkpoint(
+        config_path=config_path,
+        target_ref="external-cluster",
+        upgrade_path=upgrade_path,
+        current_segment_id=segments[0]["id"],
+        completed_segment_ids=[segments[0]["id"]],
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "collect_kubectl_soperator_snapshot",
+        lambda **_kwargs: _old_soperator_snapshot_with_provider(
+            soperator_version=_soperator_test_chart_version(),
+            current_k8s_version="1.32",
+        ),
+    )
+
+    auto = runner.invoke(app, ["ext-soperator", "upgrade", str(config_path), "--dry-run"])
+    forced = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "upgrade",
+            str(config_path),
+            "--dry-run",
+            "--populate-jail-refresh",
+            "force",
+        ],
+    )
+
+    assert auto.exit_code == 0, auto.output
+    assert forced.exit_code == 0, forced.output
+    assert "Path source: checkpoint" in forced.output
+    assert "Soperator upgrade required: no" in forced.output
+    assert "External node-template upgrade required: yes" in forced.output
+    assert "Current segment: Kubernetes 1.32 -> 1.33" in forced.output
+    assert "Soperator hop" not in forced.output
+    assert "populate-jail-refresh" not in auto.output
+    assert "populate-jail-refresh" in forced.output
+    assert forced.output.index("external-node-template-upgrade") < forced.output.index(
+        "populate-jail-refresh"
+    )
+
+
 def test_locked_ext_soperator_upgrade_path_generates_soperator_only_segment(
     tmp_path: Path,
 ) -> None:
@@ -6458,7 +6516,67 @@ def test_soperator_onboard_noninteractive_uses_source_version_for_crds_only_clus
     assert onboarding["node_template_upgrade"]["target_k8s_version"] == "1.32"
 
 
-def test_soperator_onboard_noninteractive_rejects_skipped_k8s_minor(
+def test_soperator_onboard_noninteractive_accepts_full_locked_k8s_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+    config_path = _project_config_path(deployments_root)
+
+    def _snapshot(*, kube_context: str) -> dict[str, object]:
+        assert kube_context == "legacy-context"
+        return _old_soperator_snapshot_with_provider(
+            soperator_version="1.23.3",
+            current_k8s_version="1.32",
+        )
+
+    monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _snapshot)
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "onboard",
+            str(config_path),
+            "--cluster-id",
+            "mk8scluster-legacy",
+            "--target-id",
+            "legacy-cluster",
+            "--kube-context",
+            "legacy-context",
+            "--storage-mode",
+            "keep-existing-storage",
+            "--compute-mode",
+            "keep-existing-compute",
+            "--to-chart-version",
+            _soperator_test_chart_version(),
+            "--to-k8s-version",
+            "1.34",
+            "--no-interactive",
+            "--no-validate-sources",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]
+    assert onboarding["node_template_upgrade"]["target_k8s_version"] == "1.34"
+    assert [
+        segment["target_k8s_version"] for segment in onboarding["upgrade_path"]["segments"]
+    ] == ["1.32", "1.33", "1.34"]
+
+
+def test_soperator_onboard_noninteractive_rejects_unsupported_future_k8s_minor(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -6512,8 +6630,8 @@ def test_soperator_onboard_noninteractive_rejects_skipped_k8s_minor(
     assert result.exit_code != 0
     normalized_output = " ".join(result.output.split())
     assert "Invalid external Soperator onboarding Kubernetes target" in result.output
-    assert "Current Kubernetes version: 1.32; requested target: 1.35" in normalized_output
-    assert "Run the next hop first with --to-k8s-version 1.33" in normalized_output
+    assert "requested target 1.35 is newer than" in normalized_output
+    assert "cxcli-supported external onboarding target 1.34" in normalized_output
     assert "Soperator onboarding state:" not in result.output
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     deploy = payload.get("deploy")
@@ -7782,7 +7900,7 @@ def test_soperator_onboard_interactive_defaults_node_template_target_to_next_min
     assert "Target Kubernetes version: 1.33" in "\n".join(printed)
 
 
-def test_soperator_onboard_interactive_rejects_skipped_k8s_minor_at_prompt(
+def test_soperator_onboard_interactive_accepts_full_locked_k8s_path_at_prompt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     prompt_labels: list[str] = []
@@ -7816,31 +7934,29 @@ def test_soperator_onboard_interactive_rejects_skipped_k8s_minor_at_prompt(
     ) -> tuple[object, bool]:
         prompt_labels.append(field_label)
         if field_label.endswith(".target_k8s_version"):
-            return "1.35", False
+            return "1.34", False
         return current, False
 
     monkeypatch.setattr(cli_module, "_prompt_scalar_override", _prompt_scalar)
 
-    with pytest.raises(
-        RuntimeError,
-        match=(
-            "Invalid external Soperator onboarding Kubernetes target: .*"
-            "Run the next hop first with --to-k8s-version 1\\.33"
-        ),
-    ):
-        cli_module._prompt_soperator_onboarding_target_row(
-            payload={"client_info": {"nebius": {"project_id": "project-123"}}},
-            project_id="project-123",
-            storage_mode="keep-existing-storage",
-            compute_mode="keep-existing-compute",
-            to_chart_version=cli_module._soperator_upgrade_catalog_to_version_default(),
-            worker_rollout_strategy="zero-surge",
-            validate_sources=False,
-        )
+    row = cli_module._prompt_soperator_onboarding_target_row(
+        payload={"client_info": {"nebius": {"project_id": "project-123"}}},
+        project_id="project-123",
+        storage_mode="keep-existing-storage",
+        compute_mode="keep-existing-compute",
+        to_chart_version=cli_module._soperator_upgrade_catalog_to_version_default(),
+        worker_rollout_strategy="zero-surge",
+        validate_sources=False,
+    )
 
     assert prompt_labels == [
         "deploy.targets[].soperator_onboarding.node_template_upgrade.target_k8s_version"
     ]
+    onboarding = row["soperator_onboarding"]
+    assert onboarding["node_template_upgrade"]["target_k8s_version"] == "1.34"
+    assert [
+        segment["target_k8s_version"] for segment in onboarding["upgrade_path"]["segments"]
+    ] == ["1.32", "1.33", "1.34"]
 
 
 def test_soperator_onboard_rejects_discovered_k8s_newer_than_supported_target() -> None:

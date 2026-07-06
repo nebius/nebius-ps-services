@@ -10,6 +10,11 @@ All notable changes to this chart are tracked here.
   2, mounts managed `/home` at `/mnt/jail-store/shared/home`, and supports
   external single-SFS adoption by pointing `/home` at `/mnt/jail/home` plus
   explicit customer paths such as `/data` without copying data.
+- Fixed worker NodeSet jail configuration during active/passive rootfs
+  adoption. The chart now seeds generated Slurm configs into the mounted jail
+  before `worker-init`, mounts the same configs into `slurmd`, and sets
+  `SlurmdParameters=l3cache_as_socket` automatically for GPU NodeSets so
+  GPU-worker topology registration matches the generated `slurm.conf`.
 - Clarified `volume.jail.size` as the total backing-store capacity for the
   SFS-mounted active/passive jail store; the local-path PV/PVC requests are
   informational and do not represent per-slot quota.

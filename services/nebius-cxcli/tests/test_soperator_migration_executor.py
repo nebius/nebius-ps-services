@@ -4,6 +4,8 @@ import hashlib
 import json
 import re
 import subprocess
+import sys
+import types
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
@@ -125,6 +127,121 @@ def test_command_not_found_recognizes_explicit_not_found_status(stderr: str) -> 
     assert migration._command_not_found(result) is True
 
 
+def test_default_command_runner_retries_transient_kubectl_auth_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def _run(
+        args: list[str],
+        *,
+        input: str | None,
+        text: bool,
+        capture_output: bool,
+        timeout: int,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        del input, text, capture_output, timeout, check
+        calls.append(args)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(
+                args,
+                1,
+                "",
+                (
+                    "Unable to connect to the server: getting credentials: "
+                    "authentication handshake failed: Client.Timeout exceeded "
+                    "while awaiting headers"
+                ),
+            )
+        return subprocess.CompletedProcess(args, 0, "ok", "")
+
+    monkeypatch.setattr(migration.subprocess, "run", _run)
+    monkeypatch.setattr(migration.time, "sleep", lambda _seconds: None)
+
+    result = migration._default_command_runner(  # noqa: SLF001
+        ["kubectl", "get", "pods"],
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == "ok"
+    assert len(calls) == 2
+
+
+def test_default_command_runner_retries_read_timeout_for_read_only_kubectl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def _run(
+        args: list[str],
+        *,
+        input: str | None,
+        text: bool,
+        capture_output: bool,
+        timeout: int,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        del input, text, capture_output, timeout, check
+        calls.append(args)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(args, 1, "", "read: operation timed out")
+        return subprocess.CompletedProcess(args, 0, "ok", "")
+
+    monkeypatch.setattr(migration.subprocess, "run", _run)
+    monkeypatch.setattr(migration.time, "sleep", lambda _seconds: None)
+
+    result = migration._default_command_runner(  # noqa: SLF001
+        ["kubectl", "--context", "external-context", "get", "pods"],
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == "ok"
+    assert len(calls) == 2
+
+
+def test_default_command_runner_does_not_retry_read_timeout_for_kubectl_exec(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def _run(
+        args: list[str],
+        *,
+        input: str | None,
+        text: bool,
+        capture_output: bool,
+        timeout: int,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        del input, text, capture_output, timeout, check
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 1, "", "read: operation timed out")
+
+    monkeypatch.setattr(migration.subprocess, "run", _run)
+    monkeypatch.setattr(migration.time, "sleep", lambda _seconds: None)
+
+    result = migration._default_command_runner(  # noqa: SLF001
+        [
+            "kubectl",
+            "--context",
+            "external-context",
+            "exec",
+            "login-0",
+            "--",
+            "bash",
+            "-lc",
+            "scontrol update nodename=worker-0 state=resume",
+        ],
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert len(calls) == 1
+
+
 def test_node_group_payload_reads_through_nebius_api() -> None:
     class _Api:
         def __init__(self) -> None:
@@ -142,6 +259,181 @@ def test_node_group_payload_reads_through_nebius_api() -> None:
 
     assert payload["metadata"]["id"] == "node-group-1"
     assert api.calls == ["node-group-1"]
+
+
+def test_sdk_cluster_control_plane_update_preserves_required_identity_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    current_cluster = {
+        "metadata": {
+            "id": "mk8scluster-123",
+            "parent_id": "project-123",
+            "name": "cluster-a",
+        },
+        "spec": {
+            "control_plane": {
+                "version": "1.32",
+                "subnet_id": "vpcsubnet-123",
+            }
+        },
+        "status": {
+            "control_plane": {
+                "endpoints": {
+                    "private_endpoint": "https://private.example.invalid",
+                    "public_endpoint": "https://public.example.invalid",
+                }
+            }
+        },
+    }
+
+    class _Message:
+        def __init__(self, **kwargs: Any) -> None:
+            self.__dict__.update(kwargs)
+
+    class _UpdateClusterRequest(_Message):
+        def set_mask(self, mask: object) -> None:
+            self.mask = mask
+
+    class _Request:
+        def __init__(self, *, id: str) -> None:
+            self.id = id
+
+    class _GetOperation:
+        def wait(self) -> Mapping[str, Any]:
+            return current_cluster
+
+    class _UpdateOperation:
+        def wait(self) -> object:
+            return object()
+
+    class _ClusterClient:
+        def get(self, request: _Request) -> _GetOperation:
+            captured["get_request_id"] = request.id
+            return _GetOperation()
+
+        def update(self, request: _UpdateClusterRequest) -> _UpdateOperation:
+            captured["update_request"] = request
+            return _UpdateOperation()
+
+    common_module = types.ModuleType("nebius.api.nebius.common.v1")
+    common_module.ResourceMetadata = _Message  # type: ignore[attr-defined]
+    mk8s_module = types.ModuleType("nebius.api.nebius.mk8s.v1")
+    mk8s_module.ClusterSpec = _Message  # type: ignore[attr-defined]
+    mk8s_module.ControlPlaneEndpointsSpec = _Message  # type: ignore[attr-defined]
+    mk8s_module.ControlPlaneSpec = _Message  # type: ignore[attr-defined]
+    mk8s_module.GetClusterRequest = _Request  # type: ignore[attr-defined]
+    mk8s_module.PublicEndpointSpec = _Message  # type: ignore[attr-defined]
+    mk8s_module.UpdateClusterRequest = _UpdateClusterRequest  # type: ignore[attr-defined]
+    fieldmask_module = types.ModuleType("nebius.base.fieldmask")
+    fieldmask_module.Mask = types.SimpleNamespace(unmarshal=lambda value: value)  # type: ignore[attr-defined]
+
+    monkeypatch.setitem(sys.modules, "nebius.api.nebius.common.v1", common_module)
+    monkeypatch.setitem(sys.modules, "nebius.api.nebius.mk8s.v1", mk8s_module)
+    monkeypatch.setitem(sys.modules, "nebius.base.fieldmask", fieldmask_module)
+    monkeypatch.setattr(migration, "wait_nebius_operation", lambda *args, **kwargs: None)
+
+    api = object.__new__(migration._SdkSoperatorMigrationNebiusApi)  # noqa: SLF001
+    api._cluster_client = _ClusterClient()
+
+    result = api.update_cluster_control_plane(
+        cluster_id="mk8scluster-123",
+        control_plane_version="1.33",
+    )
+
+    update_request = captured["update_request"]
+    assert result == current_cluster
+    assert captured["get_request_id"] == "mk8scluster-123"
+    assert update_request.metadata.id == "mk8scluster-123"
+    assert update_request.metadata.parent_id == "project-123"
+    assert update_request.metadata.name == "cluster-a"
+    assert update_request.spec.control_plane.version == "1.33"
+    assert update_request.spec.control_plane.subnet_id == "vpcsubnet-123"
+    assert isinstance(update_request.spec.control_plane.endpoints.public_endpoint, _Message)
+    assert update_request.mask == "spec.control_plane.version"
+
+
+def test_sdk_node_group_updates_preserve_required_identity_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    current_node_group = {
+        "metadata": {
+            "id": "nodegroup-123",
+            "parent_id": "mk8scluster-123",
+            "name": "worker-a",
+        },
+        "spec": {
+            "version": "1.32",
+            "fixed_node_count": 2,
+            "template": {"os": "ubuntu22.04-driverless"},
+        },
+    }
+
+    class _Message:
+        def __init__(self, **kwargs: Any) -> None:
+            self.__dict__.update(kwargs)
+
+    class _UpdateNodeGroupRequest(_Message):
+        def set_mask(self, mask: object) -> None:
+            self.mask = mask
+
+    class _Request:
+        def __init__(self, *, id: str) -> None:
+            self.id = id
+
+    class _GetOperation:
+        def wait(self) -> Mapping[str, Any]:
+            return current_node_group
+
+    class _UpdateOperation:
+        def wait(self) -> object:
+            return object()
+
+    class _NodeGroupClient:
+        def get(self, request: _Request) -> _GetOperation:
+            captured.setdefault("get_request_ids", []).append(request.id)
+            return _GetOperation()
+
+        def update(self, request: _UpdateNodeGroupRequest) -> _UpdateOperation:
+            captured.setdefault("update_requests", []).append(request)
+            return _UpdateOperation()
+
+    common_module = types.ModuleType("nebius.api.nebius.common.v1")
+    common_module.ResourceMetadata = _Message  # type: ignore[attr-defined]
+    mk8s_module = types.ModuleType("nebius.api.nebius.mk8s.v1")
+    mk8s_module.GetNodeGroupRequest = _Request  # type: ignore[attr-defined]
+    mk8s_module.NodeGroupSpec = _Message  # type: ignore[attr-defined]
+    mk8s_module.UpdateNodeGroupRequest = _UpdateNodeGroupRequest  # type: ignore[attr-defined]
+    fieldmask_module = types.ModuleType("nebius.base.fieldmask")
+    fieldmask_module.Mask = types.SimpleNamespace(unmarshal=lambda value: value)  # type: ignore[attr-defined]
+
+    monkeypatch.setitem(sys.modules, "nebius.api.nebius.common.v1", common_module)
+    monkeypatch.setitem(sys.modules, "nebius.api.nebius.mk8s.v1", mk8s_module)
+    monkeypatch.setitem(sys.modules, "nebius.base.fieldmask", fieldmask_module)
+    monkeypatch.setattr(migration, "sdk_parse_message", lambda cls, payload: cls(**payload))
+    monkeypatch.setattr(migration, "wait_nebius_operation", lambda *args, **kwargs: None)
+
+    api = object.__new__(migration._SdkSoperatorMigrationNebiusApi)  # noqa: SLF001
+    api._node_group_client = _NodeGroupClient()
+
+    api.update_node_group(
+        node_group_id="nodegroup-123",
+        original_node_group=current_node_group,
+        update_args=("--version", "1.33"),
+        strategy_args=(),
+    )
+    api.scale_node_group(node_group_id="nodegroup-123", count=3)
+
+    update_request, scale_request = captured["update_requests"]
+    assert update_request.metadata.id == "nodegroup-123"
+    assert update_request.metadata.parent_id == "mk8scluster-123"
+    assert update_request.metadata.name == "worker-a"
+    assert update_request.mask == "spec.version"
+    assert scale_request.metadata.id == "nodegroup-123"
+    assert scale_request.metadata.parent_id == "mk8scluster-123"
+    assert scale_request.metadata.name == "worker-a"
+    assert scale_request.mask == "spec.fixed_node_count"
 
 
 def test_node_group_payload_propagates_nebius_api_error() -> None:
@@ -938,6 +1230,7 @@ class _FakeCommandRunner:
         worker_topology_by_nodeset: dict[str, dict[str, int]] | None = None,
         slurm_resource_names: list[str] | None = None,
         slurm_queue_output: str = "",
+        slurm_queue_outputs: list[str] | None = None,
         slurm_queue_returncode: int = 0,
         cluster: dict[str, Any] | None = None,
     ) -> None:
@@ -1136,6 +1429,7 @@ spec:
             ]
         )
         self.slurm_queue_output = slurm_queue_output
+        self.slurm_queue_outputs = list(slurm_queue_outputs or [])
         self.slurm_queue_returncode = slurm_queue_returncode
         self.file_update_payloads: list[dict[str, Any]] = []
         self._populate_jail_refresh_saved_pods: list[dict[str, Any]] | None = None
@@ -2276,10 +2570,15 @@ spec:
             if command[8:10] == ("squeue", "-h"):
                 if "PENDING" in command:
                     return SoperatorMigrationCommandResult(command, 0, "", "")
+                queue_output = (
+                    self.slurm_queue_outputs.pop(0)
+                    if self.slurm_queue_outputs
+                    else self.slurm_queue_output
+                )
                 return SoperatorMigrationCommandResult(
                     command,
                     self.slurm_queue_returncode,
-                    self.slurm_queue_output,
+                    queue_output,
                     "" if self.slurm_queue_returncode == 0 else "squeue failed",
                 )
             if command[8:10] == ("bash", "-lc") and "cxcli-soperator-smoke" in command[10]:
@@ -5530,6 +5829,13 @@ def test_external_node_template_quiesces_zero_surge_service_roles(
                     "spec": {"replicas": 3},
                     "status": {"availableReplicas": 3, "readyReplicas": 3},
                 }
+            ],
+            "statefulsets.apps.kruise.io": [
+                {
+                    "metadata": {"name": "login", "namespace": "soperator"},
+                    "spec": {"replicas": 2},
+                    "status": {"availableReplicas": 2, "readyReplicas": 2},
+                }
             ]
         },
         live_slurmclusters=[
@@ -5615,7 +5921,7 @@ def test_external_node_template_quiesces_zero_surge_service_roles(
         "--type",
         "merge",
         "-p",
-        '{"spec": {"slurmNodes": {"login": {"size": 0}}}}',
+        '{"spec": {"slurmNodes": {"login": {"size": 1}}}}',
     ) in commands
     assert (
         "kubectl",
@@ -5626,7 +5932,18 @@ def test_external_node_template_quiesces_zero_surge_service_roles(
         "scale",
         "statefulsets.apps.kruise.io/login",
         "--replicas",
-        "0",
+        "1",
+    ) in commands
+    assert (
+        "kubectl",
+        "--context",
+        "external-context",
+        "-n",
+        "soperator",
+        "scale",
+        "statefulsets.apps.kruise.io/login",
+        "--replicas",
+        "2",
     ) in commands
     assert (
         "kubectl",
@@ -6594,6 +6911,35 @@ def test_execute_external_node_template_blocks_nonempty_slurm_queue_before_mutat
         call[0][:4] == ("nebius", "mk8s", "node-group", "update") and "--version" in call[0]
         for call in runner.calls
     )
+
+
+def test_execute_external_node_template_rechecks_slurm_queue_before_worker_wave(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot_with_compute_source()
+    runner = _FakeCommandRunner(slurm_queue_outputs=["", "RUNNING\n"])
+
+    result = execute_soperator_migration(
+        config_path=tmp_path / "config.yaml",
+        target_ref="external-cluster",
+        payload=_payload(include_placements=True),
+        source_report=_source_report(snapshot),
+        snapshot_collector=lambda *, kube_context: snapshot,
+        approved=True,
+        command_runner=runner,
+        job_policy="fail",
+    )
+
+    assert result.pending_phase == "external-node-template-upgrade"
+    assert "Affected Slurm jobs exist for the upgrade scope" in result.pending_reason
+    worker_updates = [
+        call[0]
+        for call in runner.calls
+        if call[0][:4] == ("nebius", "mk8s", "node-group", "update")
+        and call[0][4] == "nodegroup-gpu-pool"
+        and "--version" in call[0]
+    ]
+    assert worker_updates == []
 
 
 def _external_upgrade_slurm_runner(
@@ -7720,10 +8066,9 @@ def test_populate_jail_refresh_phase_capacity_fail_blocks_before_slurm_and_helm(
         ),
     )
     helm_calls: list[Mapping[str, Any]] = []
-    monkeypatch.setattr(
-        migration,
-        "_patch_target_values_for_compute",
-        lambda **_kwargs: {
+    probe_kwargs: dict[str, Any] = {}
+    target_values = migration.apply_jail_persistent_mount_values(
+        {
             "populateJail": {"overwrite": False},
             "externalNfs": {
                 "enabled": True,
@@ -7732,14 +8077,26 @@ def test_populate_jail_refresh_phase_capacity_fail_blocks_before_slurm_and_helm(
                 "mountPath": "/home",
             },
         },
+        target_ref="external-cluster",
+        layout="external",
     )
     monkeypatch.setattr(
         migration,
-        "probe_active_passive_jail_capacity",
-        lambda *_args, **_kwargs: evaluate_jail_capacity(
+        "_patch_target_values_for_compute",
+        lambda **_kwargs: target_values,
+    )
+
+    def _fake_probe_active_passive_jail_capacity(*_args: Any, **kwargs: Any) -> Any:
+        probe_kwargs.update(kwargs)
+        return evaluate_jail_capacity(
             passive_available_bytes=8 * GIB,
             active_used_bytes=80 * GIB,
-        ),
+        )
+
+    monkeypatch.setattr(
+        migration,
+        "probe_active_passive_jail_capacity",
+        _fake_probe_active_passive_jail_capacity,
     )
     monkeypatch.setattr(
         migration,
@@ -7770,6 +8127,10 @@ def test_populate_jail_refresh_phase_capacity_fail_blocks_before_slurm_and_helm(
 
     populate_phase = checkpoint["phase_state"]["populate-jail-refresh"]
     assert populate_phase["capacity_preflight"]["status"] == "failed"
+    assert populate_phase["rootfs_slots"]["passive_pvc"] == "jail-rootfs-slot-b-pvc"
+    assert probe_kwargs["active_pvc"] == "jail-pvc"
+    assert probe_kwargs["passive_pvc"] == "jail-pvc"
+    assert probe_kwargs["active_rootfs_path"] == "/mnt/jail"
     assert checkpoint["populate_jail_refresh"]["capacity_preflight"]["shortage_gib"] == 92
     assert helm_calls == []
     assert not any("squeue" in " ".join(command) for command, _input_text in runner.calls)
@@ -10906,6 +11267,7 @@ def test_login_service_quiesce_skips_slurmcluster_without_login_role() -> None:
             "role": "login",
             "exists": False,
             "size": None,
+            "target_size": None,
         }
     ]
     assert not any(
@@ -10931,6 +11293,7 @@ def test_login_service_quiesce_skips_empty_slurmcluster_list() -> None:
         "role": "login",
         "exists": False,
         "size": None,
+        "target_size": None,
     }
     assert not any(
         len(call[0]) > 7 and call[0][5] == "patch" and call[0][6].startswith("slurmcluster")
@@ -10965,19 +11328,11 @@ def test_login_service_quiesce_preserves_zero_slurmcluster_size() -> None:
 
     slurm_items = [item for item in state["resources"] if item["action"] == "slurm-node-size"]
     assert slurm_items[0]["size"] == 0
-    assert (
-        "kubectl",
-        "--context",
-        "external-context",
-        "-n",
-        "soperator",
-        "patch",
-        "slurmcluster/soperator",
-        "--type",
-        "merge",
-        "-p",
-        '{"spec": {"slurmNodes": {"login": {"size": 0}}}}',
-    ) in [call[0] for call in runner.calls]
+    assert slurm_items[0]["target_size"] == 0
+    assert not any(
+        len(call[0]) > 7 and call[0][5] == "patch" and call[0][6].startswith("slurmcluster")
+        for call in runner.calls
+    )
 
 
 def test_execute_runs_completion_safety_when_plan_omits_validation_phase(
@@ -10994,7 +11349,7 @@ def test_execute_runs_completion_safety_when_plan_omits_validation_phase(
     monkeypatch.setattr(
         migration,
         "_phase_ids_for_actions",
-        lambda *, report, onboarding: phase_ids,
+        lambda *, report, onboarding, populate_jail_refresh="auto": phase_ids,
     )
 
     result = execute_soperator_migration(
@@ -12550,6 +12905,37 @@ def test_execute_allows_premutation_checkpoint_source_report_refresh(tmp_path: P
     refresh_index = events.index("execute-checkpoint-source-report-refreshed")
     backup_index = events.index("backup-metadata-checkpointed")
     assert refresh_index < backup_index
+
+
+def test_phase_ids_force_populate_jail_refresh_for_node_template_segment() -> None:
+    payload = _payload(target_k8s_version="1.33")
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]  # type: ignore[index]
+    report = _source_report(target_k8s_version="1.33")["report"]
+    assert isinstance(onboarding, dict)
+    assert isinstance(report, dict)
+    onboarding["actions"] = [
+        "approve-external-soperator-upgrade",
+        "upgrade-external-node-template",
+        "reconcile-target-gpu-stack",
+    ]
+
+    auto_phase_ids = migration._phase_ids_for_actions(
+        report=report,
+        onboarding=onboarding,
+        populate_jail_refresh="auto",
+    )
+    force_phase_ids = migration._phase_ids_for_actions(
+        report=report,
+        onboarding=onboarding,
+        populate_jail_refresh="force",
+    )
+
+    assert migration.POPULATE_JAIL_REFRESH_PHASE_ID not in auto_phase_ids
+    assert migration.POPULATE_JAIL_REFRESH_PHASE_ID in force_phase_ids
+    populate_index = force_phase_ids.index(migration.POPULATE_JAIL_REFRESH_PHASE_ID)
+    assert force_phase_ids.index("external-node-template-upgrade") < populate_index
+    assert force_phase_ids.index("target-gpu-stack-remediation") < populate_index
+    assert populate_index < force_phase_ids.index("post-upgrade-mk8s-check")
 
 
 def test_execute_rejects_retired_migration_checkpoint_path(tmp_path: Path) -> None:

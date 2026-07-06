@@ -222,6 +222,9 @@ def _capacity_probe_job_manifest(
     scheduling: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     name = f"{_safe_name(target_ref)}-jail-capacity-probe"
+    shared_pvc = active_pvc == passive_pvc
+    active_mount_path = "/mnt/active"
+    passive_mount_path = active_mount_path if shared_pvc else "/mnt/passive"
     exclude_mount_paths = tuple(
         _active_mount_exclude_path(path, active_rootfs_path=active_rootfs_path)
         for path in exclude_paths
@@ -242,7 +245,7 @@ def _capacity_probe_job_manifest(
       esac
       exclude_used_kib=$((exclude_used_kib + used))
     }
-    if active_total_line="$(du -sk /mnt/active 2>/tmp/active-du.err | awk '{print $1}')" && [ -n "$active_total_line" ]; then
+    if active_total_line="$(du -sk __ACTIVE_MOUNT_PATH__ 2>/tmp/active-du.err | awk '{print $1}')" && [ -n "$active_total_line" ]; then
       exclude_used_kib=0
 __EXCLUDE_SCRIPT__
       active_used_kib=$((active_total_line - exclude_used_kib))
@@ -250,10 +253,32 @@ __EXCLUDE_SCRIPT__
         active_used_kib=0
       fi
     fi
-    passive_available_kib="$(df -Pk /mnt/passive | awk 'NR==2 {print $4}')"
+    passive_available_kib="$(df -Pk __PASSIVE_MOUNT_PATH__ | awk 'NR==2 {print $4}')"
     printf 'active_used_kib=%s\n' "$active_used_kib"
     printf 'passive_available_kib=%s\n' "$passive_available_kib"
-    """.replace("__EXCLUDE_SCRIPT__", exclude_script)
+    """
+    script = (
+        script.replace("__ACTIVE_MOUNT_PATH__", sh_quote(active_mount_path))
+        .replace("__PASSIVE_MOUNT_PATH__", sh_quote(passive_mount_path))
+        .replace("__EXCLUDE_SCRIPT__", exclude_script)
+    )
+    volume_mounts = [
+        {"name": "active-rootfs", "mountPath": active_mount_path, "readOnly": True},
+    ]
+    volumes = [
+        {
+            "name": "active-rootfs",
+            "persistentVolumeClaim": {"claimName": active_pvc, "readOnly": True},
+        },
+    ]
+    if not shared_pvc:
+        volume_mounts.append({"name": "passive-rootfs", "mountPath": passive_mount_path})
+        volumes.append(
+            {
+                "name": "passive-rootfs",
+                "persistentVolumeClaim": {"claimName": passive_pvc},
+            }
+        )
     pod_spec = {
         "restartPolicy": "Never",
         "automountServiceAccountToken": False,
@@ -263,22 +288,10 @@ __EXCLUDE_SCRIPT__
                 "image": image,
                 "imagePullPolicy": "IfNotPresent",
                 "command": ["/bin/sh", "-ceu", script],
-                "volumeMounts": [
-                    {"name": "active-rootfs", "mountPath": "/mnt/active", "readOnly": True},
-                    {"name": "passive-rootfs", "mountPath": "/mnt/passive"},
-                ],
+                "volumeMounts": volume_mounts,
             }
         ],
-        "volumes": [
-            {
-                "name": "active-rootfs",
-                "persistentVolumeClaim": {"claimName": active_pvc, "readOnly": True},
-            },
-            {
-                "name": "passive-rootfs",
-                "persistentVolumeClaim": {"claimName": passive_pvc},
-            },
-        ],
+        "volumes": volumes,
     }
     pod_spec.update(active_passive_pod_scheduling_fields(scheduling))
     return {

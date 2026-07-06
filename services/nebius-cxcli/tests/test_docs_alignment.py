@@ -64,6 +64,16 @@ def test_design_architecture_summary_matches_upgrade_surface() -> None:
     )
     assert "pending ActiveChecks restore is still completed" in design_flat
     assert "External Soperator adoption, storage/compute remediation" in design_flat
+    assert "- [Jail Upgrade](#jail-upgrade)" in design
+    assert "## Jail Upgrade" in design
+    assert "active/passive rootfs slots" in design_flat
+    assert (
+        "The switch-over is not a live bind-mount flip inside an already-running "
+        "login or worker container"
+    ) in design_flat
+    assert "Create a six-panel technical infographic for a Soperator jail rootfs upgrade" in (
+        design_flat
+    )
 
 
 def test_readme_documents_redacted_guided_create_prefill_example() -> None:
@@ -531,6 +541,10 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
         "[Soperator Commands](#soperator-commands) |"
     ) in toc
     assert (
+        "| Jail rootfs refresh or active/passive switch-over | "
+        "[Jail Upgrade](#jail-upgrade) |"
+    ) in toc
+    assert (
         "| Post-deploy smoke or benchmark validation | [Acceptance Testing](#acceptance-testing) |"
     ) in toc
     assert ("| Command flags and generated-bundle operations | [Commands](#commands) |") in toc
@@ -547,6 +561,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
         "- [Soperator Commands](#soperator-commands)"
     )
     assert "  - [Soperator Command Map](#soperator-command-map)" in toc
+    assert "  - [Jail Upgrade](#jail-upgrade)" in toc
     assert "  - [CXCLI Managed Soperator Clusters](#cxcli-managed-soperator-clusters)" in toc
     assert (
         "  - [Soperator Slurm Scheduling And Command Examples](#soperator-slurm-scheduling-and-command-examples)"
@@ -575,6 +590,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "Soperator Slurm Scheduling" not in catalog_toc
 
     assert "### Soperator Command Map" in soperator
+    assert "### Jail Upgrade" in soperator
     assert "### CXCLI Managed Soperator Clusters" in soperator
     assert "### Soperator Slurm Scheduling And Command Examples" in soperator
     assert "### External Soperator Onboarding" in soperator
@@ -651,6 +667,10 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "restore is not an in-place rollback" in soperator_flat
     assert soperator.index("`nebius-cxcli soperator upgrade") < soperator.index(
         "`nebius-cxcli ext-soperator onboard"
+    )
+    assert soperator.index("### Soperator Command Map") < soperator.index("### Jail Upgrade")
+    assert soperator.index("### Jail Upgrade") < soperator.index(
+        "### CXCLI Managed Soperator Clusters"
     )
     assert soperator.index("### CXCLI Managed Soperator Clusters") < soperator.index(
         "### Soperator Slurm Scheduling And Command Examples"
@@ -751,6 +771,20 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "Preflight and backup: validate the current bundle" in soperator_flat
     assert "Slurm and MK8s rollout: when MK8s target flags are supplied" in soperator_flat
     assert "Populate-jail refresh: when the target chart/rootfs changed" in soperator_flat
+    assert "The Soperator jail is the shared Linux root filesystem" in soperator_flat
+    assert "The refresh uses an active/passive rootfs model" in soperator_flat
+    assert "creates a Kubernetes Job named like `<target>-populate-jail-passive-<slot>`" in (
+        soperator_flat
+    )
+    assert "the cluster can briefly contain old pods using the old slot" in soperator_flat
+    assert (
+        "A single login or worker pod is not expected to run with both slot-a and "
+        "slot-b mounted as two active root filesystems"
+    ) in soperator_flat
+    assert "Infographic prompt for ChatGPT" in soperator
+    assert "Create a multi-step technical infographic as six sequential panels" in (
+        soperator_flat
+    )
     assert "populate the passive active/passive jail rootfs slot with the target image" in (
         soperator_flat
     )

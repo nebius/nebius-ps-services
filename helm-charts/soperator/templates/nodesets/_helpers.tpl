@@ -102,6 +102,61 @@ IfNotPresent
       defaultMode: 493
 {{- end -}}
 
+{{/* Generated Slurm config mount for worker jails. */}}
+{{- define "nodesets.slurmConfigJailMount" -}}
+{{- $root := index . 0 -}}
+- name: "slurm-configs-jail"
+  mountPath: "/mnt/jail/etc/slurm"
+  readOnly: true
+  volumeSource:
+    configMap:
+      name: {{ include "slurm-cluster.slurmConfigsConfigMapName" $root | quote }}
+{{- end -}}
+
+{{/* Init guard that seeds generated Slurm configs into worker jails before worker-init. */}}
+{{- define "nodesets.slurmConfigJailInitContainer" -}}
+{{- $root := index . 0 -}}
+{{- $ns := index . 1 -}}
+{{- $slurmd := required ".Values.nodesets[*].slurmd is required." $ns.slurmd -}}
+- name: "cxcli-slurm-config-jail"
+  image: {{ include "nodesets.slurmdImageString" (list $root $slurmd) | quote }}
+  imagePullPolicy: {{ include "nodesets.slurmdImagePullPolicy" (list $slurmd) | quote }}
+  command:
+    - /bin/bash
+    - -c
+  args:
+    - |-
+      set -euo pipefail
+
+      log() { printf '[cxcli-slurm-config-jail] %s\n' "$*"; }
+      fail() { log "ERROR: $*"; exit 1; }
+
+      jail="/mnt/jail"
+      source_config="/mnt/slurm-configs"
+      jail_config="${jail}/etc/slurm"
+
+      [ -d "${jail}/usr" ] || fail "shared jail is not populated at ${jail}"
+      [ -s "${source_config}/slurm.conf" ] || fail "generated slurm.conf is missing in ${source_config}"
+
+      mkdir -p "${jail_config}"
+      shopt -s nullglob
+      copied=0
+      for path in "${source_config}"/*; do
+        [ -f "${path}" ] || continue
+        cp -f "${path}" "${jail_config}/$(basename "${path}")"
+        copied=$((copied + 1))
+      done
+      [ "${copied}" -gt 0 ] || fail "generated Slurm config map is empty"
+      chmod 0644 "${jail_config}"/*
+      log "seeded ${copied} generated Slurm config file(s) into the shared jail"
+  volumeMounts:
+    - name: "jail"
+      mountPath: "/mnt/jail"
+    - name: "slurm-configs-jail"
+      mountPath: "/mnt/slurm-configs"
+      readOnly: true
+{{- end -}}
+
 {{/* Chart-owned host driver root mount for GPU workers using Nebius-image host drivers. */}}
 {{- define "nodesets.gpuDriverJailMount" -}}
 - name: "nvidia-driver-root"

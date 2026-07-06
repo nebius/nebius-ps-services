@@ -533,6 +533,77 @@ def test_soperator_backup_archive_contains_restore_material(
     assert required_pvcs[0]["spec"]["volumeName"] == "pv-controller-spool"
 
 
+def test_soperator_backup_accepts_slurmcluster_prefixed_recreation_material(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    kubernetes_dir = tmp_path / "kubernetes"
+    kubernetes_dir.mkdir()
+    required_items = _required_recreation_items()
+    slurmcluster_name = "soperator-sop-cluster"
+    required_items["slurmclusters"][0]["metadata"]["name"] = slurmcluster_name
+    required_items["secrets"] = [
+        {
+            **item,
+            "metadata": {
+                **item["metadata"],
+                "name": {
+                    "soperator-sshd-keys": f"{slurmcluster_name}-sshd-keys",
+                    "soperator-slurmdbd-configs": f"{slurmcluster_name}-slurmdbd-configs",
+                }.get(item["metadata"]["name"], item["metadata"]["name"]),
+            },
+        }
+        for item in required_items["secrets"]
+    ]
+    required_items["configmaps"] = [
+        {
+            **item,
+            "metadata": {
+                **item["metadata"],
+                "name": {
+                    "soperator-slurm-configs": f"{slurmcluster_name}-slurm-configs",
+                }.get(item["metadata"]["name"], item["metadata"]["name"]),
+            },
+        }
+        for item in required_items["configmaps"]
+    ]
+    for label, items in required_items.items():
+        (kubernetes_dir / f"{label}.json").write_text(
+            json.dumps({"items": items}),
+            encoding="utf-8",
+        )
+    (kubernetes_dir / "services.json").write_text(json.dumps({"items": []}), encoding="utf-8")
+
+    def fake_kubectl_cluster(
+        args: list[str],
+        **_kwargs: Any,
+    ) -> cli._SoperatorUpgradeCommandResult:
+        if args[:2] == ["get", "persistentvolumes"]:
+            return _command_result(args, _kubernetes_list(_required_recreation_pvs()))
+        raise AssertionError(f"unexpected cluster kubectl args: {args}")
+
+    def fake_kubectl(
+        namespace: str,
+        args: list[str],
+        **_kwargs: Any,
+    ) -> cli._SoperatorUpgradeCommandResult:
+        if namespace == "flux-system":
+            return _command_result(args, returncode=1, stderr="NotFound")
+        assert namespace == "soperator"
+        return _command_result(args, returncode=1, stderr="NotFound")
+
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_kubectl_cluster", fake_kubectl_cluster)
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_kubectl", fake_kubectl)
+
+    _paths, coverage = cli._soperator_upgrade_collect_recreation_material(
+        namespace="soperator",
+        output_dir=tmp_path / "recreation",
+        kubernetes_dir=kubernetes_dir,
+    )
+
+    assert coverage["items"]["required_recreation_material"]["status"] == "collected"
+
+
 def test_soperator_backup_fails_when_required_recreation_material_missing(
     tmp_path: Path,
     monkeypatch,

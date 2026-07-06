@@ -34,6 +34,7 @@ def _by_kind_name(docs: list[dict[str, Any]], kind: str, name: str) -> dict[str,
 def test_active_passive_jail_rootfs_default_storage_contract() -> None:
     docs = _render()
     slurm_cluster = _by_kind_name(docs, "SlurmCluster", "soperator")
+    worker_nodeset = _by_kind_name(docs, "NodeSet", "worker")
 
     assert _by_kind_name(docs, "PersistentVolume", "jail-rootfs-slot-a-pv")["spec"][
         "local"
@@ -79,11 +80,47 @@ def test_active_passive_jail_rootfs_default_storage_contract() -> None:
     assert slurm_cluster["spec"]["slurmNodes"]["login"]["volumes"]["jail"] == {
         "volumeSourceName": "jail-rootfs-slot-a"
     }
+    assert "SlurmdParameters=l3cache_as_socket" in slurm_cluster["spec"]["customSlurmConfig"]
+    assert worker_nodeset["spec"]["customInitContainers"][0]["name"] == "cxcli-slurm-config-jail"
+    assert {
+        "name": "jail",
+        "mountPath": "/mnt/jail",
+    } in worker_nodeset["spec"]["customInitContainers"][0]["volumeMounts"]
+    assert {
+        "name": "slurm-configs-jail",
+        "mountPath": "/mnt/slurm-configs",
+        "readOnly": True,
+    } in worker_nodeset["spec"]["customInitContainers"][0]["volumeMounts"]
+    assert (
+        worker_nodeset["spec"]["nodeConfig"]["static"]
+        == "Boards=1 SocketsPerBoard=1 CoresPerSocket=64 ThreadsPerCore=1 Gres=gpu:8"
+    )
     assert {
         "name": "jail-persistent-home",
         "mountPath": "/home",
         "volumeSourceName": "jail-persistent-home",
     } in slurm_cluster["spec"]["slurmNodes"]["login"]["volumes"]["jailSubMounts"]
+    assert {
+        "name": "jail-persistent-home",
+        "mountPath": "/home",
+        "volumeSource": {
+            "persistentVolumeClaim": {
+                "claimName": "jail-persistent-home-pvc",
+            },
+        },
+    } in worker_nodeset["spec"]["slurmd"]["volumes"]["jailSubMounts"]
+    for mount in worker_nodeset["spec"]["slurmd"]["volumes"]["jailSubMounts"]:
+        assert "volumeSourceName" not in mount
+    assert {
+        "name": "slurm-configs-jail",
+        "mountPath": "/mnt/jail/etc/slurm",
+        "readOnly": True,
+        "volumeSource": {
+            "configMap": {
+                "name": "soperator-slurm-configs",
+            },
+        },
+    } in worker_nodeset["spec"]["slurmd"]["volumes"]["customVolumeMounts"]
 
 
 def test_external_single_sfs_layout_uses_legacy_jail_store_paths() -> None:

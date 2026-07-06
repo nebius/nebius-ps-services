@@ -20,6 +20,7 @@
   - [Operational Notes](#operational-notes)
   - [Onboarding Workflow](#onboarding-workflow)
 - [Soperator](#soperator)
+- [Jail Upgrade](#jail-upgrade)
 - [Config Model](#config-model)
 - [Command Workflow](#command-workflow)
 - [Generator-side Commands](#generator-side-commands)
@@ -3157,6 +3158,100 @@ Enabling the rebooter does not add a chart-owned reboot schedule or trigger
 install-time node reboots; an operator workflow must explicitly request drain
 or reboot behavior, and those paths are separate.
 
+## Jail Upgrade
+
+Soperator uses a shared jail rootfs as the Linux filesystem that Slurm login and
+worker pods mount at `/mnt/jail`. The target jail content comes from
+`SlurmCluster.spec.populateJail.image`. Updating that image in Helm values is
+only a desired-state change; it does not rewrite a rootfs slot that has already
+been populated. cxcli therefore treats jail refresh as a separate
+`populate-jail-refresh` phase in both managed `soperator upgrade` and external
+`ext-soperator upgrade`.
+
+The jail refresh design uses active/passive rootfs slots:
+
+- the physical jail backing store contains `slot-a` and `slot-b`;
+- exactly one slot is the active rootfs that login and worker consumers mount;
+- the other slot is passive and can be repopulated with the target image;
+- customer-owned paths such as `/home` live outside the replaceable rootfs
+  slots and are mounted back into whichever slot is active.
+
+Managed clusters use `/mnt/jail-store/rootfs/slot-a` and
+`/mnt/jail-store/rootfs/slot-b`, with `/home` under
+`/mnt/jail-store/shared/home`. External single-SFS adoption keeps the existing
+physical jail SFS, creates logical slots under `/mnt/jail/.cxcli/rootfs`, and
+treats the legacy `/mnt/jail` root as the active source until the first
+successful switch. In both layouts, `/home` is automatically modeled as a
+persistent jail mount. Additional paths such as `/data` or `/checkpoints` must
+be declared with `--jail-persistent-mount <mountPath>=<localPath>` because
+cxcli does not infer or migrate arbitrary customer data paths.
+
+The refresh sequence is deliberately ordered:
+
+1. Plan the refresh. `auto` refreshes when the populate-jail image changed, or
+   when the chart changed and rootfs compatibility cannot be proven. `force`
+   always refreshes. `manual` records the required action and stops before
+   mutation.
+2. Verify persistent mounts and passive-slot capacity. For external adoption,
+   the capacity probe measures the physical jail SFS while excluding `.cxcli`
+   and persistent-mount paths so customer data does not become part of the
+   rootfs-copy estimate.
+3. Apply refresh values and run a Kubernetes Job named like
+   `<target>-populate-jail-passive-<slot>`. The Job runs the target
+   populate-jail image and mounts the passive slot PVC at `/mnt/jail`. Existing
+   login and worker pods still use the old active slot while this Job writes
+   the new rootfs generation.
+4. Wait for the passive-slot Job to complete with the expected image.
+5. Verify that the login Service has at least one ready EndpointSlice backend
+   before switching consumers.
+6. Switch values so the passive slot becomes the active slot. For service
+   roles, the jail `volumeSourceName` changes to the refreshed slot. For worker
+   NodeSets, the `slurmd.volumes.jail.persistentVolumeClaim.claimName` changes
+   to the refreshed slot PVC. The previous active slot becomes the rollback
+   slot.
+7. Let Soperator reconcile the changed SlurmCluster and NodeSet desired state.
+   New or restarted consumers mount the refreshed rootfs, and persistent
+   submounts such as `/home` are attached back into that rootfs.
+8. Resume Slurm partitions and run postflight verification before considering
+   the refresh complete.
+
+The switch-over is not a live bind-mount flip inside an already-running
+login or worker container. The chart exposes both slot volumes as possible
+SlurmCluster volume sources, and the physical backing store has both slot
+directories, but each consumer pod has one main jail rootfs mount. During the
+rollout the cluster can temporarily contain old pods still using the previous
+slot and replacement pods using the refreshed slot. Persistent submounts such
+as `/home` are the pieces shared across generations; the rootfs slots
+themselves remain separate.
+
+Prompt for a ChatGPT-generated infographic:
+
+```text
+Create a six-panel technical infographic for a Soperator jail rootfs upgrade.
+Show two login pods and four worker pods. Use active/passive rootfs slots:
+slot-a starts as Active / outdated-rootfs and slot-b starts as Passive. Show
+/home as a separate persistent mount that is attached back into whichever slot
+is active. Do not show a single pod with both slot-a and slot-b mounted as two
+active root filesystems.
+
+Panel 1: before refresh, all login and worker pods mount slot-a.
+Panel 2: a populate-jail Kubernetes Job runs the target image and mounts only
+slot-b at /mnt/jail to write updated-rootfs.
+Panel 3: cxcli checks Slurm job policy, passive capacity, persistent mounts,
+and at least one ready login Service endpoint.
+Panel 4: Helm/Soperator desired state switches activeSlot from slot-a to
+slot-b; slot-a becomes rollback.
+Panel 5: consumer rollout shows old pods fading out on slot-a and replacement
+pods mounting slot-b; the cluster may briefly have both generations.
+Panel 6: after validation, two login pods and four worker pods use slot-b,
+/home is still persistent, Slurm partitions are resumed, and slot-a remains as
+rollback until validation passes.
+
+Style: clean Kubernetes/Slurm operator diagram, white background, blue and
+green accents, short captions, clear arrows, no decorative blobs, no marketing
+copy, no fictional logos.
+```
+
 ## Config Model
 
 Runtime config root keys:
@@ -3289,10 +3384,10 @@ The command boundary is intentional:
   versions plus `Upgrade Guidance`, and does not present external upgrade
   phases as actions taken by the onboard command. If external node-template
   work is selected, the interactive Kubernetes target prompt defaults to one
-  provider-supported minor hop from the discovered control-plane version and
-  fails immediately if the operator enters a skipped minor. Non-interactive
-  `--to-k8s-version` values use the same fail-fast next-hop validation. After
-  the storage and compute modes are resolved,
+  provider-supported minor hop from the discovered control-plane version, but
+  the operator may choose a later supported final target. Onboarding locks every
+  sequential minor hop in `upgrade_path`, and `ext-soperator upgrade` executes
+  one locked hop per run. After the storage and compute modes are resolved,
   onboarding prints the accepted layout decisions: target-compatible storage
   means no aligned SFS creation or storage data migration is planned, and
   target-compatible compute means no replacement compute node groups or compute

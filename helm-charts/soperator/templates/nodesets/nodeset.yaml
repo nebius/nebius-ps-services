@@ -174,7 +174,9 @@ spec:
         {{- if not (hasKey $existingMounts $mountPath) }}
         - name: {{ include "slurm-cluster-storage.jailPersistentMount.name" (list $ $mount) | quote }}
           mountPath: {{ $mountPath | quote }}
-          volumeSourceName: {{ include "slurm-cluster-storage.jailPersistentMount.name" (list $ $mount) | quote }}
+          volumeSource:
+            persistentVolumeClaim:
+              claimName: {{ include "slurm-cluster-storage.jailPersistentMount.pvc" (list $ $mount) }}
         {{- end }}
         {{- end }}
         {{- end }}
@@ -195,6 +197,10 @@ spec:
       {{- fail (printf ".Values.nodesets[%s].slurmd.volumes.customVolumeMounts uses reserved name \"slurm-scripts\". The chart owns this mount; use another name for custom mounts." $ns.name) }}
       {{- else if eq (get . "name") "slurm-scripts-jail" }}
       {{- fail (printf ".Values.nodesets[%s].slurmd.volumes.customVolumeMounts uses reserved name \"slurm-scripts-jail\". The chart owns this mount; use another name for custom mounts." $ns.name) }}
+      {{- else if eq (get . "name") "slurm-configs-jail" }}
+      {{- fail (printf ".Values.nodesets[%s].slurmd.volumes.customVolumeMounts uses reserved name \"slurm-configs-jail\". The chart owns this mount; use another name for custom mounts." $ns.name) }}
+      {{- else if eq (get . "mountPath") "/mnt/jail/etc/slurm" }}
+      {{- fail (printf ".Values.nodesets[%s].slurmd.volumes.customVolumeMounts uses mountPath \"/mnt/jail/etc/slurm\". The chart owns this Slurm config jail mount; use another mountPath." $ns.name) }}
       {{- else if and $gpuDriverJailEnabled (eq (get . "name") "nvidia-driver-root") }}
       {{- fail (printf ".Values.nodesets[%s].slurmd.volumes.customVolumeMounts uses reserved name \"nvidia-driver-root\". The chart owns this GPU driver jail mount; remove the custom mount." $ns.name) }}
       {{- else if and $gpuDriverJailEnabled (eq (get . "mountPath") "/run/nvidia/driver") }}
@@ -204,6 +210,7 @@ spec:
       customVolumeMounts:
         {{- include "nodesets.slurmScriptMount" (list $ "slurm-scripts") | nindent 8 }}
         {{- include "nodesets.slurmScriptMount" (list $ "slurm-scripts-jail") | nindent 8 }}
+        {{- include "nodesets.slurmConfigJailMount" (list $) | nindent 8 }}
         {{- if $gpuDriverJailEnabled }}
         {{- include "nodesets.gpuDriverJailMount" . | nindent 8 }}
         {{- end }}
@@ -353,18 +360,19 @@ spec:
 
   {{- $customInitContainers := (.customInitContainers | default list) }}
   {{- range $customInitContainers }}
-  {{- if and $gpuDriverJailEnabled (eq (get . "name") "cxcli-gpu-driver-jail") }}
+  {{- if eq (get . "name") "cxcli-slurm-config-jail" }}
+  {{- fail (printf ".Values.nodesets[%s].customInitContainers uses reserved name \"cxcli-slurm-config-jail\". The chart owns this Slurm config jail init guard; use another name." $ns.name) }}
+  {{- else if and $gpuDriverJailEnabled (eq (get . "name") "cxcli-gpu-driver-jail") }}
   {{- fail (printf ".Values.nodesets[%s].customInitContainers uses reserved name \"cxcli-gpu-driver-jail\". The chart owns this GPU driver jail init guard; use another name." $ns.name) }}
   {{- end }}
   {{- end }}
-  {{- if or $gpuDriverJailEnabled $customInitContainers }}
   customInitContainers:
+    {{- include "nodesets.slurmConfigJailInitContainer" (list $ $ns) | nindent 4 }}
     {{- if $gpuDriverJailEnabled }}
     {{- include "nodesets.gpuDriverJailInitContainer" (list $ $ns) | nindent 4 }}
     {{- end }}
     {{- with $customInitContainers }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
-  {{- end }}
 {{- end }}
 {{- end }}

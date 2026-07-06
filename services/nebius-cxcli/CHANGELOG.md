@@ -13,6 +13,9 @@ All notable changes to this project are tracked here. This changelog follows
   under `/mnt/jail/.cxcli/rootfs`, treats legacy `/mnt/jail` as the rollback
   source during first adoption, and preserves `/home` plus explicitly declared
   customer paths as persistent jail mounts without copying live data.
+- Documented the Soperator jail upgrade process, active/passive rootfs
+  switch-over semantics, and reusable ChatGPT infographic prompt in the README
+  and design guide.
 - Added a pre-populate active/passive jail capacity gate and expansion workflow.
   Managed production Soperator defaults now size the cxcli-owned jail SFS
   backing store at `2048` GiB total capacity, `soperator upgrade` expands that
@@ -25,9 +28,17 @@ All notable changes to this project are tracked here. This changelog follows
   fast even when no enabled Soperator app row reaches the accepted-onboarding
   semantic gate.
 - Fixed `ext-soperator onboard` Kubernetes target validation so interactive
-  wizard entries and non-interactive `--to-k8s-version` values reject skipped
-  Kubernetes minor targets immediately, before writing an accepted onboarding
-  plan. The error now points to the next valid `--to-k8s-version` hop.
+  wizard entries and non-interactive `--to-k8s-version` values can lock a full
+  supported sequential final target such as `1.32 -> 1.33 -> 1.34`, while
+  `ext-soperator upgrade` still executes one locked Kubernetes minor hop per
+  run.
+- Fixed `ext-soperator upgrade --populate-jail-refresh force|manual` so
+  node-template-only locked segments still schedule and display the
+  `populate-jail-refresh` phase.
+- Fixed external Soperator backup recreation-material detection for
+  SlurmCluster-prefixed Secrets and ConfigMaps such as
+  `<slurmcluster>-sshd-keys`, `<slurmcluster>-slurmdbd-configs`, and
+  `<slurmcluster>-slurm-configs`.
 - Changed external Soperator multi-hop execution to persist the accepted locked
   path in v2 checkpoints as `locked_upgrade_path` plus explicit
   `upgrade_path_fingerprint`, `current_segment_id`, `completed_segment_ids`,

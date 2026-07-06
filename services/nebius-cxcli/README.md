@@ -15,6 +15,7 @@ Use this guide by task:
 | --- | --- |
 | First project or local run | [Quick Start Guide](#quick-start-guide), then [Recommended Workflow](#recommended-workflow) |
 | Existing Soperator cluster or Soperator upgrade | [Soperator Commands](#soperator-commands) |
+| Jail rootfs refresh or active/passive switch-over | [Jail Upgrade](#jail-upgrade) |
 | MK8s node-template, node-group, or chart upgrades | [Upgrade](#upgrade) |
 | Post-deploy smoke or benchmark validation | [Acceptance Testing](#acceptance-testing) |
 | Command flags and generated-bundle operations | [Commands](#commands) |
@@ -34,6 +35,7 @@ Use this guide by task:
   - [NCCL Suite Selection](#nccl-suite-selection)
 - [Soperator Commands](#soperator-commands)
   - [Soperator Command Map](#soperator-command-map)
+  - [Jail Upgrade](#jail-upgrade)
   - [CXCLI Managed Soperator Clusters](#cxcli-managed-soperator-clusters)
   - [Soperator Slurm Scheduling And Command Examples](#soperator-slurm-scheduling-and-command-examples)
   - [External Soperator Onboarding](#external-soperator-onboarding)
@@ -2335,6 +2337,122 @@ the same workdir: cxcli restarts the pending phase from its beginning,
 reconciles live/config state, skips only completed phases that still verify,
 and never marks a phase complete until the handler and fast verification pass.
 
+### Jail Upgrade
+
+The Soperator jail is the shared Linux root filesystem mounted by Slurm login
+and worker pods. The desired jail content comes from
+`SlurmCluster.spec.populateJail.image`, but changing that image or upgrading the
+Helm chart does not rewrite an already-populated jail by itself. cxcli handles
+that boundary through the `populate-jail-refresh` phase in `soperator upgrade`
+and `ext-soperator upgrade`.
+
+The refresh uses an active/passive rootfs model. One physical jail backing store
+contains two logical rootfs slots:
+
+- `slot-a`: one rootfs generation.
+- `slot-b`: the other rootfs generation.
+- the active slot: the slot currently mounted as `/mnt/jail` by login and
+  worker consumers.
+- the passive slot: the inactive slot that cxcli can safely repopulate with the
+  target populate-jail image.
+
+For cxcli-managed clusters, the default store is
+`/mnt/jail-store/rootfs/slot-a` and `/mnt/jail-store/rootfs/slot-b`, with
+persistent `/home` at `/mnt/jail-store/shared/home`. For external single-SFS
+adoption, cxcli keeps the existing physical jail SFS, creates logical slots
+under `/mnt/jail/.cxcli/rootfs`, and treats the legacy `/mnt/jail` root as the
+active rootfs until the first switch succeeds.
+
+The populate-jail refresh process is:
+
+1. cxcli plans whether a refresh is required. `auto` refreshes when the target
+   populate-jail image changed, or when the target chart changed and rootfs
+   compatibility cannot be proven. `force` always refreshes. `manual` stops and
+   prints passive-slot instructions.
+2. cxcli verifies persistent jail mounts before any destructive overwrite.
+   `/home` is automatically modeled as a persistent jail mount. Other
+   customer-owned paths, such as `/data` or `/checkpoints`, must be declared
+   with `--jail-persistent-mount <mountPath>=<localPath>`.
+3. cxcli runs a passive-slot capacity preflight. For external adoption it
+   excludes `.cxcli` and configured persistent-mount paths from the active-size
+   estimate, so it sizes the rootfs refresh rather than customer data.
+4. cxcli applies temporary refresh values and creates a Kubernetes Job named
+   like `<target>-populate-jail-passive-<slot>`. That Job runs the target
+   populate-jail image and mounts only the passive slot PVC at `/mnt/jail`,
+   so it writes the new rootfs generation without changing current login or
+   worker consumers.
+5. After the Job completes with the expected image, cxcli verifies that the
+   login Service still has at least one ready EndpointSlice backend before
+   switching consumers.
+6. cxcli switches Helm values so the passive slot becomes the active slot:
+   login/controller/rest jail `volumeSourceName` values and worker NodeSet jail
+   PVC references are updated to the refreshed slot. The previous active slot
+   becomes the rollback slot.
+7. Soperator reconciles the changed SlurmCluster/NodeSet desired state. New or
+   restarted login and worker pods mount the refreshed rootfs. Persistent mounts
+   such as `/home` are mounted back into the new rootfs so user data stays
+   outside the replaceable rootfs slots.
+8. cxcli resumes Slurm partitions and runs postflight validation. The previous
+   slot remains available for rollback until the guarded validation path has
+   passed.
+
+During switch-over, the physical backing store contains both rootfs generations,
+and the chart exposes both slot volumes as possible `volumeSources`. The
+populate Job is connected to the passive slot while existing login and worker
+pods still use the old active slot. During the consumer rollout, the cluster can
+briefly contain old pods using the old slot and replacement pods using the new
+slot. A single login or worker pod is not expected to run with both slot-a and
+slot-b mounted as two active root filesystems. Each consumer has one main jail
+rootfs mount; persistent submounts such as `/home` are separate overlays that
+are preserved across both rootfs generations.
+
+Infographic prompt for ChatGPT:
+
+```text
+Create a multi-step technical infographic as six sequential panels. Do not show
+a single pod with two active rootfs mounts. Show that the physical jail backing
+store has two logical rootfs slots and that old and new pods may coexist during
+rollout.
+
+Context: Soperator jail rootfs upgrade with active/passive slots. There are two
+login pods and four worker pods. At the start, all consumers mount outdated
+rootfs slot-a as /mnt/jail. Persistent /home is outside the replaceable rootfs
+and is mounted back into either slot.
+
+Panel 1: "Before refresh". Draw one shared jail backing store with slot-a marked
+Active / outdated-rootfs and slot-b marked Passive / empty or old standby. Draw
+two login pods and four worker pods connected to slot-a. Draw /home as a
+separate persistent mount attached to the active rootfs.
+
+Panel 2: "Populate passive slot". Draw a Kubernetes Job named populate-jail
+using the new target image. The job mounts only slot-b at /mnt/jail and writes
+updated-rootfs into slot-b. Existing login and worker pods remain connected to
+slot-a.
+
+Panel 3: "Pre-switch guard". Show cxcli checks: Slurm job policy gate, passive
+slot capacity check, persistent mount verification, and at least one ready
+login Service endpoint. Keep the visual simple with four checkmarks.
+
+Panel 4: "Switch desired active slot". Show Helm/Soperator desired state
+changing activeSlot from slot-a to slot-b. Mark slot-b as Active /
+updated-rootfs and slot-a as Rollback / previous-rootfs. Show arrows from
+login and worker desired state moving from slot-a to slot-b.
+
+Panel 5: "Consumer rollout". Show old login/worker pods on slot-a fading out
+and replacement pods mounting slot-b. Show that the cluster may briefly have
+some old pods and some new pods, but each pod has only one active /mnt/jail
+rootfs. Keep /home mounted into the new rootfs.
+
+Panel 6: "After validation". Show all two login pods and four worker pods
+connected to slot-b updated-rootfs, /home still persistent, slot-a retained as
+rollback until validation passes, and Slurm partitions resumed.
+
+Style: clean cloud-native diagram, white background, blue and green accents,
+clear labels, no marketing copy, no decorative blobs, no fictional product
+logos. Use short captions and arrows. Make the diagrams understandable to
+Kubernetes and Slurm operators.
+```
+
 ### CXCLI Managed Soperator Clusters
 
 Use the cxcli-managed path when cxcli should create and own the infrastructure:
@@ -2426,40 +2544,8 @@ For day-2 upgrades of a cxcli-managed Soperator deployment:
   fingerprints before applying the chart phase.
   A Soperator Helm upgrade updates the desired
   `SlurmCluster.spec.populateJail.image`, but an already-completed rootfs slot
-  does not refresh by image change alone. `soperator upgrade` therefore adds a
-  reported `populate-jail-refresh` stage after target chart apply and before
-  postflight validation. With the default `--populate-jail-refresh auto`, cxcli
-  refreshes when the populate-jail image changed or the target chart changed
-  and rootfs compatibility cannot be proven; `force` always refreshes;
-  `manual` stops and prints passive-slot instructions. The refresh populates
-  the passive active/passive slot with the target populate-jail image, applies
-  the selected `--job-policy` before worker NodeSet mutation, switches
-  consumers to the populated slot only while the login Service has ready
-  EndpointSlice endpoints during the login StatefulSet rollout, and keeps the
-  previous slot as rollback until postflight passes. Managed greenfield uses
-  one SFS-backed jail store:
-  `/mnt/jail-store/rootfs/slot-a`, `/mnt/jail-store/rootfs/slot-b`, and
-  `/mnt/jail-store/shared/home`. The production profile sizes this single
-  backing store at `2048` GiB by default; this is total SFS capacity for both
-  slots and persistent jail mounts, not a per-slot quota.
-  External adoption keeps the existing physical jail SFS and creates only
-  logical slot directories under `/mnt/jail/.cxcli/rootfs`. The legacy jail root
-  is treated as the active rootfs until the first passive slot is populated and
-  switched. `/home` is automatically preserved as a persistent jail mount from
-  `/mnt/jail/home`; additional customer paths such as `/data` or
-  `/checkpoints` must be declared with `--jail-persistent-mount
-  <mountPath>=<localPath>`. cxcli does not infer, copy, or migrate customer
-  data paths during rootfs refresh.
-  Before applying passive-slot refresh values, cxcli runs a capacity preflight
-  against the physical jail SFS, excluding `.cxcli` and configured persistent
-  jail mount local paths. If the passive slot lacks free space,
-  `--jail-sfs-resize-policy fail|prompt|apply` controls whether cxcli stops,
-  prompts, or resizes the backing store before continuing. Managed
-  `soperator upgrade` patches cxcli-owned config, renders, runs Terraform
-  apply, and re-probes. External `ext-soperator upgrade` updates the identified
-  existing Nebius jail SFS with the Nebius SDK/API and re-probes. cxcli never
-  resizes customer NFS, opaque custom submounts, or unknown/non-Nebius storage, and
-  never resizes storage it cannot identify as the existing Nebius jail SFS.
+  does not refresh by image change alone. `soperator upgrade` therefore adds the
+  `populate-jail-refresh` stage described in [Jail Upgrade](#jail-upgrade).
   When the interactive wizard prompts for `soperator.upgrade.to_chart_version`,
   it
   shows the selected row's current chart version and uses the active
@@ -2909,11 +2995,13 @@ Important onboarding flags:
   analysis and accepted external MK8s node-template work. Interactive onboarding
   prints the discovered live Kubernetes version and defaults this field to the
   next provider-supported minor hop, for example `1.32 -> 1.33` before `1.34`;
-  it does not jump straight to the latest supported minor. If the operator
-  enters a later minor in the wizard, cxcli fails immediately with the next
-  valid hop. When onboarding selects `upgrade-external-node-template`,
-  non-interactive runs must pass this explicitly, and skipped minors fail fast
-  with the same next-hop guidance.
+  it does not jump straight to the latest supported minor. Operators can still
+  enter or pass a later supported final target, and onboarding locks every
+  sequential minor hop under
+  `deploy.targets[].soperator_onboarding.upgrade_path`. When onboarding selects
+  `upgrade-external-node-template`, non-interactive runs must pass this
+  explicitly; `ext-soperator upgrade` executes one locked Kubernetes minor hop
+  per run.
 - `--source-version`: source Soperator version to use when discovery finds
   Soperator CRDs but no compatible Helm release version. Interactive onboarding
   asks the operator to choose a source version from the exact committed
@@ -3269,9 +3357,9 @@ External upgrade follows these stages:
    safe-surge waves, target GPU stack reconciliation when it is paired with
    upgrade work, aligned SFS creation/attachment, and guarded PVC data-copy
    phases. External node-template work is one Kubernetes minor hop per accepted
-   onboarding plan and `ext-soperator upgrade` run; later Kubernetes hops start
-   with a fresh `ext-soperator onboard` decision after the current hop
-   completes.
+   locked-path segment and `ext-soperator upgrade` run; later Kubernetes hops
+   use the remaining locked segments and repeat the same upgrade command after
+   the current hop completes.
 4. Soperator takeover and cutover: apply target Soperator CRDs and chart values,
    preserve discovered worker NodeSets and partition refs when the source proves
    them, normalize source-era runtime settings, suspend or retire legacy source

@@ -26,7 +26,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import deque
-from collections.abc import Callable, Iterable, Iterator, Mapping, MutableMapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, MutableMapping, Sequence, Set
 from contextlib import ExitStack, contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
@@ -286,6 +286,7 @@ from .mk8s_upgrade import (
     collect_kubernetes_preflight_findings,
     find_source_mk8s_component,
     format_node_template_upgrade_plan,
+    minor_version_hops,
     node_group_node_template_rollout_complete,
     node_group_uses_nebius_gpu_image,
     node_template_target_drivers_preset,
@@ -5208,6 +5209,55 @@ def _soperator_backup_pv_reclaim_policy(resource: Mapping[str, Any]) -> str:
     return str(spec.get("persistentVolumeReclaimPolicy", "") or "").strip()
 
 
+def _soperator_backup_slurmcluster_resource_names(
+    slurmcluster_items: Sequence[Mapping[str, Any]],
+) -> tuple[str, ...]:
+    names: list[str] = []
+    for item in slurmcluster_items:
+        metadata = item.get("metadata")
+        if isinstance(metadata, Mapping):
+            name = _non_empty_text(metadata.get("name"))
+            if name:
+                names.append(name)
+        spec = item.get("spec")
+        if isinstance(spec, Mapping):
+            cluster_name = _non_empty_text(spec.get("clusterName"))
+            if cluster_name:
+                names.append(cluster_name)
+    return tuple(dict.fromkeys(names))
+
+
+def _soperator_backup_required_resource_candidates(
+    required_name: str,
+    *,
+    slurmcluster_names: Sequence[str],
+) -> tuple[str, ...]:
+    candidates = [required_name]
+    if required_name.startswith("soperator-"):
+        suffix = required_name.removeprefix("soperator-")
+        candidates.extend(
+            f"{slurmcluster_name}-{suffix}"
+            for slurmcluster_name in slurmcluster_names
+            if slurmcluster_name and slurmcluster_name != "soperator"
+        )
+    return tuple(dict.fromkeys(candidates))
+
+
+def _soperator_backup_resolve_required_resource_name(
+    required_name: str,
+    available_names: Set[str],
+    *,
+    slurmcluster_names: Sequence[str],
+) -> str:
+    for candidate in _soperator_backup_required_resource_candidates(
+        required_name,
+        slurmcluster_names=slurmcluster_names,
+    ):
+        if candidate in available_names:
+            return candidate
+    return ""
+
+
 def _soperator_backup_not_found(result: _SoperatorUpgradeCommandResult) -> bool:
     detail = f"{result.stderr}\n{result.stdout}".lower()
     return "notfound" in detail or "not found" in detail
@@ -5437,6 +5487,7 @@ def _soperator_upgrade_collect_recreation_material(
     slurmcluster_items = _soperator_backup_json_items(
         _soperator_backup_load_json(kubernetes_dir / "slurmclusters.json")
     )
+    slurmcluster_names = _soperator_backup_slurmcluster_resource_names(slurmcluster_items)
     secret_names = {_soperator_backup_metadata_name(item) for item in secret_items}
     configmap_names = {_soperator_backup_metadata_name(item) for item in configmap_items}
     missing_required: list[str] = []
@@ -5458,10 +5509,18 @@ def _soperator_upgrade_collect_recreation_material(
             continue
         required_pvs.append(pv)
     for secret_name in _SOPERATOR_BACKUP_REQUIRED_RECREATION_SECRETS:
-        if secret_name not in secret_names:
+        if not _soperator_backup_resolve_required_resource_name(
+            secret_name,
+            secret_names,
+            slurmcluster_names=slurmcluster_names,
+        ):
             missing_required.append(f"Secret/{secret_name}")
     for configmap_name in _SOPERATOR_BACKUP_REQUIRED_RECREATION_CONFIGMAPS:
-        if configmap_name not in configmap_names:
+        if not _soperator_backup_resolve_required_resource_name(
+            configmap_name,
+            configmap_names,
+            slurmcluster_names=slurmcluster_names,
+        ):
             missing_required.append(f"ConfigMap/{configmap_name}")
     if not slurmcluster_items:
         missing_required.append("SlurmCluster")
@@ -19389,17 +19448,35 @@ def _validate_soperator_onboarding_target_k8s_hop(
     target_k8s = _validate_soperator_onboarding_target_k8s_version(target_k8s_version)
     if not target_k8s:
         return ""
+    latest_supported = _validate_soperator_onboarding_target_k8s_version(
+        ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION
+    )
+    try:
+        target_version = parse_k8s_version(target_k8s)
+        latest_version = parse_k8s_version(latest_supported)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+    if (target_version.major, target_version.minor) > (
+        latest_version.major,
+        latest_version.minor,
+    ):
+        raise RuntimeError(
+            "Invalid external Soperator onboarding Kubernetes target: requested "
+            f"target {target_k8s} is newer than the cxcli-supported external "
+            f"onboarding target {latest_supported}. Upgrade cxcli before running "
+            "external Soperator onboarding for this target; cxcli will not lock "
+            "an external node-template path that it cannot validate."
+        )
     current_k8s = _soperator_onboarding_snapshot_control_plane_k8s_version(snapshot)
     if not current_k8s:
         return target_k8s
     try:
-        require_single_minor_hop(current_k8s, target_k8s)
+        minor_version_hops(current_k8s, target_k8s)
     except ValueError as exc:
         current_text = _validate_soperator_onboarding_target_k8s_version(current_k8s)
         message = str(exc).replace("--to-version", "--to-k8s-version")
         raise RuntimeError(
-            "Invalid external Soperator onboarding Kubernetes target: cxcli upgrades "
-            "one Kubernetes minor at a time during external onboarding. "
+            "Invalid external Soperator onboarding Kubernetes target: "
             f"Current Kubernetes version: {current_text}; requested target: {target_k8s}. "
             f"{message}"
         ) from exc
@@ -52898,7 +52975,7 @@ def ext_soperator_discover_command(
         f"generated/reports/{SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME}/<target>/manifest.json; "
         "reruns refresh read-only source discovery and Nebius provider node-template "
         "inventory by node group before deciding whether external node-template "
-        "upgrade is still needed, then locks the accepted next-hop upgrade path under "
+        "upgrade is still needed, then locks the accepted full upgrade path under "
         "deploy.targets[].soperator_onboarding.upgrade_path. For install/adopt-only targets "
         "with no external-upgrade-owned actions, "
         "run nebius-cxcli deploy <config.yaml> to reconcile the generated desired "
@@ -53050,8 +53127,8 @@ def soperator_onboard_command(
             help=(
                 "Target Kubernetes major.minor version for external node-template upgrade "
                 "analysis. Interactive onboarding defaults to the next discovered minor hop; "
-                "cxcli rejects skipped minor targets. Non-interactive runs must pass it "
-                "when onboarding selects external MK8s node-template work."
+                "non-interactive runs can pass the final supported target to lock every "
+                "sequential hop when onboarding selects external MK8s node-template work."
             ),
         ),
     ] = None,
@@ -53801,8 +53878,12 @@ def _soperator_migration_output_phases(
     *,
     phases: Any,
     onboarding: Mapping[str, Any],
+    populate_jail_refresh: str = "auto",
 ) -> list[Mapping[str, Any]]:
     flags = _soperator_migration_action_flags(onboarding)
+    explicit_populate_jail_refresh = normalize_populate_jail_refresh_mode(
+        populate_jail_refresh
+    ) in {"force", "manual"}
     output_phases = (
         [phase for phase in phases if isinstance(phase, Mapping)]
         if isinstance(phases, list)
@@ -53909,6 +53990,37 @@ def _soperator_migration_output_phases(
                 continue
             break
         output_phases.insert(insert_at, soperator_upgrade_phase)
+    if (
+        output_phases
+        and explicit_populate_jail_refresh
+        and not any(
+            str(phase.get("id", "") or "").strip() == POPULATE_JAIL_REFRESH_PHASE_ID
+            for phase in output_phases
+        )
+    ):
+        populate_jail_phase = {
+            "id": POPULATE_JAIL_REFRESH_PHASE_ID,
+            "title": "Populate-jail refresh",
+            "status": "planned",
+        }
+        insert_at = len(output_phases)
+        for predecessor in (
+            "final-control-plane-cutover",
+            "rolling-compute-migration",
+            _SOPERATOR_TARGET_GPU_STACK_PHASE_ID,
+            _SOPERATOR_EXTERNAL_NODE_TEMPLATE_PHASE_ID,
+            "online-bulk-data-sync",
+            "create-aligned-sfs",
+            "customer-approval",
+        ):
+            for index, phase in enumerate(output_phases):
+                if str(phase.get("id", "") or "").strip() == predecessor:
+                    insert_at = index + 1
+                    break
+            else:
+                continue
+            break
+        output_phases.insert(insert_at, populate_jail_phase)
     return output_phases
 
 
@@ -54397,6 +54509,7 @@ def _format_soperator_migration_plan_lines(
     strategy_max_unavailable_count: int | None = None,
     strategy_drain_timeout: str | None = None,
     job_policy: str | None = None,
+    populate_jail_refresh: str = "auto",
     upgrade_path: Mapping[str, Any] | None = None,
     upgrade_path_progress: Mapping[str, Any] | None = None,
     current_segment: Mapping[str, Any] | None = None,
@@ -54413,6 +54526,7 @@ def _format_soperator_migration_plan_lines(
     phases = _soperator_migration_output_phases(
         phases=report.get("migration_plan"),
         onboarding=onboarding,
+        populate_jail_refresh=populate_jail_refresh,
     )
     current_k8s_version, target_k8s_version = soperator_discovery_report_k8s_versions(report)
     report_path = source_soperator_discovery_report_path(config_path.parent, target_ref)
@@ -55545,6 +55659,7 @@ def soperator_external_upgrade_command(
             strategy_max_unavailable_count=strategy_max_unavailable_count,
             strategy_drain_timeout=strategy_drain_timeout,
             job_policy=resolved_job_policy,
+            populate_jail_refresh=resolved_populate_jail_refresh,
             upgrade_path=locked_upgrade_path or None,
             upgrade_path_progress=upgrade_path_progress,
             current_segment=current_segment,

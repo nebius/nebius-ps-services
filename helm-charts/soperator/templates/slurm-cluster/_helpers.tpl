@@ -29,6 +29,11 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- printf "%s-slurm-scripts" (include "slurm-cluster.name" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
+{{/* Cluster-scoped ConfigMap name for generated Slurm configs mounted into worker jails. */}}
+{{- define "slurm-cluster.slurmConfigsConfigMapName" -}}
+{{- printf "%s-slurm-configs" (include "slurm-cluster.name" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
 {{- define "validateAccountingConfig" -}}
 {{- if .Values.slurmNodes.accounting.enabled -}}
   {{- if not (or .Values.slurmNodes.accounting.externalDB.enabled .Values.slurmNodes.accounting.mariadbOperator.enabled) -}}

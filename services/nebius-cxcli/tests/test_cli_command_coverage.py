@@ -23684,7 +23684,10 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "Interactive onboarding defaults to the next discovered minor hop" in (
         normalized_soperator_onboard_help
     )
-    assert "cxcli rejects skipped minor targets" in normalized_soperator_onboard_help
+    assert "non-interactive runs can pass the final supported target" in (
+        normalized_soperator_onboard_help
+    )
+    assert "lock every sequential hop" in normalized_soperator_onboard_help
     assert "does not bypass Kubernetes minor-hop, backup, quota, protected-state" in (
         normalized_soperator_onboard_help
     )

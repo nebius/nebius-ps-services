@@ -34,12 +34,26 @@ spec:
   {{- $schedLines := include "renderSchedulingConfig" . -}}
   {{- $includeFile := default "" (get (.Values.partitionConfiguration | default dict) "includeFile") -}}
   {{- $includeLine := "" -}}
+  {{- $hasGpuNodeSet := false -}}
+  {{- range .Values.nodesets -}}
+    {{- $resources := get (get . "slurmd" | default dict) "resources" | default dict -}}
+    {{- $nodeConfig := get . "nodeConfig" | default dict -}}
+    {{- $gpuConfig := get . "gpu" | default dict -}}
+    {{- if or (get $gpuConfig "enabled") (hasKey $resources "gpu") (hasKey $resources "nvidia.com/gpu") (contains "Gres=gpu:" (toString (get $nodeConfig "static"))) -}}
+      {{- $hasGpuNodeSet = true -}}
+    {{- end -}}
+  {{- end -}}
+  {{- $slurmdParametersLine := "" -}}
+  {{- if and $hasGpuNodeSet (not (regexMatch "(?im)^\\s*SlurmdParameters\\s*=" $rawCustom)) -}}
+    {{- $slurmdParametersLine = "SlurmdParameters=l3cache_as_socket" -}}
+  {{- end -}}
   {{- if $includeFile -}}
     {{- $includeLine = printf "Include=%s" $includeFile -}}
   {{- end -}}
   {{- $mergedCustom := "" -}}
   {{- $parts := list -}}
   {{- if $rawCustom -}}{{- $parts = append $parts (trimSuffix "\n" $rawCustom) -}}{{- end -}}
+  {{- if $slurmdParametersLine -}}{{- $parts = append $parts $slurmdParametersLine -}}{{- end -}}
   {{- if $schedLines -}}{{- $parts = append $parts $schedLines -}}{{- end -}}
   {{- if $includeLine -}}{{- $parts = append $parts $includeLine -}}{{- end -}}
   {{- if $parts -}}{{- $mergedCustom = join "\n" $parts -}}{{- end }}

@@ -807,8 +807,16 @@ class _SdkSoperatorMigrationNebiusApi:
             strategy_args=strategy_args,
             clear_template_gpu_settings=clear_template_gpu_settings,
         )
+        metadata = _mapping(original_node_group.get("metadata"))
+        parent_id = str(metadata.get("parent_id", metadata.get("parentId", "")) or "").strip()
+        name = str(metadata.get("name", "") or "").strip()
+        request_metadata: dict[str, str] = {"id": node_group_id}
+        if parent_id:
+            request_metadata["parent_id"] = parent_id
+        if name:
+            request_metadata["name"] = name
         request = UpdateNodeGroupRequest(
-            metadata=ResourceMetadata(id=node_group_id),
+            metadata=ResourceMetadata(**request_metadata),
             spec=sdk_parse_message(NodeGroupSpec, _mapping(payload.get("spec"))),
         )
         request.set_mask(_sdk_request_mask(mask_paths))
@@ -861,8 +869,17 @@ class _SdkSoperatorMigrationNebiusApi:
         from nebius.api.nebius.common.v1 import ResourceMetadata
         from nebius.api.nebius.mk8s.v1 import NodeGroupSpec, UpdateNodeGroupRequest
 
+        node_group = self.get_node_group(node_group_id)
+        metadata = _mapping(node_group.get("metadata"))
+        parent_id = str(metadata.get("parent_id", metadata.get("parentId", "")) or "").strip()
+        name = str(metadata.get("name", "") or "").strip()
+        request_metadata: dict[str, str] = {"id": node_group_id}
+        if parent_id:
+            request_metadata["parent_id"] = parent_id
+        if name:
+            request_metadata["name"] = name
         request = UpdateNodeGroupRequest(
-            metadata=ResourceMetadata(id=node_group_id),
+            metadata=ResourceMetadata(**request_metadata),
             spec=NodeGroupSpec(fixed_node_count=count),
         )
         request.set_mask(_sdk_request_mask(("spec.fixed_node_count",)))
@@ -922,13 +939,55 @@ class _SdkSoperatorMigrationNebiusApi:
         from nebius.api.nebius.common.v1 import ResourceMetadata
         from nebius.api.nebius.mk8s.v1 import (
             ClusterSpec,
+            ControlPlaneEndpointsSpec,
             ControlPlaneSpec,
+            PublicEndpointSpec,
             UpdateClusterRequest,
         )
 
+        current = self.get_cluster(cluster_id)
+        metadata = _mapping(current.get("metadata"))
+        spec = _mapping(current.get("spec"))
+        status = _mapping(current.get("status"))
+        control_plane = _mapping(spec.get("control_plane") or spec.get("controlPlane"))
+        status_control_plane = _mapping(
+            status.get("control_plane") or status.get("controlPlane")
+        )
+        parent_id = str(metadata.get("parent_id", metadata.get("parentId", "")) or "").strip()
+        name = str(metadata.get("name", "") or "").strip()
+        subnet_id = str(
+            control_plane.get("subnet_id", control_plane.get("subnetId", "")) or ""
+        ).strip()
+        control_plane_endpoints = _mapping(control_plane.get("endpoints"))
+        status_control_plane_endpoints = _mapping(status_control_plane.get("endpoints"))
+        has_public_endpoint = bool(
+            _mapping(
+                control_plane_endpoints.get("public_endpoint")
+                or control_plane_endpoints.get("publicEndpoint")
+            )
+            or str(
+                status_control_plane_endpoints.get(
+                    "public_endpoint",
+                    status_control_plane_endpoints.get("publicEndpoint", ""),
+                )
+                or ""
+            ).strip()
+        )
+        request_metadata: dict[str, str] = {"id": cluster_id}
+        if parent_id:
+            request_metadata["parent_id"] = parent_id
+        if name:
+            request_metadata["name"] = name
+        request_control_plane: dict[str, Any] = {"version": control_plane_version}
+        if subnet_id:
+            request_control_plane["subnet_id"] = subnet_id
+        if has_public_endpoint:
+            request_control_plane["endpoints"] = ControlPlaneEndpointsSpec(
+                public_endpoint=PublicEndpointSpec()
+            )
         request = UpdateClusterRequest(
-            metadata=ResourceMetadata(id=cluster_id),
-            spec=ClusterSpec(control_plane=ControlPlaneSpec(version=control_plane_version)),
+            metadata=ResourceMetadata(**request_metadata),
+            spec=ClusterSpec(control_plane=ControlPlaneSpec(**request_control_plane)),
         )
         request.set_mask(_sdk_request_mask(("spec.control_plane.version",)))
         with suppress_expected_refresh_logs():
@@ -1229,6 +1288,80 @@ def _command_text(args: Sequence[str]) -> str:
 
 
 _SLURM_FAST_PROBE_TIMEOUT_SECONDS = 20
+_TRANSIENT_KUBECTL_CONNECTION_FAILURE_MARKERS = (
+    "unable to connect to the server: getting credentials",
+    "authentication handshake failed",
+    "tls handshake timeout",
+)
+_TRANSIENT_KUBECTL_READ_ONLY_TIMEOUT_MARKERS = (
+    "client.timeout exceeded while awaiting headers",
+    "read: operation timed out",
+)
+_KUBECTL_GLOBAL_FLAGS_WITH_VALUE = {
+    "--as",
+    "--as-group",
+    "--cache-dir",
+    "--certificate-authority",
+    "--client-certificate",
+    "--client-key",
+    "--cluster",
+    "--context",
+    "--kubeconfig",
+    "--namespace",
+    "--request-timeout",
+    "--server",
+    "--token",
+    "--user",
+    "-n",
+}
+_KUBECTL_READ_ONLY_SUBCOMMANDS = {
+    "api-resources",
+    "api-versions",
+    "auth",
+    "cluster-info",
+    "describe",
+    "explain",
+    "get",
+    "logs",
+    "top",
+    "version",
+    "wait",
+}
+_TRANSIENT_KUBECTL_MAX_ATTEMPTS = 3
+
+
+def _kubectl_subcommand(args: Sequence[str]) -> str:
+    skip_next = False
+    for raw_arg in args[1:]:
+        if skip_next:
+            skip_next = False
+            continue
+        arg = str(raw_arg)
+        if not arg:
+            continue
+        if arg.startswith("-"):
+            flag = arg.split("=", 1)[0]
+            if flag in _KUBECTL_GLOBAL_FLAGS_WITH_VALUE and "=" not in arg:
+                skip_next = True
+            continue
+        return arg
+    return ""
+
+
+def _is_transient_kubectl_failure(
+    args: Sequence[str],
+    result: SoperatorMigrationCommandResult,
+) -> bool:
+    if result.returncode == 0 or not args:
+        return False
+    if Path(str(args[0])).name != "kubectl":
+        return False
+    detail = f"{result.stderr}\n{result.stdout}".lower()
+    if any(marker in detail for marker in _TRANSIENT_KUBECTL_CONNECTION_FAILURE_MARKERS):
+        return True
+    if any(marker in detail for marker in _TRANSIENT_KUBECTL_READ_ONLY_TIMEOUT_MARKERS):
+        return _kubectl_subcommand(args) in _KUBECTL_READ_ONLY_SUBCOMMANDS
+    return False
 
 
 def _default_command_runner(
@@ -1238,20 +1371,31 @@ def _default_command_runner(
     timeout_seconds: int = 300,
     check: bool = True,
 ) -> SoperatorMigrationCommandResult:
-    completed = subprocess.run(
-        list(args),
-        input=input_text,
-        text=True,
-        capture_output=True,
-        timeout=timeout_seconds,
-        check=False,
-    )
-    result = SoperatorMigrationCommandResult(
-        args=tuple(str(item) for item in args),
-        returncode=completed.returncode,
-        stdout=completed.stdout or "",
-        stderr=completed.stderr or "",
-    )
+    command = list(args)
+    result: SoperatorMigrationCommandResult | None = None
+    for attempt in range(1, _TRANSIENT_KUBECTL_MAX_ATTEMPTS + 1):
+        completed = subprocess.run(
+            command,
+            input=input_text,
+            text=True,
+            capture_output=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+        result = SoperatorMigrationCommandResult(
+            args=tuple(str(item) for item in args),
+            returncode=completed.returncode,
+            stdout=completed.stdout or "",
+            stderr=completed.stderr or "",
+        )
+        if (
+            attempt >= _TRANSIENT_KUBECTL_MAX_ATTEMPTS
+            or not _is_transient_kubectl_failure(args, result)
+        ):
+            break
+        time.sleep(min(float(attempt * 2), 5.0))
+    if result is None:  # pragma: no cover - defensive guard
+        result = SoperatorMigrationCommandResult(tuple(str(item) for item in args), 1, "", "")
     if check and result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
         raise RuntimeError(f"{_command_text(args)} failed: {detail}")
@@ -2306,8 +2450,12 @@ def _phase_ids_for_actions(
     *,
     report: Mapping[str, Any],
     onboarding: Mapping[str, Any],
+    populate_jail_refresh: str = "auto",
 ) -> tuple[str, ...]:
     actions = _onboarding_actions(onboarding)
+    explicit_populate_jail_refresh = normalize_populate_jail_refresh_mode(
+        populate_jail_refresh
+    ) in {"force", "manual"}
     phase_ids = tuple(
         phase_id
         for phase_id in _phase_ids(report)
@@ -2376,6 +2524,27 @@ def _phase_ids_for_actions(
         if _EXTERNAL_NODE_TEMPLATE_PHASE_ID in phases:
             insert_at = max(insert_at, phases.index(_EXTERNAL_NODE_TEMPLATE_PHASE_ID) + 1)
         phases.insert(insert_at, _TARGET_GPU_STACK_PHASE_ID)
+        phase_ids = tuple(phases)
+    if (
+        phase_ids
+        and explicit_populate_jail_refresh
+        and POPULATE_JAIL_REFRESH_PHASE_ID not in phase_ids
+    ):
+        phases = list(phase_ids)
+        insert_at = len(phases)
+        for predecessor in (
+            "final-control-plane-cutover",
+            "rolling-compute-migration",
+            _TARGET_GPU_STACK_PHASE_ID,
+            _EXTERNAL_NODE_TEMPLATE_PHASE_ID,
+            "online-bulk-data-sync",
+            "create-aligned-sfs",
+            "customer-approval",
+        ):
+            if predecessor in phases:
+                insert_at = phases.index(predecessor) + 1
+                break
+        phases.insert(insert_at, POPULATE_JAIL_REFRESH_PHASE_ID)
         phase_ids = tuple(phases)
     if phase_ids and actions:
         phases = list(phase_ids)
@@ -8081,19 +8250,26 @@ def _quiesce_slurm_node_size_resource(
     selected_resource = (
         _namespace_resource_ref(selected, default=resource) if selected_exists else resource
     )
+    original_size = _slurm_node_size(selected, role=role) if selected_exists else None
+    target_size = (
+        max(original_size - 1, 1)
+        if original_size is not None and original_size > 1
+        else original_size
+    )
     item = {
         "action": "slurm-node-size",
         "resource": selected_resource,
         "role": role,
         "exists": selected_exists,
-        "size": _slurm_node_size(selected, role=role) if selected_exists else None,
+        "size": original_size,
+        "target_size": target_size,
     }
-    if selected_exists:
+    if selected_exists and target_size != original_size:
         _kubectl_patch_namespace_resource(
             command_runner=command_runner,
             kube_context=kube_context,
             resource=selected_resource,
-            patch={"spec": {"slurmNodes": {role: {"size": 0}}}},
+            patch={"spec": {"slurmNodes": {role: {"size": target_size}}}},
         )
     return item
 
@@ -8147,7 +8323,7 @@ def _external_service_role_quiesce_resources(role: str) -> tuple[tuple[str, str,
     if role == "login":
         return (
             ("slurm-node-size", "slurmclusters", _SOPERATOR_NAMESPACE),
-            ("scale", "statefulsets.apps.kruise.io/login", _SOPERATOR_NAMESPACE),
+            ("scale-down-one", "statefulsets.apps.kruise.io/login", _SOPERATOR_NAMESPACE),
             *drain_blockers,
         )
     if role == "accounting":
@@ -8271,6 +8447,13 @@ def _restore_external_service_role(
             restored_role = str(item.get("role", "") or "").strip()
             if not restored_role:
                 continue
+            restored_size = _non_negative_int(item.get("size"), fallback=1)
+            target_size = item.get("target_size")
+            if (
+                target_size is not None
+                and _non_negative_int(target_size, fallback=restored_size) == restored_size
+            ):
+                continue
             _kubectl_patch_namespace_resource(
                 command_runner=command_runner,
                 kube_context=kube_context,
@@ -8278,9 +8461,7 @@ def _restore_external_service_role(
                 namespace=namespace,
                 patch={
                     "spec": {
-                        "slurmNodes": {
-                            restored_role: {"size": _non_negative_int(item.get("size"), fallback=1)}
-                        }
+                        "slurmNodes": {restored_role: {"size": restored_size}}
                     }
                 },
             )
@@ -11088,6 +11269,14 @@ def _execute_external_node_template_upgrade_phase(
     command_runner: SoperatorMigrationCommandRunner,
     checkpoint_writer: Callable[[], None] | None = None,
     rollout: SoperatorExternalNodeTemplateRollout,
+    job_policy: str,
+    cancel_job_ids: Sequence[str],
+    requeue_job_ids: Sequence[str],
+    job_wait_timeout_seconds: int,
+    job_refresh_interval_seconds: int,
+    slurm_decision_recorder: Callable[[Mapping[str, Any]], None] | None = None,
+    interactive_prompt_pause: Callable[[], Any] | None = None,
+    allow_resolved_interactive_job_policy: bool = False,
 ) -> tuple[bool, list[str]]:
     phase = _phase_state(checkpoint, _EXTERNAL_NODE_TEMPLATE_PHASE_ID)
     onboarding = _target_onboarding(payload, target_ref)
@@ -11224,6 +11413,7 @@ def _execute_external_node_template_upgrade_phase(
                 "External Soperator upgrade checkpoint external-node-template-upgrade "
                 f"node group {group_name} must be a mapping."
             )
+        previous_status = str(group_state.get("status", "") or "")
         node_group_id = _source_group_node_group_id(raw_group)
         if not node_group_id:
             raise SoperatorMigrationPhasePending(
@@ -11383,7 +11573,6 @@ def _execute_external_node_template_upgrade_phase(
                 if checkpoint_writer is not None:
                     checkpoint_writer()
                 raise SoperatorMigrationPhasePending(str(group_state["pending_reason"]))
-            previous_status = str(group_state.get("status", "") or "")
             strategy_restored = _restore_original_strategy_if_required(node_group)
             resume_after_started = previous_status in {"failed", "updating", "waiting-rollout"}
             group_state["status"] = "completed" if resume_after_started else "already-current"
@@ -11425,6 +11614,7 @@ def _execute_external_node_template_upgrade_phase(
             "timeout": timeout,
             "timeout_seconds": timeout_seconds,
             "worker_group": worker_group,
+            "previous_status": previous_status,
         }
 
     def _run_prepared_group(
@@ -11576,6 +11766,29 @@ def _execute_external_node_template_upgrade_phase(
     phase["worker_waves"] = [[str(work["group_name"]) for work in wave] for wave in worker_waves]
     for wave_index, wave in enumerate(worker_waves, start=1):
         phase["active_worker_wave"] = wave_index
+        fresh_wave = any(
+            str(work.get("previous_status", "") or "") not in {"updating", "waiting-rollout"}
+            for work in wave
+        )
+        if fresh_wave:
+            wave_worker_groups = tuple(str(work["group_name"]) for work in wave)
+            lines.extend(
+                _run_soperator_worker_rollout_live_preflight(
+                    source_report=source_report,
+                    worker_node_groups=wave_worker_groups,
+                    command_runner=command_runner,
+                    kube_context=kube_context,
+                    rollout=rollout,
+                    job_policy=job_policy,
+                    cancel_job_ids=cancel_job_ids,
+                    requeue_job_ids=requeue_job_ids,
+                    job_wait_timeout_seconds=job_wait_timeout_seconds,
+                    job_refresh_interval_seconds=job_refresh_interval_seconds,
+                    slurm_decision_recorder=slurm_decision_recorder,
+                    interactive_prompt_pause=interactive_prompt_pause,
+                    allow_resolved_interactive_job_policy=allow_resolved_interactive_job_policy,
+                )
+            )
         for work in wave:
             group_state = work["group_state"]
             if isinstance(group_state, dict):
@@ -12806,6 +13019,16 @@ def _execute_populate_jail_refresh_phase(
             checkpoint_writer()
         raise SoperatorMigrationPhasePending(result.detail)
 
+    topology_lines: list[str] = []
+    if _mapping(source_report.get("snapshot")) and _mapping(source_report.get("report")):
+        topology_lines = _ensure_worker_nodeset_topology_checkpoint(
+            checkpoint=checkpoint,
+            source_report=source_report,
+            kube_context=kube_context,
+            command_runner=command_runner,
+        )
+    if topology_lines and checkpoint_writer is not None:
+        checkpoint_writer()
     values = _patch_target_values_for_compute(
         checkpoint=checkpoint,
         payload=payload,
@@ -12852,6 +13075,7 @@ def _execute_populate_jail_refresh_phase(
             if legacy_active_rootfs
             else slots.active_pvc
         )
+        passive_pvc = active_pvc if legacy_active_rootfs else slots.passive_pvc
         active_rootfs_path = JAIL_LEGACY_ROOT_PATH if legacy_active_rootfs else ""
         return probe_active_passive_jail_capacity(
             command_runner,
@@ -12859,7 +13083,7 @@ def _execute_populate_jail_refresh_phase(
             target_ref=target_ref,
             image=populate_image,
             active_pvc=active_pvc,
-            passive_pvc=slots.passive_pvc,
+            passive_pvc=passive_pvc,
             active_rootfs_path=active_rootfs_path,
             exclude_paths=jail_persistent_mount_exclude_paths(values),
             scheduling=job_scheduling,
@@ -13063,6 +13287,7 @@ def _execute_populate_jail_refresh_phase(
     if checkpoint_writer is not None:
         checkpoint_writer()
     return mutation_performed, [
+        *topology_lines,
         "Slurm partitions resumed after active/passive jail rootfs refresh.",
         (
             "Jail rootfs passive slot populated and consumers switched "
@@ -16760,7 +16985,14 @@ def _execute_soperator_migration_unlocked(
     )
     onboarding = _target_onboarding(payload, normalized_target)
     actions = _onboarding_actions(onboarding)
-    phase_ids = _phase_ids_for_actions(report=report, onboarding=onboarding)
+    resolved_populate_jail_refresh = normalize_populate_jail_refresh_mode(
+        populate_jail_refresh
+    )
+    phase_ids = _phase_ids_for_actions(
+        report=report,
+        onboarding=onboarding,
+        populate_jail_refresh=resolved_populate_jail_refresh,
+    )
     if not phase_ids:
         phase_ids = ("discovery-and-plan",)
     phase_ids = _phase_ids_with_jail_persistent_mount_prerequisites(
@@ -16869,9 +17101,6 @@ def _execute_soperator_migration_unlocked(
         **existing_mounts,
         **dict(to_plain_data(persistent_mount_state)),
     }
-    resolved_populate_jail_refresh = normalize_populate_jail_refresh_mode(
-        populate_jail_refresh
-    )
     resolved_job_policy = _external_upgrade_job_policy(
         job_policy,
         default_policy="fail",
@@ -17268,6 +17497,14 @@ def _execute_soperator_migration_unlocked(
                 command_runner=active_command_runner,
                 checkpoint_writer=_checkpoint_progress,
                 rollout=rollout,
+                job_policy=resolved_job_policy,
+                cancel_job_ids=selected_cancel_job_ids,
+                requeue_job_ids=selected_requeue_job_ids,
+                job_wait_timeout_seconds=job_wait_timeout_seconds,
+                job_refresh_interval_seconds=job_refresh_interval_seconds,
+                slurm_decision_recorder=_record_slurm_decision,
+                interactive_prompt_pause=status_prompt_pause,
+                allow_resolved_interactive_job_policy=allow_resolved_interactive_job_policy,
             ),
             _TARGET_GPU_STACK_PHASE_ID: lambda: _execute_target_gpu_stack_remediation_phase(
                 checkpoint=checkpoint,
