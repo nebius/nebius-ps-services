@@ -27,6 +27,7 @@ from .soperator_discovery import (
     soperator_discovery_manifest_path,
     write_soperator_discovery_bundle,
 )
+from .soperator_populate_jail import POPULATE_JAIL_REFRESH_PHASE_ID
 
 ONBOARDING_SCHEMA = "nebius-cxcli-soperator-onboarding/v2"
 SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA = "nebius-cxcli-ext-soperator-upgrade-path/v1"
@@ -1437,6 +1438,26 @@ def _default_soperator_migration_plan(
                     requires_customer_approval=True,
                     quiet_window=True,
                     notes=final_notes,
+                ),
+                *(
+                    (
+                        _migration_phase(
+                            POPULATE_JAIL_REFRESH_PHASE_ID,
+                            "Jail Upgrade: refresh shared Soperator jail rootfs",
+                            progress_label=(
+                                "Jail Upgrade: populate passive active/passive rootfs slot"
+                            ),
+                            notes=(
+                                "Populate the passive jail rootfs slot with the target image.",
+                                "Keep persistent jail mounts outside the rootfs slots before "
+                                "switching login and worker consumers.",
+                                "Switch consumers only after the login Service has ready "
+                                "endpoints, and keep the previous slot available for rollback.",
+                            ),
+                        ),
+                    )
+                    if include_soperator_upgrade
+                    else ()
                 ),
                 _migration_phase(
                     "validation-and-rollback-hold",

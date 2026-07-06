@@ -1451,6 +1451,7 @@ def test_ext_soperator_upgrade_dry_run_forces_populate_jail_for_node_template_se
     assert "Soperator hop" not in forced.output
     assert "populate-jail-refresh" not in auto.output
     assert "populate-jail-refresh" in forced.output
+    assert "[Jail Upgrade] populate-jail-refresh: planned" in forced.output
     assert forced.output.index("external-node-template-upgrade") < forced.output.index(
         "populate-jail-refresh"
     )
@@ -8442,6 +8443,12 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
         in result.output
     )
     assert "final-control-plane-cutover" in result.output
+    assert (
+        "[Jail Upgrade] populate-jail-refresh: planned - "
+        f"Jail Upgrade after Soperator hop 3.0.5 -> {_soperator_test_chart_version()}: "
+        "refresh shared Soperator jail rootfs"
+        in result.output
+    )
     assert "Execution contracts:" in result.output
     assert "Live executor contract:" in result.output
     assert "External node-template contract:" in result.output
@@ -8943,6 +8950,12 @@ def test_ext_soperator_upgrade_dry_run_omits_k8s_hop_without_node_template_actio
         f"Soperator {_soperator_test_chart_version()} cutover: final Soperator chart cutover"
         in result.output
     )
+    assert (
+        "[Jail Upgrade] populate-jail-refresh: planned - "
+        f"Jail Upgrade after Soperator hop 3.0.5 -> {_soperator_test_chart_version()}: "
+        "refresh shared Soperator jail rootfs"
+        in result.output
+    )
     assert "Kubernetes hop 1.31 -> 1.32" not in result.output
 
 
@@ -9182,10 +9195,10 @@ def test_soperator_migration_plan_styles_topic_labels() -> None:
         ),
         (
             "populate-jail-refresh",
-            "Populate-jail refresh",
+            "Jail Upgrade: refresh shared Soperator jail rootfs",
             {},
             {"target_soperator_version": "4.0.2-ps.3"},
-            "Populate-jail refresh",
+            "Jail Upgrade: refresh shared Soperator jail rootfs",
         ),
         (
             "validation-and-rollback-hold",
@@ -10199,6 +10212,8 @@ def test_soperator_discovery_result_prints_k8s_versions(
         "- Upgrade path evaluation:",
         "  - Kubernetes: 1.32 -> 1.33 -> 1.34",
         "  - Soperator: 1.22.3 -> 4.0.2-ps.3",
+        "  - Jail Upgrade: refresh active/passive jail rootfs after the "
+        "Soperator chart/rootfs hop.",
         "  - Recommended order: Soperator 1.22.3 -> 4.0.2-ps.3 while Kubernetes stays "
         "1.32; Kubernetes 1.32 -> 1.33 -> 1.34.",
         "- Soperator upgrade path: status=supported, rule=k8s-1-33-soperator-4-supported, "
@@ -10266,6 +10281,10 @@ def test_soperator_discovery_upgrade_guidance_uses_direct_soperator_hop() -> Non
 
     assert "  - Kubernetes: 1.32 -> 1.33 -> 1.34" in guidance
     assert "  - Soperator: 1.23.3 -> 4.0.2-ps.3" in guidance
+    assert (
+        "  - Jail Upgrade: refresh active/passive jail rootfs after the "
+        "Soperator chart/rootfs hop."
+    ) in guidance
     assert not any("Required gate" in line for line in guidance)
     assert (
         "  - Recommended order: Soperator 1.23.3 -> 4.0.2-ps.3 while Kubernetes "
@@ -10296,6 +10315,10 @@ def test_soperator_discovery_upgrade_guidance_stages_after_pre_133_k8s_hop() -> 
 
     assert "  - Kubernetes: 1.31 -> 1.32 -> 1.33 -> 1.34" in guidance
     assert "  - Soperator: 1.22.3 -> 4.0.2-ps.3" in guidance
+    assert (
+        "  - Jail Upgrade: refresh active/passive jail rootfs after the "
+        "Soperator chart/rootfs hop."
+    ) in guidance
     assert not any("1.23.0" in line for line in guidance)
     assert (
         "  - Recommended order: Kubernetes 1.31 -> 1.32; Soperator "
@@ -10327,6 +10350,10 @@ def test_soperator_discovery_upgrade_guidance_runs_132_hop_before_soperator() ->
 
     assert "  - Kubernetes: 1.31 -> 1.32" in guidance
     assert "  - Soperator: 1.22.3 -> 4.0.2-ps.3" in guidance
+    assert (
+        "  - Jail Upgrade: refresh active/passive jail rootfs after the "
+        "Soperator chart/rootfs hop."
+    ) in guidance
     assert (
         "  - Recommended order: Kubernetes 1.31 -> 1.32; Soperator "
         "1.22.3 -> 4.0.2-ps.3 while Kubernetes stays 1.32."

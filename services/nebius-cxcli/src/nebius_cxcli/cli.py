@@ -2090,7 +2090,8 @@ ext_soperator_app = typer.Typer(
         "onboard registers/adopts one cluster into config.yaml without "
         "Terraform-owning it. backup/restore move restore-capable Soperator "
         "state to new empty target clusters only. upgrade is only for accepted "
-        "onboarding plans that contain external-upgrade-owned actions."
+        "onboarding plans that contain external-upgrade-owned actions, including "
+        "Jail Upgrade when Soperator chart/rootfs work is selected."
     ),
     epilog=(
         "Workflow: nebius-cxcli ext-soperator discover --project-id PROJECT "
@@ -2138,8 +2139,8 @@ soperator_app = typer.Typer(
         "Manage cxcli-managed Soperator deployments. backup/restore create or "
         "apply restore-capable Soperator archives to new empty target clusters only. "
         "discover writes a support-safe read-only Soperator discovery bundle. Use upgrade "
-        "for Soperator-aware MK8s node-template plus chart upgrades with Slurm preflight "
-        "and postflight validation."
+        "for Soperator-aware MK8s node-template, chart, and Jail Upgrade rootfs "
+        "refresh with Slurm preflight and postflight validation."
     ),
     epilog=(
         "Examples: nebius-cxcli soperator upgrade <config.yaml> "
@@ -2686,6 +2687,7 @@ _SOPERATOR_UPGRADE_PLANNED_PHASE_IDS = (
 )
 _SOPERATOR_TOP_LEVEL_STAGE_MK8S = "MK8s Node Upgrades"
 _SOPERATOR_TOP_LEVEL_STAGE_CHART = "Soperator Upgrade"
+_SOPERATOR_TOP_LEVEL_STAGE_JAIL = "Jail Upgrade"
 _SOPERATOR_MK8S_TOP_LEVEL_PHASE_IDS = frozenset(
     {
         "slurm-job-drain",
@@ -2693,6 +2695,7 @@ _SOPERATOR_MK8S_TOP_LEVEL_PHASE_IDS = frozenset(
         "post-mk8s-validation",
     }
 )
+_SOPERATOR_JAIL_TOP_LEVEL_PHASE_IDS = frozenset({POPULATE_JAIL_REFRESH_PHASE_ID})
 _SOPERATOR_UPGRADE_JOB_POLICIES = frozenset(
     {
         "interactive",
@@ -4583,6 +4586,8 @@ def _soperator_upgrade_now_iso() -> str:
 def _soperator_upgrade_top_level_stage(phase_id: str) -> str:
     if phase_id in _SOPERATOR_MK8S_TOP_LEVEL_PHASE_IDS:
         return _SOPERATOR_TOP_LEVEL_STAGE_MK8S
+    if phase_id in _SOPERATOR_JAIL_TOP_LEVEL_PHASE_IDS:
+        return _SOPERATOR_TOP_LEVEL_STAGE_JAIL
     return _SOPERATOR_TOP_LEVEL_STAGE_CHART
 
 
@@ -5089,6 +5094,39 @@ def _soperator_backup_restore_manifest_text(resources: Sequence[Mapping[str, Any
     return "\n---\n".join(documents).rstrip() + ("\n" if documents else "")
 
 
+def _soperator_backup_restore_manifest_resources(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    try:
+        documents = yaml.safe_load_all(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError:
+        return []
+    return [dict(item) for item in documents if isinstance(item, Mapping)]
+
+
+def _soperator_backup_filter_restore_manifest_by_name(
+    path: Path,
+    *,
+    excluded_names: Sequence[str],
+) -> tuple[str, ...]:
+    excluded = {str(name).strip() for name in excluded_names if str(name).strip()}
+    if not excluded or not path.exists():
+        return ()
+    resources = _soperator_backup_restore_manifest_resources(path)
+    kept: list[dict[str, Any]] = []
+    removed: list[str] = []
+    for resource in resources:
+        name = _soperator_backup_metadata_name(resource)
+        if name in excluded:
+            removed.append(name)
+            continue
+        kept.append(resource)
+    if not removed:
+        return ()
+    path.write_text(_soperator_backup_restore_manifest_text(kept), encoding="utf-8")
+    return tuple(dict.fromkeys(removed))
+
+
 def _soperator_upgrade_collect_kubernetes_restore_material(
     *,
     namespace: str,
@@ -5240,6 +5278,12 @@ def _soperator_backup_required_resource_candidates(
             for slurmcluster_name in slurmcluster_names
             if slurmcluster_name and slurmcluster_name != "soperator"
         )
+    elif required_name == "slurm-scripts":
+        candidates.extend(
+            f"{slurmcluster_name}-slurm-scripts"
+            for slurmcluster_name in slurmcluster_names
+            if slurmcluster_name and slurmcluster_name != "soperator"
+        )
     return tuple(dict.fromkeys(candidates))
 
 
@@ -5256,6 +5300,65 @@ def _soperator_backup_resolve_required_resource_name(
         if candidate in available_names:
             return candidate
     return ""
+
+
+def _soperator_backup_slurmcluster_volume_source_value(
+    slurmcluster_items: Sequence[Mapping[str, Any]],
+    *,
+    source_name: str,
+    source_kind: str,
+    value_key: str,
+) -> tuple[str, ...]:
+    values: list[str] = []
+    for item in slurmcluster_items:
+        spec = item.get("spec")
+        if not isinstance(spec, Mapping):
+            continue
+        volume_sources = spec.get("volumeSources")
+        if not isinstance(volume_sources, Sequence) or isinstance(volume_sources, (str, bytes)):
+            continue
+        for raw_source in volume_sources:
+            if not isinstance(raw_source, Mapping):
+                continue
+            if _non_empty_text(raw_source.get("name")) != source_name:
+                continue
+            source = raw_source.get(source_kind)
+            if not isinstance(source, Mapping):
+                continue
+            value = _non_empty_text(source.get(value_key))
+            if value:
+                values.append(value)
+    return tuple(dict.fromkeys(values))
+
+
+def _soperator_backup_required_pvc_candidates(
+    required_name: str,
+    *,
+    pvc_items: Sequence[Mapping[str, Any]],
+    slurmcluster_items: Sequence[Mapping[str, Any]],
+) -> tuple[str, ...]:
+    candidates: list[str] = []
+    if required_name == "controller-spool-controller-0":
+        candidates.extend(
+            _soperator_backup_slurmcluster_volume_source_value(
+                slurmcluster_items,
+                source_name="controller-spool",
+                source_kind="persistentVolumeClaim",
+                value_key="claimName",
+            )
+        )
+    elif required_name == "storage-soperator-acct-db-0":
+        for item in pvc_items:
+            metadata = item.get("metadata")
+            labels = metadata.get("labels") if isinstance(metadata, Mapping) else None
+            name = _soperator_backup_metadata_name(item)
+            if (
+                isinstance(labels, Mapping)
+                and labels.get("pvc.k8s.mariadb.com/role") == "storage"
+            ) or (name.startswith("storage-") and name.endswith("-acct-db-0")):
+                candidates.append(name)
+    candidates.append(required_name)
+    return tuple(dict.fromkeys(candidate for candidate in candidates if candidate))
 
 
 def _soperator_backup_not_found(result: _SoperatorUpgradeCommandResult) -> bool:
@@ -5493,20 +5596,34 @@ def _soperator_upgrade_collect_recreation_material(
     missing_required: list[str] = []
     required_pvcs: list[dict[str, Any]] = []
     required_pvs: list[dict[str, Any]] = []
+    required_pvc_names: list[str] = []
     for pvc_name in _SOPERATOR_BACKUP_REQUIRED_RECREATION_PVCS:
-        pvc = pvc_by_name.get(pvc_name)
+        pvc = None
+        resolved_pvc_name = ""
+        for candidate in _soperator_backup_required_pvc_candidates(
+            pvc_name,
+            pvc_items=pvc_items,
+            slurmcluster_items=slurmcluster_items,
+        ):
+            pvc = pvc_by_name.get(candidate)
+            if pvc is not None:
+                resolved_pvc_name = candidate
+                break
         if pvc is None:
             missing_required.append(f"PersistentVolumeClaim/{pvc_name}")
             continue
         required_pvcs.append(pvc)
         volume_name = _soperator_backup_pvc_volume_name(pvc)
         if not volume_name:
-            missing_required.append(f"PersistentVolumeClaim/{pvc_name}.spec.volumeName")
+            missing_required.append(
+                f"PersistentVolumeClaim/{resolved_pvc_name or pvc_name}.spec.volumeName"
+            )
             continue
         pv = pv_by_name.get(volume_name)
         if pv is None:
             missing_required.append(f"PersistentVolume/{volume_name}")
             continue
+        required_pvc_names.append(resolved_pvc_name or pvc_name)
         required_pvs.append(pv)
     for secret_name in _SOPERATOR_BACKUP_REQUIRED_RECREATION_SECRETS:
         if not _soperator_backup_resolve_required_resource_name(
@@ -5580,6 +5697,9 @@ def _soperator_upgrade_collect_recreation_material(
             paths=required_restore_paths,
             warnings=required_warnings,
         )
+        required_entry = coverage.get("items", {}).get("required_recreation_material")
+        if isinstance(required_entry, dict):
+            required_entry["retained_pvc_names"] = list(dict.fromkeys(required_pvc_names))
 
     services_items = _soperator_backup_json_items(
         _soperator_backup_load_json(kubernetes_dir / "services.json")
@@ -6215,6 +6335,19 @@ def _create_restore_capable_soperator_upgrade_backup(
             required_recreation = recreation_coverage.get("items", {}).get(
                 "required_recreation_material",
                 {},
+            )
+            retained_pvc_names = (
+                tuple(
+                    str(name)
+                    for name in required_recreation.get("retained_pvc_names", ())
+                    if str(name).strip()
+                )
+                if isinstance(required_recreation, Mapping)
+                else ()
+            )
+            _soperator_backup_filter_restore_manifest_by_name(
+                root / "kubernetes" / "restore" / "persistentvolumeclaims.yaml",
+                excluded_names=retained_pvc_names,
             )
             recreation_restore_paths = (
                 tuple(
@@ -9702,7 +9835,7 @@ def _write_soperator_upgrade_report(
             "",
             *slurm_lines,
             "",
-            "## Populate-Jail Refresh",
+            "## Jail Upgrade",
             "",
             *populate_jail_lines,
             "",
@@ -13076,8 +13209,10 @@ def _print_soperator_discovery_result(path: Path) -> None:
         "--to-chart-version <chart-version> --to-k8s-version 1.33. "
         "Discovery writes generated/reports/soperator-discovery/<target>/manifest.json "
         "and section files for support review. Use target-version flags to preview "
-        "upgrade findings without changing config or the cluster. It is not a backup and never writes "
-        "raw Secret values, SQL dumps, tokens, or cert material."
+        "upgrade findings without changing config or the cluster. If the preview includes "
+        "Soperator chart/rootfs changes, Upgrade Guidance names the Jail Upgrade "
+        "rootfs-refresh boundary. It is not a backup and never writes raw Secret "
+        "values, SQL dumps, tokens, or cert material."
     ),
 )
 def soperator_discover_command(
@@ -13549,8 +13684,9 @@ def soperator_scale_up_command(
         "--to-k8s-version 1.33 --to-os ubuntu24.04 --to-gpu-stack-preset cuda13.0 "
         "--to-chart-version <chart-version> --job-policy wait-to-finish. "
         "The run without --dry-run creates the restore-capable backup and applies "
-        "the requested Soperator-aware upgrade. Kubernetes minor hops stay one "
-        "hop per run; if the support policy requires a chart-first step before "
+        "the requested Soperator-aware upgrade, including Jail Upgrade rootfs "
+        "refresh when chart/rootfs changes require it. Kubernetes minor hops stay "
+        "one hop per run; if the support policy requires a chart-first step before "
         "crossing a Kubernetes boundary, run the Soperator chart upgrade first. "
         "Standalone MK8s node-template upgrades still use upgrade node-template."
     ),
@@ -14239,7 +14375,7 @@ def _format_managed_soperator_cluster_upgrade_plan(
             f"`{_non_empty_text(to_gpu_stack_preset) or 'unchanged/operator-managed'}`",
             f"  - node group: `{_non_empty_text(node_group) or 'all selected by plan'}`",
             f"- Slurm job policy: `{job_policy}`",
-            f"- populate-jail refresh: `{populate_jail_refresh}`",
+            f"- Jail Upgrade refresh mode: `{populate_jail_refresh}`",
             f"- jail SFS resize policy: `{jail_sfs_resize_policy}`",
             "- backup: restore-capable archive with raw Secrets and optional accounting DB dump "
             "will be created before mutation",
@@ -15434,10 +15570,10 @@ def _run_managed_soperator_cluster_upgrade(
                 )
                 _run_stage_fast_verification(
                     phase_id=POPULATE_JAIL_REFRESH_PHASE_ID,
-                    summary="Populate-jail refresh requires manual passive-slot action.",
+                    summary="Jail Upgrade requires manual passive-slot action.",
                     checks=[
                         stage_fast_verification_check(
-                            "Populate-jail refresh mode",
+                            "Jail Upgrade mode",
                             "failed",
                             populate_jail_result.detail,
                         )
@@ -15659,13 +15795,13 @@ def _run_managed_soperator_cluster_upgrade(
             _run_stage_fast_verification(
                 phase_id=POPULATE_JAIL_REFRESH_PHASE_ID,
                 summary=(
-                    "Populate-jail refresh completed."
+                    "Jail Upgrade completed."
                     if populate_jail_result.status == "refreshed"
-                    else "Populate-jail refresh was not required."
+                    else "Jail Upgrade was not required."
                 ),
                 checks=[
                     stage_fast_verification_check(
-                        "Populate-jail refresh status",
+                        "Jail Upgrade status",
                         "passed" if populate_jail_result.status == "refreshed" else "skipped",
                         (
                             f"status={populate_jail_result.status}, "
@@ -15673,7 +15809,7 @@ def _run_managed_soperator_cluster_upgrade(
                         ),
                     ),
                     stage_fast_verification_check(
-                        "Populate-jail target image",
+                        "Jail Upgrade target image",
                         "passed" if populate_jail_result.status != "refreshed"
                         or not populate_jail_result.target_image
                         or populate_jail_result.job_image == populate_jail_result.target_image
@@ -20063,6 +20199,11 @@ def _soperator_discovery_upgrade_path_lines(
         lines.append(f"  - Kubernetes: {' -> '.join(k8s_hops)}")
     if soperator_hops:
         lines.append(f"  - Soperator: {' -> '.join(soperator_hops)}")
+        if len(soperator_hops) > 1:
+            lines.append(
+                "  - Jail Upgrade: refresh active/passive jail rootfs after the "
+                "Soperator chart/rootfs hop."
+            )
     lines.extend(
         _soperator_discovery_upgrade_order_steps(
             k8s_hops=k8s_hops,
@@ -52761,7 +52902,8 @@ def ext_soperator_restore_command(
         "uses project-scoped Nebius auth; pass --client-name only when you need a specific "
         "runtime-auth cache profile. Discovery writes "
         "generated/reports/soperator-discovery/<target>/manifest.json and does not back up "
-        "raw restore material."
+        "raw restore material. Target-version flags preview upgrade findings and name the "
+        "Jail Upgrade rootfs-refresh boundary when Soperator chart/rootfs work is in scope."
     ),
 )
 def ext_soperator_discover_command(
@@ -52976,7 +53118,9 @@ def ext_soperator_discover_command(
         "reruns refresh read-only source discovery and Nebius provider node-template "
         "inventory by node group before deciding whether external node-template "
         "upgrade is still needed, then locks the accepted full upgrade path under "
-        "deploy.targets[].soperator_onboarding.upgrade_path. For install/adopt-only targets "
+        "deploy.targets[].soperator_onboarding.upgrade_path. When Soperator chart/rootfs "
+        "work is accepted, the locked path includes Jail Upgrade before validation. "
+        "For install/adopt-only targets "
         "with no external-upgrade-owned actions, "
         "run nebius-cxcli deploy <config.yaml> to reconcile the generated desired "
         "state and produce deploy-report.md; use deploy --target <target-id> only "
@@ -53493,7 +53637,7 @@ _SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES = (
     "reduce active capacity; safe-surge needs temporary surge quota/capacity "
     "and Ready schedulable workers.",
     "Status contract: approved --execute reports phase-aware MK8s, storage, "
-    "compute, cutover, validation, and retirement status.",
+    "compute, cutover, Jail Upgrade, validation, and retirement status.",
     "Validation contract: validation runs MK8s inventory, configured deploy-time "
     "checks, required Soperator snapshots, and JSON/Markdown rollups under "
     "generated/reports/.",
@@ -53652,6 +53796,7 @@ def _style_soperator_migration_status_message(message: str) -> str:
         ),
         ("MK8s Node Upgrades", "[bold white]MK8s Node Upgrades[/bold white]"),
         ("Soperator Upgrade", "[bold white]Soperator Upgrade[/bold white]"),
+        ("Jail Upgrade", "[bold white]Jail Upgrade[/bold white]"),
         ("MK8s Node Groups", "[bold white]MK8s Node Groups[/bold white]"),
         ("Slurm Workers", "[bold white]Slurm Workers[/bold white]"),
         ("Node groups:", "[bold cyan]Node groups:[/bold cyan]"),
@@ -53897,6 +54042,12 @@ def _soperator_migration_output_phases(
             flags,
         )
     ]
+    if output_phases and not flags["soperator_upgrade_required"] and not explicit_populate_jail_refresh:
+        output_phases = [
+            phase
+            for phase in output_phases
+            if str(phase.get("id", "") or "").strip() != POPULATE_JAIL_REFRESH_PHASE_ID
+        ]
     if (
         not output_phases
         and flags["migration_required"]
@@ -53992,7 +54143,7 @@ def _soperator_migration_output_phases(
         output_phases.insert(insert_at, soperator_upgrade_phase)
     if (
         output_phases
-        and explicit_populate_jail_refresh
+        and (flags["soperator_upgrade_required"] or explicit_populate_jail_refresh)
         and not any(
             str(phase.get("id", "") or "").strip() == POPULATE_JAIL_REFRESH_PHASE_ID
             for phase in output_phases
@@ -54000,7 +54151,7 @@ def _soperator_migration_output_phases(
     ):
         populate_jail_phase = {
             "id": POPULATE_JAIL_REFRESH_PHASE_ID,
-            "title": "Populate-jail refresh",
+            "title": "Jail Upgrade: refresh shared Soperator jail rootfs",
             "status": "planned",
         }
         insert_at = len(output_phases)
@@ -54104,6 +54255,13 @@ def _soperator_migration_phase_display_title(
             return f"Soperator {target_soperator} cutover: final Soperator chart cutover"
         if title.startswith("Final Soperator "):
             return title.replace("Final Soperator ", f"Final Soperator {target_soperator} ", 1)
+    if phase_id == POPULATE_JAIL_REFRESH_PHASE_ID:
+        if flags.get("soperator_upgrade_required") and soperator_hop:
+            return (
+                f"Jail Upgrade after Soperator hop {soperator_hop}: "
+                "refresh shared Soperator jail rootfs"
+            )
+        return "Jail Upgrade: refresh shared Soperator jail rootfs"
     return title
 
 
@@ -55217,8 +55375,8 @@ def ext_soperator_scale_up_command(
         "ext-soperator onboard. Dry-run refreshes discovery and prints the plan. "
         "--execute --approve refreshes discovery, creates a restore-capable backup, "
         "then runs exactly one locked upgrade-path segment: one external MK8s "
-        "control-plane/node-template hop plus any Soperator/storage/compute/GPU-stack "
-        "work assigned to that segment, validation, and reports. If the accepted "
+        "control-plane/node-template hop plus any Soperator/storage/compute/GPU-stack/"
+        "Jail Upgrade work assigned to that segment, validation, and reports. If the accepted "
         "locked path still contains more segments, repeat the same ext-soperator "
         "upgrade --execute --approve command until the path is complete; use a "
         "fresh ext-soperator onboard decision only to plan a new later path or "
@@ -55328,8 +55486,8 @@ def soperator_external_upgrade_command(
                 "Use --dry-run for discovery refresh and the read-only plan. Use "
                 "--execute only after accepting that plan; it performs checkpointed live preflight and "
                 "advances the accepted external MK8s control-plane/node-template hop, "
-                "target GPU stack, storage, copy, compute, cutover, validation, "
-                "and retirement phases with guarded resume checkpoints. Kubernetes "
+                "target GPU stack, storage, copy, compute, cutover, Jail Upgrade, "
+                "validation, and retirement phases with guarded resume checkpoints. Kubernetes "
                 "node-template work is one minor hop per external upgrade run."
             ),
         ),

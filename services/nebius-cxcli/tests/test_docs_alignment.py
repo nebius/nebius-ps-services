@@ -770,7 +770,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "CXCLI-managed Soperator upgrade follows these stages:" in soperator_flat
     assert "Preflight and backup: validate the current bundle" in soperator_flat
     assert "Slurm and MK8s rollout: when MK8s target flags are supplied" in soperator_flat
-    assert "Populate-jail refresh: when the target chart/rootfs changed" in soperator_flat
+    assert "Jail Upgrade: when the target chart/rootfs changed" in soperator_flat
     assert "The Soperator jail is the shared Linux root filesystem" in soperator_flat
     assert "The refresh uses an active/passive rootfs model" in soperator_flat
     assert "creates a Kubernetes Job named like `<target>-populate-jail-passive-<slot>`" in (
@@ -790,13 +790,12 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     )
     assert "login Service has ready EndpointSlice endpoints" in soperator_flat
     assert "keep the previous rootfs slot available for rollback" in soperator_flat
-    assert "operator-facing top-level stage (`MK8s Node Upgrades` or `Soperator Upgrade`)" in (
-        soperator_flat
-    )
+    assert (
+        "operator-facing top-level stage (`MK8s Node Upgrades`, `Soperator Upgrade`, "
+        "or `Jail Upgrade`)"
+    ) in soperator_flat
     assert "Fast stage verification gates: after ActiveChecks suspension" in soperator_flat
-    assert "post-MK8s validation, Soperator chart apply, populate-jail refresh" in (
-        soperator_flat
-    )
+    assert "post-MK8s validation, Soperator chart apply, Jail Upgrade" in soperator_flat
     assert "final post-upgrade MK8s and Helm readiness checks" in soperator_flat
     assert "Postflight validation and restore: restore Slurm node state" in soperator_flat
     assert "JSON `stage_verification` details" in soperator_flat
@@ -1590,8 +1589,13 @@ def test_docs_define_component_selector_contract() -> None:
     )
     assert "color-highlighted sectioned plan covering target discovery" in readme_flat
     assert "the full locked path, completed/current/remaining segments" in readme_flat
-    assert "accepted onboarding actions, node-template rollout, phases, execution controls" in (
-        readme_flat
+    assert (
+        "accepted onboarding actions, node-template rollout, phases including `Jail Upgrade`"
+        in readme_flat
+    )
+    assert (
+        "Checkpoint refresh preserves the original ordered plan, including `Jail Upgrade` / `populate-jail-refresh`"
+        in readme_flat
     )
     assert "Existing locked-path resumption stays on the same upgrade command until all locked segments are complete" in (
         readme_flat
@@ -1909,7 +1913,7 @@ def test_docs_define_component_selector_contract() -> None:
     )
     assert "validation hold verifies MK8s, target Soperator" in design_flat
     assert "every executed stage runs a fast stage-scoped verification" in design_flat
-    assert "including the post-MK8s validation and populate-jail refresh boundaries" in design_flat
+    assert "including the post-MK8s validation and Jail Upgrade boundaries" in design_flat
     assert "final post-upgrade MK8s and Helm readiness checks" in design_flat
     assert "`phase_state[<stage>].fast_verification`" in design_flat
     assert "JSON `stage_verification` array" in design_flat
@@ -1974,6 +1978,10 @@ def test_docs_define_component_selector_contract() -> None:
     )
     assert (
         "resume checkpoints are local under `.nebius-cxcli/ext-soperator-upgrades/<target>/`"
+        in design_flat
+    )
+    assert (
+        "Compatible checkpoint refresh preserves the original ordered phase plan, including `Jail Upgrade` / `populate-jail-refresh`"
         in design_flat
     )
     assert "normal `validate`, `render`, and `deploy` can run from any workstation" in design_flat

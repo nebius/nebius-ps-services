@@ -249,6 +249,7 @@ _RESUME_OPTIONAL_PLANNED_PHASE_IDS = frozenset(
 )
 _EXTERNAL_UPGRADE_TOP_LEVEL_STAGE_MK8S = "MK8s Node Upgrades"
 _EXTERNAL_UPGRADE_TOP_LEVEL_STAGE_SOPERATOR = "Soperator Upgrade"
+_EXTERNAL_UPGRADE_TOP_LEVEL_STAGE_JAIL = "Jail Upgrade"
 _EXTERNAL_UPGRADE_MK8S_TOP_LEVEL_PHASE_IDS = frozenset(
     {
         _EXTERNAL_NODE_TEMPLATE_PHASE_ID,
@@ -256,6 +257,7 @@ _EXTERNAL_UPGRADE_MK8S_TOP_LEVEL_PHASE_IDS = frozenset(
         "post-upgrade-mk8s-check",
     }
 )
+_EXTERNAL_UPGRADE_JAIL_TOP_LEVEL_PHASE_IDS = frozenset({POPULATE_JAIL_REFRESH_PHASE_ID})
 _FAST_STAGE_VERIFICATION_PHASE_IDS = frozenset(
     (*_MUTATING_PHASE_IDS, *_POST_UPGRADE_CHECK_PHASE_IDS)
 )
@@ -277,7 +279,7 @@ _STATUS_PHASE_LABELS = {
     "online-bulk-data-sync": "Online bulk data sync",
     "rolling-compute-migration": "Rolling compute migration",
     "final-control-plane-cutover": "Final control-plane cutover",
-    POPULATE_JAIL_REFRESH_PHASE_ID: "Populate-jail refresh",
+    POPULATE_JAIL_REFRESH_PHASE_ID: "Jail Upgrade",
     "validation-and-rollback-hold": "Validation and rollback hold",
     "retire-old-resources": "Retire old resources",
     "post-upgrade-mk8s-check": "Post-upgrade MK8s check",
@@ -288,6 +290,8 @@ _STATUS_PHASE_LABELS = {
 def external_soperator_upgrade_top_level_stage(phase_id: str) -> str:
     if phase_id in _EXTERNAL_UPGRADE_MK8S_TOP_LEVEL_PHASE_IDS:
         return _EXTERNAL_UPGRADE_TOP_LEVEL_STAGE_MK8S
+    if phase_id in _EXTERNAL_UPGRADE_JAIL_TOP_LEVEL_PHASE_IDS:
+        return _EXTERNAL_UPGRADE_TOP_LEVEL_STAGE_JAIL
     return _EXTERNAL_UPGRADE_TOP_LEVEL_STAGE_SOPERATOR
 
 
@@ -1444,6 +1448,26 @@ def _ordered_phase_list(phases: set[str], planned_phases: Sequence[str]) -> list
     return [*planned_order, *remaining]
 
 
+def _external_upgrade_report_phase_ids(
+    *,
+    phase_ids: Sequence[str],
+    checkpoint: Mapping[str, Any],
+) -> tuple[str, ...]:
+    candidates: set[str] = set()
+    phase_state = _mapping(checkpoint.get("phase_state"))
+    for raw_phase in (
+        *phase_ids,
+        *(checkpoint.get("planned_phases", []) or []),
+        *(checkpoint.get("completed_phases", []) or []),
+        *phase_state.keys(),
+    ):
+        phase_id = str(raw_phase or "").strip()
+        if phase_id in _SUPPORTED_EXECUTE_PHASE_IDS:
+            candidates.add(phase_id)
+    ordered = [phase_id for phase_id in _ORDERED_EXECUTE_PHASE_IDS if phase_id in candidates]
+    return tuple(ordered)
+
+
 def _phase_state(checkpoint: dict[str, Any], phase_id: str) -> dict[str, Any]:
     state = checkpoint.setdefault("phase_state", {})
     if not isinstance(state, dict):
@@ -2461,6 +2485,14 @@ def _phase_ids_for_actions(
         for phase_id in _phase_ids(report)
         if _phase_allowed_by_onboarding_actions(phase_id, actions)
     )
+    if (
+        phase_ids
+        and ONBOARDING_ACTION_UPGRADE_SOPERATOR not in actions
+        and not explicit_populate_jail_refresh
+    ):
+        phase_ids = tuple(
+            phase_id for phase_id in phase_ids if phase_id != POPULATE_JAIL_REFRESH_PHASE_ID
+        )
     if not phase_ids and (
         ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE in actions
         or ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK in actions
@@ -2553,6 +2585,10 @@ def _phase_ids_for_actions(
                 phases.append(phase_id)
         phase_ids = tuple(phases)
     return phase_ids
+
+
+def _target_soperator_helm_release_required(onboarding: Mapping[str, Any]) -> bool:
+    return ONBOARDING_ACTION_UPGRADE_SOPERATOR in _onboarding_actions(onboarding)
 
 
 def _phase_ids_with_jail_persistent_mount_prerequisites(
@@ -9696,6 +9732,7 @@ def _helm_upgrade_target_app_chart(
         namespace,
         "--create-namespace",
         "--no-hooks",
+        "--force-conflicts",
         "-f",
         "-",
         "--wait",
@@ -13010,7 +13047,7 @@ def _execute_populate_jail_refresh_phase(
         phase["completed_at"] = _utc_now()
         if checkpoint_writer is not None:
             checkpoint_writer()
-        return False, [f"Populate-jail refresh skipped: {result.reason}."]
+        return False, [f"Jail Upgrade skipped: {result.reason}."]
     if plan.mode == "manual":
         result = manual_populate_jail_refresh_result(plan)
         phase["result"] = result.as_payload()
@@ -13698,6 +13735,7 @@ def _execute_validation_hold_phase(
     target_version: str,
     command_runner: SoperatorMigrationCommandRunner,
     approve_remediation: bool = False,
+    require_target_soperator_helm: bool = True,
 ) -> tuple[bool, list[str]]:
     phase = _phase_state(checkpoint, "validation-and-rollback-hold")
     _ensure_live_nodes_ready(live_snapshot)
@@ -13712,6 +13750,7 @@ def _execute_validation_hold_phase(
         command_runner=command_runner,
         kube_context=kube_context,
         target_version=target_version,
+        require_target_release=require_target_soperator_helm,
     )
     validation_lines = _run_migration_mk8s_gpu_validations(
         config_path=config_path,
@@ -13974,8 +14013,8 @@ def _phase_report_summary(phase_id: str, phase: Mapping[str, Any]) -> str:
         image = str(result.get("job_image") or result.get("target_image") or "").strip()
         reason = str(result.get("reason", "") or "").strip()
         if image:
-            return f"populate-jail refresh status={status}; image={image}."
-        return f"populate-jail refresh status={status}{f'; {reason}' if reason else ''}."
+            return f"Jail Upgrade status={status}; image={image}."
+        return f"Jail Upgrade status={status}{f'; {reason}' if reason else ''}."
     if phase_id == "validation-and-rollback-hold":
         gpu_count = _positive_int(phase.get("mk8s_gpu_validation_count"), fallback=0)
         soperator_count = _positive_int(
@@ -14111,6 +14150,10 @@ def _write_soperator_migrate_report(
     json_report_path = _upgrade_report_json_path(config_path)
     report_path.parent.mkdir(parents=True, exist_ok=True)
     phase_state = _mapping(checkpoint.get("phase_state"))
+    report_phase_ids = _external_upgrade_report_phase_ids(
+        phase_ids=phase_ids,
+        checkpoint=checkpoint,
+    )
     generated_at = _utc_now()
     locked_upgrade_path = _checkpoint_locked_upgrade_path(checkpoint)
     upgrade_path_progress = _checkpoint_upgrade_path_progress(checkpoint)
@@ -14176,7 +14219,7 @@ def _write_soperator_migrate_report(
     lines.extend(["## Upgrade Steps", ""])
     phase_reports: list[dict[str, Any]] = []
     stage_verification_reports: list[dict[str, Any]] = []
-    for phase_id in phase_ids:
+    for phase_id in report_phase_ids:
         if phase_id in _POST_UPGRADE_CHECK_PHASE_IDS:
             continue
         status = _phase_report_status(
@@ -14296,7 +14339,7 @@ def _write_soperator_migrate_report(
         "pending_phase": pending_phase or "none",
         "pending_reason": pending_reason or "",
         "upgrade_performed": mutation_performed,
-        "completed_phases": list(_ordered_phase_list(completed_phases, phase_ids)),
+        "completed_phases": list(_ordered_phase_list(completed_phases, report_phase_ids)),
         "phases": phase_reports,
         "stage_verification": stage_verification_reports,
         "backup": to_plain_data(_mapping(checkpoint.get("backup"))),
@@ -14372,6 +14415,7 @@ def _checkpoint_for_run(
 ) -> dict[str, Any]:
     source_report_refreshed = False
     previous_source_report_fingerprint = ""
+    existing_planned_phases: tuple[str, ...] = ()
     preserved_locked_upgrade_path: dict[str, Any] | None = None
     preserved_completed_segment_ids: list[str] = []
     preserved_segment_state: dict[str, Any] = {}
@@ -14424,10 +14468,8 @@ def _checkpoint_for_run(
     if existing is not None:
         existing_source_version = str(existing.get("source_version", "") or "").strip()
         existing_target_version = str(existing.get("target_version", "") or "").strip()
-        existing_planned_phases = tuple(
-            str(phase or "").strip()
-            for phase in existing.get("planned_phases", []) or []
-            if str(phase or "").strip()
+        existing_planned_phases = _normalized_phase_ids(
+            existing.get("planned_phases", []) or []
         )
         if str(existing.get("source_report_fingerprint", "") or "") != source_report_fingerprint:
             same_resume_contract = (
@@ -14482,6 +14524,10 @@ def _checkpoint_for_run(
     checkpoint.setdefault("pending_phase", "none")
     checkpoint.setdefault("pending_reason", "")
     checkpoint.setdefault("phase_state", {})
+    durable_phase_ids = _checkpoint_phase_ids_for_run(
+        existing_planned_phases=existing_planned_phases,
+        phase_ids=phase_ids,
+    )
     if upgrade_path_fingerprint:
         locked_path = _checkpoint_locked_upgrade_path(checkpoint) or incoming_locked_path
         if not locked_path:
@@ -14496,7 +14542,7 @@ def _checkpoint_for_run(
             if isinstance(segment_entry, dict):
                 segment_entry.setdefault("started_at", _utc_now())
                 segment_entry["source_report_fingerprint"] = source_report_fingerprint
-                segment_entry["planned_phases"] = list(phase_ids)
+                segment_entry["planned_phases"] = list(durable_phase_ids)
         completed_segment_ids = checkpoint.get("completed_segment_ids")
         if not isinstance(completed_segment_ids, list):
             completed_segment_ids = []
@@ -14505,7 +14551,7 @@ def _checkpoint_for_run(
         checkpoint["current_segment_id"] = upgrade_path_segment_id
         checkpoint["completed_segment_ids"] = list(completed_segment_ids)
     checkpoint["updated_at"] = _utc_now()
-    checkpoint["planned_phases"] = list(phase_ids)
+    checkpoint["planned_phases"] = list(durable_phase_ids)
     if source_report_refreshed:
         events = list(checkpoint.get("events", []) or [])
         events.append(
@@ -14533,21 +14579,43 @@ def _checkpoint_run_complete(checkpoint: Mapping[str, Any]) -> bool:
 
 
 def _checkpoint_planned_phase_ids(checkpoint: Mapping[str, Any] | None) -> tuple[str, ...]:
-    return tuple(
-        str(phase or "").strip()
-        for phase in (checkpoint or {}).get("planned_phases", []) or []
-        if str(phase or "").strip()
-    )
+    return _normalized_phase_ids((checkpoint or {}).get("planned_phases", []) or [])
+
+
+def _normalized_phase_ids(phases: Sequence[str]) -> tuple[str, ...]:
+    return tuple(str(phase or "").strip() for phase in phases if str(phase or "").strip())
+
+
+def _checkpoint_phase_ids_for_run(
+    *,
+    existing_planned_phases: Sequence[str],
+    phase_ids: Sequence[str],
+) -> tuple[str, ...]:
+    incoming = _normalized_phase_ids(phase_ids)
+    existing = _normalized_phase_ids(existing_planned_phases)
+    if not existing:
+        return incoming
+    if not incoming:
+        return existing
+    if existing == incoming:
+        return incoming
+    if incoming and existing[: len(incoming)] == incoming and all(
+        phase in _RESUME_OPTIONAL_PLANNED_PHASE_IDS for phase in existing[len(incoming) :]
+    ):
+        return existing
+    if existing and incoming[: len(existing)] == existing and all(
+        phase in _RESUME_OPTIONAL_PLANNED_PHASE_IDS for phase in incoming[len(existing) :]
+    ):
+        return incoming
+    return incoming
 
 
 def _same_resume_checkpoint_plan(
     existing_planned_phases: Sequence[str],
     phase_ids: Sequence[str],
 ) -> bool:
-    incoming = tuple(str(phase or "").strip() for phase in phase_ids if str(phase or "").strip())
-    existing = tuple(
-        str(phase or "").strip() for phase in existing_planned_phases if str(phase or "").strip()
-    )
+    incoming = _normalized_phase_ids(phase_ids)
+    existing = _normalized_phase_ids(existing_planned_phases)
     if existing == incoming:
         return True
     if incoming and existing[: len(incoming)] == incoming:
@@ -15550,20 +15618,39 @@ def _verify_completed_soperator_migration_helm_state(
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
     target_version: str,
+    require_target_release: bool = True,
 ) -> tuple[str, ...]:
     retirement_lines = _retire_stale_source_soperator_helm_releases(
         command_runner=command_runner,
         kube_context=kube_context,
         target_version=target_version,
     )
-    target_readiness = verify_helm_chart_ready(
-        command_runner=command_runner,
-        kube_context=kube_context,
-        release_name=_SOPERATOR_TARGET_RELEASE_NAME,
-        namespace=_SOPERATOR_NAMESPACE,
-        expected_version=target_version,
-    )
-    target_line = "Verified target Soperator Helm chart readiness: " + target_readiness.summary()
+    target_releases = [
+        release
+        for release in list_helm_releases(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            namespace=_SOPERATOR_NAMESPACE,
+            filter_regex=f"^{re.escape(_SOPERATOR_TARGET_RELEASE_NAME)}$",
+        )
+        if release.name == _SOPERATOR_TARGET_RELEASE_NAME
+    ]
+    if require_target_release or target_releases:
+        target_readiness = verify_helm_chart_ready(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            release_name=_SOPERATOR_TARGET_RELEASE_NAME,
+            namespace=_SOPERATOR_NAMESPACE,
+            expected_version=target_version,
+        )
+        target_line = (
+            "Verified target Soperator Helm chart readiness: " + target_readiness.summary()
+        )
+    else:
+        target_line = (
+            "Skipped target Soperator Helm chart readiness: no target Soperator Helm release "
+            "is installed or expected for this adopted external upgrade segment."
+        )
     stale = _deployed_stale_source_soperator_releases(
         command_runner=command_runner,
         kube_context=kube_context,
@@ -16558,10 +16645,12 @@ def _run_external_upgrade_phase_fast_verification(
             result = _mapping(phase.get("result"))
             status = str(result.get("status", "") or "").strip()
             if status == "skipped":
-                summary = f"populate-jail refresh skipped as expected: {result.get('reason') or 'not required'}."
+                summary = (
+                    f"Jail Upgrade skipped as expected: {result.get('reason') or 'not required'}."
+                )
                 checks = [
                     _fast_verification_check(
-                        "Populate-jail refresh",
+                        "Jail Upgrade",
                         "skipped",
                         str(result.get("reason") or "not required"),
                     )
@@ -16580,17 +16669,17 @@ def _run_external_upgrade_phase_fast_verification(
                 maintenance_restored = result.get("maintenance_restored") is True
                 checks = [
                     _fast_verification_check(
-                        "Populate-jail Job completion",
+                        "Jail Upgrade Job completion",
                         "passed" if snapshot.job_complete else "failed",
                         f"job={snapshot.job_name or 'unknown'}",
                     ),
                     _fast_verification_check(
-                        "Populate-jail image",
+                        "Jail Upgrade image",
                         "passed" if image_ok else "failed",
                         f"expected={expected_image or 'unknown'}, actual={snapshot.job_image or 'unknown'}",
                     ),
                     _fast_verification_check(
-                        "Populate-jail maintenance restore",
+                        "Jail Upgrade maintenance restore",
                         "passed" if maintenance_restored else "failed",
                         "steady-state maintenance values were reapplied"
                         if maintenance_restored
@@ -16598,9 +16687,9 @@ def _run_external_upgrade_phase_fast_verification(
                     ),
                 ]
                 summary = (
-                    f"populate-jail refresh verified with image {snapshot.job_image or expected_image}."
+                    f"Jail Upgrade verified with image {snapshot.job_image or expected_image}."
                     if not _fast_verification_failed(checks)
-                    else "populate-jail refresh is incomplete or not using the target image."
+                    else "Jail Upgrade is incomplete or not using the target image."
                 )
         elif phase_id == "validation-and-rollback-hold":
             summary, checks = _validation_hold_fast_verification_checks(checkpoint=checkpoint)
@@ -16666,6 +16755,9 @@ def _reconcile_completed_action_phases(
     nebius_api: SoperatorMigrationNebiusApi,
     command_runner: SoperatorMigrationCommandRunner,
 ) -> list[str]:
+    require_target_soperator_helm = _target_soperator_helm_release_required(
+        _target_onboarding(payload, target_ref)
+    )
     checks: Mapping[str, Callable[[], bool]] = {
         _EXTERNAL_NODE_TEMPLATE_PHASE_ID: lambda: _external_node_template_upgrade_satisfied(
             payload=payload,
@@ -16746,6 +16838,7 @@ def _reconcile_completed_action_phases(
                 target_version=str(
                     _target_onboarding(payload, target_ref).get("target_version", "") or ""
                 ),
+                require_target_release=require_target_soperator_helm,
             )
         ),
     }
@@ -16985,6 +17078,7 @@ def _execute_soperator_migration_unlocked(
     )
     onboarding = _target_onboarding(payload, normalized_target)
     actions = _onboarding_actions(onboarding)
+    require_target_soperator_helm = _target_soperator_helm_release_required(onboarding)
     resolved_populate_jail_refresh = normalize_populate_jail_refresh_mode(
         populate_jail_refresh
     )
@@ -17096,6 +17190,9 @@ def _execute_soperator_migration_unlocked(
         upgrade_path_segment_id=upgrade_path_segment_id,
         locked_upgrade_path=locked_upgrade_path,
     )
+    checkpoint_phase_ids = _checkpoint_planned_phase_ids(checkpoint)
+    if checkpoint_phase_ids:
+        phase_ids = checkpoint_phase_ids
     existing_mounts = dict(_mapping(checkpoint.get("persistent_jail_mounts")))
     checkpoint["persistent_jail_mounts"] = {
         **existing_mounts,
@@ -17589,6 +17686,7 @@ def _execute_soperator_migration_unlocked(
                 target_version=target_version,
                 command_runner=active_command_runner,
                 approve_remediation=approve_remediation,
+                require_target_soperator_helm=require_target_soperator_helm,
             ),
             "retire-old-resources": lambda: _execute_retire_old_resources_phase(
                 checkpoint=checkpoint,
@@ -17794,6 +17892,7 @@ def _execute_soperator_migration_unlocked(
                 command_runner=active_command_runner,
                 kube_context=kube_context,
                 target_version=target_version,
+                require_target_release=require_target_soperator_helm,
             )
         except RuntimeError as exc:
             pending_phase = "post-upgrade-helm-check"

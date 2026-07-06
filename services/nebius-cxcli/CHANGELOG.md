@@ -6,6 +6,10 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Promoted Soperator jail rootfs refresh to a visible `Jail Upgrade` phase
+  across managed discovery guidance, external discovery/onboarding plans, and
+  managed/external upgrade reports while keeping the durable
+  `populate-jail-refresh` checkpoint id.
 - Added single-SFS active/passive Soperator jail rootfs refresh. Managed
   installs now use `slot-a`/`slot-b` rootfs PVCs plus generic
   `jailPersistentMounts` from day one, with two login replicas by default.
@@ -35,6 +39,14 @@ All notable changes to this project are tracked here. This changelog follows
 - Fixed `ext-soperator upgrade --populate-jail-refresh force|manual` so
   node-template-only locked segments still schedule and display the
   `populate-jail-refresh` phase.
+- Fixed external Soperator upgrade Markdown/JSON reports, including segment
+  snapshots under `generated/reports/ext-soperator-upgrades/<target>/<segment-id>/`,
+  so checkpoint-planned `populate-jail-refresh` remains visible even when a
+  resume/report-refresh invocation uses a shorter active phase list.
+- Fixed external Soperator upgrade checkpoint refresh so compatible reruns
+  preserve checkpoint-planned `populate-jail-refresh` in both top-level and
+  segment planned phases, allowing interrupted or failed Jail Upgrade runs to
+  restart from the same pending phase.
 - Fixed external Soperator backup recreation-material detection for
   SlurmCluster-prefixed Secrets and ConfigMaps such as
   `<slurmcluster>-sshd-keys`, `<slurmcluster>-slurmdbd-configs`, and
@@ -97,7 +109,7 @@ All notable changes to this project are tracked here. This changelog follows
   bounded timeout errors instead of freezing long-running upgrade status checks.
   MK8s node-template status now also surfaces active Nebius node-group rollout
   state, event code, outdated count, and reconciling state when Kubernetes nodes
-  are still Ready. Populate-jail refresh status now includes live Kubernetes,
+  are still Ready. Jail Upgrade status now includes live Kubernetes,
   Slurm, Soperator, and populate-jail Job signals instead of an unknown
   no-checks message.
 - Added `examples/slurm-jobs/submit-job-test.sh --watch-jobs` to watch smoke
@@ -109,7 +121,7 @@ All notable changes to this project are tracked here. This changelog follows
   path is printed, MK8s node-upgrade phase wording is shorter, execution
   contracts are summarized, and external-upgrade backup archives now use the
   accepted source chart/Kubernetes versions in transition names.
-- Added Soperator populate-jail refresh handling to managed `soperator upgrade`
+- Added Soperator Jail Upgrade rootfs-refresh handling to managed `soperator upgrade`
   and external `ext-soperator upgrade`. Chart upgrades now report a
   `populate-jail-refresh` stage, defaults non-TTY upgrade job handling to
   `fail` unless a disruptive policy is selected explicitly, and extends

@@ -649,6 +649,7 @@ def test_soperator_onboarding_analyzer_offers_upgrade_for_older_release() -> Non
         "online-bulk-data-sync",
         "rolling-compute-migration",
         "final-control-plane-cutover",
+        "populate-jail-refresh",
         "validation-and-rollback-hold",
         "retire-old-resources",
     ]
@@ -793,6 +794,7 @@ def test_soperator_onboarding_modes_make_compute_only_plan_consistent() -> None:
         "target-gpu-stack-remediation",
         "rolling-compute-migration",
         "final-control-plane-cutover",
+        "populate-jail-refresh",
         "validation-and-rollback-hold",
         "retire-old-resources",
     ]
@@ -847,6 +849,7 @@ def test_soperator_onboarding_analyzer_reuses_target_compatible_legacy_layout() 
         "target-gpu-stack-remediation",
         "rolling-compute-migration",
         "final-control-plane-cutover",
+        "populate-jail-refresh",
         "validation-and-rollback-hold",
         "retire-old-resources",
     ]
@@ -1070,6 +1073,7 @@ def test_soperator_onboarding_report_from_config_respects_selected_modes() -> No
         "external-node-template-upgrade",
         "rolling-compute-migration",
         "final-control-plane-cutover",
+        "populate-jail-refresh",
         "validation-and-rollback-hold",
         "retire-old-resources",
     ]

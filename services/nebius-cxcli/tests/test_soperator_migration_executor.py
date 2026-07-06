@@ -72,6 +72,7 @@ def _snapshot(version: str = "3.0.5") -> dict[str, Any]:
         ("online-bulk-data-sync", "Soperator Upgrade"),
         ("rolling-compute-migration", "Soperator Upgrade"),
         ("final-control-plane-cutover", "Soperator Upgrade"),
+        ("populate-jail-refresh", "Jail Upgrade"),
         ("validation-and-rollback-hold", "Soperator Upgrade"),
         ("retire-old-resources", "Soperator Upgrade"),
         ("post-upgrade-helm-check", "Soperator Upgrade"),
@@ -3724,6 +3725,14 @@ def test_execute_records_approval_and_runs_checkpointed_mutators(tmp_path: Path)
     assert {
         item["id"] for item in checkpoint["phase_state"]["target-gpu-stack-remediation"]["charts"]
     } == {"nvidia-gpu-operator", "nvidia-network-operator"}
+    gpu_stack_helm_upgrades = [
+        call
+        for call in runner.calls
+        if call[0][:5] == ("helm", "--kube-context", "external-context", "upgrade", "--install")
+        and call[0][5] in {"gpu-operator", "network-operator"}
+    ]
+    assert gpu_stack_helm_upgrades
+    assert all("--force-conflicts" in call[0] for call in gpu_stack_helm_upgrades)
     for phase_id in result.completed_phases:
         if phase_id in {"discovery-and-plan", "customer-approval"}:
             continue
@@ -3759,10 +3768,12 @@ def test_execute_records_approval_and_runs_checkpointed_mutators(tmp_path: Path)
     )
     assert phase_reports["post-upgrade-mk8s-check"]["top_level_stage"] == ("MK8s Node Upgrades")
     assert phase_reports["post-upgrade-helm-check"]["top_level_stage"] == "Soperator Upgrade"
+    assert phase_reports["populate-jail-refresh"]["top_level_stage"] == "Jail Upgrade"
     assert phase_reports["target-gpu-stack-remediation"]["fast_verification"]["status"] == "passed"
     assert phase_reports["post-upgrade-helm-check"]["fast_verification"]["status"] == "passed"
     assert "- Top-level stage: `MK8s Node Upgrades`" in migrate_report
     assert "- Top-level stage: `Soperator Upgrade`" in migrate_report
+    assert "- Top-level stage: `Jail Upgrade`" in migrate_report
     populate_phase = checkpoint["phase_state"]["populate-jail-refresh"]
     assert populate_phase["slurm_job_scope_nodes"]
     assert populate_phase["slurm_quiet_at"]
@@ -4081,6 +4092,118 @@ def test_execute_runtime_error_keeps_current_phase_pending_and_resumes_same_phas
     )
 
 
+def test_execute_populate_jail_failure_keeps_checkpointed_phase_pending(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = _snapshot()
+    source_report = _source_report(snapshot)
+    runner = _FakeCommandRunner()
+    locked_upgrade_path = _locked_upgrade_path_fixture()
+    segment_id = locked_upgrade_path["segments"][0]["id"]
+    original_handler = migration._execute_populate_jail_refresh_phase
+    handler_calls = 0
+
+    def _fail_once_populate_jail_refresh(**kwargs: Any) -> tuple[bool, list[str]]:
+        nonlocal handler_calls
+        handler_calls += 1
+        if handler_calls == 1:
+            checkpoint = kwargs["checkpoint"]
+            assert isinstance(checkpoint, dict)
+            phase = checkpoint.setdefault("phase_state", {}).setdefault(
+                migration.POPULATE_JAIL_REFRESH_PHASE_ID,
+                {},
+            )
+            phase["attempt_recorded_before_failure"] = True
+            writer = kwargs.get("checkpoint_writer")
+            if callable(writer):
+                writer()
+            raise RuntimeError("populate jail refresh failed mid-phase")
+        return original_handler(**kwargs)
+
+    monkeypatch.setattr(
+        migration,
+        "_execute_populate_jail_refresh_phase",
+        _fail_once_populate_jail_refresh,
+    )
+
+    with pytest.raises(RuntimeError, match="populate jail refresh failed mid-phase"):
+        execute_soperator_migration(
+            config_path=tmp_path / "config.yaml",
+            target_ref="external-cluster",
+            payload=_payload(),
+            source_report=source_report,
+            backup_metadata=_backup_metadata("populate-jail-pending"),
+            snapshot_collector=lambda *, kube_context: snapshot,
+            approved=True,
+            command_runner=runner,
+            worker_rollout_strategy="safe-surge",
+            locked_upgrade_path=locked_upgrade_path,
+            upgrade_path_fingerprint="locked-path-fingerprint",
+            upgrade_path_segment_id=segment_id,
+        )
+
+    checkpoint_path = soperator_migration_checkpoint_path(
+        tmp_path / "config.yaml",
+        "external-cluster",
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["pending_phase"] == migration.POPULATE_JAIL_REFRESH_PHASE_ID
+    assert checkpoint["pending_reason"] == "populate jail refresh failed mid-phase"
+    assert checkpoint["completed_phases"] == [
+        "discovery-and-plan",
+        "customer-approval",
+        "external-node-template-upgrade",
+        "target-gpu-stack-remediation",
+        "create-aligned-sfs",
+        "online-bulk-data-sync",
+        "rolling-compute-migration",
+        "final-control-plane-cutover",
+    ]
+    assert migration.POPULATE_JAIL_REFRESH_PHASE_ID not in checkpoint["completed_phases"]
+    assert migration.POPULATE_JAIL_REFRESH_PHASE_ID in checkpoint["planned_phases"]
+    assert checkpoint["segment_state"][segment_id]["planned_phases"] == checkpoint[
+        "planned_phases"
+    ]
+    assert checkpoint["phase_state"][migration.POPULATE_JAIL_REFRESH_PHASE_ID][
+        "attempt_recorded_before_failure"
+    ] is True
+    assert any(
+        event["event"] == "execute-phase-failed"
+        and event.get("phase") == migration.POPULATE_JAIL_REFRESH_PHASE_ID
+        for event in checkpoint["events"]
+    )
+    upgrade_json_report = json.loads(
+        (
+            tmp_path / "generated" / "reports" / "ext-soperator-upgrade-report.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert upgrade_json_report["pending_phase"] == migration.POPULATE_JAIL_REFRESH_PHASE_ID
+
+    runner.calls.clear()
+    resumed = execute_soperator_migration(
+        config_path=tmp_path / "config.yaml",
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=source_report,
+        snapshot_collector=lambda *, kube_context: snapshot,
+        command_runner=runner,
+        worker_rollout_strategy="safe-surge",
+        locked_upgrade_path=locked_upgrade_path,
+        upgrade_path_fingerprint="locked-path-fingerprint",
+        upgrade_path_segment_id=segment_id,
+    )
+
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert handler_calls == 2
+    assert resumed.pending_phase == "none"
+    assert migration.POPULATE_JAIL_REFRESH_PHASE_ID in resumed.completed_phases
+    assert checkpoint["pending_phase"] == "none"
+    assert checkpoint["segment_state"][segment_id]["planned_phases"] == checkpoint[
+        "planned_phases"
+    ]
+
+
 def test_execute_keyboard_interrupt_keeps_current_phase_pending_and_resumes_same_phase(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -4226,6 +4349,86 @@ def test_execute_final_helm_check_failure_writes_pending_report(
     assert upgrade_json_report["pending_phase"] == "post-upgrade-helm-check"
     migrate_report = (reports_dir / "ext-soperator-upgrade-report.md").read_text(encoding="utf-8")
     assert "`post-upgrade-helm-check`: `FAIL`" in migrate_report
+
+
+def test_execute_skips_target_helm_readiness_for_adopted_external_node_upgrade(
+    tmp_path: Path,
+) -> None:
+    payload = _payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]
+    assert isinstance(onboarding, dict)
+    onboarding["storage_mode"] = "keep-existing-storage"
+    onboarding["compute_mode"] = "keep-existing-compute"
+    onboarding["actions"] = [
+        "adopt-soperator",
+        "reconcile-target-gpu-stack",
+        "upgrade-external-node-template",
+        "approve-external-soperator-upgrade",
+    ]
+    onboarding["source_version"] = "4.0.1"
+    onboarding["target_version"] = "4.0.1"
+    onboarding["analysis_fingerprint"] = soperator_onboarding_fingerprint(
+        payload,
+        target_ref="external-cluster",
+    )
+    source_snapshot = _snapshot(version="4.0.1")
+    source_report = _source_report(source_snapshot)
+    report = source_report["report"]
+    assert isinstance(report, dict)
+    report["migration_plan"] = [
+        {"id": "discovery-and-plan", "status": "complete"},
+        {
+            "id": "customer-approval",
+            "status": "planned",
+            "requires_customer_approval": True,
+        },
+        {"id": migration._EXTERNAL_NODE_TEMPLATE_PHASE_ID, "status": "planned"},
+        {"id": migration._TARGET_GPU_STACK_PHASE_ID, "status": "planned"},
+    ]
+    runner = _FakeCommandRunner(helm_releases=[])
+
+    result = execute_soperator_migration(
+        config_path=tmp_path / "config.yaml",
+        target_ref="external-cluster",
+        payload=payload,
+        source_report=source_report,
+        backup_metadata=_backup_metadata("adopted-external-node-upgrade"),
+        snapshot_collector=lambda *, kube_context: source_snapshot,
+        approved=True,
+        command_runner=runner,
+        worker_rollout_strategy="safe-surge",
+    )
+
+    assert result.pending_phase == "none"
+    assert result.completed_phases == (
+        "discovery-and-plan",
+        "customer-approval",
+        "external-node-template-upgrade",
+        "target-gpu-stack-remediation",
+        "post-upgrade-mk8s-check",
+        "post-upgrade-helm-check",
+    )
+    output = "\n".join(result.lines)
+    assert (
+        "post-upgrade-helm-check: Skipped target Soperator Helm chart readiness: "
+        "no target Soperator Helm release is installed or expected"
+    ) in output
+    assert not any(
+        call[0][:6]
+        == ("helm", "--kube-context", "external-context", "get", "manifest", "soperator")
+        for call in runner.calls
+    )
+    checkpoint_path = soperator_migration_checkpoint_path(
+        tmp_path / "config.yaml",
+        "external-cluster",
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    helm_verification = checkpoint["phase_state"]["post-upgrade-helm-check"][
+        "fast_verification"
+    ]
+    assert helm_verification["status"] == "passed"
+    assert "Skipped target Soperator Helm chart readiness" in helm_verification["summary"]
 
 
 def test_execute_final_helm_check_keyboard_interrupt_writes_pending_report(
@@ -5664,11 +5867,15 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
     )
     assert segment_report_path.exists()
     assert segment_json_report_path.exists()
+    segment_markdown_report = segment_report_path.read_text(encoding="utf-8")
     segment_json_report = json.loads(segment_json_report_path.read_text(encoding="utf-8"))
     assert segment_json_report["latest_markdown_report"].endswith(
         "generated/reports/ext-soperator-upgrade-report.md"
     )
     assert segment_json_report["markdown_report"] == str(segment_report_path)
+    assert "### populate-jail-refresh" in segment_markdown_report
+    assert "Jail Upgrade" in segment_markdown_report
+    assert "populate-jail-refresh" in {phase["id"] for phase in segment_json_report["phases"]}
     assert upgrade_json_report["post_upgrade_verification"]["status"] == "passed"
     assert upgrade_json_report["protected_customer_state"]["before_hash"]
     assert upgrade_json_report["fast_smoke"]["status"] == "passed"
@@ -10381,7 +10588,7 @@ def test_execute_emits_phase_aware_status_for_storage_and_compute(tmp_path: Path
     )
     assert any(
         "phase populate-jail-refresh" in message
-        and "[Populate-jail refresh]" in message
+        and "[Jail Upgrade]" in message
         and "MK8s" in message
         and "Slurm" in message
         and "Soperator" in message
@@ -13101,6 +13308,13 @@ def test_checkpoint_allows_report_refresh_when_resume_plan_omits_terminal_phases
         "target-gpu-stack-remediation",
         "rolling-compute-migration",
     )
+    planned_phases = (
+        *phase_ids,
+        "final-control-plane-cutover",
+        migration.POPULATE_JAIL_REFRESH_PHASE_ID,
+        "validation-and-rollback-hold",
+        "retire-old-resources",
+    )
     checkpoint = migration._checkpoint_for_run(
         existing={
             "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
@@ -13108,14 +13322,15 @@ def test_checkpoint_allows_report_refresh_when_resume_plan_omits_terminal_phases
             "source_report_fingerprint": "old",
             "source_version": "1.22.3",
             "target_version": "4.0.2-ps.3",
-            "planned_phases": [
-                *phase_ids,
-                "final-control-plane-cutover",
-                "populate-jail-refresh",
-                "validation-and-rollback-hold",
-                "retire-old-resources",
-            ],
+            "planned_phases": list(planned_phases),
             "completed_phases": ["rolling-compute-migration"],
+            "locked_upgrade_path": {
+                "schema": SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA,
+                "segments": [{"id": "segment-1", "title": "Segment 1"}],
+            },
+            "upgrade_path_fingerprint": "locked-path-fingerprint",
+            "current_segment_id": "segment-1",
+            "segment_state": {"segment-1": {"started_at": "old"}},
             "events": [],
         },
         target_ref="external-cluster",
@@ -13124,10 +13339,111 @@ def test_checkpoint_allows_report_refresh_when_resume_plan_omits_terminal_phases
         target_version="4.0.2-ps.3",
         phase_ids=phase_ids,
         allow_source_report_refresh=True,
+        upgrade_path_fingerprint="locked-path-fingerprint",
+        upgrade_path_segment_id="segment-1",
     )
 
     assert checkpoint["source_report_fingerprint"] == "new"
+    assert checkpoint["planned_phases"] == list(planned_phases)
+    assert checkpoint["segment_state"]["segment-1"]["planned_phases"] == list(planned_phases)
+    assert migration.POPULATE_JAIL_REFRESH_PHASE_ID in checkpoint["planned_phases"]
     assert checkpoint["events"][-1]["event"] == "execute-checkpoint-source-report-refreshed"
+
+
+def test_external_upgrade_reports_checkpoint_planned_populate_jail_when_current_phase_ids_omit(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    phase_ids = (
+        "discovery-and-plan",
+        "customer-approval",
+        "external-node-template-upgrade",
+        "target-gpu-stack-remediation",
+        "rolling-compute-migration",
+    )
+    planned_phases = (
+        *phase_ids,
+        "final-control-plane-cutover",
+        "populate-jail-refresh",
+        "validation-and-rollback-hold",
+        "retire-old-resources",
+        "post-upgrade-mk8s-check",
+        "post-upgrade-helm-check",
+    )
+    segment_id = "segment-1"
+    checkpoint = {
+        "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+        "target_ref": "external-cluster",
+        "source_report_fingerprint": "fingerprint",
+        "source_version": "1.22.3",
+        "target_version": "4.0.2-ps.3",
+        "pending_phase": "none",
+        "pending_reason": "",
+        "planned_phases": list(planned_phases),
+        "completed_phases": ["rolling-compute-migration"],
+        "events": [],
+        "phase_state": {
+            "rolling-compute-migration": {
+                "target_node_groups": {"login": "nodegroup-login"},
+            },
+            "populate-jail-refresh": {
+                "result": {
+                    "status": "skipped",
+                    "reason": "target rootfs image already active",
+                }
+            },
+        },
+        "locked_upgrade_path": {
+            "schema": SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA,
+            "segments": [{"id": segment_id, "title": "Segment 1 with Jail Upgrade"}],
+        },
+        "upgrade_path_fingerprint": "locked-path-fingerprint",
+        "current_segment_id": segment_id,
+        "completed_segment_ids": [segment_id],
+        "segment_state": {segment_id: {}},
+    }
+
+    migration._write_soperator_migrate_report(  # noqa: SLF001
+        config_path=config_path,
+        checkpoint_path=soperator_migration_checkpoint_path(config_path, "external-cluster"),
+        checkpoint=checkpoint,
+        phase_ids=phase_ids,
+        completed_phases={"rolling-compute-migration"},
+        target_ref="external-cluster",
+        source_version="1.22.3",
+        target_version="4.0.2-ps.3",
+        pending_phase="none",
+        pending_reason="",
+        mutation_performed=True,
+    )
+
+    latest_markdown = (
+        tmp_path / "generated" / "reports" / "ext-soperator-upgrade-report.md"
+    ).read_text(encoding="utf-8")
+    latest_json = json.loads(
+        (tmp_path / "generated" / "reports" / "ext-soperator-upgrade-report.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    segment_report_path, segment_json_report_path = migration.ext_soperator_upgrade_segment_report_paths(
+        config_path,
+        "external-cluster",
+        segment_id,
+    )
+    segment_markdown = segment_report_path.read_text(encoding="utf-8")
+    segment_json = json.loads(segment_json_report_path.read_text(encoding="utf-8"))
+
+    assert "### populate-jail-refresh" in latest_markdown
+    assert "Jail Upgrade status=skipped; target rootfs image already active." in latest_markdown
+    assert "### populate-jail-refresh" in segment_markdown
+    assert "Jail Upgrade status=skipped; target rootfs image already active." in segment_markdown
+    latest_phases = {phase["id"]: phase for phase in latest_json["phases"]}
+    segment_phases = {phase["id"]: phase for phase in segment_json["phases"]}
+    assert latest_phases["populate-jail-refresh"]["top_level_stage"] == "Jail Upgrade"
+    assert latest_phases["populate-jail-refresh"]["summary"] == (
+        "Jail Upgrade status=skipped; target rootfs image already active."
+    )
+    assert segment_phases["populate-jail-refresh"] == latest_phases["populate-jail-refresh"]
 
 
 def test_checkpoint_starts_fresh_after_completed_prior_hop() -> None:

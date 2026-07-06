@@ -195,6 +195,81 @@ def _required_recreation_pvs() -> list[dict[str, Any]]:
     ]
 
 
+def _chart_named_required_recreation_items() -> dict[str, list[dict[str, Any]]]:
+    required_items = _required_recreation_items()
+    slurmcluster_name = "mk8s"
+    required_items["slurmclusters"][0]["metadata"]["name"] = slurmcluster_name
+    required_items["slurmclusters"][0]["spec"] = {
+        "clusterName": slurmcluster_name,
+        "volumeSources": [
+            {
+                "name": "controller-spool",
+                "persistentVolumeClaim": {"claimName": "controller-spool-pvc"},
+            },
+            {
+                "name": "slurm-scripts",
+                "configMap": {"name": "mk8s-slurm-scripts"},
+            },
+        ],
+    }
+    required_items["persistentvolumeclaims"] = [
+        {
+            **required_items["persistentvolumeclaims"][0],
+            "metadata": {"name": "controller-spool-pvc", "uid": "pvc-uid"},
+            "spec": {
+                **required_items["persistentvolumeclaims"][0]["spec"],
+                "volumeName": "pv-controller-spool",
+            },
+        },
+        {
+            **required_items["persistentvolumeclaims"][1],
+            "metadata": {
+                "name": "storage-mk8s-acct-db-0",
+                "uid": "pvc-uid",
+                "labels": {"pvc.k8s.mariadb.com/role": "storage"},
+            },
+            "spec": {
+                **required_items["persistentvolumeclaims"][1]["spec"],
+                "volumeName": "pv-accounting",
+            },
+        },
+    ]
+    required_items["secrets"] = [
+        {
+            **item,
+            "metadata": {
+                **item["metadata"],
+                "name": {
+                    "soperator-sshd-keys": f"{slurmcluster_name}-sshd-keys",
+                    "soperator-slurmdbd-configs": f"{slurmcluster_name}-slurmdbd-configs",
+                }.get(item["metadata"]["name"], item["metadata"]["name"]),
+            },
+        }
+        for item in required_items["secrets"]
+    ]
+    required_items["configmaps"] = [
+        {
+            **item,
+            "metadata": {
+                **item["metadata"],
+                "name": {
+                    "soperator-slurm-configs": f"{slurmcluster_name}-slurm-configs",
+                    "slurm-scripts": f"{slurmcluster_name}-slurm-scripts",
+                }.get(item["metadata"]["name"], item["metadata"]["name"]),
+            },
+        }
+        for item in required_items["configmaps"]
+    ]
+    return required_items
+
+
+def _chart_named_required_recreation_pvs() -> list[dict[str, Any]]:
+    pvs = _required_recreation_pvs()
+    pvs[0]["spec"]["claimRef"]["name"] = "controller-spool-pvc"
+    pvs[1]["spec"]["claimRef"]["name"] = "storage-mk8s-acct-db-0"
+    return pvs
+
+
 def test_soperator_backup_filename_uses_external_prefix_without_upgrade_transitions() -> None:
     filename = cli._soperator_upgrade_backup_filename(
         target_ref="mk8scluster-e00wrz1h8fhxgbdf8j",
@@ -533,6 +608,128 @@ def test_soperator_backup_archive_contains_restore_material(
     assert required_pvcs[0]["spec"]["volumeName"] == "pv-controller-spool"
 
 
+def test_soperator_backup_archive_deduplicates_chart_named_recreation_pvcs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(_source_payload()), encoding="utf-8")
+    target = cli._parse_soperator_upgrade_target("mk8s")
+    plan = cli._plan_helm_chart_upgrade(
+        payload=_source_payload(),
+        target=target,
+        target_version="0.26.0",
+    )
+    required_items = _chart_named_required_recreation_items()
+
+    def fake_kubectl(
+        namespace: str,
+        args: list[str],
+        **kwargs: Any,
+    ) -> cli._SoperatorUpgradeCommandResult:
+        if namespace == "flux-system":
+            return _command_result(
+                args,
+                returncode=1,
+                stderr='Error from server (NotFound): configmaps "soperator-fluxcd" not found',
+            )
+        assert namespace == "soperator"
+        if args[:2] == ["get", "deployment/accounting"]:
+            return _command_result(
+                args,
+                json.dumps({"spec": {"replicas": 1}, "metadata": {"name": "accounting"}}),
+            )
+        if args[:1] == ["scale"]:
+            return _command_result(args)
+        if args[:2] == ["exec", "soperator-acct-db-0"]:
+            command = args[-1]
+            if "mariadb-dump" in command or "mysqldump" in command:
+                return _command_result(args, "CREATE DATABASE slurm_acct_db;\n")
+            return _command_result(args, "slurm_acct_db|12\n")
+        if args[:1] == ["get"]:
+            resource = args[1]
+            items_by_resource: dict[str, list[dict[str, Any]]] = {
+                **required_items,
+                "services": [],
+                "deployments.apps": [],
+                "pods": [
+                    {
+                        "apiVersion": "v1",
+                        "kind": "Pod",
+                        "metadata": {"name": "soperator-acct-db-0"},
+                        "status": {"phase": "Running"},
+                    }
+                ],
+            }
+            return _command_result(args, _kubernetes_list(items_by_resource.get(resource, [])))
+        raise AssertionError(f"unexpected kubectl args: {args}")
+
+    def fake_kubectl_cluster(
+        args: list[str],
+        **_kwargs: Any,
+    ) -> cli._SoperatorUpgradeCommandResult:
+        if args[:2] == ["get", "persistentvolumes"]:
+            return _command_result(args, _kubernetes_list(_chart_named_required_recreation_pvs()))
+        raise AssertionError(f"unexpected cluster kubectl args: {args}")
+
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_kubectl", fake_kubectl)
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_kubectl_cluster", fake_kubectl_cluster)
+    monkeypatch.setattr(
+        cli,
+        "_run_soperator_upgrade_process",
+        lambda args, **_kwargs: _command_result(list(args), '{"values": true}\n'),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_soperator_upgrade_login_command",
+        lambda namespace, command, **_kwargs: _command_result(
+            ["login", command],
+            "snapshot\n",
+        ),
+    )
+
+    backup = cli._create_restore_capable_soperator_upgrade_backup(
+        config_path=config_path,
+        backup_dir=tmp_path / "backups",
+        source_payload=_source_payload(),
+        generated_config=SimpleNamespace(client_info={"client_name": "client-a"}),
+        manifest={"schema": "manifest"},
+        target=target,
+        plan=plan,
+        checkpoint_id="checkpoint-1",
+        target_k8s_version=None,
+        command=["nebius-cxcli", "soperator", "backup", str(config_path)],
+        archive_prefix="soperator-backup",
+        source_kind="managed-backup",
+    )
+
+    with tarfile.open(backup.path, "r:gz") as archive:
+        generic_pvc_restore = (
+            archive.extractfile("kubernetes/restore/persistentvolumeclaims.yaml")
+            .read()
+            .decode()
+        )
+        required_pvcs = list(
+            yaml.safe_load_all(
+                archive.extractfile("recreation/restore/persistentvolumeclaims.yaml")
+                .read()
+                .decode()
+            )
+        )
+        coverage = json.loads(archive.extractfile("recreation/recreation-coverage.json").read())
+
+    assert "controller-spool-pvc" not in generic_pvc_restore
+    assert "storage-mk8s-acct-db-0" not in generic_pvc_restore
+    assert [item["metadata"]["name"] for item in required_pvcs] == [
+        "controller-spool-pvc",
+        "storage-mk8s-acct-db-0",
+    ]
+    assert coverage["items"]["required_recreation_material"]["retained_pvc_names"] == [
+        "controller-spool-pvc",
+        "storage-mk8s-acct-db-0",
+    ]
+
+
 def test_soperator_backup_accepts_slurmcluster_prefixed_recreation_material(
     tmp_path: Path,
     monkeypatch,
@@ -602,6 +799,54 @@ def test_soperator_backup_accepts_slurmcluster_prefixed_recreation_material(
     )
 
     assert coverage["items"]["required_recreation_material"]["status"] == "collected"
+
+
+def test_soperator_backup_collects_chart_named_recreation_material(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    kubernetes_dir = tmp_path / "kubernetes"
+    kubernetes_dir.mkdir()
+    required_items = _chart_named_required_recreation_items()
+    for label, items in required_items.items():
+        (kubernetes_dir / f"{label}.json").write_text(
+            json.dumps({"items": items}),
+            encoding="utf-8",
+        )
+    (kubernetes_dir / "services.json").write_text(json.dumps({"items": []}), encoding="utf-8")
+
+    def fake_kubectl_cluster(
+        args: list[str],
+        **_kwargs: Any,
+    ) -> cli._SoperatorUpgradeCommandResult:
+        if args[:2] == ["get", "persistentvolumes"]:
+            return _command_result(args, _kubernetes_list(_chart_named_required_recreation_pvs()))
+        raise AssertionError(f"unexpected cluster kubectl args: {args}")
+
+    def fake_kubectl(
+        namespace: str,
+        args: list[str],
+        **_kwargs: Any,
+    ) -> cli._SoperatorUpgradeCommandResult:
+        if namespace == "flux-system":
+            return _command_result(args, returncode=1, stderr="NotFound")
+        assert namespace == "soperator"
+        return _command_result(args, returncode=1, stderr="NotFound")
+
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_kubectl_cluster", fake_kubectl_cluster)
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_kubectl", fake_kubectl)
+
+    _paths, coverage = cli._soperator_upgrade_collect_recreation_material(
+        namespace="soperator",
+        output_dir=tmp_path / "recreation",
+        kubernetes_dir=kubernetes_dir,
+    )
+
+    assert coverage["items"]["required_recreation_material"]["status"] == "collected"
+    assert coverage["items"]["required_recreation_material"]["retained_pvc_names"] == [
+        "controller-spool-pvc",
+        "storage-mk8s-acct-db-0",
+    ]
 
 
 def test_soperator_backup_fails_when_required_recreation_material_missing(

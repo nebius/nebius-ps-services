@@ -127,6 +127,7 @@ def _config_with_enabled_mk8s(*, charts: list[dict[str, Any]] | None = None) -> 
         ("post-mk8s-validation", "MK8s Node Upgrades"),
         ("backup", "Soperator Upgrade"),
         ("soperator-chart", "Soperator Upgrade"),
+        ("populate-jail-refresh", "Jail Upgrade"),
         ("shared-safety-verification", "Soperator Upgrade"),
         ("completed", "Soperator Upgrade"),
     ],
@@ -3537,6 +3538,10 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
         item["id"] == "soperator-chart" and item["top_level_stage"] == "Soperator Upgrade"
         for item in report["phase_history"]
     )
+    assert any(
+        item["id"] == "populate-jail-refresh" and item["top_level_stage"] == "Jail Upgrade"
+        for item in report["phase_history"]
+    )
     assert any(item["id"] == "shared-safety-verification" for item in report["phase_history"])
     markdown_report = (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_FILENAME).read_text(
         encoding="utf-8"
@@ -3545,6 +3550,7 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
     assert "top-level stage: `Soperator Upgrade`" in markdown_report
     assert "for `apps:soperator" in markdown_report
     assert "## Phase History" in markdown_report
+    assert "## Jail Upgrade" in markdown_report
     assert "## Stage Fast Verification" in markdown_report
     assert "`soperator-chart`: `PASS`" in markdown_report
     assert "`mk8s-node-template`: `SKIP`" in markdown_report
@@ -23318,7 +23324,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "complete production MK8s+SFS+Soperator cluster" in normalized_create_help
     assert "soperator [OPTIONS] COMMAND [ARGS]" in managed_soperator_help
     assert "Manage cxcli-managed Soperator deployments" in (normalized_managed_soperator_help)
-    assert "Soperator-aware MK8s node-template plus chart upgrades" in (
+    assert "Soperator-aware MK8s node-template, chart, and Jail Upgrade rootfs refresh" in (
         normalized_managed_soperator_help
     )
     assert "Examples: | nebius-cxcli soperator upgrade <config.yaml>" in (
@@ -23371,6 +23377,9 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "Use target-version flags to preview upgrade findings" in (
         normalized_managed_soperator_discover_help
     )
+    assert "Jail Upgrade rootfs-refresh boundary" in (
+        normalized_managed_soperator_discover_help
+    )
     assert "--execute" in normalized_managed_soperator_restore_help
     assert "--approve" in normalized_managed_soperator_restore_help
     assert "--restore-accounting-db" in normalized_managed_soperator_restore_help
@@ -23416,6 +23425,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         normalized_managed_soperator_scale_up_help
     )
     assert "Standalone MK8s node-template upgrades" in normalized_managed_soperator_upgrade_help
+    assert "including Jail Upgrade rootfs refresh" in normalized_managed_soperator_upgrade_help
     assert "Kubernetes minor hops stay one hop per run" in (
         normalized_managed_soperator_upgrade_help
     )
@@ -23545,6 +23555,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     )
     assert "onboard resolves or creates" not in normalized_ext_soperator_discover_help
     assert "soperator-discovery/<target>/manifest.json" in normalized_ext_soperator_discover_help
+    assert "Jail Upgrade rootfs-refresh boundary" in normalized_ext_soperator_discover_help
     assert "--execute" in normalized_ext_soperator_restore_help
     assert "--approve" in normalized_ext_soperator_restore_help
     assert "--restore-accounting-db" in normalized_ext_soperator_restore_help
@@ -23598,6 +23609,9 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert (
         "upgrade is only for accepted onboarding plans that contain external-upgrade-owned actions"
         in (normalized_soperator_help)
+    )
+    assert "including Jail Upgrade when Soperator chart/rootfs work is selected" in (
+        normalized_soperator_help
     )
     assert (
         "nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root> "
@@ -23717,6 +23731,9 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         "reruns refresh read-only source discovery and Nebius provider node-template inventory by node group"
         in (normalized_soperator_onboard_help)
     )
+    assert "locked path includes Jail Upgrade before validation" in (
+        normalized_soperator_onboard_help
+    )
     assert "--cluster-id selects the Nebius MK8s cluster to adopt" in (
         normalized_soperator_onboard_help
     )
@@ -23778,6 +23795,9 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "Use --dry-run for discovery refresh and the read-only plan" in (
         normalized_ext_soperator_upgrade_help
     )
+    assert "cutover, Jail Upgrade, validation, and retirement phases" in (
+        normalized_ext_soperator_upgrade_help
+    )
     assert "Use --execute only after accepting that plan" in normalized_ext_soperator_upgrade_help
     assert "Confirm approval for the accepted external upgrade plan" in (
         normalized_ext_soperator_upgrade_help
@@ -23815,6 +23835,9 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         "--execute --approve refreshes discovery, creates a restore-capable backup"
     ) in normalized_ext_soperator_upgrade_help
     assert "runs exactly one locked upgrade-path segment" in (normalized_ext_soperator_upgrade_help)
+    assert "Soperator/storage/compute/GPU-stack/Jail Upgrade work" in (
+        normalized_ext_soperator_upgrade_help
+    )
     assert (
         "If the accepted locked path still contains more segments"
         in (normalized_ext_soperator_upgrade_help)

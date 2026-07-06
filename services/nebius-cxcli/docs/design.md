@@ -661,11 +661,11 @@ and chart source-family changes.
   requested/scheduled on affected nodes, and waits for
   Terraform-managed control-plane/node-group readiness; chart apply updates the
   Soperator app row, rerenders, validates, applies Flux/static manifests, and
-  verifies live chart identity; populate-jail refresh populates the passive
+  verifies live chart identity; Jail Upgrade populates the passive
   active/passive rootfs slot and switches consumers when required; fast stage
   gates record
   `fast_verification` after each completed managed upgrade stage, including the
-  post-MK8s validation and populate-jail refresh boundaries, before advancing;
+  post-MK8s validation and Jail Upgrade boundaries, before advancing;
   postflight restores Slurm and
   ActiveChecks, compares protected customer state, runs required Soperator/Slurm
   smoke plus the shared fast safety verifier, and writes
@@ -699,7 +699,7 @@ and chart source-family changes.
   `generated/reports/soperator-upgrade-report.json` with before/after protected
   customer-state hashes, deltas, fast safety results, zero-downtime eligibility,
   backup evidence, manual heavy follow-ups, the final `current_phase`, the
-  operator-facing top-level stage (`MK8s Node Upgrades` or `Soperator Upgrade`),
+  operator-facing top-level stage (`MK8s Node Upgrades`, `Soperator Upgrade`, or `Jail Upgrade`),
   the Markdown `Stage Fast Verification` rollup plus JSON `stage_verification`
   details, per-phase `phase_state[<phase>].fast_verification` proof, and the
   phase history with component-aware operator comments. Setup phases record
@@ -1267,7 +1267,7 @@ reused backup metadata before mutation, writes a local
 `.nebius-cxcli/ext-soperator-upgrades/` timeout-guarded checkpoint, and
 advances the selected accepted external MK8s control-plane/node-template hop,
 target GPU stack reconciliation phase when paired with external upgrade work,
-storage, copy, compute, cutover, populate-jail refresh, validation, and
+storage, copy, compute, cutover, Jail Upgrade, validation, and
 retirement phases in order.
 External node-template work is one Kubernetes minor hop per accepted locked-path
 segment and `ext-soperator upgrade` run. If the accepted locked path still has
@@ -1299,7 +1299,7 @@ table with persistent controls: `a` selects or clears all rows, `i` inverts the
 selection, lowercase selected-action keys such as `c`/`q`/`h` operate on the
 selected rows, and uppercase `C`/`Q`/`H` operate on all displayed or all active
 displayed jobs as appropriate. When the target chart/rootfs changed, the
-populate-jail refresh phase first verifies persistent jail mounts, then applies
+Jail Upgrade phase first verifies persistent jail mounts, then applies
 the same job-policy gate to affected worker NodeSets, populates the passive
 rootfs slot with the target populate-jail image, switches consumers to that
 populated slot only while the login Service has ready EndpointSlice endpoints
@@ -1360,10 +1360,13 @@ starts, reruns may refresh the checkpointed source discovery fingerprint when
 the source version, target version, and phase plan are unchanged. After a
 mutating phase starts, resume relies on phase checkpoints because the original
 full discovery fingerprint is expected to change as new storage and attachments
-appear. Every mutating phase must watch Nebius API, Kubernetes, Soperator, and
-Slurm failure signals and persist timeout-guarded checkpoints so interrupted
-upgrades can resume without redoing completed safe work or retiring old
-storage and compute early. Reruns are action-idempotent: the accepted
+appear. Compatible checkpoint refresh preserves the original ordered phase plan,
+including `Jail Upgrade` / `populate-jail-refresh`, so an interrupted or failed
+rootfs refresh remains a restartable pending phase. Every mutating phase must
+watch Nebius API, Kubernetes, Soperator, and Slurm failure signals and persist
+timeout-guarded checkpoints so interrupted upgrades can resume without redoing
+completed safe work or retiring old storage and compute early. Reruns are
+action-idempotent: the accepted
 `deploy.targets[].soperator_onboarding.actions` list defines the desired work,
 and `ext-soperator upgrade --execute` rechecks completed action phases against
 live state before skipping them, including data sync, rolling compute,
