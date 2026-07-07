@@ -144,9 +144,8 @@ jobs:
         id: asset
         run: |
           set -euo pipefail
-          shopt -s nullglob
-          assets=( ${ASSET_GLOB} )
-          shopt -u nullglob
+          assets=()
+          mapfile -t assets < <(compgen -G "${ASSET_GLOB}" | sort)
           if [[ "${#assets[@]}" -eq 0 ]]; then
             echo "::error::No release asset found with glob ${ASSET_GLOB}"
             exit 1

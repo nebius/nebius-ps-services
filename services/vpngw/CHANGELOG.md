@@ -23,6 +23,8 @@ All notable changes to this project are tracked here. This changelog follows
   VPN gateway source tree.
 - Fixed local and release wheel builds by declaring the `vcs-versioning`
   provider required for the configured `semver-pep440` version scheme.
+- Fixed release workflow artifact glob resolution so actionlint/shellcheck
+  validation does not depend on unsafe word splitting.
 - Fixed route command SSH handling so `add-routes-local` BGP route discovery and
   `list-routes-remote` gateway queries honor configured SSH user and private key
   settings.
