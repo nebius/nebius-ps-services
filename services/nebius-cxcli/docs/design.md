@@ -631,25 +631,29 @@ and chart source-family changes.
   `/mnt/jail-store/shared/models`. The
   production profile defaults that backing store to `2048` GiB total capacity
   for both rootfs slots plus persistent mounts, not a per-slot quota. External
-  adoption keeps the existing physical jail SFS, creates only logical slot
-  directories under `/mnt/jail/.cxcli/rootfs`, treats legacy `/mnt/jail` as the
-  active rootfs until first switch, and models `/home`, `/data`, `/scripts`,
-  `/models`, plus explicitly declared additional customer paths as persistent
-  jail mounts on that same physical SFS. During first adoption, cxcli migrates
-  rootfs-owned `/home`, `/data`, `/scripts`, `/models`, or similar declared
-  paths into `/mnt/jail/shared/...` with ownership,
-  permissions, symlinks, ACLs, and xattrs preserved where supported. The
-  migration records exact source decisions in checkpoint/report state and counts
-  only present source paths in shared-copy capacity.
+  adoption and external adoption share the same Jail Upgrade pattern: known
+  customer paths are moved out of the replaceable rootfs and mounted back into
+  every active/passive slot. Managed first adoption uses the cxcli-owned
+  physical jail store and migrates rootfs-owned `/home`, `/data`, `/scripts`,
+  `/models`, or explicitly declared paths into
+  `/mnt/jail-store/shared/...`. External adoption keeps the existing physical
+  jail SFS, creates only logical slot directories under
+  `/mnt/jail/.cxcli/rootfs`, treats legacy `/mnt/jail` as the active rootfs
+  until first switch, and migrates those same paths into `/mnt/jail/shared/...`.
+  In both layouts, cxcli keeps ownership and permissions, symlinks, ACLs, and
+  xattrs preserved where supported. The migration records exact source decisions in
+  checkpoint/report state and counts only present source paths in shared-copy
+  capacity.
   Before passive-slot values or the populate Job are applied, cxcli probes
   physical jail SFS capacity, measuring legacy rootfs usage while excluding
-  `.cxcli` and configured persistent jail mount local paths. Required passive
-  free space is the larger of `64` GiB and `measured_rootfs_used * 1.25`,
-  rounded up. If capacity is short, managed `soperator upgrade` expands only
-  the cxcli-owned `filesystems.jail.size_gib` through config render plus
-  Terraform apply, then re-probes. External `ext-soperator upgrade` may expand
-  only a single identified existing Nebius jail SFS through the Nebius SDK/API,
-  then re-probes. Existing NFS, opaque customer submounts, unknown/non-Nebius
+  the layout-specific cxcli system directory and configured persistent jail
+  mount local paths. Required passive free space is the larger of `64` GiB and
+  `measured_rootfs_used * 1.25`, rounded up. If capacity is short, managed
+  `soperator upgrade` expands only the cxcli-owned
+  `filesystems.jail.size_gib` through config render plus Terraform apply, then
+  re-probes. External `ext-soperator upgrade` may expand only a single
+  identified existing Nebius jail SFS through the Nebius SDK/API, then
+  re-probes. Existing NFS, opaque customer submounts, unknown/non-Nebius
   storage, and non-jail SFS rows are preserved and never resized by the rootfs
   refresh.
   Managed `soperator scale-up` and `soperator scale-down` are narrower worker
@@ -3252,9 +3256,11 @@ not additional rootfs slots and do not require separate physical SFS filesystems
 each path is a stable submount/PV/PVC backed by the same jail SFS. External
 single-SFS adoption keeps the existing physical jail SFS, creates logical slots
 under `/mnt/jail/.cxcli/rootfs`, and treats the legacy `/mnt/jail` root as the
-active source until the first successful switch. In external adoption, `/home`,
-`/data`, `/scripts`, and `/models` are automatically modeled as persistent jail
-mounts. Additional paths such as `/checkpoints` must be declared with
+active source until the first successful switch. In managed and external first
+adoption, `/home`, `/data`, `/scripts`, and `/models` are automatically modeled
+as persistent jail mounts. Managed targets use `/mnt/jail-store/shared/...`;
+external targets use `/mnt/jail/shared/...`. Additional paths such as
+`/checkpoints` must be declared with
 `--jail-persistent-mount <mountPath>=<localPath>` because cxcli does not infer
 arbitrary root-level folders as customer data.
 
@@ -3264,14 +3270,15 @@ The refresh sequence is deliberately ordered:
    when selected chart/rootfs evidence means compatibility cannot be proven. `force`
    always refreshes. `manual` records the required action and stops before
    mutation.
-2. Verify persistent mounts and passive-slot capacity. For external adoption,
-   cxcli first probes each known and explicit source path in the old rootfs and
-   records it as `present`, `absent`, `existing-submount`, or `explicit`. The
-   capacity probe measures the physical jail SFS while excluding `.cxcli` and
-   persistent-mount source paths from the rootfs-copy estimate, counts only
-   present persistent-mount data for the one-time shared-data copy, skips absent
-   paths cleanly, and requires enough free space for both the passive rootfs slot
-   and that copy.
+2. Verify persistent mounts and passive-slot capacity. For managed and external
+   first adoption, cxcli first probes each known and explicit source path in the
+   old rootfs and records it as `present`, `absent`, `existing-submount`, or
+   `explicit`. The capacity probe measures the physical jail SFS while
+   excluding the layout-specific cxcli system directory and persistent-mount
+   source paths from the rootfs-copy estimate, counts only present
+   persistent-mount data for the one-time shared-data copy, skips absent paths
+   cleanly, and requires enough free space for both the passive rootfs slot and
+   that copy.
 3. During first adoption from a legacy rootfs, drain Slurm with the selected
    job policy, hold worker writers, and hold login writers only after an
    explicit `wait-active` or `grace-period` login-session policy gate. With the
@@ -3285,6 +3292,8 @@ The refresh sequence is deliberately ordered:
    `/store/.cxcli/persistent-migrations/`, skips only matching completed markers
    on rerun, and fails closed on source/target overlap, top-level source
    symlinks, target symlinks, or unmarked non-empty targets.
+   On managed clusters those store paths map to `/mnt/jail-store/...`; on
+   external clusters they map to `/mnt/jail/...`.
    If a later refresh step fails after the copy is marked complete, cxcli keeps
    login/worker writers held and Slurm quiet instead of reopening legacy-rootfs
    writes that would make the shared copy stale.

@@ -97,8 +97,8 @@ from .soperator_jail_capacity import (
 )
 from .soperator_jail_mounts import (
     JAIL_EXTERNAL_AUTO_PERSISTENT_MOUNT_PATHS,
-    JAIL_EXTERNAL_SYSTEM_PATH,
     JAIL_LEGACY_ROOT_PATH,
+    JAIL_MANAGED_AUTO_PERSISTENT_MOUNT_PATHS,
     JAIL_PERSISTENT_MOUNTS_VALUES_KEY,
     apply_jail_persistent_mount_values,
     jail_persistent_mount_decisions,
@@ -2926,11 +2926,24 @@ def _store_relative_path(path: str, *, store_path: str = JAIL_LEGACY_ROOT_PATH) 
     return "/" + normalized.removeprefix(f"{store}/").strip("/")
 
 
+def _jail_store_path(values: Mapping[str, Any]) -> str:
+    store = _mapping(_mapping(values.get("jailRootfs")).get("store"))
+    return "/" + str(store.get("mountPath") or JAIL_LEGACY_ROOT_PATH).strip().strip("/")
+
+
+def _jail_system_path(values: Mapping[str, Any], *, store_path: str) -> str:
+    store = _mapping(_mapping(values.get("jailRootfs")).get("store"))
+    system_path = str(store.get("systemPath") or f"{store_path.rstrip('/')}/.cxcli").strip()
+    return "/" + system_path.strip("/")
+
+
 def _legacy_persistent_mount_migration_entries(
     values: Mapping[str, Any],
 ) -> tuple[dict[str, Any], ...]:
     if not jail_rootfs_uses_legacy_active_source(values):
         return ()
+    store_path = _jail_store_path(values)
+    system_path = _jail_system_path(values, store_path=store_path)
     entries: list[dict[str, Any]] = []
     for mount in _sequence_of_mappings(values.get(JAIL_PERSISTENT_MOUNTS_VALUES_KEY)):
         mount_path = "/" + str(mount.get("mountPath") or "").strip().strip("/")
@@ -2946,27 +2959,26 @@ def _legacy_persistent_mount_migration_entries(
                     "persistent mount migration paths must not contain quotes or newlines: "
                     f"{field}={value!r}."
                 )
-        source_path = f"{JAIL_LEGACY_ROOT_PATH}{mount_path}"
+        source_path = f"{store_path}{mount_path}"
         if _paths_overlap_posix(source_path, local_path):
             raise SoperatorMigrationPhasePending(
                 "persistent mount migration source and target overlap: "
                 f"{source_path} -> {local_path}. Use a shared target such as "
-                f"{JAIL_LEGACY_ROOT_PATH}/shared{mount_path}."
+                f"{store_path}/shared{mount_path}."
             )
-        relative_target = _store_relative_path(local_path)
+        relative_target = _store_relative_path(local_path, store_path=store_path)
         marker_name = normalize_component_token(mount_path.strip("/")) or "root"
+        marker_path = f"{system_path}/persistent-migrations/{marker_name}.json"
         entries.append(
             {
                 "name": f"jail-persistent-migration-{marker_name}",
                 "mount_path": mount_path,
                 "source_path": source_path,
-                "source_store_path": _store_relative_path(source_path),
+                "source_store_path": _store_relative_path(source_path, store_path=store_path),
                 "target_local_path": local_path,
                 "target_store_path": relative_target,
-                "marker_path": (
-                    f"{JAIL_EXTERNAL_SYSTEM_PATH}/persistent-migrations/{marker_name}.json"
-                ),
-                "marker_store_path": f"/.cxcli/persistent-migrations/{marker_name}.json",
+                "marker_path": marker_path,
+                "marker_store_path": _store_relative_path(marker_path, store_path=store_path),
                 "bytes_planned": None,
                 "pvc_name": str(mount.get("pvcName") or ""),
                 "status": "planned",
@@ -3082,10 +3094,21 @@ def _prepare_jail_persistent_mount_payload(
     jail_persistent_mounts: Sequence[str] = (),
     populate_jail_refresh: str,
     auto_persistent_mounts: bool = True,
+    layout: str = "external",
+    legacy_active_source: bool | None = None,
 ) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+    if layout not in {"managed", "external"}:
+        raise ValueError("layout must be managed or external.")
+    auto_preserve_paths = (
+        JAIL_MANAGED_AUTO_PERSISTENT_MOUNT_PATHS
+        if layout == "managed"
+        else JAIL_EXTERNAL_AUTO_PERSISTENT_MOUNT_PATHS
+    )
     values = _target_soperator_values(payload, target_ref)
     explicit_mounts = parse_jail_persistent_mount_specs(jail_persistent_mounts)
     if not auto_persistent_mounts and not explicit_mounts:
+        store_path = _jail_store_path(values)
+        system_path = _jail_system_path(values, store_path=store_path)
         state: dict[str, Any] = {
             "status": "not_required",
             "reason": "jail rootfs refresh is not planned for this segment",
@@ -3093,10 +3116,11 @@ def _prepare_jail_persistent_mount_payload(
             "copy_required": False,
             "migration": {
                 "status": "not_required",
-                "source_rootfs": JAIL_LEGACY_ROOT_PATH,
+                "source_rootfs": store_path,
                 "entries": [],
             },
-            "rootfs_path": "/mnt/jail/.cxcli/rootfs",
+            "rootfs_path": str(_mapping(_mapping(values.get("jailRootfs")).get("store")).get("rootfsPath") or ""),
+            "system_path": system_path,
             "legacy_active_rootfs": False,
         }
         return payload, state
@@ -3104,10 +3128,17 @@ def _prepare_jail_persistent_mount_payload(
         values,
         target_ref=target_ref,
         persistent_mounts=explicit_mounts,
-        layout="external",
+        layout=layout,
+        include_default_shared_mounts=True,
+        legacy_active_source=legacy_active_source,
     )
     status = jail_persistent_mount_status(patched_values)
     migration_entries = _legacy_persistent_mount_migration_entries(patched_values)
+    store_path = _jail_store_path(patched_values)
+    system_path = _jail_system_path(patched_values, store_path=store_path)
+    rootfs_path = str(
+        _mapping(_mapping(patched_values.get("jailRootfs")).get("store")).get("rootfsPath") or ""
+    ).strip()
     decisions = jail_persistent_mount_decisions(
         original_values=values,
         patched_values=patched_values,
@@ -3118,14 +3149,15 @@ def _prepare_jail_persistent_mount_payload(
         "reason": status.reason,
         "mounts": [mount.as_payload() for mount in status.mounts],
         "decisions": [dict(decision) for decision in decisions],
-        "auto_preserve_paths": list(JAIL_EXTERNAL_AUTO_PERSISTENT_MOUNT_PATHS),
+        "auto_preserve_paths": list(auto_preserve_paths),
         "copy_required": bool(migration_entries),
         "migration": {
             "status": "planned" if migration_entries else "not_required",
-            "source_rootfs": JAIL_LEGACY_ROOT_PATH,
+            "source_rootfs": store_path,
             "entries": [dict(entry) for entry in migration_entries],
         },
-        "rootfs_path": "/mnt/jail/.cxcli/rootfs",
+        "rootfs_path": rootfs_path,
+        "system_path": system_path,
         "legacy_active_rootfs": jail_rootfs_uses_legacy_active_source(patched_values),
     }
     if not status.verified and normalize_populate_jail_refresh_mode(populate_jail_refresh) != "manual":
@@ -4465,6 +4497,7 @@ def _persistent_mount_source_probe_job_manifest(
     image: str,
     jail_pvc: str,
     entries: Sequence[Mapping[str, Any]],
+    namespace: str = _SOPERATOR_NAMESPACE,
     scheduling: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     pod_spec = {
@@ -4497,7 +4530,7 @@ def _persistent_mount_source_probe_job_manifest(
         "apiVersion": "batch/v1",
         "kind": "Job",
         "metadata": {
-            "namespace": _SOPERATOR_NAMESPACE,
+            "namespace": namespace,
             "name": _persistent_mount_source_probe_job_name(target_ref),
             "labels": {
                 "app.kubernetes.io/managed-by": "nebius-cxcli",
@@ -4661,6 +4694,7 @@ def _persistent_mount_migration_job_manifest(
     image: str,
     jail_pvc: str,
     entries: Sequence[Mapping[str, Any]],
+    namespace: str = _SOPERATOR_NAMESPACE,
     scheduling: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     pod_spec = {
@@ -4691,7 +4725,7 @@ def _persistent_mount_migration_job_manifest(
         "apiVersion": "batch/v1",
         "kind": "Job",
         "metadata": {
-            "namespace": _SOPERATOR_NAMESPACE,
+            "namespace": namespace,
             "name": _persistent_mount_migration_job_name(target_ref),
             "labels": {
                 "app.kubernetes.io/managed-by": "nebius-cxcli",
@@ -4774,11 +4808,13 @@ def _delete_failed_job_before_reapply(
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
     name: str,
+    namespace: str = _SOPERATOR_NAMESPACE,
 ) -> None:
     exists, job = _kubectl_get_namespace_resource(
         command_runner=command_runner,
         kube_context=kube_context,
         resource=f"job/{name}",
+        namespace=namespace,
     )
     if not exists or not _job_condition_true(job, "Failed"):
         return
@@ -4788,7 +4824,7 @@ def _delete_failed_job_before_reapply(
             "--context",
             kube_context,
             "-n",
-            _SOPERATOR_NAMESPACE,
+            namespace,
             "delete",
             "job",
             name,
@@ -4803,6 +4839,7 @@ def _delete_job_before_reapply(
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
     name: str,
+    namespace: str = _SOPERATOR_NAMESPACE,
     wait: bool = False,
 ) -> None:
     command_runner(
@@ -4811,7 +4848,7 @@ def _delete_job_before_reapply(
             "--context",
             kube_context,
             "-n",
-            _SOPERATOR_NAMESPACE,
+            namespace,
             "delete",
             "job",
             name,
@@ -4829,6 +4866,7 @@ def _wait_for_job_complete_or_failed(
     kube_context: str,
     name: str,
     timeout_seconds: int,
+    namespace: str = _SOPERATOR_NAMESPACE,
     job_label: str = "Soperator data sync Job",
 ) -> None:
     deadline = time.monotonic() + timeout_seconds
@@ -4837,6 +4875,7 @@ def _wait_for_job_complete_or_failed(
             command_runner=command_runner,
             kube_context=kube_context,
             resource=f"job/{name}",
+            namespace=namespace,
         )
         if not exists:
             raise RuntimeError(f"{job_label} disappeared before completion: {name}")
@@ -4859,11 +4898,13 @@ def _probe_legacy_persistent_mount_sources(
     jail_pvc: str,
     entries: Sequence[Mapping[str, Any]],
     scheduling: Mapping[str, Any] | None,
+    namespace: str = _SOPERATOR_NAMESPACE,
 ) -> tuple[dict[str, Any], ...]:
     if not entries:
         return ()
     manifest = _persistent_mount_source_probe_job_manifest(
         target_ref=target_ref,
+        namespace=namespace,
         image=image,
         jail_pvc=jail_pvc,
         entries=entries,
@@ -4875,6 +4916,7 @@ def _probe_legacy_persistent_mount_sources(
             command_runner=command_runner,
             kube_context=kube_context,
             name=job_name,
+            namespace=namespace,
             wait=True,
         )
     _kubectl_apply_objects(
@@ -4887,6 +4929,7 @@ def _probe_legacy_persistent_mount_sources(
         command_runner=command_runner,
         kube_context=kube_context,
         name=job_name,
+        namespace=namespace,
         timeout_seconds=900,
         job_label="Soperator persistent mount source probe Job",
     )
@@ -4896,7 +4939,7 @@ def _probe_legacy_persistent_mount_sources(
             "--context",
             kube_context,
             "-n",
-            _SOPERATOR_NAMESPACE,
+            namespace,
             "logs",
             f"job/{job_name}",
         ],
@@ -6785,8 +6828,13 @@ def _login_pod_name(
     *,
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
+    namespace: str = _SOPERATOR_NAMESPACE,
 ) -> str:
-    names = _login_pod_names(command_runner=command_runner, kube_context=kube_context)
+    names = _login_pod_names(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        namespace=namespace,
+    )
     return names[0] if names else ""
 
 
@@ -6794,6 +6842,7 @@ def _login_pod_names(
     *,
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
+    namespace: str = _SOPERATOR_NAMESPACE,
 ) -> tuple[str, ...]:
     try:
         parsed = _json_value_from_command(
@@ -6803,7 +6852,7 @@ def _login_pod_names(
                 "--context",
                 kube_context,
                 "-n",
-                _SOPERATOR_NAMESPACE,
+                namespace,
                 "get",
                 "pods",
                 "-o",
@@ -7553,6 +7602,7 @@ def _active_login_ssh_session_probe(
     *,
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
+    namespace: str = _SOPERATOR_NAMESPACE,
     pod_names: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     script = (
@@ -7566,7 +7616,11 @@ def _active_login_ssh_session_probe(
     pods = (
         tuple(dict.fromkeys(str(name or "").strip() for name in pod_names if str(name or "").strip()))
         if pod_names is not None
-        else _login_pod_names(command_runner=command_runner, kube_context=kube_context)
+        else _login_pod_names(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            namespace=namespace,
+        )
     )
     pod_results: list[dict[str, Any]] = []
     total = 0
@@ -7578,7 +7632,7 @@ def _active_login_ssh_session_probe(
                 "--context",
                 kube_context,
                 "-n",
-                _SOPERATOR_NAMESPACE,
+                namespace,
                 "exec",
                 pod,
                 "--",
@@ -7614,6 +7668,7 @@ def _wait_for_login_session_policy(
     phase: dict[str, Any],
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
+    namespace: str = _SOPERATOR_NAMESPACE,
     policy: str,
     timeout_seconds: int,
     pod_names: Sequence[str] | None = None,
@@ -7647,6 +7702,7 @@ def _wait_for_login_session_policy(
         last_probe = _active_login_ssh_session_probe(
             command_runner=command_runner,
             kube_context=kube_context,
+            namespace=namespace,
             pod_names=pod_names,
         )
         continuity["last_session_probe"] = last_probe
@@ -15258,6 +15314,7 @@ def _nodeset_replicas(
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
     name: str,
+    namespace: str = _SOPERATOR_NAMESPACE,
 ) -> tuple[bool, int]:
     payload = _json_from_command(
         command_runner,
@@ -15266,7 +15323,7 @@ def _nodeset_replicas(
             "--context",
             kube_context,
             "-n",
-            _SOPERATOR_NAMESPACE,
+            namespace,
             "get",
             "nodeset",
             name,
@@ -15287,6 +15344,7 @@ def _hold_persistent_migration_writers(
     kube_context: str,
     values: Mapping[str, Any],
     state: dict[str, Any],
+    namespace: str = _SOPERATOR_NAMESPACE,
 ) -> list[str]:
     if state.get("status") == "held":
         return []
@@ -15295,7 +15353,7 @@ def _hold_persistent_migration_writers(
         command_runner=command_runner,
         kube_context=kube_context,
         resource="statefulsets.apps.kruise.io/login",
-        namespace=_SOPERATOR_NAMESPACE,
+        namespace=namespace,
         replicas=0,
         action="scale",
     )
@@ -15305,10 +15363,12 @@ def _hold_persistent_migration_writers(
             command_runner=command_runner,
             kube_context=kube_context,
             name=name,
+            namespace=namespace,
         )
         item = {
             "kind": "nodeset",
             "name": name,
+            "namespace": namespace,
             "exists": exists,
             "replicas": replicas,
             "target_replicas": 0,
@@ -15319,6 +15379,7 @@ def _hold_persistent_migration_writers(
                 kube_context=kube_context,
                 resource=f"nodeset/{name}",
                 patch={"spec": {"replicas": 0}},
+                namespace=namespace,
             )
         resources.append(item)
     state.update(
@@ -15336,6 +15397,7 @@ def _restore_persistent_migration_writers(
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
     state: dict[str, Any],
+    namespace: str = _SOPERATOR_NAMESPACE,
 ) -> list[str]:
     if state.get("status") != "held":
         return []
@@ -15352,6 +15414,7 @@ def _restore_persistent_migration_writers(
                 kube_context=kube_context,
                 resource=f"nodeset/{name}",
                 patch={"spec": {"replicas": _non_negative_int(item.get("replicas"), fallback=0)}},
+                namespace=str(item.get("namespace") or namespace),
             )
         elif kind == "login":
             resource = str(item.get("resource") or "statefulsets.apps.kruise.io/login")
@@ -15373,6 +15436,7 @@ def _ensure_persistent_migration_login_hold_allowed(
     phase: dict[str, Any],
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
+    namespace: str = _SOPERATOR_NAMESPACE,
     policy: str,
     timeout_seconds: int,
 ) -> list[str]:
@@ -15399,6 +15463,7 @@ def _ensure_persistent_migration_login_hold_allowed(
     login_pods = _login_pod_names(
         command_runner=command_runner,
         kube_context=kube_context,
+        namespace=namespace,
     )
     state["login_pods_before_hold"] = list(login_pods)
     session_phase = {"login_continuity": dict(state)}
@@ -15406,6 +15471,7 @@ def _ensure_persistent_migration_login_hold_allowed(
         phase=session_phase,
         command_runner=command_runner,
         kube_context=kube_context,
+        namespace=namespace,
         policy=policy,
         timeout_seconds=timeout_seconds,
         pod_names=login_pods,
@@ -15430,6 +15496,7 @@ def _execute_legacy_persistent_mount_migration(
     jail_pvc: str,
     entries: Sequence[Mapping[str, Any]],
     scheduling: Mapping[str, Any] | None,
+    namespace: str = _SOPERATOR_NAMESPACE,
     checkpoint_writer: Callable[[], None] | None = None,
 ) -> tuple[bool, list[str]]:
     migration_state = phase.setdefault("legacy_persistent_mount_migration", {})
@@ -15444,6 +15511,7 @@ def _execute_legacy_persistent_mount_migration(
         return False, ["Persistent mount migration already completed in checkpoint."]
     manifest = _persistent_mount_migration_job_manifest(
         target_ref=target_ref,
+        namespace=namespace,
         image=image,
         jail_pvc=jail_pvc,
         entries=entries,
@@ -15468,6 +15536,7 @@ def _execute_legacy_persistent_mount_migration(
             command_runner=command_runner,
             kube_context=kube_context,
             name=job_name,
+            namespace=namespace,
         )
     _kubectl_apply_objects(
         command_runner=command_runner,
@@ -15479,6 +15548,7 @@ def _execute_legacy_persistent_mount_migration(
         command_runner=command_runner,
         kube_context=kube_context,
         name=job_name,
+        namespace=namespace,
         timeout_seconds=3900,
         job_label="Soperator persistent mount migration Job",
     )
@@ -15488,7 +15558,7 @@ def _execute_legacy_persistent_mount_migration(
             "--context",
             kube_context,
             "-n",
-            _SOPERATOR_NAMESPACE,
+            namespace,
             "logs",
             f"job/{job_name}",
         ],

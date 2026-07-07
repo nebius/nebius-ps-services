@@ -471,6 +471,7 @@ def assert_doc_contracts(root: Path) -> None:
         "Keep current.md summarized; replace stale details instead of appending logs.",
         "Related same-workspace task-state candidates (not loaded):",
         "verify against current repo/runtime evidence",
+        "the prompt or local policy request authorizes delegation",
         "Local policy asks the main Codex agent to dynamically spawn bounded",
         "Choose the smallest useful set of targeted roles",
     )
@@ -481,7 +482,9 @@ def assert_doc_contracts(root: Path) -> None:
     required_agents_template = (
         "Read the durable task-state file injected by global hooks",
         "Keep the parent thread focused on objective, constraints, decisions",
-        "close completed helpers when\n  close controls are available",
+        "Treat that policy request as sufficient\n  authorization",
+        "do not ask for another user prompt only because the original",
+        "close completed helpers when close controls are available",
     )
     for needle in required_agents_template:
         if needle not in agents_template:

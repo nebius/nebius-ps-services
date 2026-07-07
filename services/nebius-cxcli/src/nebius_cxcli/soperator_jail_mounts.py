@@ -17,6 +17,7 @@ JAIL_PERSISTENT_HOME_MOUNT_PATH = "/home"
 JAIL_LEGACY_ROOT_PATH = "/mnt/jail"
 JAIL_MANAGED_STORE_PATH = "/mnt/jail-store"
 JAIL_MANAGED_ROOTFS_PATH = "/mnt/jail-store/rootfs"
+JAIL_MANAGED_SYSTEM_PATH = "/mnt/jail-store/.cxcli"
 JAIL_MANAGED_HOME_LOCAL_PATH = "/mnt/jail-store/shared/home"
 JAIL_EXTERNAL_ROOTFS_PATH = "/mnt/jail/.cxcli/rootfs"
 JAIL_EXTERNAL_SYSTEM_PATH = "/mnt/jail/.cxcli"
@@ -33,6 +34,8 @@ JAIL_EXTERNAL_AUTO_PERSISTENT_MOUNT_PATHS = (
     JAIL_PERSISTENT_HOME_MOUNT_PATH,
     *JAIL_EXTERNAL_DEFAULT_SHARED_MOUNT_PATHS,
 )
+JAIL_MANAGED_DEFAULT_SHARED_MOUNT_PATHS = JAIL_EXTERNAL_DEFAULT_SHARED_MOUNT_PATHS
+JAIL_MANAGED_AUTO_PERSISTENT_MOUNT_PATHS = JAIL_EXTERNAL_AUTO_PERSISTENT_MOUNT_PATHS
 
 
 @dataclass(frozen=True)
@@ -196,6 +199,11 @@ def jail_persistent_mount_decisions(
     explicit_mounts: Sequence[JailPersistentMount | Mapping[str, Any]],
 ) -> tuple[dict[str, Any], ...]:
     existing_paths = set(jail_existing_submount_paths(original_values))
+    store = _mapping(_mapping(patched_values.get("jailRootfs")).get("store"))
+    store_path = _normalize_path(
+        store.get("mountPath") or JAIL_LEGACY_ROOT_PATH,
+        field="jailRootfs.store.mountPath",
+    )
     explicit_by_path = {
         _normalize_path(mount.mount_path, field="jailPersistentMount.mountPath"): mount
         for mount in (_coerce_jail_persistent_mount(item) for item in explicit_mounts)
@@ -248,7 +256,7 @@ def jail_persistent_mount_decisions(
                 "status": status,
                 "source_status": source_status,
                 "origin": "explicit" if explicit is not None else "auto",
-                "source_path": f"{JAIL_LEGACY_ROOT_PATH}{mount_path}",
+                "source_path": f"{store_path}{mount_path}",
                 "target_local_path": local_path,
                 "copy_required": True,
             }
@@ -280,6 +288,16 @@ def external_default_jail_persistent_mounts() -> tuple[JailPersistentMount, ...]
             local_path=f"{JAIL_LEGACY_ROOT_PATH}/shared/{mount_path.strip('/')}",
         )
         for mount_path in JAIL_EXTERNAL_DEFAULT_SHARED_MOUNT_PATHS
+    )
+
+
+def managed_default_jail_persistent_mounts() -> tuple[JailPersistentMount, ...]:
+    return tuple(
+        JailPersistentMount(
+            mount_path=mount_path,
+            local_path=f"{JAIL_MANAGED_STORE_PATH}/shared/{mount_path.strip('/')}",
+        )
+        for mount_path in JAIL_MANAGED_DEFAULT_SHARED_MOUNT_PATHS
     )
 
 
@@ -523,6 +541,8 @@ def apply_jail_persistent_mount_values(
     target_ref: str,
     persistent_mounts: Sequence[JailPersistentMount | Mapping[str, Any]] = (),
     layout: str = "external",
+    include_default_shared_mounts: bool | None = None,
+    legacy_active_source: bool | None = None,
 ) -> dict[str, Any]:
     """Return Soperator chart values patched for single-SFS active/passive rootfs slots."""
 
@@ -532,8 +552,12 @@ def apply_jail_persistent_mount_values(
     managed = layout == "managed"
     store_path = JAIL_MANAGED_STORE_PATH if managed else JAIL_LEGACY_ROOT_PATH
     rootfs_path = JAIL_MANAGED_ROOTFS_PATH if managed else JAIL_EXTERNAL_ROOTFS_PATH
-    system_path = f"{store_path}/.cxcli" if managed else JAIL_EXTERNAL_SYSTEM_PATH
+    system_path = JAIL_MANAGED_SYSTEM_PATH if managed else JAIL_EXTERNAL_SYSTEM_PATH
     home_local_path = JAIL_MANAGED_HOME_LOCAL_PATH if managed else JAIL_EXTERNAL_HOME_LOCAL_PATH
+    if include_default_shared_mounts is None:
+        include_default_shared_mounts = not managed
+    if legacy_active_source is None:
+        legacy_active_source = not managed
 
     patched = copy.deepcopy(dict(to_plain_data(values)))
     jail_rootfs = _mutable_mapping(patched, "jailRootfs")
@@ -545,20 +569,34 @@ def apply_jail_persistent_mount_values(
     store["mountPath"] = store_path
     store["rootfsPath"] = rootfs_path
     store.setdefault("volumeKey", "jail")
+    if managed:
+        volume = _mutable_mapping(patched, "volume")
+        jail_volume = _mutable_mapping(volume, "jail")
+        jail_volume["localPath"] = store_path
     slots = _mutable_mapping(jail_rootfs, "slots")
     for slot in (JAIL_ROOTFS_SLOT_A, JAIL_ROOTFS_SLOT_B):
         slot_values = _mutable_mapping(slots, slot)
         slot_values.update(_slot_values(rootfs_path, slot))
-    if not managed:
+    if legacy_active_source:
         adoption = _mutable_mapping(jail_rootfs, "adoption")
         adoption.setdefault("activeSource", JAIL_LEGACY_ACTIVE_SOURCE)
         adoption.setdefault("rollbackSource", JAIL_LEGACY_ACTIVE_SOURCE)
+    elif "adoption" in jail_rootfs:
+        adoption = jail_rootfs.get("adoption")
+        if isinstance(adoption, MutableMapping) and not adoption:
+            jail_rootfs.pop("adoption", None)
 
+    default_mounts = (
+        managed_default_jail_persistent_mounts()
+        if managed
+        else external_default_jail_persistent_mounts()
+    ) if include_default_shared_mounts else ()
+    configured_mounts = _sequence_of_mappings(patched.get(JAIL_PERSISTENT_MOUNTS_VALUES_KEY))
     mounts = normalize_jail_persistent_mounts(
-        persistent_mounts,
+        (*configured_mounts, *persistent_mounts),
         values=patched,
         include_home=True,
-        default_mounts=() if managed else external_default_jail_persistent_mounts(),
+        default_mounts=default_mounts,
         home_local_path=home_local_path,
         store_path=store_path,
         rootfs_path=rootfs_path,
@@ -609,7 +647,10 @@ def jail_rootfs_uses_legacy_active_source(values: Mapping[str, Any]) -> bool:
 
 
 def jail_persistent_mount_exclude_paths(values: Mapping[str, Any]) -> tuple[str, ...]:
-    paths = [JAIL_EXTERNAL_SYSTEM_PATH]
+    store = _mapping(_mapping(values.get("jailRootfs")).get("store"))
+    store_path = str(store.get("mountPath") or JAIL_LEGACY_ROOT_PATH).strip()
+    system_path = str(store.get("systemPath") or f"{store_path.rstrip('/')}/.cxcli").strip()
+    paths = [system_path]
     for mount in _sequence_of_mappings(values.get(JAIL_PERSISTENT_MOUNTS_VALUES_KEY)):
         local_path = str(mount.get("localPath") or "").strip()
         if local_path:

@@ -6,6 +6,14 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Aligned managed `soperator upgrade` with the external Jail Upgrade pattern.
+  Managed upgrades now expose `--jail-persistent-mount`,
+  `--login-session-policy`, and `--login-session-drain-timeout`, automatically
+  preserve `/home`, `/data`, `/scripts`, and `/models` during first adoption
+  under `/mnt/jail-store/shared/...`, probe and migrate legacy rootfs data
+  before passive-slot population, run managed migration Jobs and writer holds in
+  the selected Soperator namespace, and keep login/worker writers held for
+  resume if a later refresh step fails after the persistent copy completes.
 - Fixed Soperator discovery guidance so app version, chart package version, and
   Jail rootfs image-tag version are reported separately. Discovery now records
   current and target populate-jail image evidence and only reports a Soperator

@@ -228,6 +228,7 @@ def _stub_soperator_upgrade_runtime(
     calls: list[object],
     *,
     populate_jail_image_changed: bool = True,
+    command_calls: list[tuple[tuple[str, ...], str | None]] | None = None,
 ) -> None:
     backup_path = paths.project_dir / "backups" / "soperator-upgrade-test.tar.gz"
 
@@ -371,20 +372,6 @@ def _stub_soperator_upgrade_runtime(
     monkeypatch.setattr(cli, "inspect_populate_jail", _inspect_populate_jail)
     monkeypatch.setattr(
         cli,
-        "jail_persistent_mount_status",
-        lambda _values: SimpleNamespace(
-            status="verified",
-            reason="persistent mounts are test-mode storage",
-            verified=True,
-            as_payload=lambda: {
-                "status": "verified",
-                "reason": "persistent mounts are test-mode storage",
-                "mounts": [],
-            },
-        ),
-    )
-    monkeypatch.setattr(
-        cli,
         "wait_for_active_passive_populate_jail_job",
         lambda *_args, **_kwargs: PopulateJailSnapshot(
             slurmcluster_name="mk8s",
@@ -421,11 +408,58 @@ def _stub_soperator_upgrade_runtime(
         check: bool = True,
         extra_env: Mapping[str, str] | None = None,
     ) -> cli._SoperatorUpgradeCommandResult:
-        del input_text, timeout_seconds, check, extra_env
+        del timeout_seconds, check, extra_env
         arg_text = tuple(str(arg) for arg in args)
+        if command_calls is not None:
+            command_calls.append((arg_text, input_text))
         stdout = ""
-        if "logs" in arg_text and any("jail-capacity-probe" in arg for arg in arg_text):
+        if "get" in arg_text and any(
+            arg.startswith("job/") and "jail-persistent" in arg for arg in arg_text
+        ):
+            stdout = json.dumps(
+                {"status": {"conditions": [{"type": "Complete", "status": "True"}]}}
+            )
+        elif "get" in arg_text and "pods" in arg_text:
+            stdout = json.dumps(
+                {
+                    "items": [
+                        {
+                            "metadata": {
+                                "name": "login-0",
+                                "labels": {"app.kubernetes.io/component": "login"},
+                            },
+                            "status": {"phase": "Running"},
+                        }
+                    ]
+                }
+            )
+        elif "exec" in arg_text and "login-0" in arg_text:
+            stdout = "0\n"
+        elif "logs" in arg_text and any("jail-capacity-probe" in arg for arg in arg_text):
             stdout = "active_used_kib=1048576\npassive_available_kib=209715200\n"
+        elif "logs" in arg_text and any("jail-persistent-source-probe" in arg for arg in arg_text):
+            stdout = "\n".join(
+                json.dumps(
+                    {
+                        "mount_path": mount_path,
+                        "source_path": f"/mnt/jail-store{mount_path}",
+                        "target_path": f"/mnt/jail-store/shared/{mount_path.strip('/')}",
+                        "marker_path": (
+                            "/mnt/jail-store/.cxcli/persistent-migrations/"
+                            f"{mount_path.strip('/')}.json"
+                        ),
+                        "source_status": "present",
+                        "marker_status": "none",
+                        "marker_present": False,
+                    }
+                )
+                for mount_path in ("/home", "/data", "/scripts", "/models")
+            )
+        elif "logs" in arg_text and any("jail-persistent-migration" in arg for arg in arg_text):
+            stdout = "\n".join(
+                f"persistent mount migration copied: {mount_path}"
+                for mount_path in ("/home", "/data", "/scripts", "/models")
+            )
         return cli._SoperatorUpgradeCommandResult(
             args=arg_text,
             returncode=0,
@@ -502,6 +536,7 @@ def test_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path) -> 
         strategy_max_surge_count=None,
         backup_dir=None,
         populate_jail_refresh="auto",
+        jail_persistent_mounts=("/data=/mnt/jail-store/shared/data",),
         jail_sfs_resize_policy="fail",
         jail_sfs_resize_to_gib=None,
         job_policy="requeue-selected",
@@ -509,18 +544,25 @@ def test_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path) -> 
         requeue_job=("42", "43"),
         job_wait_timeout="45m",
         job_refresh_interval="10s",
+        login_session_policy="wait-active",
+        login_session_drain_timeout="20m",
         dry_run=False,
         approve_remediation=False,
     )
 
     assert "--cancel-job" in args
     assert "--preserve-jail-home" not in args
+    assert args[args.index("--jail-persistent-mount") + 1] == (
+        "/data=/mnt/jail-store/shared/data"
+    )
     assert "--jail-sfs-resize-policy" in args
     assert args[args.index("--jail-sfs-resize-policy") + 1] == "fail"
     assert "--home-sfs-size-multiplier" not in args
     assert "--home-sfs-size-gib" not in args
     assert "--confirm-jail-rootfs-overwrite" not in args
     assert args[args.index("--cancel-job") + 1] == "17"
+    assert args[args.index("--login-session-policy") + 1] == "wait-active"
+    assert args[args.index("--login-session-drain-timeout") + 1] == "20m"
     assert [args[index + 1] for index, item in enumerate(args) if item == "--requeue-job"] == [
         "42",
         "43",
@@ -769,6 +811,9 @@ def _run_soperator_upgrade_for_test(
     node_group: str = "",
     job_policy: str | None = None,
     populate_jail_refresh: str = "auto",
+    jail_persistent_mounts: Sequence[str] = (),
+    login_session_policy: str = "wait-active",
+    login_session_drain_timeout: str = "30m",
     dry_run: bool = False,
     allow_unsupported_soperator_upgrade_path: bool = False,
     interactive: bool = False,
@@ -786,6 +831,7 @@ def _run_soperator_upgrade_for_test(
         strategy_max_surge_count=None,
         backup_dir=None,
         populate_jail_refresh=populate_jail_refresh,
+        jail_persistent_mounts=jail_persistent_mounts,
         jail_sfs_resize_policy=None,
         jail_sfs_resize_to_gib=None,
         job_policy=job_policy,
@@ -793,6 +839,8 @@ def _run_soperator_upgrade_for_test(
         requeue_job=(),
         job_wait_timeout=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
         job_refresh_interval=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
+        login_session_policy=login_session_policy,
+        login_session_drain_timeout=login_session_drain_timeout,
         dry_run=dry_run,
         allow_unsupported_soperator_upgrade_path=allow_unsupported_soperator_upgrade_path,
         interactive=interactive,
@@ -3255,7 +3303,7 @@ def test_upgrade_helm_chart_rejects_soperator_selector_with_canonical_command(
                             "id": "soperator",
                             "instance_id": "mk8s",
                             "enabled": True,
-                            "namespace": "soperator",
+                            "namespace": "soperator-prod",
                             "release-name": "soperator",
                             "target_ref": "mk8s",
                             "version": "0.25.0",
@@ -3433,7 +3481,7 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
                             "id": "soperator",
                             "instance_id": "mk8s",
                             "enabled": True,
-                            "namespace": "soperator",
+                            "namespace": "soperator-prod",
                             "release-name": "soperator",
                             "target_ref": "mk8s",
                             "version": "0.25.0",
@@ -3447,6 +3495,7 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
     generated_config = SimpleNamespace()
     manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
     calls: list[object] = []
+    command_calls: list[tuple[tuple[str, ...], str | None]] = []
 
     monkeypatch.setattr(
         cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
@@ -3482,7 +3531,7 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
             calls.append(("soperator-validation", kwargs["phase_label"])) or ()
         ),
     )
-    _stub_soperator_upgrade_runtime(monkeypatch, paths, calls)
+    _stub_soperator_upgrade_runtime(monkeypatch, paths, calls, command_calls=command_calls)
     rich_console = cli.Console(record=True, width=300)
     monkeypatch.setattr(cli, "console", rich_console)
 
@@ -3490,14 +3539,20 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
         paths.config_path,
         target_ref="mk8s",
         to_chart_version="0.26.0",
+        login_session_policy="wait-active",
     )
 
     payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
     assert payload["apps"]["charts"][0]["version"] == "0.26.0"
     values = payload["apps"]["charts"][0]["values"]
     assert values["jailPersistentMounts"] == [
-        {"mountPath": "/home", "localPath": "/mnt/jail-store/shared/home"}
+        {"mountPath": "/home", "localPath": "/mnt/jail-store/shared/home"},
+        {"mountPath": "/data", "localPath": "/mnt/jail-store/shared/data"},
+        {"mountPath": "/scripts", "localPath": "/mnt/jail-store/shared/scripts"},
+        {"mountPath": "/models", "localPath": "/mnt/jail-store/shared/models"},
     ]
+    assert values["jailRootfs"]["adoption"]["activeSource"] == "slot"
+    assert values["jailRootfs"]["adoption"]["rollbackSource"] == "legacy-rootfs"
     assert "jail_home" not in values
     assert "home" not in values["jailRootfs"]
     assert calls == [
@@ -3531,6 +3586,50 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
         "soperator-static-ready",
         ("soperator-validation", "Postflight"),
     ]
+
+    def _command_namespace(command: tuple[str, ...]) -> str:
+        return command[command.index("-n") + 1] if "-n" in command else ""
+
+    namespace_sensitive_commands = [
+        command
+        for command, _input_text in command_calls
+        if (
+            "jail-persistent" in " ".join(command)
+            or "statefulsets.apps.kruise.io/login" in command
+            or ("get" in command and "pods" in command)
+            or ("exec" in command and "login-0" in command)
+        )
+    ]
+    assert namespace_sensitive_commands
+    assert {_command_namespace(command) for command in namespace_sensitive_commands} == {
+        "soperator-prod"
+    }
+
+    applied_jobs: dict[str, Mapping[str, Any]] = {}
+    for command, input_text in command_calls:
+        if command[-3:] != ("apply", "-f", "-") or not input_text:
+            continue
+        try:
+            payload_text = json.loads(input_text)
+        except json.JSONDecodeError:
+            payload_text = yaml.safe_load(input_text) or {}
+        for item in payload_text.get("items", []):
+            if not isinstance(item, Mapping) or item.get("kind") != "Job":
+                continue
+            component = str(
+                item.get("metadata", {})
+                .get("labels", {})
+                .get("app.kubernetes.io/component", "")
+            )
+            if component:
+                applied_jobs[component] = item
+    for component in (
+        "jail-persistent-source-probe",
+        "jail-persistent-migration",
+        "populate-jail",
+    ):
+        assert applied_jobs[component]["metadata"]["namespace"] == "soperator-prod"
+
     report = json.loads(
         (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_JSON_FILENAME).read_text(encoding="utf-8")
     )
@@ -3545,6 +3644,20 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
     assert stage_verification["mk8s-node-template"]["status"] == "skipped"
     assert stage_verification["post-mk8s-validation"]["status"] == "skipped"
     assert stage_verification["mk8s-node-template"]["verified_at"]
+    assert report["persistent_jail_mounts"]["auto_preserve_paths"] == [
+        "/home",
+        "/data",
+        "/scripts",
+        "/models",
+    ]
+    assert report["persistent_jail_mounts"]["first_adoption"] is True
+    assert report["populate_jail_refresh"]["legacy_active_rootfs"] is True
+    assert report["populate_jail_refresh"]["legacy_persistent_mount_migration"][
+        "status"
+    ] == "completed"
+    assert report["populate_jail_refresh"]["persistent_migration_writer_hold"][
+        "status"
+    ] == "restored"
     phase_state = report["phase_state"]
     for phase_id in cli._SOPERATOR_UPGRADE_PLANNED_PHASE_IDS:
         verification = phase_state[phase_id]["fast_verification"]
@@ -3582,6 +3695,67 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
     assert "Phase validation backup: PASS" in rendered
     assert "Phase validation mk8s-node-template: SKIP" in rendered
     assert "Phase validation shared-safety-verification: PASS" in rendered
+
+
+def test_soperator_upgrade_target_ready_refuses_managed_first_adoption_hold(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    paths.infra_dir.mkdir(parents=True)
+    paths.flux_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
+    paths.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "apps": {
+                    "charts": [
+                        {
+                            "id": "soperator",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "namespace": "soperator",
+                            "release-name": "soperator",
+                            "target_ref": "mk8s",
+                            "version": "0.25.0",
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    generated_config = SimpleNamespace()
+    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
+
+    monkeypatch.setattr(
+        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(cli, "_run_generated_bundle_validation", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "flux_apply_command", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_verify_soperator_static_upgrade_ready", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_raise_if_soperator_upgrade_would_bypass_migration", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_validation_phase", lambda *_args, **_kwargs: ())
+    _stub_soperator_upgrade_runtime(monkeypatch, paths, [])
+
+    with pytest.raises(RuntimeError, match="target-ready login session policy refuses"):
+        _run_soperator_upgrade_for_test(
+            config_path=paths.config_path,
+            login_session_policy="target-ready",
+        )
+
+    checkpoint = json.loads(
+        cli._soperator_upgrade_checkpoint_path(paths.config_path, "mk8s").read_text(
+            encoding="utf-8"
+        )
+    )
+    phase = checkpoint["phase_state"]["populate-jail-refresh"]
+    assert phase["persistent_migration_login_hold_policy"]["status"] == "pending"
+    assert phase["persistent_migration_writer_hold"] == {}
 
 
 def test_soperator_upgrade_fast_stage_failure_blocks_next_stage(
@@ -5971,6 +6145,7 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
         strategy_max_surge_count=None,
         backup_dir=None,
         populate_jail_refresh="auto",
+        jail_persistent_mounts=(),
         jail_sfs_resize_policy=None,
         jail_sfs_resize_to_gib=None,
         job_policy=None,
@@ -5978,6 +6153,8 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
         requeue_job=(),
         job_wait_timeout=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
         job_refresh_interval=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
+        login_session_policy="wait-active",
+        login_session_drain_timeout="30m",
         dry_run=False,
         interactive=False,
     )
@@ -23537,6 +23714,17 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--job-policy" in normalized_managed_soperator_upgrade_help
     assert "--requeue-job" in normalized_managed_soperator_upgrade_help
     assert "--backup-dir" in normalized_managed_soperator_upgrade_help
+    assert "--jail-persistent-mount" in normalized_managed_soperator_upgrade_help
+    assert "<mountPath>=<localPath>" in normalized_managed_soperator_upgrade_help
+    assert "/mnt/jail-store/shared/checkpoints" in normalized_managed_soperator_upgrade_help
+    assert "--login-session-policy" in normalized_managed_soperator_upgrade_help
+    assert "--login-session-drain-timeout" in normalized_managed_soperator_upgrade_help
+    assert "target-ready keeps normal slot switches gated" in (
+        normalized_managed_soperator_upgrade_help
+    )
+    assert "wait-active waits for active SSH sessions" in (
+        normalized_managed_soperator_upgrade_help
+    )
     assert "--preserve-jail-home" not in normalized_managed_soperator_upgrade_help
     assert "--no-preserve-jail-home" not in normalized_managed_soperator_upgrade_help
     assert "--jail-sfs-resize-policy" in normalized_managed_soperator_upgrade_help
