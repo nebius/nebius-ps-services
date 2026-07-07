@@ -76,9 +76,12 @@ folder. The single-source form copies only SDLC hook files into
 `${CODEX_HOME:-$HOME/.codex}/hooks`. Add `--register-hooks` when the installer
 should merge the SDLC `PreToolUse` and `Stop` entries into `hooks.json`. Add
 `--replace-hooks-json` only when intentionally replacing `hooks.json` with a
-clean file built from the selected source manifests. Registration is
-idempotent, does not trust hooks, refuses duplicate Python hook files within
-the same hook event, and reports extra installed hook files or `hooks.json`
-entries for manual review instead of removing them by default.
+clean file built from the selected source manifests. Hook payload sync records
+local provenance hashes so source-owned unmodified hook files can auto-upgrade;
+unproven local edits still require review unless intentionally listed by
+basename with `--overwrite-hook-files`, which backs up each replaced target.
+Registration is idempotent, does not trust hooks, refuses duplicate Python hook
+files within the same hook event, and reports extra installed hook files or
+`hooks.json` entries for manual review instead of removing them by default.
 Restart Codex and review the PreToolUse and Stop entries in `/hooks` after
 syncing.

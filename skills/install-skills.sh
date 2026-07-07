@@ -5,8 +5,8 @@ set -euo pipefail
 #
 # Usage: ./install-skills.sh [source] [destination_dir]
 #        ./install-skills.sh --remove-skill <skill_name> [destination_dir]
-#        ./install-skills.sh --install-hooks <source_hook_dir> [--register-hooks] [--replace-hooks-json]
-#        ./install-skills.sh --install-all-hooks [--register-hooks] [--replace-hooks-json]
+#        ./install-skills.sh --install-hooks <source_hook_dir> [--register-hooks] [--replace-hooks-json] [--overwrite-hook-files <name[,name...]>]
+#        ./install-skills.sh --install-all-hooks [--register-hooks] [--replace-hooks-json] [--overwrite-hook-files <name[,name...]>]
 #        ./install-skills.sh --help
 # No-argument install: source is this script's directory and destination is
 # ~/.agents/skills. --remove-skill without a destination removes from the same
@@ -16,8 +16,8 @@ set -euo pipefail
 #   - https://github.com/<owner>/<repo>/tree/<ref>/<subpath>
 #
 # Requirements: bash, rsync, and git (GitHub sources only). Hook installation
-# also uses install, find, cmp, chmod, awk, cut, sort, and mktemp. Hook
-# registration also uses python3.
+# also uses install, find, cmp, chmod, awk, cut, sort, date, mktemp, and
+# shasum or sha256sum. Hook registration also uses python3.
 # How behavior is enforced:
 #   - Skill detection: only directories containing SKILL.md are treated as skills.
 #   - Idempotency: rsync keeps destination in sync (--delete, --omit-dir-times) and
@@ -29,11 +29,13 @@ set -euo pipefail
 #   - Drift visibility: destination skills missing from the selected source are
 #     listed at the end with a --remove-skill hint instead of being removed unless
 #     they are still marked as owned by the same source.
-#   - Hook drift visibility: hook installation copies missing hook files and
-#     leaves differing existing hook files for manual review. It lists extra
-#     installed hook files and hooks.json registrations that are not present in
-#     the selected source manifests, but it never deletes them automatically
-#     unless --replace-hooks-json is explicitly set for registrations.
+#   - Hook drift visibility: hook installation copies missing hook files,
+#     upgrades source-owned unmodified hook files using provenance hashes, and
+#     leaves unproven local edits for manual review unless explicitly listed
+#     with --overwrite-hook-files. It lists extra installed hook files and
+#     hooks.json registrations that are not present in the selected source
+#     manifests, but it never deletes them automatically unless
+#     --replace-hooks-json is explicitly set for registrations.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_SRC_DIR="${SCRIPT_DIR}"
@@ -94,8 +96,8 @@ show_usage() {
   printf '%b\n' "${S_BOLD}Usage:${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}[source] [destination_dir]${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}--remove-skill <skill_name> [destination_dir]${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}--install-hooks <source_hook_dir> [--register-hooks] [--replace-hooks-json]${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}--install-all-hooks [--register-hooks] [--replace-hooks-json]${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}--install-hooks <source_hook_dir> [--register-hooks] [--replace-hooks-json] [--overwrite-hook-files <name[,name...]>]${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}--install-all-hooks [--register-hooks] [--replace-hooks-json] [--overwrite-hook-files <name[,name...]>]${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}--help${S_RESET}"
   printf '\n'
 
@@ -120,7 +122,7 @@ show_usage() {
   printf '%b\n' "  ${S_YELLOW}--remove-skill${S_RESET}   Remove one skill by its visible Codex skill name or folder name"
   printf '%b\n' "  ${S_YELLOW}--install-hooks${S_RESET}  Copy hook files from a source hook directory into"
   printf '%b\n' "                    ${S_CYAN}\${CODEX_HOME:-~/.codex}/hooks${S_RESET}, stripping .template suffixes"
-  printf '%b\n' "                    and refusing to replace differing existing hook files"
+  printf '%b\n' "                    and refusing unproven local hook edits"
   printf '%b\n' "                    without modifying hooks.json unless --register-hooks is also set"
   printf '%b\n' "  ${S_YELLOW}--install-all-hooks${S_RESET}"
   printf '%b\n' "                    Copy hook files from every ${S_CYAN}*/assets/hooks${S_RESET} directory"
@@ -132,6 +134,10 @@ show_usage() {
   printf '%b\n' "  ${S_YELLOW}--replace-hooks-json${S_RESET}"
   printf '%b\n' "                    With --register-hooks, replace hooks.json with a clean"
   printf '%b\n' "                    file built only from selected source manifest(s)"
+  printf '%b\n' "  ${S_YELLOW}--overwrite-hook-files${S_RESET}"
+  printf '%b\n' "                    Intentionally replace listed hook file basenames,"
+  printf '%b\n' "                    comma-separated, comma-and-space separated, or repeated;"
+  printf '%b\n' "                    backs up each target first"
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Examples:${S_RESET}"
@@ -145,6 +151,8 @@ show_usage() {
   printf '%b\n' "  ${S_CYAN}./install-skills.sh --install-hooks config-codex/assets/hooks --register-hooks${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./install-skills.sh --install-all-hooks --register-hooks${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./install-skills.sh --install-all-hooks --register-hooks --replace-hooks-json${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./install-skills.sh --install-all-hooks --overwrite-hook-files stop_sdlc_continue.py, test_sdlc_hooks.py${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./install-skills.sh --install-hooks sdlc-start/assets/hooks --overwrite-hook-files stop_sdlc_continue.py, test_sdlc_hooks.py${S_RESET}"
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Notes:${S_RESET}"
@@ -157,10 +165,12 @@ show_usage() {
   printf '%b\n' "  - Reinstalling from a source that still contains the skill will add it back."
   printf '%b\n' "  - ${S_CYAN}--install-hooks${S_RESET} is opt-in because hooks are runtime guardrails, not skills."
   printf '%b\n' "  - ${S_CYAN}--install-all-hooks${S_RESET} discovers only hook-only ${S_CYAN}*/assets/hooks${S_RESET} directories under this source."
-  printf '%b\n' "  - Existing hook files with different content are left unchanged for manual review."
+  printf '%b\n' "  - Source-owned unmodified hook files are upgraded using local provenance hashes."
+  printf '%b\n' "  - Unproven local hook edits are left unchanged for manual review unless listed with ${S_CYAN}--overwrite-hook-files${S_RESET}."
   printf '%b\n' "  - ${S_CYAN}--register-hooks${S_RESET} preserves existing ${S_CYAN}hooks.json${S_RESET} entries and appends missing source entries."
   printf '%b\n' "  - ${S_CYAN}--register-hooks${S_RESET} refuses duplicate Python hook files within the same hook event."
   printf '%b\n' "  - ${S_CYAN}--replace-hooks-json${S_RESET} explicitly backs up and replaces ${S_CYAN}hooks.json${S_RESET} with selected source entries."
+  printf '%b\n' "  - ${S_CYAN}--overwrite-hook-files${S_RESET} affects hook payload files only, not ${S_CYAN}hooks.json${S_RESET}."
   printf '%b\n' "  - Hook installation reports extra installed hook files and ${S_CYAN}hooks.json${S_RESET} entries not present in the selected source."
   printf '%b\n' "  - After installing new or changed hooks, restart Codex and review/trust the hook entries in ${S_CYAN}/hooks${S_RESET}."
   printf '%b\n' "  - If newly installed skills are not visible, restart the VS Code extension host ${S_DIM}(Developer: Restart Extension Host)${S_RESET}."
@@ -185,6 +195,30 @@ hash_string() {
 
   # Fallback key if hashing tools are unavailable.
   printf '%s' "${value}" | tr '/ :@' '____'
+}
+
+hash_file() {
+  local file="$1"
+
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "${file}" | awk '{print $1}'
+    return
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "${file}" | awk '{print $1}'
+    return
+  fi
+
+  log_error "either 'shasum' or 'sha256sum' is required for hook file provenance."
+  exit 1
+}
+
+require_hook_hash_command() {
+  if ! command -v shasum >/dev/null 2>&1 && ! command -v sha256sum >/dev/null 2>&1; then
+    log_error "either 'shasum' or 'sha256sum' is required for hook file provenance."
+    log_note "Install one SHA-256 tool and run again."
+    exit 1
+  fi
 }
 
 expand_home_path() {
@@ -591,34 +625,253 @@ hook_source_label() {
   printf '%s\n' "${hook_src}"
 }
 
+hook_source_id() {
+  local hook_src="$1"
+
+  printf 'local:%s\n' "${hook_src}"
+}
+
+hook_state_dir() {
+  local codex_home="$1"
+
+  printf '%s/.install-hooks-state\n' "${codex_home}"
+}
+
+hook_state_file() {
+  local codex_home="$1"
+
+  printf '%s/hook-files.tsv\n' "$(hook_state_dir "${codex_home}")"
+}
+
+read_hook_target_hash_from_state() {
+  local codex_home="$1"
+  local dest_rel="$2"
+  local source_id="$3"
+  local state_file=""
+
+  state_file="$(hook_state_file "${codex_home}")"
+  [[ -f "${state_file}" ]] || return 1
+
+  awk -F '\t' -v dest_rel="${dest_rel}" -v source_id="${source_id}" '
+    $1 == dest_rel && $2 == source_id { print $5; found = 1; exit }
+    END { exit found ? 0 : 1 }
+  ' "${state_file}"
+}
+
+write_hook_file_provenance() {
+  local codex_home="$1"
+  local dest_rel="$2"
+  local source_id="$3"
+  local source_rel="$4"
+  local source_sha="$5"
+  local target_sha="$6"
+  local state_dir=""
+  local state_file=""
+  local tmp_state=""
+
+  state_dir="$(hook_state_dir "${codex_home}")"
+  state_file="$(hook_state_file "${codex_home}")"
+  mkdir -p "${state_dir}"
+  tmp_state="$(mktemp)"
+
+  if [[ -f "${state_file}" ]]; then
+    awk -F '\t' -v dest_rel="${dest_rel}" '$1 != dest_rel { print }' "${state_file}" > "${tmp_state}"
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\n' \
+    "${dest_rel}" \
+    "${source_id}" \
+    "${source_rel}" \
+    "${source_sha}" \
+    "${target_sha}" >> "${tmp_state}"
+  sort -u "${tmp_state}" -o "${tmp_state}"
+  mv "${tmp_state}" "${state_file}"
+}
+
+hook_file_can_auto_upgrade() {
+  local codex_home="$1"
+  local dest_rel="$2"
+  local source_id="$3"
+  local dest="$4"
+  local recorded_target_sha=""
+  local current_target_sha=""
+
+  [[ -f "${dest}" ]] || return 1
+  if ! recorded_target_sha="$(read_hook_target_hash_from_state "${codex_home}" "${dest_rel}" "${source_id}")"; then
+    return 1
+  fi
+  current_target_sha="$(hash_file "${dest}")"
+  [[ "${current_target_sha}" == "${recorded_target_sha}" ]]
+}
+
+hook_overwrite_backup_dir() {
+  local codex_home="$1"
+
+  if [[ -z "${HOOK_OVERWRITE_BACKUP_DIR}" ]]; then
+    HOOK_OVERWRITE_BACKUP_DIR="$(hook_state_dir "${codex_home}")/backups/$(date -u +%Y%m%d%H%M%S)-$$"
+  fi
+  printf '%s\n' "${HOOK_OVERWRITE_BACKUP_DIR}"
+}
+
+backup_hook_file_for_overwrite() {
+  local codex_home="$1"
+  local dest_rel="$2"
+  local dest="$3"
+  local backup_dest=""
+
+  backup_dest="$(hook_overwrite_backup_dir "${codex_home}")/${dest_rel}"
+  mkdir -p "$(dirname "${backup_dest}")"
+  cp -p "${dest}" "${backup_dest}"
+  log_note "Backed up overwritten hook file: ${backup_dest}"
+}
+
+normalize_overwrite_hook_files() {
+  local output_file="$1"
+  local raw=""
+  local compact=""
+  local part=""
+  local name=""
+  local tmp_file=""
+  local raw_values=()
+  local raw_count=0
+  local idx=0
+  local parts=()
+
+  shift
+  raw_values=("$@")
+  raw_count="${#raw_values[@]}"
+  tmp_file="$(mktemp)"
+  : > "${tmp_file}"
+  for ((idx = 0; idx < raw_count; idx++)); do
+    raw="${raw_values[idx]}"
+    compact="${raw//[[:space:]]/}"
+    if [[ -z "${compact}" || "${compact}" == ","* || "${compact}" == *",,"* ]]; then
+      log_error "--overwrite-hook-files contains an empty hook file name."
+      rm -f "${tmp_file}"
+      exit 1
+    fi
+    if [[ "${compact}" == *"," ]]; then
+      if [[ "${idx}" -eq $((raw_count - 1)) ]]; then
+        log_error "--overwrite-hook-files contains an empty hook file name."
+        rm -f "${tmp_file}"
+        exit 1
+      fi
+      compact="${compact%,}"
+    fi
+
+    IFS=',' read -r -a parts <<< "${compact}"
+    for part in "${parts[@]}"; do
+      name="${part}"
+      if [[ -z "${name}" ]]; then
+        log_error "--overwrite-hook-files contains an empty hook file name."
+        rm -f "${tmp_file}"
+        exit 1
+      fi
+      if [[ "${name}" == */* || "${name}" == *\\* || "${name}" == "." || "${name}" == ".." ]]; then
+        log_error "--overwrite-hook-files accepts hook file basenames only: ${name}"
+        rm -f "${tmp_file}"
+        exit 1
+      fi
+      printf '%s\n' "${name}" >> "${tmp_file}"
+    done
+  done
+  sort -u "${tmp_file}" > "${output_file}"
+  rm -f "${tmp_file}"
+}
+
+is_hook_overwrite_requested() {
+  local overwrite_names_file="$1"
+  local basename="$2"
+
+  [[ -s "${overwrite_names_file}" ]] || return 1
+  grep -Fxq -- "${basename}" "${overwrite_names_file}"
+}
+
+validate_hook_overwrite_requests() {
+  local overwrite_names_file="$1"
+  local catalog=""
+  local hook_src=""
+  local src=""
+  local rel=""
+  local dest_rel=""
+  local basename=""
+  local duplicate=""
+  local requested=""
+
+  [[ -s "${overwrite_names_file}" ]] || return 0
+
+  shift
+  catalog="$(mktemp)"
+  for hook_src in "$@"; do
+    while IFS= read -r -d '' src; do
+      rel="${src#"${hook_src}/"}"
+      is_installable_hook_rel "${rel}" || continue
+      dest_rel="${rel%.template}"
+      basename="$(basename "${dest_rel}")"
+      printf '%s\t%s\t%s\n' "${basename}" "${dest_rel}" "${src}" >> "${catalog}"
+    done < <(find "${hook_src}" -type f -print0)
+  done
+
+  duplicate="$(cut -f 1 "${catalog}" | sort | uniq -d | head -n 1 || true)"
+  if [[ -n "${duplicate}" ]]; then
+    log_error "--overwrite-hook-files cannot use basename-only matching because selected hook sources contain duplicate basename: ${duplicate}"
+    awk -F '\t' -v basename="${duplicate}" '$1 == basename { print "  - " $2 " (" $3 ")" }' "${catalog}" >&2
+    rm -f "${catalog}"
+    exit 1
+  fi
+
+  while IFS= read -r requested; do
+    [[ -n "${requested}" ]] || continue
+    if ! awk -F '\t' -v requested="${requested}" '$1 == requested { found = 1; exit } END { exit found ? 0 : 1 }' "${catalog}"; then
+      log_error "--overwrite-hook-files requested a hook file not present in selected source: ${requested}"
+      rm -f "${catalog}"
+      exit 1
+    fi
+  done < "${overwrite_names_file}"
+
+  rm -f "${catalog}"
+}
+
 HOOK_SYNC_INSTALLED=0
 HOOK_SYNC_UNCHANGED=0
 HOOK_SYNC_TOTAL=0
 HOOK_FILE_STATUS_FILE=""
+HOOK_OVERWRITE_BACKUP_DIR=""
 
 preflight_hook_file_conflicts() {
   local codex_home="$1"
+  local overwrite_names_file="$2"
   local hook_dest="${codex_home}/hooks"
   local hook_src=""
   local src=""
   local rel=""
   local dest_rel=""
   local dest=""
+  local source_id=""
+  local basename=""
   local conflicts=0
 
-  shift
+  shift 2
   for hook_src in "$@"; do
+    source_id="$(hook_source_id "${hook_src}")"
     while IFS= read -r -d '' src; do
       rel="${src#"${hook_src}/"}"
       is_installable_hook_rel "${rel}" || continue
       dest_rel="${rel%.template}"
       dest="${hook_dest}/${dest_rel}"
       if [[ -f "${dest}" ]] && ! cmp -s "${src}" "${dest}"; then
+        basename="$(basename "${dest_rel}")"
+        if hook_file_can_auto_upgrade "${codex_home}" "${dest_rel}" "${source_id}" "${dest}"; then
+          continue
+        fi
+        if is_hook_overwrite_requested "${overwrite_names_file}" "${basename}"; then
+          continue
+        fi
         if [[ "${conflicts}" -eq 0 ]]; then
           log_error "refusing to replace existing customized hook file(s)"
         fi
         printf '%b\n' "  source: ${S_CYAN}${src}${S_RESET}" >&2
         printf '%b\n' "  target: ${S_CYAN}${dest}${S_RESET}" >&2
+        printf '%b\n' "  overwrite: ${S_CYAN}--overwrite-hook-files ${basename}${S_RESET}" >&2
         conflicts=$((conflicts + 1))
       fi
     done < <(find "${hook_src}" -type f -print0)
@@ -626,7 +879,7 @@ preflight_hook_file_conflicts() {
 
   if [[ "${conflicts}" -gt 0 ]]; then
     log_note "Review the target file(s), then remove or update them manually before rerunning hook installation."
-    log_note "This installer copies missing hook files and repairs matching file permissions, but it does not overwrite local hook customizations."
+    log_note "This installer upgrades source-owned unmodified hook files, but it does not overwrite unproven local hook edits unless they are listed with --overwrite-hook-files."
     exit 1
   fi
 }
@@ -634,16 +887,25 @@ preflight_hook_file_conflicts() {
 sync_hook_files() {
   local hook_src="$1"
   local codex_home="$2"
+  local overwrite_names_file="$3"
   local hook_dest="${codex_home}/hooks"
   local source_label=""
+  local source_id=""
   local src=""
   local rel=""
   local dest_rel=""
+  local dest=""
+  local basename=""
+  local source_sha=""
+  local target_sha=""
+  local auto_upgrade=0
+  local overwrite_requested=0
 
   HOOK_SYNC_INSTALLED=0
   HOOK_SYNC_UNCHANGED=0
   HOOK_SYNC_TOTAL=0
   source_label="$(hook_source_label "${hook_src}")"
+  source_id="$(hook_source_id "${hook_src}")"
 
   mkdir -p "${hook_dest}"
 
@@ -652,13 +914,35 @@ sync_hook_files() {
     is_installable_hook_rel "${rel}" || continue
 
     dest_rel="${rel%.template}"
+    dest="${hook_dest}/${dest_rel}"
+    basename="$(basename "${dest_rel}")"
+    source_sha="$(hash_file "${src}")"
     HOOK_SYNC_TOTAL=$((HOOK_SYNC_TOTAL + 1))
-    if [[ -f "${hook_dest}/${dest_rel}" ]] && cmp -s "${src}" "${hook_dest}/${dest_rel}"; then
-      chmod 0644 "${hook_dest}/${dest_rel}"
+    if [[ -f "${dest}" ]] && cmp -s "${src}" "${dest}"; then
+      chmod 0644 "${dest}"
+      target_sha="$(hash_file "${dest}")"
+      write_hook_file_provenance "${codex_home}" "${dest_rel}" "${source_id}" "${rel}" "${source_sha}" "${target_sha}"
       HOOK_SYNC_UNCHANGED=$((HOOK_SYNC_UNCHANGED + 1))
     else
-      mkdir -p "$(dirname "${hook_dest}/${dest_rel}")"
-      install -m 0644 "${src}" "${hook_dest}/${dest_rel}"
+      auto_upgrade=0
+      overwrite_requested=0
+      if [[ -f "${dest}" ]] && hook_file_can_auto_upgrade "${codex_home}" "${dest_rel}" "${source_id}" "${dest}"; then
+        auto_upgrade=1
+      fi
+      if is_hook_overwrite_requested "${overwrite_names_file}" "${basename}"; then
+        overwrite_requested=1
+      fi
+      if [[ -f "${dest}" && "${auto_upgrade}" -eq 0 && "${overwrite_requested}" -eq 1 ]]; then
+        backup_hook_file_for_overwrite "${codex_home}" "${dest_rel}" "${dest}"
+      elif [[ -f "${dest}" && "${auto_upgrade}" -eq 0 && "${overwrite_requested}" -eq 0 ]]; then
+        log_error "refusing to replace existing customized hook file: ${dest}"
+        log_note "Use --overwrite-hook-files ${basename} after reviewing the target, or update/remove it manually."
+        exit 1
+      fi
+      mkdir -p "$(dirname "${dest}")"
+      install -m 0644 "${src}" "${dest}"
+      target_sha="$(hash_file "${dest}")"
+      write_hook_file_provenance "${codex_home}" "${dest_rel}" "${source_id}" "${rel}" "${source_sha}" "${target_sha}"
       HOOK_SYNC_INSTALLED=$((HOOK_SYNC_INSTALLED + 1))
     fi
   done < <(find "${hook_src}" -type f -print0)
@@ -1444,6 +1728,7 @@ install_hooks() {
   local report_extras="${4:-1}"
   local replace_hooks_json="${5:-0}"
   local hook_src=""
+  local overwrite_names_file=""
   local file_status_file=""
   local registration_status_file=""
 
@@ -1451,6 +1736,10 @@ install_hooks() {
   require_command "cmp" "for hook idempotency checks"
   require_command "chmod" "for hook permission repair"
   require_command "find" "for hook source discovery"
+  require_command "awk" "for hook provenance checks"
+  require_command "sort" "for hook overwrite validation"
+  require_command "date" "for hook overwrite backups"
+  require_hook_hash_command
 
   if ! hook_src="$(resolve_hook_source_dir "${hook_source_arg}")"; then
     log_error "hook source directory not found: ${hook_source_arg}"
@@ -1458,8 +1747,12 @@ install_hooks() {
     exit 1
   fi
 
+  overwrite_names_file="$(mktemp)"
+  normalize_overwrite_hook_files "${overwrite_names_file}" "${OVERWRITE_HOOK_FILES[@]}"
+  validate_hook_overwrite_requests "${overwrite_names_file}" "${hook_src}"
+
   reject_inline_agent_nebius_auth_config_hook "${codex_home}" "${hook_src}"
-  preflight_hook_file_conflicts "${codex_home}" "${hook_src}"
+  preflight_hook_file_conflicts "${codex_home}" "${overwrite_names_file}" "${hook_src}"
 
   if [[ "${register_hooks}" -eq 1 ]]; then
     require_command "python3" "for hooks.json registration"
@@ -1473,7 +1766,7 @@ install_hooks() {
   file_status_file="$(mktemp)"
   registration_status_file="$(mktemp)"
   HOOK_FILE_STATUS_FILE="${file_status_file}"
-  sync_hook_files "${hook_src}" "${codex_home}"
+  sync_hook_files "${hook_src}" "${codex_home}" "${overwrite_names_file}"
   HOOK_FILE_STATUS_FILE=""
   if [[ "${register_hooks}" -eq 1 ]]; then
     HOOK_REGISTRATION_STATUS_FILE="${registration_status_file}"
@@ -1486,7 +1779,7 @@ install_hooks() {
   if [[ "${HOOK_STATUS_REVIEW_NEEDED}" -eq 1 ]]; then
     log_action_required "Action required: hook files or registrations changed. Restart Codex and review/trust entries in /hooks."
   fi
-  rm -f "${file_status_file}" "${registration_status_file}"
+  rm -f "${file_status_file}" "${registration_status_file}" "${overwrite_names_file}"
   if [[ "${report_extras}" -eq 1 ]]; then
     print_extra_destination_hooks "${codex_home}" "${hook_src}"
   fi
@@ -1574,6 +1867,7 @@ install_all_hooks() {
   local source_root=""
   local hook_src=""
   local hook_dirs=()
+  local overwrite_names_file=""
   local file_status_file=""
   local registration_status_file=""
 
@@ -1587,6 +1881,10 @@ install_all_hooks() {
   require_command "cmp" "for hook idempotency checks"
   require_command "chmod" "for hook permission repair"
   require_command "find" "for hook source discovery"
+  require_command "awk" "for hook provenance checks"
+  require_command "sort" "for hook overwrite validation"
+  require_command "date" "for hook overwrite backups"
+  require_hook_hash_command
 
   while IFS= read -r hook_src; do
     [[ -n "${hook_src}" ]] || continue
@@ -1600,9 +1898,12 @@ install_all_hooks() {
   fi
 
   validate_hook_dest_collisions "${hook_dirs[@]}"
+  overwrite_names_file="$(mktemp)"
+  normalize_overwrite_hook_files "${overwrite_names_file}" "${OVERWRITE_HOOK_FILES[@]}"
+  validate_hook_overwrite_requests "${overwrite_names_file}" "${hook_dirs[@]}"
 
   reject_inline_agent_nebius_auth_config_hook "${codex_home}" "${hook_dirs[@]}"
-  preflight_hook_file_conflicts "${codex_home}" "${hook_dirs[@]}"
+  preflight_hook_file_conflicts "${codex_home}" "${overwrite_names_file}" "${hook_dirs[@]}"
 
   if [[ "${register_hooks}" -eq 1 ]]; then
     require_command "python3" "for hooks.json registration"
@@ -1619,7 +1920,7 @@ install_all_hooks() {
   registration_status_file="$(mktemp)"
   HOOK_FILE_STATUS_FILE="${file_status_file}"
   for hook_src in "${hook_dirs[@]}"; do
-    sync_hook_files "${hook_src}" "${codex_home}"
+    sync_hook_files "${hook_src}" "${codex_home}" "${overwrite_names_file}"
   done
   HOOK_FILE_STATUS_FILE=""
 
@@ -1634,7 +1935,7 @@ install_all_hooks() {
   if [[ "${HOOK_STATUS_REVIEW_NEEDED}" -eq 1 ]]; then
     log_action_required "Action required: hook files or registrations changed. Restart Codex and review/trust entries in /hooks."
   fi
-  rm -f "${file_status_file}" "${registration_status_file}"
+  rm -f "${file_status_file}" "${registration_status_file}" "${overwrite_names_file}"
 
   print_extra_destination_hooks "${codex_home}" "${hook_dirs[@]}"
 }
@@ -1646,6 +1947,7 @@ HOOK_INSTALL_SOURCE=""
 INSTALL_ALL_HOOKS=0
 REGISTER_HOOKS=0
 REPLACE_HOOKS_JSON=0
+OVERWRITE_HOOK_FILES=()
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -1668,8 +1970,9 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --install-hooks)
-      if [[ $# -lt 2 ]]; then
+      if [[ $# -lt 2 || "${2}" == -* ]]; then
         log_error "--install-hooks requires a source hook directory."
+        log_note "Use --install-all-hooks to sync every reviewed hook bundle, or pass a hook-only source such as sdlc-start/assets/hooks."
         show_usage >&2
         exit 1
       fi
@@ -1707,6 +2010,18 @@ while [[ $# -gt 0 ]]; do
       fi
       REPLACE_HOOKS_JSON=1
       shift
+      ;;
+    --overwrite-hook-files)
+      shift
+      if [[ $# -eq 0 || "${1}" == -* ]]; then
+        log_error "--overwrite-hook-files requires a comma-separated hook file basename list."
+        show_usage >&2
+        exit 1
+      fi
+      while [[ $# -gt 0 && "${1}" != -* ]]; do
+        OVERWRITE_HOOK_FILES+=("$1")
+        shift
+      done
       ;;
     --)
       shift
@@ -1747,6 +2062,12 @@ fi
 
 if [[ "${REPLACE_HOOKS_JSON}" -eq 1 && "${REGISTER_HOOKS}" -eq 0 ]]; then
   log_error "--replace-hooks-json must be combined with --register-hooks."
+  show_usage >&2
+  exit 1
+fi
+
+if [[ "${#OVERWRITE_HOOK_FILES[@]}" -gt 0 && -z "${HOOK_INSTALL_SOURCE}" && "${INSTALL_ALL_HOOKS}" -eq 0 ]]; then
+  log_error "--overwrite-hook-files must be combined with --install-hooks or --install-all-hooks."
   show_usage >&2
   exit 1
 fi

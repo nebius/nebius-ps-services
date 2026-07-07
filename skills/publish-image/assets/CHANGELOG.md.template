@@ -9,9 +9,11 @@ All notable changes to this project are tracked here. This changelog follows
 - Keep `## [Unreleased]` at the top and add bullets as changes land.
 - Before release tagging, start from clean synced `__MAIN_BRANCH__` and move
   `Unreleased` into a dated release section with
-  `./publish-image.sh --prep X.Y.Z`; it creates and pushes a release branch.
+  `./publish-image.sh --mode prep --tag X.Y.Z`; it creates and pushes a
+  release branch.
 - After the release-prep PR merges to `__MAIN_BRANCH__`, run
-  `./publish-image.sh --publish X.Y.Z` on clean synced `__MAIN_BRANCH__`.
+  `./publish-image.sh --mode publish --tag X.Y.Z` on clean synced
+  `__MAIN_BRANCH__`.
 - Release section format:
   `## [__PROJECT_TAG_PREFIX__-vX.Y.Z] - YYYY-MM-DD`
 
