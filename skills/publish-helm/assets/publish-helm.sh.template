@@ -47,12 +47,11 @@ log_success() {
 show_usage() {
   printf '%b\n' "${S_BOLD}Usage:${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./publish-helm.sh${S_RESET} ${S_DIM}--prep X.Y.Z[-prerelease] [--no-push]${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./publish-helm.sh${S_RESET} ${S_DIM}--publish X.Y.Z[-prerelease] [--allow-non-main]${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./publish-helm.sh${S_RESET} ${S_DIM}--publish X.Y.Z[-prerelease]${S_RESET}"
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Modes:${S_RESET}"
-  printf '%b\n' "  ${S_YELLOW}--prep${S_RESET}     Update ${CHANGELOG_FILE} and ${CHART_FILE}, validate the chart, commit the release prep, and push the current branch."
-  printf '%b\n' "                 First push auto-sets origin/<current-branch> as upstream when needed."
+  printf '%b\n' "  ${S_YELLOW}--prep${S_RESET}     Require clean synced ${MAIN_BRANCH}, create release/${TAG_PREFIX}-vX.Y.Z[-prerelease], update ${CHANGELOG_FILE} and ${CHART_FILE}, validate the chart, commit it, and push the release branch."
   printf '%b\n' "                 Clean-worktree check is strict and includes untracked files."
   printf '%b\n' "                 Fails if tag ${TAG_PREFIX}-vX.Y.Z[-prerelease] already exists locally or on origin."
   printf '%b\n' "  ${S_YELLOW}--publish${S_RESET}  Create and push tag ${TAG_PREFIX}-vX.Y.Z[-prerelease]."
@@ -62,7 +61,6 @@ show_usage() {
 
   printf '%b\n' "${S_BOLD}Options:${S_RESET}"
   printf '%b\n' "  ${S_YELLOW}--no-push${S_RESET}          For --prep only: do not push the branch."
-  printf '%b\n' "  ${S_YELLOW}--allow-non-main${S_RESET}   Allow --publish from a non-${MAIN_BRANCH} branch when HEAD is already in origin/${MAIN_BRANCH} history."
   printf '%b\n' "  ${S_YELLOW}-h, --help${S_RESET}         Show help."
   printf '\n'
 
@@ -132,10 +130,49 @@ push_current_branch() {
   git push --set-upstream origin "HEAD:${branch}"
 }
 
-ensure_not_default_branch() {
+release_source_required_note() {
+  log_note "First open and merge a PR for your current branch into ${MAIN_BRANCH}, then switch to ${MAIN_BRANCH}, fast-forward, and rerun."
+}
+
+ensure_release_source_ready() {
   local branch="$1"
-  if [[ "${branch}" == "${MAIN_BRANCH}" ]]; then
-    log_error "--prep must run from a feature branch, not ${MAIN_BRANCH}."
+  local mode="$2"
+  local status_output=""
+  ensure_named_branch "${branch}"
+  if [[ "${branch}" != "${MAIN_BRANCH}" ]]; then
+    log_error "--${mode} must run from ${MAIN_BRANCH}; current branch is ${branch}."
+    release_source_required_note
+    exit 1
+  fi
+  status_output="$(git status --short --untracked-files=all)"
+  if [[ -n "${status_output}" ]]; then
+    log_error "--${mode} requires a clean working tree on ${MAIN_BRANCH}."
+    printf '%s\n' "${status_output}" >&2
+    release_source_required_note
+    exit 1
+  fi
+  ensure_branch_synced "${MAIN_BRANCH}"
+}
+
+release_branch_name() {
+  local tag="$1"
+  printf 'release/%s\n' "${tag}"
+}
+
+ensure_release_branch_absent() {
+  local branch="$1"
+  local remote_status=0
+  if git show-ref --verify --quiet "refs/heads/${branch}"; then
+    log_error "Release branch already exists locally: ${branch}"
+    exit 1
+  fi
+  git ls-remote --exit-code --heads origin "${branch}" >/dev/null 2>&1 || remote_status=$?
+  if [[ "${remote_status}" -eq 0 ]]; then
+    log_error "Release branch already exists on origin: ${branch}"
+    exit 1
+  fi
+  if [[ "${remote_status}" -ne 2 ]]; then
+    log_error "Unable to check origin for release branch: ${branch}"
     exit 1
   fi
 }
@@ -154,20 +191,6 @@ ensure_branch_synced() {
     log_error "Local ${branch} is not at origin/${branch}."
     log_note "local : ${local_commit}"
     log_note "origin: ${remote_commit}"
-    exit 1
-  fi
-}
-
-ensure_head_in_branch_history() {
-  local branch="$1"
-  git fetch origin
-  if ! git rev-parse "origin/${branch}" >/dev/null 2>&1; then
-    log_error "Remote branch origin/${branch} not found."
-    exit 1
-  fi
-  if ! git merge-base --is-ancestor HEAD "origin/${branch}"; then
-    log_error "Current HEAD is not in origin/${branch} history."
-    log_note "The tag-triggered publish workflow will reject tags outside origin/${branch} history."
     exit 1
   fi
 }
@@ -479,12 +502,16 @@ prep_release() {
   local version="${tag##*-v}"
   local charts_path="${CHART_DIR}/charts"
   local charts_staged=""
+  local release_branch=""
   local staged_paths=("${CHANGELOG_FILE}" "${CHART_FILE}")
 
-  ensure_clean_worktree
-  ensure_named_branch "${branch}"
-  ensure_not_default_branch "${branch}"
+  ensure_release_source_ready "${branch}" "prep"
   ensure_tag_absent "${tag}"
+  release_branch="$(release_branch_name "${tag}")"
+  ensure_release_branch_absent "${release_branch}"
+  git switch -c "${release_branch}"
+  branch="${release_branch}"
+  log_success "Created release branch ${release_branch} from ${MAIN_BRANCH}."
 
   log_note "Updating ${CHANGELOG_FILE} for ${tag}..."
   ensure_unreleased_changelog_note "${tag}"
@@ -514,7 +541,7 @@ prep_release() {
   fi
 
   if [[ "${do_push}" -eq 1 ]]; then
-    log_note "Pushing current branch..."
+    log_note "Pushing release branch..."
     push_current_branch "${branch}"
     log_success "Branch pushed."
   fi
@@ -536,7 +563,6 @@ main() {
 
   local mode=""
   local raw_version=""
-  local allow_non_main=0
   local no_push=0
 
   while [[ $# -gt 0 ]]; do
@@ -550,8 +576,8 @@ main() {
         shift
         ;;
       --allow-non-main)
-        allow_non_main=1
-        shift
+        log_error "--allow-non-main is not supported; publish must run from the clean synced ${MAIN_BRANCH} branch."
+        exit 1
         ;;
       --no-push)
         no_push=1
@@ -609,17 +635,7 @@ main() {
       prep_release "${tag}" "$(( ! no_push ))" "${branch}"
       ;;
     publish)
-      ensure_clean_worktree
-      if [[ "${allow_non_main}" -eq 1 ]]; then
-        ensure_head_in_branch_history "${MAIN_BRANCH}"
-      else
-        ensure_named_branch "${branch}"
-        if [[ "${branch}" != "${MAIN_BRANCH}" ]]; then
-          log_error "--publish must run from ${MAIN_BRANCH} unless --allow-non-main is set."
-          exit 1
-        fi
-        ensure_branch_synced "${MAIN_BRANCH}"
-      fi
+      ensure_release_source_ready "${branch}" "publish"
       create_and_push_tag "${tag}"
       ;;
     *)

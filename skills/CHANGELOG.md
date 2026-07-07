@@ -140,6 +140,10 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Hardened `publish-release`, `publish-image`, and `publish-helm` so release
+  prep and publish phases must start from a clean, synced default branch; prep
+  now creates and pushes `release/<tag>` from that branch, and the old
+  non-default-branch publish escape hatch fails fast.
 - Refreshed `align-skill` against current official OpenAI Codex skill guidance,
   separating the portable `SKILL.md` minimum from this repository's stricter
   source-owned skill structure, clarifying optional upstream
