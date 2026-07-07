@@ -778,7 +778,10 @@ instead of removed automatically.
 ./install-skills.sh --install-all-hooks --register-hooks --replace-hooks-json
 
 # Intentionally replace reviewed hook payload files by basename
-./install-skills.sh --install-all-hooks --overwrite-hook-files stop_sdlc_continue.py,test_sdlc_hooks.py
+./install-skills.sh --install-all-hooks --overwrite-hook-files stop_sdlc_continue.py, test_sdlc_hooks.py
+
+# Intentionally replace reviewed hook payload files from one hook source
+./install-skills.sh --install-hooks sdlc-start/assets/hooks --overwrite-hook-files stop_sdlc_continue.py, test_sdlc_hooks.py
 
 # Copy hooks into a non-default Codex home
 CODEX_HOME=~/custom-codex ./install-skills.sh --install-all-hooks --register-hooks
@@ -848,7 +851,8 @@ CODEX_HOME=~/custom-codex ./install-skills.sh --install-all-hooks --register-hoo
   containing every reviewed hook bundle under this source folder.
 - `--overwrite-hook-files <name[,name...]>` can be combined with either hook
   install mode to intentionally replace reviewed hook payload files by
-  basename. It backs up each replaced target under
+  basename. The names can be comma-separated, comma-and-space separated, or
+  provided by repeating the flag. It backs up each replaced target under
   `${CODEX_HOME:-$HOME/.codex}/.install-hooks-state/backups/`, rejects unknown
   names and duplicate source basenames, and does not affect `hooks.json`.
 - Hook install modes report extra files under

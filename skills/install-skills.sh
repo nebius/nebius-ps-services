@@ -136,7 +136,8 @@ show_usage() {
   printf '%b\n' "                    file built only from selected source manifest(s)"
   printf '%b\n' "  ${S_YELLOW}--overwrite-hook-files${S_RESET}"
   printf '%b\n' "                    Intentionally replace listed hook file basenames,"
-  printf '%b\n' "                    comma-separated or repeated; backs up each target first"
+  printf '%b\n' "                    comma-separated, comma-and-space separated, or repeated;"
+  printf '%b\n' "                    backs up each target first"
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Examples:${S_RESET}"
@@ -150,7 +151,8 @@ show_usage() {
   printf '%b\n' "  ${S_CYAN}./install-skills.sh --install-hooks config-codex/assets/hooks --register-hooks${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./install-skills.sh --install-all-hooks --register-hooks${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./install-skills.sh --install-all-hooks --register-hooks --replace-hooks-json${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./install-skills.sh --install-all-hooks --overwrite-hook-files stop_sdlc_continue.py,test_sdlc_hooks.py${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./install-skills.sh --install-all-hooks --overwrite-hook-files stop_sdlc_continue.py, test_sdlc_hooks.py${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./install-skills.sh --install-hooks sdlc-start/assets/hooks --overwrite-hook-files stop_sdlc_continue.py, test_sdlc_hooks.py${S_RESET}"
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Notes:${S_RESET}"
@@ -729,23 +731,36 @@ normalize_overwrite_hook_files() {
   local part=""
   local name=""
   local tmp_file=""
+  local raw_values=()
+  local raw_count=0
+  local idx=0
   local parts=()
 
   shift
+  raw_values=("$@")
+  raw_count="${#raw_values[@]}"
   tmp_file="$(mktemp)"
   : > "${tmp_file}"
-  for raw in "$@"; do
+  for ((idx = 0; idx < raw_count; idx++)); do
+    raw="${raw_values[idx]}"
     compact="${raw//[[:space:]]/}"
-    if [[ -z "${compact}" || "${compact}" == ","* || "${compact}" == *"," || "${compact}" == *",,"* ]]; then
+    if [[ -z "${compact}" || "${compact}" == ","* || "${compact}" == *",,"* ]]; then
       log_error "--overwrite-hook-files contains an empty hook file name."
       rm -f "${tmp_file}"
       exit 1
     fi
+    if [[ "${compact}" == *"," ]]; then
+      if [[ "${idx}" -eq $((raw_count - 1)) ]]; then
+        log_error "--overwrite-hook-files contains an empty hook file name."
+        rm -f "${tmp_file}"
+        exit 1
+      fi
+      compact="${compact%,}"
+    fi
 
-    IFS=',' read -r -a parts <<< "${raw}"
+    IFS=',' read -r -a parts <<< "${compact}"
     for part in "${parts[@]}"; do
-      name="${part#"${part%%[![:space:]]*}"}"
-      name="${name%"${name##*[![:space:]]}"}"
+      name="${part}"
       if [[ -z "${name}" ]]; then
         log_error "--overwrite-hook-files contains an empty hook file name."
         rm -f "${tmp_file}"
@@ -1955,8 +1970,9 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --install-hooks)
-      if [[ $# -lt 2 ]]; then
+      if [[ $# -lt 2 || "${2}" == -* ]]; then
         log_error "--install-hooks requires a source hook directory."
+        log_note "Use --install-all-hooks to sync every reviewed hook bundle, or pass a hook-only source such as sdlc-start/assets/hooks."
         show_usage >&2
         exit 1
       fi
@@ -1996,13 +2012,16 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --overwrite-hook-files)
-      if [[ $# -lt 2 ]]; then
+      shift
+      if [[ $# -eq 0 || "${1}" == -* ]]; then
         log_error "--overwrite-hook-files requires a comma-separated hook file basename list."
         show_usage >&2
         exit 1
       fi
-      OVERWRITE_HOOK_FILES+=("$2")
-      shift 2
+      while [[ $# -gt 0 && "${1}" != -* ]]; do
+        OVERWRITE_HOOK_FILES+=("$1")
+        shift
+      done
       ;;
     --)
       shift

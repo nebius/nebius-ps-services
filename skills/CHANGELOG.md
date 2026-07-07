@@ -145,6 +145,11 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Made `install-skills.sh --overwrite-hook-files` accept shell-split
+  comma-and-space basename lists, for example
+  `--overwrite-hook-files stop_sdlc_continue.py, test_sdlc_hooks.py`, and
+  improved the `--install-hooks` error when the source hook directory is
+  omitted before another option.
 - Aligned `publish-helm`, `publish-image`, and `publish-release` project-local
   shell helper templates with their canonical doer scripts: generated helpers
   now use `--mode prep|publish|verify`, require explicit `--tag`, reject the
