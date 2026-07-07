@@ -9,7 +9,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from .soperator_jail_mounts import JAIL_LEGACY_ACTIVE_SOURCE
+from .soperator_jail_mounts import JAIL_LEGACY_ACTIVE_SOURCE, sync_jail_volume_sources
 
 POPULATE_JAIL_REFRESH_PHASE_ID = "populate-jail-refresh"
 POPULATE_JAIL_REFRESH_MODES = frozenset({"auto", "force", "manual"})
@@ -168,7 +168,7 @@ def populate_jail_refresh_values(values: Mapping[str, Any]) -> dict[str, Any]:
             "status": "planned",
         }
     )
-    return patched
+    return sync_jail_volume_sources(patched)
 
 
 def populate_jail_steady_state_values(values: Mapping[str, Any]) -> dict[str, Any]:
@@ -179,7 +179,7 @@ def populate_jail_steady_state_values(values: Mapping[str, Any]) -> dict[str, An
         populate = {}
         patched["populateJail"] = populate
     populate["overwrite"] = False
-    return patched
+    return sync_jail_volume_sources(patched)
 
 
 def populate_jail_manual_instruction(*, namespace: str, slurmcluster_name: str) -> str:
@@ -357,7 +357,7 @@ def switch_active_passive_jail_rootfs_values(values: Mapping[str, Any]) -> dict[
             jail = _mutable_mapping(volumes, "jail")
             pvc = _mutable_mapping(jail, "persistentVolumeClaim")
             pvc["claimName"] = slots.passive_pvc
-    return patched
+    return sync_jail_volume_sources(patched)
 
 
 def active_passive_populate_jail_job_manifest(

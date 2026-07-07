@@ -7,6 +7,36 @@ This folder contains deployment helpers that are separate from the installed
 
 - `gcp-vpngw.sh`: configure one GCP-side HA VPN connection to a Nebius VPN
   gateway and print the matching Nebius `connections:` block.
+- `fix-vpngw-esp4.sh`: repair gateway VMs where the Ubuntu image or a temporary
+  Dirty Frag mitigation left the required `esp4` module blocked.
+
+## `fix-vpngw-esp4.sh`
+
+`fix-vpngw-esp4.sh` is an operational repair helper for existing gateway VMs.
+It uploads and runs the same packaged ESP4 preflight used during new-VM
+provisioning, upgrades Ubuntu packages, reboots each target gateway serially,
+confirms the remote boot ID changed, verifies `modprobe esp4`, and restarts the
+gateway services.
+
+The script requires typed `REBOOT` confirmation unless `--yes` is supplied
+because VPN traffic through each target is disrupted for a few minutes.
+
+Common forms:
+
+```bash
+./misc/fix-vpngw-esp4.sh --host ubuntu@<gateway-ip>
+./misc/fix-vpngw-esp4.sh --local-config-file <local-config-file>
+./misc/fix-vpngw-esp4.sh --host <gateway-ip> \
+  --ssh-user ubuntu --identity-file ~/.ssh/id_ed25519
+```
+
+Useful options:
+
+- `--host <user@ip>`: add one target gateway; repeat for multiple gateways
+- `--local-config-file <path>`: discover targets from `gateway_group.external_ips`
+- `--dry-run`: print planned actions without connecting or rebooting
+- `--wait-timeout <seconds>`: change the post-reboot SSH wait timeout
+- `--yes`: skip the typed confirmation for automation
 
 ## `gcp-vpngw.sh`
 

@@ -19,13 +19,15 @@ All notable changes to the reusable Codex skills are tracked here.
   `sdlc-gather-context`, `sdlc-create-design`, `sdlc-create-plan`,
   `sdlc-tdd`, `sdlc-implement-plan`, `sdlc-validate-codes`,
   `sdlc-unit-tests`, `sdlc-evaluate`, `sdlc-classify-failure`,
-  `sdlc-gui-test`, `sdlc-tui-test`, `sdlc-commit`, `sdlc-uat-tests`,
+  `sdlc-auto-steering`, `sdlc-gui-test`, `sdlc-tui-test`,
+  `sdlc-update-documents`, `sdlc-commit`, `sdlc-uat-tests`,
   `sdlc-merge-pr`, and `sdlc-align-specs`. These skills keep committed
-  product truth in `docs/requirements.md` and
-  `docs/design.md`, keep execution state under `~/.codex/sdlc-runs`, and
-  model the SDLC loop as skill-selected phases rather than a workflow CLI. The
-  SDLC flow reuses existing `create-pr` and `review-pr` as PR creation and
-  review handoff phases.
+  product truth in `docs/requirements.md` and `docs/design.md`, keep execution
+  state under `~/.codex/sdlc-runs`, record mid-run prompts in private steering
+  state, update project-facing docs from implemented evidence, and model the
+  SDLC loop as skill-selected phases rather than a workflow CLI. The SDLC flow
+  reuses existing `create-pr` and `review-pr` as PR creation and review
+  handoff phases.
 - Added SDLC templates for requirements, design, context packs, locked feature
   plans, validation/test/evaluation evidence, local commit evidence, and UAT
   reports, plus state-schema and failure-taxonomy references.
@@ -162,6 +164,11 @@ All notable changes to the reusable Codex skills are tracked here.
   security-adjacent implementation issues, owner-review needs, and severity
   decisions while preserving boundaries with `review-pr`, `align`,
   `apply-security`, and `system-design-rules`.
+- Hardened `task-implementer` into an explicit-only sequential implementation
+  loop where each task session validates the active task, runs `code-review`,
+  fixes scoped findings, commits through `$commit`, records review and commit
+  evidence in the private handoff, stops, and hands the markdown context to the
+  next fresh Codex session.
 - Changed `apply-security` to implicit invocation so it can act as a general
   security adviser during design, implementation, review, and validation
   sessions, while keeping patching constrained to authorized low-risk
@@ -214,6 +221,30 @@ All notable changes to the reusable Codex skills are tracked here.
   product, standard, and technology due diligence routes through `research`
   when that skill is available, leaving `design` focused on synthesis,
   alternatives, and `/plan` handoff.
+- Extended the `design` skill so standard, deep, architecture-heavy, or
+  hard-to-reverse solution designs apply `system-design-rules` as an advisory
+  checklist before final `/plan` handoff while leaving checklist-only reviews
+  owned by `system-design-rules`.
+- Strengthened `sdlc-create-design` with the same phased design discipline used
+  by `design` while preserving Agentic SDLC ownership of `docs/design.md`: it
+  now records existing-system evidence, selected and rejected options,
+  implementation boundaries, validation/test/evaluation plans, rollout,
+  rollback, and context-gap routing before a feature can move to planning.
+- Strengthened `sdlc-validate-codes` so mechanical build/lint/type/import,
+  dependency, and configuration checks are followed by `code-review` in
+  review-only mode; blocking review findings now keep the feature out of the
+  `validated` state and route repair to the responsible SDLC phase.
+- Extended the Agentic SDLC requirements, start, evaluation, and UAT skills
+  with an optional Live Experiment Environment contract so users can provide a
+  confirmed non-production or disposable target, safe connection references,
+  allowed actions, reset instructions, approvals, and evidence limits for later
+  agent experiments without storing secret values.
+- Updated the `research` skill source order so organization-tied research
+  searches internal Slack and Confluence sources through available connectors
+  first, uses MCP or app-tool access for internal systems when connectors are
+  unavailable, verifies technical claims with official vendor or authoritative
+  external sources, and labels organization-specific guidance separately from
+  vendor facts and industry practice.
 - Simplified `install-skills.sh --install-all-hooks --register-hooks` output
   into a single per-source `Hooks status` report and only shows the restart and
   trust warning when hook files or registrations changed.
@@ -376,12 +407,8 @@ All notable changes to the reusable Codex skills are tracked here.
   out-of-band remediation steps when a PreToolUse or permission guard blocks a
   safe patch, and added disposable fixture coverage for local idempotency
   policy-file edge cases.
-- Narrowed the Agentic SDLC PreToolUse guard so `apply_patch` may align only the
-  exact resolved `$CODEX_HOME/AGENTS.md` file, while deletion, moves, shell
-  writes, MCP writes, `$CODEX_HOME/config.toml`, and `$CODEX_HOME/hooks` remain
-  blocked; the Agentic SDLC verifier now requires this contract in the design
-  document and can locate the repo design doc when run from an installed skill
-  copy.
+- Hardened the Agentic SDLC verifier path resolution so installed skill copies
+  can locate the repo design doc when checking the current checkout.
 - Renamed SDLC-only workflow skills and the coordinator to `sdlc-*` names, and
   made their front matter descriptions start with
   `Use only as part of the Agentic SDLC workflow;` so tool discovery separates

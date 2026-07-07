@@ -1302,13 +1302,13 @@ def _default_soperator_migration_plan(
                 "external-node-template-upgrade",
                 "Upgrade external MK8s control plane and node templates",
                 progress_label=(
-                    "External MK8s Upgrade: control plane first, worker groups zero-surge by default"
+                    "External MK8s Upgrade: control plane first, service roles safe-surge by default"
                 ),
                 requires_customer_approval=True,
                 notes=(
                     "Run direct Nebius cluster and node-group updates; do not call Terraform.",
                     "Upgrade the control plane first, one Kubernetes minor at a time when needed.",
-                    "Upgrade service-role source node groups with a temporary zero-surge strategy.",
+                    "Upgrade service-role source node groups with serial safe-surge by default.",
                     "Upgrade worker source node groups with zero-surge by default, or safe-surge "
                     "waves when selected, and restore each group's original strategy.",
                 ),
@@ -1364,7 +1364,7 @@ def _default_soperator_migration_plan(
             rolling_notes = (
                 "Create or reuse service-role node groups without duplicating worker capacity.",
                 "Map worker NodeSets to detected existing worker node groups.",
-                "Apply migration-owned template changes with serial zero-surge service-role "
+                "Apply migration-owned template changes with serial safe-surge service-role "
                 "updates and zero-surge worker updates by default.",
             )
         else:

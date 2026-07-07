@@ -14,6 +14,9 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Added an ESP4 readiness preflight for new gateway VMs and a
+  `misc/fix-vpngw-esp4.sh` repair helper for existing gateways affected by
+  Ubuntu Dirty Frag module-block mitigations.
 - Added a project mypy check and fixed current static typing errors in the
   VPN gateway source tree.
 - Fixed route command SSH handling so `add-routes-local` BGP route discovery and

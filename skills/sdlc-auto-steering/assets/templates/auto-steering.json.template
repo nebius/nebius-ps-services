@@ -1,0 +1,30 @@
+{
+  "state_version": 1,
+  "updated_at": "<ISO-8601>",
+  "project_id": "<project-id>",
+  "run_id": "<run-id>",
+  "current_feature": "<FEAT-ID>",
+  "current_phase": "<phase>",
+  "routing_request": null,
+  "active_reminders": [
+    {
+      "id": "REM-001",
+      "source": "requirements|design|context|plan|evidence|steering",
+      "text": "<compact reminder>",
+      "applies_to": "<FEAT-ID or run>"
+    }
+  ],
+  "entries": [
+    {
+      "id": "STEER-001",
+      "received_at": "<ISO-8601>",
+      "source_phase": "<phase>",
+      "current_feature": "<FEAT-ID or null>",
+      "prompt_summary": "<raw prompt when safe, otherwise redacted summary>",
+      "disposition": "runtime-only|requirements-change|design-change|docs-update|resolved|superseded|rejected|needs-human",
+      "owner_skill": "sdlc-start|sdlc-create-requirements|sdlc-create-design|sdlc-update-documents|null",
+      "status": "pending|active|resolved|blocked",
+      "notes": "<short reason or blocker>"
+    }
+  ]
+}

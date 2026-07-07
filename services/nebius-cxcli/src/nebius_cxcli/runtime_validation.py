@@ -500,6 +500,14 @@ def _validate_soperator_onboarding_rollout(onboarding: Mapping[str, Any], field_
             f"{field_label}.node_template_upgrade.rollout.strategy must be one of: "
             + ", ".join(sorted(_SOPERATOR_WORKER_ROLLOUT_STRATEGIES))
         )
+    service_role_strategy = (
+        normalize_component_token(rollout.get("service_role_strategy")) or "safe-surge"
+    )
+    if service_role_strategy not in _SOPERATOR_WORKER_ROLLOUT_STRATEGIES:
+        raise ValueError(
+            f"{field_label}.node_template_upgrade.rollout.service_role_strategy must be one of: "
+            + ", ".join(sorted(_SOPERATOR_WORKER_ROLLOUT_STRATEGIES))
+        )
     legacy_keys = (
         "max_global_unavailable_worker_nodes",
         "max_global_unavailable_worker_percent",
@@ -558,39 +566,58 @@ def _validate_soperator_onboarding_rollout(onboarding: Mapping[str, Any], field_
         rollout.get("max_parallel_worker_groups"),
         f"{field_label}.node_template_upgrade.rollout.max_parallel_worker_groups",
     )
-    worker_strategy = rollout.get("worker_group_strategy")
-    if worker_strategy is None:
-        return
-    if not isinstance(worker_strategy, Mapping):
-        raise ValueError(
-            f"{field_label}.node_template_upgrade.rollout.worker_group_strategy must be a mapping"
+    def _validate_group_strategy(
+        node: Any,
+        *,
+        strategy_value: str,
+        key: str,
+        role_label: str,
+    ) -> None:
+        if node is None:
+            return
+        if not isinstance(node, Mapping):
+            raise ValueError(
+                f"{field_label}.node_template_upgrade.rollout.{key} must be a mapping"
+            )
+        max_surge = _non_negative_int_for_validation(
+            node.get("max_surge_count"),
+            f"{field_label}.node_template_upgrade.rollout.{key}.max_surge_count",
         )
-    max_surge = _non_negative_int_for_validation(
-        worker_strategy.get("max_surge_count"),
-        f"{field_label}.node_template_upgrade.rollout.worker_group_strategy.max_surge_count",
+        max_unavailable = _non_negative_int_for_validation(
+            node.get("max_unavailable_count"),
+            f"{field_label}.node_template_upgrade.rollout.{key}.max_unavailable_count",
+        )
+        if max_surge == 0 and max_unavailable == 0:
+            raise ValueError(
+                f"{field_label}.node_template_upgrade.rollout.{key} must keep "
+                "at least one of max_surge_count or max_unavailable_count greater than zero"
+            )
+        if strategy_value == "zero-surge" and max_surge not in {None, 0}:
+            raise ValueError(
+                f"{field_label}.node_template_upgrade.rollout.{key}."
+                f"max_surge_count must be 0 when {role_label} strategy is zero-surge"
+            )
+        if strategy_value == "safe-surge" and max_surge == 0:
+            raise ValueError(
+                f"{field_label}.node_template_upgrade.rollout.{key}."
+                f"max_surge_count must be greater than 0 when {role_label} strategy is safe-surge"
+            )
+        _drain_timeout_for_validation(
+            node.get("drain_timeout"),
+            f"{field_label}.node_template_upgrade.rollout.{key}.drain_timeout",
+        )
+
+    _validate_group_strategy(
+        rollout.get("service_role_group_strategy"),
+        strategy_value=service_role_strategy,
+        key="service_role_group_strategy",
+        role_label="service-role",
     )
-    max_unavailable = _non_negative_int_for_validation(
-        worker_strategy.get("max_unavailable_count"),
-        f"{field_label}.node_template_upgrade.rollout.worker_group_strategy.max_unavailable_count",
-    )
-    if max_surge == 0 and max_unavailable == 0:
-        raise ValueError(
-            f"{field_label}.node_template_upgrade.rollout.worker_group_strategy must keep "
-            "at least one of max_surge_count or max_unavailable_count greater than zero"
-        )
-    if strategy == "zero-surge" and max_surge not in {None, 0}:
-        raise ValueError(
-            f"{field_label}.node_template_upgrade.rollout.worker_group_strategy."
-            "max_surge_count must be 0 when strategy is zero-surge"
-        )
-    if strategy == "safe-surge" and max_surge == 0:
-        raise ValueError(
-            f"{field_label}.node_template_upgrade.rollout.worker_group_strategy."
-            "max_surge_count must be greater than 0 when strategy is safe-surge"
-        )
-    _drain_timeout_for_validation(
-        worker_strategy.get("drain_timeout"),
-        f"{field_label}.node_template_upgrade.rollout.worker_group_strategy.drain_timeout",
+    _validate_group_strategy(
+        rollout.get("worker_group_strategy"),
+        strategy_value=strategy,
+        key="worker_group_strategy",
+        role_label="worker",
     )
 
 

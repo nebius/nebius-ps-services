@@ -21,6 +21,7 @@ from typing import Any
 
 REQUIRED_SDLC_SKILLS = (
     "sdlc-align-specs",
+    "sdlc-auto-steering",
     "sdlc-classify-failure",
     "sdlc-commit",
     "sdlc-create-design",
@@ -34,6 +35,7 @@ REQUIRED_SDLC_SKILLS = (
     "sdlc-start",
     "sdlc-tdd",
     "sdlc-tui-test",
+    "sdlc-update-documents",
     "sdlc-uat-tests",
     "sdlc-unit-tests",
     "sdlc-validate-codes",
@@ -185,6 +187,13 @@ def check_design(ctx: Context) -> None:
     required_terms = [
         "There is no workflow CLI",
         "sdlc-start",
+        "sdlc-auto-steering",
+        "sdlc-update-documents",
+        "steering/auto-steering.json",
+        "documents.md",
+        "requirements-change",
+        "design-change",
+        "docs-update",
         "PreToolUse",
         "Stop",
         "Private local run state",
@@ -418,6 +427,7 @@ def setup_fixture_state(ctx: Context, *, record: bool = True) -> Path:
     write_json(run_dir / "fingerprints.json", {})
     for rel in ("context", "plans", "evidence/FEAT-001", "history", "permissions"):
         (run_dir / rel).mkdir(parents=True, exist_ok=True)
+    (run_dir / "steering").mkdir(parents=True, exist_ok=True)
     plan = run_dir / "plans" / "FEAT-001.plan.v1.md"
     plan.write_text("# Plan\n", encoding="utf-8")
     (run_dir / "plans" / "FEAT-001.plan.v1.md.lock").write_text("locked\n", encoding="utf-8")
@@ -638,6 +648,16 @@ def add_agent_required_sections(ctx: Context) -> None:
         ),
         (
             "Steering behavior results",
+            "Auto-steering classification",
+            "PENDING: agent must verify sdlc-auto-steering records prompts, dispositions, and routes product-truth changes.",
+        ),
+        (
+            "Disposable SDLC golden-path run results",
+            "Documentation update phase",
+            "PENDING: agent must verify sdlc-update-documents records documentation evidence after evaluation or UAT.",
+        ),
+        (
+            "Steering behavior results",
             "Steering and continuation",
             "PENDING: agent must verify STEERING.md pause/no-PR handling and continuation guards.",
         ),
@@ -675,6 +695,8 @@ def summarize_matrix(ctx: Context) -> list[tuple[str, str]]:
         "Change request handling",
         "Failure-loop routing",
         "Steering",
+        "Auto steering",
+        "Documentation update",
         "Long-running continuation",
         "GUI smoke check",
         "TUI smoke check",
@@ -693,6 +715,8 @@ def summarize_matrix(ctx: Context) -> list[tuple[str, str]]:
         "Change request handling": "Idempotency results",
         "Failure-loop routing": "Failure-loop results",
         "Steering": "Steering behavior results",
+        "Auto steering": "Steering behavior results",
+        "Documentation update": "Disposable SDLC golden-path run results",
         "Long-running continuation": "Steering behavior results",
         "GUI smoke check": "Disposable SDLC golden-path run results",
         "TUI smoke check": "Disposable SDLC golden-path run results",

@@ -1,6 +1,6 @@
 ---
 name: task-implementer
-description: "Use for sequential brownfield implementation loops when a request asks to break work into ordered task-1..task-n items, inspect target code first, route architecture/contracts/missing-code/ambiguous boundaries through the design skill when available, then implement one task at a time with a markdown handoff checkpoint and a fresh Codex session per task. Do not use for ordinary one-shot implementation, Agentic SDLC, chat-only brainstorming, code review, commits, PRs, or parallel multi-agent edits."
+description: "Use only when the user explicitly asks for sequential brownfield implementation loops: break work into ordered task-1..task-n items, inspect target code first, route architecture/contracts/missing-code/ambiguous boundaries through design when available, then implement one task per fresh Codex session with validation, code-review, fixes, $commit, and a markdown handoff checkpoint. Do not use for ordinary one-shot implementation, Agentic SDLC, chat-only brainstorming, standalone code review, standalone commits, PRs, or parallel multi-agent edits."
 ---
 
 # Task Implementer
@@ -9,18 +9,19 @@ description: "Use for sequential brownfield implementation loops when a request 
 
 Coordinate small to medium brownfield implementation work by turning the user
 request into an ordered task queue, then implementing that queue sequentially
-with a markdown handoff between fresh Codex sessions.
+with a reviewed, committed checkpoint and markdown handoff between fresh Codex
+sessions.
 
 This is a lightweight implementation loop, not the Agentic SDLC state machine.
 
 ## When To Use
 
-- The user invokes `$task-implementer`.
+- The user explicitly invokes `$task-implementer`.
 - The user asks for a sequential task implementation loop.
 - A brownfield request contains multiple dependent code, test, docs, config, or
   validation tasks and would benefit from fresh context between tasks.
-- The user wants task ordering, checkpoint handoff, and no concurrent write
-  agents.
+- The user wants task ordering, per-task review, per-task local commits,
+  checkpoint handoff, and no concurrent write agents.
 
 ## When Not To Use
 
@@ -32,7 +33,9 @@ This is a lightweight implementation loop, not the Agentic SDLC state machine.
 - Do not use for design review without implementation; use `design` or
   `system-design-rules` when available and appropriate.
 - Do not use for review-only work; use `code-review`, `review-pr`, or `align`.
-- Do not use for commits, pushes, PR creation, PR review, or merge.
+- Do not use for standalone commits, pushes, PR creation, PR review, or merge.
+  Use `commit`, `commit-push`, `create-pr`, `review-pr`, or `merge-pr`
+  directly for those jobs.
 - Do not run parallel write-capable agents or overlapping implementation
   sessions in the same workspace.
 
@@ -51,6 +54,8 @@ This is a lightweight implementation loop, not the Agentic SDLC state machine.
 - Existing task-implementer handoff markdown when the prompt is a continuation.
 - `references/implementation-loop.md` before creating the queue or launching
   follow-on sessions.
+- The `code-review` skill before reviewing the active task's code changes.
+- The `commit` skill before committing the active task checkpoint.
 - The relevant `AGENTS.md`, README, design docs, changelog, tests, and source
   files for the target code.
 - `docs/agentic-sdlc-design.md` only when the boundary with Agentic SDLC is
@@ -71,7 +76,8 @@ This is a lightweight implementation loop, not the Agentic SDLC state machine.
 
 - Focused source, test, docs, changelog, config, or generated-artifact edits
   required by the active task.
-- Validation evidence summarized in the handoff; avoid raw logs.
+- Per-task validation, review, fix, and local commit evidence summarized in
+  the handoff; avoid raw logs.
 
 Do not commit the handoff file, raw logs, secrets, private endpoints, customer
 data, or broad copied documentation.
@@ -102,37 +108,59 @@ data, or broad copied documentation.
    the changed surface requires it.
 10. Inspect the diff after each task. Do not hide failures, weaken tests, or
     leave unrelated cleanup mixed into the task.
-11. Update the handoff with status, changed files, validation, blockers, and
-    the exact next-session prompt.
-12. Start the next task in a fresh context. In the interactive CLI, use `/new`
-    after the handoff is updated. In automation, start a new `codex exec`
-    invocation; do not use `codex exec resume` for normal next-task handoff.
-13. Repeat until every task is `done` or a task is `blocked`.
-14. After all tasks are done, run changed-surface alignment with `$align` when
+11. Invoke `code-review` on the active task's code changes. Treat review
+    findings as a required gate before handoff.
+12. Fix the review findings that are safe, scoped to the active task, and
+    supported by evidence. Re-run focused validation and, when code changed as
+    part of the fix, re-run or refresh the review until no blocking finding
+    remains or a blocker is recorded.
+13. Invoke `$commit` to commit the completed active task only after validation
+    and review/fix gates pass. Let the `commit` skill own repo-root
+    `git add -A`, staged validation, commit hooks, message generation, and
+    no-push behavior. If unrelated or unsafe dirty changes would make the
+    whole-repo commit unsafe, classify `WORKTREE_CONFLICT`, update the
+    handoff, and stop before committing.
+14. Update the handoff with status, changed files, validation, code-review
+    result, fixes applied, commit hash/message or commit blocker, residual
+    risks, and the exact next-session prompt.
+15. End the current task session after the handoff is saved. Start the next
+    task only in a fresh agent session that receives the handoff markdown as
+    context material.
+16. Repeat until every task is `done` or a task is `blocked`.
+17. After all tasks are done, run changed-surface alignment with `$align` when
     available, or perform the equivalent local checklist across code, tests,
     docs, changelog, CLI/help, config, and generated artifacts.
 
 ## Fresh Session Contract
 
-The skill cannot reset its own current context. It must hand off through a
-markdown file and one of these operator/session mechanisms:
+The skill cannot reset, close, or reopen its own current context. It must hand
+off through a markdown file and one of these operator/session mechanisms:
 
-- Interactive CLI: update the handoff, then run `/new` and paste or send the
-  next-session prompt from the handoff.
+- Strict interactive close/open: update the handoff, run `/archive` or
+  `/quit` to close the current session, start a new `codex` session from the
+  repo root, and paste or send the next-session prompt from the handoff.
+- Interactive same-terminal reset: when the operator accepts a fresh
+  conversation inside the same CLI process as the session boundary, update the
+  handoff, run `/new`, and paste or send the next-session prompt from the
+  handoff.
 - Noninteractive automation: run a new `codex exec` process for each task.
-  Pass the handoff path in the prompt and grant access to the handoff directory
-  when sandboxing requires it, for example:
+  Let the current process exit after saving the handoff; the supervising
+  script starts the next process and passes the handoff path in the prompt.
+  Grant access to the handoff directory when sandboxing requires it, for
+  example:
 
   ```bash
   codex --ask-for-approval never exec \
     --cd <repo-root> \
     --sandbox workspace-write \
     --add-dir "${CODEX_HOME:-$HOME/.codex}/task-implementer" \
-    'Use $task-implementer to continue <handoff-path> and implement only task-N.'
+    'Use $task-implementer to continue <handoff-path>. Implement only task-N, run validation, use code-review, fix scoped findings, commit through $commit, update the handoff, and stop.'
   ```
 
 Do not write `codex exec /new`; `/new` is an interactive slash command, while a
-new `codex exec` process is already a fresh noninteractive session.
+new `codex exec` process is already a fresh noninteractive session. Do not use
+`codex exec resume` for normal next-task handoff because the handoff file is
+the intended context boundary.
 
 ## Ordering Rules
 
@@ -151,13 +179,18 @@ new `codex exec` process is already a fresh noninteractive session.
 
 - On every session, read the handoff first and verify it against current
   `git status` and relevant source files before editing.
+- Before invoking `$commit`, verify that the dirty diff belongs to the active
+  task or to intentionally preserved prior task changes recorded in the
+  handoff. If not, stop with `WORKTREE_CONFLICT`.
 - Never renumber existing task IDs after implementation starts. Add new tasks
   as `task-n+1` and mark superseded tasks explicitly.
 - If a task is already done, verify its evidence instead of redoing it.
+- If a task already has a commit hash recorded, verify the commit still exists
+  and the task evidence still matches before moving on.
 - If source drift invalidates a task, update that task to `blocked` or
   `superseded`, add a new task with the revised plan, and explain why.
 - Keep one active task at a time. Do not launch the next fresh session until
-  the current one has finished and the handoff is updated.
+  the current one has finished, reviewed, committed, and updated the handoff.
 
 ## Failure Handling
 
@@ -170,6 +203,11 @@ Classify failures before retrying:
 - `TEST_DEFECT`: tests are wrong, incomplete, or not aligned with the task.
 - `VALIDATION_DEFECT`: lint, type, build, import, generated artifact, or config
   validation fails.
+- `REVIEW_BLOCKER`: `code-review` found a blocking issue that cannot be fixed
+  safely inside the active task boundary.
+- `COMMIT_BLOCKER`: `$commit` stopped because staged validation failed,
+  commit hooks failed, the branch state is unsafe, or the commit message/scope
+  would be misleading.
 - `WORKTREE_CONFLICT`: unrelated user changes or concurrent edits block safe
   progress.
 - `ENVIRONMENT_BLOCKER`: local tools, credentials, services, network, or
@@ -190,8 +228,14 @@ or repeated attempts without new evidence.
   `~/.codex/sdlc-runs` state.
 - Do not use compatibility shims, deprecated aliases, or dual old/new paths
   unless the user explicitly asks for them.
-- Do not commit, push, open PRs, merge, publish, or run live external writes
-  unless a separate explicitly invoked skill owns that action.
+- Do not bypass `code-review` for completed code tasks unless the handoff
+  records that no code changed and review was not applicable.
+- Do not commit by hand. Use `$commit` for the per-task local checkpoint, and
+  never push, open PRs, merge, publish, or run live external writes unless a
+  separate explicitly invoked skill owns that action.
+- Do not continue into the next task in the same session after a task
+  checkpoint is saved; stop so the next task starts from the handoff in a fresh
+  session.
 - Do not persist secrets, raw logs, private URLs, or customer data in the
   handoff or reusable skill sources.
 
@@ -199,7 +243,11 @@ or repeated attempts without new evidence.
 
 - The handoff contains an ordered `task-1` through `task-n` queue.
 - Exactly one task is active at a time, and each completed task records files
-  changed, validation, and a short checkpoint summary.
+  changed, validation, `code-review` outcome, fixes, commit hash/message, and a
+  short checkpoint summary.
+- Each task session stops after saving the reviewed and committed handoff
+  checkpoint; the next task starts in a fresh session using the handoff as
+  context.
 - Every task is `done`, `blocked`, or `superseded`.
 - The final session inspected the aggregate diff and ran changed-surface
   alignment or recorded why it could not.
@@ -231,6 +279,8 @@ Return:
 - Ordered task queue with statuses.
 - Current or completed task summary.
 - Files changed and validation performed.
+- Code-review result, fixes applied, and per-task commit hash/message when a
+  task completed.
 - Failure classification and next action when blocked.
 - Exact next-session prompt when work remains.
 

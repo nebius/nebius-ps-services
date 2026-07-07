@@ -23,6 +23,12 @@ Research OpenTelemetry Collector scaling patterns and compare the alternatives.
 ```
 
 ```text
+Research our Kubernetes upgrade policy. Search internal Slack and Confluence
+first, then verify the technical claims against upstream Kubernetes and vendor
+documentation.
+```
+
+```text
 Investigate how Slurm preemption works, what breaks operationally, and what design tradeoffs matter.
 ```
 
@@ -68,8 +74,9 @@ When trigger precision matters, test these prompts in a fresh Codex thread
 where the source skill is installed or discoverable:
 
 - Should-trigger prompts should load `research` or produce a due diligence
-  response with source ranking, internals, operations, limitations,
-  alternatives, and recommendations.
+  response with internal-first source coverage when organization context
+  matters, external technical verification, provenance labels, internals,
+  operations, limitations, alternatives, and recommendations.
 - Should-not-trigger prompts should route to brainstorming, design,
   implementation, design-review, or SDLC skills as appropriate.
 - If `research` steals open-ended ideation, design planning, implementation, or

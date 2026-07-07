@@ -12,14 +12,14 @@ Design a new quota-aware preflight for this CLI before we implement it.
 
 ```text
 I need a software design for adding SSO to this existing app. Read the code,
-use research for the auth-library due diligence, compare options, and give me a
-/plan handoff.
+use research for the auth-library due diligence, apply system-design-rules to
+the auth boundary decision, compare options, and give me a /plan handoff.
 ```
 
 ```text
 There is no code yet. Use research for the stack and requirement due diligence,
-then design a small API service with persistence, tests, observability, and
-rollout guidance.
+then use system-design-rules to check the API, data, reliability, security,
+observability, and rollout choices before the /plan handoff.
 ```
 
 ```text
@@ -70,7 +70,9 @@ When trigger precision matters, test these prompts in a fresh Codex thread
 where the source skill is installed or discoverable:
 
 - Should-trigger prompts should load `design` or produce a response that
-  follows its six-phase workflow and ends with a `/plan` handoff.
+  follows its design workflow, routes substantial due diligence through
+  `research`, applies `system-design-rules` for non-trivial solution decisions,
+  and ends with a `/plan` handoff.
 - Should-not-trigger prompts should route to brainstorming, checklist review,
   Agentic SDLC, implementation, or PR workflows.
 - If `design` steals open-ended ideation, SDLC-owned design artifacts,

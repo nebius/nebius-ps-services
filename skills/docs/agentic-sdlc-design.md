@@ -23,12 +23,14 @@
   - [`sdlc-start`](#sdlc-start)
   - [`sdlc-gather-context`](#sdlc-gather-context)
   - [`sdlc-create-design`](#sdlc-create-design)
+  - [`sdlc-auto-steering`](#sdlc-auto-steering)
   - [`sdlc-create-plan`](#sdlc-create-plan)
   - [`sdlc-tdd`](#sdlc-tdd)
   - [`sdlc-implement-plan`](#sdlc-implement-plan)
   - [`sdlc-validate-codes`](#sdlc-validate-codes)
   - [`sdlc-unit-tests`](#sdlc-unit-tests)
   - [`sdlc-evaluate`](#sdlc-evaluate)
+  - [`sdlc-update-documents`](#sdlc-update-documents)
   - [`sdlc-gui-test`](#sdlc-gui-test)
   - [`sdlc-tui-test`](#sdlc-tui-test)
   - [`sdlc-classify-failure`](#sdlc-classify-failure)
@@ -125,14 +127,20 @@ Important files include:
 - `current-state.json`: current feature, phase, status, retry counts, and next
   recommended skill.
 - `feature-queue.json`: ordered feature queue derived from `docs/design.md`.
-- `fingerprints.json`: requirement, design, context, and plan fingerprints.
+- `fingerprints.json`: requirement, design, context, plan, steering, and
+  documentation fingerprints.
 - `checkpoints/checkpoint-*.json`: append-only state snapshots.
 - `checkpoints/latest.json`: pointer to the newest complete checkpoint.
-- `STEERING.md`: temporary runtime steering, not a second requirements file.
+- `STEERING.md`: active-run steering inbox and ledger, not a second
+  requirements file.
+- `steering/auto-steering.json`: machine-readable steering dispositions and
+  compact active reminders.
 - `context/FEAT-*.context.md`: compact context packs for design and planning.
 - `plans/FEAT-*.plan.vN.md` and `.lock`: private locked feature plans.
-- `evidence/`: validation, test, evaluation, UAT, PR, review, merge, and
-  commit evidence.
+- `evidence/`: validation, test, evaluation, documentation, UAT, PR, review,
+  merge, and commit evidence.
+- `evidence/FEAT-*/documents.md` and `evidence/uat/documents.md`:
+  documentation update evidence.
 - `history/iteration-*.md`: append-only state-transition history.
 - `permissions/`: short-lived authorization files for guarded commit, PR, and
   merge actions.
@@ -140,6 +148,13 @@ Important files include:
 `sdlc-start` resumes from the latest checkpoint and current state. It does not
 depend on conversation memory to know the current phase, feature, retry count,
 or next skill.
+
+During an active run, every user prompt submitted to steer the in-flight SDLC
+work is recorded in private steering state. `STEERING.md` keeps the
+human-readable inbox and ledger; `steering/auto-steering.json` keeps the
+machine-readable dispositions and compact active reminders. Entries that
+change requirements or design still route through `sdlc-create-requirements`
+or `sdlc-create-design` before they become implementation truth.
 
 ### Hooks as guardrails
 
@@ -166,9 +181,10 @@ invocation with a continuation prompt. It stops instead of continuing when the
 run is complete, paused, blocked, waiting on human input, over the iteration or
 retry budget, or making no progress after repeated continuation attempts. It
 can continue to `$sdlc-start` when local state recommends another phase,
-steering needs to be persisted, all features are committed and UAT still needs
-to run, or UAT failed with an addressable classification. It never
-auto-continues into `sdlc-merge-pr`; merge requires an explicit user request.
+steering needs to be refreshed by `sdlc-auto-steering`, all features are
+committed and UAT still needs to run, or UAT failed with an addressable
+classification. It never auto-continues into `sdlc-merge-pr`; merge requires
+an explicit user request.
 
 The PreToolUse hook does not deny filesystem targets by path. File reads,
 writes, updates, deletes, and moves may target repository files, outside-repo
@@ -218,7 +234,11 @@ owning skills:
 front matter, source prompt, problem, desired outcome, users, success
 definition, constraints, environment, external systems, stable `REQ-*` blocks,
 acceptance criteria, negative criteria, validation method, test method,
-evaluation method, open questions, decision log, and change log.
+evaluation method, optional Live Experiment Environment details, open questions,
+decision log, and change log. The Live Experiment Environment section records
+status, non-production confirmation, safe access references, allowed and
+prohibited agent actions, test data, reset instructions, approvals, and
+evidence limits without storing secret values.
 
 The requirements template also records:
 
@@ -271,6 +291,9 @@ sdlc-create-design
 <project>/docs/design.md
   |
   v
+sdlc-auto-steering
+  |
+  v
 Feature loop
   |
   v
@@ -292,6 +315,9 @@ sdlc-unit-tests
 sdlc-evaluate
   |
   v
+sdlc-update-documents
+  |
+  v
 sdlc-classify-failure, if a phase fails
   |
   v
@@ -310,6 +336,9 @@ next feature
 sdlc-uat-tests
   |
   v
+sdlc-update-documents, if UAT or final steering changed docs
+  |
+  v
 create-pr
   |
   v
@@ -324,18 +353,26 @@ The implementation state schema uses this phase order:
 1. requirements
 2. context
 3. design
-4. plan
-5. sdlc-tdd
-6. implementation
-7. validation
-8. test
-9. evaluation
-10. sdlc-align-specs
-11. sdlc-commit
-12. uat
-13. create-pr
-14. review-pr
-15. sdlc-merge-pr, only after explicit user request
+4. sdlc-auto-steering
+5. plan
+6. sdlc-tdd
+7. implementation
+8. validation
+9. test
+10. evaluation
+11. sdlc-update-documents
+12. sdlc-align-specs
+13. sdlc-commit
+14. uat
+15. create-pr
+16. review-pr
+17. sdlc-merge-pr, only after explicit user request
+
+`sdlc-auto-steering` also runs at the start of each feature loop, or whenever
+`sdlc-start` sees new steering input, stale steering fingerprints, or
+unresolved steering dispositions. `sdlc-update-documents` runs in feature scope
+after evaluation and may run again in run scope after UAT when UAT or final
+steering changes user-facing docs before PR creation.
 
 `sdlc-classify-failure` is the routing mechanism for failed phases rather than
 a normal happy-path phase. It records the failure class and sends the loop back
@@ -392,6 +429,8 @@ The preflight must verify and record:
 
 - global `sdlc-*` skill folders, `SKILL.md` front matter, and explicit-only
   `agents/openai.yaml` invocation policy
+- `sdlc-auto-steering` and `sdlc-update-documents` discovery, metadata, and
+  placement in the workflow contract
 - duplicate SDLC skill-name detection
 - configured PreToolUse and Stop hooks
 - preservation of non-SDLC hook boundaries such as `SessionStart` and
@@ -436,14 +475,18 @@ Required happy-path evidence:
   next skill.
 - `sdlc-gather-context` records a compact context pack.
 - `sdlc-create-design` creates committed design with stable `FEAT-*` IDs.
+- `sdlc-auto-steering` records active-run steering, classifies mid-run prompts,
+  and derives compact reminders without changing product-truth docs.
 - `sdlc-create-plan` writes a private locked plan version.
 - `sdlc-tdd` records test intent before implementation.
 - `sdlc-implement-plan` changes only the disposable project for the current
   feature.
 - `sdlc-validate-codes`, `sdlc-unit-tests`, and `sdlc-evaluate` record passing
   evidence or route failures for classification.
+- `sdlc-update-documents` updates README, changelog, examples, or usage docs
+  when implemented behavior requires it and records documentation evidence.
 - `sdlc-align-specs` confirms requirements, design, plan, implementation, and
-  evidence agree.
+  evidence agree, including documentation evidence when it exists.
 - `sdlc-commit` creates one local feature-scoped commit only after evidence
   passes.
 - `sdlc-uat-tests` records product-level UAT evidence after all features are
@@ -463,6 +506,9 @@ After the happy path, verify these recovery behaviors:
   the earliest responsible phase before retry
 - add `Pause after the current feature. Do not create a PR.` to `STEERING.md`
   and confirm `sdlc-start` and Stop continuation honor it
+- submit a mid-run prompt that changes requirements, design, and docs in turn,
+  then confirm `sdlc-auto-steering` records each prompt and routes product-truth
+  changes to the owning skill before implementation treats them as true
 - confirm clearing steering allows resume
 - run optional GUI or TUI smoke checks only against harmless local disposable
   targets when the required harness is available
@@ -511,16 +557,21 @@ the contract.
 Converts user intent, tickets, issues, Slack threads, Confluence pages, GitHub
 context, or approved change requests into durable requirements in
 `docs/requirements.md`. It preserves stable `REQ-*` IDs, records acceptance
-and negative criteria, and marks unclear items as open questions instead of
+and negative criteria, records optional Live Experiment Environment details for
+safe later evaluation, and marks unclear items as open questions instead of
 guessing.
 
 ### `sdlc-start`
 
 Coordinates the active SDLC run. It reads `docs/requirements.md`,
 `docs/design.md`, `active-run.json`, `current-state.json`, feature queue,
-fingerprints, latest checkpoint, `STEERING.md`, and evidence. It selects the
-highest-priority incomplete feature whose dependencies are satisfied, writes a
-checkpoint, and returns exactly one next recommended skill.
+fingerprints, latest checkpoint, `STEERING.md`,
+`steering/auto-steering.json`, and evidence. It selects the highest-priority
+incomplete feature whose dependencies are satisfied, routes stale or unresolved
+steering to `sdlc-auto-steering`, writes a checkpoint, and returns exactly one
+next recommended skill. At the beginning of a run, it encourages the user to
+provide a non-production or disposable live experiment environment and routes
+any provided details through `sdlc-create-requirements`.
 
 ### `sdlc-gather-context`
 
@@ -535,6 +586,18 @@ Converts requirements and gathered context into `docs/design.md`. It maps
 stable `REQ-*` blocks to stable `FEAT-*` blocks, defines architecture,
 boundaries, data flow, control flow, state, error handling, security,
 observability, validation, tests, evaluation, rollback, and done criteria.
+
+### `sdlc-auto-steering`
+
+Refreshes private runtime steering for the active run. It records every mid-run
+user prompt in `STEERING.md` or a redacted summary when raw content is unsafe,
+keeps `steering/auto-steering.json` as the machine-readable disposition state,
+and derives compact reminders from requirements, design, context, locked plan,
+fingerprints, steering, and recent evidence. It classifies entries with exact
+disposition values such as `runtime-only`, `requirements-change`,
+`design-change`, `docs-update`, `resolved`, `superseded`, `rejected`, or
+`needs-human`. It does not choose the next phase directly and does not edit
+committed product-truth docs.
 
 ### `sdlc-create-plan`
 
@@ -559,9 +622,13 @@ smallest coherent implementation inside the plan boundaries.
 ### `sdlc-validate-codes`
 
 Checks whether the implementation can build, parse, lint, type-check, import,
-and validate configuration. It records validation evidence in the local run
-state and classifies failures instead of treating missing or broken tooling as
-success.
+and validate configuration. After those mechanical checks pass, it uses
+`code-review` in review-only mode against the current feature diff, changed
+files, tests, locked plan, and design context. It records validation and review
+evidence in the local run state and classifies failures instead of treating
+missing tooling, broken tooling, or blocking review findings as success. This
+is not PR readiness; `review-pr` remains the PR review and merge-readiness
+phase after PR creation.
 
 ### `sdlc-unit-tests`
 
@@ -575,7 +642,20 @@ environment, or design defects.
 Observes product behavior against acceptance and negative criteria after
 validation and tests pass. It chooses the correct route for the product shape:
 `sdlc-gui-test`, `sdlc-tui-test`, API/service checks, performance checks, or
-manual review. Passing tests alone are not treated as evaluation.
+manual review. When `docs/requirements.md` provides a confirmed safe Live
+Experiment Environment, it may use that environment within the recorded
+allowed actions; missing, unsafe, or unconfirmed live access is classified
+instead of guessed around. Passing tests alone are not treated as evaluation.
+
+### `sdlc-update-documents`
+
+Updates project-facing documentation after feature evaluation, resolved
+documentation steering, UAT, or final run evidence. It may update README,
+changelog, usage docs, examples, docs indexes, or generated docs that describe
+implemented behavior, then records documentation evidence under the private run
+directory as `evidence/FEAT-*/documents.md` or `evidence/uat/documents.md`. It
+does not edit `docs/requirements.md` or `docs/design.md`; spec or design drift
+routes back to `sdlc-create-requirements` or `sdlc-create-design`.
 
 ### `sdlc-gui-test`
 
@@ -595,13 +675,15 @@ criteria without storing credentials in transcripts.
 Classifies failed phases before the loop retries. It identifies the primary
 failure cause, maps it to the earliest responsible phase, updates retry counts,
 and routes back to requirements, context, design, plan, TDD, implementation,
-validation, tests, evaluation, UAT, environment, policy, or human input.
+validation, tests, evaluation, documents, UAT, environment, policy, or human
+input.
 
 ### `sdlc-align-specs`
 
 Checks that requirements, design, locked plans, tests, implementation, and
-evidence tell one consistent story. It is SDLC-specific and does not replace
-the general `align` skill. Drift is routed to the responsible SDLC skill.
+evidence tell one consistent story, including documentation evidence when it
+exists. It is SDLC-specific and does not replace the general `align` skill.
+Drift is routed to the responsible SDLC skill.
 
 ### `sdlc-commit`
 
@@ -614,8 +696,9 @@ commit evidence, and never pushes.
 
 Runs product-level UAT after all feature commits are complete. It builds a UAT
 matrix from requirements, validates cross-feature user journeys and negative
-criteria, records evidence, and marks the product ready for `create-pr` only
-on pass.
+criteria, may use the confirmed safe Live Experiment Environment within its
+recorded allowed operations and reset rules, records evidence, and marks the
+product ready for `create-pr` only on pass.
 
 ### `create-pr`
 
@@ -656,6 +739,7 @@ Typical routes are:
 - implementation defects -> `sdlc-implement-plan`
 - validation defects -> `sdlc-validate-codes` after repair
 - behavior or acceptance defects -> `sdlc-evaluate` or the correct evaluator
+- documentation drift -> `sdlc-update-documents`
 - environment defects -> stop or request the minimum missing setup
 - policy blocks -> stop unless the required explicit authorization exists
 

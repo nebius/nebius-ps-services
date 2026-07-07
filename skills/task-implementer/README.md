@@ -7,8 +7,9 @@ dependencies and priority, and implements one task at a time with a markdown
 handoff between fresh Codex sessions.
 
 It is intentionally smaller than Agentic SDLC. It does not create committed
-requirements/design docs, private SDLC JSON state, hooks, commits, PRs, or
-merge actions.
+requirements/design docs, private SDLC JSON state, hooks, PRs, or merge
+actions. Each completed task is reviewed with `code-review`, fixed as needed,
+and locally committed through `$commit` before the next fresh session starts.
 
 ## Files
 
@@ -24,9 +25,12 @@ merge actions.
 ## Boundaries
 
 - Use this skill when the user asks for a sequential task implementation loop
-  or continuation from an existing handoff.
+  or continuation from an existing handoff. It is explicit-only because it
+  mutates code, invokes commit checkpoints, and may launch follow-on sessions.
 - Use `design` as a supporting skill for unresolved architecture, component,
   contract, or technology choices before implementation.
+- Use `code-review` and `$commit` as required per-task gates after validation
+  and before session handoff.
 - Use `$sdlc-start` for Agentic SDLC.
 - Use `align` for changed-surface consistency after implementation.
 - Do not run parallel write-capable agents in the same workspace.

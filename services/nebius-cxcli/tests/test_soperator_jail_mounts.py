@@ -4,6 +4,7 @@ import pytest
 
 from nebius_cxcli.soperator_jail_mounts import (
     apply_jail_persistent_mount_values,
+    jail_persistent_mount_decisions,
     jail_persistent_mount_status,
     normalize_jail_persistent_mounts,
     parse_jail_persistent_mount_spec,
@@ -21,10 +22,112 @@ def test_apply_external_persistent_mount_values_adds_home_in_shared_area() -> No
     assert values["jailRootfs"]["store"]["rootfsPath"] == "/mnt/jail/.cxcli/rootfs"
     assert values["jailRootfs"]["adoption"]["activeSource"] == "legacy-rootfs"
     assert values["jailPersistentMounts"] == [
-        {"mountPath": "/home", "localPath": "/mnt/jail/shared/home"}
+        {"mountPath": "/home", "localPath": "/mnt/jail/shared/home"},
+        {"mountPath": "/data", "localPath": "/mnt/jail/shared/data"},
+        {"mountPath": "/scripts", "localPath": "/mnt/jail/shared/scripts"},
+        {"mountPath": "/models", "localPath": "/mnt/jail/shared/models"},
     ]
+    volume_sources = {item["name"]: item for item in values["volumeSources"]}
+    assert set(volume_sources) == {
+        "jail",
+    }
+    assert volume_sources["jail"]["persistentVolumeClaim"]["claimName"] == (
+        "jail-rootfs-slot-a-pvc"
+    )
     assert "jail_home" not in values
     assert "home" not in values["jailRootfs"]
+
+
+def test_external_persistent_mount_decisions_record_auto_explicit_and_existing_submounts() -> None:
+    source_values = {
+        "externalNfs": {
+            "enabled": True,
+            "mountPath": "/home",
+            "server": "nfs.example.invalid",
+            "path": "/exports/home",
+        }
+    }
+    explicit_data = parse_jail_persistent_mount_spec("/data=/mnt/jail/shared/data")
+    values = apply_jail_persistent_mount_values(
+        source_values,
+        target_ref="external-cluster",
+        persistent_mounts=[explicit_data],
+        layout="external",
+    )
+
+    decisions = jail_persistent_mount_decisions(
+        original_values=source_values,
+        patched_values=values,
+        explicit_mounts=[explicit_data],
+    )
+
+    assert {item["mount_path"]: item["status"] for item in decisions} == {
+        "/home": "existing-submount",
+        "/data": "explicit",
+        "/scripts": "pending-probe",
+        "/models": "pending-probe",
+    }
+    assert {
+        item["mount_path"]: item["copy_required"] for item in decisions
+    } == {
+        "/home": False,
+        "/data": True,
+        "/scripts": True,
+        "/models": True,
+    }
+
+
+def test_apply_persistent_mount_values_removes_chart_rendered_volume_source_duplicates() -> None:
+    values = apply_jail_persistent_mount_values(
+        {
+            "volumeSources": [
+                {"name": "controller-spool", "persistentVolumeClaim": {"claimName": "spool"}},
+                {
+                    "name": "jail-rootfs-slot-a",
+                    "persistentVolumeClaim": {"claimName": "stale-a"},
+                },
+                {
+                    "name": "jail-persistent-data",
+                    "persistentVolumeClaim": {"claimName": "stale-data"},
+                },
+            ]
+        },
+        target_ref="external-cluster",
+        layout="external",
+    )
+
+    volume_sources = {item["name"]: item for item in values["volumeSources"]}
+    assert set(volume_sources) == {"controller-spool", "jail"}
+    assert volume_sources["controller-spool"]["persistentVolumeClaim"]["claimName"] == "spool"
+    assert volume_sources["jail"]["persistentVolumeClaim"]["claimName"] == (
+        "jail-rootfs-slot-a-pvc"
+    )
+
+
+def test_apply_persistent_mount_values_adds_referenced_controller_spool_source() -> None:
+    values = apply_jail_persistent_mount_values(
+        {
+            "slurmNodes": {
+                "controller": {
+                    "volumes": {
+                        "spool": {
+                            "volumeSourceName": "controller-spool",
+                        }
+                    }
+                }
+            }
+        },
+        target_ref="external-cluster",
+        layout="external",
+    )
+
+    volume_sources = {item["name"]: item for item in values["volumeSources"]}
+    assert volume_sources["controller-spool"]["persistentVolumeClaim"]["claimName"] == (
+        "controller-spool-pvc"
+    )
+    assert volume_sources["jail"]["persistentVolumeClaim"]["claimName"] == (
+        "jail-rootfs-slot-a-pvc"
+    )
 
 
 def test_apply_managed_persistent_mount_values_uses_same_store_home() -> None:
@@ -66,7 +169,10 @@ def test_explicit_home_persistent_mount_replaces_default_home() -> None:
     )
 
     assert values["jailPersistentMounts"] == [
-        {"mountPath": "/home", "localPath": "/mnt/jail/customer-home"}
+        {"mountPath": "/home", "localPath": "/mnt/jail/customer-home"},
+        {"mountPath": "/data", "localPath": "/mnt/jail/shared/data"},
+        {"mountPath": "/scripts", "localPath": "/mnt/jail/shared/scripts"},
+        {"mountPath": "/models", "localPath": "/mnt/jail/shared/models"},
     ]
 
 
@@ -84,7 +190,11 @@ def test_existing_external_home_submount_prevents_duplicate_default_home() -> No
         layout="external",
     )
 
-    assert values["jailPersistentMounts"] == []
+    assert values["jailPersistentMounts"] == [
+        {"mountPath": "/data", "localPath": "/mnt/jail/shared/data"},
+        {"mountPath": "/scripts", "localPath": "/mnt/jail/shared/scripts"},
+        {"mountPath": "/models", "localPath": "/mnt/jail/shared/models"},
+    ]
     assert jail_persistent_mount_status(values).status == "verified"
 
 

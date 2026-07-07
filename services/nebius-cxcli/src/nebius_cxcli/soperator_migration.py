@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import ipaddress
 import json
 import math
 import os
@@ -95,10 +96,12 @@ from .soperator_jail_capacity import (
     probe_active_passive_jail_capacity,
 )
 from .soperator_jail_mounts import (
+    JAIL_EXTERNAL_AUTO_PERSISTENT_MOUNT_PATHS,
     JAIL_EXTERNAL_SYSTEM_PATH,
     JAIL_LEGACY_ROOT_PATH,
     JAIL_PERSISTENT_MOUNTS_VALUES_KEY,
     apply_jail_persistent_mount_values,
+    jail_persistent_mount_decisions,
     jail_persistent_mount_exclude_paths,
     jail_persistent_mount_status,
     jail_rootfs_uses_legacy_active_source,
@@ -129,6 +132,7 @@ from .soperator_populate_jail import (
     active_passive_populate_jail_job_scheduling,
     completed_populate_jail_refresh_result,
     inspect_populate_jail,
+    login_service_ready_endpoint_count,
     manual_populate_jail_refresh_result,
     normalize_populate_jail_refresh_mode,
     plan_populate_jail_refresh,
@@ -329,6 +333,7 @@ _SOURCE_WORKER_NODESET_PREFIX = "worker"
 SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE = "safe-surge"
 SOPERATOR_WORKER_ROLLOUT_STRATEGY_ZERO_SURGE = "zero-surge"
 SOPERATOR_WORKER_ROLLOUT_DEFAULT_STRATEGY = SOPERATOR_WORKER_ROLLOUT_STRATEGY_ZERO_SURGE
+SOPERATOR_SERVICE_ROLE_ROLLOUT_DEFAULT_STRATEGY = SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE
 SOPERATOR_WORKER_ROLLOUT_STRATEGIES = frozenset(
     {
         SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE,
@@ -365,11 +370,20 @@ _SOPERATOR_STORAGE_DEFAULTS: Mapping[str, Mapping[str, Any]] = {
     },
 }
 _SOPERATOR_NAMESPACE = "soperator"
+SOPERATOR_LOGIN_LB_ALLOCATION_ANNOTATION = "nebius.com/load-balancer-allocation-id"
+SOPERATOR_LOGIN_LB_TYPE_ANNOTATION = "nebius.com/load-balancer-type"
+SOPERATOR_LOGIN_LB_TYPE_INTERNAL = "internal"
+SOPERATOR_LOGIN_LB_TYPE_EXTERNAL = "external"
+_NEBIUS_MANAGED_BY_LABEL = "nebius.com/managed-by"
 _SECURITY_PROFILES_OPERATOR_NAMESPACE = "security-profiles-operator-system"
 _SECURITY_PROFILES_OPERATOR_WEBHOOK_RESOURCE = "deployment/security-profiles-operator-webhook"
 _SOPERATOR_TARGET_RELEASE_NAME = "soperator"
 _SOPERATOR_CONTROLLER_POD = "controller-0"
 _SOPERATOR_CONTROLLER_CONTAINER = "slurmctld"
+_SOPERATOR_LEGACY_SLURM_CONF = "/mnt/jail/etc/slurm/slurm.conf"
+_SOPERATOR_SLURM_CLI_NAMES = frozenset(
+    {"sacct", "sbatch", "scancel", "scontrol", "sinfo", "squeue", "srun"}
+)
 _SOPERATOR_SOURCE_RELEASE_NAMES = frozenset(
     {
         "flux-system-soperator-fluxcd",
@@ -442,7 +456,7 @@ _SOPERATOR_SOURCE_CHART_PREFIXES = (
 )
 _TARGET_KUBE_RBAC_PROXY_REPOSITORY = "registry.k8s.io/kubebuilder/kube-rbac-proxy"
 _TARGET_KUBE_RBAC_PROXY_TAG = "v0.15.0"
-_ROLLING_COMPUTE_VALUES_REVISION = 12
+_ROLLING_COMPUTE_VALUES_REVISION = 14
 _VALIDATION_HOLD_REVISION = 2
 _TARGET_SLURM_PLUGIN_DIR = "/usr/lib/x86_64-linux-gnu/slurm"
 _TARGET_GPU_GRES_AFFINITY_PARAMETER = "l3cache_as_socket"
@@ -479,6 +493,27 @@ _EXTERNAL_UPGRADE_JOB_POLICIES = frozenset(
 _EXTERNAL_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT_SECONDS = 3600
 _EXTERNAL_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL_SECONDS = 30
 _EXTERNAL_UPGRADE_CANCEL_CLEAR_TIMEOUT_SECONDS = 300
+EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY = "target-ready"
+EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE = "wait-active"
+EXTERNAL_LOGIN_SESSION_POLICY_GRACE_PERIOD = "grace-period"
+EXTERNAL_LOGIN_SESSION_POLICIES = frozenset(
+    {
+        EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
+        EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE,
+        EXTERNAL_LOGIN_SESSION_POLICY_GRACE_PERIOD,
+    }
+)
+EXTERNAL_LOGIN_SESSION_DRAIN_TIMEOUT_SECONDS = 30 * 60
+
+
+def normalize_external_login_session_policy(policy: str | None) -> str:
+    resolved = str(policy or "").strip() or EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY
+    if resolved not in EXTERNAL_LOGIN_SESSION_POLICIES:
+        raise ValueError(
+            "--login-session-policy must be one of: "
+            + ", ".join(sorted(EXTERNAL_LOGIN_SESSION_POLICIES))
+        )
+    return resolved
 
 
 class SoperatorMigrationPhasePending(RuntimeError):
@@ -573,6 +608,22 @@ class SoperatorMigrationNebiusApi(Protocol):
     ) -> Mapping[str, Any]:
         """Update a cluster control-plane version and return its payload."""
 
+    def list_allocations(self, *, project_id: str) -> tuple[Mapping[str, Any], ...]:
+        """Return VPC allocations for a project."""
+
+    def get_allocation(self, allocation_id: str) -> Mapping[str, Any]:
+        """Return one VPC allocation payload."""
+
+    def update_allocation_labels(
+        self,
+        *,
+        allocation_id: str,
+        original_allocation: Mapping[str, Any],
+        labels: Mapping[str, str],
+        timeout_seconds: int = 300,
+    ) -> Mapping[str, Any]:
+        """Update a VPC allocation's labels and return the updated payload."""
+
     def close(self) -> None:
         """Release any SDK resources owned by this API object."""
 
@@ -610,9 +661,17 @@ class SoperatorExternalNodeTemplateTarget:
 @dataclass(frozen=True)
 class SoperatorExternalNodeTemplateRollout:
     strategy: str
+    service_role_strategy: str = SOPERATOR_SERVICE_ROLE_ROLLOUT_DEFAULT_STRATEGY
     worker_wave_groups: int | None = None
     worker_wave_percent: int | None = None
     max_parallel_worker_groups: int | None = None
+    service_role_max_surge_count: int = (
+        SOPERATOR_SAFE_SURGE_WORKER_GROUP_STRATEGY_DEFAULT_MAX_SURGE_COUNT
+    )
+    service_role_max_unavailable_count: int = (
+        SOPERATOR_SAFE_SURGE_WORKER_GROUP_STRATEGY_DEFAULT_MAX_UNAVAILABLE_COUNT
+    )
+    service_role_drain_timeout: str = SOPERATOR_WORKER_GROUP_STRATEGY_DEFAULT_DRAIN_TIMEOUT
     strategy_max_surge_count: int = (
         SOPERATOR_ZERO_SURGE_WORKER_GROUP_STRATEGY_DEFAULT_MAX_SURGE_COUNT
     )
@@ -622,13 +681,21 @@ class SoperatorExternalNodeTemplateRollout:
     strategy_drain_timeout: str = SOPERATOR_WORKER_GROUP_STRATEGY_DEFAULT_DRAIN_TIMEOUT
 
     def to_manifest_dict(self) -> dict[str, Any]:
-        result: dict[str, Any] = {"strategy": self.strategy}
+        result: dict[str, Any] = {
+            "strategy": self.strategy,
+            "service_role_strategy": self.service_role_strategy,
+        }
         if self.worker_wave_groups is not None:
             result["worker_wave_groups"] = self.worker_wave_groups
         if self.worker_wave_percent is not None:
             result["worker_wave_percent"] = self.worker_wave_percent
         if self.max_parallel_worker_groups is not None:
             result["max_parallel_worker_groups"] = self.max_parallel_worker_groups
+        result["service_role_group_strategy"] = {
+            "max_surge_count": self.service_role_max_surge_count,
+            "max_unavailable_count": self.service_role_max_unavailable_count,
+            "drain_timeout": self.service_role_drain_timeout,
+        }
         result["worker_group_strategy"] = {
             "max_surge_count": self.strategy_max_surge_count,
             "max_unavailable_count": self.strategy_max_unavailable_count,
@@ -648,6 +715,30 @@ class SoperatorMigrationExecutionResult:
     mutation_performed: bool
     lines: tuple[str, ...]
     report_path: Path | None = None
+
+
+@dataclass(frozen=True)
+class SoperatorLoginLoadBalancerAllocationDecision:
+    service_name: str
+    status: str
+    address: str = ""
+    load_balancer_type: str = SOPERATOR_LOGIN_LB_TYPE_EXTERNAL
+    allocation_id: str = ""
+    allocation_cidr: str = ""
+    removed_labels: tuple[str, ...] = ()
+    persisted_to_values: bool = False
+
+    def as_payload(self) -> dict[str, Any]:
+        return {
+            "service_name": self.service_name,
+            "status": self.status,
+            "address": self.address,
+            "load_balancer_type": self.load_balancer_type,
+            "allocation_id": self.allocation_id,
+            "allocation_cidr": self.allocation_cidr,
+            "removed_labels": list(self.removed_labels),
+            "persisted_to_values": self.persisted_to_values,
+        }
 
 
 def _sdk_not_found_error(error: BaseException) -> bool:
@@ -705,11 +796,13 @@ class _SdkSoperatorMigrationNebiusApi:
         )
         from nebius.api.nebius.compute.v1 import FilesystemServiceClient
         from nebius.api.nebius.mk8s.v1 import ClusterServiceClient, NodeGroupServiceClient
+        from nebius.api.nebius.vpc.v1 import AllocationServiceClient
 
         self._sdk = sdk
         self._filesystem_client = FilesystemServiceClient(sdk)
         self._cluster_client = ClusterServiceClient(sdk)
         self._node_group_client = NodeGroupServiceClient(sdk)
+        self._allocation_client = AllocationServiceClient(sdk)
 
     def get_filesystem_by_name(self, *, project_id: str, name: str) -> Mapping[str, Any]:
         from nebius.api.nebius.common.v1 import GetByNameRequest
@@ -1006,6 +1099,74 @@ class _SdkSoperatorMigrationNebiusApi:
                 action=f"Nebius MK8s cluster control-plane update {cluster_id}",
             )
         return self.get_cluster(cluster_id)
+
+    def list_allocations(self, *, project_id: str) -> tuple[Mapping[str, Any], ...]:
+        from nebius.api.nebius.vpc.v1 import ListAllocationsRequest
+
+        items: list[Mapping[str, Any]] = []
+        token = ""
+        while True:
+            with suppress_expected_refresh_logs():
+                response = self._allocation_client.list(
+                    ListAllocationsRequest(
+                        parent_id=project_id,
+                        page_size=999,
+                        page_token=token or None,
+                    )
+                ).wait()
+            for item in getattr(response, "items", []) or []:
+                payload = sdk_message_to_mapping(item)
+                if payload:
+                    items.append(payload)
+            token = str(getattr(response, "next_page_token", "") or "").strip()
+            if not token:
+                return tuple(items)
+
+    def get_allocation(self, allocation_id: str) -> Mapping[str, Any]:
+        from nebius.api.nebius.vpc.v1 import GetAllocationRequest
+
+        with suppress_expected_refresh_logs():
+            allocation = self._allocation_client.get(GetAllocationRequest(id=allocation_id)).wait()
+        payload = sdk_message_to_mapping(allocation)
+        if not payload:
+            raise RuntimeError(f"Nebius VPC allocation {allocation_id} did not return a payload.")
+        return payload
+
+    def update_allocation_labels(
+        self,
+        *,
+        allocation_id: str,
+        original_allocation: Mapping[str, Any],
+        labels: Mapping[str, str],
+        timeout_seconds: int = 300,
+    ) -> Mapping[str, Any]:
+        from nebius.api.nebius.common.v1 import ResourceMetadata
+        from nebius.api.nebius.vpc.v1 import UpdateAllocationRequest
+
+        metadata = _mapping(original_allocation.get("metadata"))
+        parent_id = str(metadata.get("parent_id", metadata.get("parentId", "")) or "").strip()
+        name = str(metadata.get("name", "") or "").strip()
+        resource_version = _positive_int(metadata.get("resource_version"), fallback=0)
+        request_metadata: dict[str, Any] = {
+            "id": allocation_id,
+            "labels": dict(labels),
+        }
+        if parent_id:
+            request_metadata["parent_id"] = parent_id
+        if name:
+            request_metadata["name"] = name
+        if resource_version:
+            request_metadata["resource_version"] = resource_version
+        request = UpdateAllocationRequest(metadata=ResourceMetadata(**request_metadata))
+        request.set_mask(_sdk_request_mask(("metadata.labels",)))
+        with suppress_expected_refresh_logs():
+            operation = self._allocation_client.update(request).wait()
+            wait_nebius_operation(
+                operation,
+                timeout_seconds=timeout_seconds,
+                action=f"Nebius VPC allocation label update {allocation_id}",
+            )
+        return self.get_allocation(allocation_id)
 
     def close(self) -> None:
         with suppress(Exception):
@@ -1693,6 +1854,25 @@ def resolve_external_node_template_rollout(
             "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.strategy "
             f"must be one of: {available}."
         )
+    config_service_role_strategy = normalize_component_token(
+        str(config.get("service_role_strategy", "") or "")
+    )
+    if config_service_role_strategy and config_service_role_strategy not in (
+        SOPERATOR_WORKER_ROLLOUT_STRATEGIES
+    ):
+        available = ", ".join(sorted(SOPERATOR_WORKER_ROLLOUT_STRATEGIES))
+        raise ValueError(
+            "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout."
+            f"service_role_strategy must be one of: {available}."
+        )
+    resolved_service_role_strategy = (
+        config_service_role_strategy
+        or (
+            cli_strategy
+            if strategy is not None and cli_strategy in SOPERATOR_WORKER_ROLLOUT_STRATEGIES
+            else SOPERATOR_SERVICE_ROLE_ROLLOUT_DEFAULT_STRATEGY
+        )
+    )
     for legacy_key in (
         "max_global_unavailable_worker_nodes",
         "max_global_unavailable_worker_percent",
@@ -1802,6 +1982,51 @@ def resolve_external_node_template_rollout(
     default_max_surge, default_max_unavailable = _default_worker_group_strategy_values(
         resolved_strategy
     )
+    service_role_group_strategy = _mapping(config.get("service_role_group_strategy"))
+    (
+        default_service_role_max_surge,
+        default_service_role_max_unavailable,
+    ) = _default_worker_group_strategy_values(resolved_service_role_strategy)
+    resolved_service_role_max_surge = _non_negative_int_or_default(
+        service_role_group_strategy.get("max_surge_count"),
+        field_name=(
+            "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout."
+            "service_role_group_strategy.max_surge_count"
+        ),
+        default=default_service_role_max_surge,
+    )
+    resolved_service_role_max_unavailable = _non_negative_int_or_default(
+        service_role_group_strategy.get("max_unavailable_count"),
+        field_name=(
+            "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout."
+            "service_role_group_strategy.max_unavailable_count"
+        ),
+        default=default_service_role_max_unavailable,
+    )
+    if resolved_service_role_max_surge == 0 and resolved_service_role_max_unavailable == 0:
+        raise ValueError(
+            "service_role_group_strategy must keep at least one of max_surge_count or "
+            "max_unavailable_count greater than zero."
+        )
+    if (
+        resolved_service_role_strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_ZERO_SURGE
+        and resolved_service_role_max_surge != 0
+    ):
+        raise ValueError("zero-surge service-role rollout requires max_surge_count to be 0.")
+    if (
+        resolved_service_role_strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE
+        and resolved_service_role_max_surge <= 0
+    ):
+        raise ValueError(
+            "safe-surge service-role rollout requires max_surge_count greater than 0."
+        )
+    resolved_service_role_drain_timeout = _rollout_drain_timeout_or_default(
+        service_role_group_strategy.get("drain_timeout"),
+        field_name=(
+            "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout."
+            "service_role_group_strategy.drain_timeout"
+        ),
+    )
     resolved_max_surge = _non_negative_int_or_default(
         strategy_max_surge_count
         if strategy_max_surge_count is not None
@@ -1860,9 +2085,13 @@ def resolve_external_node_template_rollout(
     )
     return SoperatorExternalNodeTemplateRollout(
         strategy=resolved_strategy,
+        service_role_strategy=resolved_service_role_strategy,
         worker_wave_groups=resolved_wave_groups,
         worker_wave_percent=resolved_wave_percent,
         max_parallel_worker_groups=resolved_parallel,
+        service_role_max_surge_count=resolved_service_role_max_surge,
+        service_role_max_unavailable_count=resolved_service_role_max_unavailable,
+        service_role_drain_timeout=resolved_service_role_drain_timeout,
         strategy_max_surge_count=resolved_max_surge,
         strategy_max_unavailable_count=resolved_max_unavailable,
         strategy_drain_timeout=resolved_drain_timeout,
@@ -1922,12 +2151,29 @@ def _worker_group_strategy_label(rollout: SoperatorExternalNodeTemplateRollout) 
     )
 
 
+def _service_role_group_strategy_label(rollout: SoperatorExternalNodeTemplateRollout) -> str:
+    return (
+        f"max_surge={rollout.service_role_max_surge_count}, "
+        f"max_unavailable={rollout.service_role_max_unavailable_count}, "
+        f"drain_timeout={rollout.service_role_drain_timeout}"
+    )
+
+
 def _effective_worker_group_strategy_label(
     rollout: SoperatorExternalNodeTemplateRollout,
 ) -> str:
     if rollout.strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_ZERO_SURGE:
         return _worker_group_strategy_label(rollout) + " (zero-surge)"
     return _worker_group_strategy_label(rollout)
+
+
+def _effective_service_role_strategy_label(
+    rollout: SoperatorExternalNodeTemplateRollout,
+) -> str:
+    label = _service_role_group_strategy_label(rollout)
+    if rollout.service_role_strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_ZERO_SURGE:
+        return label + " (lower-continuity zero-surge)"
+    return label
 
 
 def _chunked_groups(
@@ -1968,19 +2214,51 @@ def _external_node_template_rollout_plan_lines(
         f"Node-template rollout strategy: {rollout.strategy}",
         "Worker wave parallelism: "
         + _worker_rollout_budget_label(rollout, worker_group_count=len(worker_groups)),
+        "Service-role per-group strategy: " + _effective_service_role_strategy_label(rollout),
         "Node-group per-group strategy: " + _effective_worker_group_strategy_label(rollout),
     ]
-    if rollout.strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE:
-        surge_count = rollout.strategy_max_surge_count
+    service_safe_surge = (
+        rollout.service_role_strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE
+    )
+    worker_safe_surge = rollout.strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE
+    if service_safe_surge or worker_safe_surge:
+        surge_counts = []
+        if service_safe_surge and service_groups:
+            surge_counts.append(
+                f"{rollout.service_role_max_surge_count} surge node(s) per active service group"
+            )
+        if worker_safe_surge and worker_groups:
+            surge_counts.append(
+                f"{rollout.strategy_max_surge_count} surge node(s) per active worker group"
+            )
+        surge_text = "; ".join(surge_counts) or "configured surge nodes for active groups"
         lines.append(
-            f"Safe-surge spare capacity required: {surge_count} surge node(s) per active "
-            "service group or worker group in the active worker wave; --execute preflight "
+            f"Safe-surge spare capacity required: {surge_text}; --execute preflight "
             "verifies quota and capacity before any cluster mutation."
         )
-        if rollout.strategy_drain_timeout != "none":
+        finite_timeouts = [
+            timeout
+            for timeout in (rollout.service_role_drain_timeout, rollout.strategy_drain_timeout)
+            if timeout != "none"
+        ]
+        if finite_timeouts:
             lines.append(
                 "Node-group drain timeout: finite timeout may let Nebius delete a node after "
-                f"{rollout.strategy_drain_timeout} if draining is still blocked."
+                f"{', '.join(sorted(set(finite_timeouts)))} if draining is still blocked."
+            )
+        if not worker_safe_surge and worker_groups:
+            unavailable_count = rollout.strategy_max_unavailable_count
+            lines.append(
+                "Zero-surge worker capacity: no worker surge quota; active worker group "
+                f"capacity may be reduced by {unavailable_count} node"
+                f"{'' if unavailable_count == 1 else 's'} during rollout."
+            )
+        if not service_safe_surge and service_groups:
+            unavailable_count = rollout.service_role_max_unavailable_count
+            lines.append(
+                "Lower-continuity zero-surge service-role capacity: active login or service "
+                f"group capacity may be reduced by {unavailable_count} node"
+                f"{'' if unavailable_count == 1 else 's'} during rollout."
             )
     else:
         unavailable_count = rollout.strategy_max_unavailable_count
@@ -1990,13 +2268,8 @@ def _external_node_template_rollout_plan_lines(
             f"{'' if unavailable_count == 1 else 's'} during rollout."
         )
     if service_groups:
-        service_strategy = (
-            rollout.strategy
-            if rollout.strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE
-            else "zero-surge"
-        )
         lines.append(
-            f"Service-role rollout: serial {service_strategy} for "
+            f"Service-role rollout: serial {rollout.service_role_strategy} for "
             + ", ".join(name for name, _raw_group in service_groups)
             + "."
         )
@@ -2706,6 +2979,78 @@ def _legacy_persistent_mount_migration_required(values: Mapping[str, Any]) -> bo
     return bool(_legacy_persistent_mount_migration_entries(values))
 
 
+def _persistent_mount_decisions_with_migration_entries(
+    decisions: Sequence[Mapping[str, Any]],
+    entries: Sequence[Mapping[str, Any]],
+) -> tuple[dict[str, Any], ...]:
+    entries_by_mount = {
+        str(entry.get("mount_path") or ""): entry
+        for entry in entries
+        if str(entry.get("mount_path") or "")
+    }
+    updated: list[dict[str, Any]] = []
+    for decision in decisions:
+        next_decision = dict(to_plain_data(decision))
+        entry = entries_by_mount.get(str(next_decision.get("mount_path") or ""))
+        if not entry:
+            updated.append(next_decision)
+            continue
+        source_status = str(entry.get("source_status") or "").strip()
+        if source_status:
+            next_decision["source_status"] = source_status
+            if str(next_decision.get("status") or "") == "pending-probe":
+                next_decision["status"] = source_status
+            next_decision["copy_required"] = source_status != "absent"
+        copy_status = str(entry.get("copy_status") or "").strip()
+        if copy_status:
+            next_decision["copy_status"] = copy_status
+        marker_status = str(entry.get("marker_status") or "").strip()
+        if marker_status:
+            next_decision["marker_status"] = marker_status
+        next_decision["marker_present"] = bool(entry.get("marker_present"))
+        updated.append(next_decision)
+    return tuple(updated)
+
+
+def _sync_persistent_mount_decisions_from_migration_entries(
+    checkpoint: dict[str, Any],
+    entries: Sequence[Mapping[str, Any]],
+) -> None:
+    persistent_state = dict(_mapping(checkpoint.get("persistent_jail_mounts")))
+    decisions = _sequence_of_mappings(persistent_state.get("decisions"))
+    if not decisions:
+        synthesized: list[dict[str, Any]] = []
+        for entry in entries:
+            mount_path = str(entry.get("mount_path") or "").strip()
+            if not mount_path:
+                continue
+            source_status = str(entry.get("source_status") or "unknown").strip() or "unknown"
+            next_decision = {
+                "mount_path": mount_path,
+                "local_path": str(entry.get("target_local_path") or "").strip(),
+                "status": source_status,
+                "source_status": source_status,
+                "origin": "checkpoint",
+                "source_path": str(entry.get("source_path") or "").strip(),
+                "target_local_path": str(entry.get("target_local_path") or "").strip(),
+                "copy_required": source_status != "absent",
+            }
+            copy_status = str(entry.get("copy_status") or "").strip()
+            if copy_status:
+                next_decision["copy_status"] = copy_status
+            synthesized.append(next_decision)
+        if not synthesized:
+            return
+        persistent_state["decisions"] = synthesized
+        checkpoint["persistent_jail_mounts"] = persistent_state
+        return
+    persistent_state["decisions"] = [
+        dict(item)
+        for item in _persistent_mount_decisions_with_migration_entries(decisions, entries)
+    ]
+    checkpoint["persistent_jail_mounts"] = persistent_state
+
+
 def _payload_with_target_soperator_values(
     *,
     payload: Mapping[str, Any],
@@ -2736,9 +3081,25 @@ def _prepare_jail_persistent_mount_payload(
     target_ref: str,
     jail_persistent_mounts: Sequence[str] = (),
     populate_jail_refresh: str,
+    auto_persistent_mounts: bool = True,
 ) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
     values = _target_soperator_values(payload, target_ref)
     explicit_mounts = parse_jail_persistent_mount_specs(jail_persistent_mounts)
+    if not auto_persistent_mounts and not explicit_mounts:
+        state: dict[str, Any] = {
+            "status": "not_required",
+            "reason": "jail rootfs refresh is not planned for this segment",
+            "mounts": [],
+            "copy_required": False,
+            "migration": {
+                "status": "not_required",
+                "source_rootfs": JAIL_LEGACY_ROOT_PATH,
+                "entries": [],
+            },
+            "rootfs_path": "/mnt/jail/.cxcli/rootfs",
+            "legacy_active_rootfs": False,
+        }
+        return payload, state
     patched_values = apply_jail_persistent_mount_values(
         values,
         target_ref=target_ref,
@@ -2747,10 +3108,17 @@ def _prepare_jail_persistent_mount_payload(
     )
     status = jail_persistent_mount_status(patched_values)
     migration_entries = _legacy_persistent_mount_migration_entries(patched_values)
+    decisions = jail_persistent_mount_decisions(
+        original_values=values,
+        patched_values=patched_values,
+        explicit_mounts=explicit_mounts,
+    )
     state: dict[str, Any] = {
         "status": status.status,
         "reason": status.reason,
         "mounts": [mount.as_payload() for mount in status.mounts],
+        "decisions": [dict(decision) for decision in decisions],
+        "auto_preserve_paths": list(JAIL_EXTERNAL_AUTO_PERSISTENT_MOUNT_PATHS),
         "copy_required": bool(migration_entries),
         "migration": {
             "status": "planned" if migration_entries else "not_required",
@@ -2917,7 +3285,7 @@ def _zero_surge_service_quiesce_required(
 ) -> bool:
     if not role:
         return False
-    if role in {"login", "system"}:
+    if role in {"accounting", "login", "system"}:
         return True
     return _positive_int(source_group.get("node_count"), fallback=1) <= 1
 
@@ -3432,14 +3800,27 @@ def _soperator_worker_strategy_cli_args(
     ]
 
 
+def _soperator_service_role_strategy_cli_args(
+    rollout: SoperatorExternalNodeTemplateRollout,
+) -> list[str]:
+    return [
+        "--strategy-max-surge-count",
+        str(rollout.service_role_max_surge_count),
+        "--strategy-max-unavailable-count",
+        str(rollout.service_role_max_unavailable_count),
+        "--strategy-drain-timeout",
+        _rollout_drain_timeout_cli_value(rollout.service_role_drain_timeout),
+    ]
+
+
 def _external_node_template_strategy_cli_args(
     rollout: SoperatorExternalNodeTemplateRollout,
     *,
     worker_group: bool,
 ) -> tuple[list[str], str]:
-    if worker_group or rollout.strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE:
+    if worker_group:
         return _soperator_worker_strategy_cli_args(rollout), rollout.strategy
-    return _soperator_zero_surge_strategy_cli_args(), "zero-surge"
+    return _soperator_service_role_strategy_cli_args(rollout), rollout.service_role_strategy
 
 
 def _set_node_group_strategy_from_args(
@@ -4032,6 +4413,158 @@ def _persistent_mount_migration_job_name(target_ref: str) -> str:
     return (base or "jail-persistent-migration")[:63].rstrip("-")
 
 
+def _persistent_mount_source_probe_job_name(target_ref: str) -> str:
+    base = normalize_component_token(f"{target_ref}-jail-persistent-source-probe")
+    return (base or "jail-persistent-source-probe")[:63].rstrip("-")
+
+
+def _persistent_mount_source_probe_shell_command(
+    entries: Sequence[Mapping[str, Any]],
+) -> str:
+    blocks: list[str] = [
+        "set -eu",
+        "probe_entry() {",
+        "  source_path=\"$1\"",
+        "  target_path=\"$2\"",
+        "  marker_path=\"$3\"",
+        "  mount_path=\"$4\"",
+        "  source_status=absent",
+        "  marker_present=false",
+        "  marker_status=none",
+        "  if [ -e \"$source_path\" ]; then",
+        "    source_status=present",
+        "  fi",
+        "  if [ -f \"$marker_path\" ]; then",
+        "    marker_present=true",
+        "    if grep -Fq '\"status\":\"copied\"' \"$marker_path\"; then",
+        "      marker_status=copied",
+        "    elif grep -Fq '\"status\":\"source_missing\"' \"$marker_path\"; then",
+        "      marker_status=source_missing",
+        "    else",
+        "      marker_status=unknown",
+        "    fi",
+        "  fi",
+        "  printf '{\"mount_path\":\"%s\",\"source_path\":\"%s\",\"target_path\":\"%s\",\"marker_path\":\"%s\",\"source_status\":\"%s\",\"marker_status\":\"%s\",\"marker_present\":%s}\\n' "
+        "\"$mount_path\" \"$source_path\" \"$target_path\" \"$marker_path\" \"$source_status\" \"$marker_status\" \"$marker_present\"",
+        "}",
+    ]
+    for entry in entries:
+        blocks.append(
+            "probe_entry "
+            f"{shlex.quote(_store_mount_path(str(entry.get('source_store_path') or '')))} "
+            f"{shlex.quote(_store_mount_path(str(entry.get('target_store_path') or '')))} "
+            f"{shlex.quote(_store_mount_path(str(entry.get('marker_store_path') or '')))} "
+            f"{shlex.quote(str(entry.get('mount_path') or ''))}"
+        )
+    return "\n".join(blocks)
+
+
+def _persistent_mount_source_probe_job_manifest(
+    *,
+    target_ref: str,
+    image: str,
+    jail_pvc: str,
+    entries: Sequence[Mapping[str, Any]],
+    scheduling: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    pod_spec = {
+        "restartPolicy": "Never",
+        "automountServiceAccountToken": False,
+        "containers": [
+            {
+                "name": "persistent-mount-source-probe",
+                "image": image,
+                "imagePullPolicy": "IfNotPresent",
+                "command": [
+                    "/bin/sh",
+                    "-ceu",
+                    _persistent_mount_source_probe_shell_command(entries),
+                ],
+                "volumeMounts": [
+                    {"name": "jail-store", "mountPath": "/store", "readOnly": True}
+                ],
+            }
+        ],
+        "volumes": [
+            {
+                "name": "jail-store",
+                "persistentVolumeClaim": {"claimName": jail_pvc},
+            }
+        ],
+    }
+    pod_spec.update(active_passive_pod_scheduling_fields(scheduling))
+    return {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {
+            "namespace": _SOPERATOR_NAMESPACE,
+            "name": _persistent_mount_source_probe_job_name(target_ref),
+            "labels": {
+                "app.kubernetes.io/managed-by": "nebius-cxcli",
+                "app.kubernetes.io/component": "jail-persistent-source-probe",
+                "nebius-cxcli.io/soperator-migration": "true",
+            },
+        },
+        "spec": {
+            "backoffLimit": 0,
+            "template": {
+                "metadata": {
+                    "labels": {
+                        "app.kubernetes.io/component": "jail-persistent-source-probe",
+                    }
+                },
+                "spec": pod_spec,
+            },
+        },
+    }
+
+
+def _parse_persistent_mount_source_probe_output(output: str) -> tuple[dict[str, Any], ...]:
+    entries: list[dict[str, Any]] = []
+    for line in str(output or "").splitlines():
+        text = line.strip()
+        if not text.startswith("{"):
+            continue
+        try:
+            item = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(item, Mapping):
+            continue
+        mount_path = str(item.get("mount_path") or "").strip()
+        if not mount_path:
+            continue
+        source_status = str(item.get("source_status") or "").strip()
+        if source_status not in {"present", "absent"}:
+            source_status = "unknown"
+        entries.append(
+            {
+                "mount_path": mount_path,
+                "source_path": str(item.get("source_path") or "").strip(),
+                "target_path": str(item.get("target_path") or "").strip(),
+                "marker_path": str(item.get("marker_path") or "").strip(),
+                "source_status": source_status,
+                "marker_status": str(item.get("marker_status") or "none").strip() or "none",
+                "marker_present": bool(item.get("marker_present")),
+            }
+        )
+    return tuple(entries)
+
+
+def _persistent_mount_migration_copy_status_by_log(output: str) -> dict[str, str]:
+    statuses: dict[str, str] = {}
+    for line in str(output or "").splitlines():
+        text = line.strip()
+        if text.startswith("persistent mount migration copied: "):
+            statuses[text.rsplit(": ", 1)[-1]] = "copied"
+        elif text.startswith("persistent mount migration source missing: "):
+            statuses[text.rsplit(": ", 1)[-1]] = "source_missing"
+        elif text.startswith("persistent mount migration skipped: "):
+            mount = text.removeprefix("persistent mount migration skipped: ")
+            statuses[mount.split(" ", 1)[0]] = "skipped"
+    return statuses
+
+
 def _persistent_mount_migration_shell_command(
     entries: Sequence[Mapping[str, Any]],
 ) -> str:
@@ -4265,6 +4798,31 @@ def _delete_failed_job_before_reapply(
     )
 
 
+def _delete_job_before_reapply(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    name: str,
+    wait: bool = False,
+) -> None:
+    command_runner(
+        [
+            "kubectl",
+            "--context",
+            kube_context,
+            "-n",
+            _SOPERATOR_NAMESPACE,
+            "delete",
+            "job",
+            name,
+            "--ignore-not-found",
+            f"--wait={'true' if wait else 'false'}",
+        ],
+        timeout_seconds=300,
+        check=False,
+    )
+
+
 def _wait_for_job_complete_or_failed(
     *,
     command_runner: SoperatorMigrationCommandRunner,
@@ -4290,6 +4848,76 @@ def _wait_for_job_complete_or_failed(
         if remaining <= 0:
             raise RuntimeError(f"{job_label} did not complete before timeout: {name}")
         time.sleep(min(10.0, remaining))
+
+
+def _probe_legacy_persistent_mount_sources(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    target_ref: str,
+    image: str,
+    jail_pvc: str,
+    entries: Sequence[Mapping[str, Any]],
+    scheduling: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], ...]:
+    if not entries:
+        return ()
+    manifest = _persistent_mount_source_probe_job_manifest(
+        target_ref=target_ref,
+        image=image,
+        jail_pvc=jail_pvc,
+        entries=entries,
+        scheduling=scheduling,
+    )
+    job_name = str(_mapping(manifest.get("metadata")).get("name") or "")
+    if job_name:
+        _delete_job_before_reapply(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            name=job_name,
+            wait=True,
+        )
+    _kubectl_apply_objects(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        objects=(manifest,),
+        timeout_seconds=300,
+    )
+    _wait_for_job_complete_or_failed(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        name=job_name,
+        timeout_seconds=900,
+        job_label="Soperator persistent mount source probe Job",
+    )
+    result = command_runner(
+        [
+            "kubectl",
+            "--context",
+            kube_context,
+            "-n",
+            _SOPERATOR_NAMESPACE,
+            "logs",
+            f"job/{job_name}",
+        ],
+        timeout_seconds=120,
+        check=False,
+    )
+    parsed = _parse_persistent_mount_source_probe_output(result.stdout)
+    if parsed:
+        return parsed
+    return tuple(
+        {
+            "mount_path": str(entry.get("mount_path") or ""),
+            "source_path": str(entry.get("source_path") or ""),
+            "target_path": str(entry.get("target_local_path") or ""),
+            "marker_path": str(entry.get("marker_path") or ""),
+            "source_status": "unknown",
+            "marker_status": "unknown",
+            "marker_present": False,
+        }
+        for entry in entries
+    )
 
 
 def _kubectl_rollout_status(
@@ -5572,12 +6200,17 @@ def _safe_surge_node_group_quota_requirements(
     rollout: SoperatorExternalNodeTemplateRollout,
 ) -> tuple[list[QuotaRequirement], list[QuotaCoverageGap], list[str]]:
     _tenant_id, project_id, region = _nebius_identity(payload)
-    if rollout.strategy != SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE:
+    service_safe_surge = (
+        rollout.service_role_strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE
+    )
+    worker_safe_surge = rollout.strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE
+    if not service_safe_surge and not worker_safe_surge:
         return (
             [],
             [],
             [
-                "Quota preflight safe-surge: disabled by zero-surge rollout strategy; "
+                "Quota preflight safe-surge: disabled by zero-surge service-role and worker "
+                "rollout strategy; "
                 "no surge quota required."
             ],
         )
@@ -5588,38 +6221,75 @@ def _safe_surge_node_group_quota_requirements(
     if not service_groups and not worker_groups:
         return [], [], ["Quota preflight safe-surge: no source node groups detected."]
     waves = _external_node_template_worker_waves(worker_groups, rollout=rollout)
-    surge_count = rollout.strategy_max_surge_count
-    if surge_count <= 0:
-        return (
-            [],
-            [],
-            [
-                "Quota preflight safe-surge: no surge quota required "
-                "because strategy max_surge_count is 0."
-            ],
+    safe_surge_waves: list[
+        tuple[str, str, int, tuple[tuple[str, Mapping[str, Any]], ...]]
+    ] = []
+    if service_safe_surge:
+        if rollout.service_role_max_surge_count <= 0:
+            return (
+                [],
+                [],
+                [
+                    "Quota preflight safe-surge: no service-role surge quota required "
+                    "because service_role_group_strategy max_surge_count is 0."
+                ],
+            )
+        safe_surge_waves.extend(
+            (
+                f"service group {group_name}",
+                f"service-{group_name}",
+                rollout.service_role_max_surge_count,
+                ((group_name, raw_group),),
+            )
+            for group_name, raw_group in service_groups
         )
-    safe_surge_waves: list[tuple[str, str, tuple[tuple[str, Mapping[str, Any]], ...]]] = [
-        (f"service group {group_name}", f"service-{group_name}", ((group_name, raw_group),))
-        for group_name, raw_group in service_groups
-    ]
-    safe_surge_waves.extend(
-        (
-            f"worker wave {wave_index}",
-            f"worker-wave-{wave_index}",
-            wave,
+    if worker_safe_surge:
+        if rollout.strategy_max_surge_count <= 0:
+            return (
+                [],
+                [],
+                [
+                    "Quota preflight safe-surge: no worker surge quota required "
+                    "because worker_group_strategy max_surge_count is 0."
+                ],
+            )
+        safe_surge_waves.extend(
+            (
+                f"worker wave {wave_index}",
+                f"worker-wave-{wave_index}",
+                rollout.strategy_max_surge_count,
+                wave,
+            )
+            for wave_index, wave in enumerate(waves, start=1)
         )
-        for wave_index, wave in enumerate(waves, start=1)
-    )
+    if not safe_surge_waves:
+        return [], [], ["Quota preflight safe-surge: no active safe-surge groups detected."]
     all_requirements: list[QuotaRequirement] = []
     all_gaps: list[QuotaCoverageGap] = []
     lines: list[str] = [
         "[green]Verified[/green] safe-surge preflight: checking spare capacity for "
-        + f"{len(service_groups)} service group(s) serially and "
-        + _worker_rollout_budget_label(rollout, worker_group_count=len(worker_groups))
-        + f" with {surge_count} surge node(s) per active group"
+        + (
+            f"{len(service_groups)} service group(s) serially"
+            if service_safe_surge
+            else "0 service group(s)"
+        )
+        + " and "
+        + (
+            _worker_rollout_budget_label(rollout, worker_group_count=len(worker_groups))
+            if worker_safe_surge
+            else "zero-surge worker groups"
+        )
         + "."
     ]
-    for wave_label, instance_suffix, wave in safe_surge_waves:
+    lines.append(
+        "Quota preflight safe-surge counts "
+        + "; ".join(
+            f"{wave_label} requires {surge_count} temporary surge node(s) per group"
+            for wave_label, _instance_suffix, surge_count, _wave in safe_surge_waves
+        )
+        + "."
+    )
+    for wave_label, instance_suffix, surge_count, wave in safe_surge_waves:
         planned_groups: dict[str, Any] = {}
         for group_name, raw_group in wave:
             node_group_id = _source_group_node_group_id(raw_group)
@@ -6116,6 +6786,15 @@ def _login_pod_name(
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
 ) -> str:
+    names = _login_pod_names(command_runner=command_runner, kube_context=kube_context)
+    return names[0] if names else ""
+
+
+def _login_pod_names(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+) -> tuple[str, ...]:
     try:
         parsed = _json_value_from_command(
             command_runner,
@@ -6134,11 +6813,12 @@ def _login_pod_name(
             timeout_seconds=30,
         )
     except subprocess.TimeoutExpired:
-        return ""
+        return ()
     items = parsed.get("items", []) if isinstance(parsed, Mapping) else []
     if not isinstance(items, Sequence) or isinstance(items, (str, bytes, bytearray)):
-        return ""
-    best_name = ""
+        return ()
+    running: list[str] = []
+    fallback: list[str] = []
     for item in items:
         if not isinstance(item, Mapping):
             continue
@@ -6147,11 +6827,965 @@ def _login_pod_name(
         labels = _mapping(metadata.get("labels"))
         label_text = " ".join(str(value) for value in labels.values())
         phase = str(_mapping(item.get("status")).get("phase", "") or "")
-        if name and phase == "Running" and ("login" in name or "login" in label_text):
-            return name
-        if name and not best_name and ("login" in name or "login" in label_text):
-            best_name = name
-    return best_name
+        if not name or ("login" not in name and "login" not in label_text):
+            continue
+        if phase == "Running":
+            running.append(name)
+        else:
+            fallback.append(name)
+    return tuple(dict.fromkeys([*running, *fallback]))
+
+
+def _login_service_identities(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    required: bool = False,
+) -> tuple[dict[str, Any], ...]:
+    result = command_runner(
+        [
+            "kubectl",
+            "--context",
+            kube_context,
+            "-n",
+            _SOPERATOR_NAMESPACE,
+            "get",
+            "services",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ],
+        timeout_seconds=30,
+        check=False,
+    )
+    if result.returncode != 0:
+        if required:
+            raise SoperatorMigrationPhasePending(
+                "login Service continuity guard failed: could not list Services before "
+                f"target chart handoff: {result.stderr.strip() or result.stdout.strip() or result.returncode}."
+            )
+        return ()
+    try:
+        parsed = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        if required:
+            raise SoperatorMigrationPhasePending(
+                "login Service continuity guard failed: kubectl returned invalid Service JSON."
+            ) from exc
+        return ()
+    identities: list[dict[str, Any]] = []
+    for item in _sequence_of_mappings(parsed.get("items") if isinstance(parsed, Mapping) else None):
+        metadata = _mapping(item.get("metadata"))
+        name = str(metadata.get("name") or "").strip()
+        annotations = _mapping(metadata.get("annotations"))
+        labels = _mapping(metadata.get("labels"))
+        label_text = " ".join(str(value) for value in labels.values())
+        if "login" not in name and "login" not in label_text:
+            continue
+        spec = _mapping(item.get("spec"))
+        status = _mapping(item.get("status"))
+        ingress = _mapping(status.get("loadBalancer")).get("ingress") or []
+        ingress_values: list[str] = []
+        for entry in _sequence_of_mappings(ingress):
+            ip = str(entry.get("ip") or "").strip()
+            hostname = str(entry.get("hostname") or "").strip()
+            if ip:
+                ingress_values.append(ip)
+            elif hostname:
+                ingress_values.append(hostname)
+        identities.append(
+            {
+                "name": name,
+                "uid": str(metadata.get("uid") or "").strip(),
+                "type": str(spec.get("type") or "").strip(),
+                "cluster_ip": str(spec.get("clusterIP") or "").strip(),
+                "load_balancer_ip": str(spec.get("loadBalancerIP") or "").strip(),
+                "load_balancer_ingress": copy.deepcopy(to_plain_data(ingress)),
+                "load_balancer_external": sorted(dict.fromkeys(ingress_values)),
+                "load_balancer_type": str(
+                    annotations.get(SOPERATOR_LOGIN_LB_TYPE_ANNOTATION)
+                    or SOPERATOR_LOGIN_LB_TYPE_EXTERNAL
+                ).strip()
+                or SOPERATOR_LOGIN_LB_TYPE_EXTERNAL,
+                "load_balancer_allocation_id": str(
+                    annotations.get(SOPERATOR_LOGIN_LB_ALLOCATION_ANNOTATION) or ""
+                ).strip(),
+            }
+        )
+    if required and not identities:
+        raise SoperatorMigrationPhasePending(
+            "login Service continuity guard failed: no login Service identity was detected."
+        )
+    return tuple(identities)
+
+
+def _login_service_identity_by_name(
+    identities: Sequence[Mapping[str, Any]],
+) -> dict[str, Mapping[str, Any]]:
+    return {
+        str(item.get("name") or ""): item
+        for item in identities
+        if str(item.get("name") or "")
+    }
+
+
+def _login_service_load_balancer_addresses(identity: Mapping[str, Any]) -> tuple[str, ...]:
+    values: list[str] = []
+    external = identity.get("load_balancer_external")
+    if isinstance(external, Sequence) and not isinstance(external, (str, bytes, bytearray)):
+        values.extend(str(item or "").strip() for item in external)
+    for key in ("load_balancer_ip",):
+        value = str(identity.get(key) or "").strip()
+        if value:
+            values.append(value)
+    return tuple(dict.fromkeys(item for item in values if item))
+
+
+def _normalize_login_load_balancer_type(value: object) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized == SOPERATOR_LOGIN_LB_TYPE_INTERNAL:
+        return SOPERATOR_LOGIN_LB_TYPE_INTERNAL
+    return SOPERATOR_LOGIN_LB_TYPE_EXTERNAL
+
+
+def _service_address_ipv4_cidr(address: str) -> str:
+    try:
+        parsed = ipaddress.ip_address(str(address or "").strip())
+    except ValueError:
+        return ""
+    if parsed.version != 4:
+        return ""
+    return f"{parsed}/32"
+
+
+def _login_service_single_ipv4_address(identity: Mapping[str, Any]) -> tuple[str, str] | None:
+    addresses = _login_service_load_balancer_addresses(identity)
+    if not addresses:
+        return None
+    ipv4_addresses: list[tuple[str, str]] = []
+    non_ipv4_addresses: list[str] = []
+    for address in addresses:
+        cidr = _service_address_ipv4_cidr(address)
+        if cidr:
+            ipv4_addresses.append((address, cidr))
+        else:
+            non_ipv4_addresses.append(address)
+    deduped_ipv4 = list(dict.fromkeys(ipv4_addresses))
+    if len(deduped_ipv4) == 1:
+        return deduped_ipv4[0]
+    name = str(identity.get("name") or "login").strip()
+    if not deduped_ipv4:
+        raise SoperatorMigrationPhasePending(
+            "login Service LoadBalancer allocation retention is blocked: "
+            f"Service {name} has no IPv4 LoadBalancer address that can be matched to "
+            "a Nebius VPC allocation: "
+            + ", ".join(non_ipv4_addresses or addresses)
+            + "."
+        )
+    raise SoperatorMigrationPhasePending(
+        "login Service LoadBalancer allocation retention is blocked: "
+        f"Service {name} has multiple IPv4 LoadBalancer addresses, but a single "
+        "Soperator login Service can persist only one Nebius allocation id: "
+        + ", ".join(address for address, _cidr in deduped_ipv4)
+        + "."
+    )
+
+
+def _allocation_metadata(allocation: Mapping[str, Any]) -> Mapping[str, Any]:
+    return _mapping(allocation.get("metadata"))
+
+
+def _allocation_id(allocation: Mapping[str, Any]) -> str:
+    return str(_allocation_metadata(allocation).get("id") or "").strip()
+
+
+def _allocation_labels(allocation: Mapping[str, Any]) -> dict[str, str]:
+    labels = _mapping(_allocation_metadata(allocation).get("labels"))
+    return {str(key): str(value) for key, value in labels.items()}
+
+
+def _normalized_ipv4_cidr(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = ipaddress.ip_network(text, strict=False)
+    except ValueError:
+        return ""
+    if parsed.version != 4:
+        return ""
+    return str(parsed)
+
+
+def _allocation_cidrs(allocation: Mapping[str, Any]) -> tuple[str, ...]:
+    cidrs: list[str] = []
+    status = _mapping(allocation.get("status"))
+    details = _mapping(status.get("details"))
+    cidrs.append(str(details.get("allocated_cidr") or "").strip())
+    spec = _mapping(allocation.get("spec"))
+    for key in ("ipv4_private", "ipv4Private", "ipv4_public", "ipv4Public"):
+        cidrs.append(str(_mapping(spec.get(key)).get("cidr") or "").strip())
+    return tuple(
+        dict.fromkeys(
+            cidr for cidr in (_normalized_ipv4_cidr(item) for item in cidrs) if cidr
+        )
+    )
+
+
+def _allocation_load_balancer_type(allocation: Mapping[str, Any]) -> str:
+    spec = _mapping(allocation.get("spec"))
+    if _mapping(spec.get("ipv4_private")) or _mapping(spec.get("ipv4Private")):
+        return SOPERATOR_LOGIN_LB_TYPE_INTERNAL
+    if _mapping(spec.get("ipv4_public")) or _mapping(spec.get("ipv4Public")):
+        return SOPERATOR_LOGIN_LB_TYPE_EXTERNAL
+    cidrs = _allocation_cidrs(allocation)
+    if cidrs and all(ipaddress.ip_network(cidr).network_address.is_private for cidr in cidrs):
+        return SOPERATOR_LOGIN_LB_TYPE_INTERNAL
+    return SOPERATOR_LOGIN_LB_TYPE_EXTERNAL
+
+
+def _matching_allocations_for_service_address(
+    allocations: Sequence[Mapping[str, Any]],
+    *,
+    address_cidr: str,
+) -> tuple[Mapping[str, Any], ...]:
+    return tuple(
+        allocation
+        for allocation in allocations
+        if address_cidr in _allocation_cidrs(allocation)
+    )
+
+
+def _allocation_status_text(
+    *,
+    allocation: Mapping[str, Any],
+    removed_labels: Sequence[str],
+    annotation_was_present: bool,
+) -> str:
+    labels = _allocation_labels(allocation)
+    if _NEBIUS_MANAGED_BY_LABEL in labels or removed_labels:
+        return "converted-dynamic"
+    return "already-static" if annotation_was_present else "converted-dynamic"
+
+
+def _ensure_allocation_not_mk8s_managed(
+    *,
+    allocation: Mapping[str, Any],
+    nebius_api: SoperatorMigrationNebiusApi,
+) -> tuple[Mapping[str, Any], tuple[str, ...]]:
+    labels = _allocation_labels(allocation)
+    if labels.get(_NEBIUS_MANAGED_BY_LABEL) != "mk8s":
+        return allocation, ()
+    allocation_id = _allocation_id(allocation)
+    updated_labels = dict(labels)
+    updated_labels.pop(_NEBIUS_MANAGED_BY_LABEL, None)
+    try:
+        updated = nebius_api.update_allocation_labels(
+            allocation_id=allocation_id,
+            original_allocation=allocation,
+            labels=updated_labels,
+        )
+    except Exception as exc:
+        raise SoperatorMigrationPhasePending(
+            "login Service LoadBalancer allocation retention is blocked: "
+            f"could not remove {_NEBIUS_MANAGED_BY_LABEL}=mk8s from Nebius VPC "
+            f"allocation {allocation_id}: {exc}"
+        ) from exc
+    if _allocation_labels(updated).get(_NEBIUS_MANAGED_BY_LABEL) == "mk8s":
+        raise SoperatorMigrationPhasePending(
+            "login Service LoadBalancer allocation retention is blocked: "
+            f"Nebius VPC allocation {allocation_id} still has "
+            f"{_NEBIUS_MANAGED_BY_LABEL}=mk8s after label update."
+        )
+    return updated, (_NEBIUS_MANAGED_BY_LABEL,)
+
+
+def _require_allocation_matches_login_service(
+    *,
+    allocation: Mapping[str, Any],
+    allocation_id: str,
+    service_name: str,
+    address: str,
+    address_cidr: str,
+    load_balancer_type: str,
+) -> None:
+    if address_cidr not in _allocation_cidrs(allocation):
+        raise SoperatorMigrationPhasePending(
+            "login Service LoadBalancer allocation retention is blocked: "
+            f"Service {service_name} uses address {address}, but Nebius VPC "
+            f"allocation {allocation_id} does not report allocated CIDR {address_cidr}."
+        )
+    allocation_type = _allocation_load_balancer_type(allocation)
+    if allocation_type != load_balancer_type:
+        raise SoperatorMigrationPhasePending(
+            "login Service LoadBalancer allocation retention is blocked: "
+            f"Service {service_name} is {load_balancer_type}, but Nebius VPC "
+            f"allocation {allocation_id} is {allocation_type}."
+        )
+
+
+def _resolve_login_service_allocation(
+    *,
+    identity: Mapping[str, Any],
+    project_id: str,
+    nebius_api: SoperatorMigrationNebiusApi,
+) -> tuple[Mapping[str, Any], str, str, str, bool]:
+    name = str(identity.get("name") or "login").strip()
+    resolved_address = _login_service_single_ipv4_address(identity)
+    if resolved_address is None:
+        return {}, "", "", "", False
+    address, address_cidr = resolved_address
+    load_balancer_type = _normalize_login_load_balancer_type(identity.get("load_balancer_type"))
+    allocation_id = str(identity.get("load_balancer_allocation_id") or "").strip()
+    if allocation_id:
+        try:
+            allocation = nebius_api.get_allocation(allocation_id)
+        except Exception as exc:
+            raise SoperatorMigrationPhasePending(
+                "login Service LoadBalancer allocation retention is blocked: "
+                f"could not read annotated Nebius VPC allocation {allocation_id} for "
+                f"Service {name}: {exc}"
+            ) from exc
+        _require_allocation_matches_login_service(
+            allocation=allocation,
+            allocation_id=allocation_id,
+            service_name=name,
+            address=address,
+            address_cidr=address_cidr,
+            load_balancer_type=load_balancer_type,
+        )
+        return allocation, allocation_id, address, address_cidr, True
+
+    try:
+        allocations = nebius_api.list_allocations(project_id=project_id)
+    except Exception as exc:
+        raise SoperatorMigrationPhasePending(
+            "login Service LoadBalancer allocation retention is blocked: "
+            f"could not list Nebius VPC allocations in project {project_id}: {exc}"
+        ) from exc
+    matches = _matching_allocations_for_service_address(allocations, address_cidr=address_cidr)
+    typed_matches = tuple(
+        allocation
+        for allocation in matches
+        if _allocation_load_balancer_type(allocation) == load_balancer_type
+    )
+    if not typed_matches:
+        detail = (
+            "matching allocations had a different public/internal type"
+            if matches
+            else f"no allocation reported allocated CIDR {address_cidr}"
+        )
+        raise SoperatorMigrationPhasePending(
+            "login Service LoadBalancer allocation retention is blocked: "
+            f"could not find a unique {load_balancer_type} Nebius VPC allocation "
+            f"for Service {name} address {address}: {detail}."
+        )
+    unique_matches = {
+        _allocation_id(allocation): allocation
+        for allocation in typed_matches
+        if _allocation_id(allocation)
+    }
+    if len(unique_matches) != 1:
+        raise SoperatorMigrationPhasePending(
+            "login Service LoadBalancer allocation retention is blocked: "
+            f"Service {name} address {address} matched multiple Nebius VPC "
+            "allocations: "
+            + ", ".join(sorted(unique_matches))
+            + "."
+        )
+    allocation_id, allocation = next(iter(unique_matches.items()))
+    return allocation, allocation_id, address, address_cidr, False
+
+
+def _annotate_login_service_load_balancer_allocation(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    service_name: str,
+    allocation_id: str,
+    load_balancer_type: str,
+) -> None:
+    annotations = [f"{SOPERATOR_LOGIN_LB_ALLOCATION_ANNOTATION}={allocation_id}"]
+    if load_balancer_type == SOPERATOR_LOGIN_LB_TYPE_INTERNAL:
+        annotations.append(
+            f"{SOPERATOR_LOGIN_LB_TYPE_ANNOTATION}={SOPERATOR_LOGIN_LB_TYPE_INTERNAL}"
+        )
+    result = command_runner(
+        [
+            "kubectl",
+            "--context",
+            kube_context,
+            "-n",
+            _SOPERATOR_NAMESPACE,
+            "annotate",
+            "service",
+            service_name,
+            *annotations,
+            "--overwrite",
+            "--request-timeout=20s",
+        ],
+        timeout_seconds=30,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise SoperatorMigrationPhasePending(
+            "login Service LoadBalancer allocation retention is blocked: "
+            f"could not annotate Service {service_name} with reusable Nebius "
+            f"allocation {allocation_id}: "
+            f"{result.stderr.strip() or result.stdout.strip() or result.returncode}."
+        )
+
+
+def apply_soperator_login_load_balancer_allocation_values(
+    values: dict[str, Any],
+    *,
+    allocation_id: str,
+    load_balancer_type: str,
+    context: str,
+) -> bool:
+    allocation_id = str(allocation_id or "").strip()
+    if not allocation_id:
+        return False
+    load_balancer_type = _normalize_login_load_balancer_type(load_balancer_type)
+    slurm_nodes = _ensure_child_mapping(values, "slurmNodes")
+    login = _ensure_child_mapping(slurm_nodes, "login")
+    annotations = _ensure_child_mapping(login, "sshdServiceAnnotations")
+    current_allocation_id = str(
+        annotations.get(SOPERATOR_LOGIN_LB_ALLOCATION_ANNOTATION) or ""
+    ).strip()
+    if current_allocation_id and current_allocation_id != allocation_id:
+        raise RuntimeError(
+            f"{context} already declares "
+            f"{SOPERATOR_LOGIN_LB_ALLOCATION_ANNOTATION}={current_allocation_id}, "
+            f"but the live login Service uses allocation {allocation_id}."
+        )
+    changed = False
+    if current_allocation_id != allocation_id:
+        annotations[SOPERATOR_LOGIN_LB_ALLOCATION_ANNOTATION] = allocation_id
+        changed = True
+    if load_balancer_type == SOPERATOR_LOGIN_LB_TYPE_INTERNAL:
+        if annotations.get(SOPERATOR_LOGIN_LB_TYPE_ANNOTATION) != SOPERATOR_LOGIN_LB_TYPE_INTERNAL:
+            annotations[SOPERATOR_LOGIN_LB_TYPE_ANNOTATION] = SOPERATOR_LOGIN_LB_TYPE_INTERNAL
+            changed = True
+    elif SOPERATOR_LOGIN_LB_TYPE_ANNOTATION in annotations:
+        annotations.pop(SOPERATOR_LOGIN_LB_TYPE_ANNOTATION, None)
+        changed = True
+    return changed
+
+
+def stabilize_soperator_login_load_balancer_allocations(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    project_id: str,
+    nebius_api: SoperatorMigrationNebiusApi,
+    values: dict[str, Any] | None = None,
+    service_identities: Sequence[Mapping[str, Any]] | None = None,
+) -> tuple[
+    tuple[Mapping[str, Any], ...],
+    tuple[SoperatorLoginLoadBalancerAllocationDecision, ...],
+    tuple[str, ...],
+]:
+    identities = tuple(
+        service_identities
+        if service_identities is not None
+        else _login_service_identities(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            required=True,
+        )
+    )
+    decisions: list[SoperatorLoginLoadBalancerAllocationDecision] = []
+    persisted_allocations: set[tuple[str, str]] = set()
+    for identity in identities:
+        if str(identity.get("type") or "").strip() != "LoadBalancer":
+            continue
+        service_name = str(identity.get("name") or "login").strip()
+        resolved_address = _login_service_single_ipv4_address(identity)
+        if resolved_address is None:
+            decisions.append(
+                SoperatorLoginLoadBalancerAllocationDecision(
+                    service_name=service_name,
+                    status="no-address",
+                    load_balancer_type=_normalize_login_load_balancer_type(
+                        identity.get("load_balancer_type")
+                    ),
+                )
+            )
+            continue
+        allocation, allocation_id, address, address_cidr, annotation_was_present = (
+            _resolve_login_service_allocation(
+                identity=identity,
+                project_id=project_id,
+                nebius_api=nebius_api,
+            )
+        )
+        if not allocation_id:
+            continue
+        allocation, removed_labels = _ensure_allocation_not_mk8s_managed(
+            allocation=allocation,
+            nebius_api=nebius_api,
+        )
+        load_balancer_type = _normalize_login_load_balancer_type(
+            identity.get("load_balancer_type")
+        )
+        if not annotation_was_present:
+            _annotate_login_service_load_balancer_allocation(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                service_name=service_name,
+                allocation_id=allocation_id,
+                load_balancer_type=load_balancer_type,
+            )
+        persisted_to_values = False
+        if values is not None:
+            try:
+                apply_soperator_login_load_balancer_allocation_values(
+                    values,
+                    allocation_id=allocation_id,
+                    load_balancer_type=load_balancer_type,
+                    context=f"Soperator login Service {service_name}",
+                )
+            except RuntimeError as exc:
+                raise SoperatorMigrationPhasePending(
+                    "login Service LoadBalancer allocation retention is blocked: "
+                    f"{exc}"
+                ) from exc
+            persisted_to_values = True
+            persisted_allocations.add((allocation_id, load_balancer_type))
+        decisions.append(
+            SoperatorLoginLoadBalancerAllocationDecision(
+                service_name=service_name,
+                status=_allocation_status_text(
+                    allocation=allocation,
+                    removed_labels=removed_labels,
+                    annotation_was_present=annotation_was_present,
+                ),
+                address=address,
+                load_balancer_type=load_balancer_type,
+                allocation_id=allocation_id,
+                allocation_cidr=address_cidr,
+                removed_labels=tuple(removed_labels),
+                persisted_to_values=persisted_to_values,
+            )
+        )
+    if len(persisted_allocations) > 1:
+        raise SoperatorMigrationPhasePending(
+            "login Service LoadBalancer allocation retention is blocked: multiple "
+            "login LoadBalancer Services require different allocation annotations, "
+            "but Soperator chart values can persist only one login Service allocation."
+        )
+    if not decisions:
+        return identities, (), ()
+    refreshed = _login_service_identities(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        required=True,
+    )
+    refreshed_by_name = _login_service_identity_by_name(refreshed)
+    for decision in decisions:
+        if not decision.allocation_id:
+            continue
+        refreshed_identity = refreshed_by_name.get(decision.service_name)
+        if not refreshed_identity:
+            raise SoperatorMigrationPhasePending(
+                "login Service LoadBalancer allocation retention is blocked: "
+                f"Service {decision.service_name} disappeared after allocation annotation."
+            )
+        refreshed_addresses = _login_service_load_balancer_addresses(refreshed_identity)
+        if decision.address not in refreshed_addresses:
+            raise SoperatorMigrationPhasePending(
+                "login Service LoadBalancer allocation retention is blocked: "
+                f"Service {decision.service_name} address changed from {decision.address} "
+                f"to {', '.join(refreshed_addresses) or 'none'} after annotation."
+            )
+        refreshed_allocation_id = str(
+            refreshed_identity.get("load_balancer_allocation_id") or ""
+        ).strip()
+        if refreshed_allocation_id != decision.allocation_id:
+            raise SoperatorMigrationPhasePending(
+                "login Service LoadBalancer allocation retention is blocked: "
+                f"Service {decision.service_name} annotation "
+                f"{SOPERATOR_LOGIN_LB_ALLOCATION_ANNOTATION} is "
+                f"{refreshed_allocation_id or 'missing'}, expected {decision.allocation_id}."
+            )
+        refreshed_type = _normalize_login_load_balancer_type(
+            refreshed_identity.get("load_balancer_type")
+        )
+        if refreshed_type != decision.load_balancer_type:
+            raise SoperatorMigrationPhasePending(
+                "login Service LoadBalancer allocation retention is blocked: "
+                f"Service {decision.service_name} LoadBalancer type changed from "
+                f"{decision.load_balancer_type} to {refreshed_type} after annotation."
+            )
+    lines = tuple(_login_load_balancer_allocation_decision_line(item) for item in decisions)
+    return refreshed, tuple(decisions), lines
+
+
+def _login_load_balancer_allocation_decision_line(
+    decision: SoperatorLoginLoadBalancerAllocationDecision,
+) -> str:
+    if decision.status == "no-address":
+        return (
+            f"Login Service {decision.service_name} has no LoadBalancer address yet; "
+            "allocation retention will be rechecked when an address exists."
+        )
+    action = (
+        "Converted dynamic login LoadBalancer allocation"
+        if decision.status == "converted-dynamic"
+        else "Verified reusable login LoadBalancer allocation"
+    )
+    value_text = " and persisted it in Soperator values" if decision.persisted_to_values else ""
+    return (
+        f"{action} for Service {decision.service_name}: {decision.address} "
+        f"({decision.load_balancer_type}) uses {decision.allocation_id}{value_text}."
+    )
+
+
+def _assert_login_service_stable_load_balancer_preconditions(
+    service_identities: Sequence[Mapping[str, Any]],
+) -> None:
+    for identity in service_identities:
+        if str(identity.get("type") or "").strip() != "LoadBalancer":
+            continue
+        addresses = _login_service_load_balancer_addresses(identity)
+        if not addresses:
+            continue
+        allocation_id = str(identity.get("load_balancer_allocation_id") or "").strip()
+        if allocation_id:
+            continue
+        name = str(identity.get("name") or "login").strip()
+        lb_type = str(identity.get("load_balancer_type") or "external").strip() or "external"
+        raise SoperatorMigrationPhasePending(
+            "login Service continuity guard failed before target chart handoff: "
+            f"LoadBalancer Service {name} already has {lb_type} address "
+            + ", ".join(addresses)
+            + f" but is still missing annotation {SOPERATOR_LOGIN_LB_ALLOCATION_ANNOTATION} "
+            "after automatic allocation retention. Ensure the Nebius VPC allocation for "
+            "the current public or internal address can be listed and updated, then retry."
+        )
+
+
+def _assert_login_service_identity_preserved(
+    *,
+    before: Sequence[Mapping[str, Any]],
+    after: Sequence[Mapping[str, Any]],
+) -> None:
+    before_by_name = _login_service_identity_by_name(before)
+    after_by_name = _login_service_identity_by_name(after)
+    missing = sorted(set(before_by_name) - set(after_by_name))
+    if missing:
+        raise SoperatorMigrationPhasePending(
+            "login Service continuity guard failed: target chart did not preserve "
+            + ", ".join(missing)
+            + "."
+        )
+    for name, before_identity in before_by_name.items():
+        after_identity = after_by_name.get(name, {})
+        if before_identity.get("uid") and after_identity.get("uid") != before_identity.get("uid"):
+            raise SoperatorMigrationPhasePending(
+                "login Service continuity guard failed: Service "
+                f"{name} was recreated during target chart handoff. Preserve the Service "
+                "object or bind it to a reusable Nebius load-balancer allocation before retrying."
+            )
+        for key in (
+            "cluster_ip",
+            "load_balancer_ip",
+            "load_balancer_external",
+            "load_balancer_type",
+            "load_balancer_allocation_id",
+        ):
+            before_value = before_identity.get(key)
+            if not before_value:
+                continue
+            if after_identity.get(key) != before_value:
+                if key in {
+                    "load_balancer_external",
+                    "load_balancer_type",
+                    "load_balancer_allocation_id",
+                }:
+                    raise SoperatorMigrationPhasePending(
+                        "login Service continuity guard failed: Service "
+                        f"{name} changed {key} during target chart handoff. Convert the "
+                        "current Nebius LoadBalancer public or internal IP into a reusable allocation and "
+                        "preserve the nebius.com/load-balancer-allocation-id annotation before "
+                        "retrying."
+                    )
+                raise SoperatorMigrationPhasePending(
+                    "login Service continuity guard failed: Service "
+                    f"{name} changed {key} during target chart handoff."
+            )
+
+
+def _wait_for_preserved_login_service_ready_endpoints(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    service_names: Sequence[str],
+    min_ready_endpoints: int = 1,
+    timeout_seconds: int = 600,
+    poll_interval_seconds: int = 5,
+) -> dict[str, Any]:
+    names = tuple(dict.fromkeys(str(name or "").strip() for name in service_names if name))
+    if not names:
+        return {"service_names": [], "ready_endpoints": 0, "status": "skipped"}
+    deadline = time.monotonic() + max(timeout_seconds, 0)
+    last_ready = 0
+    while True:
+        last_ready = login_service_ready_endpoint_count(
+            command_runner,
+            namespace=_SOPERATOR_NAMESPACE,
+            service_names=names,
+            kube_context=kube_context,
+        )
+        if last_ready >= min_ready_endpoints:
+            return {"service_names": list(names), "ready_endpoints": last_ready}
+        if time.monotonic() >= deadline:
+            raise SoperatorMigrationPhasePending(
+                "login Service continuity guard failed: preserved login Service "
+                f"endpoint(s) are not ready: services={', '.join(names)}, "
+                f"ready={last_ready}, required={min_ready_endpoints}."
+            )
+        time.sleep(max(poll_interval_seconds, 1))
+
+
+def _active_login_ssh_session_probe(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    pod_names: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    script = (
+        "if command -v ss >/dev/null 2>&1; then "
+        "ss -Htn state established '( sport = :22 )' | wc -l; "
+        "elif command -v netstat >/dev/null 2>&1; then "
+        "netstat -tn | awk '$4 ~ /:22$/ && $6 == \"ESTABLISHED\" {count++} "
+        "END {print count+0}'; "
+        "else echo unsupported; exit 42; fi"
+    )
+    pods = (
+        tuple(dict.fromkeys(str(name or "").strip() for name in pod_names if str(name or "").strip()))
+        if pod_names is not None
+        else _login_pod_names(command_runner=command_runner, kube_context=kube_context)
+    )
+    pod_results: list[dict[str, Any]] = []
+    total = 0
+    checked = False
+    for pod in pods:
+        result = command_runner(
+            [
+                "kubectl",
+                "--context",
+                kube_context,
+                "-n",
+                _SOPERATOR_NAMESPACE,
+                "exec",
+                pod,
+                "--",
+                "sh",
+                "-ceu",
+                script,
+            ],
+            timeout_seconds=60,
+            check=False,
+        )
+        output = str(result.stdout or "").strip().splitlines()
+        raw_count = output[-1].strip() if output else ""
+        try:
+            active = int(raw_count)
+        except ValueError:
+            pod_results.append(
+                {
+                    "pod": pod,
+                    "status": "unsupported" if result.returncode == 42 else "unknown",
+                    "detail": result.stderr.strip() or raw_count,
+                }
+            )
+            continue
+        checked = True
+        total += max(active, 0)
+        pod_results.append({"pod": pod, "status": "checked", "active_sessions": active})
+    status = "checked" if checked else ("no_login_pods" if not pods else "unsupported")
+    return {"status": status, "active_sessions": total, "pods": pod_results}
+
+
+def _wait_for_login_session_policy(
+    *,
+    phase: dict[str, Any],
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    policy: str,
+    timeout_seconds: int,
+    pod_names: Sequence[str] | None = None,
+) -> list[str]:
+    continuity = phase.setdefault("login_continuity", {})
+    if not isinstance(continuity, dict):
+        raise RuntimeError("login_continuity must be a mapping.")
+    continuity["session_policy"] = policy
+    continuity["session_drain_timeout_seconds"] = timeout_seconds
+    if policy == EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY:
+        continuity["session_drain"] = {
+            "status": "skipped",
+            "reason": "target-ready does not wait for existing TCP SSH sessions",
+        }
+        return [
+            "Login continuity: target-ready policy selected; existing TCP SSH sessions "
+            "remain best-effort if a backing pod or node is restarted."
+        ]
+    if policy == EXTERNAL_LOGIN_SESSION_POLICY_GRACE_PERIOD:
+        deadline = time.monotonic() + max(timeout_seconds, 0)
+        while time.monotonic() < deadline:
+            time.sleep(min(30.0, max(0.0, deadline - time.monotonic())))
+        continuity["session_drain"] = {
+            "status": "grace_period_elapsed",
+            "timeout_seconds": timeout_seconds,
+        }
+        return [f"Login continuity: grace-period elapsed after {timeout_seconds}s."]
+    deadline = time.monotonic() + max(timeout_seconds, 0)
+    last_probe: dict[str, Any] = {}
+    while True:
+        last_probe = _active_login_ssh_session_probe(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            pod_names=pod_names,
+        )
+        continuity["last_session_probe"] = last_probe
+        if last_probe.get("status") != "checked":
+            continuity["session_drain"] = {
+                "status": "pending",
+                "reason": "active SSH session detection is unavailable",
+                "last_probe": last_probe,
+            }
+            raise SoperatorMigrationPhasePending(
+                "login session drain requested but active SSH session detection is unavailable."
+            )
+        active_sessions = _nonnegative_int(last_probe.get("active_sessions"), fallback=0)
+        if active_sessions == 0:
+            continuity["session_drain"] = {
+                "status": "drained",
+                "last_probe": last_probe,
+            }
+            return ["Login continuity: active SSH sessions drained before source retirement."]
+        if time.monotonic() >= deadline:
+            continuity["session_drain"] = {
+                "status": "pending",
+                "active_sessions": active_sessions,
+                "last_probe": last_probe,
+            }
+            raise SoperatorMigrationPhasePending(
+                "login session drain timed out with "
+                f"{active_sessions} active SSH session(s) on old login pods."
+            )
+        time.sleep(min(30.0, max(1.0, deadline - time.monotonic())))
+
+
+def _ensure_rolling_login_continuity(
+    *,
+    phase: dict[str, Any],
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    target_ref: str,
+    service_identity_before: Sequence[Mapping[str, Any]],
+    source_login_pod_names: Sequence[str],
+    login_session_policy: str,
+    login_session_drain_timeout_seconds: int,
+) -> list[str]:
+    continuity = phase.setdefault("login_continuity", {})
+    if not isinstance(continuity, dict):
+        raise RuntimeError("rolling-compute-migration.login_continuity must be a mapping.")
+    continuity["status"] = "checking"
+    continuity["service_identity_before_handoff"] = [
+        dict(to_plain_data(item)) for item in service_identity_before
+    ]
+    continuity["source_login_pods_before_handoff"] = list(source_login_pod_names)
+    service_ready = wait_for_login_service_ready_endpoints(
+        command_runner,
+        namespace=_SOPERATOR_NAMESPACE,
+        target_ref=target_ref,
+        kube_context=kube_context,
+        timeout_seconds=600,
+    )
+    continuity["service_ready_before_source_retirement"] = service_ready
+    rollout_ready = wait_for_login_statefulset_rollout_with_ready_endpoint_guard(
+        command_runner,
+        namespace=_SOPERATOR_NAMESPACE,
+        target_ref=target_ref,
+        kube_context=kube_context,
+        timeout_seconds=900,
+    )
+    continuity["statefulset_ready_before_source_retirement"] = rollout_ready
+    service_identity_after = _login_service_identities(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        required=True,
+    )
+    continuity["service_identity_after_handoff"] = [
+        dict(to_plain_data(item)) for item in service_identity_after
+    ]
+    _assert_login_service_identity_preserved(
+        before=service_identity_before,
+        after=service_identity_after,
+    )
+    preserved_service_names = tuple(
+        str(item.get("name") or "")
+        for item in service_identity_before
+        if str(item.get("name") or "")
+    )
+    continuity["preserved_service_ready_after_handoff"] = (
+        _wait_for_preserved_login_service_ready_endpoints(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            service_names=preserved_service_names,
+            timeout_seconds=600,
+        )
+    )
+    smoke = _kubectl_exec_login(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        args=("scontrol", "ping"),
+        check=False,
+        timeout_seconds=120,
+    )
+    if smoke.returncode != 0 and "login pod not found" in smoke.stderr.lower():
+        continuity["slurm_smoke"] = {
+            "status": "skipped",
+            "reason": "login pod not found",
+            "returncode": smoke.returncode,
+            "stdout": smoke.stdout.strip(),
+            "stderr": smoke.stderr.strip(),
+        }
+        smoke_lines = [
+            "Login continuity: Slurm smoke skipped because no login pod was available."
+        ]
+    else:
+        continuity["slurm_smoke"] = {
+            "status": "passed" if smoke.returncode == 0 else "failed",
+            "returncode": smoke.returncode,
+            "stdout": smoke.stdout.strip(),
+            "stderr": smoke.stderr.strip(),
+        }
+        if smoke.returncode != 0:
+            raise SoperatorMigrationPhasePending(
+                "login continuity guard failed: Slurm smoke check from login did not pass."
+            )
+        smoke_lines = ["Login continuity: Slurm smoke check from login passed."]
+    lines = _wait_for_login_session_policy(
+        phase=phase,
+        command_runner=command_runner,
+        kube_context=kube_context,
+        policy=login_session_policy,
+        timeout_seconds=login_session_drain_timeout_seconds,
+        pod_names=source_login_pod_names,
+    )
+    continuity["status"] = "target_ready"
+    continuity["checked_at"] = _utc_now()
+    return [
+        "Login continuity: target login StatefulSet and ready Service endpoints verified "
+        "before source login retirement.",
+        *smoke_lines,
+        *lines,
+    ]
+
 
 
 def _kubectl_exec_login(
@@ -6165,17 +7799,21 @@ def _kubectl_exec_login(
     pod = _login_pod_name(command_runner=command_runner, kube_context=kube_context)
     if not pod:
         return SoperatorMigrationCommandResult(tuple(args), 1, "", "login pod not found")
-    login_args = [
-        "kubectl",
-        "--context",
-        kube_context,
-        "-n",
-        _SOPERATOR_NAMESPACE,
-        "exec",
-        pod,
-        "--",
-        *args,
-    ]
+
+    def _login_exec_args(exec_args: Sequence[str]) -> list[str]:
+        return [
+            "kubectl",
+            "--context",
+            kube_context,
+            "-n",
+            _SOPERATOR_NAMESPACE,
+            "exec",
+            pod,
+            "--",
+            *exec_args,
+        ]
+
+    login_args = _login_exec_args(args)
     try:
         result = command_runner(
             login_args,
@@ -6190,6 +7828,24 @@ def _kubectl_exec_login(
             f"kubectl exec login pod timed out after {timeout_seconds}s",
         )
     if _slurm_cli_needs_controller_fallback(result):
+        slurm_conf_args = _slurm_cli_with_legacy_conf(args)
+        if slurm_conf_args != tuple(args):
+            slurm_conf_login_args = _login_exec_args(slurm_conf_args)
+            try:
+                slurm_conf_result = command_runner(
+                    slurm_conf_login_args,
+                    check=False,
+                    timeout_seconds=timeout_seconds,
+                )
+            except subprocess.TimeoutExpired:
+                slurm_conf_result = SoperatorMigrationCommandResult(
+                    tuple(str(item) for item in slurm_conf_login_args),
+                    124,
+                    "",
+                    f"kubectl exec login pod timed out after {timeout_seconds}s",
+                )
+            if slurm_conf_result.returncode == 0:
+                return slurm_conf_result
         controller_args = [
             "kubectl",
             "--context",
@@ -6223,6 +7879,15 @@ def _kubectl_exec_login(
     return result
 
 
+def _slurm_cli_with_legacy_conf(args: Sequence[str]) -> tuple[str, ...]:
+    selected = tuple(str(item) for item in args)
+    if not selected or selected[0] not in _SOPERATOR_SLURM_CLI_NAMES:
+        return selected
+    if selected[:2] == ("env", f"SLURM_CONF={_SOPERATOR_LEGACY_SLURM_CONF}"):
+        return selected
+    return ("env", f"SLURM_CONF={_SOPERATOR_LEGACY_SLURM_CONF}", *selected)
+
+
 def _slurm_cli_needs_controller_fallback(result: SoperatorMigrationCommandResult) -> bool:
     if result.returncode == 0:
         return False
@@ -6230,11 +7895,13 @@ def _slurm_cli_needs_controller_fallback(result: SoperatorMigrationCommandResult
     return any(
         marker in detail
         for marker in (
+            "container not found",
             "could not establish a configuration source",
             "dns srv lookup failed",
             "resolve_ctls_from_dns_srv",
             "failed to fetch config",
             "timed out",
+            "unable to upgrade connection",
         )
     )
 
@@ -6284,6 +7951,20 @@ def _format_status_elapsed(seconds: float) -> str:
 
 def _command_detail(result: SoperatorMigrationCommandResult) -> str:
     return result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
+
+
+def _slurm_inspection_transient_unavailable(value: object) -> bool:
+    detail = str(value or "").lower()
+    return any(
+        marker in detail
+        for marker in (
+            "container not found",
+            "containercreating",
+            "podinitializing",
+            "pod is not running",
+            "unable to upgrade connection",
+        )
+    )
 
 
 def _external_upgrade_parse_slurm_jobs(
@@ -6819,9 +8500,36 @@ def _wait_for_external_upgrade_slurm_jobs_until_timeout(
     def _timed_out() -> bool:
         return deadline is not None and time.monotonic() >= deadline
 
+    def _sleep_seconds() -> float:
+        sleep_seconds = float(poll_interval)
+        if deadline is not None:
+            sleep_seconds = min(sleep_seconds, max(deadline - time.monotonic(), 0.0))
+        return sleep_seconds
+
     if not getattr(_console, "is_terminal", False):
         while True:
-            jobs = _jobs()
+            try:
+                jobs = _jobs()
+            except RuntimeError as exc:
+                if not _slurm_inspection_transient_unavailable(exc):
+                    raise
+                if _timed_out():
+                    raise RuntimeError(
+                        "Timed out waiting for Slurm login readiness before job inspection: "
+                        + str(exc)
+                    ) from exc
+                _console.print(
+                    "Waiting for Slurm login readiness before job inspection: " + str(exc),
+                    soft_wrap=True,
+                )
+                sleep_seconds = _sleep_seconds()
+                if sleep_seconds <= 0:
+                    raise RuntimeError(
+                        "Timed out waiting for Slurm login readiness before job inspection: "
+                        + str(exc)
+                    ) from exc
+                time.sleep(sleep_seconds)
+                continue
             if not jobs:
                 _console.print("No affected Slurm jobs remain", soft_wrap=True)
                 return ()
@@ -6832,22 +8540,41 @@ def _wait_for_external_upgrade_slurm_jobs_until_timeout(
                     poll_interval_seconds=poll_interval,
                 )
             )
-            for local_elapsed in range(poll_interval):
-                if _timed_out():
-                    return jobs
-                if local_elapsed:
-                    _console.print(
-                        _external_upgrade_wait_dashboard(
-                            jobs,
-                            local_elapsed_seconds=local_elapsed,
-                            poll_interval_seconds=poll_interval,
-                        )
-                    )
-                time.sleep(1)
+            if _timed_out():
+                return jobs
+            sleep_seconds = _sleep_seconds()
+            if sleep_seconds <= 0:
+                return jobs
+            time.sleep(sleep_seconds)
 
     with Live(console=_console, refresh_per_second=4) as live:
         while True:
-            jobs = _jobs()
+            try:
+                jobs = _jobs()
+            except RuntimeError as exc:
+                if not _slurm_inspection_transient_unavailable(exc):
+                    raise
+                if _timed_out():
+                    raise RuntimeError(
+                        "Timed out waiting for Slurm login readiness before job inspection: "
+                        + str(exc)
+                    ) from exc
+                for local_elapsed in range(poll_interval):
+                    live.update(
+                        Table(
+                            title=(
+                                "Waiting for Slurm login readiness before job inspection "
+                                f"({local_elapsed}s)"
+                            )
+                        )
+                    )
+                    if _timed_out():
+                        raise RuntimeError(
+                            "Timed out waiting for Slurm login readiness before job inspection: "
+                            + str(exc)
+                        ) from exc
+                    time.sleep(1)
+                continue
             if not jobs:
                 live.update(Table(title="No affected Slurm jobs remain"))
                 return ()
@@ -8437,6 +10164,13 @@ def _slurm_node_size(payload: Mapping[str, Any], *, role: str) -> int:
     return _non_negative_int(role_spec.get("size"), fallback=1)
 
 
+def _slurm_node_enabled(payload: Mapping[str, Any], *, role: str) -> bool:
+    spec = _mapping(payload.get("spec"))
+    slurm_nodes = _mapping(spec.get("slurmNodes"))
+    role_spec = _mapping(slurm_nodes.get(role))
+    return _bool_value(role_spec.get("enabled"), fallback=True)
+
+
 def _select_slurmcluster_for_role(
     payload: Mapping[str, Any],
     *,
@@ -8577,6 +10311,42 @@ def _quiesce_slurm_node_size_resource(
     return item
 
 
+def _quiesce_slurm_node_enabled_resource(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    resource: str,
+    role: str,
+) -> dict[str, Any]:
+    exists, payload = _kubectl_get_namespace_resource(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        resource=resource,
+    )
+    selected = _select_slurmcluster_for_role(payload, role=role) if exists else {}
+    selected_exists = bool(selected)
+    selected_resource = (
+        _namespace_resource_ref(selected, default=resource) if selected_exists else resource
+    )
+    original_enabled = _slurm_node_enabled(selected, role=role) if selected_exists else None
+    item = {
+        "action": "slurm-node-enabled",
+        "resource": selected_resource,
+        "role": role,
+        "exists": selected_exists,
+        "enabled": original_enabled,
+        "target_enabled": False,
+    }
+    if selected_exists and original_enabled is not False:
+        _kubectl_patch_namespace_resource(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            resource=selected_resource,
+            patch={"spec": {"slurmNodes": {role: {"enabled": False}}}},
+        )
+    return item
+
+
 def _quiesce_mariadb_resource(
     *,
     command_runner: SoperatorMigrationCommandRunner,
@@ -8631,6 +10401,7 @@ def _external_service_role_quiesce_resources(role: str) -> tuple[tuple[str, str,
         )
     if role == "accounting":
         return (
+            ("slurm-node-enabled", "slurmclusters", _SOPERATOR_NAMESPACE),
             ("scale", "deployment/accounting", _SOPERATOR_NAMESPACE),
             (
                 "mariadb-suspend",
@@ -8678,6 +10449,15 @@ def _quiesce_external_service_role(
         elif action == "slurm-node-size":
             resources.append(
                 _quiesce_slurm_node_size_resource(
+                    command_runner=command_runner,
+                    kube_context=kube_context,
+                    resource=resource,
+                    role=role,
+                )
+            )
+        elif action == "slurm-node-enabled":
+            resources.append(
+                _quiesce_slurm_node_enabled_resource(
                     command_runner=command_runner,
                     kube_context=kube_context,
                     resource=resource,
@@ -8765,6 +10545,28 @@ def _restore_external_service_role(
                 patch={
                     "spec": {
                         "slurmNodes": {restored_role: {"size": restored_size}}
+                    }
+                },
+            )
+        elif action == "slurm-node-enabled":
+            restored_role = str(item.get("role", "") or "").strip()
+            if not restored_role:
+                continue
+            restored_enabled = _bool_value(item.get("enabled"), fallback=True)
+            target_enabled = item.get("target_enabled")
+            if target_enabled is not None and _bool_value(
+                target_enabled,
+                fallback=restored_enabled,
+            ) == restored_enabled:
+                continue
+            _kubectl_patch_namespace_resource(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                resource=resource,
+                namespace=namespace,
+                patch={
+                    "spec": {
+                        "slurmNodes": {restored_role: {"enabled": restored_enabled}}
                     }
                 },
             )
@@ -9138,8 +10940,15 @@ _SLURM_STATIC_NORMALIZED_KEYS = frozenset(
 )
 _TARGET_NODESET_RESERVED_CUSTOM_VOLUME_MOUNT_NAMES = frozenset(
     {
+        "slurm-configs-jail",
         "slurm-scripts",
         "slurm-scripts-jail",
+    }
+)
+_TARGET_NODESET_RESERVED_CUSTOM_INIT_CONTAINER_NAMES = frozenset(
+    {
+        "cxcli-slurm-config-jail",
+        SOPERATOR_GPU_DRIVER_JAIL_INIT_CONTAINER_NAME,
     }
 )
 
@@ -9253,7 +11062,7 @@ def _strip_reserved_nodeset_custom_init_containers(nodeset: dict[str, Any]) -> N
     changed = False
     for container in containers:
         name = str(_mapping(container).get("name", "") or "").strip()
-        if name == SOPERATOR_GPU_DRIVER_JAIL_INIT_CONTAINER_NAME:
+        if name in _TARGET_NODESET_RESERVED_CUSTOM_INIT_CONTAINER_NAMES:
             changed = True
             continue
         kept.append(container)
@@ -11578,6 +13387,8 @@ def _execute_external_node_template_upgrade_phase(
     requeue_job_ids: Sequence[str],
     job_wait_timeout_seconds: int,
     job_refresh_interval_seconds: int,
+    login_session_policy: str = EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
+    login_session_drain_timeout_seconds: int = EXTERNAL_LOGIN_SESSION_DRAIN_TIMEOUT_SECONDS,
     slurm_decision_recorder: Callable[[Mapping[str, Any]], None] | None = None,
     interactive_prompt_pause: Callable[[], Any] | None = None,
     allow_resolved_interactive_job_policy: bool = False,
@@ -11789,7 +13600,14 @@ def _execute_external_node_template_upgrade_phase(
                 "strategy": strategy_label,
                 "rollout": rollout.to_manifest_dict()
                 if worker_group
-                else {"strategy": strategy_label},
+                else {
+                    "strategy": strategy_label,
+                    "service_role_group_strategy": {
+                        "max_surge_count": rollout.service_role_max_surge_count,
+                        "max_unavailable_count": rollout.service_role_max_unavailable_count,
+                        "drain_timeout": rollout.service_role_drain_timeout,
+                    },
+                },
                 "update_args": list(update_args),
                 "timeout": timeout,
             }
@@ -11962,6 +13780,38 @@ def _execute_external_node_template_upgrade_phase(
                 checkpoint_writer()
         if write_progress and checkpoint_writer is not None:
             checkpoint_writer()
+        if service_role == "login":
+            login_pods_before_update = _login_pod_names(
+                command_runner=command_runner,
+                kube_context=kube_context,
+            )
+            group_state["login_pods_before_node_update"] = list(login_pods_before_update)
+            group_state["login_service_ready_before_node_update"] = (
+                wait_for_login_service_ready_endpoints(
+                    command_runner,
+                    namespace=_SOPERATOR_NAMESPACE,
+                    target_ref=target_ref,
+                    kube_context=kube_context,
+                    timeout_seconds=300,
+                    poll_interval_seconds=5,
+                )
+            )
+            work_lines.append(
+                "External login node-template guard: login Service has ready endpoints "
+                "before node-group update."
+            )
+            work_lines.extend(
+                _wait_for_login_session_policy(
+                    phase=phase,
+                    command_runner=command_runner,
+                    kube_context=kube_context,
+                    policy=login_session_policy,
+                    timeout_seconds=login_session_drain_timeout_seconds,
+                    pod_names=login_pods_before_update,
+                )
+            )
+            if write_progress and checkpoint_writer is not None:
+                checkpoint_writer()
         try:
             _update_node_group_with_temporary_strategy(
                 nebius_api=nebius_api,
@@ -12021,6 +13871,23 @@ def _execute_external_node_template_upgrade_phase(
             if write_progress and checkpoint_writer is not None:
                 checkpoint_writer()
             raise
+        if service_role == "login":
+            group_state["login_service_ready_after_node_update"] = (
+                wait_for_login_service_ready_endpoints(
+                    command_runner,
+                    namespace=_SOPERATOR_NAMESPACE,
+                    target_ref=target_ref,
+                    kube_context=kube_context,
+                    timeout_seconds=300,
+                    poll_interval_seconds=5,
+                )
+            )
+            work_lines.append(
+                "External login node-template guard: login Service has ready endpoints "
+                "after node-group update."
+            )
+            if write_progress and checkpoint_writer is not None:
+                checkpoint_writer()
         if service_quiesce_state is not None:
             work_lines.extend(
                 _restore_external_service_role(
@@ -12150,9 +14017,15 @@ def _execute_external_node_template_upgrade_phase(
             lines.extend(work_lines)
         if checkpoint_writer is not None:
             checkpoint_writer()
+    service_strategy = (
+        "safe-surge"
+        if rollout.service_role_strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE
+        else "lower-continuity zero-surge"
+    )
     lines.append(
-        "External node-template strategy: service-role groups use serial zero-surge "
-        "(max_surge=0, max_unavailable=1, drain_timeout=30m); worker groups use "
+        "External node-template strategy: service-role groups use "
+        f"{service_strategy} ({_effective_service_role_strategy_label(rollout)}); "
+        "worker groups use "
         f"{rollout.strategy} with "
         + _worker_rollout_budget_label(rollout, worker_group_count=len(worker_groups))
         + " and "
@@ -12435,6 +14308,8 @@ def _execute_rolling_compute_migration_phase(
     requeue_job_ids: Sequence[str] = (),
     job_wait_timeout_seconds: int = _EXTERNAL_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT_SECONDS,
     job_refresh_interval_seconds: int = _EXTERNAL_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL_SECONDS,
+    login_session_policy: str = EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
+    login_session_drain_timeout_seconds: int = EXTERNAL_LOGIN_SESSION_DRAIN_TIMEOUT_SECONDS,
     slurm_decision_recorder: Callable[[Mapping[str, Any]], None] | None = None,
     interactive_prompt_pause: Callable[[], Any] | None = None,
     allow_resolved_interactive_job_policy: bool = False,
@@ -12462,24 +14337,6 @@ def _execute_rolling_compute_migration_phase(
         nebius_api=nebius_api,
         command_runner=command_runner,
     )
-    if checkpoint_writer is not None:
-        checkpoint_writer()
-    lines.extend(
-        _suspend_legacy_flux_helmreleases(
-            command_runner=command_runner,
-            kube_context=kube_context,
-            phase=phase,
-        )
-    )
-    scaled_source_controller, scale_lines = _scale_down_legacy_soperator_controllers(
-        command_runner=command_runner,
-        kube_context=kube_context,
-        phase=phase,
-        target_version=str(_mapping(source_report.get("report")).get("target_version", "") or ""),
-        profile_group=_source_report_migration_profile_group(source_report),
-    )
-    mutation_performed = mutation_performed or scaled_source_controller
-    lines.extend(scale_lines)
     if checkpoint_writer is not None:
         checkpoint_writer()
     live_source_slurmcluster_present = _live_source_slurmcluster_present(
@@ -12523,12 +14380,6 @@ def _execute_rolling_compute_migration_phase(
         )
         if checkpoint_writer is not None:
             checkpoint_writer()
-        _delete_conflicting_source_slurm_resources(
-            command_runner=command_runner,
-            kube_context=kube_context,
-            source_report=source_report,
-            target_ref=target_ref,
-        )
         values = _patch_target_values_for_compute(
             payload=payload,
             target_ref=target_ref,
@@ -12550,6 +14401,41 @@ def _execute_rolling_compute_migration_phase(
             source_report=source_report,
             worker_node_groups=checkpoint_worker_groups,
         )
+        source_login_pod_names = _login_pod_names(
+            command_runner=command_runner,
+            kube_context=kube_context,
+        )
+        service_identity_before = _login_service_identities(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            required=True,
+        )
+        service_identity_before, allocation_decisions, allocation_lines = (
+            stabilize_soperator_login_load_balancer_allocations(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                project_id=_nebius_project_id(payload),
+                nebius_api=nebius_api,
+                values=values,
+                service_identities=service_identity_before,
+            )
+        )
+        lines.extend(allocation_lines)
+        _assert_login_service_stable_load_balancer_preconditions(service_identity_before)
+        phase["login_continuity"] = {
+            **dict(_mapping(phase.get("login_continuity"))),
+            "service_identity_before_handoff": [
+                dict(to_plain_data(item)) for item in service_identity_before
+            ],
+            "login_load_balancer_allocation": [
+                decision.as_payload() for decision in allocation_decisions
+            ],
+            "source_login_pods_before_handoff": list(source_login_pod_names),
+            "session_policy": login_session_policy,
+            "session_drain_timeout_seconds": login_session_drain_timeout_seconds,
+        }
+        if checkpoint_writer is not None:
+            checkpoint_writer()
         _helm_upgrade_target_soperator(
             command_runner=command_runner,
             kube_context=kube_context,
@@ -12558,6 +14444,46 @@ def _execute_rolling_compute_migration_phase(
                 _mapping(source_report.get("report")).get("target_version", "") or ""
             ),
             wait=False,
+        )
+        lines.extend(
+            _ensure_rolling_login_continuity(
+                phase=phase,
+                command_runner=command_runner,
+                kube_context=kube_context,
+                target_ref=target_ref,
+                service_identity_before=service_identity_before,
+                source_login_pod_names=source_login_pod_names,
+                login_session_policy=login_session_policy,
+                login_session_drain_timeout_seconds=login_session_drain_timeout_seconds,
+            )
+        )
+        if checkpoint_writer is not None:
+            checkpoint_writer()
+        lines.extend(
+            _suspend_legacy_flux_helmreleases(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                phase=phase,
+            )
+        )
+        scaled_source_controller, scale_lines = _scale_down_legacy_soperator_controllers(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            phase=phase,
+            target_version=str(
+                _mapping(source_report.get("report")).get("target_version", "") or ""
+            ),
+            profile_group=_source_report_migration_profile_group(source_report),
+        )
+        mutation_performed = mutation_performed or scaled_source_controller
+        lines.extend(scale_lines)
+        if checkpoint_writer is not None:
+            checkpoint_writer()
+        _delete_conflicting_source_slurm_resources(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            source_report=source_report,
+            target_ref=target_ref,
         )
         _clear_worker_nodeset_ephemeral_storage_aliases(
             command_runner=command_runner,
@@ -12624,6 +14550,9 @@ def _reapply_stale_rolling_compute_values(
     target_ref: str,
     kube_context: str,
     command_runner: SoperatorMigrationCommandRunner,
+    nebius_api: SoperatorMigrationNebiusApi,
+    login_session_policy: str = EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
+    login_session_drain_timeout_seconds: int = EXTERNAL_LOGIN_SESSION_DRAIN_TIMEOUT_SECONDS,
 ) -> tuple[bool, list[str]]:
     if _rolling_compute_values_revision(checkpoint) >= _ROLLING_COMPUTE_VALUES_REVISION:
         return False, []
@@ -12641,12 +14570,6 @@ def _reapply_stale_rolling_compute_values(
         source_report=source_report,
         live_snapshot=live_snapshot,
     )
-    _delete_conflicting_source_slurm_resources(
-        command_runner=command_runner,
-        kube_context=kube_context,
-        source_report=source_report,
-        target_ref=target_ref,
-    )
     _delete_pending_accounting_pvcs(
         command_runner=command_runner,
         kube_context=kube_context,
@@ -12661,24 +14584,78 @@ def _reapply_stale_rolling_compute_values(
         source_report=source_report,
         worker_node_groups=checkpoint_worker_groups,
     )
-    _suspend_legacy_flux_helmreleases(
+    source_login_pod_names = _login_pod_names(
         command_runner=command_runner,
         kube_context=kube_context,
-        phase=phase,
     )
-    _scale_down_legacy_soperator_controllers(
+    service_identity_before = _login_service_identities(
         command_runner=command_runner,
         kube_context=kube_context,
-        phase=phase,
-        target_version=str(_mapping(source_report.get("report")).get("target_version", "") or ""),
-        profile_group=_source_report_migration_profile_group(source_report),
+        required=True,
     )
+    service_identity_before, allocation_decisions, allocation_lines = (
+        stabilize_soperator_login_load_balancer_allocations(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            project_id=_nebius_project_id(payload),
+            nebius_api=nebius_api,
+            values=values,
+            service_identities=service_identity_before,
+        )
+    )
+    lines.extend(allocation_lines)
+    _assert_login_service_stable_load_balancer_preconditions(service_identity_before)
+    phase["login_continuity"] = {
+        **dict(_mapping(phase.get("login_continuity"))),
+        "service_identity_before_handoff": [
+            dict(to_plain_data(item)) for item in service_identity_before
+        ],
+        "login_load_balancer_allocation": [
+            decision.as_payload() for decision in allocation_decisions
+        ],
+        "source_login_pods_before_handoff": list(source_login_pod_names),
+        "session_policy": login_session_policy,
+        "session_drain_timeout_seconds": login_session_drain_timeout_seconds,
+    }
     _helm_upgrade_target_soperator(
         command_runner=command_runner,
         kube_context=kube_context,
         values=values,
         expected_version=str(_mapping(source_report.get("report")).get("target_version", "") or ""),
         wait=False,
+    )
+    lines.extend(
+        _ensure_rolling_login_continuity(
+            phase=phase,
+            command_runner=command_runner,
+            kube_context=kube_context,
+            target_ref=target_ref,
+            service_identity_before=service_identity_before,
+            source_login_pod_names=source_login_pod_names,
+            login_session_policy=login_session_policy,
+            login_session_drain_timeout_seconds=login_session_drain_timeout_seconds,
+        )
+    )
+    lines.extend(
+        _suspend_legacy_flux_helmreleases(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            phase=phase,
+        )
+    )
+    _scaled_source_controller, scale_lines = _scale_down_legacy_soperator_controllers(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        phase=phase,
+        target_version=str(_mapping(source_report.get("report")).get("target_version", "") or ""),
+        profile_group=_source_report_migration_profile_group(source_report),
+    )
+    lines.extend(scale_lines)
+    _delete_conflicting_source_slurm_resources(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        source_report=source_report,
+        target_ref=target_ref,
     )
     _clear_worker_nodeset_ephemeral_storage_aliases(
         command_runner=command_runner,
@@ -12727,6 +14704,9 @@ def _reconcile_completed_compute_cutover(
     target_ref: str,
     kube_context: str,
     command_runner: SoperatorMigrationCommandRunner,
+    nebius_api: SoperatorMigrationNebiusApi,
+    login_session_policy: str = EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
+    login_session_drain_timeout_seconds: int = EXTERNAL_LOGIN_SESSION_DRAIN_TIMEOUT_SECONDS,
 ) -> tuple[bool, list[str]]:
     lines: list[str] = []
     mutation_performed = False
@@ -12739,6 +14719,9 @@ def _reconcile_completed_compute_cutover(
             target_ref=target_ref,
             kube_context=kube_context,
             command_runner=command_runner,
+            nebius_api=nebius_api,
+            login_session_policy=login_session_policy,
+            login_session_drain_timeout_seconds=login_session_drain_timeout_seconds,
         )
         mutation_performed = mutation_performed or phase_mutation
         lines.extend(phase_lines)
@@ -13385,8 +15368,60 @@ def _restore_persistent_migration_writers(
     return ["Restored login and worker consumers after persistent mount migration."]
 
 
+def _ensure_persistent_migration_login_hold_allowed(
+    *,
+    phase: dict[str, Any],
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    policy: str,
+    timeout_seconds: int,
+) -> list[str]:
+    state = phase.setdefault("persistent_migration_login_hold_policy", {})
+    if not isinstance(state, dict):
+        raise RuntimeError(
+            "populate-jail-refresh.persistent_migration_login_hold_policy must be a mapping."
+        )
+    state["session_policy"] = policy
+    state["session_drain_timeout_seconds"] = timeout_seconds
+    if policy == EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY:
+        state["status"] = "pending"
+        state["reason"] = (
+            "first-adoption persistent mount migration must temporarily stop login "
+            "writers and cannot preserve continuous SSH endpoints under target-ready"
+        )
+        raise SoperatorMigrationPhasePending(
+            "first-adoption persistent mount migration must temporarily stop login "
+            "writers before copying customer rootfs paths. The target-ready login "
+            "session policy refuses that SSH gap; rerun with --login-session-policy "
+            "wait-active or grace-period during an approved maintenance window, or "
+            "perform the persistent path migration manually."
+        )
+    login_pods = _login_pod_names(
+        command_runner=command_runner,
+        kube_context=kube_context,
+    )
+    state["login_pods_before_hold"] = list(login_pods)
+    session_phase = {"login_continuity": dict(state)}
+    lines = _wait_for_login_session_policy(
+        phase=session_phase,
+        command_runner=command_runner,
+        kube_context=kube_context,
+        policy=policy,
+        timeout_seconds=timeout_seconds,
+        pod_names=login_pods,
+    )
+    state.update(dict(_mapping(session_phase.get("login_continuity"))))
+    state["status"] = "allowed"
+    return [
+        "Persistent mount migration login hold allowed by "
+        f"{policy} session policy.",
+        *lines,
+    ]
+
+
 def _execute_legacy_persistent_mount_migration(
     *,
+    checkpoint: dict[str, Any],
     phase: dict[str, Any],
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
@@ -13447,14 +15482,56 @@ def _execute_legacy_persistent_mount_migration(
         timeout_seconds=3900,
         job_label="Soperator persistent mount migration Job",
     )
+    log_result = command_runner(
+        [
+            "kubectl",
+            "--context",
+            kube_context,
+            "-n",
+            _SOPERATOR_NAMESPACE,
+            "logs",
+            f"job/{job_name}",
+        ],
+        timeout_seconds=120,
+        check=False,
+    )
+    copy_status_by_mount = _persistent_mount_migration_copy_status_by_log(
+        log_result.stdout
+    )
     for entry in migration_state["entries"]:
         if isinstance(entry, dict):
+            mount_path = str(entry.get("mount_path") or "")
+            source_status = str(entry.get("source_status") or "unknown")
+            copy_status = copy_status_by_mount.get(mount_path)
+            if not copy_status and source_status == "absent":
+                copy_status = "source_missing"
+            entry["copy_status"] = copy_status or "completed"
             entry["status"] = "completed"
     migration_state["status"] = "completed"
     migration_state["completed_at"] = _utc_now()
+    _sync_persistent_mount_decisions_from_migration_entries(
+        checkpoint,
+        _sequence_of_mappings(migration_state.get("entries")),
+    )
     if checkpoint_writer is not None:
         checkpoint_writer()
-    return True, [f"Persistent mount migration job completed: {job_name}."]
+    copied = sum(
+        1
+        for entry in migration_state["entries"]
+        if isinstance(entry, Mapping) and entry.get("copy_status") == "copied"
+    )
+    missing = sum(
+        1
+        for entry in migration_state["entries"]
+        if isinstance(entry, Mapping) and entry.get("copy_status") == "source_missing"
+    )
+    skipped = sum(
+        1
+        for entry in migration_state["entries"]
+        if isinstance(entry, Mapping) and entry.get("copy_status") == "skipped"
+    )
+    detail = f"copied={copied}, source_missing={missing}, skipped={skipped}"
+    return True, [f"Persistent mount migration job completed: {job_name} ({detail})."]
 
 
 def _execute_populate_jail_refresh_phase(
@@ -13472,6 +15549,8 @@ def _execute_populate_jail_refresh_phase(
     requeue_job_ids: Sequence[str],
     job_wait_timeout_seconds: int,
     job_refresh_interval_seconds: int,
+    login_session_policy: str = EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
+    login_session_drain_timeout_seconds: int = EXTERNAL_LOGIN_SESSION_DRAIN_TIMEOUT_SECONDS,
     slurm_decision_recorder: Callable[[Mapping[str, Any]], None] | None = None,
     interactive_prompt_pause: Callable[[], Any] | None = None,
     allow_resolved_interactive_job_policy: bool = False,
@@ -13552,8 +15631,9 @@ def _execute_populate_jail_refresh_phase(
     phase["rootfs_strategy"] = "activePassive"
     phase["rootfs_slots"] = slots.as_payload()
     legacy_active_rootfs = jail_rootfs_uses_legacy_active_source(values)
-    phase["legacy_active_rootfs"] = legacy_active_rootfs
     legacy_migration_entries = _legacy_persistent_mount_migration_entries(values)
+    legacy_active_rootfs = bool(legacy_active_rootfs or legacy_migration_entries)
+    phase["legacy_active_rootfs"] = legacy_active_rootfs
     existing_migration_state = dict(_mapping(phase.get("legacy_persistent_mount_migration")))
     migration_status = str(existing_migration_state.get("status") or "").strip()
     if migration_status != "completed":
@@ -13577,8 +15657,65 @@ def _execute_populate_jail_refresh_phase(
         raise SoperatorMigrationPhasePending(
             "Could not resolve a populate-jail image for passive-slot rootfs population."
         )
+    source_probe_entries: tuple[dict[str, Any], ...] = ()
+    if legacy_migration_entries and migration_status != "completed":
+        source_probe_entries = _probe_legacy_persistent_mount_sources(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            target_ref=target_ref,
+            image=populate_image,
+            jail_pvc=_target_pvc_name_for_storage_key(payload, target_ref, "jail"),
+            entries=legacy_migration_entries,
+            scheduling=job_scheduling,
+        )
+        source_by_mount = {
+            str(entry.get("mount_path") or ""): entry
+            for entry in source_probe_entries
+            if str(entry.get("mount_path") or "")
+        }
+        updated_entries: list[dict[str, Any]] = []
+        for entry in legacy_migration_entries:
+            next_entry = dict(to_plain_data(entry))
+            probe = source_by_mount.get(str(next_entry.get("mount_path") or ""))
+            if probe:
+                next_entry["source_status"] = str(probe.get("source_status") or "unknown")
+                next_entry["marker_status"] = str(probe.get("marker_status") or "unknown")
+                next_entry["marker_present"] = bool(probe.get("marker_present"))
+            else:
+                next_entry["source_status"] = "unknown"
+            updated_entries.append(next_entry)
+        legacy_migration_entries = tuple(updated_entries)
+        phase["legacy_persistent_mount_source_probe"] = {
+            "status": "completed",
+            "probed_at": _utc_now(),
+            "entries": [dict(entry) for entry in source_probe_entries],
+        }
+        phase["legacy_persistent_mount_migration"] = {
+            **dict(_mapping(phase.get("legacy_persistent_mount_migration"))),
+            "entries": [dict(entry) for entry in legacy_migration_entries],
+        }
+        _sync_persistent_mount_decisions_from_migration_entries(
+            checkpoint,
+            legacy_migration_entries,
+        )
+        checkpoint["populate_jail_refresh"] = {
+            **dict(_mapping(checkpoint.get("populate_jail_refresh"))),
+            "legacy_persistent_mount_source_probe": dict(
+                _mapping(phase.get("legacy_persistent_mount_source_probe"))
+            ),
+            "legacy_persistent_mount_migration": dict(
+                _mapping(phase.get("legacy_persistent_mount_migration"))
+            ),
+        }
+        if checkpoint_writer is not None:
+            checkpoint_writer()
 
     def _probe_jail_capacity() -> JailCapacityPreflight:
+        copy_required_entries = tuple(
+            entry
+            for entry in legacy_migration_entries
+            if str(entry.get("source_status") or "unknown") != "absent"
+        )
         active_pvc = (
             _target_pvc_name_for_storage_key(payload, target_ref, "jail")
             if legacy_active_rootfs
@@ -13596,7 +15733,7 @@ def _execute_populate_jail_refresh_phase(
                 _mapping(phase.get("legacy_persistent_mount_migration")).get("status") or ""
             ).strip()
             == "completed"
-            else tuple(str(entry.get("source_path") or "") for entry in legacy_migration_entries)
+            else tuple(str(entry.get("source_path") or "") for entry in copy_required_entries)
         )
         return probe_active_passive_jail_capacity(
             command_runner,
@@ -13760,6 +15897,17 @@ def _execute_populate_jail_refresh_phase(
 
     if legacy_migration_entries:
         migration_lines.extend(
+            _ensure_persistent_migration_login_hold_allowed(
+                phase=phase,
+                command_runner=command_runner,
+                kube_context=kube_context,
+                policy=login_session_policy,
+                timeout_seconds=login_session_drain_timeout_seconds,
+            )
+        )
+        if checkpoint_writer is not None:
+            checkpoint_writer()
+        migration_lines.extend(
             _hold_persistent_migration_writers(
                 command_runner=command_runner,
                 kube_context=kube_context,
@@ -13771,6 +15919,7 @@ def _execute_populate_jail_refresh_phase(
             checkpoint_writer()
         try:
             migration_mutation, lines = _execute_legacy_persistent_mount_migration(
+                checkpoint=checkpoint,
                 phase=phase,
                 command_runner=command_runner,
                 kube_context=kube_context,
@@ -17542,6 +19691,8 @@ def execute_soperator_migration(
     requeue_job_ids: Sequence[str] = (),
     job_wait_timeout_seconds: int = _EXTERNAL_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT_SECONDS,
     job_refresh_interval_seconds: int = _EXTERNAL_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL_SECONDS,
+    login_session_policy: str = EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
+    login_session_drain_timeout_seconds: int = EXTERNAL_LOGIN_SESSION_DRAIN_TIMEOUT_SECONDS,
     jail_sfs_resize_handler: JailSfsResizeHandler | None = None,
     worker_rollout_strategy: str | None = None,
     worker_wave_groups: int | None = None,
@@ -17602,6 +19753,8 @@ def execute_soperator_migration(
                 requeue_job_ids=requeue_job_ids,
                 job_wait_timeout_seconds=job_wait_timeout_seconds,
                 job_refresh_interval_seconds=job_refresh_interval_seconds,
+                login_session_policy=login_session_policy,
+                login_session_drain_timeout_seconds=login_session_drain_timeout_seconds,
                 jail_sfs_resize_handler=jail_sfs_resize_handler,
                 worker_rollout_strategy=worker_rollout_strategy,
                 worker_wave_groups=worker_wave_groups,
@@ -17640,6 +19793,8 @@ def _execute_soperator_migration_unlocked(
     requeue_job_ids: Sequence[str] = (),
     job_wait_timeout_seconds: int = _EXTERNAL_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT_SECONDS,
     job_refresh_interval_seconds: int = _EXTERNAL_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL_SECONDS,
+    login_session_policy: str = EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
+    login_session_drain_timeout_seconds: int = EXTERNAL_LOGIN_SESSION_DRAIN_TIMEOUT_SECONDS,
     jail_sfs_resize_handler: JailSfsResizeHandler | None = None,
     worker_rollout_strategy: str | None = None,
     worker_wave_groups: int | None = None,
@@ -17660,6 +19815,14 @@ def _execute_soperator_migration_unlocked(
     active_nebius_api = nebius_api or attached_nebius_api
     if active_nebius_api is None:
         raise RuntimeError("External Soperator upgrade execution requires a Nebius API adapter.")
+    try:
+        resolved_login_session_policy = normalize_external_login_session_policy(
+            login_session_policy
+        )
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+    if login_session_drain_timeout_seconds < 0:
+        raise RuntimeError("--login-session-drain-timeout must be non-negative.")
 
     def _emit_phase_comment(phase_id: str, comment: str) -> None:
         if status_callback is None:
@@ -17698,13 +19861,6 @@ def _execute_soperator_migration_unlocked(
         onboarding.get("target_version", "") or report.get("target_version", "") or ""
     )
     kube_context = _target_kube_context(payload, normalized_target)
-    payload, persistent_mount_state = _prepare_jail_persistent_mount_payload(
-        payload=payload,
-        target_ref=normalized_target,
-        jail_persistent_mounts=jail_persistent_mounts,
-        populate_jail_refresh=populate_jail_refresh,
-    )
-    onboarding = _target_onboarding(payload, normalized_target)
     actions = _onboarding_actions(onboarding)
     require_target_soperator_helm = _target_soperator_helm_release_required(onboarding)
     resolved_populate_jail_refresh = normalize_populate_jail_refresh_mode(
@@ -17717,6 +19873,29 @@ def _execute_soperator_migration_unlocked(
     )
     if not phase_ids:
         phase_ids = ("discovery-and-plan",)
+    explicit_mount_requested = any(
+        str(item or "").strip() for item in jail_persistent_mounts
+    )
+    jail_rootfs = report.get("jail_rootfs")
+    jail_rootfs_refresh_required = (
+        isinstance(jail_rootfs, Mapping) and jail_rootfs.get("refresh_required") is True
+    )
+    explicit_populate_jail_refresh = resolved_populate_jail_refresh in {"force", "manual"}
+    auto_persistent_mounts = (
+        explicit_mount_requested
+        or explicit_populate_jail_refresh
+        or jail_rootfs_refresh_required
+    )
+    payload, persistent_mount_state = _prepare_jail_persistent_mount_payload(
+        payload=payload,
+        target_ref=normalized_target,
+        jail_persistent_mounts=jail_persistent_mounts,
+        populate_jail_refresh=populate_jail_refresh,
+        auto_persistent_mounts=auto_persistent_mounts,
+    )
+    onboarding = _target_onboarding(payload, normalized_target)
+    actions = _onboarding_actions(onboarding)
+    require_target_soperator_helm = _target_soperator_helm_release_required(onboarding)
     phase_ids = _phase_ids_with_jail_persistent_mount_prerequisites(
         phase_ids=phase_ids,
         payload=payload,
@@ -17880,6 +20059,16 @@ def _execute_soperator_migration_unlocked(
         }
     )
     checkpoint["slurm"] = slurm_state
+    checkpoint["login_continuity"] = {
+        **dict(_mapping(checkpoint.get("login_continuity"))),
+        "session_policy": resolved_login_session_policy,
+        "session_drain_timeout_seconds": login_session_drain_timeout_seconds,
+        "guarantee": (
+            "new SSH connections require a ready target login endpoint before source "
+            "login retirement; existing TCP sessions are best-effort unless session "
+            "drain is selected"
+        ),
+    }
     checkpoint["populate_jail_refresh"] = {
         **dict(_mapping(checkpoint.get("populate_jail_refresh"))),
         "mode": resolved_populate_jail_refresh,
@@ -18182,6 +20371,9 @@ def _execute_soperator_migration_unlocked(
                 target_ref=normalized_target,
                 kube_context=kube_context,
                 command_runner=active_command_runner,
+                nebius_api=active_nebius_api,
+                login_session_policy=resolved_login_session_policy,
+                login_session_drain_timeout_seconds=login_session_drain_timeout_seconds,
             )
             if phase_mutation or lines:
                 mutation_performed = mutation_performed or phase_mutation
@@ -18227,6 +20419,8 @@ def _execute_soperator_migration_unlocked(
                 requeue_job_ids=selected_requeue_job_ids,
                 job_wait_timeout_seconds=job_wait_timeout_seconds,
                 job_refresh_interval_seconds=job_refresh_interval_seconds,
+                login_session_policy=resolved_login_session_policy,
+                login_session_drain_timeout_seconds=login_session_drain_timeout_seconds,
                 slurm_decision_recorder=_record_slurm_decision,
                 interactive_prompt_pause=status_prompt_pause,
                 allow_resolved_interactive_job_policy=allow_resolved_interactive_job_policy,
@@ -18298,6 +20492,8 @@ def _execute_soperator_migration_unlocked(
                 requeue_job_ids=selected_requeue_job_ids,
                 job_wait_timeout_seconds=job_wait_timeout_seconds,
                 job_refresh_interval_seconds=job_refresh_interval_seconds,
+                login_session_policy=resolved_login_session_policy,
+                login_session_drain_timeout_seconds=login_session_drain_timeout_seconds,
                 slurm_decision_recorder=_record_slurm_decision,
                 interactive_prompt_pause=status_prompt_pause,
                 allow_resolved_interactive_job_policy=allow_resolved_interactive_job_policy,

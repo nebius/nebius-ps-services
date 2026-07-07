@@ -239,6 +239,7 @@ def test_active_passive_slot_selection_and_switch_values() -> None:
             "strategy": "activePassive",
             "activeSlot": "slot-a",
             "passiveSlot": "slot-b",
+            "store": {"volumeKey": "jail"},
             "slots": {
                 "slot-a": {
                     "volumeSourceName": "jail-rootfs-slot-a",
@@ -251,7 +252,12 @@ def test_active_passive_slot_selection_and_switch_values() -> None:
             },
         },
         "slurmNodes": {
-            "controller": {"volumes": {"jail": {"volumeSourceName": "jail-rootfs-slot-a"}}},
+            "controller": {
+                "volumes": {
+                    "jail": {"volumeSourceName": "jail-rootfs-slot-a"},
+                    "spool": {"volumeSourceName": "controller-spool"},
+                }
+            },
             "login": {"volumes": {"jail": {"volumeSourceName": "jail-rootfs-slot-a"}}},
             "rest": {"volumes": {"jail": {"volumeSourceName": "jail-rootfs-slot-a"}}},
         },
@@ -266,6 +272,15 @@ def test_active_passive_slot_selection_and_switch_values() -> None:
                     }
                 },
             }
+        ],
+        "volumeSources": [
+            {
+                "name": "jail",
+                "persistentVolumeClaim": {
+                    "claimName": "jail-rootfs-slot-a-pvc",
+                    "readOnly": False,
+                },
+            },
         ],
     }
 
@@ -282,6 +297,14 @@ def test_active_passive_slot_selection_and_switch_values() -> None:
     assert switched["nodesets"][0]["slurmd"]["volumes"]["jail"]["persistentVolumeClaim"][
         "claimName"
     ] == "jail-rootfs-slot-b-pvc"
+    volume_sources = {item["name"]: item for item in switched["volumeSources"]}
+    assert set(volume_sources) == {"controller-spool", "jail"}
+    assert volume_sources["controller-spool"]["persistentVolumeClaim"]["claimName"] == (
+        "controller-spool-pvc"
+    )
+    assert volume_sources["jail"]["persistentVolumeClaim"]["claimName"] == (
+        "jail-rootfs-slot-b-pvc"
+    )
 
 
 def test_active_passive_populate_job_scheduling_uses_populate_jail_filter() -> None:

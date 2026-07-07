@@ -1,14 +1,15 @@
 ---
 name: sdlc-start
-description: "Use only as part of the Agentic SDLC workflow; use when the user asks to start, resume, continue, or run the Agentic SDLC workflow for a project using `docs/requirements.md` and `docs/design.md`. This is the main SDLC coordinator and state-machine skill."
+description: "Use only as part of the Agentic SDLC workflow; use when the user asks to start, resume, continue, or run the Agentic SDLC workflow for a project using `docs/requirements.md`, `docs/design.md`, private steering input, and local run state. This is the main SDLC coordinator and state-machine skill."
 ---
 
 # Start SDLC
 
 ## Purpose
 
-Coordinate the SDLC loop by reading specs, checkpoints, and local state,
-selecting the next feature, and choosing exactly one next skill.
+Coordinate the SDLC loop by reading specs, checkpoints, steering input, and
+local state, selecting the next feature, refreshing auto-steering when needed,
+and choosing exactly one next skill.
 
 ## When To Use
 
@@ -28,6 +29,9 @@ selecting the next feature, and choosing exactly one next skill.
 - `docs/design.md` when present.
 - Existing local run state when present.
 - User instruction or continuation prompt.
+- Active `STEERING.md` and `steering/auto-steering.json` when present.
+- Optional user-provided live experiment environment information for
+  requirements capture.
 
 ## Required Reads
 
@@ -38,6 +42,7 @@ selecting the next feature, and choosing exactly one next skill.
 - `current-state.json`, `feature-queue.json`, `fingerprints.json`,
   `checkpoints/latest.json`, and the latest checkpoint file.
 - `STEERING.md`.
+- `steering/auto-steering.json` when present.
 - Latest feature evidence and failure logs.
 - `references/state-schema.md` for state fields and transitions.
 - `assets/hooks/README.md` when maintaining optional SDLC PreToolUse or Stop
@@ -55,6 +60,14 @@ selecting the next feature, and choosing exactly one next skill.
 ## Process
 
 - Read `references/state-schema.md` before initializing or repairing local state.
+- At the beginning of a new run, or when `docs/requirements.md` is missing or
+  lacks a Live Experiment Environment section, encourage the user to provide a
+  non-production or disposable environment with safe connection steps, allowed
+  actions, reset instructions, and evidence limits. Do not block the workflow
+  only because the section is not provided.
+- If the user provides live experiment environment details, route that update to
+  `sdlc-create-requirements`; `sdlc-start` must not write `docs/requirements.md`
+  directly or store raw environment details in local run state.
 - Resolve the project ID from the repository identity and read
   `active-run.json` before choosing a run.
 - Acquire or honor the active run lock. If the lock appears stale, report the
@@ -72,9 +85,23 @@ selecting the next feature, and choosing exactly one next skill.
 - If design is missing or stale and required context is present, route only to
   `sdlc-create-design`.
 - Build or refresh the feature queue from `docs/design.md`.
-- Check `STEERING.md` before every iteration.
+- Check `STEERING.md` and `steering/auto-steering.json` before every
+  iteration.
+- If there are new or unresolved steering entries, stale steering fingerprints,
+  conflicting reminders, or changed requirements, design, context, plan, or
+  evidence reminders, route to `sdlc-auto-steering` before selecting the next
+  implementation phase.
+- Honor `sdlc-auto-steering` dispositions: route `requirements-change` to
+  `sdlc-create-requirements`, `design-change` to `sdlc-create-design`,
+  `docs-update` to `sdlc-update-documents`, and `needs-human` to a blocked
+  human-input state.
 - Select the highest-priority incomplete feature whose dependencies are complete.
 - Set one `next_recommended_skill` based on the current phase.
+- After evaluation passes, route to `sdlc-update-documents` before
+  `sdlc-align-specs` when feature-facing docs, changelog, examples, or
+  documentation steering need updates.
+- After UAT, route back to `sdlc-update-documents` before PR creation when UAT
+  or final steering requires run-level documentation updates.
 - Before returning a next skill, write a checkpoint containing current feature,
   phase, status, blocker, retry counts, last successful phase, fingerprints,
   evidence pointers, and next recommended skill.
@@ -90,6 +117,8 @@ selecting the next feature, and choosing exactly one next skill.
 - Every invocation starts by reading the latest checkpoint and current state.
 - Repeating the same invocation with unchanged specs, fingerprints, evidence,
   and steering returns the same current feature and `next_recommended_skill`.
+- Repeating with unchanged auto-steering state must not re-route to
+  `sdlc-auto-steering` or duplicate steering history.
 - Completed features with unchanged fingerprints are skipped.
 - Changed requirements or design invalidate only affected features and
   supersede stale plans; locked plan files are never edited in place.
@@ -113,12 +142,15 @@ selecting the next feature, and choosing exactly one next skill.
 - Implement code directly.
 - Commit, push, create PRs, review PRs, or merge.
 - Bypass validation, tests, or evaluation.
+- Record live environment credentials, private endpoints, customer data, or raw
+  logs in run state.
 - Create a workflow CLI.
 
 ## Completion Criteria
 
 - Active run state is accurate and backed by a checkpoint.
 - Current feature and next skill are explicit.
+- Steering has been consumed, refreshed, or routed to `sdlc-auto-steering`.
 - Each state transition writes a checkpoint and history entry.
 - Repeated resumes without state changes do not duplicate history.
 - The loop can resume after context loss.

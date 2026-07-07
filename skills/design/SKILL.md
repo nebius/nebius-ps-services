@@ -1,6 +1,6 @@
 ---
 name: design
-description: "Use for non-SDLC software design before implementation: understand requirements, inspect an existing codebase or greenfield context, route topic, requirement, and technology due diligence through `research` when available, choose components and architecture, compare alternatives, and create a Codex `/plan` handoff. Use for new features, major changes, architecture/design docs, ADR-like decisions, and new applications when the user needs a design and implementation plan rather than immediate coding; do not use for open-ended brainstorming, checklist-only review, Agentic SDLC-owned `docs/design.md`, or immediate implementation."
+description: "Use for non-SDLC software design before implementation: understand requirements, inspect an existing codebase or greenfield context, route topic, requirement, and technology due diligence through `research` when available, apply `system-design-rules` to standard/deep solution decisions, choose components and architecture, compare alternatives, and create a Codex `/plan` handoff. Use for new features, major changes, architecture/design docs, ADR-like decisions, and new applications when the user needs a design and implementation plan rather than immediate coding; do not use for open-ended brainstorming, checklist-only review, Agentic SDLC-owned `docs/design.md`, or immediate implementation."
 ---
 
 # Design
@@ -129,7 +129,19 @@ For brownfield work, name the exact integration points and files or modules
 likely to change. For greenfield work, name the initial project structure and
 bootstrap sequence at a design level.
 
-### Phase 5: Evaluate Alternatives
+### Phase 5: Apply `system-design-rules` And Evaluate Alternatives
+
+Before finalizing a standard, deep, architecture-heavy, ADR-like, or otherwise
+hard-to-reverse design, use `system-design-rules` when it is installed and
+relevant. Treat it as an advisory design checklist over the proposed solution,
+boundaries, API/data ownership, reliability, security, observability, cost,
+operability, rollout, and ownership decisions.
+
+For light, local, reversible designs, apply only the relevant checklist
+categories yourself or record why a full `system-design-rules` pass is not
+needed. Keep checklist-only reviews of an existing proposal routed directly to
+`system-design-rules`; inside `design`, use its findings to improve the design
+and plan.
 
 Compare at least the baseline/current approach, the recommended design, and
 one simpler or more conservative alternative when meaningful. Explain what each
@@ -143,6 +155,7 @@ Use the Codex `/plan` command when available. The plan handoff must include:
 - final design summary
 - selected option and rejected alternatives
 - assumptions and unresolved questions
+- `system-design-rules` findings or skipped-review rationale
 - ordered implementation steps
 - expected files or modules to inspect or modify
 - tests and validation commands to add or run
@@ -204,6 +217,8 @@ short answer is explicitly requested:
 - Requirements summary and assumptions.
 - Existing-system findings or greenfield statement.
 - Research findings with official source links or clear unverified markers.
+- `system-design-rules` findings for non-trivial designs, or why that review
+  was not needed.
 - Recommended design with components, technologies, boundaries, data/control
   flow, security, observability, validation, and rollout notes.
 - Alternative comparison and rationale.
@@ -213,6 +228,7 @@ short answer is explicitly requested:
 ## References
 
 - Read `references/design-workflow.md` for the detailed phase checklist,
-  brownfield and greenfield paths, `research` handoff guidance, and `/plan`
-  handoff template.
+  brownfield and greenfield paths, `research` handoff guidance,
+  `system-design-rules` decision review guidance, and `/plan` handoff
+  template.
 - Use `evals/trigger-prompts.md` when reviewing or tuning trigger readiness.

@@ -698,6 +698,8 @@ def test_ext_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path)
         requeue_job=("42", "43"),
         job_wait_timeout="45m",
         job_refresh_interval="10s",
+        login_session_policy="wait-active",
+        login_session_drain_timeout="20m",
         worker_rollout_strategy="safe-surge",
         worker_wave_groups=2,
         worker_wave_percent=None,
@@ -729,6 +731,8 @@ def test_ext_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path)
     assert "--confirm-jail-rootfs-overwrite" not in args
     assert args[args.index("--target") + 1] == "external"
     assert args[args.index("--cancel-job") + 1] == "17"
+    assert args[args.index("--login-session-policy") + 1] == "wait-active"
+    assert args[args.index("--login-session-drain-timeout") + 1] == "20m"
     assert [args[index + 1] for index, item in enumerate(args) if item == "--requeue-job"] == [
         "42",
         "43",
@@ -9682,7 +9686,11 @@ def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_by_terminal_m
 
     rendered = rich_console.export_text()
     assert f"Slurm job policy: {expected_policy}" in rendered
+    assert "Login SSH session policy: target-ready" in rendered
+    assert "Login LoadBalancer allocation retention: cxcli automatically converts" in rendered
     assert captured["job_policy"] == expected_policy
+    assert captured["login_session_policy"] == "target-ready"
+    assert captured["login_session_drain_timeout_seconds"] == 1800
     assert events == ["backup", "execute"]
 
 
@@ -15609,6 +15617,11 @@ def test_deploy_generated_artifacts_runs_gpu_validations_before_soperator_flux(
     )
     monkeypatch.setattr(cli, "_collect_grafana_status_after_flux", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(cli, "_warn_if_flux_gitops_not_bootstrapped", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr(
+        cli,
+        "_stabilize_deploy_soperator_login_load_balancer",
+        lambda config, paths, manifest, **kwargs: (config, dict(manifest)),
+    )
     monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
 
     @contextmanager
@@ -15741,6 +15754,11 @@ def test_deploy_generated_artifacts_runs_cpu_cluster_smoke_before_app_flux(
     )
     monkeypatch.setattr(cli, "_collect_grafana_status_after_flux", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(cli, "_warn_if_flux_gitops_not_bootstrapped", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr(
+        cli,
+        "_stabilize_deploy_soperator_login_load_balancer",
+        lambda config, paths, manifest, **kwargs: (config, dict(manifest)),
+    )
     monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
 
     @contextmanager
@@ -16013,6 +16031,11 @@ def test_deploy_generated_artifacts_runs_soperator_smoke_before_post_gpu_validat
     )
     monkeypatch.setattr(cli, "_collect_grafana_status_after_flux", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(cli, "_warn_if_flux_gitops_not_bootstrapped", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr(
+        cli,
+        "_stabilize_deploy_soperator_login_load_balancer",
+        lambda config, paths, manifest, **kwargs: (config, dict(manifest)),
+    )
     monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
 
     @contextmanager
@@ -23820,6 +23843,13 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--requeue-job" in normalized_ext_soperator_upgrade_help
     assert "--job-wait-timeout" in normalized_ext_soperator_upgrade_help
     assert "--job-refresh-interval" in normalized_ext_soperator_upgrade_help
+    assert "--login-session-policy" in normalized_ext_soperator_upgrade_help
+    assert "--login-session-drain-timeout" in normalized_ext_soperator_upgrade_help
+    assert "target-ready keeps source login retirement gated" in normalized_ext_soperator_upgrade_help
+    assert "wait-active also waits for active SSH sessions" in normalized_ext_soperator_upgrade_help
+    assert "stops before its temporary login writer hold" in (
+        normalized_ext_soperator_upgrade_help
+    )
     assert "--jail-persistent-mount" in normalized_ext_soperator_upgrade_help
     assert "--preserve-jail-home" not in normalized_ext_soperator_upgrade_help
     assert "--no-preserve-jail-home" not in normalized_ext_soperator_upgrade_help
@@ -23908,10 +23938,15 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--strategy-drain-timeout" in normalized_ext_soperator_upgrade_help
     assert "--max-global-unavailable-worker-nodes" not in normalized_ext_soperator_upgrade_help
     assert "--max-global-unavailable-worker-percent" not in normalized_ext_soperator_upgrade_help
-    assert "zero-surge is the default and requires no spare quota" in (
+    assert "zero-surge is the worker default and requires no spare worker quota" in (
         normalized_ext_soperator_upgrade_help
     )
-    assert "safe-surge uses temporary surge capacity" in normalized_ext_soperator_upgrade_help
+    assert "safe-surge uses temporary worker surge capacity" in (
+        normalized_ext_soperator_upgrade_help
+    )
+    assert "Login/service-role node groups use safe-surge by default" in (
+        normalized_ext_soperator_upgrade_help
+    )
     assert "does not bypass Kubernetes minor-hop, backup, quota, protected-state" in (
         normalized_ext_soperator_upgrade_help
     )

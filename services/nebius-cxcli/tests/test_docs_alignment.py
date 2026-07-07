@@ -1643,9 +1643,10 @@ def test_docs_define_component_selector_contract() -> None:
     assert "color-highlighted sectioned plan covering target discovery" in readme_flat
     assert "the full locked path, completed/current/remaining segments" in readme_flat
     assert (
-        "accepted onboarding actions, node-template rollout, phases including `Jail Upgrade`"
-        in readme_flat
-    )
+        "accepted onboarding actions, persistent jail mounts when a rootfs refresh "
+        "or explicit mount input makes them relevant, node-template rollout, "
+        "phases including `Jail Upgrade`"
+    ) in readme_flat
     assert (
         "Checkpoint refresh preserves the original ordered plan, including `Jail Upgrade` / `populate-jail-refresh`"
         in readme_flat
@@ -1778,16 +1779,20 @@ def test_docs_define_component_selector_contract() -> None:
         "external node-template and target GPU stack reconciliation as their own required actions"
         in readme_flat
     )
-    assert "Worker groups default to zero-surge" in readme_flat
+    assert "worker groups default to zero-surge" in readme_flat
+    assert "service-role groups use safe-surge by default" in readme_flat
     assert (
-        "safe-surge uses one temporary replacement node per active service or worker group"
+        "one temporary replacement node for each active service-role group"
         in readme_flat
     )
     assert "cxcli fails fast rather than assuming a vanilla cluster is safe to adopt" in readme_flat
     assert "ignored by cxcli-managed deployments `.gitignore` files" in readme_flat
     assert "creates or reuses aligned controller-spool and accounting SFS" in readme_flat
     assert "keeps the existing physical jail SFS for single-SFS active/passive rootfs adoption" in readme_flat
-    assert "automatically models `/home` as a persistent jail mount" in readme_flat
+    assert (
+        "automatically models `/home`, `/data`, `/scripts`, and `/models` "
+        "as persistent jail mounts"
+    ) in readme_flat
     assert "First adoption migrates data out of legacy in-rootfs directories" in readme_flat
     assert (
         "Quota must cover spare target storage for non-jail storage while source storage remains mounted"
@@ -1954,7 +1959,10 @@ def test_docs_define_component_selector_contract() -> None:
     assert (
         "dry-run plan groups target discovery, versions, the full locked path, completed/current/remaining segments"
     ) in design_flat
-    assert "external node-template rollout, phases, execution controls" in design_flat
+    assert (
+        "persistent jail mounts when a rootfs refresh or explicit mount input "
+        "makes them relevant, external node-template rollout, phases"
+    ) in design_flat
     assert "execution contracts so operators can scan the plan" in design_flat
     assert (
         "`--execute --approve` refreshes discovery, validates the accepted onboarding analysis"
@@ -2055,9 +2063,15 @@ def test_docs_define_component_selector_contract() -> None:
     assert "explicit policy such as `--job-policy wait-to-finish`" in design_flat
     assert "populates the passive rootfs slot with the target populate-jail image" in design_flat
     assert "login Service has ready EndpointSlice endpoints" in design_flat
-    assert "models `/home` plus explicitly declared customer paths as persistent jail mounts" in (
-        design_flat
-    )
+    assert "Nebius LoadBalancer public or internal address" in design_flat
+    assert "`nebius.com/load-balancer-allocation-id`" in design
+    assert "`slurmNodes.login.sshdServiceAnnotations`" in design
+    assert "cannot be converted into a reusable Nebius allocation" in design_flat
+    assert "refuses the later first-adoption persistent-mount login writer hold" in design_flat
+    assert (
+        "models `/home`, `/data`, `/scripts`, `/models`, plus explicitly declared "
+        "additional customer paths as persistent jail mounts"
+    ) in design_flat
     assert "provides ad hoc `ext-soperator scale-up` and `ext-soperator scale-down`" in (
         design_flat
     )
@@ -2105,17 +2119,19 @@ def test_docs_define_component_selector_contract() -> None:
     )
     assert "does not create parallel worker node groups" in design_flat
     assert (
-        "zero-surge quiesces login workloads, one-node service workloads, "
-        "and known drain-blocking webhook replicas"
+        "lower-continuity zero-surge override quiesces login workloads, one-node "
+        "service workloads, and known drain-blocking webhook replicas"
     ) in design_flat
     assert "worker groups default to zero-surge" in design_flat
+    assert "Service-role groups are serial safe-surge by default" in design_flat
     assert "worker_wave_percent: 1" in readme
     assert "worker_group_strategy:" in readme
     assert "worker_wave_percent: 1" in design
     assert "worker_group_strategy:" in design
-    assert "`max_surge_count` temporary surge node(s) per active service group" in design_flat
+    assert "one temporary replacement node per active service group" in design_flat
+    assert "`max_surge_count` temporary surge node(s) per worker group" in design_flat
     assert "worker-health, and Slurm queue preflights pass" in design_flat
-    assert "With safe-surge, remediation counts `max_surge_count`" in design_flat
+    assert "With worker safe-surge, remediation also counts `max_surge_count`" in design_flat
     assert "requires the Slurm queue to be empty before mutation" in design_flat
     assert "the MK8s control plane first, then updates service-role node groups" in design_flat
     assert "phase end, and pending gates" in design_flat
@@ -2124,11 +2140,15 @@ def test_docs_define_component_selector_contract() -> None:
     assert "ignored by cxcli-managed deployments `.gitignore` files" in design_flat
     assert "creates or reuses aligned controller-spool and accounting SFS" in design_flat
     assert "keeps the existing physical jail SFS for single-SFS rootfs slot adoption" in design_flat
-    assert "models `/home` plus explicitly declared customer paths as persistent jail mounts" in (
-        design_flat
-    )
+    assert (
+        "models `/home`, `/data`, `/scripts`, `/models`, plus explicitly declared "
+        "additional customer paths as persistent jail mounts"
+    ) in design_flat
     assert "migrates legacy in-rootfs data into those shared mount paths during first adoption" in (
         design_flat
+    )
+    assert "With the default `target-ready` policy, this step stops before login is scaled down" in (
+        readme_flat
     )
     assert "instead of reopening legacy-rootfs writes that would make the shared copy stale" in (
         design_flat

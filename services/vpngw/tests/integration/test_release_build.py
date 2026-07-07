@@ -42,6 +42,7 @@ def test_wheel_build_uses_package_local_version_file(tmp_path) -> None:
         names = set(wheel_zip.namelist())
 
     assert "nebius_vpngw/_version.py" in names
+    assert "nebius_vpngw/systemd/nebius-vpngw-esp4-preflight.sh" in names
     assert "services/vpngw/src/nebius_vpngw/_version.py" not in names
 
 

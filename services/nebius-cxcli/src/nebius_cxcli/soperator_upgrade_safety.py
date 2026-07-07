@@ -528,7 +528,7 @@ def _is_external_intentional_migration_delta(
     if kind == "nodes" and field == "presence":
         return (before, after) in {("present", "absent"), ("absent", "present")}
     if kind == "slurm_runtime":
-        return field in {"slurm_config", "slurm_nodes"}
+        return field in {"home_mount", "slurm_config", "slurm_nodes"}
     if kind in {"configmaps", "secrets", "nodesets", "slurmclusters"}:
         return field == "presence" and _is_external_migration_owned_resource_name(
             name,
@@ -1879,6 +1879,12 @@ def _home_mount_check(
             "summary": "Post-upgrade /home mount evidence is missing.",
         }
     if before_mount != after_mount:
+        if _home_mount_is_shared_jail_home(after_state):
+            return {
+                "name": "home-mounted",
+                "status": "passed",
+                "summary": "/home is mounted from the expected shared jail home path.",
+            }
         return {
             "name": "home-mounted",
             "status": "failed",
@@ -2124,6 +2130,19 @@ def _home_mount_hash(state: ProtectedCustomerState | None) -> str:
     if not isinstance(home, Mapping) or not bool(home.get("available")):
         return ""
     return str(home.get("stdout_sha256") or "")
+
+
+def _home_mount_is_shared_jail_home(state: ProtectedCustomerState | None) -> bool:
+    if state is None:
+        return False
+    runtime = state.sections.get("slurm_runtime")
+    if not isinstance(runtime, Mapping):
+        return False
+    home = runtime.get("home_mount")
+    if not isinstance(home, Mapping) or not bool(home.get("available")):
+        return False
+    summary = str(home.get("summary") or "").lower()
+    return "/mnt/jail/home" in summary and "/shared/home" in summary
 
 
 def _first_login_pod(pods: Mapping[str, Any]) -> str:

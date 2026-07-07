@@ -625,18 +625,22 @@ and chart source-family changes.
   previous slot as rollback until postflight passes. Managed greenfield uses one
   SFS-backed jail store with
   `/mnt/jail-store/rootfs/slot-a`, `/mnt/jail-store/rootfs/slot-b`, and
-  `/mnt/jail-store/shared/home`; additional customer paths such as `/data` or
-  `/scripts` belong under sibling shared directories such as
-  `/mnt/jail-store/shared/data` or `/mnt/jail-store/shared/scripts`. The
+  `/mnt/jail-store/shared/home`; additional customer paths such as `/data`,
+  `/scripts`, or `/models` belong under sibling shared directories such as
+  `/mnt/jail-store/shared/data`, `/mnt/jail-store/shared/scripts`, or
+  `/mnt/jail-store/shared/models`. The
   production profile defaults that backing store to `2048` GiB total capacity
   for both rootfs slots plus persistent mounts, not a per-slot quota. External
   adoption keeps the existing physical jail SFS, creates only logical slot
   directories under `/mnt/jail/.cxcli/rootfs`, treats legacy `/mnt/jail` as the
-  active rootfs until first switch, and models `/home` plus explicitly declared
-  customer paths as persistent jail mounts on that same physical SFS. During
-  first adoption, cxcli migrates rootfs-owned `/home`, `/data`, `/scripts`, or
-  similar declared paths into `/mnt/jail/shared/...` with ownership,
-  permissions, symlinks, ACLs, and xattrs preserved where supported.
+  active rootfs until first switch, and models `/home`, `/data`, `/scripts`,
+  `/models`, plus explicitly declared additional customer paths as persistent
+  jail mounts on that same physical SFS. During first adoption, cxcli migrates
+  rootfs-owned `/home`, `/data`, `/scripts`, `/models`, or similar declared
+  paths into `/mnt/jail/shared/...` with ownership,
+  permissions, symlinks, ACLs, and xattrs preserved where supported. The
+  migration records exact source decisions in checkpoint/report state and counts
+  only present source paths in shared-copy capacity.
   Before passive-slot values or the populate Job are applied, cxcli probes
   physical jail SFS capacity, measuring legacy rootfs usage while excluding
   `.cxcli` and configured persistent jail mount local paths. Required passive
@@ -1145,7 +1149,7 @@ Worker node groups stay in place. External Kubernetes minor, node OS image, and
 Nebius-image GPU-stack upgrades selected by onboarding are external-upgrade-owned
 external work because the target is not Terraform-owned. The executor upgrades
 the MK8s control plane first, then updates service-role node groups one group
-at a time with direct Nebius node-group updates and temporary zero-surge, while
+at a time with direct Nebius node-group updates and safe-surge by default, while
 worker groups default to zero-surge and can use safe-surge waves after
 spare-capacity, worker-health, and Slurm queue preflights pass. CPU node groups
 that still carry a legacy GPU
@@ -1190,8 +1194,10 @@ repair or replan. In
 interactive terminals, the dry-run plan groups target discovery, versions, the
 full locked path, completed/current/remaining segments, locked path source, the
 accepted one-minor Kubernetes hop for the current segment, support policy, accepted onboarding
-actions, external node-template rollout, phases, execution controls, and
-execution contracts so operators can scan the plan before accepting live work.
+actions, persistent jail mounts when a rootfs refresh or explicit mount input
+makes them relevant, external node-template rollout, phases,
+execution controls, and execution contracts so operators can scan the plan
+before accepting live work.
 The route
 is driven by
 `deploy.targets[].soperator_onboarding.actions`, not by storage and compute
@@ -1318,6 +1324,19 @@ populate-jail image, switches consumers to that
 populated slot only while the login Service has ready EndpointSlice endpoints
 during the login StatefulSet rollout, and keeps the previous slot available for
 rollback,
+preserves the canonical login Service object and Nebius LoadBalancer public or
+internal address during `rolling-compute-migration`, fails before target chart
+handoff if the existing login `LoadBalancer` address cannot be converted into a
+reusable Nebius allocation and persisted as
+`nebius.com/load-balancer-allocation-id` in
+`slurmNodes.login.sshdServiceAnnotations`, and verifies the original Service UID,
+ClusterIP, LoadBalancer ingress, allocation id, target login StatefulSet
+readiness, preserved-Service EndpointSlice readiness, and login-side Slurm smoke
+before source login retirement,
+refuses the later first-adoption persistent-mount login writer hold under the
+default `target-ready` session policy because that hold temporarily removes
+continuous login endpoints; operators must explicitly choose `wait-active` or
+`grace-period` for that maintenance window,
 provides ad hoc `ext-soperator scale-up` and `ext-soperator scale-down`
 commands for external maintenance without onboarding, requiring both Nebius
 `--project-id`/`--cluster-id` for node-group lookup and `--kube-context` for
@@ -1325,14 +1344,15 @@ Kubernetes/Slurm access,
 clears stale GPU driver presets
 from CPU node groups, temporarily quiesces login workloads, one-node
 controller/accounting workloads, and known drain-blocking webhook replicas only
-for zero-surge service rollouts, applies
+for the explicit lower-continuity zero-surge service-role override, applies
 target-scoped GPU Operator and Network Operator app rows plus the same
 catalog-owned post-render patches that Flux would apply,
 creates or reuses aligned controller-spool and accounting SFS
 filesystems, keeps the existing physical jail SFS for single-SFS rootfs slot
-adoption, models `/home` plus explicitly declared customer paths as persistent
-jail mounts on the same physical jail SFS, migrates legacy in-rootfs data into
-those shared mount paths during first adoption, attaches required storage to
+adoption, models `/home`, `/data`, `/scripts`, `/models`, plus explicitly
+declared additional customer paths as persistent jail mounts on the same
+physical jail SFS, migrates legacy in-rootfs data into those shared mount paths
+during first adoption, attaches required storage to
 discovered Nebius node groups, runs Kubernetes data-copy Jobs when old and
 target PVC pairs exist for non-jail storage, normalizes target Slurm
 plugin runtime settings, recreates target worker Kruise StatefulSets when
@@ -1566,11 +1586,12 @@ worker capacity source, and apply external-upgrade-owned external node-group tem
 changes, including Kubernetes version, node OS image, Nebius-image GPU stack,
 and aligned SFS filesystem attachments, through direct Nebius node-group
 updates. cxcli snapshots each node group's original strategy, keeps
-service-role groups serial, uses temporary zero-surge
-(`max_surge=0`, `max_unavailable=1`, `drain_timeout=30m`) by default, and
-updates worker groups with zero-surge by default. Operators can select
-safe-surge (`max_surge=1`, `max_unavailable=0`, `drain_timeout=30m`) for
-service groups and bounded worker waves when spare quota/capacity is available.
+service-role groups serial, uses safe-surge
+(`max_surge=1`, `max_unavailable=0`, `drain_timeout=30m`) by default, and
+updates worker groups with zero-surge by default. Operators can select bounded
+worker safe-surge waves when spare quota/capacity is available, or the explicit
+lower-continuity zero-surge service-role override when service-role surge
+capacity is unavailable.
 The rollout config exposes worker-wave
 parallelism across worker groups plus the per-group Nebius strategy
 (`max_surge_count`, `max_unavailable_count`, and `drain_timeout`). Users can set
@@ -1578,9 +1599,9 @@ parallelism across worker groups plus the per-group Nebius strategy
 fallback after a finite timeout. It clears invalid GPU driver presets from CPU
 templates when legacy groups carry them, quiesces and restores login workloads,
 one-node controller/accounting workloads, and known drain-blocking webhook
-replicas for zero-surge service-role rollouts, and
-requires spare surge capacity for active service groups or worker waves only
-when the operator explicitly chooses safe-surge.
+replicas only for lower-continuity zero-surge service-role rollouts, and
+requires spare surge capacity for active service groups by default and worker
+waves only when the operator explicitly chooses worker safe-surge.
 
 The persisted rollout shape is:
 
@@ -1624,13 +1645,15 @@ Approved execution also runs a strict net-new quota preflight before the first
 mutation. The preflight counts aligned SFS filesystems that do not already
 exist as spare storage required during copy, and counts target service-role
 node groups that do not already exist as net-new compute capacity. Existing
-worker node groups are preserved in place. The default zero-surge worker
-template remediation skips surge quota but can reduce active service or worker
-capacity during rollout. With safe-surge, remediation counts
-`max_surge_count` temporary surge node(s) per active service group or worker
-group in the active wave, checks the required spare quota and GPU capacity,
-requires all selected worker nodes to start Ready and schedulable, and requires
-the Slurm queue to be empty before mutation.
+worker node groups are preserved in place. The default worker zero-surge
+template remediation skips worker surge quota but can reduce active worker
+capacity during rollout. Service-role remediation uses safe-surge by default,
+counts one temporary replacement node per active service group, and fails before
+mutation when quota/capacity is unavailable. With worker safe-surge, remediation
+also counts `max_surge_count` temporary surge node(s) per worker group in the
+active wave, checks the required spare quota and GPU capacity, requires all
+selected worker nodes to start Ready and schedulable, and requires the Slurm
+queue to be empty before mutation.
 Confirmed quota shortages, unresolved live limits, coverage gaps, or quota
 lookup failures stop the upgrade before SFS creation, service-role node-group
 creation, or Helm apply starts.
@@ -3222,19 +3245,18 @@ persistent-mount area on the same physical jail SFS:
   active.
 
 Managed clusters use `/mnt/jail-store/rootfs/slot-a` and
-`/mnt/jail-store/rootfs/slot-b`, with `/home` under
-`/mnt/jail-store/shared/home`. Additional persistent mounts use the same shared
-area, for example `/mnt/jail-store/shared/data` or
-`/mnt/jail-store/shared/scripts`. These are not additional rootfs slots and do
-not require separate physical SFS filesystems; each path is a stable
-submount/PV/PVC backed by the same jail SFS. External single-SFS adoption keeps
-the existing physical jail SFS, creates logical slots under
-`/mnt/jail/.cxcli/rootfs`, and treats the legacy `/mnt/jail` root as the active
-source until the first successful switch. In both layouts, `/home` is
-automatically modeled as a persistent jail mount. Additional paths such as
-`/data`, `/scripts`, or `/checkpoints` must be declared with
+`/mnt/jail-store/rootfs/slot-b`, with known persistent mounts under the same
+physical SFS, for example `/mnt/jail-store/shared/home`,
+`/mnt/jail-store/shared/data`, and `/mnt/jail-store/shared/scripts`. These are
+not additional rootfs slots and do not require separate physical SFS filesystems;
+each path is a stable submount/PV/PVC backed by the same jail SFS. External
+single-SFS adoption keeps the existing physical jail SFS, creates logical slots
+under `/mnt/jail/.cxcli/rootfs`, and treats the legacy `/mnt/jail` root as the
+active source until the first successful switch. In external adoption, `/home`,
+`/data`, `/scripts`, and `/models` are automatically modeled as persistent jail
+mounts. Additional paths such as `/checkpoints` must be declared with
 `--jail-persistent-mount <mountPath>=<localPath>` because cxcli does not infer
-arbitrary customer data paths.
+arbitrary root-level folders as customer data.
 
 The refresh sequence is deliberately ordered:
 
@@ -3243,18 +3265,26 @@ The refresh sequence is deliberately ordered:
    always refreshes. `manual` records the required action and stops before
    mutation.
 2. Verify persistent mounts and passive-slot capacity. For external adoption,
-   the capacity probe measures the physical jail SFS while excluding `.cxcli`
-   and persistent-mount source paths from the rootfs-copy estimate, measures
-   persistent-mount data separately, and requires enough free space for both
-   the passive rootfs slot and the one-time shared-data copy.
+   cxcli first probes each known and explicit source path in the old rootfs and
+   records it as `present`, `absent`, `existing-submount`, or `explicit`. The
+   capacity probe measures the physical jail SFS while excluding `.cxcli` and
+   persistent-mount source paths from the rootfs-copy estimate, counts only
+   present persistent-mount data for the one-time shared-data copy, skips absent
+   paths cleanly, and requires enough free space for both the passive rootfs slot
+   and that copy.
 3. During first adoption from a legacy rootfs, drain Slurm with the selected
-   job policy, hold login and worker writers, and run a Kubernetes persistent
-   migration Job before passive-slot population. The Job mounts the existing
-   jail PVC once at `/store`, copies `/store/home`, `/store/data`,
-   `/store/scripts`, and other declared paths into `/store/shared/...`, writes
-   markers under `/store/.cxcli/persistent-migrations/`, skips only matching
-   completed markers on rerun, and fails closed on source/target overlap,
-   top-level source symlinks, target symlinks, or unmarked non-empty targets.
+   job policy, hold worker writers, and hold login writers only after an
+   explicit `wait-active` or `grace-period` login-session policy gate. With the
+   default `target-ready` policy, cxcli stops before scaling login down because
+   continuous SSH endpoints cannot be preserved during that writer hold. After
+   the gate, cxcli runs a Kubernetes persistent migration Job before
+   passive-slot population. The Job mounts the existing
+   jail PVC once at `/store`, copies only present known or explicit paths such
+   as `/store/home`, `/store/data`, and `/store/scripts` into
+   `/store/shared/...`, writes markers under
+   `/store/.cxcli/persistent-migrations/`, skips only matching completed markers
+   on rerun, and fails closed on source/target overlap, top-level source
+   symlinks, target symlinks, or unmarked non-empty targets.
    If a later refresh step fails after the copy is marked complete, cxcli keeps
    login/worker writers held and Slurm quiet instead of reopening legacy-rootfs
    writes that would make the shared copy stale.
@@ -3292,12 +3322,12 @@ the rootfs slots themselves remain separate.
 
 The one-time migration runs only while
 `jailRootfs.adoption.activeSource == "legacy-rootfs"`. After cxcli has copied
-declared persistent paths into the shared area and switched consumers to a
-slot-backed rootfs, those paths are external to the rootfs lifecycle. Future
-Jail Upgrade runs repopulate only the passive rootfs slot and remount the same
-shared paths into each newly active slot. The old legacy rootfs and old
-in-rootfs data remain untouched for rollback until an explicit cleanup policy is
-added.
+known automatic and explicit persistent paths into the shared area and switched
+consumers to a slot-backed rootfs, those paths are external to the rootfs
+lifecycle. Future Jail Upgrade runs repopulate only the passive rootfs slot and
+remount the same shared paths into each newly active slot. The old legacy rootfs
+and old in-rootfs data remain untouched for rollback until an explicit cleanup
+policy is added.
 
 ![Soperator jail upgrade workflow](jail-upgrade-workflow.png)
 
@@ -3453,11 +3483,13 @@ The command boundary is intentional:
   not create parallel worker node groups; external-upgrade-owned external node-group
   template changes, including Kubernetes version, node OS image, Nebius-image
   GPU stack, and aligned SFS filesystem attachments, use direct Nebius
-  node-group updates. Service-role groups are serial, zero-surge quiesces login
-  workloads, one-node service workloads, and known drain-blocking webhook
-  replicas, and safe-surge uses one temporary replacement node per active
-  service or worker group after quota/capacity, worker-health, and Slurm queue
-  preflights pass. Worker groups default to zero-surge and can
+	  node-group updates. Service-role groups are serial safe-surge by default,
+	  requiring one temporary replacement node per active service group and failing
+	  before mutation when quota/capacity is unavailable. The explicit
+	  lower-continuity zero-surge override quiesces login workloads, one-node
+	  service workloads, and known drain-blocking webhook replicas. During login
+	  node-group updates, cxcli verifies ready login Service endpoints before and
+	  after the node-template change. Worker groups default to zero-surge and can
   use safe-surge waves. cxcli restores each node group's original
   strategy after the active rollout. Render/deploy refuse
   onboarding mode until

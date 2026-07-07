@@ -29,6 +29,7 @@ COORDINATOR_SKILL = "sdlc-start"
 def _normalize_skill_name(value: str) -> str:
     aliases = {
         "align-specs": "sdlc-align-specs",
+        "auto-steering": "sdlc-auto-steering",
         "classify-failure": "sdlc-classify-failure",
         "commit": "sdlc-commit",
         "create-design": "sdlc-create-design",
@@ -41,6 +42,7 @@ def _normalize_skill_name(value: str) -> str:
         "merge-pr": "sdlc-merge-pr",
         "tdd": "sdlc-tdd",
         "tui-test": "sdlc-tui-test",
+        "update-documents": "sdlc-update-documents",
         "uat-tests": "sdlc-uat-tests",
         "unit-tests": "sdlc-unit-tests",
         "validate-codes": "sdlc-validate-codes",

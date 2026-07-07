@@ -711,6 +711,32 @@ def test_home_mount_and_activechecks_baseline_are_verified() -> None:
     assert "activechecks-restored" in failed
 
 
+def test_external_shared_jail_home_mount_change_is_intentional() -> None:
+    before = _capture(_Runner(home_mount="nfs.example:/home on /home type nfs4 (rw)"))
+
+    result = run_post_upgrade_fast_verification(
+        command_runner=_Runner(
+            home_mount=(
+                '{ "filesystems": [ { "target": "/mnt/jail/home", '
+                '"source": "jail[/shared/home]", "fstype": "virtiofs" } ] }'
+            )
+        ),
+        target_ref="gpu",
+        namespace="soperator",
+        kube_context="external-context",
+        before_state=before,
+        external_cluster=True,
+    )
+
+    assert result.status == "passed"
+    assert any(
+        check["name"] == "home-mounted"
+        and check["status"] == "passed"
+        and "shared jail home" in check["summary"]
+        for check in result.checks
+    )
+
+
 def test_activechecks_restored_allows_baseline_suspended_checks() -> None:
     before = _capture(
         _Runner(

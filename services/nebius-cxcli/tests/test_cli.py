@@ -38,7 +38,7 @@ from nebius_cxcli.components import (
 from nebius_cxcli.email_settings import EmailSettings
 from nebius_cxcli.provider_options import ProviderOptionLookup
 from nebius_cxcli.quota_checks import QuotaCheck, QuotaReport
-from nebius_cxcli.runtime_config import to_plain_data
+from nebius_cxcli.runtime_config import to_plain_data, wrap_runtime_config
 from nebius_cxcli.runtime_validation import validate_dynamic_payload_structure
 from nebius_cxcli.soperator_migration import (
     SoperatorMigrationCommandResult,
@@ -397,6 +397,11 @@ def test_deploy_managed_soperator_runs_gpu_validations_before_full_flux(
     monkeypatch.setattr(cli_module, "_warn_if_flux_gitops_not_bootstrapped", lambda *a, **k: "")
     monkeypatch.setattr(
         cli_module,
+        "_stabilize_deploy_soperator_login_load_balancer",
+        lambda config, paths, manifest, **kwargs: (config, dict(manifest)),
+    )
+    monkeypatch.setattr(
+        cli_module,
         "write_inventory",
         lambda _config, inventory_paths, *, validations=(): SimpleNamespace(
             markdown=inventory_paths.reports_dir / "deploy-report.md"
@@ -425,6 +430,153 @@ def test_deploy_managed_soperator_runs_gpu_validations_before_full_flux(
         ("apply", True),
         ("validations", ("soperator_cluster_smoke",)),
     ]
+
+
+def test_deploy_stabilizes_soperator_login_load_balancer_allocation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    paths = cli_module.resolve_project_paths(config_path)
+    payload = {
+        "client_info": {
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-456",
+                "region_id": "eu-north1",
+            }
+        },
+        "infra": {"components": []},
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "namespace": "soperator",
+                    "release-name": "soperator",
+                    "values": {},
+                }
+            ]
+        },
+        "deploy": {"targets": [{"instance_id": "mk8s"}]},
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    config = wrap_runtime_config(payload)
+    target = {"target_ref": "mk8s", "flux_dir": str(paths.flux_dir)}
+    manifest = {"deploy": {"validations": [{"kind": "soperator_cluster_smoke"}]}}
+    events: list[tuple[str, object]] = []
+
+    class FakeApi:
+        def __init__(self, *, project_id: str) -> None:
+            events.append(("api", project_id))
+
+        def close(self) -> None:
+            events.append(("api-close", ""))
+
+    states = iter(("missing-service", "no-address", "ready"))
+
+    def fake_stabilize(*, command_runner, kube_context, project_id, nebius_api, values):
+        events.append(("stabilize", (command_runner, kube_context, project_id, nebius_api)))
+        state = next(states)
+        if state == "missing-service":
+            raise cli_module.SoperatorMigrationPhasePending(
+                "login Service continuity guard failed: no login Service identity was detected."
+            )
+        if state == "no-address":
+            return (
+                (),
+                (SimpleNamespace(status="no-address", allocation_id=""),),
+                ("Login Service login has no LoadBalancer address yet.",),
+            )
+        values.setdefault("slurmNodes", {}).setdefault("login", {}).setdefault(
+            "sshdServiceAnnotations", {}
+        )["nebius.com/load-balancer-allocation-id"] = "vpcallocation-login"
+        return (
+            (),
+            (
+                SimpleNamespace(
+                    status="converted-dynamic",
+                    allocation_id="vpcallocation-login",
+                ),
+            ),
+            ("Converted dynamic login LoadBalancer allocation.",),
+        )
+
+    def fake_load_deploy_context(_config_path: Path):
+        refreshed_payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        return wrap_runtime_config(refreshed_payload), paths, manifest
+
+    monkeypatch.setattr(cli_module, "_SdkSoperatorMigrationNebiusApi", FakeApi)
+    monkeypatch.setattr(cli_module, "_soperator_cleanup_kube_context", lambda *a, **k: "ctx")
+    monkeypatch.setattr(
+        cli_module,
+        "_deploy_soperator_cleanup_command_runner",
+        lambda _extra_env: "runner",
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "stabilize_soperator_login_load_balancer_allocations",
+        fake_stabilize,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_run_internal_render_command",
+        lambda config_arg, *, force: events.append(("render", (config_arg, force))),
+    )
+    monkeypatch.setattr(cli_module, "_load_deploy_context", fake_load_deploy_context)
+    monkeypatch.setattr(
+        cli_module,
+        "_apply_rendered_flux_with_soperator_job_policy",
+        lambda _config, _paths, **kwargs: events.append(("apply", kwargs["target_ref"])),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "write_inventory",
+        lambda _config, _paths, *, validations=(): events.append(
+            ("inventory", tuple(item.get("kind") for item in validations))
+        ),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "wait_for_login_service_ready_endpoints",
+        lambda _runner, **kwargs: events.append(("endpoints", kwargs["target_ref"])),
+    )
+    monkeypatch.setattr(cli_module.time, "sleep", lambda seconds: events.append(("sleep", seconds)))
+
+    refreshed_config, refreshed_manifest = (
+        cli_module._stabilize_deploy_soperator_login_load_balancer(
+            config,
+            paths,
+            manifest,
+            target=target,
+            target_ref="mk8s",
+            extra_env={"KUBECONFIG": "test"},
+            job_policy="wait-to-finish",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            job_wait_timeout_seconds=120,
+            job_refresh_interval_seconds=5,
+            report_validations=manifest["deploy"]["validations"],
+        )
+    )
+
+    saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    annotations = saved["apps"]["charts"][0]["values"]["slurmNodes"]["login"][
+        "sshdServiceAnnotations"
+    ]
+    assert annotations == {
+        "nebius.com/load-balancer-allocation-id": "vpcallocation-login",
+    }
+    assert refreshed_manifest == manifest
+    assert refreshed_config["apps"]["charts"][0]["values"]["slurmNodes"]["login"][
+        "sshdServiceAnnotations"
+    ] == annotations
+    assert [event[0] for event in events].count("stabilize") == 3
+    assert ("render", (config_path, True)) in events
+    assert ("apply", "mk8s") in events
+    assert ("inventory", ("soperator_cluster_smoke",)) in events
+    assert ("endpoints", "mk8s") in events
 
 
 def _tenant_folder_name(tenant_id: str = "tenant-123") -> str:
@@ -2241,6 +2393,20 @@ spec:
         self._populate_jail_refresh_saved_pods: list[dict[str, object]] | None = None
         self.populate_jail_job_uid = "populate-jail-job-old"
 
+    def _hold_populate_jail_consumers(self, prefixes: tuple[str, ...]) -> None:
+        if self._populate_jail_refresh_saved_pods is None:
+            self._populate_jail_refresh_saved_pods = list(self.live_pods)
+        self.live_pods = [
+            pod
+            for pod in self.live_pods
+            if not str(pod.get("metadata", {}).get("name", "") or "").startswith(prefixes)
+        ]
+
+    def _restore_populate_jail_consumers(self) -> None:
+        if self._populate_jail_refresh_saved_pods is not None:
+            self.live_pods = self._populate_jail_refresh_saved_pods
+            self._populate_jail_refresh_saved_pods = None
+
     def _upsert_helm_release(
         self,
         *,
@@ -2480,9 +2646,49 @@ spec:
                 and populate.get("overwrite") is False
                 and self._populate_jail_refresh_saved_pods is not None
             ):
-                self.live_pods = self._populate_jail_refresh_saved_pods
-                self._populate_jail_refresh_saved_pods = None
+                self._restore_populate_jail_consumers()
             return SoperatorMigrationCommandResult(command, 0, "{}", "")
+        if (
+            len(command) >= 10
+            and command[:6]
+            == (
+                "kubectl",
+                "--context",
+                "external-context",
+                "-n",
+                "soperator",
+                "scale",
+            )
+            and command[6] == "statefulsets.apps.kruise.io/login"
+            and "--replicas" in command
+        ):
+            replicas = int(command[command.index("--replicas") + 1])
+            if replicas == 0:
+                self._hold_populate_jail_consumers(("login-",))
+            else:
+                self._restore_populate_jail_consumers()
+            return SoperatorMigrationCommandResult(command, 0, "{}", "")
+        if (
+            len(command) >= 11
+            and command[:6]
+            == (
+                "kubectl",
+                "--context",
+                "external-context",
+                "-n",
+                "soperator",
+                "patch",
+            )
+            and command[6] == "nodeset/worker"
+            and "-p" in command
+        ):
+            patch = json.loads(command[command.index("-p") + 1])
+            replicas = int(patch.get("spec", {}).get("replicas", 1))
+            if replicas == 0:
+                self._hold_populate_jail_consumers(("worker-",))
+            else:
+                self._restore_populate_jail_consumers()
+            return SoperatorMigrationCommandResult(command, 0, "{}\n", "")
         if command[:5] == (
             "kubectl",
             "--context",
@@ -2622,9 +2828,111 @@ spec:
                                 "updatedReplicas": 2,
                             },
                         }
-                    ),
-                    "",
+                ),
+                "",
+            )
+        if (
+            len(command) >= 9
+            and command[:6]
+            == (
+                "kubectl",
+                "--context",
+                "external-context",
+                "-n",
+                "soperator",
+                "get",
+            )
+            and command[6].startswith("job/")
+            and command[-2:] == ("-o", "json")
+        ):
+            name = command[6].split("/", 1)[1]
+            image = (
+                "ubuntu:24.04"
+                if "jail-persistent" in name
+                else "registry.example/soperator/populate-jail:4.0.2-ps.3"
+            )
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "metadata": {
+                            "name": name,
+                            "namespace": "soperator",
+                            "uid": f"{name}-uid",
+                        },
+                        "spec": {
+                            "template": {
+                                "spec": {
+                                    "containers": [
+                                        {
+                                            "name": "job",
+                                            "image": image,
+                                        }
+                                    ]
+                                }
+                            }
+                        },
+                        "status": {
+                            "succeeded": 1,
+                            "conditions": [{"type": "Complete", "status": "True"}],
+                        },
+                    }
+                ),
+                "",
+            )
+        if (
+            len(command) >= 7
+            and command[:6]
+            == (
+                "kubectl",
+                "--context",
+                "external-context",
+                "-n",
+                "soperator",
+                "logs",
+            )
+            and command[6].endswith("-jail-persistent-source-probe")
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "\n".join(
+                    (
+                        '{"mount_path":"/data","source_path":"/store/data","target_path":"/store/shared/data","marker_path":"/store/.cxcli/persistent-migrations/data.json","source_status":"present","marker_status":"none","marker_present":false}',
+                        '{"mount_path":"/scripts","source_path":"/store/scripts","target_path":"/store/shared/scripts","marker_path":"/store/.cxcli/persistent-migrations/scripts.json","source_status":"absent","marker_status":"none","marker_present":false}',
+                        '{"mount_path":"/models","source_path":"/store/models","target_path":"/store/shared/models","marker_path":"/store/.cxcli/persistent-migrations/models.json","source_status":"absent","marker_status":"none","marker_present":false}',
+                    )
                 )
+                + "\n",
+                "",
+            )
+        if (
+            len(command) >= 7
+            and command[:6]
+            == (
+                "kubectl",
+                "--context",
+                "external-context",
+                "-n",
+                "soperator",
+                "logs",
+            )
+            and command[6].endswith("-jail-persistent-migration")
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "\n".join(
+                    (
+                        "persistent mount migration copied: /data",
+                        "persistent mount migration source missing: /scripts",
+                        "persistent mount migration source missing: /models",
+                    )
+                )
+                + "\n",
+                "",
+            )
         if command[:7] == (
             "kubectl",
             "--context",
@@ -2835,6 +3143,8 @@ spec:
                     "cxcli-soperator-srun-ok\nworker-0\n",
                     "",
                 )
+            if command[8:10] == ("sh", "-ceu") and "ss -Htn" in command[10]:
+                return SoperatorMigrationCommandResult(command, 0, "0\n", "")
             if command[8:10] == ("/bin/sh", "-ceu"):
                 return SoperatorMigrationCommandResult(command, 0, "/home sfs-home fuse.sfs\n", "")
             return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
@@ -6410,7 +6720,13 @@ def test_soperator_onboard_prompts_source_version_when_discovery_has_crds_only(
     assert onboarding["migration_profile_id"] == "v3-to-target"
     assert onboarding["node_template_upgrade"]["rollout"] == {
         "strategy": "safe-surge",
+        "service_role_strategy": "safe-surge",
         "worker_wave_percent": 1,
+        "service_role_group_strategy": {
+            "max_surge_count": 1,
+            "max_unavailable_count": 0,
+            "drain_timeout": "30m",
+        },
         "worker_group_strategy": {
             "max_surge_count": 1,
             "max_unavailable_count": 0,
@@ -6594,7 +6910,13 @@ def test_soperator_onboard_detects_legacy_controller_release_without_prompt(
     assert onboarding["migration_profile_id"] == "legacy-v1-to-target"
     assert onboarding["node_template_upgrade"]["rollout"] == {
         "strategy": "safe-surge",
+        "service_role_strategy": "safe-surge",
         "worker_wave_percent": 1,
+        "service_role_group_strategy": {
+            "max_surge_count": 1,
+            "max_unavailable_count": 0,
+            "drain_timeout": "30m",
+        },
         "worker_group_strategy": {
             "max_surge_count": 1,
             "max_unavailable_count": 0,
@@ -8570,6 +8892,16 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "Soperator upgrade required: yes" in result.output
     assert "External node-template upgrade required: yes" in result.output
     assert "Target GPU stack reconciliation required: yes" in result.output
+    assert "Persistent jail mounts:" in result.output
+    assert "Status:" in result.output
+    assert "Decisions:" in result.output
+    assert "/data=pending-probe" in result.output
+    assert "/scripts=pending-probe" in result.output
+    assert "/models=pending-probe" in result.output
+    assert "Resolved paths:" in result.output
+    assert "/data -> /mnt/jail/shared/data" in result.output
+    assert "/scripts -> /mnt/jail/shared/scripts" in result.output
+    assert "/models -> /mnt/jail/shared/models" in result.output
     assert "External node-template rollout:" in result.output
     assert "external-node-template-upgrade" in result.output
     assert (
@@ -8618,8 +8950,14 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
         "Node-group per-group strategy: max_surge=0, max_unavailable=1, drain_timeout=30m"
         in result.output
     )
-    assert "Zero-surge spare capacity required: no surge quota" in result.output
-    assert "active service or worker group capacity may be reduced by 1 node" in result.output
+    assert (
+        "Service-role per-group strategy: max_surge=1, max_unavailable=0, drain_timeout=30m"
+        in result.output
+    )
+    assert "Safe-surge spare capacity required:" in result.output
+    assert "configured surge nodes for active groups" in result.output
+    assert "Zero-surge worker capacity: no worker surge quota" in result.output
+    assert "active worker group capacity may be reduced by 1 node" in result.output
     assert "Planned worker waves: wave 1: gpu-pool." in result.output
     assert "one accepted Kubernetes minor hop per upgrade run" in result.output
     assert "safe-surge needs temporary surge quota/capacity" in result.output
@@ -8648,7 +8986,7 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     )
 
     assert custom_zero_surge.exit_code == 0, custom_zero_surge.output
-    assert "active service or worker group capacity may be reduced by 3 nodes" in (
+    assert "active worker group capacity may be reduced by 3 nodes" in (
         custom_zero_surge.output
     )
 
@@ -10003,6 +10341,10 @@ def test_ext_soperator_upgrade_execute_records_approval_and_worker_groups(
             "external-cluster",
             "--execute",
             "--approve",
+            "--login-session-policy",
+            "wait-active",
+            "--login-session-drain-timeout",
+            "1s",
         ],
     )
 
@@ -10156,6 +10498,10 @@ def test_ext_soperator_upgrade_execute_auto_selects_worker_groups_for_approval(
             "external-cluster",
             "--execute",
             "--approve",
+            "--login-session-policy",
+            "wait-active",
+            "--login-session-drain-timeout",
+            "1s",
         ],
     )
 
@@ -11668,8 +12014,14 @@ def test_soperator_onboard_interactive_cluster_id_prompts_rollout_settings(
     assert "upgrade-external-node-template" in onboarding["actions"]
     assert onboarding["node_template_upgrade"]["rollout"] == {
         "strategy": "safe-surge",
+        "service_role_strategy": "safe-surge",
         "worker_wave_percent": 50,
         "max_parallel_worker_groups": 2,
+        "service_role_group_strategy": {
+            "max_surge_count": 1,
+            "max_unavailable_count": 0,
+            "drain_timeout": "30m",
+        },
         "worker_group_strategy": {
             "max_surge_count": 2,
             "max_unavailable_count": 0,

@@ -1,8 +1,9 @@
 # Design Workflow Reference
 
 Use this reference for medium or deep designs, greenfield applications,
-multiple unfamiliar technologies, unclear architecture choices, or any design
-that will become a committed artifact.
+multiple unfamiliar technologies, unclear architecture choices, non-trivial
+`system-design-rules` decision review, or any design that will become a
+committed artifact.
 
 ## Phase Checklist
 
@@ -89,7 +90,28 @@ Brownfield designs should name likely files/modules and how the design fits the
 existing architecture. Greenfield designs should name the initial project
 shape, runtime, framework, storage, deployment target, and bootstrap order.
 
-### 5. Evaluate Alternatives
+### 5. Apply `system-design-rules` And Evaluate Alternatives
+
+For standard, deep, architecture-heavy, ADR-like, cross-boundary, or
+hard-to-reverse designs, use `system-design-rules` when it is installed and
+relevant before locking the recommended solution. Apply its checklist as
+advisory input over the design that `design` is synthesizing, not as a separate
+final artifact unless the user asks for one.
+
+Focus the review on categories that can change the solution:
+
+- business outcome and explicit non-goals
+- domain boundaries, component ownership, and team ownership
+- API, command, event, schema, and integration contracts
+- data ownership, lifecycle, privacy, retention, and migration
+- reliability, idempotency, concurrency, recovery, and rollback
+- security, permissions, secrets, auditability, and governance
+- observability, operations, deployment safety, cost, and scale
+
+For light local designs, apply only the relevant categories yourself or state
+why a full `system-design-rules` pass is not warranted. If the user only asks
+to critique an already-written proposal, hand off to `system-design-rules`
+directly instead of continuing the full `design` workflow.
 
 Compare options only at the depth needed for the decision. Include:
 
@@ -124,6 +146,11 @@ Rejected Alternatives:
 
 Assumptions And Open Questions:
 - ...
+
+Design Review:
+- `research` used/skipped: ...
+- `system-design-rules` used/skipped: ...
+- Checklist findings that changed the design: ...
 
 Implementation Steps:
 1. ...
@@ -168,6 +195,9 @@ ownership, new platform, or costly rollback.
   `brainstorm`.
 - Existing proposal needs critique: summarize and hand off to
   `system-design-rules`.
+- Non-trivial design needs a decision checklist before plan handoff: use
+  `system-design-rules` inside the `design` workflow, then return to synthesis
+  and `/plan` creation.
 - Active Agentic SDLC run owns committed requirements/design: route to
   `sdlc-create-design` or `sdlc-create-plan`.
 - Design is complete and code should change: use `/plan`, then the relevant

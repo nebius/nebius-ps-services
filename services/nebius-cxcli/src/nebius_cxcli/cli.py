@@ -112,7 +112,7 @@ from .compute_boot_disks import (
     refresh_compute_boot_disk_defaults,
     resolve_compute_boot_disk_recommendation,
 )
-from .config_loader import load_config, normalize_runtime_config_payload, validate_config
+from .config_loader import dump_yaml, load_config, normalize_runtime_config_payload, validate_config
 from .config_template import starter_config_yaml
 from .deploy_targets import (
     DEPLOY_TARGET_KIND_FIELD,
@@ -438,17 +438,22 @@ from .soperator_jail_capacity import (
 )
 from .soperator_jail_mounts import (
     apply_jail_persistent_mount_values,
+    jail_persistent_mount_decisions,
     jail_persistent_mount_exclude_paths,
     jail_persistent_mount_status,
+    parse_jail_persistent_mount_specs,
 )
 from .soperator_migration import (
+    EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
     SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
     SOPERATOR_WORKER_ROLLOUT_DEFAULT_WAVE_PERCENT,
     SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE,
     SOPERATOR_WORKER_ROLLOUT_STRATEGY_ZERO_SURGE,
     SoperatorMigrationCommandResult,
+    SoperatorMigrationPhasePending,
     _external_node_template_rollout_plan_lines,
     _retire_stale_source_soperator_helm_releases,
+    _SdkSoperatorMigrationNebiusApi,
     _source_worker_nodeset_values,
     _source_worker_partition_configuration,
     execute_soperator_migration,
@@ -456,8 +461,10 @@ from .soperator_migration import (
     external_soperator_upgrade_resume_backup_metadata,
     external_soperator_upgrade_top_level_stage,
     legacy_soperator_migration_checkpoint_path,
+    normalize_external_login_session_policy,
     resolve_external_node_template_rollout,
     soperator_migration_checkpoint_path,
+    stabilize_soperator_login_load_balancer_allocations,
 )
 from .soperator_onboarding import (
     ONBOARDING_ACCEPTABLE_STATES,
@@ -7220,6 +7227,13 @@ def _soperator_upgrade_job_policy(*, policy: str | None, interactive: bool) -> s
     return resolved
 
 
+def _external_login_session_policy(policy: str | None) -> str:
+    try:
+        return normalize_external_login_session_policy(policy)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+
 def _soperator_jail_sfs_resize_policy(*, policy: str | None, interactive: bool) -> str:
     prompt_allowed = bool(interactive and _is_tty_session())
     try:
@@ -12014,6 +12028,8 @@ def _external_soperator_upgrade_command_args(
     requeue_job: Sequence[str],
     job_wait_timeout: str,
     job_refresh_interval: str,
+    login_session_policy: str,
+    login_session_drain_timeout: str,
     worker_rollout_strategy: str | None,
     worker_wave_groups: int | None,
     worker_wave_percent: int | None,
@@ -12043,6 +12059,8 @@ def _external_soperator_upgrade_command_args(
         args.extend(["--requeue-job", str(job_id)])
     args.extend(["--job-wait-timeout", job_wait_timeout])
     args.extend(["--job-refresh-interval", job_refresh_interval])
+    args.extend(["--login-session-policy", login_session_policy])
+    args.extend(["--login-session-drain-timeout", login_session_drain_timeout])
     if _non_empty_text(worker_rollout_strategy):
         args.extend(["--worker-rollout-strategy", str(worker_rollout_strategy)])
     if worker_wave_groups is not None:
@@ -21179,9 +21197,10 @@ def _soperator_rollout_wave_mode_choices(default: str) -> list[OptionChoice]:
 
 _SOPERATOR_ROLLOUT_FIELD_GUIDANCE = {
     "strategy": (
-        "Strategy: zero-surge is the default and avoids spare quota by allowing "
-        "one unavailable node per group; safe-surge preserves service and worker "
-        "capacity with temporary surge nodes and requires quota/capacity preflight."
+        "Strategy: worker zero-surge is the default and avoids spare worker quota by "
+        "allowing one unavailable worker node per group; service-role groups use "
+        "safe-surge by default, and worker safe-surge preserves worker capacity with "
+        "temporary surge nodes and requires quota/capacity preflight."
     ),
     "wave_budget": (
         "Safe-surge wave budget: choose groups for a fixed batch size, or percent to "
@@ -48050,6 +48069,210 @@ def _deploy_soperator_cleanup_command_runner(
     return _run
 
 
+def _source_soperator_values_for_target(
+    payload: dict[str, Any],
+    *,
+    target_ref: str,
+) -> dict[str, Any] | None:
+    candidates: list[dict[str, Any]] = []
+    for row in _scope_rows(payload, scope="apps"):
+        if not isinstance(row, dict) or not bool(row.get("enabled", False)):
+            continue
+        if component_type_id(row) != _SOPERATOR_APP_ID:
+            continue
+        row_target_ref = app_chart_target_ref(row) or component_instance_id(row)
+        if target_ref and row_target_ref != target_ref:
+            continue
+        candidates.append(row)
+    if not candidates:
+        return None
+    if not target_ref and len(candidates) > 1:
+        raise RuntimeError(
+            "Cannot persist Soperator login LoadBalancer allocation automatically: "
+            "multiple enabled Soperator app rows exist and no target was selected."
+        )
+    row = candidates[0]
+    values = row.setdefault("values", {})
+    if not isinstance(values, dict):
+        raise RuntimeError(
+            "Cannot persist Soperator login LoadBalancer allocation automatically: "
+            "apps:soperator values must be a mapping."
+        )
+    return values
+
+
+_DEPLOY_SOPERATOR_LOGIN_LB_ALLOCATION_TIMEOUT_SECONDS = 900.0
+_DEPLOY_SOPERATOR_LOGIN_LB_ALLOCATION_POLL_SECONDS = 10.0
+
+
+def _soperator_login_load_balancer_allocation_ready(
+    decisions: Sequence[Any],
+) -> bool:
+    if not decisions:
+        return True
+    return all(str(decision.status) != "no-address" for decision in decisions)
+
+
+def _stabilize_deploy_soperator_login_load_balancer(
+    config: Any,
+    paths: ProjectPaths,
+    manifest: Mapping[str, Any],
+    *,
+    target: Mapping[str, Any] | None,
+    target_ref: str,
+    extra_env: Mapping[str, str] | None,
+    job_policy: str,
+    cancel_job_ids: Sequence[str],
+    requeue_job_ids: Sequence[str],
+    job_wait_timeout_seconds: int,
+    job_refresh_interval_seconds: int,
+    report_validations: Sequence[Mapping[str, Any]] = (),
+) -> tuple[Any, dict[str, Any]]:
+    if target_ref:
+        if _active_chart_count_for_target(config, target_ref=target_ref) <= 0:
+            return config, dict(manifest)
+        release_refs = _enabled_soperator_release_refs_for_target(config, target_ref=target_ref)
+    else:
+        if _active_chart_count(config) <= 0:
+            return config, dict(manifest)
+        release_refs = _enabled_soperator_release_refs(config)
+    if not release_refs:
+        return config, dict(manifest)
+    config_payload = to_plain_data(config)
+    if not isinstance(config_payload, Mapping):
+        config_payload = {}
+    client_info = _state_mapping(config_payload.get("client_info"))
+    nebius_config = _state_mapping(client_info.get("nebius"))
+    project_id = str(nebius_config.get("project_id") or "").strip()
+    if not project_id:
+        raise RuntimeError(
+            "Cannot stabilize the Soperator login LoadBalancer allocation: "
+            "client_info.nebius.project_id is empty."
+        )
+    payload = _load_source_payload(paths.config_path)
+    values = _source_soperator_values_for_target(payload, target_ref=target_ref)
+    if values is None:
+        return config, dict(manifest)
+    before = dump_yaml(payload)
+    api = _SdkSoperatorMigrationNebiusApi(project_id=project_id)
+    command_runner = _deploy_soperator_cleanup_command_runner(extra_env)
+    try:
+        kube_context = _soperator_cleanup_kube_context(
+            config,
+            target_ref=target_ref,
+            extra_env=extra_env,
+        )
+        if not kube_context:
+            raise RuntimeError(
+                "Cannot stabilize the Soperator login LoadBalancer allocation: "
+                "no Kubernetes context is available."
+            )
+        deadline = (
+            time.monotonic() + _DEPLOY_SOPERATOR_LOGIN_LB_ALLOCATION_TIMEOUT_SECONDS
+        )
+        announced_wait = False
+        last_lines: tuple[str, ...] = ()
+        while True:
+            service_identity_missing = False
+            try:
+                _identities, decisions, lines = (
+                    stabilize_soperator_login_load_balancer_allocations(
+                        command_runner=command_runner,
+                        kube_context=kube_context,
+                        project_id=project_id,
+                        nebius_api=api,
+                        values=values,
+                    )
+                )
+            except SoperatorMigrationPhasePending as exc:
+                if "no login Service identity was detected" not in str(exc):
+                    raise
+                service_identity_missing = True
+                decisions = ()
+                lines = (str(exc),)
+            last_lines = tuple(lines)
+            if not service_identity_missing and _soperator_login_load_balancer_allocation_ready(
+                decisions
+            ):
+                break
+            now = time.monotonic()
+            if now >= deadline:
+                rendered_lines = "; ".join(last_lines) if last_lines else "no status available"
+                raise RuntimeError(
+                    "Timed out waiting for the Soperator login LoadBalancer address before "
+                    "allocation retention. Last status: "
+                    f"{rendered_lines}"
+                )
+            if not announced_wait:
+                console.print(
+                    "Waiting for the Soperator login LoadBalancer address before preserving "
+                    "its Nebius allocation."
+                )
+                announced_wait = True
+            time.sleep(
+                min(
+                    _DEPLOY_SOPERATOR_LOGIN_LB_ALLOCATION_POLL_SECONDS,
+                    max(0.1, deadline - now),
+                )
+            )
+    finally:
+        api.close()
+    for line in lines:
+        console.print(line)
+    after = dump_yaml(payload)
+    if after == before:
+        if decisions:
+            wait_for_login_service_ready_endpoints(
+                command_runner,
+                namespace="soperator",
+                target_ref=target_ref,
+                kube_context=kube_context,
+                timeout_seconds=300,
+                poll_interval_seconds=5,
+            )
+        return config, dict(manifest)
+    paths.config_path.write_text(after, encoding="utf-8")
+    allocation_ids = ", ".join(
+        decision.allocation_id
+        for decision in decisions
+        if decision.allocation_id
+    )
+    console.print(
+        "Persisted Soperator login LoadBalancer allocation"
+        + (f" {allocation_ids}" if allocation_ids else "")
+        + " in config.yaml; rerendering and reapplying Soperator Flux resources."
+    )
+    _run_internal_render_command(paths.config_path, force=True)
+    refreshed_config, refreshed_paths, refreshed_manifest = _load_deploy_context(paths.config_path)
+    refreshed_target_paths = (
+        _paths_for_target_flux_dir(refreshed_paths, target)
+        if target is not None
+        else refreshed_paths
+    )
+    _apply_rendered_flux_with_soperator_job_policy(
+        refreshed_config,
+        refreshed_target_paths,
+        command_name="deploy",
+        target_ref=target_ref,
+        extra_env=dict(extra_env or {}),
+        job_policy=job_policy,
+        cancel_job_ids=cancel_job_ids,
+        requeue_job_ids=requeue_job_ids,
+        job_wait_timeout_seconds=job_wait_timeout_seconds,
+        job_refresh_interval_seconds=job_refresh_interval_seconds,
+    )
+    write_inventory(refreshed_config, refreshed_paths, validations=report_validations)
+    wait_for_login_service_ready_endpoints(
+        command_runner,
+        namespace="soperator",
+        target_ref=target_ref,
+        kube_context=kube_context,
+        timeout_seconds=300,
+        poll_interval_seconds=5,
+    )
+    return refreshed_config, refreshed_manifest
+
+
 def _retire_deploy_owned_soperator_source_state(
     config: Any,
     *,
@@ -48651,6 +48874,20 @@ def _deploy_generated_artifacts(
                         job_wait_timeout_seconds=job_wait_timeout_seconds,
                         job_refresh_interval_seconds=job_refresh_interval_seconds,
                     )
+                    config, manifest = _stabilize_deploy_soperator_login_load_balancer(
+                        config,
+                        paths,
+                        manifest,
+                        target=target,
+                        target_ref=target_ref,
+                        extra_env=kube_env,
+                        job_policy=job_policy,
+                        cancel_job_ids=cancel_job_ids,
+                        requeue_job_ids=requeue_job_ids,
+                        job_wait_timeout_seconds=job_wait_timeout_seconds,
+                        job_refresh_interval_seconds=job_refresh_interval_seconds,
+                        report_validations=report_validations,
+                    )
                     _retire_deploy_owned_soperator_source_state(
                         config,
                         selected_targets=selected_targets,
@@ -48722,6 +48959,20 @@ def _deploy_generated_artifacts(
                 requeue_job_ids=requeue_job_ids,
                 job_wait_timeout_seconds=job_wait_timeout_seconds,
                 job_refresh_interval_seconds=job_refresh_interval_seconds,
+            )
+            config, manifest = _stabilize_deploy_soperator_login_load_balancer(
+                config,
+                paths,
+                manifest,
+                target=None,
+                target_ref="",
+                extra_env=None,
+                job_policy=job_policy,
+                cancel_job_ids=cancel_job_ids,
+                requeue_job_ids=requeue_job_ids,
+                job_wait_timeout_seconds=job_wait_timeout_seconds,
+                job_refresh_interval_seconds=job_refresh_interval_seconds,
+                report_validations=report_validations,
             )
             _retire_deploy_owned_soperator_source_state(
                 config,
@@ -53870,7 +54121,7 @@ def soperator_onboard_command(
         typer.Option(
             "--strategy-max-surge-count",
             help=(
-                "Nebius node-group strategy max_surge count for each active group. "
+                "Nebius node-group strategy max_surge count for each active worker group. "
                 "Default: 0 for zero-surge / 1 for safe-surge."
             ),
         ),
@@ -53880,7 +54131,7 @@ def soperator_onboard_command(
         typer.Option(
             "--strategy-max-unavailable-count",
             help=(
-                "Nebius node-group strategy max_unavailable count for each active group. "
+                "Nebius node-group strategy max_unavailable count for each active worker group. "
                 "Default: 1 for zero-surge / 0 for safe-surge."
             ),
         ),
@@ -53890,7 +54141,7 @@ def soperator_onboard_command(
         typer.Option(
             "--strategy-drain-timeout",
             help=(
-                "Nebius node-group strategy drain timeout for each active service or worker group: "
+                "Nebius node-group strategy drain timeout for each active worker group: "
                 "none or an explicit Go-style duration such as 30m. Default: 30m."
             ),
         ),
@@ -55267,6 +55518,69 @@ def _locked_upgrade_path_plan_lines(
     return lines
 
 
+def _external_soperator_plan_values(
+    payload: Mapping[str, Any],
+    target_ref: str,
+) -> Mapping[str, Any]:
+    apps = payload.get("apps")
+    charts = apps.get("charts") if isinstance(apps, Mapping) else None
+    if not isinstance(charts, Sequence) or isinstance(charts, (str, bytes, bytearray)):
+        return {}
+    normalized_target = normalize_component_token(target_ref)
+    for row in charts:
+        if not isinstance(row, Mapping):
+            continue
+        if normalize_component_token(component_type_id(row)) != "soperator":
+            continue
+        if normalize_component_token(component_instance_id(row)) != normalized_target:
+            continue
+        values = row.get("values")
+        return values if isinstance(values, Mapping) else {}
+    return {}
+
+
+def _external_soperator_persistent_mount_plan_lines(
+    *,
+    payload: Mapping[str, Any],
+    target_ref: str,
+    jail_persistent_mounts: Sequence[str],
+) -> list[str]:
+    values = _external_soperator_plan_values(payload, target_ref)
+    if not values:
+        return []
+    explicit_mounts = parse_jail_persistent_mount_specs(jail_persistent_mounts)
+    patched_values = apply_jail_persistent_mount_values(
+        values,
+        target_ref=target_ref,
+        persistent_mounts=explicit_mounts,
+        layout="external",
+    )
+    status = jail_persistent_mount_status(patched_values)
+    lines = ["", "Persistent jail mounts:"]
+    lines.append(f"Status: {status.status}; {status.reason}.")
+    decisions = jail_persistent_mount_decisions(
+        original_values=values,
+        patched_values=patched_values,
+        explicit_mounts=explicit_mounts,
+    )
+    decision_parts = [
+        f"{item['mount_path']}={item['status']}"
+        for item in decisions
+        if item.get("mount_path") and item.get("status")
+    ]
+    if decision_parts:
+        lines.append("Decisions: " + "; ".join(decision_parts) + ".")
+    if not status.mounts:
+        lines.append("Resolved paths: none; existing customer-owned submounts provide /home.")
+        return lines
+    mount_parts = [
+        f"{mount.mount_path} -> {mount.local_path}"
+        for mount in status.mounts
+    ]
+    lines.append("Resolved paths: " + "; ".join(mount_parts) + ".")
+    return lines
+
+
 def _format_soperator_migration_plan_lines(
     *,
     config_path: Path,
@@ -55282,7 +55596,10 @@ def _format_soperator_migration_plan_lines(
     strategy_max_unavailable_count: int | None = None,
     strategy_drain_timeout: str | None = None,
     job_policy: str | None = None,
+    login_session_policy: str = EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
+    login_session_drain_timeout: str = "30m",
     populate_jail_refresh: str = "auto",
+    jail_persistent_mounts: Sequence[str] = (),
     upgrade_path: Mapping[str, Any] | None = None,
     upgrade_path_progress: Mapping[str, Any] | None = None,
     current_segment: Mapping[str, Any] | None = None,
@@ -55382,6 +55699,29 @@ def _format_soperator_migration_plan_lines(
             + ("yes" if flags["target_gpu_reconciliation_required"] else "no"),
         ]
     )
+    explicit_persistent_mount_requested = any(
+        str(item or "").strip() for item in jail_persistent_mounts
+    )
+    jail_rootfs = report.get("jail_rootfs")
+    jail_rootfs_refresh_required = (
+        isinstance(jail_rootfs, Mapping) and jail_rootfs.get("refresh_required") is True
+    )
+    explicit_populate_jail_refresh = normalize_populate_jail_refresh_mode(
+        populate_jail_refresh
+    ) in {"force", "manual"}
+    persistent_mount_plan_required = (
+        explicit_persistent_mount_requested
+        or explicit_populate_jail_refresh
+        or jail_rootfs_refresh_required
+    )
+    if persistent_mount_plan_required:
+        lines.extend(
+            _external_soperator_persistent_mount_plan_lines(
+                payload=payload,
+                target_ref=target_ref,
+                jail_persistent_mounts=jail_persistent_mounts,
+            )
+        )
     if flags["external_node_template_upgrade_required"]:
         rollout = resolve_external_node_template_rollout(
             onboarding,
@@ -55438,6 +55778,19 @@ def _format_soperator_migration_plan_lines(
     lines.extend(["", "Execution controls:", f"Execution mode: {mode}."])
     if job_policy:
         lines.append(f"Slurm job policy: {job_policy}")
+    lines.append(f"Login SSH session policy: {login_session_policy}")
+    if login_session_policy != EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY:
+        lines.append(f"Login SSH session drain timeout: {login_session_drain_timeout}")
+    lines.append(
+        "Login continuity: new SSH connections require a ready target login endpoint "
+        "before source login retirement; existing TCP sessions remain best-effort unless "
+        "wait-active or grace-period is selected."
+    )
+    lines.append(
+        "Login LoadBalancer allocation retention: cxcli automatically converts and "
+        "persists the current Nebius public/internal allocation before chart handoff, "
+        "or fails before mutation if it cannot resolve or update exactly one allocation."
+    )
     lines.append(
         "Backup: restore-capable archive is required before approved mutation; "
         "restore is supported only into a new/replacement cluster."
@@ -56034,10 +56387,11 @@ def soperator_external_upgrade_command(
         typer.Option(
             "--jail-persistent-mount",
             help=(
-                "Persistent in-jail path to mount back into each active/passive rootfs "
-                "slot as <mountPath>=<localPath>, for example /data=/mnt/jail/shared/data. "
-                "/home is added automatically unless an existing customer-owned /home "
-                "submount is already configured."
+                "Additional persistent in-jail path to mount back into each active/passive "
+                "rootfs slot as <mountPath>=<localPath>, for example "
+                "/checkpoints=/mnt/jail/shared/checkpoints. /home, /data, /scripts, "
+                "and /models are added automatically unless an existing customer-owned "
+                "submount already owns the path."
             ),
         ),
     ] = None,
@@ -56094,6 +56448,32 @@ def soperator_external_upgrade_command(
             "--job-refresh-interval", help="Refresh interval while waiting for Slurm jobs."
         ),
     ] = _SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
+    login_session_policy: Annotated[
+        str,
+        typer.Option(
+            "--login-session-policy",
+            help=(
+                "Login SSH continuity policy: target-ready, wait-active, or grace-period. "
+                "target-ready keeps source login retirement gated until the target login "
+                "StatefulSet and the preserved login Service have ready SSH endpoints. "
+                "wait-active also waits for active SSH sessions on old login pods to drain. "
+                "grace-period waits the drain timeout after target readiness. Existing TCP "
+                "SSH sessions remain best-effort if their backing pod or node is restarted. "
+                "First-adoption persistent mount migration stops before its temporary login "
+                "writer hold unless wait-active or grace-period is selected."
+            ),
+        ),
+    ] = EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
+    login_session_drain_timeout: Annotated[
+        str,
+        typer.Option(
+            "--login-session-drain-timeout",
+            help=(
+                "Maximum login session drain/grace wait for --login-session-policy "
+                "wait-active or grace-period, for example 30m."
+            ),
+        ),
+    ] = "30m",
     dry_run: Annotated[
         bool,
         typer.Option(
@@ -56151,10 +56531,12 @@ def soperator_external_upgrade_command(
         typer.Option(
             "--worker-rollout-strategy",
             help=(
-                "External node-template rollout strategy. zero-surge is the default "
-                "and requires no spare quota but can reduce active capacity; "
-                "safe-surge uses temporary surge capacity for active service groups "
-                "and worker waves and verifies quota/capacity before mutation."
+                "External worker node-template rollout strategy. zero-surge is the "
+                "worker default and requires no spare worker quota but can reduce "
+                "worker capacity; safe-surge uses temporary worker surge capacity. "
+                "Login/service-role node groups use safe-surge by default and use "
+                "zero-surge only when this flag explicitly selects the lower-continuity "
+                "zero-surge rollout."
             ),
         ),
     ] = None,
@@ -56197,7 +56579,7 @@ def soperator_external_upgrade_command(
         typer.Option(
             "--strategy-max-surge-count",
             help=(
-                "Nebius node-group strategy max_surge count for each active group. "
+                "Nebius node-group strategy max_surge count for each active worker group. "
                 "Default comes from config.yaml, or 0 for zero-surge / 1 for safe-surge."
             ),
         ),
@@ -56207,7 +56589,7 @@ def soperator_external_upgrade_command(
         typer.Option(
             "--strategy-max-unavailable-count",
             help=(
-                "Nebius node-group strategy max_unavailable count for each active group. "
+                "Nebius node-group strategy max_unavailable count for each active worker group. "
                 "Default comes from config.yaml, or 1 for zero-surge / 0 for safe-surge."
             ),
         ),
@@ -56217,7 +56599,7 @@ def soperator_external_upgrade_command(
         typer.Option(
             "--strategy-drain-timeout",
             help=(
-                "Nebius node-group strategy drain timeout for each active service or worker group: "
+                "Nebius node-group strategy drain timeout for each active worker group: "
                 "none or an explicit Go-style duration such as 30m. Default comes from "
                 "config.yaml, or 30m."
             ),
@@ -56414,6 +56796,19 @@ def soperator_external_upgrade_command(
             job_refresh_interval,
             option_name="--job-refresh-interval",
         )
+        resolved_login_session_policy = _external_login_session_policy(login_session_policy)
+        login_session_drain_timeout_seconds = _soperator_upgrade_duration_seconds(
+            login_session_drain_timeout,
+            option_name="--login-session-drain-timeout",
+        )
+        if (
+            login_session_drain_timeout_seconds <= 0
+            and resolved_login_session_policy != EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY
+        ):
+            raise RuntimeError(
+                "--login-session-drain-timeout must be positive when --login-session-policy "
+                "is wait-active or grace-period."
+            )
         if resolved_job_policy == "wait-then-cancel" and job_wait_timeout_seconds <= 0:
             raise RuntimeError(
                 "--job-policy wait-then-cancel requires a positive --job-wait-timeout. "
@@ -56433,7 +56828,10 @@ def soperator_external_upgrade_command(
             strategy_max_unavailable_count=strategy_max_unavailable_count,
             strategy_drain_timeout=strategy_drain_timeout,
             job_policy=resolved_job_policy,
+            login_session_policy=resolved_login_session_policy,
+            login_session_drain_timeout=login_session_drain_timeout,
             populate_jail_refresh=resolved_populate_jail_refresh,
+            jail_persistent_mounts=tuple(jail_persistent_mount or ()),
             upgrade_path=locked_upgrade_path or None,
             upgrade_path_progress=upgrade_path_progress,
             current_segment=current_segment,
@@ -56493,6 +56891,8 @@ def soperator_external_upgrade_command(
                     requeue_job=selected_requeue_jobs,
                     job_wait_timeout=job_wait_timeout,
                     job_refresh_interval=job_refresh_interval,
+                    login_session_policy=resolved_login_session_policy,
+                    login_session_drain_timeout=login_session_drain_timeout,
                     worker_rollout_strategy=worker_rollout_strategy,
                     worker_wave_groups=worker_wave_groups,
                     worker_wave_percent=worker_wave_percent,
@@ -56575,6 +56975,8 @@ def soperator_external_upgrade_command(
                     requeue_job_ids=selected_requeue_jobs,
                     job_wait_timeout_seconds=job_wait_timeout_seconds,
                     job_refresh_interval_seconds=job_refresh_interval_seconds,
+                    login_session_policy=resolved_login_session_policy,
+                    login_session_drain_timeout_seconds=login_session_drain_timeout_seconds,
                     approve_remediation=approve_remediation,
                     worker_rollout_strategy=worker_rollout_strategy,
                     worker_wave_groups=worker_wave_groups,

@@ -1,0 +1,35 @@
+# Documentation Update Evidence
+
+- Feature: `<FEAT-ID or run>`
+- Scope: `<feature | run>`
+- Updated at: `<ISO-8601>`
+- Source requirements: `<REQ-ID list>`
+- Source design: `<FEAT-ID list>`
+- Source evidence:
+  - Plan: `<path or none>`
+  - Validation: `<path or none>`
+  - Tests: `<path or none>`
+  - Evaluation: `<path or none>`
+  - UAT: `<path or none>`
+  - Steering: `<entry IDs or none>`
+
+## Documentation Changes
+
+| File | Change | Reason |
+| --- | --- | --- |
+| `<path>` | `<updated or no-op or blocked>` | `<reason>` |
+
+## Changelog
+
+- Status: `<updated or not-needed or missing or blocked>`
+- Entry: `<summary or reason>`
+
+## Steering Disposition
+
+| Entry | Disposition | Notes |
+| --- | --- | --- |
+| `<STEER-ID>` | `<resolved or blocked or superseded>` | `<reason>` |
+
+## Remaining Gaps
+
+- `<none or blocker>`

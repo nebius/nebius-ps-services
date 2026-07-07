@@ -2309,8 +2309,8 @@ to render/apply the Soperator app and to run guarded external upgrade phases.
 | `nebius-cxcli ext-soperator restore <backup.tar.gz> --kube-context <new-context> --execute --approve` | DR restore a Soperator archive onto a new empty external target cluster. | Archive-driven and dry-run by default. This is not same-cluster rollback: do not target the original/source cluster or an existing Soperator namespace. With approval, validates archive checksums, recreation coverage, and required CRD/API availability, restores cluster-scoped retained PV bindings before namespaced resources, applies restore-ready Kubernetes manifests, and imports the chart-managed MariaDB accounting dump into the selected kube context when the archive contains one. VM/NFS retention and final Terraform convergence remain operator runbook steps. |
 | `nebius-cxcli ext-soperator scale-down --project-id <project-id> --cluster-id <mk8scluster-id> --kube-context <context> --nodeset <worker> --to-workers <count> --execute --approve` and `ext-soperator scale-up` | Ad hoc maintenance scaling for an external Soperator cluster without onboarding it. | Dry-run by default. `--project-id` and `--cluster-id` identify Nebius MK8s node groups; `--kube-context` is still required for Kubernetes and Slurm access. Ephemeral workers patch `NodeSetPowerState`; non-ephemeral workers patch the live NodeSet. Scale-down uses the same `--job-policy` choices before removing affected worker ordinals. Explicit non-ephemeral ordinal removal is tail-only until a tested controller-safe `reserveOrdinals` path is added. cxcli updates the mapped Nebius node group when it can uniquely map the worker pods to one group; otherwise it fails closed for ambiguous capacity changes. This is the supported helper for external “scale workers to zero, replace worker node groups externally, scale back up” maintenance. |
 | `nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>` | Register one existing Nebius MK8s cluster by `cluster_id`, discover source Soperator state, choose storage/compute onboarding modes, and write the accepted onboarding plan. | Read-only against live cluster state; writes local `config.yaml` and the canonical discovery bundle at `generated/reports/soperator-discovery/<target>/manifest.json`. Interactive runs show the discovered Kubernetes version, default external MK8s node-template work to the next minor hop, reject unsupported Kubernetes target jumps immediately at the prompt, and print the matched Soperator/Kubernetes upgrade-path rule during the decision summary. When selected actions require a Soperator chart package change or target populate-jail image refresh, the onboarding migration plan includes the `Jail Upgrade` phase so operators can see the future active/passive rootfs refresh before execution. Non-interactive runs use `--cluster-id` and optional `--target-id`; pass the supported final Kubernetes target with `--to-k8s-version` when external node-template work is selected. Unsupported target jumps fail fast with the next valid hop guidance. The accepted full locked upgrade path is stored under `deploy.targets[].soperator_onboarding.upgrade_path` and is included in the accepted onboarding fingerprint, while `ext-soperator upgrade` still executes one locked Kubernetes minor segment per run. Unsupported accepted plans still require `--allow-unsupported-soperator-upgrade-path`. No-op reruns preserve stable discovery content so unchanged onboarding does not invalidate external upgrade checkpoints. |
-| `nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run` | Inspect the accepted external-cluster upgrade plan before any live mutation. | Read-only; refreshes discovery for the next incomplete locked segment, validates accepted onboarding or resumes from a v2 checkpoint `locked_upgrade_path` snapshot, shows the matched Soperator/Kubernetes upgrade-path rule, refuses deploy-owned/no-upgrade action sets with render/deploy guidance, and prints a color-highlighted sectioned plan covering target discovery, locked path source, the full locked path, completed/current/remaining segments, the accepted one-minor Kubernetes hop for the current segment, accepted onboarding actions, node-template rollout, phases including `Jail Upgrade` when selected chart/rootfs image evidence requires a refresh, execution controls, and execution contracts in interactive terminals. Existing locked-path resumption stays on the same upgrade command until all locked segments are complete; use a fresh `ext-soperator onboard` decision only to plan a new later path or intentionally repair/replan. |
-| `nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --execute --approve` | Execute one approved locked external-upgrade segment: one MK8s control-plane/node-template hop plus any target GPU stack, storage, compute, Soperator Helm cutover, persistent jail mount adoption, Jail Upgrade active/passive rootfs refresh when required, configured MK8s GPU deployment testing, and required Soperator/Slurm smoke validation assigned to that segment. | Creates a restore-capable backup before mutation for DR restore to a new/replacement cluster only, rejects sparse reused backup metadata before mutation, captures protected customer state before approved mutation, fails unsupported or not-validated Soperator upgrade paths unless the run also passes `--allow-unsupported-soperator-upgrade-path`, mutates only supported external upgrade surfaces, handles affected Slurm jobs, including running, completing, and pending jobs in affected partitions or requested/scheduled on affected nodes, through `--job-policy`, writes a local v2 checkpoint with immutable `locked_upgrade_path`, `upgrade_path_fingerprint`, `current_segment_id`, `completed_segment_ids`, `pending_phase`, top-level `segment_state`, persistent jail mount evidence, and segment report/backup metadata, rejects old progress-only checkpoints, enforces one Kubernetes minor hop per run, rechecks completed selected actions against live state on rerun, runs a fast stage-scoped verification after each executed stage before advancing within the segment, verifies external MK8s node-template state, normalizes target `kube-rbac-proxy` image values to `registry.k8s.io/kubebuilder/kube-rbac-proxy:v0.15.0`, verifies target Helm chart workloads, models `/home` and declared customer paths such as `/data` or `/scripts` as persistent jail mounts on the same physical jail SFS, migrates legacy in-rootfs data into those shared mount paths during first adoption, refreshes the jail rootfs by populating the passive active/passive slot on the existing jail SFS and switching consumers when the target populate-jail image or selected chart/rootfs evidence requires it, suspends old source-family Flux Kustomization desired state, deletes suspended old source-family Flux HelmRelease records, retires stale profile-derived source-family Helm release records while preserving shared/storage resources, writes validation detail reports under `generated/reports/`, runs the shared bounded read-only fast safety checks in validation hold, writes stage verification, locked-path progress, MK8s GPU deployment-testing, Soperator/Slurm validation, and protected-state rollups into `generated/reports/ext-soperator-upgrade-report.md` and `.json`, writes segment snapshots under `generated/reports/ext-soperator-upgrades/<target>/<segment-id>/`, refreshes `deploy-report.md` as a secondary deploy-compatible MK8s GPU summary only after protected comparison passes, keeps accepted onboarding while locked segments remain, prints the next same-command invocation, and stops at guarded pending gates. |
+| `nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run` | Inspect the accepted external-cluster upgrade plan before any live mutation. | Read-only; refreshes discovery for the next incomplete locked segment, validates accepted onboarding or resumes from a v2 checkpoint `locked_upgrade_path` snapshot, shows the matched Soperator/Kubernetes upgrade-path rule, refuses deploy-owned/no-upgrade action sets with render/deploy guidance, and prints a color-highlighted sectioned plan covering target discovery, locked path source, the full locked path, completed/current/remaining segments, the accepted one-minor Kubernetes hop for the current segment, accepted onboarding actions, persistent jail mounts when a rootfs refresh or explicit mount input makes them relevant, node-template rollout, phases including `Jail Upgrade` when selected chart/rootfs image evidence requires a refresh, execution controls, and execution contracts in interactive terminals. Existing locked-path resumption stays on the same upgrade command until all locked segments are complete; use a fresh `ext-soperator onboard` decision only to plan a new later path or intentionally repair/replan. |
+| `nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --execute --approve` | Execute one approved locked external-upgrade segment: one MK8s control-plane/node-template hop plus any target GPU stack, storage, compute, Soperator Helm cutover, persistent jail mount adoption, Jail Upgrade active/passive rootfs refresh when required, configured MK8s GPU deployment testing, and required Soperator/Slurm smoke validation assigned to that segment. | Creates a restore-capable backup before mutation for DR restore to a new/replacement cluster only, rejects sparse reused backup metadata before mutation, captures protected customer state before approved mutation, fails unsupported or not-validated Soperator upgrade paths unless the run also passes `--allow-unsupported-soperator-upgrade-path`, mutates only supported external upgrade surfaces, handles affected Slurm jobs, including running, completing, and pending jobs in affected partitions or requested/scheduled on affected nodes, through `--job-policy`, writes a local v2 checkpoint with immutable `locked_upgrade_path`, `upgrade_path_fingerprint`, `current_segment_id`, `completed_segment_ids`, `pending_phase`, top-level `segment_state`, persistent jail mount evidence, and segment report/backup metadata, rejects old progress-only checkpoints, enforces one Kubernetes minor hop per run, rechecks completed selected actions against live state on rerun, runs a fast stage-scoped verification after each executed stage before advancing within the segment, verifies external MK8s node-template state, normalizes target `kube-rbac-proxy` image values to `registry.k8s.io/kubebuilder/kube-rbac-proxy:v0.15.0`, verifies target Helm chart workloads, models `/home`, `/data`, `/scripts`, `/models`, and declared additional customer paths as persistent jail mounts on the same physical jail SFS, migrates legacy in-rootfs data into those shared mount paths during first adoption, refreshes the jail rootfs by populating the passive active/passive slot on the existing jail SFS and switching consumers when the target populate-jail image or selected chart/rootfs evidence requires it, suspends old source-family Flux Kustomization desired state, deletes suspended old source-family Flux HelmRelease records, retires stale profile-derived source-family Helm release records while preserving shared/storage resources, writes validation detail reports under `generated/reports/`, runs the shared bounded read-only fast safety checks in validation hold, writes stage verification, locked-path progress, MK8s GPU deployment-testing, Soperator/Slurm validation, and protected-state rollups into `generated/reports/ext-soperator-upgrade-report.md` and `.json`, writes segment snapshots under `generated/reports/ext-soperator-upgrades/<target>/<segment-id>/`, refreshes `deploy-report.md` as a secondary deploy-compatible MK8s GPU summary only after protected comparison passes, keeps accepted onboarding while locked segments remain, prints the next same-command invocation, and stops at guarded pending gates. |
 | `nebius-cxcli upgrade node-template` and `upgrade node-group` | Upgrade Terraform-managed MK8s infrastructure underneath a cxcli-managed deployment. | `node-template` owns Kubernetes version, OS, and Nebius-image GPU stack rolling updates and writes `generated/reports/upgrade-node-template-report.md` / `.json` after verification. Node-group hardware, preset, CPU/GPU kind, GPU cluster, or fabric changes require the approved `upgrade node-group` planner; current execute writes `generated/reports/upgrade-node-group-report.md` / `.json` with the approved pre-mutation checkpoint and then stops before live replacement/cutover/retirement. |
 
 Operationally, finish a running `ext-soperator upgrade` or `soperator upgrade`
@@ -2732,21 +2732,22 @@ Underlying MK8s upgrade ownership is different for managed and external targets:
 - External Soperator upgrade owns external Kubernetes minor, node OS image, and
   Nebius-image GPU-stack upgrades selected by onboarding. It uses direct Nebius
   SDK/API cluster and node-group update calls, upgrades the
-  control plane first, then updates service-role node groups serially and
-  worker node groups with zero-surge by default, or safe-surge when selected.
-  Service groups run serially; worker safe-surge runs in bounded waves. It does
+  control plane first, then updates service-role node groups serially with
+  safe-surge by default and worker node groups with zero-surge by default, or
+  safe-surge when selected. Service groups run serially; worker safe-surge runs
+  in bounded waves. It does
   not report completion until the live control plane and selected node groups
   match the requested Kubernetes version, OS image, and Nebius `drivers_preset`
   / CUDA stack.
 - For external node-group template updates, upgrade snapshots each original
   node-group strategy and restores it after that group finishes. Service-role
-  groups use the selected temporary strategy one group at a time. zero-surge
-  sets `max_surge=0`, `max_unavailable=1`, `drain_timeout=30m` and quiesces
-  login workloads, one-node service workloads, and known drain-blocking webhook
-  replicas. Worker groups also default to zero-surge; safe-surge
-  (`max_surge=1`, `max_unavailable=0`,
-  `drain_timeout=30m`) applies to service groups and runs workers in bounded
-  waves only when selected, after
+  groups use safe-surge (`max_surge=1`, `max_unavailable=0`,
+  `drain_timeout=30m`) one group at a time by default. The explicit
+  lower-continuity zero-surge override sets `max_surge=0`,
+  `max_unavailable=1`, `drain_timeout=30m` and quiesces login workloads,
+  one-node service workloads, and known drain-blocking webhook replicas. Worker
+  groups default to zero-surge; worker safe-surge runs in bounded waves only
+  when selected, after
   quota/capacity, worker-node health, and Slurm queue preflights pass. Set
   `drain_timeout: none` when
   waiting indefinitely is safer than provider drain fallback. CPU node groups
@@ -2883,10 +2884,11 @@ Important onboarding flags:
   to persist under
   `deploy.targets[].soperator_onboarding.node_template_upgrade.rollout` during
   non-interactive onboarding. They use the same semantics as the upgrade flags:
-  `zero-surge` is the default and avoids surge quota but can temporarily reduce
-  service or worker capacity, `safe-surge` uses temporary nodes for active
-  service groups and worker waves, and verifies the needed quota and capacity
-  during `--execute` preflight before mutation.
+  worker `zero-surge` is the default and avoids worker surge quota but can
+  temporarily reduce worker capacity, service-role groups use safe-surge by
+  default, and worker `safe-surge` uses temporary nodes for worker waves and
+  verifies the needed quota and capacity during `--execute` preflight before
+  mutation.
   `--worker-wave-groups` is the exact fixed worker-group count per safe-surge
   wave; `--worker-wave-percent` scales from the discovered worker-group count;
   `--max-parallel-worker-groups` is only an optional upper cap for percent-based
@@ -3213,10 +3215,11 @@ External upgrade follows these stages:
    `--job-policy` decision before any affected worker rollout.
 3. External infrastructure remediation: upgrade the external MK8s control plane
    first to the accepted Kubernetes target for this run when selected, then
-   service-role node groups serially, worker node groups with zero-surge or
-   safe-surge waves, target GPU stack reconciliation when it is paired with
-   upgrade work, aligned SFS creation/attachment, and guarded PVC data-copy
-   phases. External node-template work is one Kubernetes minor hop per accepted
+   service-role node groups serially with safe-surge by default, worker node
+   groups with zero-surge or safe-surge waves, target GPU stack reconciliation
+   when it is paired with upgrade work, aligned SFS creation/attachment, and
+   guarded PVC data-copy phases. External node-template work is one Kubernetes
+   minor hop per accepted
    locked-path segment and `ext-soperator upgrade` run; later Kubernetes hops
    use the remaining locked segments and repeat the same upgrade command after
    the current hop completes.
@@ -3270,14 +3273,13 @@ Important external upgrade flags:
   passive slot, switches consumers to that slot, and keeps the previous slot for
   rollback until postflight passes.
 - `--jail-persistent-mount <mountPath>=<localPath>`: external upgrade input for
-  customer-owned paths that must remain outside rootfs generation slots and be
-  mounted back into every new rootfs. `/home` is added automatically unless an
-  existing external/customer mount already owns `/home`; other paths such as
-  `/data` or `/scripts` must be declared explicitly. The local path must be on
-  the same physical jail SFS and outside the rootfs slots. During first
-  adoption from a legacy rootfs, approved execution migrates existing in-rootfs
-  data for those declared paths into the shared local paths before passive
-  rootfs population.
+  additional customer-owned paths that must remain outside rootfs generation
+  slots and be mounted back into every new rootfs. `/home`, `/data`, `/scripts`,
+  and `/models` are added automatically unless an existing external/customer
+  mount already owns the path. The local path must be on the same physical jail
+  SFS and outside the rootfs slots. During first adoption from a legacy rootfs,
+  approved execution migrates existing in-rootfs data for those persistent paths
+  into the shared local paths before passive rootfs population.
 - `--jail-sfs-resize-policy fail|prompt|apply`: capacity-shortage behavior for
   active/passive jail rootfs refresh. The default is `prompt` for interactive
   TTY runs and `fail` for non-interactive runs. For managed `soperator upgrade`,
@@ -3344,6 +3346,20 @@ Important external upgrade flags:
   affected-job dashboard every second, locally counting down known Slurm
   `Remaining` values from `squeue`; unknown remaining time stays `unknown`, and
   cxcli polls `squeue` again on `--job-refresh-interval`.
+- `--login-session-policy target-ready|wait-active|grace-period`: external
+  upgrade login-continuity policy. `target-ready` is the default and keeps
+  source login retirement gated until the target login StatefulSet and the
+  preserved login Service have ready SSH endpoints. `wait-active` also waits for
+  active SSH sessions on old login pods to drain, and `grace-period` waits the
+  configured drain timeout after target readiness. Existing TCP SSH sessions
+  cannot be guaranteed if their backing pod or node is restarted; these policies
+  prevent premature source retirement. During first-adoption persistent mount
+  migration, cxcli must temporarily stop login writers before copying legacy
+  rootfs paths; the default `target-ready` policy stops before that login writer
+  hold, and the operator must choose `wait-active` or `grace-period` for an
+  approved maintenance window.
+- `--login-session-drain-timeout <duration>`: maximum active-session drain or
+  grace wait for `wait-active` and `grace-period`. The default is `30m`.
 
 Interactive Slurm job actions map to these Slurm commands:
 
@@ -3359,11 +3375,15 @@ Interactive Slurm job actions map to these Slurm commands:
 - Release one held job after the upgrade: `scontrol release <jobid>`.
 - Release all admin-held pending jobs after review:
   `squeue --states=PD -h -o '%A|%r' | awk -F'|' '$2 == "JobHeldAdmin" { print $1 }' | xargs -r scontrol release`.
-- `--worker-rollout-strategy zero-surge|safe-surge`: select the external
-  node-template rollout strategy. `zero-surge` is the default and avoids surge
-  quota, but can reduce active service or worker capacity during the rollout.
-  `safe-surge` uses temporary nodes for active service groups and worker waves,
-  and checks the required quota and capacity before mutation.
+- `--worker-rollout-strategy zero-surge|safe-surge`: select the external worker
+  node-template rollout strategy and the explicit lower-continuity service-role
+  override. `zero-surge` is the worker default and avoids worker surge quota, but
+  can reduce active worker capacity during the rollout. Login and other
+  service-role groups use serial safe-surge by default and require one temporary
+  replacement node before mutation; passing `--worker-rollout-strategy
+  zero-surge` explicitly also selects the lower-continuity service-role rollout.
+  `safe-surge` uses temporary nodes for active worker waves and checks the
+  required quota and capacity before mutation.
 - `--worker-wave-groups`: exact fixed number of worker groups to update per
   safe-surge wave.
 - `--worker-wave-percent` and `--max-parallel-worker-groups`: percent-based
@@ -3373,8 +3393,9 @@ Interactive Slurm job actions map to these Slurm commands:
   count is already the concurrency limit.
 - `--strategy-max-surge-count`, `--strategy-max-unavailable-count`, and
   `--strategy-drain-timeout`: configure the Nebius node-group strategy inside
-  each active service or worker group. zero-surge defaults are `0`, `1`, and `30m`;
-  safe-surge defaults are `1`, `0`, and `30m`. Use
+  each active worker group. zero-surge defaults are `0`, `1`, and `30m`;
+  safe-surge defaults are `1`, `0`, and `30m`. Login/service-role groups use
+  `max_surge=1`, `max_unavailable=0`, and `drain_timeout=30m` by default. Use
   `--strategy-drain-timeout none` to wait indefinitely for drain completion;
   a finite timeout can let Nebius delete the node after that timeout when drain
   is still blocked.
@@ -3483,13 +3504,14 @@ net-new upgrade quota preflight before any SFS or node-group mutation:
 aligned SFS filesystems that do not already exist are counted as spare storage
 required during data copy, and target service-role node groups that do not
 already exist are counted as net-new compute capacity. Existing worker node
-groups are preserved in place. For external node-template work, the default
-strategy is zero-surge: it avoids surge quota but may reduce active service or
-worker capacity during the rollout. When operators choose safe-surge, cxcli
-counts `max_surge_count` temporary surge node(s) for each active service group
-or worker group in the active wave, checks the required spare quota and GPU
-capacity before mutation, requires all selected worker nodes to start Ready and
-schedulable, checks affected Slurm jobs on external node-template workers,
+groups are preserved in place. For external node-template work, service-role
+groups use safe-surge by default and worker groups default to zero-surge. cxcli
+counts one temporary replacement node for each active service-role group before
+mutation; when operators choose worker safe-surge, it also counts
+`max_surge_count` temporary surge node(s) for each worker group in the active
+wave. It checks the required spare quota and GPU capacity before mutation,
+requires all selected worker nodes to start Ready and schedulable, checks
+affected Slurm jobs on external node-template workers,
 including pending jobs in affected partitions or requested/scheduled on affected
 nodes, and checks all live worker NodeSets before target Soperator chart reconciliation or
 worker NodeSet recreation.
@@ -3519,10 +3541,10 @@ The planned phases depend on the accepted storage and compute modes:
 - `create-aligned-sfs` creates or reuses aligned controller-spool and
   accounting SFS filesystems, but keeps the existing physical jail SFS for
   single-SFS active/passive rootfs adoption. The external jail upgrade creates
-  logical slots under `/mnt/jail/.cxcli/rootfs`, automatically models `/home`
-  as a persistent jail mount, and mounts explicitly declared customer paths
-  such as `/data` or `/scripts` back into the new rootfs from the same physical
-  jail SFS. First adoption migrates data out of legacy in-rootfs directories
+  logical slots under `/mnt/jail/.cxcli/rootfs`, automatically models `/home`,
+  `/data`, `/scripts`, and `/models` as persistent jail mounts, and mounts
+  declared additional customer paths back into the new rootfs from the same
+  physical jail SFS. First adoption migrates data out of legacy in-rootfs directories
   into `/mnt/jail/shared/...` before passive rootfs population, preserving
   ownership, permissions, symlinks, ACLs, and xattrs where supported. It
   attaches required filesystems to discovered Nebius node groups, runs
@@ -3545,10 +3567,13 @@ The planned phases depend on the accepted storage and compute modes:
   create duplicate worker groups or require 2x worker quota. Upgrade-owned
   external node-group template changes, including Kubernetes version, node OS
   image, Nebius-image GPU stack, and aligned SFS filesystem attachments, use
-  direct Nebius node-group updates: service-role groups are serial, zero-surge
-  quiesces login workloads, one-node service workloads, and known drain-blocking
-  webhook replicas, and safe-surge uses one temporary replacement node per
-  active service or worker group when selected. Worker
+  direct Nebius node-group updates: service-role groups are serial safe-surge by
+  default, requiring one temporary replacement node per active service group and
+  failing before mutation if quota/capacity is unavailable. The explicit
+  lower-continuity zero-surge override quiesces login workloads, one-node service
+  workloads, and known drain-blocking webhook replicas. During login node-group
+  updates, cxcli verifies ready login Service endpoints before and after the
+  node-template change. Worker
   groups default to zero-surge and can use bounded safe-surge waves. cxcli
   restores each node group's original strategy after the active rollout.
 
@@ -3584,6 +3609,20 @@ ActiveChecks CronJobs/jobs/pods so stale old-chart desired state no longer
 appears in discovery or smoke validation. It does not drain
 or delete preserved worker node groups as part of a synthetic parallel-worker
 replacement.
+Login continuity during `rolling-compute-migration` is handled as a Service
+handoff. cxcli preserves the canonical login Service object and its Nebius
+LoadBalancer identity, including public or internal address. If a login
+`LoadBalancer` Service already has an address but lacks
+`nebius.com/load-balancer-allocation-id`, cxcli resolves the matching Nebius VPC
+allocation with the SDK/API, removes only the `nebius.com/managed-by=mk8s`
+ownership label, annotates the live Service, and persists the allocation under
+`slurmNodes.login.sshdServiceAnnotations` before target chart handoff. If the
+allocation cannot be uniquely resolved or updated, cxcli fails before risky
+mutation with exact remediation context. After target chart apply, cxcli verifies the
+original Service UID, ClusterIP, LoadBalancer ingress, and allocation id, warms
+target login pods, requires ready EndpointSlice backends for the preserved
+Service, and runs a login-side Slurm smoke check before retiring source login
+controllers or pods.
 If a legacy external cluster has Soperator ActiveChecks or
 `wait-for-active-checks` enabled, treat them as a maintenance-window concern:
 they can consume GPU/RDMA capacity or extend readiness waits. CXCLI managed
@@ -3701,23 +3740,32 @@ The Jail Upgrade rootfs-refresh process is:
    compatibility cannot be proven. `force` always refreshes. `manual` stops and
    prints passive-slot instructions.
 2. cxcli verifies persistent jail mounts before any destructive overwrite.
-   `/home` is automatically modeled as a persistent jail mount. Other
-   customer-owned paths, such as `/data`, `/scripts`, or `/checkpoints`, must
-   be declared with `--jail-persistent-mount <mountPath>=<localPath>`.
-3. cxcli runs a passive-slot capacity preflight. For external adoption it
-   excludes `.cxcli` and configured persistent-mount source paths from the
-   active rootfs estimate, measures the persistent-mount data separately, and
-   requires enough space on the same physical jail SFS for both the passive
-   rootfs slot and the one-time shared-data copy. If capacity is short, the
-   existing jail SFS resize handler runs before any copy or rootfs mutation.
+   External adoption automatically models `/home`, `/data`, `/scripts`, and
+   `/models` as persistent jail mounts. Other customer-owned paths, such as
+   `/checkpoints`, must be declared with `--jail-persistent-mount
+   <mountPath>=<localPath>` because cxcli does not infer arbitrary root-level
+   folders as customer data.
+3. cxcli probes each known and explicit persistent source path in the old rootfs
+   and records the decision as `present`, `absent`, `existing-submount`, or
+   `explicit`. It then runs a passive-slot capacity preflight. For external
+   adoption it excludes `.cxcli` and configured persistent-mount source paths
+   from the active rootfs estimate, measures present persistent-mount data
+   separately, skips absent paths cleanly, and requires enough space on the same
+   physical jail SFS for both the passive rootfs slot and the one-time
+   shared-data copy. If capacity is short, the existing jail SFS resize handler
+   runs before any copy or rootfs mutation.
 4. During first adoption from a legacy rootfs, cxcli drains Slurm with the
-   selected `--job-policy`, holds login and worker consumers at zero writers,
-   and runs a Kubernetes migration Job before passive-slot population. The Job
-   mounts the existing jail PVC once at `/store`, copies paths such as
-   `/store/home`, `/store/data`, and `/store/scripts` into
-   `/store/shared/home`, `/store/shared/data`, and `/store/shared/scripts`, and
-   preserves ownership, permissions, symlinks, ACLs, and xattrs where the
-   runtime supports them. Completion markers live under
+   selected `--job-policy`, holds worker consumers, and holds login consumers
+   only after an explicit `wait-active` or `grace-period` login-session policy
+   gate. With the default `target-ready` policy, this step stops before login is
+   scaled down because continuous SSH endpoints cannot be preserved during that
+   writer hold. After the gate, cxcli runs a Kubernetes migration Job before
+   passive-slot population. The Job
+   mounts the existing jail PVC once at `/store`, copies only present known or
+   explicit paths such as `/store/home`, `/store/data`, and `/store/scripts`
+   into `/store/shared/home`, `/store/shared/data`, and
+   `/store/shared/scripts`, and preserves ownership, permissions, symlinks,
+   ACLs, and xattrs where the runtime supports them. Completion markers live under
    `/store/.cxcli/persistent-migrations/`; reruns skip only marked completed
    paths and fail closed on source/target overlap, top-level source symlinks,
    target symlinks, or unmarked non-empty targets.
@@ -3741,9 +3789,9 @@ The Jail Upgrade rootfs-refresh process is:
 8. Soperator reconciles the changed SlurmCluster/NodeSet desired state. For a
    first-adoption migration, cxcli restores the recorded login and worker sizes
    after the switch. New or restarted login and worker pods mount the refreshed
-   rootfs, and persistent mounts such as `/home`, `/data`, and `/scripts` are
-   mounted back into the new rootfs so user data stays outside the replaceable
-   rootfs slots.
+   rootfs, and persistent mounts such as `/home`, `/data`, `/scripts`, and
+   `/models` are mounted back into the new rootfs so user data stays outside
+   the replaceable rootfs slots.
 9. cxcli resumes Slurm partitions and runs postflight validation. The previous
    slot remains available for rollback until the guarded validation path has
    passed.
@@ -3761,13 +3809,13 @@ generations.
 
 The one-time migration happens only while
 `jailRootfs.adoption.activeSource == "legacy-rootfs"`. After cxcli has copied
-the declared persistent paths into the shared area and switched consumers to a
-slot-backed rootfs, those paths are external to the rootfs lifecycle. Later
-Jail Upgrade runs repopulate only the passive rootfs slot and keep mounting the
-same shared paths into each newly active slot; they do not copy `/home`,
-`/data`, `/scripts`, or other declared persistent paths again. The old legacy
-rootfs and old in-rootfs data remain untouched for rollback until an explicit
-cleanup policy is added.
+the known automatic and explicit persistent paths into the shared area and
+switched consumers to a slot-backed rootfs, those paths are external to the
+rootfs lifecycle. Later Jail Upgrade runs repopulate only the passive rootfs slot
+and keep mounting the same shared paths into each newly active slot; they do not
+copy `/home`, `/data`, `/scripts`, `/models`, or explicit persistent paths
+again. The old legacy rootfs and old in-rootfs data remain untouched for rollback
+until an explicit cleanup policy is added.
 
 ![Soperator jail upgrade workflow](docs/jail-upgrade-workflow.png)
 

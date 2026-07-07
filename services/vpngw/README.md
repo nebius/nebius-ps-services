@@ -1350,6 +1350,8 @@ Applied at VM creation:
 - UFW firewall (allows IPsec UDP 500/4500, ESP)
 - auditd for command auditing
 - Automated security updates (unattended-upgrades)
+- ESP4 preflight that removes only `esp4` deny rules left by temporary
+  Dirty Frag mitigations, then gates VPN services until ESP4 is loadable
 - IP forwarding enabled, ICMP redirects disabled
 
 ### Dynamic Firewall
@@ -1416,6 +1418,40 @@ sudo ipsec statusall
 sudo journalctl -u strongswan-starter -f
 sudo journalctl -u nebius-vpngw-agent -f
 ```
+
+### ESP4 Blocked After Dirty Frag Mitigation
+
+Some Ubuntu images temporarily blocked the kernel `esp4` module under
+`/etc/modprobe.d` as a mitigation for Dirty Frag kernel issues. This gateway
+requires IPv4 ESP for strongSwan/XFRM; if `esp4` remains blocked, IKE can
+establish but ESP CHILD_SAs fail to install in the kernel.
+
+New gateway VMs run an automatic preflight during cloud-init:
+
+- package upgrades still run as usual
+- only `esp4` block lines are commented out with a `nebius-vpngw` marker
+- `esp6`, `rxrpc`, and unrelated module policy are left unchanged
+- if an `esp4` policy change or kernel update requires reboot, config push
+  waits until the VM has rebooted and `modprobe esp4` succeeds
+
+Fixed future images take the no-op path unless Ubuntu package upgrades require
+a reboot.
+
+For an existing gateway that suddenly loses ESP4, use the repair helper from a
+source checkout:
+
+```bash
+./misc/fix-vpngw-esp4.sh --local-config-file <local-config-file>
+# or:
+./misc/fix-vpngw-esp4.sh --host ubuntu@<gateway-ip>
+```
+
+The helper prints all target gateways and requires typing `REBOOT` unless
+`--yes` is passed. It upgrades packages, applies the same ESP4 preflight,
+reboots each gateway serially, confirms the remote boot ID changed, verifies
+`modprobe esp4`, and restarts `strongswan-starter` and `nebius-vpngw-agent`.
+VPN traffic through the target gateway is disrupted for a few minutes during
+reboot.
 
 ### BGP Issues
 

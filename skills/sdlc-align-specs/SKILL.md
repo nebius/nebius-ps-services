@@ -1,18 +1,20 @@
 ---
 name: sdlc-align-specs
-description: "Use only as part of the Agentic SDLC workflow; use when Agentic SDLC requirements, design, plans, tests, implementation, and evidence must be checked for consistency. This is SDLC-specific and does not replace the general `align` skill."
+description: "Use only as part of the Agentic SDLC workflow; use when Agentic SDLC requirements, design, plans, tests, implementation, documentation, and evidence must be checked for consistency. This is SDLC-specific and does not replace the general `align` skill."
 ---
 
 # Align Specs
 
 ## Purpose
 
-Verify that SDLC specs, plans, implementation, tests, and evidence tell one consistent story.
+Verify that SDLC specs, plans, implementation, documentation, tests, and
+evidence tell one consistent story.
 
 ## When To Use
 
 - Before committing or PR creation, specs and evidence need consistency review.
-- A failure suggests drift between requirements, design, tests, implementation, or evidence.
+- A failure suggests drift between requirements, design, tests, implementation,
+  documentation, steering, or evidence.
 - The user asks for SDLC spec alignment.
 
 ## When Not To Use
@@ -23,7 +25,8 @@ Verify that SDLC specs, plans, implementation, tests, and evidence tell one cons
 
 ## Inputs
 
-- Requirements, design, current feature plan, changed files, tests, and evidence.
+- Requirements, design, current feature plan, changed files, tests,
+  documentation, steering, and evidence.
 - Current feature ID or full-run scope.
 
 ## Required Reads
@@ -31,8 +34,9 @@ Verify that SDLC specs, plans, implementation, tests, and evidence tell one cons
 - `docs/requirements.md`.
 - `docs/design.md`.
 - Locked plans.
-- Validation, test, evaluation, UAT, and commit evidence.
+- Validation, test, evaluation, documentation, UAT, and commit evidence.
 - Changed implementation and tests.
+- Project-facing docs touched by the active feature or run.
 
 ## Writes
 
@@ -41,10 +45,13 @@ Verify that SDLC specs, plans, implementation, tests, and evidence tell one cons
 
 ## Process
 
-- Map `REQ-*` to `FEAT-*`, plans, tests, implementation, and evidence.
+- Map `REQ-*` to `FEAT-*`, plans, tests, implementation, documentation, and
+  evidence.
 - Check stable IDs and status fields.
 - Check that no manual spec edits bypassed owner skills.
 - Check that evidence supports claimed state transitions.
+- Check that project-facing docs do not describe behavior that implementation
+  and evaluation evidence have not proven.
 - Classify drift and route to the responsible SDLC skill.
 
 ## Idempotency
@@ -59,6 +66,8 @@ Verify that SDLC specs, plans, implementation, tests, and evidence tell one cons
 - Missing evidence routes to the responsible phase.
 - Spec contradiction maps to `SPEC_GAP`.
 - Plan/design mismatch maps to `DESIGN_DEFECT` or `PLAN_DEFECT`.
+- Documentation mismatch maps to `DOCUMENTATION_DRIFT` and routes to
+  `sdlc-update-documents`.
 
 ## Must Not
 

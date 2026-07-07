@@ -447,12 +447,20 @@ class HookTestCase(unittest.TestCase):
         self.assertIn("sdlc-validate-codes", result.get("reason", ""))
 
     def test_stop_normalizes_short_next_skill_alias(self) -> None:
-        self.active_run(next_skill="validate-codes")
-        result = run_hook(STOP, self.stop_payload(), self.codex_home)
-        self.assertEqual(result.get("decision"), "block")
-        self.assertIn("Use $sdlc-start", result.get("reason", ""))
-        self.assertIn("sdlc-validate-codes", result.get("reason", ""))
-        self.assertNotIn("Next recommended skill: validate-codes", result.get("reason", ""))
+        cases = {
+            "validate-codes": "sdlc-validate-codes",
+            "auto-steering": "sdlc-auto-steering",
+            "update-documents": "sdlc-update-documents",
+        }
+        for short_name, canonical_name in cases.items():
+            with self.subTest(short_name=short_name):
+                self.active_run(next_skill=short_name)
+                result = run_hook(STOP, self.stop_payload(), self.codex_home)
+                reason = result.get("reason", "")
+                self.assertEqual(result.get("decision"), "block")
+                self.assertIn("Use $sdlc-start", reason)
+                self.assertIn(canonical_name, reason)
+                self.assertNotIn(f"Next recommended skill: {short_name}", reason)
 
     def test_stop_continues_for_pause_steering(self) -> None:
         run_dir = self.active_run(next_skill="sdlc-validate-codes")

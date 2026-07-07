@@ -6,11 +6,21 @@
 - Requirements: <REQ IDs>
 - Features: <FEAT IDs>
 
+## Live Experiment Environment
+
+| Field | Value |
+| --- | --- |
+| Status | <not-used, used, unavailable, unsafe> |
+| Requirements Reference | <Live Experiment Environment section or none> |
+| Environment Type | <local, disposable, sandbox, staging, other, none> |
+| Allowed Actions Used | <summary> |
+| Cleanup Completed | <yes, no, not-needed> |
+
 ## Matrix
 
 | Requirement | Flow | Harness | Result | Evidence |
 | --- | --- | --- | --- | --- |
-| REQ-<id> | <journey> | <gui|tui|api|service> | <pass|fail> | <path> |
+| REQ-<id> | <journey> | <gui, tui, api, service> | <pass, fail> | <path> |
 
 ## Cross-Feature Findings
 
