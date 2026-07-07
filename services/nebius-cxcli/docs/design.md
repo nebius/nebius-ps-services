@@ -3483,13 +3483,13 @@ The command boundary is intentional:
   not create parallel worker node groups; external-upgrade-owned external node-group
   template changes, including Kubernetes version, node OS image, Nebius-image
   GPU stack, and aligned SFS filesystem attachments, use direct Nebius
-	  node-group updates. Service-role groups are serial safe-surge by default,
-	  requiring one temporary replacement node per active service group and failing
-	  before mutation when quota/capacity is unavailable. The explicit
-	  lower-continuity zero-surge override quiesces login workloads, one-node
-	  service workloads, and known drain-blocking webhook replicas. During login
-	  node-group updates, cxcli verifies ready login Service endpoints before and
-	  after the node-template change. Worker groups default to zero-surge and can
+  node-group updates. Service-role groups are serial safe-surge by default,
+  requiring one temporary replacement node per active service group and failing
+  before mutation when quota/capacity is unavailable. The explicit
+  lower-continuity zero-surge override quiesces login workloads, one-node
+  service workloads, and known drain-blocking webhook replicas. During login
+  node-group updates, cxcli verifies ready login Service endpoints before and
+  after the node-template change. Worker groups default to zero-surge and can
   use safe-surge waves. cxcli restores each node group's original
   strategy after the active rollout. Render/deploy refuse
   onboarding mode until
