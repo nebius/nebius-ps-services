@@ -2,3 +2,5 @@ interface:
   display_name: "Helm Chart"
   short_description: "Harden and validate Helm charts"
   default_prompt: "Use $helmchart to create, review, or harden a Helm chart with Chart.yaml/appVersion accuracy, values/schema design, safer security and RBAC defaults, dependency-aware lint/render checks, and existing chart CI conventions."
+policy:
+  allow_implicit_invocation: true

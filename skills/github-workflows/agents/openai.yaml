@@ -2,3 +2,5 @@ interface:
   display_name: "GitHub Workflows"
   short_description: "Create and harden repo-aligned GitHub Actions workflows"
   default_prompt: "Use $github-workflows to create or review GitHub Actions workflows for PR CI, merge automation, GitHub Releases, and container image publishing in this monorepo."
+policy:
+  allow_implicit_invocation: true

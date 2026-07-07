@@ -1,0 +1,6 @@
+interface:
+  display_name: "System Design Rules"
+  short_description: "Apply a system-design decision checklist"
+  default_prompt: "Use $system-design-rules to evaluate a system design, compare architecture options, and make trade-off-driven design decisions before implementation."
+policy:
+  allow_implicit_invocation: true

@@ -67,6 +67,45 @@ id_policy: "Requirement IDs are stable. Never renumber existing IDs."
 
 - <system>: <purpose and access method>
 
+<!-- live-experiment-environment -->
+### Live Experiment Environment
+
+| Field | Value |
+| --- | --- |
+| Status | <not-provided, provided, unavailable, unsafe> |
+| Environment Type | <local, disposable, sandbox, staging, other> |
+| Non-Production Confirmation | <yes, no, unknown> |
+| Access Reference | <env var names, local profile, connector, or secret manager reference; no secret values> |
+
+#### Connection And Setup
+
+- <command or step using placeholders only>
+
+#### Allowed Agent Actions
+
+- <read-only checks, disposable test-data creation, safe evaluation commands, or none>
+
+#### Prohibited Actions
+
+- <production mutation, destructive operations, credential export, customer data access, or other limits>
+
+#### Test Data And Reset
+
+- Fixtures: <known safe fixtures or generated disposable data>
+- Cleanup/reset: <cleanup command, reset process, or owner>
+
+#### Safety Approvals
+
+- Requires explicit approval before: <action or none>
+
+#### Evidence Allowed
+
+- <redacted logs, screenshots, transcripts, summaries, or none>
+
+#### Open Environment Questions
+
+- Q-ENV-001: <question or none>
+
 ## Requirement Blocks
 
 <!-- REQUIREMENT: REQ-001 status=draft priority=P0 type=feature -->

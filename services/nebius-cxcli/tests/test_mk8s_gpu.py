@@ -888,6 +888,72 @@ def test_external_mk8s_inventory_enables_gpu_cluster_operator_stack() -> None:
     }
 
 
+def test_external_mk8s_heterogeneous_gpu_inventory_materializes_app_values() -> None:
+    payload = _external_h100_sxm_payload()
+    node_groups = payload["deploy"]["targets"][0]["inventory"]["node_groups"]
+    rdma_group = node_groups["gpu-h100-sxm"]
+    node_groups["gpu-h100-eth"] = {
+        "gpu": True,
+        "node_count": 1,
+        "allocatable": {"nvidia.com/gpu": "1"},
+        "labels": {
+            "nebius.com/driverful": "true",
+            "nebius.com/resource-preset": "1gpu-16vcpu-200gb",
+        },
+    }
+    assert rdma_group["labels"]["nebius.com/resource-preset"] == "8gpu-128vcpu-1600gb"
+
+    selection = resolve_mk8s_gpu_app_selection(payload, app_entries=component_entries("apps"))
+
+    assert len(selection.cluster_contexts) == 2
+    assert {context.gpu_preset for context in selection.cluster_contexts} == {
+        "1gpu-16vcpu-200gb",
+        "8gpu-128vcpu-1600gb",
+    }
+    assert {context.gpu_cluster_enabled for context in selection.cluster_contexts} == {
+        False,
+        True,
+    }
+    assert ensure_mk8s_gpu_app_rows(payload, app_entries=component_entries("apps")) is True
+
+    mk8s_gpu.materialize_mk8s_gpu_app_values(payload)
+
+    gpu_values = next(
+        row["values"] for row in payload["apps"]["charts"] if row["id"] == "nvidia-gpu-operator"
+    )
+    network_values = next(
+        row["values"]
+        for row in payload["apps"]["charts"]
+        if row["id"] == "nvidia-network-operator"
+    )
+    assert gpu_values["driver"]["enabled"] is False
+    assert gpu_values["toolkit"]["enabled"] is False
+    assert gpu_values["driver"]["nvidiaDriverCRD"]["enabled"] is False
+    assert gpu_values["nfd"]["enabled"] is False
+    assert network_values["operator"]["ofedDriver"]["deploy"] is False
+    assert network_values["nfd"]["enabled"] is True
+
+
+def test_external_mk8s_mixed_gpu_stack_sources_fail_fast() -> None:
+    payload = _external_h100_sxm_payload()
+    node_groups = payload["deploy"]["targets"][0]["inventory"]["node_groups"]
+    node_groups["gpu-b200-operator"] = {
+        "gpu": True,
+        "node_count": 1,
+        "gpu_stack_source": "operator_managed",
+        "platform": "gpu-b200-sxm",
+        "preset": "8gpu-128vcpu-1600gb",
+        "allocatable": {"nvidia.com/gpu": "8"},
+    }
+    assert ensure_mk8s_gpu_app_rows(payload, app_entries=component_entries("apps")) is True
+
+    with pytest.raises(
+        RuntimeError,
+        match="mixes Nebius-image and operator-managed GPU stack sources",
+    ):
+        mk8s_gpu.materialize_mk8s_gpu_app_values(payload)
+
+
 def test_external_mk8s_single_gpu_inventory_enables_gpu_operator_only() -> None:
     payload = _external_h100_sxm_payload()
     gpu_group = payload["deploy"]["targets"][0]["inventory"]["node_groups"]["gpu-h100-sxm"]

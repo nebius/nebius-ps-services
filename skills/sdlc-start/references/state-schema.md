@@ -17,6 +17,8 @@ All run artifacts are private local state under
       feature-queue.json
       fingerprints.json
       STEERING.md
+      steering/
+        auto-steering.json
       permissions/
         commit-authorization.json
         pr-authorization.json
@@ -34,12 +36,14 @@ All run artifacts are private local state under
           validate.md
           tests.md
           evaluate.md
+          documents.md
           screenshots/
           transcripts/
           failure-log.md
           commit.md
         uat/
           uat-report.md
+          documents.md
         pr.md
         review.md
         merge.md
@@ -70,12 +74,14 @@ the only project-level file that should change when switching active runs.
     "requirements": 0,
     "context": 0,
     "design": 0,
+    "sdlc-auto-steering": 0,
     "plan": 0,
     "sdlc-tdd": 0,
     "implementation": 0,
     "validation": 0,
     "test": 0,
     "evaluation": 0,
+    "sdlc-update-documents": 0,
     "sdlc-align-specs": 0,
     "sdlc-commit": 0,
     "uat": 0,
@@ -110,12 +116,14 @@ without conversation history.
     "requirements": 0,
     "context": 0,
     "design": 0,
+    "sdlc-auto-steering": 0,
     "plan": 0,
     "sdlc-tdd": 0,
     "implementation": 0,
     "validation": 0,
     "test": 0,
     "evaluation": 0,
+    "sdlc-update-documents": 0,
     "sdlc-align-specs": 0,
     "sdlc-commit": 0,
     "uat": 0,
@@ -135,6 +143,7 @@ without conversation history.
     "validation": null,
     "tests": null,
     "evaluation": null,
+    "documents": null,
     "uat": null,
     "pr": null,
     "review": null,
@@ -204,25 +213,44 @@ write is interrupted, resume by selecting the newest complete checkpoint.
 1. requirements
 2. context
 3. design
-4. plan
-5. sdlc-tdd
-6. implementation
-7. validation
-8. test
-9. evaluation
-10. sdlc-align-specs
-11. sdlc-commit
-12. uat
-13. create-pr
-14. review-pr
-15. sdlc-merge-pr, only after explicit user request
+4. sdlc-auto-steering
+5. plan
+6. sdlc-tdd
+7. implementation
+8. validation
+9. test
+10. evaluation
+11. sdlc-update-documents
+12. sdlc-align-specs
+13. sdlc-commit
+14. uat
+15. create-pr
+16. review-pr
+17. sdlc-merge-pr, only after explicit user request
+
+After UAT, `sdlc-start` may route back to `sdlc-update-documents` in run scope
+before `create-pr` when UAT or final steering changes require project-facing
+documentation updates.
 
 ## Steering
 
 `STEERING.md` is temporary runtime steering, not a second requirements file.
-Use it for urgent corrections, priority overrides, blocker answers, pause
-instructions, or UAT rerun requests. Convert durable product changes through
-`sdlc-create-requirements` and `sdlc-create-design`.
+It is the active-run inbox and ledger for user prompts submitted during an
+active SDLC run, including runtime instructions, requirements-related notes,
+design-related notes, documentation updates, blockers, priority overrides,
+pause instructions, and UAT rerun requests.
+
+`sdlc-auto-steering` owns refreshing `STEERING.md` and
+`steering/auto-steering.json`. Each unresolved entry must have one disposition:
+`runtime-only`, `requirements-change`, `design-change`, `docs-update`,
+`resolved`, `superseded`, `rejected`, or `needs-human`. Raw secrets,
+credentials, private endpoints, customer data, and noisy logs must be redacted
+before they are persisted.
+
+Only compact active reminders and unresolved routing decisions should be
+injected into the agent loop. Durable product changes still route through
+`sdlc-create-requirements` and `sdlc-create-design`; documentation-only changes
+route through `sdlc-update-documents`.
 
 ## Hook Boundary
 
@@ -240,14 +268,18 @@ hook bundle should be refreshed. Add `--register-hooks` when the installer
 should also merge the SDLC `PreToolUse` and `Stop` registration entries into
 `$CODEX_HOME/hooks.json`.
 
-The Stop hook continuation prompt must route through `sdlc-start` and emit
-canonical `sdlc-*` skill names. It may normalize short phase values when
-reading local state, but those aliases must not appear as emitted next-skill
-names. Steering text that pauses work or controls PR creation, including
-`Pause after the current feature. Do not create a PR.`, must be treated as
-coordinator input rather than ignored.
+The Stop hook continuation prompt must route through explicit `$sdlc-start`
+invocation and emit canonical `sdlc-*` skill names. It may normalize short
+phase values when reading local state, but those aliases must not appear as
+emitted next-skill names. Steering text that pauses work or controls PR
+creation, including `Pause after the current feature. Do not create a PR.`,
+must be treated as coordinator input rather than ignored. Broader steering
+classification belongs to `sdlc-auto-steering`, not the hook.
 
-The PreToolUse hook must continue blocking out-of-scope writes such as direct
-runtime hook edits from an unrelated project workspace. Use the explicit hook
-installer option for deliberate runtime sync instead of broadening the write
-allowlist.
+The PreToolUse hook does not block filesystem targets by path. Repository
+files, outside-repo files, credential directories, Codex runtime files, global
+`AGENTS.md`, locked SDLC plans, and private SDLC state are path-allowed for
+operator flexibility. It must still block secret-bearing payloads, dangerous
+shell patterns, and guarded Git or GitHub actions without valid short-lived
+authorization. Use the explicit hook installer option for deliberate runtime
+sync instead of editing installed hook artifacts directly.

@@ -742,7 +742,7 @@ components:
                 filesystems: &soperator_production_sfs_filesystems
                   jail:
                     name: "{target}-jail"
-                    size_gib: 1024
+                    size_gib: 2048
                     block_size_kib: 4
                     mount_tag: "{target}-jail"
                     forbid_deletion: false
@@ -919,7 +919,7 @@ components:
                             emptyDir: {}
                           jail:
                             persistentVolumeClaim:
-                              claimName: jail-pvc
+                              claimName: jail-rootfs-slot-a-pvc
                           jailSubMounts: []
                           sharedMemorySize: 8Gi
                         security:
@@ -1377,7 +1377,7 @@ components:
                             emptyDir: {}
                           jail:
                             persistentVolumeClaim:
-                              claimName: jail-pvc
+                              claimName: jail-rootfs-slot-a-pvc
                           jailSubMounts: []
                           sharedMemorySize: 8Gi
                         security:
@@ -1430,7 +1430,7 @@ components:
                             emptyDir: {}
                           jail:
                             persistentVolumeClaim:
-                              claimName: jail-pvc
+                              claimName: jail-rootfs-slot-a-pvc
                           jailSubMounts: []
                           sharedMemorySize: 8Gi
                         security:
@@ -1718,7 +1718,7 @@ components:
                                 emptyDir: {}
                               jail:
                                 persistentVolumeClaim:
-                                  claimName: jail-pvc
+                                  claimName: jail-rootfs-slot-a-pvc
                               jailSubMounts: []
                               sharedMemorySize: 8Gi
                             security:
@@ -1773,7 +1773,7 @@ components:
                                 emptyDir: {}
                               jail:
                                 persistentVolumeClaim:
-                                  claimName: jail-pvc
+                                  claimName: jail-rootfs-slot-a-pvc
                               jailSubMounts: []
                               sharedMemorySize: 8Gi
                             security:
@@ -2010,7 +2010,7 @@ components:
                             emptyDir: {}
                           jail:
                             persistentVolumeClaim:
-                              claimName: jail-pvc
+                              claimName: jail-rootfs-slot-a-pvc
                           jailSubMounts: []
                           sharedMemorySize: 8Gi
                         security:

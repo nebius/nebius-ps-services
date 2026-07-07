@@ -109,6 +109,7 @@ def _sfs_type_field() -> dict[str, dict[str, Any]]:
             ),
             "default": "NETWORK_SSD",
             "write_default_to_config": True,
+            "required": True,
         }
     }
 
@@ -119,7 +120,7 @@ _SFS_LAYOUT_FILESYSTEM_KEYS = ("jail", "controller-spool", "accounting")
 def _sfs_layout_filesystem_fields() -> dict[str, dict[str, Any]]:
     fields: dict[str, dict[str, Any]] = {}
     field_specs: dict[str, dict[str, Any]] = {
-        "name": {"type_hint": "string"},
+        "name": {"required": True, "type_hint": "string"},
         "existing_id": {
             "options": {
                 "from": "project_filesystems",
@@ -129,10 +130,10 @@ def _sfs_layout_filesystem_fields() -> dict[str, dict[str, Any]]:
             "required": False,
             "type_hint": "string",
         },
-        "size_gib": {"type_hint": "number"},
-        "block_size_kib": {"type_hint": "number"},
-        "mount_tag": {"type_hint": "string"},
-        "forbid_deletion": {"type_hint": "bool"},
+        "size_gib": {"required": True, "type_hint": "number"},
+        "block_size_kib": {"required": True, "type_hint": "number"},
+        "mount_tag": {"required": True, "type_hint": "string"},
+        "forbid_deletion": {"required": True, "type_hint": "bool"},
     }
     for filesystem_key in _SFS_LAYOUT_FILESYSTEM_KEYS:
         for field_name, spec in field_specs.items():
@@ -202,19 +203,22 @@ def _mk8s_soperator_autoscaling_fields() -> dict[str, dict[str, Any]]:
             {
                 "default": True,
                 "write_default_to_config": True,
+                "required": True,
                 "type_hint": "bool",
             }
             if role == "system"
-            else _disabled_bool_wizard_field()
+            else {**_disabled_bool_wizard_field(), "required": True}
         )
         fields[f"{prefix}.min_node_count"] = {
             "default": 3 if role == "system" else 1,
             "write_default_to_config": True,
+            "required": True,
             "type_hint": "number",
         }
         fields[f"{prefix}.max_node_count"] = {
             "default": 5 if role == "system" else 1,
             "write_default_to_config": True,
+            "required": True,
             "type_hint": "number",
         }
     return fields
@@ -236,11 +240,13 @@ def _mk8s_soperator_worker_shape_fields() -> dict[str, dict[str, Any]]:
         fields[f"inputs.soperator.worker_{shape}_total_nodes"] = {
             "default": 1,
             "write_default_to_config": True,
+            "required": True,
             "type_hint": "number",
         }
         fields[f"inputs.soperator.worker_{shape}_nodes_per_group"] = {
             "default": 100,
             "write_default_to_config": True,
+            "required": True,
             "type_hint": "number",
         }
     return fields
@@ -427,6 +433,7 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
         "inputs.cluster.public_endpoint": {
             "default": True,
             "write_default_to_config": True,
+            "required": True,
             "type_hint": "bool",
         },
         "inputs.node_group_defaults.cpu.platform": {
@@ -460,6 +467,7 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
                 "from": "compute_boot_disk_types",
                 "auto_select_first": True,
             },
+            "required": True,
         },
         "inputs.node_group_defaults.cpu.boot_disk.size_gibibytes": {
             "prompt": False,
@@ -468,7 +476,8 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
             "options": {
                 "from": "mk8s_compatible_platforms",
                 "prefix": "gpu-",
-            }
+            },
+            "required": True,
         },
         "inputs.node_group_defaults.gpu.preset": {
             "options": {
@@ -478,7 +487,8 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
                     "reservation_policy_path": "inputs.node_group_defaults.gpu.reservation.policy",
                 },
                 "auto_select_single": True,
-            }
+            },
+            "required": True,
         },
         "inputs.node_group_defaults.gpu.reservation.policy": {
             **_static_sources(
@@ -494,6 +504,7 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
             ),
             "default": "AUTO",
             "write_default_to_config": True,
+            "required": True,
             "type_hint": "string",
         },
         "inputs.node_group_defaults.gpu.gpu_stack_source": {
@@ -515,6 +526,7 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
             ),
             "default": "nebius_image",
             "write_default_to_config": True,
+            "required": True,
         },
         "inputs.gpu_clusters.workers.infiniband_fabric": {
             "options": {
@@ -551,6 +563,7 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
                 "from": "compute_boot_disk_types",
                 "auto_select_first": True,
             },
+            "required": True,
         },
         "inputs.node_group_defaults.gpu.boot_disk.size_gibibytes": {
             "prompt": False,
@@ -598,6 +611,7 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
                 "from": "compute_boot_disk_types",
                 "auto_select_first": True,
             },
+            "required": True,
         },
         "inputs.node_groups.system.boot_disk.size_gibibytes": {
             "prompt": False,
@@ -610,21 +624,25 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
         "inputs.soperator.system_node_count": {
             "default": 3,
             "write_default_to_config": True,
+            "required": True,
             "type_hint": "number",
         },
         "inputs.soperator.controller_node_count": {
             "default": 2,
             "write_default_to_config": True,
+            "required": True,
             "type_hint": "number",
         },
         "inputs.soperator.login_node_count": {
             "default": 2,
             "write_default_to_config": True,
+            "required": True,
             "type_hint": "number",
         },
         "inputs.soperator.accounting_node_count": {
             "default": 2,
             "write_default_to_config": True,
+            "required": True,
             "type_hint": "number",
         },
         **_mk8s_soperator_autoscaling_fields(),
@@ -693,16 +711,19 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
         "inputs.name": {
             "default": "sfs",
             "write_default_to_config": True,
+            "required": True,
             "type_hint": "string",
         },
         "inputs.size_gib": {
             "default": 1024,
             "write_default_to_config": True,
+            "required": True,
             "type_hint": "number",
         },
         "inputs.block_size_kib": {
             "default": 4,
             "write_default_to_config": True,
+            "required": True,
             "type_hint": "number",
         },
         "inputs.mount_tag": {
@@ -711,6 +732,7 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
         "inputs.forbid_deletion": {
             "default": False,
             "write_default_to_config": True,
+            "required": True,
             "type_hint": "bool",
         },
         **_sfs_layout_filesystem_fields(),

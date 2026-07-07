@@ -1,0 +1,6 @@
+interface:
+  display_name: "Create Learning Course"
+  short_description: "Create public-safe learning courses"
+  default_prompt: "Use $create-learning-course to design a public-safe learning course from a learner mission, trusted sources, lessons, exercises, and review checkpoints."
+policy:
+  allow_implicit_invocation: false

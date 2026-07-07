@@ -120,6 +120,9 @@ The helper is intentionally conservative:
   `GRAFANA_URL` or `GRAFANA_TOKEN_FILE` exports.
 - It adds the Codex MCP server only when `codex mcp get "$MCP_SERVER_NAME"`
   cannot find it.
+- It accepts an existing Codex MCP server whose command points at a
+  byte-identical wrapper file, for example a repo source checkout instead of
+  the installed `~/.agents` copy.
 - It does not remove or replace an existing Codex MCP server. If an existing
   server uses the wrong command or environment, inspect it and replace it only
   after the user confirms.
@@ -189,6 +192,8 @@ For `https://grafana.nebius.dev/`, prefer the bundled wrapper:
 The wrapper:
 
 - requires `nebius` and `mcp-grafana` on `PATH`;
+- refuses any `GRAFANA_URL` other than `https://grafana.nebius.dev/`, because
+  the wrapper authenticates with a Nebius IAM token;
 - refreshes `nebius iam get-access-token` into `GRAFANA_TOKEN_FILE`;
 - writes the token file with mode `0600` and does not print the token;
 - prefers `GRAFANA_SERVICE_ACCOUNT_TOKEN_FILE="$GRAFANA_TOKEN_FILE"` when the
@@ -216,20 +221,74 @@ After Codex is restarted with the `grafana-nebius` MCP server enabled, the
 first runtime step is datasource discovery:
 
 ```text
-Use grafana-nebius to list Grafana datasources and identify Prometheus, Loki,
-and Tempo datasources available for my Nebius project.
+Use grafana-nebius to list Grafana datasources and identify PromQL-compatible
+monitoring, Loki logging, and Tempo tracing datasources available for my
+Nebius project.
 ```
 
-Then query only through discovered datasources:
+Nebius-managed Grafana may expose monitoring as a Prometheus datasource or as a
+PromQL-compatible datasource such as `victoriametrics-datasource`. Use the UID
+returned by datasource discovery instead of assuming a fixed datasource name.
+
+For project-scoped metric exploration, discover labels before running a metric
+query:
 
 ```text
-Use grafana-nebius to run a small PromQL query against the Nebius Prometheus
-datasource for project <project_ID>.
+Use grafana-nebius to list label names for the discovered monitoring datasource
+UID <monitoring_datasource_uid> over the last 30 minutes. Identify labels that
+look like project, resource, cluster, instance, namespace, or node identifiers.
+Do not return raw series data.
+```
+
+Then discover bounded values for the project and resource labels:
+
+```text
+Use grafana-nebius to list up to 20 values for label <project_label> in
+datasource <monitoring_datasource_uid> over the last 30 minutes, filtered only
+as needed to find project <project_ID>.
 ```
 
 ```text
-Use grafana-nebius to run a small LogQL query against the Nebius Loki
-datasource for project <project_ID>.
+Use grafana-nebius to list up to 20 values for label <resource_label> in
+datasource <monitoring_datasource_uid> over the last 30 minutes, filtered by
+<project_label>="<project_ID>" and, if known, a narrow resource name or
+resource type.
+```
+
+After labels and metric names are known, run a short, resource-filtered query:
+
+```text
+Use grafana-nebius to run an instant PromQL query in datasource
+<monitoring_datasource_uid> for metric <metric_name>, filtered by
+<project_label>="<project_ID>" and <resource_label>="<resource_ID>". Limit the
+result to the matching resource and summarize only the latest value.
+```
+
+For a short range query, keep the window and step bounded:
+
+```text
+Use grafana-nebius to run a PromQL range query in datasource
+<monitoring_datasource_uid> over the last 15 minutes with a 60 second step:
+<metric_name>{<project_label>="<project_ID>", <resource_label>="<resource_ID>"}.
+Return a compact summary, not every sample.
+```
+
+For logs, query only through a discovered Loki datasource and start with label
+discovery:
+
+```text
+Use grafana-nebius to list Loki label names in datasource <loki_datasource_uid>
+over the last 30 minutes. Identify the project/workspace/bucket and resource
+labels needed for project <project_ID>.
+```
+
+Then run bounded LogQL, such as a count or a very small log limit:
+
+```text
+Use grafana-nebius to run a LogQL count_over_time query in datasource
+<loki_datasource_uid> over the last 15 minutes, filtered by the discovered
+project/workspace label for <project_ID> and the resource label for
+<resource_ID>. Do not return raw log lines unless I ask for them.
 ```
 
 Grafana MCP has documented Prometheus and Loki query tools. For traces, first
@@ -491,8 +550,13 @@ codex mcp get "$MCP_SERVER_NAME"
 ```
 
 If the server exists and points to the desired wrapper command, leave it in
-place. If it exists but points to a different command or token source, do not
-add a second server with the same purpose. Ask before replacing it:
+place. A byte-identical wrapper is accepted only from the installed skill roots
+or from the same skill-relative path inside a Git source checkout under the
+current user's home directory, and only when the file and nearby parent
+directories are not group- or world-writable. If it exists but points to a
+different command, an untrusted byte-identical copy, a different URL, or a
+token source, do not add a second server with the same purpose. Ask before
+replacing it:
 
 ```bash
 codex mcp remove "$MCP_SERVER_NAME"
@@ -557,7 +621,7 @@ Use the grafana-nebius MCP server to list Grafana data sources.
 ```
 
 ```text
-Use the Grafana MCP server to run a small PromQL query against a discovered Nebius Prometheus datasource.
+Use the Grafana MCP server to run a small PromQL query against a discovered Nebius monitoring datasource.
 ```
 
 ```text

@@ -66,11 +66,28 @@ tests:
           value:
             slurm.nebius.ai/nodeset-name: worker-cpu
         documentIndex: 0
-      - notExists:
-          path: spec.customInitContainers
+      - equal:
+          path: spec.customInitContainers[0].name
+          value: cxcli-slurm-config-jail
         documentIndex: 0
-      - notExists:
+      - equal:
+          path: spec.customInitContainers[0].volumeMounts
+          value:
+            - name: jail
+              mountPath: /mnt/jail
+            - name: slurm-configs-jail
+              mountPath: /mnt/slurm-configs
+              readOnly: true
+        documentIndex: 0
+      - equal:
           path: spec.slurmd.volumes.customVolumeMounts[2]
+          value:
+            name: slurm-configs-jail
+            mountPath: /mnt/jail/etc/slurm
+            readOnly: true
+            volumeSource:
+              configMap:
+                name: soperator-slurm-configs
         documentIndex: 0
       - equal:
           path: metadata.name
@@ -92,6 +109,16 @@ tests:
       - equal:
           path: spec.slurmd.volumes.customVolumeMounts[2]
           value:
+            name: slurm-configs-jail
+            mountPath: /mnt/jail/etc/slurm
+            readOnly: true
+            volumeSource:
+              configMap:
+                name: soperator-slurm-configs
+        documentIndex: 1
+      - equal:
+          path: spec.slurmd.volumes.customVolumeMounts[3]
+          value:
             name: nvidia-driver-root
             mountPath: /run/nvidia/driver
             readOnly: false
@@ -102,7 +129,7 @@ tests:
         documentIndex: 1
       - equal:
           path: spec.customInitContainers[0].name
-          value: cxcli-gpu-driver-jail
+          value: cxcli-slurm-config-jail
         documentIndex: 1
       - equal:
           path: spec.customInitContainers[0].image
@@ -110,6 +137,23 @@ tests:
         documentIndex: 1
       - equal:
           path: spec.customInitContainers[0].volumeMounts
+          value:
+            - name: jail
+              mountPath: /mnt/jail
+            - name: slurm-configs-jail
+              mountPath: /mnt/slurm-configs
+              readOnly: true
+        documentIndex: 1
+      - equal:
+          path: spec.customInitContainers[1].name
+          value: cxcli-gpu-driver-jail
+        documentIndex: 1
+      - equal:
+          path: spec.customInitContainers[1].image
+          value: cr.eu-north1.nebius.cloud/soperator/worker_slurmd:4.0.2-slurm25.11.3
+        documentIndex: 1
+      - equal:
+          path: spec.customInitContainers[1].volumeMounts
           value:
             - name: jail
               mountPath: /mnt/jail

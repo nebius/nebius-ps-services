@@ -1,6 +1,6 @@
 ---
 name: sdlc-create-requirements
-description: "Use only as part of the Agentic SDLC workflow; use when the user provides a product idea, ticket, rough prompt, user story, change request, or feature request and needs `docs/requirements.md` created or updated. This Agentic SDLC skill owns requirements.md and preserves stable REQ IDs."
+description: "Use only as part of the Agentic SDLC workflow; use when the user provides a product idea, ticket, rough prompt, user story, change request, feature request, or optional live experiment environment details and needs `docs/requirements.md` created or updated. This Agentic SDLC skill owns requirements.md and preserves stable REQ IDs."
 ---
 
 # Create Requirements
@@ -26,6 +26,8 @@ Convert user intent into durable, testable product requirements in `docs/require
 - User prompt or approved change request.
 - Existing `docs/requirements.md` when present.
 - Existing `docs/design.md` for impact awareness only.
+- Optional live experiment environment details, including safe connection and
+  usage instructions.
 - Optional Jira, Slack, Confluence, GitHub, or pasted context.
 
 ## Required Reads
@@ -44,6 +46,13 @@ Convert user intent into durable, testable product requirements in `docs/require
 
 - Use `assets/templates/requirements.md.template` when creating the file.
 - Extract product goal, users, constraints, non-goals, assumptions, and external systems.
+- Ask for or record the optional Live Experiment Environment when the user can
+  provide one: status, environment type, non-production confirmation, safe
+  access reference, connection steps, allowed and prohibited agent actions, test
+  data, reset process, approvals, and evidence rules.
+- If a user provides raw credentials, private endpoints, customer data, or
+  sensitive logs, replace them with placeholders or safe references and ask for
+  an approved credential delivery mechanism instead of committing the values.
 - Break intent into stable `REQ-*` blocks with acceptance and negative criteria.
 - Add inputs, outputs, validation method, test method, evaluation method, priority, and risk to each requirement.
 - Preserve existing requirement IDs and append new IDs instead of renumbering.
@@ -69,11 +78,18 @@ Convert user intent into durable, testable product requirements in `docs/require
 - Implement code or tests.
 - Rename existing requirement IDs.
 - Delete accepted requirements without explicit user instruction.
+- Store secrets, private endpoints, customer data, or raw logs in
+  `docs/requirements.md`.
+- Mark a live experiment environment safe unless non-production or disposable
+  scope and allowed operations are explicit.
 
 ## Completion Criteria
 
 - `docs/requirements.md` exists.
 - Every requirement has acceptance criteria, validation method, test method, and evaluation method.
+- The Live Experiment Environment section has a status; when provided, it
+  records safe access references, allowed operations, reset instructions, and
+  evidence limits.
 - Open questions and change log are explicit.
 
 ## SDLC Invariants

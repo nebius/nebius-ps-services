@@ -8,6 +8,16 @@
 
 <How the product was controlled.>
 
+## Live Experiment Environment Used
+
+| Field | Value |
+| --- | --- |
+| Status | <not-used, used, unavailable, unsafe> |
+| Requirements Reference | <Live Experiment Environment section or none> |
+| Environment Type | <local, disposable, sandbox, staging, other, none> |
+| Allowed Actions Used | <summary> |
+| Cleanup Completed | <yes, no, not-needed> |
+
 ## Observation
 
 <What was observed.>
@@ -16,7 +26,7 @@
 
 | Criterion | Result | Evidence |
 | --- | --- | --- |
-| REQ-<id> AC-<id> | <pass|fail> | <path-or-summary> |
+| REQ-<id> AC-<id> | <pass, fail> | <path-or-summary> |
 
 ## Failure Classification
 

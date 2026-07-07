@@ -1,6 +1,6 @@
 ---
 name: apply-security
-description: "Use when reviewing or fixing security issues in infrastructure, deployment, Helm, Kubernetes, Terraform, CI/CD workflows, Bash scripts, and application code in Python, Java, JavaScript, TypeScript, or Rust. Use for security scan reports, remediation plans, safe patching, verification, SARIF/JSON/Markdown findings, secret leakage, public exposure, IAM/RBAC, injection, deserialization, crypto, and supply-chain risks."
+description: "Use as a security reviewer, adviser, and safe remediation helper for software design, implementation, code review, infrastructure, deployment, Helm, Kubernetes, Terraform, CI/CD workflows, Bash scripts, and application code in Python, Java, JavaScript, TypeScript, or Rust. Use when work may affect secrets, public exposure, IAM/RBAC, auth, input handling, injection, deserialization, crypto, dependencies, containers, workflows, or supply-chain risk. Advises implicitly; patches only when the current task allows edits and the fix is low-risk."
 ---
 
 # Apply Security
@@ -11,8 +11,31 @@ Review codebases for practical security risk and apply minimal,
 behavior-preserving remediations. Prefer secure defaults, controlled opt-ins,
 and clear exceptions over removing features or rewriting unrelated code.
 
+Act as the general security reviewer for agent sessions that involve design,
+implementation, review, validation, infrastructure, deployment, or automation
+work. When loaded implicitly, stay inside the current task scope and look for
+security implications before or alongside normal engineering work.
+
+## Invocation Policy
+
+Implicit invocation is allowed. When selected implicitly, default to security
+advice and changed-scope review for the current design, code, diff, or
+implementation task.
+
+Do not expand into a broad full-repository scan unless the user asks for a
+repository-wide scan or the coordinator skill explicitly defines that scope.
+Do not patch merely because this skill was loaded implicitly. Apply changes
+only when the user request or current workflow already authorizes edits, and
+only when the fix satisfies this skill's safe auto-fix policy. Plan first and
+ask for explicit approval for high-risk or externally visible public exposure,
+IAM/RBAC, auth, crypto, serialization, database, availability, credential, or
+external-route changes. The low-risk direct-patch examples below remain valid
+when they are compatible with the current task scope and repository contract.
+
 ## Use This Skill For
 
+- Security review and advice during design, implementation, code review, and
+  post-change validation sessions.
 - Security scans across Terraform, Kubernetes manifests, Helm charts, CI/CD
   workflows, shell scripts, and application code.
 - Remediation plans that identify exact files, risk, fix strategy, expected
@@ -27,6 +50,8 @@ and clear exceptions over removing features or rewriting unrelated code.
 
 - Do not treat this skill as a replacement for threat modeling, penetration
   testing, formal compliance attestation, or project-specific security policy.
+- Do not take over purely non-security style, formatting, documentation, or
+  generic code-quality work when no security-relevant surface is in scope.
 - Do not rotate credentials, rewrite history, delete resources, disable
   features, change auth flows, or alter externally visible behavior without
   explicit user approval.
@@ -38,6 +63,8 @@ and clear exceptions over removing features or rewriting unrelated code.
 
 - A repository, branch, PR, diff, directory, file list, chart, module, workflow,
   or pasted code.
+- A design, architecture note, implementation plan, requirements document,
+  threat-sensitive feature, or current changed scope.
 - Optional mode: `scan`, `plan`, `patch`, `verify`, or `explain`.
 - Optional output format: Markdown, JSON, or SARIF-style findings.
 - Optional constraints: target environment, production sensitivity, approved
@@ -46,6 +73,11 @@ and clear exceptions over removing features or rewriting unrelated code.
 Default to `scan` when the user asks for a review and does not ask for edits.
 Default to `plan` when the user asks what should be fixed. Use `patch` only
 when the user asks to fix, harden, remediate, or apply changes.
+
+When invoked implicitly during an implementation or design task, default to
+advisory review of the current changed or proposed scope. If edits are already
+allowed by the active task, apply only safe low-risk remediations and report
+larger security concerns as findings or approval-needed plans.
 
 ## Required References
 
@@ -91,6 +123,8 @@ missing.
      unless the repository already uses them or the user approves them.
 
 4. Apply changes only inside the approved boundary.
+   - Implicit invocation does not by itself approve edits, broad scans, live
+     checks, dependency installation, or external changes.
    - Safe to patch directly: obvious log redaction, missing
      `sensitive = true`, least-privilege workflow `permissions` when compatible,
      non-breaking Helm values, compatible pod/container security contexts,

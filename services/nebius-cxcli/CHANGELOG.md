@@ -6,17 +6,521 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Fixed Soperator discovery guidance so app version, chart package version, and
+  Jail rootfs image-tag version are reported separately. Discovery now records
+  current and target populate-jail image evidence and only reports a Soperator
+  chart upgrade or Jail refresh when selected actions or image comparisons
+  require it.
+- Promoted Soperator jail rootfs refresh to a visible `Jail Upgrade` phase
+  across managed discovery guidance, external discovery/onboarding plans, and
+  managed/external upgrade reports while keeping the durable
+  `populate-jail-refresh` checkpoint id.
+- Added single-SFS active/passive Soperator jail rootfs refresh. Managed
+  installs now use `slot-a`/`slot-b` rootfs PVCs plus generic
+  `jailPersistentMounts` from day one, with two login replicas by default.
+  External upgrade keeps the existing physical jail SFS, creates logical slots
+  under `/mnt/jail/.cxcli/rootfs`, treats legacy `/mnt/jail` as the rollback
+  source during first adoption, and models `/home`, `/data`, `/scripts`,
+  `/models`, plus explicitly declared additional customer paths as persistent
+  jail mounts on the same physical jail SFS. First adoption now migrates those
+  legacy in-rootfs paths into `/mnt/jail/shared/...` with ownership,
+  permissions, symlinks, ACLs, and xattrs preserved where supported.
+- Hardened external Soperator login continuity. `ext-soperator upgrade` now
+  preserves the canonical login Service and Nebius LoadBalancer public/internal
+  address, automatically converts an existing dynamic login LoadBalancer
+  allocation to reusable Nebius allocation state, persists
+  `nebius.com/load-balancer-allocation-id` under
+  `slurmNodes.login.sshdServiceAnnotations`, fails before chart handoff if that
+  allocation cannot be uniquely resolved or updated, warms target login pods before
+  source login retirement, and exposes
+  `--login-session-policy target-ready|wait-active|grace-period` plus
+  `--login-session-drain-timeout`. First-adoption persistent mount migration
+  now refuses its temporary login writer hold under the default `target-ready`
+  policy; operators must choose `wait-active` or `grace-period` for that
+  maintenance window.
+- Changed external service-role node-template rollout to use serial safe-surge
+  by default, with `max_surge=1` and `max_unavailable=0`, while worker groups
+  keep the existing zero-surge default unless worker safe-surge is selected.
+- Documented the Soperator jail upgrade process, active/passive rootfs
+  switch-over semantics, same-SFS shared persistent mounts, the one-time
+  rootfs-to-shared migration flow, and checked-in workflow infographic in the
+  README and design guide.
+- Added a pre-populate active/passive jail capacity gate and expansion workflow.
+  Managed production Soperator defaults now size the cxcli-owned jail SFS
+  backing store at `2048` GiB total capacity, `soperator upgrade` expands that
+  store through config render and Terraform apply, and `ext-soperator upgrade`
+  expands only one identified existing Nebius jail SFS through the Nebius SDK/API.
+  Both commands expose `--jail-sfs-resize-policy fail|prompt|apply` plus
+  `--jail-sfs-resize-to-gib` before passive-slot population.
+- Fixed `nebius-cxcli validate` coverage for external Soperator onboarding
+  configs so malformed `deploy.targets[].soperator_onboarding` sections fail
+  fast even when no enabled Soperator app row reaches the accepted-onboarding
+  semantic gate.
+- Fixed `ext-soperator onboard` Kubernetes target validation so interactive
+  wizard entries and non-interactive `--to-k8s-version` values can lock a full
+  supported sequential final target such as `1.32 -> 1.33 -> 1.34`, while
+  `ext-soperator upgrade` still executes one locked Kubernetes minor hop per
+  run.
+- Aligned Soperator upgrade README, design, and docs-alignment assertions so
+  external onboarding describes the full locked upgrade path with one segment
+  executed per `ext-soperator upgrade` run, and managed upgrade docs name the
+  actual postflight/shared-safety verification boundaries.
+- Focused Soperator README and design navigation so managed setup/upgrade,
+  external onboarding/upgrade, shared Jail Upgrade, Slurm examples, and safety
+  checks are grouped in the same operator-facing order, with matching TOC
+  entries and docs-alignment assertions.
+- Fixed `ext-soperator upgrade --populate-jail-refresh force|manual` so
+  node-template-only locked segments still schedule and display the
+  `populate-jail-refresh` phase.
+- Fixed external Soperator upgrade Markdown/JSON reports, including segment
+  snapshots under `generated/reports/ext-soperator-upgrades/<target>/<segment-id>/`,
+  so checkpoint-planned `populate-jail-refresh` remains visible even when a
+  resume/report-refresh invocation uses a shorter active phase list.
+- Fixed external Soperator upgrade checkpoint refresh so compatible reruns
+  preserve checkpoint-planned `populate-jail-refresh` in both top-level and
+  segment planned phases, allowing interrupted or failed Jail Upgrade runs to
+  restart from the same pending phase.
+- Fixed external Soperator backup recreation-material detection for
+  SlurmCluster-prefixed Secrets and ConfigMaps such as
+  `<slurmcluster>-sshd-keys`, `<slurmcluster>-slurmdbd-configs`, and
+  `<slurmcluster>-slurm-configs`.
+- Changed external Soperator multi-hop execution to persist the accepted locked
+  path in v2 checkpoints as `locked_upgrade_path` plus explicit
+  `upgrade_path_fingerprint`, `current_segment_id`, `completed_segment_ids`,
+  `pending_phase`, and `segment_state`. Repeated identical
+  `ext-soperator upgrade <config.yaml> --target <target> --execute --approve`
+  invocations now advance one locked segment at a time, can resume from the
+  checkpoint snapshot if `config.yaml` loses the onboarding `upgrade_path`, and
+  fail fast on old progress-only checkpoints. The latest external upgrade
+  Markdown/JSON reports now include locked-path progress and each segment also
+  writes a snapshot under
+  `generated/reports/ext-soperator-upgrades/<target>/<segment-id>/`.
+- Clarified `ext-soperator upgrade` help and README wording so operators repeat
+  the same `--execute --approve` command until all accepted locked-path segments
+  are complete; `ext-soperator onboard` is only for a new later path or an
+  intentional repair/replan.
+- Added phase-bounded resume checkpoints for managed `soperator upgrade` and
+  hardened the existing external `ext-soperator upgrade --execute` phase
+  runner. Both commands now record `planned_phases`, `completed_phases`,
+  `pending_phase`, and per-phase `phase_state`; reruns restart the interrupted
+  phase from the beginning, verify completed phases before skipping them, and
+  persist the current pending phase/report on ordinary errors, Ctrl+C, and Typer
+  aborts when Python can run cleanup.
+- Added phase-scoped Soperator upgrade validation summaries. Managed
+  `soperator upgrade` now records `phase_state[<phase>].fast_verification` for
+  every planned phase, including evidence-only setup phases, and both managed
+  and external upgrade execution print a phase validation summary before
+  advancing. Failed phase verification keeps the same phase pending, writes the
+  Markdown/JSON upgrade reports, and stops; full Soperator/Slurm validation
+  remains at managed postflight and external validation-hold boundaries.
+- Changed `ext-soperator upgrade --execute` runs with no explicit
+  `--job-policy` to match managed `soperator upgrade`: real TTY runs default
+  to `interactive` and carry that resolved policy through plan output, backup
+  metadata, and checkpointed execution, while non-TTY and `--no-interactive`
+  runs default to `fail`.
+- Renamed the blocking Soperator Slurm job policy from `wait` to
+  `wait-to-finish` across managed and external Soperator upgrade, scale-down,
+  deploy, and Flux apply surfaces. The old `wait` value is no longer accepted.
+- Fixed Soperator Slurm job-policy checks after in-place node-template
+  replacement so checkpoint resume skips deleted stale `computeinstance-*`
+  worker nodes instead of failing node-alias mapping or querying all Slurm jobs
+  for an empty affected-node scope.
+- Changed external Soperator upgrade MK8s control-plane, node-group, and
+  aligned-SFS reads/mutations to use the Nebius SDK/API directly instead of
+  shelling out to the `nebius` CLI.
+- Fixed the interactive Soperator Slurm job-control screen so selected rows use
+  a high-contrast marker, remaining times tick while the selector is open, and
+  pressing `w` waits in the same screen instead of switching to a separate wait
+  dashboard.
+- Fixed external Soperator upgrade operator output so backup phase comments and
+  live status lines no longer repeat the top-level stage label, backup
+  checkpoint reuse validates the recorded archive size before mutation resumes
+  and falls back to SHA256 for older metadata, Slurm job preflight is announced
+  before the job-control screen opens, pending runs include an explicit upgrade
+  status summary, and the Slurm job-control screen keeps one concise legend
+  while polling Slurm in a background worker. Read-only Slurm probes now return
+  bounded timeout errors instead of freezing long-running upgrade status checks.
+  MK8s node-template status now also surfaces active Nebius node-group rollout
+  state, event code, outdated count, and reconciling state when Kubernetes nodes
+  are still Ready. Jail Upgrade status now includes live Kubernetes,
+  Slurm, Soperator, and populate-jail Job signals instead of an unknown
+  no-checks message.
+- Added `examples/slurm-jobs/submit-job-test.sh --watch-jobs` to watch smoke
+  jobs during an upgrade with timestamped `squeue` snapshots and optional
+  `sacct` accounting evidence for observed job IDs. Watch sample headers are
+  highlighted in color on terminals for easier scanning.
+- Changed `ext-soperator upgrade` output to keep locked-path plans more compact:
+  support policy now avoids repeating the explanatory rule text when the locked
+  path is printed, MK8s node-upgrade phase wording is shorter, execution
+  contracts are summarized, and external-upgrade backup archives now use the
+  accepted source chart/Kubernetes versions in transition names.
+- Added Soperator Jail Upgrade rootfs-refresh handling to managed `soperator upgrade`
+  and external `ext-soperator upgrade`. Chart upgrades now report a
+  `populate-jail-refresh` stage, defaults non-TTY upgrade job handling to
+  `fail` unless a disruptive policy is selected explicitly, and extends
+  Soperator backup archives with recreation coverage evidence for
+  new/replacement-cluster runbooks.
+- Changed managed and external Soperator backup/restore archives to fail fast
+  when required controller/accounting recreation material is missing, record
+  sanitized retained PV/PVC restore manifests that preserve PV `claimRef` and
+  PVC `volumeName`, and restore those bindings before the remaining namespaced
+  resources on new empty target clusters after validating archive checksums,
+  recreation coverage, and required CRD/API availability. Slurm accounting dumps
+  now derive the cluster name from live `slurm.conf`; generated MariaDB metrics
+  Secrets are backed up when present but no longer block backups when absent;
+  VM/NFS retention and final Terraform convergence remain operator runbook steps.
+- Changed Nebius SDK operator-auth precedence so the matching Codex agent
+  `NEBIUS_AUTH_CREDENTIALS_FILE`/`NEBIUS_PROFILE` pair with an existing
+  credential file wins over a static `NEBIUS_IAM_TOKEN`, keeping long-running
+  agent clients on renewable service-account credentials while preserving
+  IAM-token fallback for short commands, stale credential paths, and generic
+  runtime credential files.
+- Changed Soperator `create` and `component add` scaffolding to seed
+  `slurmNodes.login.sshRootPublicKeys` from the configured MK8s node-group SSH
+  public key for newly created Soperator targets so rendered login nodes
+  authorize `root` SSH with the matching private key instead of relying on
+  chart defaults.
+- Added Soperator worker scale commands. Managed `soperator scale-up` /
+  `scale-down` keep cxcli config/render state aligned, use `NodeSetPowerState`
+  for ephemeral workers, and gate scale-down with the existing Slurm job-policy
+  choices. Ad hoc `ext-soperator scale-up` / `scale-down` operate on external
+  clusters with explicit `--project-id`, `--cluster-id`, and `--kube-context`,
+  including scale-to-zero maintenance workflows; explicit non-ephemeral ordinal
+  removal is tail-only until a tested controller-safe `reserveOrdinals` path is
+  added.
+- Renamed the public Soperator Slurm job-test examples to
+  `submit-job-test.sh`, `cpu-job-test.sbatch`, and `gpu-job-test.sbatch`,
+  replaced the wrapper's `--kind` option with `--part-type`, and documented
+  copying the examples to the Slurm login node before submitting jobs with
+  `sbatch`.
+- Expanded `soperator --help` and `ext-soperator --help` examples so each
+  managed and external Soperator subcommand shows copy-pasteable dry-run,
+  execute, config-backed, or standalone command forms where applicable.
+- Hardened external Soperator target Helm cutover so `ext-soperator upgrade`
+  forces target `kube-rbac-proxy` image values to
+  `registry.k8s.io/kubebuilder/kube-rbac-proxy:v0.15.0` for both the Soperator
+  manager and Soperator checks before applying the target chart.
+- Added a managed `soperator upgrade` order guard for old Soperator chart
+  upgrades across the Kubernetes `1.33+` boundary. Managed upgrades still use
+  per-run `config.yaml` plus live MK8s state instead of a locked path, but now
+  block a combined `1.32 -> 1.33` Kubernetes hop plus Soperator chart upgrade
+  when the chart must be upgraded first while Kubernetes stays at the staging
+  minor.
+- Added locked external Soperator upgrade paths. `ext-soperator onboard` now
+  stores the accepted discovery-guided path under
+  `deploy.targets[].soperator_onboarding.upgrade_path` and includes it in the
+  accepted onboarding fingerprint. Repeated `ext-soperator upgrade --execute
+  --approve` runs now advance one locked segment at a time from checkpoint
+  progress, print the next same-command invocation, keep onboarding in place
+  while segments remain, refresh pre-mutation source discovery fingerprints
+  when source/target versions and phase plans still match, and hand back to
+  deploy-owned reconciliation only after the final locked segment completes.
+- Clarified `ext-soperator upgrade` plan phase rows so the approval, MK8s
+  node-template, target GPU stack, Soperator chart, and final cutover phase
+  descriptions show the current locked segment's Kubernetes and Soperator hops
+  instead of only generic lifecycle titles.
+- Clarified `ext-soperator upgrade --dry-run` output for preserved storage and
+  compute layouts, restore target scope, and external Kubernetes hop scope. The
+  plan now labels keep-existing modes as layout preservation, uses migration
+  work labels for storage/compute remediation, states that restore-capable
+  backups restore only to a new/replacement cluster, and makes clear that
+  external node-template work is one accepted Kubernetes minor hop per upgrade
+  run.
+- Organized `ext-soperator upgrade --dry-run` output into concise sections for
+  target discovery, the locked upgrade path, accepted onboarding actions,
+  node-template rollout, phases, execution controls, and execution contracts.
+- Added spinner/status feedback while `ext-soperator upgrade --dry-run`
+  refreshes external Soperator discovery and Nebius provider inventory before
+  printing the plan.
+- Fixed `ext-soperator onboard --cluster-id` interactive runs so `--cluster-id`
+  only preselects the cluster; storage, compute, and external node-template
+  rollout prompts still run unless `--no-interactive` or explicit rollout flags
+  are supplied.
+- Simplified external Soperator render/onboard guidance so accepted upgrade work
+  is listed under `Accepted onboarding actions:` without extra route/deploy
+  rationale before the next-step commands.
+- Fixed `render` overwrite confirmation so first render does not warn or require
+  `--force` when the only existing generated files are command-owned lifecycle
+  reports such as `generated/reports/soperator-discovery/<target>/manifest.json`;
+  rerenders over render-owned artifacts still prompt or require `--force`.
+- Added public Soperator Slurm upgrade smoke job examples with a configurable
+  submitter for repeated CPU/GPU `sbatch` submissions, array mode, optional
+  exclusive placement, interactive job-policy demonstrations, and a `--login`
+  flag that stages the examples under `/root/testjobs` before opening a
+  login-node SSH session there. The submitter now defaults to the GPU job
+  template for the standard Nebius `main*` partition without requiring
+  `--part-type`.
+- Extended Soperator Slurm job-policy coverage to chart-driven worker
+  reconciliation. Managed `soperator upgrade`, external `ext-soperator
+  upgrade`, local `deploy`, and `flux apply` now gate disruptive Soperator
+  worker-pod reconciliation on all live worker NodeSets when a live
+  SlurmCluster exists, while first installs with no live SlurmCluster skip the
+  interactive job gate.
+- Extended managed `soperator upgrade` and external `ext-soperator upgrade`
+  Slurm job gates from running allocations to affected Slurm jobs, including
+  pending jobs in affected partitions or requested/scheduled on affected nodes.
+  Interactive job control now uses an aligned Textual table in prompt-capable
+  terminals, reserves `a` for select/clear all and `i` for invert selection,
+  uses uppercase `C` for all displayed cancellation, and uses uppercase `Q`/`H`
+  for all displayed active requeue actions. External upgrade status spinners
+  pause while prompts are active, and wait output shows a per-second countdown
+  dashboard between `squeue` polls. Requeue policies reject pending jobs with
+  guidance to cancel, wait, choose another displayed job, or abort.
+- Changed default Soperator Slurm job-policy handling so managed and external
+  upgrade runs default to `interactive` only in a real TTY and to `fail` in
+  non-TTY or `--no-interactive` automation, while local `deploy` and `flux
+  apply` still default to `wait-then-cancel` outside a TTY. The default
+  `--job-wait-timeout` is now `1h`; after that timeout cxcli cancels only the
+  still-displayed affected jobs and proceeds only after they clear.
+- Changed existing config-backed commands so `client_info.nebius.tenant_id` is
+  optional when the command can operate from `project_id` and `region_id`.
+  `create` and deployments-root `ext-soperator onboard` still require tenant
+  identity to validate scope, write `config.yaml`, and resolve the canonical
+  tenant/project folder path. Quota checks continue with project-scope quota
+  data when tenant id is absent and report a partial-coverage warning for
+  skipped tenant quota and Capacity Dashboard checks.
+- Hardened Soperator upgrade and deploy guardrails. External Soperator
+  affected-node Slurm job handling now fails closed when Kubernetes nodes cannot
+  be mapped to Slurm node names or Slurm rejects the scoped node filter, so
+  `--job-policy cancel-all` and requeue-all policies cannot act on an
+  unfiltered cluster-wide job list. External upgrade worker NodeSet readiness
+  now prefers `readyReplicas` over total replicas, validation-hold fast
+  verification records absent Soperator smoke validations as skipped, and
+  deploy smoke detects failed one-shot `populate-jail` Jobs with
+  `backoffLimit: 0`.
+- Hardened external Soperator Kubernetes-hop upgrades. Completed prior-hop
+  checkpoints no longer reuse stale backup metadata for the next hop,
+  same-version Soperator onboarding now plans external node-template work for
+  Kubernetes minor upgrades, zero-surge service-node rollouts temporarily reduce
+  the security-profiles webhook by one replica and restore it after rollout, and
+  target completion now re-runs shared protected-state safety verification
+  before reporting success.
+- Hardened Soperator deploy smoke around jail startup. When the
+  `populate-jail` Job is still active after the same-node `jail-mount` pod can
+  see the jail `.populated` sentinel, cxcli now deletes only the stuck Job pod
+  and waits for the Job to complete. Deploy smoke also fails on failed or
+  crash-looping Soperator pods, so GPU driver-jail and local jail failures no
+  longer pass as a clean deployment snapshot.
+- Added Soperator/Kubernetes upgrade support-policy enforcement for managed and
+  external Soperator upgrade paths. cxcli now records matched support rule
+  status in onboarding, dry-run/execute reports, and managed checkpoints; fails
+  `unsupported` and `not_validated` paths before mutation; supports an explicit
+  `--allow-unsupported-soperator-upgrade-path` advanced/testing override for
+  Soperator policy rejections only; and continues to reject Kubernetes skipped
+  minor upgrades such as `1.31 -> 1.34`.
+- Added read-only Soperator discovery commands: `soperator discover` for
+  cxcli-managed clusters and `ext-soperator discover` for external clusters.
+  Both write the canonical support-safe
+  `generated/reports/soperator-discovery/<target>/` bundle with manifest,
+  identity, Kubernetes, Slurm, accounting, customizations, fingerprints,
+  findings, and summary files; discovery is not a backup and omits raw Secret
+  values, SQL, DB dumps, tokens, and cert material. External discovery can now
+  run before onboarding with `--project-id <project-id> --cluster-id
+  <mk8scluster-id>` and no config/deployments path; `--tenant-id` is optional
+  metadata for that standalone cluster-id mode, and `--client-name` can select a
+  runtime-auth cache profile when project-scoped cache selection is needed. The
+  discovery footer and summary now include a Soperator/Kubernetes upgrade path
+  evaluation, including the canonical staged order of Kubernetes `1.31 -> 1.32`,
+  Soperator `1.22.3 -> 4.0.2-ps.3`, then Kubernetes `1.32 -> 1.33 -> 1.34`
+  for older external sources targeting the cxcli-pinned chart. `--output-dir`
+  now selects the bundle root while preserving
+  `generated/reports/soperator-discovery/<target>/` below it, and discovery
+  output now prints Soperator install status plus the detected Soperator version
+  when Helm release metadata or live Soperator resource labels provide one.
+- Added standalone restore-capable Soperator backup/restore commands:
+  `soperator backup`, `soperator restore`, `ext-soperator backup`, and
+  `ext-soperator restore`. The backup archive now includes raw and
+  restore-ready Kubernetes in-cluster resources plus chart-managed MariaDB
+  accounting DB material when live chart-managed accounting is present, while
+  restore validates checksums and stays dry-run until `--execute --approve`.
+  Restore help and docs now explicitly state that restore is DR/new-empty-target
+  only, not same-cluster rollback, and must not target the original/source
+  cluster or an existing Soperator namespace.
+  External backup can now also run before onboarding with
+  `ext-soperator backup --project-id <project-id> --cluster-id
+  <mk8scluster-id>` or a direct `--kube-context`; standalone `--cluster-id`
+  backup now documents that `--access external` selects the public endpoint and
+  `--access internal` selects the private endpoint, and rejects `--access` with
+  standalone `--kube-context` because the kubeconfig context already selects
+  its endpoint.
+- Fixed standalone external Soperator backup planning to reuse live Helm
+  release evidence from the source cluster, report source kind
+  `external-soperator-backup`, and write plain backup archive names without
+  fake chart/Kubernetes upgrade transitions.
+- Changed external Soperator backup archive names to start with
+  `external-soperator-backup-` so they are easy to distinguish from
+  cxcli-managed `soperator backup` archives.
+- Added terminal spinners around Soperator backup and discovery collection so
+  managed and external `soperator` / `ext-soperator` backup and discover
+  commands show progress during quiet live-cluster work.
+- Fixed Soperator backup and discovery `wckey` snapshots to use Slurm-portable
+  `Cluster,User,WCKey` fields, and made accounting DB dump/restore resolve the
+  target-specific `*-acct-db-0` pod instead of assuming the old static pod name.
+  This avoids backup failures on clusters where `sacctmgr show wckey` does not
+  expose an `Account` field or the MariaDB pod is named after the Slurm cluster.
+- Fixed Soperator backup/restore for clusters without chart-managed Slurm
+  accounting. Backup now records accounting snapshots and restore metadata as
+  not collected instead of failing when `sacctmgr` reports that slurmdbd
+  accounting is unavailable.
+- Fixed Soperator accounting DB backup dumps and restore imports to authenticate
+  with the chart-provided `MARIADB_ROOT_PASSWORD` environment instead of
+  assuming local root access without a password.
+- Added Soperator upgrade Slurm requeue policies: `--job-policy requeue-selected`
+  with repeated `--requeue-job`, `--job-policy requeue-all`,
+  `--job-policy requeue-hold-selected` with repeated `--requeue-job`, and
+  `--job-policy requeue-hold-all`. The policies call `scontrol requeue` or
+  `scontrol requeuehold`, wait for selected jobs to leave nodes selected for
+  the MK8s rollout, and still stop if those jobs keep running there. The
+  managed Soperator upgrade path drains cxcli-owned Slurm nodes before requeue
+  or requeue-hold.
+- Fixed managed Soperator upgrade protected-config comparison so cxcli-owned
+  Slurm drains and Nebius node replacement state no longer look like customer
+  config drift after an MK8s node-template phase.
+- Hardened MK8s node-template waits to require two consecutive node-group ready
+  observations before advancing to the next staged node group.
+- Changed managed `soperator upgrade` into the canonical cxcli-managed
+  Soperator cluster upgrade command. It now accepts `--to-chart-version`,
+  optional MK8s node-template target flags, Slurm affected-job policy flags, and
+  `--backup-dir`; creates a restore-capable local backup with raw Kubernetes
+  Secret material plus optional chart-managed MariaDB accounting DB dump before mutation;
+  and writes the combined checkpoint/report without requiring a separate
+  render/deploy step.
+- Changed external Soperator execution to the canonical
+  `ext-soperator upgrade` command. The old `ext-soperator migrate` command is
+  no longer registered; external upgrades now require prior accepted
+  `ext-soperator onboard` data, refresh discovery before planning or mutation,
+  create a restore-capable backup before mutation, use
+  `.nebius-cxcli/ext-soperator-upgrades/<target>/checkpoint.json`, write
+  `generated/reports/ext-soperator-upgrade-report.md` and `.json`, and handle
+  affected Slurm jobs with `--job-policy` before MK8s rollout work.
+- Added fast stage-scoped verification after every executed
+  `ext-soperator upgrade --execute` stage, including the final post-upgrade
+  MK8s and Helm readiness checks. Failed stage verification keeps the same
+  phase pending instead of advancing, records
+  `phase_state[<stage>].fast_verification` in the checkpoint, and writes the
+  Markdown `Stage Fast Verification` rollup plus JSON `stage_verification`
+  details into `generated/reports/ext-soperator-upgrade-report.md` and `.json`.
+- Added the same fast stage-scoped verification gate to managed
+  `soperator upgrade` runs. Managed upgrades now record per-stage
+  `fast_verification` results in the checkpoint, including the MK8s
+  post-validation boundary, stop before the next stage when a stage gate fails,
+  and write the Markdown `Stage Fast Verification` rollup plus JSON
+  `stage_verification` details into
+  `generated/reports/soperator-upgrade-report.md` and `.json`. Shared
+  stage-verification payload/report helpers are reused by both managed and
+  external Soperator upgrade paths.
+- Improved managed and external Soperator upgrade visibility so runtime phase
+  output and reports include the operator-facing top-level stage:
+  `MK8s Node Upgrades` or `Soperator Upgrade`.
+- Added external Soperator onboarding target chart selection. The
+  `ext-soperator onboard` command now accepts `--to-chart-version`, prompts
+  with the `component_sources.yaml` Soperator chart pin by default, validates
+  non-default values against the configured Soperator chart source when source
+  validation is enabled, and keeps
+  `deploy.targets[].soperator_onboarding.target_version` aligned with the
+  Soperator app chart row.
+- Fixed external Soperator onboarding Kubernetes target selection. Interactive
+  onboarding now prints the discovered live Kubernetes minor, defaults external
+  node-template work to the next supported minor hop instead of the global latest
+  minor, prints and stores current/target Kubernetes versions in discovery
+  output, fails fast when the discovered live minor is newer than cxcli's
+  supported external onboarding target, and keeps
+  `ext-soperator upgrade --dry-run` plan output aligned with those values.
+- Improved Soperator discovery and external onboarding guidance. Discovery
+  summaries now include an `Upgrade Guidance` section with the matched
+  Soperator/Kubernetes upgrade-path rule without blocking read-only collection,
+  while onboarding decision summaries and external upgrade dry runs reuse the
+  same upgrade-path wording before execute-time gates.
+- Clarified external Soperator safe-surge worker wave controls. Fixed
+  `worker_wave_groups` now owns the exact concurrent worker-group count, while
+  `max_parallel_worker_groups` is accepted only as an optional cap for
+  percent-based safe-surge waves; the onboarding wizard no longer asks for the
+  redundant cap after a fixed group count is selected.
+- Changed external Soperator safe-surge node-template execution so
+  service-role node groups use the same temporary safe-surge strategy when
+  selected, while one-node service workload quiesce remains limited to
+  zero-surge service rollouts.
+- Fixed external Soperator rolling compute migration to stamp both
+  `slurm.nebius.ai/nodeset` and `slurm.nebius.ai/nodeset-name` on created
+  service-role node groups, preventing cloned controller labels from blocking
+  accounting pod scheduling after chart takeover.
+- Fixed external Soperator worker NodeSet rendering for legacy source clusters
+  whose NodeSet name and MK8s worker-group role label differ. cxcli now falls
+  back to the single discovered worker group, samples Slurm's
+  `slurmd -C --parameters=l3cache_as_socket` topology for GPU workers, and adds
+  `SlurmdParameters=l3cache_as_socket` to generated target values when no
+  explicit Slurm daemon parameters are configured, avoiding GPU GRES affinity
+  `INVAL` workers after upgrade.
+- Fixed external Soperator target cutover to reconcile Slurm worker runtime
+  `NodeAddr` and `InstanceId` values from the current worker pods after chart
+  takeover, and made zero-downtime safety fail when post-upgrade Slurm workers
+  are `DOWN`, drained, failed, or `NOT_RESPONDING`.
+- Fixed external Soperator safety verification to treat baseline-suspended
+  ActiveChecks as restored when they remain suspended, and to classify
+  migration-owned chart takeover and node replacement deltas as intentional
+  external-upgrade drift instead of remediation-required customer drift.
+- Clarified external Soperator onboarding output. The read-only discovery
+  summary no longer prints future external upgrade phases or selected actions
+  as if onboarding will mutate the cluster, and onboarding now prints explicit
+  accepted storage and compute layout decisions after mode resolution.
+- Reworded compatible non-standard Soperator Helm release discovery as
+  `helm-release-detected`, including the detected release name, namespace,
+  chart, source version, and matched migration profile in the onboarding
+  finding message. Soperator discovery now enumerates Helm releases across all
+  namespaces and stores only Soperator-like releases, so non-standard Soperator
+  namespaces are reachable by onboard/discover without adding unrelated Helm
+  release inventory to the discovery bundle.
+- Added a shared Soperator upgrade safety layer used by both managed
+  `soperator upgrade` and external `ext-soperator upgrade`. Both flows now
+  capture protected customer state after backup and before mutation, run the
+  same bounded read-only post-upgrade fast verification, report before/after
+  protected-state hashes and deltas, expose `--approve-remediation` for
+  remediation-required deltas while keeping blocked data-loss/downtime deltas
+  non-overrideable, keep protected-state report payloads to redacted keys and
+  fingerprints instead of raw custom-resource specs or annotations, fail closed
+  when approved external mutation lacks restore-capable backup metadata, and
+  print/checkpoint the current upgrade phase with component-aware operator
+  comments and terminal spinners around quiet long-running steps from preflight
+  through final report writing, while keeping heavy follow-ups such as backend
+  metrics/log queries, Terraform drift
+  review, and full Slurm acceptance audits out of the required fast gate.
+- Fixed `ext-soperator onboard` for external MK8s clusters with heterogeneous
+  GPU worker groups. Target-scoped GPU app value materialization now accepts
+  mixed GPU presets and RDMA/non-RDMA groups when the resolved chart defaults do
+  not conflict, so onboarding no longer fails with the single GPU
+  platform/preset error before writing `config.yaml`.
+- Improved CLI `--help` example readability. Example sections now render each
+  command behind a visible accent-colored `|` separator so wrapped help output
+  makes the beginning of every example easier to scan, and trailing explanatory
+  prose is split into a separate `Comments:` block.
+- Aligned `soperator` and `ext-soperator` help examples so managed and external
+  upgrade dry-run/execute flows render as copy-pasteable command lines, and
+  expanded the README common flag index to include `ext-soperator discover`,
+  `ext-soperator onboard`, and `ext-soperator upgrade`.
+- Changed `acceptance-test smoke` and `acceptance-test benchmark` to require an
+  explicit `--suite`. Omitted suites now fail fast with a warning instead of
+  selecting a default K8s acceptance path.
+- Tightened the create/component-add wizard labels for MK8s, SFS, and
+  Soperator production-cluster prompts. Active cluster shape, SFS filesystem,
+  GPU default, service sizing, and worker-shard controls now render as required
+  while true opt-in alternatives such as SFS `existing_id` and optional
+  Soperator child charts stay optional.
 - Documented the Soperator cluster upgrade split in the README. Full
   cxcli-managed cluster upgrades run the Terraform-managed MK8s layer first and
   the Soperator chart upgrade second only when both layers change, while
   external clusters use `ext-soperator onboard` and guarded `ext-soperator
-  migrate` for onboarding-selected MK8s/Soperator migration work.
+  upgrade` for onboarding-selected MK8s/Soperator upgrade work. The docs now
+  spell out the staged upgrade process, validation gates, Slurm job-policy
+  decisions, report/checkpoint outputs, and completion handoff for both paths.
 - Added Soperator GPU driver-jail guardrails for Nebius-image GPU workers.
   cxcli now materializes the chart-owned `gpuDriverJail` contract for managed
   and migrated GPU NodeSets, fails fast on conflicting external mounts, and
   validates both the static NodeSet mount/init contract and Slurm job-root
   visibility of non-empty `libcuda.so.1`, `libnvidia-ml.so.1`, and
-  `nvidia-smi` in acceptance smoke and Slurm NCCL benchmark reports.
+  `nvidia-smi` in acceptance smoke and Slurm NCCL benchmark reports. The
+  deploy/upgrade snapshot skips the static NodeSet contract for known
+  pre-contract charts such as `4.0.1-ps.2`, then enforces it for
+  `4.0.2-ps.3` and newer.
 - Fixed Soperator deploy smoke to wait through bounded first-run storage and
   pod startup before evaluating the Pending-pod snapshot. It still does not wait
   for full Slurm availability or run Slurm jobs during deploy.
@@ -56,17 +560,19 @@ All notable changes to this project are tracked here. This changelog follows
   kubeconfig handoff metadata when available and fail fast with deploy/flux
   remediation when the target context is missing.
 - Changed `acceptance-test benchmark` to be suite-driven instead of NCCL-only
-  in its command contract. A bare benchmark run now defaults to `k8s-nccl`
-  across all generated targets, all schedulable GPU nodes, no cxcli timeout,
-  and a 300 Gbps RDMA bandwidth threshold. `slurm-nccl` is the canonical Slurm
-  NCCL suite. Slurm NCCL now honors the same run-only `--max-nodes`, `--timeout`, and
+  in its command contract. Operators must choose `--suite k8s-nccl` or
+  `--suite slurm-nccl`; after a suite is selected, omitting `--target` still
+  runs across all generated targets, omitting `--max-nodes` uses all
+  schedulable GPU nodes, omitting `--timeout` leaves no cxcli timeout, and the
+  RDMA bandwidth threshold defaults to 300 Gbps. `slurm-nccl` is the canonical
+  Slurm NCCL suite. Slurm NCCL now honors the same run-only `--max-nodes`, `--timeout`, and
   `--average-bus-bandwidth-threshold-gbps` benchmark flags, and smoke suite
   help now uses canonical `slurm` and `k8s-cuda` suite names.
-- Changed `acceptance-test smoke` to default to all generated targets when
-  `--target` is omitted, matching benchmark target selection. Removed the
-  ambiguous `--k8s` and `--soperator` acceptance-test selectors; operators now
-  select runtime behavior through `--suite`: `k8s-cuda` or `slurm` for smoke,
-  and `k8s-nccl` or `slurm-nccl` for benchmark.
+- Changed `acceptance-test smoke` to run all generated targets when `--target`
+  is omitted after a suite is selected, matching benchmark target selection.
+  Removed the ambiguous `--k8s` and `--soperator` acceptance-test selectors;
+  operators now select runtime behavior through `--suite`: `k8s-cuda` or
+  `slurm` for smoke, and `k8s-nccl` or `slurm-nccl` for benchmark.
 - Updated the bundled Soperator portable chart pin to `4.0.2-ps.3`, matching
   the current parent chart package release while keeping local-source
   resolution tied to `helm-charts/soperator/Chart.yaml`.
@@ -138,8 +644,8 @@ All notable changes to this project are tracked here. This changelog follows
   Slurm availability or start Slurm jobs. Exhaustive
   all-node Slurm smoke moves to
   `acceptance-test smoke --suite slurm`, and K8s/Slurm NCCL performance work
-  moves to explicit `acceptance-test benchmark` runs. Smoke and benchmark both
-  default to all generated targets when `--target` is omitted. The
+  moves to explicit `acceptance-test benchmark` runs. After a suite is selected,
+  smoke and benchmark both run all generated targets when `--target` is omitted. The
   Soperator validation JSON detail report schema remains
   `nebius-cxcli-soperator-cluster-validation/v2`; it stores command output as
   line arrays and keeps structured per-partition `partition_hostnames` and
@@ -239,8 +745,8 @@ All notable changes to this project are tracked here. This changelog follows
   `upgrade node-group --execute --approve` writes
   `upgrade-node-group-report.md` / `.json` at the approved pre-mutation gate,
   external Soperator source discovery is now
-  `ext-soperator-onboard-source-discovery-report.json`, external migration uses
-  `ext-soperator-migrate-report.md`, and cxcli-managed Soperator chart upgrades
+  `soperator-discovery/<target>/manifest.json`, external upgrade uses
+  `ext-soperator-upgrade-report.md`, and cxcli-managed Soperator chart upgrades
   use `soperator-upgrade-report.md` / `soperator-upgrade-report.json`; the old
   generic report names are not kept as aliases.
 - Clarified `soperator upgrade` dry-run output: the wizard shows the current
@@ -307,7 +813,7 @@ All notable changes to this project are tracked here. This changelog follows
 - Removed the Soperator compatibility redirect from
   `upgrade helm-chart apps:soperator@<target>`; Soperator chart upgrades now
   fail fast there and point to the single canonical
-  `soperator upgrade <config.yaml> --target <target> --to-version <version>`
+  `soperator upgrade <config.yaml> --target <target> --to-chart-version <version>`
   command.
 - Exposed the live Nebius MK8s compatibility-matrix summary in infra upgrade
   plans: `upgrade node-template` now prints the returned OS and
@@ -413,7 +919,7 @@ All notable changes to this project are tracked here. This changelog follows
 - Hardened cxcli safety paths: managed Terraform/Flux downloads now verify
   published SHA256 manifests, use bounded reads, atomically install cached
   binaries, and reject corrupted cache entries; local SMTP settings and
-  Soperator migration checkpoints and `ext-soperator-migrate-report.md` are written
+  external Soperator upgrade checkpoints and `ext-soperator-upgrade-report.md` are written
   atomically; Nebius SDK pagination loops fail fast on repeated page tokens;
   and CLI-sourced IAM tokens are no longer written into process-global
   environment variables.
@@ -425,17 +931,17 @@ All notable changes to this project are tracked here. This changelog follows
   validation, and writes command-owned Soperator upgrade reports.
 - Clarified the README Soperator command map so the cxcli-managed
   `nebius-cxcli soperator` path is documented separately from
-  `nebius-cxcli ext-soperator` external onboarding and migration, including
+  `nebius-cxcli ext-soperator` external onboarding and upgrade, including
   when external targets hand back to the normal deploy-owned upgrade path and
   which non-interactive onboarding flags persist external worker rollout
   defaults. The docs and CLI help now call the create/deploy-owned path
   cxcli-managed Soperator to avoid confusion with the Nebius Console Managed
-  Soperator service. The README now also calls out that `ext-soperator migrate`
+  Soperator service. The README now also calls out that `ext-soperator upgrade`
   and checkpointed `soperator upgrade` runs should finish from the same
   laptop/workdir/operator account because their resume checkpoints are local
-  under `.nebius-cxcli/soperator-migrations/` and
+  under `.nebius-cxcli/ext-soperator-upgrades/` and
   `.nebius-cxcli/soperator-upgrades/`.
-- Changed the `ext-soperator migrate` no-migration-actions route from a red
+- Changed the `ext-soperator upgrade` no-upgrade-actions route from a red
   generic error paragraph to a note-style handoff with copy-paste
   `validate`, `render`, and `deploy` commands on separate first-column lines.
 - Standardized CLI follow-up command output so suggested commands from create,
@@ -446,13 +952,13 @@ All notable changes to this project are tracked here. This changelog follows
   color across create, component edit, render, Soperator onboarding, deploy,
   quota, WireGuard, and upgrade guidance while keeping the command text
   directly copyable.
-- Renamed the external Soperator migration report and execute summary field
-  from `Mutation performed` to `Migration performed` so completed migrations are
+- Renamed the external Soperator upgrade report and execute summary field
+  from `Mutation performed` to `Upgrade performed` so completed upgrades are
   easier to recognize.
 - Fixed `render` so the transactional `generated/` replacement preserves
   command-owned runtime reports such as `deploy-report.md`, external Soperator
-  `ext-soperator-onboard-source-discovery-report.json`,
-  `ext-soperator-migrate-report.md`, `upgrade-node-template-report.md` /
+  `soperator-discovery/<target>/manifest.json`,
+  `ext-soperator-upgrade-report.md`, `upgrade-node-template-report.md` /
   `.json`, `upgrade-node-group-report.md` / `.json`,
   `soperator-upgrade-report.md` / `soperator-upgrade-report.json`, and JSON
   detail reports referenced by those Markdown reports, while still removing
@@ -495,10 +1001,10 @@ All notable changes to this project are tracked here. This changelog follows
   and `accounting` to two fixed nodes each. Their catalog-owned CPU role shape
   now uses `cpu-d3/32vcpu-128gb` as the production minimum.
 - Clarified external Soperator safe-surge rollout output so the dry-run/execute
-  plan says the spare worker quota and capacity gate runs during `--execute`
-  preflight before any cluster mutation, and pinned that gate with executor
-  regression coverage.
-- Clarified external Soperator migration status output so migration-owned
+  plan says the spare service/worker quota and capacity gate runs during
+  `--execute` preflight before any cluster mutation, and pinned that gate with
+  executor regression coverage.
+- Clarified external Soperator upgrade status output so external-upgrade-owned
   replacing or cordoned rollout nodes are reported in a separate colored
   `Nodes:` section as transition activity instead of `problem nodes`, while
   node-group readiness stays under `Node groups:` and unrelated NotReady nodes
@@ -546,21 +1052,21 @@ All notable changes to this project are tracked here. This changelog follows
   check, and includes that value in deploy/migration summaries when Kubernetes
   NCCL is skipped because Soperator workers already own the Ready GPUs.
   One-GPU Slurm clusters report the Slurm NCCL benchmark as skipped.
-- Fixed external Soperator migration validation resume. The Slurm NCCL
+- Fixed external Soperator upgrade validation resume. The Slurm NCCL
   validation now holds the selected multi-node allocation with `salloc` and
   launches the MPI benchmark once from a nested one-task `srun`, so Slurm does
   not collapse the allocation to one node or start duplicate launchers. When a
   previously pending migration phase succeeds on rerun, the checkpoint now
   clears the stale pending phase and reason immediately before later phases
   continue.
-- Improved external Soperator migration completion handoff. After a fully
-  completed `ext-soperator migrate --execute`, cxcli now performs a live
-  post-migration discovery refresh and rewrites `config.yaml` plus
-  `generated/reports/ext-soperator-onboard-source-discovery-report.json` into
+- Improved external Soperator upgrade completion handoff. After a fully
+  completed `ext-soperator upgrade --execute`, cxcli now performs a live
+  post-upgrade discovery refresh and rewrites `config.yaml` plus
+  `generated/reports/soperator-discovery/<target>/manifest.json` into
   the same deploy-owned onboarding shape that a rerun of `ext-soperator onboard` would produce, while
-  leaving pending or still-migration-owned plans blocked from normal deploy. The
-  README and design guide now call out `generated/reports/ext-soperator-migrate-report.md`
-  `Pending phase: none` as the migration resume-complete marker before normal
+  leaving pending or still-external-upgrade-owned plans blocked from normal deploy. The
+  README and design guide now call out `generated/reports/ext-soperator-upgrade-report.md`
+  `Pending phase: none` as the upgrade resume-complete marker before normal
   render/deploy reconciliation.
 - Improved external Soperator onboarding rollout wizard guidance. The worker
   node-template rollout prompts now show concise per-field comments for
@@ -610,56 +1116,57 @@ All notable changes to this project are tracked here. This changelog follows
   values.
 - Fixed `ext-soperator onboard` source-version prompting when discovery finds
   both a compatible Soperator release version and another Soperator-like Helm
-  release with noncanonical identity; interactive onboarding now asks the
+  release with non-standard identity; interactive onboarding now asks the
   operator to confirm the source version instead of leaving a
   `source-version-required` finding in the final summary. If the compatible
   release is already the pinned target and the other same-name record is an
   older source-family Helm chart, onboarding now records it as informational
   stale evidence in the saved report instead of prompting for a source version
   or printing it as selected onboarding work.
-- Fixed external Soperator migration stale Helm cleanup for same-name source
-  records left behind after target takeover. The post-migration Helm check now
+- Fixed external Soperator upgrade stale Helm cleanup for same-name source
+  records left behind after target takeover. The post-upgrade Helm check now
   retires stale source-family records before validation hold and target
   readiness lookup, and deletes only the stale Helm storage revision,
   preserving the current target release revision.
 - Improved `ext-soperator onboard` rerun idempotency for failed or partially
-  completed external Soperator migrations. Nebius `--cluster-id` onboarding now
+  completed external Soperator upgrades. Nebius `--cluster-id` onboarding now
   enriches source discovery with control-plane and node-group template
   inventory by node group, including Kubernetes version, node OS image, and GPU
   driver preset, and omits `upgrade-external-node-template` only when that
   provider evidence proves every discovered group is already aligned.
 - Tightened external Soperator onboarding guidance and deploy safety. Onboarding
   and render hints now explain whether the next path is `render` then `deploy`
-  or `render` then `ext-soperator migrate`, including cases where storage and
-  compute are kept but Soperator or external node-template migration work
+  or `render` then `ext-soperator upgrade`, including cases where storage and
+  compute are kept but Soperator or external node-template upgrade work
   remains, and the interactive storage/compute mode prompts now tell operators
   to choose the aligned SFS/node-group options when they are unsure because
   cxcli can keep compatible existing layouts automatically. `deploy` now
-  refuses selected migration-required external Soperator targets before
+  refuses selected external-upgrade-required external Soperator targets before
   Terraform/Flux preflight, checks the source `config.yaml` as a fail-closed
-  guard for older rendered bundles, and prints the required migrate
+  guard for older rendered bundles, and prints the required upgrade
   dry-run/execute commands.
-- Improved `ext-soperator migrate --dry-run` output by color-highlighting
+- Improved `ext-soperator upgrade --dry-run` output by color-highlighting
   topic labels, required-action statuses, migration phases, executor contracts,
   and execution mode in interactive terminals.
-- Changed `ext-soperator migrate` to fail fast when the accepted onboarding
-  action set has no migration-owned work; deploy-owned remediation such as
+- Changed `ext-soperator upgrade` to fail fast when the accepted onboarding
+  action set has no external-upgrade-owned work; deploy-owned remediation such as
   target GPU stack alignment now reports the render/deploy route instead of a
   no-op migration plan.
-- Improved approved `ext-soperator migrate --execute` progress reporting with
+- Improved approved `ext-soperator upgrade --execute` progress reporting with
   an interactive spinner, richer MK8s node-group status, bounded down/upgrading
   node details, named Slurm worker state summaries, and color-highlighted
   degraded/down states; every status line now includes the phase id,
   human-readable phase label, and overall phase health before component
   details.
 - Changed external Soperator worker node-template rollout to default to
-  `zero-surge`: service-role groups still use serial zero-surge updates, while
-  worker groups avoid surge quota by default with
+  `zero-surge`: service-role groups now use serial safe-surge by default with
+  `max_surge_count=1`, `max_unavailable_count=0`, and `drain_timeout=30m`,
+  while worker groups avoid surge quota by default with
   `max_surge_count=0`, `max_unavailable_count=1`, and `drain_timeout=30m`.
   Operators can still select bounded `safe-surge` waves with configurable
   `max_surge_count`, `max_unavailable_count`, and `drain_timeout` per active
   worker group after quota/capacity, worker-node health, and Slurm queue
-  preflights pass. `ext-soperator onboard` and `ext-soperator migrate` accept
+  preflights pass. `ext-soperator onboard` and `ext-soperator upgrade` accept
   explicit worker-rollout strategy, wave-budget, and per-group strategy
   overrides, and checkpoint the effective rollout settings for resume safety.
 - Tightened external Soperator zero-surge rollout validation and reporting:
@@ -669,14 +1176,14 @@ All notable changes to this project are tracked here. This changelog follows
   timeouts, and onboarding help shows the correct zero-surge/safe-surge
   strategy count defaults.
 - Hardened upgrade resume behavior for long MK8s rollouts. Accepted
-  `ext-soperator migrate --execute` node-group update timeouts now reconcile
+  `ext-soperator upgrade --execute` node-group update timeouts now reconcile
   live state, checkpoint still-rolling external node-template updates as
   pending, and resume without duplicate Nebius update calls; Terraform-managed
   MK8s `upgrade` reruns that only wait for an already-requested rollout now
   still perform the final rendered apply needed to restore temporary
   `zero-surge`, `safe-surge`, or `force-delete` node-group strategies.
 - Added final MK8s readiness checks for `upgrade node-template` and
-  `ext-soperator migrate --execute`; commands now re-read live control-plane
+  `ext-soperator upgrade --execute`; commands now re-read live control-plane
   and node-group state before reporting success, including Nebius OS image and
   GPU `drivers_preset` / CUDA stack where applicable. Final checks now require
   provider node-group status with ready, target, and total node counts instead
@@ -684,34 +1191,34 @@ All notable changes to this project are tracked here. This changelog follows
   migrations emit a baseline MK8s cluster/node group readiness check even when
   no node-template action was selected.
 - Added post-action Helm readiness checks for `upgrade helm-chart` and
-  `ext-soperator migrate --execute`; Soperator migration now verifies the
+  `ext-soperator upgrade --execute`; External Soperator upgrade now verifies the
   target chart workloads, suspends old source-family Flux Kustomization desired
   state, deletes suspended old source-family Flux HelmRelease records, prunes
   old operational Soperator resources, preserves shared/storage resources, and
   removes stale source-family Helm release records before reporting completion.
   Managed Helm chart upgrades now require the generated target handoff before
   running live readiness verification.
-- Fixed external Soperator migration takeover for profiled legacy v1 and v2
+- Fixed external Soperator upgrade takeover for profiled legacy v1 and v2
   releases. Migration profiles now declare source admission webhooks to delete
   and source controller deployments to scale down before target compute
   reconciliation, preventing old source controllers or stale source webhooks
   from racing or blocking the pinned target chart over `NodeSet`, `SlurmCluster`,
   and worker `StatefulSet` objects while leaving storage/shared resources for
   the normal retirement phase.
-- Fixed `ext-soperator migrate --help` so the rendered epilog includes the
+- Fixed `ext-soperator upgrade --help` so the rendered epilog includes the
   completed remediation/upgrade/cutover rerun recheck contract.
 - Changed the generated report artifact contract from `generated/inventory/` to
   `generated/reports/`. Code paths now use `reports_dir` for deploy,
-  validation, notification, and external Soperator migration reports, and new
+  validation, notification, and external Soperator upgrade reports, and new
   generated bundles scaffold `generated/reports/` without a compatibility
   alias.
 - Fixed preserved-worker external Soperator cutover for heterogeneous worker
-  shapes. `ext-soperator migrate --execute` now samples one live worker pod per
+  shapes. `ext-soperator upgrade --execute` now samples one live worker pod per
   preserved NodeSet for Slurm CPU/socket/core/thread topology, strips
   source-era chart-owned worker mounts, normalizes target operator affinity to
   Slurm role labels, and resumes Slurm nodes left drained after cutover.
 - Fixed external Soperator GPU-stack reconciliation so direct
-  `ext-soperator migrate --execute` Helm upgrades also apply catalog-owned
+  `ext-soperator upgrade --execute` Helm upgrades also apply catalog-owned
   post-render patches such as the Network Operator `NicClusterPolicy`
   `rdma/shared_device` overlay. Reruns now verify those live post-rendered
   fields before considering `target-gpu-stack-remediation` complete.
@@ -743,22 +1250,23 @@ All notable changes to this project are tracked here. This changelog follows
   next-step hints now prefer plain `deploy <config.yaml>` and document
   `deploy --target <target-id>` only as a narrowing selector.
 - Tightened external Soperator rerun idempotency. No-op `ext-soperator
-  onboard` reruns now keep stable source discovery reports instead of churning
-  timestamps that invalidate migration checkpoints, and `ext-soperator
-  migrate --execute` rechecks completed selected actions against live state so
+  onboard` reruns now keep stable source discovery bundles instead of churning
+  timestamps that invalidate upgrade checkpoints, and `ext-soperator
+  upgrade --execute` rechecks completed selected actions against live state so
   missing GPU-stack releases, node-template drift, aligned-SFS gaps, or target
   cutover drift are retried instead of skipped solely because the local
   checkpoint said the phase had completed.
-- Changed `ext-soperator migrate --execute` to own onboarded external MK8s
+- Changed `ext-soperator upgrade --execute` to own onboarded external MK8s
   control-plane and node-template upgrades through direct Nebius updates:
-  control plane first, service-role node groups one at a time with temporary
-  zero-surge strategy, worker node groups with zero-surge by default or
-  safe-surge waves when selected, original strategy restore, and spare-worker
-  quota preflight for the active safe-surge wave.
+  control plane first, service-role node groups one at a time with safe-surge by
+  default, worker node groups with zero-surge by default or safe-surge waves when
+  selected, original strategy restore, and spare-worker quota preflight for the
+  active safe-surge wave.
 - Fixed external node-template upgrade execution for legacy layouts by clearing
   stale GPU driver presets from CPU node groups before Kubernetes/OS rollout
-  and by checkpointing temporary quiesce/restore of one-node
-  controller/login/accounting workloads during zero-surge service-role updates.
+  and by checkpointing temporary quiesce/restore of login, one-node
+  controller/accounting, and known drain-blocking webhook workloads during the
+  explicit lower-continuity zero-surge service-role override.
 - Hardened external Soperator chart takeover by suspending legacy Flux
   HelmReleases before applying the cxcli target chart, forcing server-side CRD
   conflict resolution, retrying transient target webhook startup failures, and
@@ -791,24 +1299,24 @@ All notable changes to this project are tracked here. This changelog follows
   are preserved instead of collapsing them into a new synthetic `worker`
   NodeSet, and stale source-era camelCase `ephemeralStorage` resource keys are
   removed from adopted worker NodeSet CRs so target worker Pods can be created.
-- Tightened external Soperator migration completion so completed-checkpoint
+- Tightened external Soperator upgrade completion so completed-checkpoint
   reconciliation waits for target worker NodeSets to report desired-ready
   replicas before returning `Pending phase: none`.
-- Changed `ext-soperator migrate --execute` validation hold to run the
+- Changed `ext-soperator upgrade --execute` validation hold to run the
   target-scoped `deploy.targets[].deployment_testing.mk8s_gpu.*` checks for the
   onboarded external target, including operator readiness and bounded GPU
   visibility when enabled. NCCL/performance work remains an explicit
   `acceptance-test benchmark` run. The MK8s GPU rollup is written to
-  `generated/reports/ext-soperator-migrate-report.md`; `generated/reports/deploy-report.md`
+  `generated/reports/ext-soperator-upgrade-report.md`; `generated/reports/deploy-report.md`
   is refreshed as a secondary deploy-compatible summary.
 - Added required Soperator/Slurm smoke validation for enabled Soperator
   targets. `deploy` now records a `soperator_cluster_smoke` JSON report and
-  includes it in `deploy-report.md`; `ext-soperator migrate --execute` runs
+  includes it in `deploy-report.md`; `ext-soperator upgrade --execute` runs
   the same smoke validation during validation hold and writes
-  `generated/reports/ext-soperator-migrate-report.md` with migration phase, remediation,
+  `generated/reports/ext-soperator-upgrade-report.md` with migration phase, remediation,
   upgrade, layout, validation, and event summaries.
 - Clarified the successful `ext-soperator onboard` config-only note so
-  migration-required targets point to the Soperator-specific next steps instead
+  external-upgrade-required targets point to the Soperator-specific next steps instead
   of the generic deploy/destroy follow-up wording.
 - Fixed Soperator onboarding source-version detection for legacy controller
   installs where the source operator Helm chart is released as
@@ -816,11 +1324,11 @@ All notable changes to this project are tracked here. This changelog follows
   `helm-soperator`.
 - Expanded the successful `ext-soperator onboard` footer to print the selected
   target's next-step command sequence: deploy for install/adopt-only targets,
-  or migration dry-run and approved migration execute for migration-required
+  or upgrade dry-run and approved upgrade execute for external-upgrade-required
   targets.
 - Aligned `ext-soperator --help`, `ext-soperator onboard --help`, and
-  `ext-soperator migrate --help` examples with the complete external-cluster
-  sequence, including the no-deploy-before-migration warning and external
+  `ext-soperator upgrade --help` examples with the complete external-cluster
+  sequence, including the no-deploy-before-upgrade warning and external
   node-template update contract.
 - Clarified `ext-soperator` help text so `--target` is explicitly the cxcli
   target id from `deploy.targets[].instance_id`, install/adopt-only targets
@@ -832,9 +1340,9 @@ All notable changes to this project are tracked here. This changelog follows
   `reconcile-target-gpu-stack`, add the target-scoped GPU Operator and
   Network Operator when GPU-cluster/RDMA inventory is present, persist MK8s GPU
   deploy-time validation defaults, show the target GPU reconciliation in
-  `ext-soperator migrate --dry-run`, and execute it as a checkpointed
+  `ext-soperator upgrade --dry-run`, and execute it as a checkpointed
   `target-gpu-stack-remediation` phase before Soperator compute/cutover work.
-- Renamed Soperator migration execution stop points to pending phases and
+- Renamed External Soperator upgrade execution stop points to pending phases and
   changed incomplete onboarding analysis wording to concrete
   action-required/source-version-required statuses.
 - Split Soperator existing-cluster onboarding out of the `create` wizard:
@@ -866,10 +1374,10 @@ All notable changes to this project are tracked here. This changelog follows
   Soperator CRDs but no compatible Helm release version, interactive onboarding
   asks for a committed migration-profile version or manual version entry, and
   non-interactive runs can pass `--source-version`.
-- Added `nebius-cxcli ext-soperator migrate <config.yaml>` as the explicit
-  Soperator migration command surface. It validates the accepted onboarding
+- Added `nebius-cxcli ext-soperator upgrade <config.yaml>` as the explicit
+  external Soperator upgrade command surface. It validates the accepted onboarding
   analysis, reads
-  `generated/reports/ext-soperator-onboard-source-discovery-report.json`, prints
+  `generated/reports/soperator-discovery/<target>/manifest.json`, prints
   the target remediation and compute/storage migration plan in dry-run mode, and
   runs checkpointed live phases in `--execute` mode. The executor rechecks the
   live source release and discovery fingerprint before the first mutation,
@@ -884,25 +1392,24 @@ All notable changes to this project are tracked here. This changelog follows
   Kruise StatefulSets when immutable source-era specs cannot be updated in
   place, validating cutover resources, and preserving in-place worker node
   groups while holding old storage retirement for explicit confirmation.
-- Added phase-aware live status output for approved `ext-soperator migrate
+- Added phase-aware live status output for approved `ext-soperator upgrade
   --execute` runs. Storage phases now report aligned SFS/PVC copy progress
   alongside MK8s and Slurm continuity, while compute/cutover phases report
   MK8s node readiness, Slurm login/queue/node-state health, and Soperator
   SlurmCluster reconciliation as best-effort degradation signals.
-- Added a strict Soperator migration quota preflight for approved `--execute`
+- Added a strict external Soperator upgrade quota preflight for approved `--execute`
   runs. The executor now checks net-new aligned SFS storage and net-new
   service-role node groups before any SFS, node-group, or Helm mutation, counts
-  safe-surge preserved worker capacity for the active worker wave, and fails
-  fast on confirmed shortages, unresolved limits, coverage gaps, or quota lookup
-  errors. External service-role template mutations use temporary zero-surge
-  (`max_surge=0`, `max_unavailable=1`, `drain_timeout=30m`) and restore the
-  original strategy afterward; worker template mutations now default to
-  zero-surge and check safe-surge spare capacity only when selected.
+  safe-surge spare capacity for active service groups and worker waves, and
+  fails fast on confirmed shortages, unresolved limits, coverage gaps, or quota
+  lookup errors. External service-role and worker template mutations now default
+  to zero-surge and check safe-surge spare capacity only when selected, restoring
+  each node group's original strategy afterward.
 - Consolidated README Soperator command guidance into a visible
   `Soperator Commands` section covering managed create/deploy, external
   onboarding, migration flags, storage/compute migration modes, safety rules,
   and the difference between `upgrade helm-chart` for cxcli-managed Soperator
-  rows and onboard+migrate workflows for external clusters.
+  rows and onboard+upgrade workflows for external clusters.
 - Hardened the Soperator migration profile generator with paginated GitHub
   release fetching, release tarball extraction, official chart identity
   detection, per-component chart archive, CRD, template, values, image, and
@@ -914,7 +1421,7 @@ All notable changes to this project are tracked here. This changelog follows
 - Updated Soperator migration compute remediation to reuse existing
   service-role node groups discovered by role name or
   `slurm.nebius.ai/nodeset` / `slurm.nebius.ai/nodeset-name` labels, while
-  preserving worker node groups in place and using migration-owned external
+  preserving worker node groups in place and using external-upgrade-owned external
   node-group updates for template remediation.
 - Added a final render helper to successful `render` command output: `Next step: deploy the rendered bundle:`
   followed by a copy-paste `nebius-cxcli deploy <config.yaml>` command line.
@@ -1268,7 +1775,7 @@ All notable changes to this project are tracked here. This changelog follows
   `component add soperator@<external-target>` now infers onboarding for
   existing external MK8s targets and repairs missing target-scoped
   Soperator-required app rows without adding Terraform MK8s/SFS rows. External
-  onboarding now writes a source-cluster discovery report next to the project
+  onboarding now writes a source-cluster discovery bundle next to the project
   config, records stable `no-soperator-detected` or existing-Soperator
   migration states, matches installed releases against committed migration
   profile history, and plans `keep-existing-storage` or `create-aligned-sfs`
@@ -3162,7 +3669,6 @@ All notable changes to this project are tracked here. This changelog follows
 - Hardened `create --force` guard rails for existing projects: the CLI emits a force-specific overwrite warning before overwriting an existing resolved project folder and documents that `create --force` does not delete the deployments root or unrelated projects.
 - Wired canonical MK8s `inputs.gpu_clusters.<key>.infiniband_fabric` materialization into the built-in wizard profile with a provider-ranked derived fabric selection keyed by the chosen GPU platform/preset and `client_info.nebius.region_id`, using live Nebius GPU-cluster capacity rows instead of a raw free-text prompt.
 - Fixed `create` wizard prompt helper late-binding closures in `cli.py` so Ruff no longer flags `B023` on the deferred module-prompt builders, and tightened the runtime-shape unit coverage to skip post-write validation in the test that only asserts generated config structure.
-- Added a central Codex skill at `../../skills/onboard-nebius-cxcli/` for onboarding Nebius Terraform modules into `nebius-cxcli`; it documents the catalog-first onboarding flow, the code-owned layers (`wizard_profiles.py`, `provider_options.py`, `validation_profiles.py`, `runtime_component_validation.py`, `cluster_handoffs.py`, `deployment_status.py`), and the focused test/doc updates expected for each change shape.
 - Refined MK8s wizard platform discovery to use live Nebius platform inventory at runtime: CPU/GPU platform prompts now intersect the MK8s compatibility matrix with the selected project's compute-platform list, so the wizard only shows currently available supported platforms while preset choices remain live per selected platform.
 - Extended the built-in `ssh-jumphost` and `wireguard-gw` wizard profiles to use the live compute platform inventory plus preset chaining, so those VM modules no longer rely on manual `platform` / `preset` entry when project-scoped Nebius choices are available.
 - Moved bundled infra runtime validation-profile selection out of the public `component_sources.yaml` catalog and into code-owned defaults in `src/nebius_cxcli/validation_profiles.py`; bundled components now omit repeated internal `validation` markers, and the catalog loader rejects that field instead of carrying a compatibility path.

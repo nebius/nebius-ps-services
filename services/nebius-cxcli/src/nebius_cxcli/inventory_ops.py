@@ -1251,9 +1251,10 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
 
     client_info = _mapping(_lookup(payload_data, "client_info"))
     nebius = _mapping(_lookup(client_info, "nebius"))
-    project_id = str(_coalesce(_lookup(nebius, "project_id"), ""))
-    tenant_id = str(_coalesce(_lookup(nebius, "tenant_id"), ""))
-    region_id = str(_coalesce(_lookup(nebius, "region_id"), ""))
+    project_id = str(_lookup(nebius, "project_id") or "").strip()
+    tenant_id = str(_lookup(nebius, "tenant_id") or "").strip()
+    region_id = str(_lookup(nebius, "region_id") or "").strip()
+    project_scope = f"{tenant_id}/{project_id}" if tenant_id else project_id
 
     infra_rows = _infra_component_rows(payload_data)
     app_rows = _app_chart_rows(payload_data)
@@ -1368,7 +1369,7 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
     )
     return {
         "infra": {
-            "project_scope": f"{tenant_id}/{project_id}",
+            "project_scope": project_scope,
             "project_id": project_id,
             "region": region_id,
             "component_statuses": infra_component_statuses,
@@ -1507,9 +1508,9 @@ def write_inventory(
         "",
         "## Client",
         "",
-        f"- Client: `{_coalesce(_lookup(client_info, 'client_name'), '')}`",
-        f"- Tenant: `{_coalesce(_lookup(nebius, 'tenant_id'), '')}`",
-        f"- Project: `{_coalesce(_lookup(nebius, 'project_id'), '')}`",
+        f"- Client: `{str(_lookup(client_info, 'client_name') or '').strip()}`",
+        f"- Tenant: `{str(_lookup(nebius, 'tenant_id') or '').strip()}`",
+        f"- Project: `{str(_lookup(nebius, 'project_id') or '').strip()}`",
         f"- Region: `{payload['infra']['region']}`",
         "",
         "## Infra",

@@ -68,6 +68,12 @@ global file.
   resume, or after compaction when prior context may matter. Update it with
   concise checkpoints, and do not create repo-local task-state files unless
   explicitly requested.
+- If hooks suggest same-workspace prior task-state candidate paths, read only
+  candidates that appear relevant to the current task, treat them as stale
+  hints, and verify against current repo or runtime evidence.
+- Keep `current.md` as a rolling summary, not an append-only transcript:
+  replace stale details with the latest validated state, and summarize any
+  oversized historical task-state file before relying on it.
 - Keep the parent thread focused on objective, constraints, decisions, current
   plan, changed files, verification status, risks, and final answer.
 - Keep raw logs, broad file listings, abandoned attempts, secrets, customer
@@ -82,7 +88,9 @@ global file.
   delegation is authorized, useful, available, and permitted.
 - When subagents are used, ask them for concise final summaries, wait for the
   result, consolidate it in the parent thread, and close completed subagent
-  threads when close controls are available and no follow-up is needed.
+  threads when close controls are available. Before the final response, close
+  every spawned subagent handle that is completed or no longer needed; if close
+  controls are unavailable or cleanup fails, report that residual handle.
   With multiple subagents, close each completed handle as its terminal result
   arrives, then continue waiting on the remaining handles.
 - If delegation is authorized and useful but subagent tools are not visible,
@@ -143,6 +151,8 @@ every configured read-only role by default: use `repo_mapper` and
 `test_strategist` early only when useful and independent, close completed
 helpers after consolidation, and use `risk_reviewer` near the end only for
 non-trivial or risky changes.
+Completed helpers can still count toward concurrency until closed, so cleanup
+is part of the parent agent's completion contract when close controls exist.
 
 If the user wants hook-assisted delegation for complex prompts, create this
 local-only policy file:
@@ -166,9 +176,11 @@ dynamically decides whether to spawn the smallest useful set of targeted
 read-only helpers. The hint tells Codex not to spawn every configured role by
 default. The parent agent still owns lifecycle cleanup: wait for returned
 summaries, consolidate them, and close completed subagent threads when close
-controls are available and no follow-up is needed. With multiple subagents,
-close each completed handle as its terminal result arrives and continue waiting
-on the remaining handles.
+controls are available. Before the final response, close every spawned handle
+that is completed or no longer needed. With multiple subagents, close each
+completed handle as its terminal result arrives and continue waiting on the
+remaining handles. If close controls are unavailable or cleanup fails, report
+the residual open or running handle instead of leaving it silent.
 
 ## Hook Review
 
@@ -223,6 +235,14 @@ advertise or reuse the session-scoped `current.md`; the parent agent creates
 and updates that file when continuity is useful. Keep broader runtime paths
 such as `$CODEX_HOME/hooks` protected unless the user deliberately syncs hook
 sources.
+Treat existing `current.md` files as compact rolling summaries: replace stale
+details instead of appending transcripts, keep raw logs and secrets out, and
+summarize files that have grown too large to scan before relying on them.
+For complex prompts, the prompt-time hook may list a bounded set of
+same-workspace prior `current.md` candidate paths from the same workspace hash
+bucket. It must not inject the contents of those files. Treat candidate paths
+as optional stale context to inspect only when relevant; the current session's
+advertised `current.md` remains the write target.
 
 Direct hook unit probes against a live `$CODEX_HOME` with synthetic
 `session_id` values should not create task-state files or directories. They
@@ -236,9 +256,9 @@ Use a second probe for subagent availability:
 
 ```text
 Use $global-context-management. Explicitly spawn one read-only repo_mapper
-subagent to inspect this repository. Do not edit files. Wait for it, then
-report whether the subagent was spawned, and keep raw command output out of
-the answer.
+subagent to inspect this repository. Do not edit files. Wait for it, close it
+after the result when close controls are available, then report whether the
+subagent was spawned and closed. Keep raw command output out of the answer.
 ```
 
 If the probe does not spawn a subagent, check:

@@ -879,7 +879,7 @@ def test_assess_live_quota_requirements_reports_explicit_sufficiency_and_shortag
 ) -> None:
     class _Session:
         def __init__(self, *, context: str, project_id: str) -> None:
-            assert context == "external migration quota preflight"
+            assert context == "external soperator upgrade quota preflight"
             assert project_id == "project-1"
             self.closed = False
 
@@ -921,7 +921,7 @@ def test_assess_live_quota_requirements_reports_explicit_sufficiency_and_shortag
         tenant_id="tenant-1",
         project_id="project-1",
         region_id="eu-north1",
-        context="external migration quota preflight",
+        context="external soperator upgrade quota preflight",
         requirements=[
             QuotaRequirement(
                 component_id="mk8s",
@@ -952,7 +952,61 @@ def test_assess_live_quota_requirements_reports_explicit_sufficiency_and_shortag
     assert checks["compute.filesystem.count"].sufficient is False
 
 
-def test_assess_live_quota_requirements_requires_identity(
+def test_assess_live_quota_requirements_allows_project_only_with_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class _Session:
+        def __init__(self, *, context: str, project_id: str) -> None:
+            assert context == "quota assessment"
+            assert project_id == "project-1"
+
+        def list_quotas(self, *, parent_id: str) -> dict[tuple[str, str], QuotaRecord]:
+            calls.append(parent_id)
+            assert parent_id == "project-1"
+            return {
+                ("compute.instance.count", "eu-north1"): _quota_record(
+                    name="compute.instance.count",
+                    limit=5,
+                    usage=1,
+                )
+            }
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(quota_checks, "_QuotaSession", _Session)
+
+    report = assess_live_quota_requirements(
+        tenant_id="",
+        project_id="project-1",
+        region_id="eu-north1",
+        requirements=[
+            QuotaRequirement(
+                component_id="mk8s",
+                instance_id="external",
+                component_label="external worker remediation",
+                quota_name="compute.instance.count",
+                region="eu-north1",
+                required=4,
+                reason="preserved worker node-template rollout",
+            ),
+        ],
+    )
+
+    assert calls == ["project-1"]
+    assert report.errors == (
+        "tenant_id was not provided; tenant quota and Capacity Dashboard checks were "
+        "skipped, but project quota checks still ran",
+    )
+    assert len(report.checks) == 1
+    assert report.checks[0].available == 4
+    assert report.checks[0].sufficient is True
+    assert report.checks[0].source_scope == "project"
+
+
+def test_assess_live_quota_requirements_requires_project_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def _unexpected_session(**_kwargs: object) -> object:
@@ -961,14 +1015,14 @@ def test_assess_live_quota_requirements_requires_identity(
     monkeypatch.setattr(quota_checks, "_QuotaSession", _unexpected_session)
 
     report = assess_live_quota_requirements(
-        tenant_id="",
-        project_id="project-1",
+        tenant_id="tenant-1",
+        project_id="",
         region_id="eu-north1",
         requirements=(),
     )
 
     assert report.checks == ()
-    assert report.errors == ("quota assessment is missing tenant_id or project_id",)
+    assert report.errors == ("quota assessment is missing project_id",)
 
 
 def test_assess_live_quota_requirements_preserves_gaps_and_lookup_errors(

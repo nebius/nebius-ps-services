@@ -988,6 +988,7 @@ def test_run_component_field_wizard_prompts_soperator_worker_controls_per_shard(
 ) -> None:
     prompted_paths: list[str] = []
     prompt_currents: dict[str, list[object]] = {}
+    prompt_required: dict[str, bool] = {}
     payload = {
         "version": "v1",
         "infra": {
@@ -1023,21 +1024,25 @@ def test_run_component_field_wizard_prompts_soperator_worker_controls_per_shard(
             "inputs.soperator.worker_cpu_total_nodes": {
                 "default": 1,
                 "write_default_to_config": True,
+                "required": True,
                 "type_hint": "number",
             },
             "inputs.soperator.worker_cpu_nodes_per_group": {
                 "default": 100,
                 "write_default_to_config": True,
+                "required": True,
                 "type_hint": "number",
             },
             "inputs.soperator.worker_gpu_total_nodes": {
                 "default": 1,
                 "write_default_to_config": True,
+                "required": True,
                 "type_hint": "number",
             },
             "inputs.soperator.worker_gpu_nodes_per_group": {
                 "default": 100,
                 "write_default_to_config": True,
+                "required": True,
                 "type_hint": "number",
             },
             "inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds": {
@@ -1077,6 +1082,7 @@ def test_run_component_field_wizard_prompts_soperator_worker_controls_per_shard(
     def _capture_prompt(path_label: str, current, **_kwargs):
         prompted_paths.append(path_label)
         prompt_currents.setdefault(path_label, []).append(current)
+        prompt_required[path_label] = bool(_kwargs.get("required"))
         if path_label in worker_size_answers:
             return worker_size_answers[path_label], False
         if path_label == bulk_apply_path:
@@ -1105,7 +1111,10 @@ def test_run_component_field_wizard_prompts_soperator_worker_controls_per_shard(
     assert completed is True
     assert bulk_apply_path in prompted_paths
     assert prompt_currents[bulk_apply_path] == [True]
+    assert prompt_required[bulk_apply_path] is True
     assert bulk_enabled_path not in prompted_paths
+    for path in worker_size_answers:
+        assert prompt_required[path] is True
     assert (
         "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu"
         ".autoscaling.enabled"
@@ -1173,6 +1182,23 @@ def test_run_component_field_wizard_prompts_soperator_worker_controls_per_shard(
         "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu-1"
         ".autoscaling.enabled",
     ]
+    for path in worker_enabled_prompt_order:
+        assert prompt_required[path] is True
+    for suffix in (".autoscaling.min_node_count", ".autoscaling.max_node_count"):
+        assert (
+            prompt_required[
+                "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-0"
+                f"{suffix}"
+            ]
+            is True
+        )
+        assert (
+            prompt_required[
+                "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu-1"
+                f"{suffix}"
+            ]
+            is True
+        )
     assert prompted_paths.index(bulk_apply_path) < prompted_paths.index(
         "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-0"
         ".autoscaling.enabled"
@@ -2850,13 +2876,13 @@ def test_app_chart_skip_defaults_preview_lines_are_concise_and_redacted() -> Non
                 "partitionProfile": "shape-default",
                 "topologyProfile": "disabled",
                 "volume": {
-                    "jail": {"size": "1024Gi"},
+                    "jail": {"size": "2048Gi"},
                     "controllerSpool": {"size": "128Gi"},
                     "accounting": {"enabled": True, "size": "128Gi"},
                 },
                 "sfs": {
                     "filesystems": {
-                        "jail": {"size_gib": 1024},
+                        "jail": {"size_gib": 2048},
                         "controller-spool": {"size_gib": 128},
                         "accounting": {"size_gib": 128},
                     }
@@ -2871,10 +2897,10 @@ def test_app_chart_skip_defaults_preview_lines_are_concise_and_redacted() -> Non
     assert "namespace=soperator" in preview
     assert "install_mode=production-cluster" in preview
     assert "timeout=90m" in preview
-    assert "values.volume={jail.size=1024Gi" in preview
+    assert "values.volume={jail.size=2048Gi" in preview
     assert "controllerSpool.size=128Gi" in preview
     assert "accounting.size=128Gi" in preview
-    assert "values.sfs={jail.size_gib=1024" in preview
+    assert "values.sfs={jail.size_gib=2048" in preview
     assert "secret-url" not in preview
 
 

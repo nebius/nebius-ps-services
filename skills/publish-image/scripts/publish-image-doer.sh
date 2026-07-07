@@ -41,10 +41,9 @@ show_usage() {
   printf '\n'
   printf '%b\n' "${S_BOLD}Options:${S_RESET}"
   printf '%b\n' "  ${S_YELLOW}--project-dir DIR${S_RESET}       Project directory, default current directory"
-  printf '%b\n' "  ${S_YELLOW}--main-branch BRANCH${S_RESET}    Release branch, default repository default branch or main"
+  printf '%b\n' "  ${S_YELLOW}--main-branch BRANCH${S_RESET}    Default branch, default repository default branch or main"
   printf '%b\n' "  ${S_YELLOW}--changelog FILE${S_RESET}        Changelog path relative to project dir, default CHANGELOG.md"
   printf '%b\n' "  ${S_YELLOW}--no-push${S_RESET}               Prep only: commit but do not push branch"
-  printf '%b\n' "  ${S_YELLOW}--allow-non-main${S_RESET}        Publish only: allow current HEAD outside the checked-out main branch if it is in origin/main history"
   printf '%b\n' "  ${S_YELLOW}--image-name IMAGE${S_RESET}      Verify mode: image repository without tag"
   printf '%b\n' "  ${S_YELLOW}-h, --help${S_RESET}              Show help"
 }
@@ -122,11 +121,51 @@ push_current_branch() {
   git push --set-upstream origin "HEAD:${branch}"
 }
 
-ensure_not_default_branch() {
+release_source_required_note() {
+  local main_branch="$1"
+  log_note "First open and merge a PR for your current branch into ${main_branch}, then switch to ${main_branch}, fast-forward, and rerun."
+}
+
+ensure_release_source_ready() {
   local branch="$1"
   local main_branch="$2"
-  if [[ "${branch}" == "${main_branch}" ]]; then
-    log_error "--mode prep must run from a feature branch, not ${main_branch}."
+  local mode="$3"
+  local status_output=""
+  ensure_named_branch "${branch}"
+  if [[ "${branch}" != "${main_branch}" ]]; then
+    log_error "--mode ${mode} must run from ${main_branch}; current branch is ${branch}."
+    release_source_required_note "${main_branch}"
+    exit 1
+  fi
+  status_output="$(git status --short --untracked-files=all)"
+  if [[ -n "${status_output}" ]]; then
+    log_error "--mode ${mode} requires a clean working tree on ${main_branch}."
+    printf '%s\n' "${status_output}" >&2
+    release_source_required_note "${main_branch}"
+    exit 1
+  fi
+  ensure_branch_synced "${main_branch}"
+}
+
+release_branch_name() {
+  local tag="$1"
+  printf 'release/%s\n' "${tag}"
+}
+
+ensure_release_branch_absent() {
+  local branch="$1"
+  local remote_status=0
+  if git show-ref --verify --quiet "refs/heads/${branch}"; then
+    log_error "Release branch already exists locally: ${branch}"
+    exit 1
+  fi
+  git ls-remote --exit-code --heads origin "${branch}" >/dev/null 2>&1 || remote_status=$?
+  if [[ "${remote_status}" -eq 0 ]]; then
+    log_error "Release branch already exists on origin: ${branch}"
+    exit 1
+  fi
+  if [[ "${remote_status}" -ne 2 ]]; then
+    log_error "Unable to check origin for release branch: ${branch}"
     exit 1
   fi
 }
@@ -142,15 +181,6 @@ ensure_branch_synced() {
     log_error "Local ${branch} is not at origin/${branch}."
     log_note "local : ${local_commit}"
     log_note "origin: ${remote_commit}"
-    exit 1
-  fi
-}
-
-ensure_head_in_branch_history() {
-  local branch="$1"
-  git fetch origin "${branch}"
-  if ! git merge-base --is-ancestor HEAD "origin/${branch}"; then
-    log_error "Current HEAD is not in origin/${branch} history."
     exit 1
   fi
 }
@@ -275,10 +305,14 @@ prep_release() {
   local do_push="$3"
   local branch="$4"
   local main_branch="$5"
-  ensure_clean_worktree
-  ensure_named_branch "${branch}"
-  ensure_not_default_branch "${branch}" "${main_branch}"
+  local release_branch=""
+  ensure_release_source_ready "${branch}" "${main_branch}" "prep"
   ensure_tag_absent "${tag}"
+  release_branch="$(release_branch_name "${tag}")"
+  ensure_release_branch_absent "${release_branch}"
+  git switch -c "${release_branch}"
+  branch="${release_branch}"
+  log_success "Created release branch ${release_branch} from ${main_branch}."
   update_changelog "${tag}" "${changelog}"
   git add "${changelog}"
   if git diff --cached --quiet -- "${changelog}"; then
@@ -325,7 +359,6 @@ main() {
   local main_branch=""
   local changelog="CHANGELOG.md"
   local no_push=0
-  local allow_non_main=0
   local image_name=""
 
   while [[ $# -gt 0 ]]; do
@@ -337,7 +370,7 @@ main() {
       --main-branch) main_branch="${2:-}"; shift 2 ;;
       --changelog) changelog="${2:-}"; shift 2 ;;
       --no-push) no_push=1; shift ;;
-      --allow-non-main) allow_non_main=1; shift ;;
+      --allow-non-main) log_error "--allow-non-main is not supported; image publish must run from the clean synced default branch."; exit 1 ;;
       --image-name) image_name="${2:-}"; shift 2 ;;
       -h|--help) show_usage; exit 0 ;;
       *) log_error "Unknown argument: $1"; show_usage >&2; exit 1 ;;
@@ -364,12 +397,7 @@ main() {
       prep_release "${tag}" "${changelog}" "$((1 - no_push))" "${branch}" "${main_branch}"
       ;;
     publish)
-      if [[ "${allow_non_main}" -eq 0 ]]; then
-        [[ "${branch}" == "${main_branch}" ]] || { log_error "--mode publish must run on ${main_branch}."; exit 1; }
-        ensure_branch_synced "${main_branch}"
-      else
-        ensure_head_in_branch_history "${main_branch}"
-      fi
+      ensure_release_source_ready "${branch}" "${main_branch}" "publish"
       publish_tag "${tag}" "${changelog}"
       ;;
     verify)

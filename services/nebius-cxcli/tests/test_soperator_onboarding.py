@@ -2,14 +2,19 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Callable
 
 import pytest
 
 import nebius_cxcli.soperator_onboarding as soperator_onboarding_module
 from nebius_cxcli.runtime_validation import validate_runtime_payload
+from nebius_cxcli.soperator_discovery import (
+    load_soperator_discovery_bundle,
+    soperator_discovery_k8s_minor_text,
+)
 from nebius_cxcli.soperator_onboarding import (
     ONBOARDING_ACTION_ADOPT_SOPERATOR,
-    ONBOARDING_ACTION_APPROVE_MIGRATION,
+    ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
     ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
     ONBOARDING_ACTION_INSTALL_SOPERATOR,
     ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
@@ -21,6 +26,11 @@ from nebius_cxcli.soperator_onboarding import (
     ONBOARDING_COMPUTE_MODE_KEEP_EXISTING,
     ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS,
     ONBOARDING_STORAGE_MODE_KEEP_EXISTING,
+    SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA,
+    SOPERATOR_UPGRADE_SUPPORT_LAYER,
+    SOPERATOR_UPGRADE_SUPPORT_STATUS_NOT_VALIDATED,
+    SOPERATOR_UPGRADE_SUPPORT_STATUS_SUPPORTED,
+    SOPERATOR_UPGRADE_SUPPORT_STATUS_UNSUPPORTED,
     SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME,
     analyze_soperator_onboarding_snapshot,
     build_soperator_onboarding_report_from_config,
@@ -30,6 +40,9 @@ from nebius_cxcli.soperator_onboarding import (
     soperator_onboarding_fingerprint,
     soperator_onboarding_is_accepted,
     soperator_onboarding_report_for_modes,
+    soperator_onboarding_report_with_support_override,
+    soperator_upgrade_support_findings,
+    soperator_upgrade_support_requires_override,
     validate_soperator_onboarding_acceptance,
     write_soperator_onboarding_reports,
     write_source_soperator_discovery_report,
@@ -138,11 +151,18 @@ def _with_provider_node_template_inventory(
     stale_gpu_preset: str = "",
 ) -> dict[str, object]:
     snapshot = json.loads(json.dumps(snapshot))
+    target_k8s_version = (
+        soperator_onboarding_module.ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION
+    )
+    target_os = soperator_onboarding_module.ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS
+    target_gpu_stack_preset = (
+        soperator_onboarding_module.ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_GPU_STACK_PRESET
+    )
     snapshot["provider"] = {
         "mk8s_cluster": {
             "id": "mk8scluster-source",
             "name": "source",
-            "control_plane_version": "1.33",
+            "control_plane_version": target_k8s_version,
         }
     }
     node_groups = snapshot["node_groups"]
@@ -155,15 +175,15 @@ def _with_provider_node_template_inventory(
         labels = raw_group.setdefault("labels", {})
         assert isinstance(labels, dict)
         labels.setdefault("nebius.com/node-group-id", node_group_id)
-        gpu_stack_preset = "cuda13.0" if raw_group.get("gpu") is True else ""
+        gpu_stack_preset = target_gpu_stack_preset if raw_group.get("gpu") is True else ""
         if group_name == stale_group:
             gpu_stack_preset = stale_gpu_preset
         raw_group["provider"] = {
             "node_group_id": node_group_id,
             "node_group_name": group_name,
             "node_template": {
-                "k8s_version": "1.33",
-                "os": "ubuntu24.04",
+                "k8s_version": target_k8s_version,
+                "os": target_os,
                 "gpu_stack_preset": gpu_stack_preset,
             },
         }
@@ -232,7 +252,7 @@ def test_collect_snapshot_groups_nodes_by_unique_nebius_node_group_id(
     )
 
 
-def test_collect_snapshot_discovers_soperator_helm_releases_by_namespace(
+def test_collect_snapshot_discovers_soperator_helm_releases_across_namespaces(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     helm_commands: list[list[str]] = []
@@ -245,7 +265,7 @@ def test_collect_snapshot_discovers_soperator_helm_releases_by_namespace(
 
     def fake_helm_json(cmd, *_args, **_kwargs):  # type: ignore[no-untyped-def]
         helm_commands.append(list(cmd))
-        if "-n" in cmd and cmd[cmd.index("-n") + 1] == "flux-system":
+        if "-A" in cmd:
             return [
                 {
                     "name": "flux-system-soperator-fluxcd",
@@ -253,7 +273,21 @@ def test_collect_snapshot_discovers_soperator_helm_releases_by_namespace(
                     "chart": "helm-soperator-2.0.5",
                     "app_version": "2.0.5",
                     "status": "deployed",
-                }
+                },
+                {
+                    "name": "soperator",
+                    "namespace": "custom",
+                    "chart": "helm-soperator-3.0.7",
+                    "app_version": "3.0.7",
+                    "status": "deployed",
+                },
+                {
+                    "name": "unrelated",
+                    "namespace": "default",
+                    "chart": "postgres-1.0.0",
+                    "app_version": "1.0.0",
+                    "status": "deployed",
+                },
             ]
         return []
 
@@ -268,18 +302,32 @@ def test_collect_snapshot_discovers_soperator_helm_releases_by_namespace(
             "chart": "helm-soperator-2.0.5",
             "app_version": "2.0.5",
             "status": "deployed",
-        }
+        },
+        {
+            "name": "soperator",
+            "namespace": "custom",
+            "chart": "helm-soperator-3.0.7",
+            "app_version": "3.0.7",
+            "status": "deployed",
+        },
     ]
     assert helm_commands
-    assert all("-A" not in cmd for cmd in helm_commands)
+    assert any(
+        cmd[:4] == ["helm", "--kube-context", "ctx", "list"] and "-A" in cmd
+        for cmd in helm_commands
+    )
     assert {cmd[cmd.index("-n") + 1] for cmd in helm_commands if "-n" in cmd} == {
-        "soperator",
-        "soperator-system",
-        "flux-system",
         "nvidia-gpu-operator",
         "nvidia-network-operator",
     }
     assert snapshot["gpu_stack"]["helm_releases"] == []
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref="cluster1",
+        pinned_chart_version="4.0.2-ps.1",
+        pinned_app_version="4.0.2",
+    )
+    assert any(finding.status == "helm-release-detected" for finding in report.findings)
 
 
 def test_collect_snapshot_discovers_gpu_stack_helm_releases_and_policies(
@@ -379,7 +427,7 @@ def test_collect_snapshot_records_worker_nodeset_topology(
                 "--context",
                 "ctx",
                 "get",
-                "deployments,statefulsets,daemonsets,pods,services,configmaps,secrets",
+                "deployments,statefulsets,daemonsets,pods,jobs,services,configmaps,secrets",
             ]
             and "-n" in cmd
         ):
@@ -601,6 +649,7 @@ def test_soperator_onboarding_analyzer_offers_upgrade_for_older_release() -> Non
         "online-bulk-data-sync",
         "rolling-compute-migration",
         "final-control-plane-cutover",
+        "populate-jail-refresh",
         "validation-and-rollback-hold",
         "retire-old-resources",
     ]
@@ -745,6 +794,7 @@ def test_soperator_onboarding_modes_make_compute_only_plan_consistent() -> None:
         "target-gpu-stack-remediation",
         "rolling-compute-migration",
         "final-control-plane-cutover",
+        "populate-jail-refresh",
         "validation-and-rollback-hold",
         "retire-old-resources",
     ]
@@ -759,7 +809,9 @@ def test_soperator_onboarding_modes_make_compute_only_plan_consistent() -> None:
     )
     assert "storage" not in approval_phase.title.lower()
     approval_action = next(
-        action for action in adjusted.actions if action.id == ONBOARDING_ACTION_APPROVE_MIGRATION
+        action
+        for action in adjusted.actions
+        if action.id == ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE
     )
     assert "storage" not in approval_action.title.lower()
 
@@ -797,6 +849,7 @@ def test_soperator_onboarding_analyzer_reuses_target_compatible_legacy_layout() 
         "target-gpu-stack-remediation",
         "rolling-compute-migration",
         "final-control-plane-cutover",
+        "populate-jail-refresh",
         "validation-and-rollback-hold",
         "retire-old-resources",
     ]
@@ -832,6 +885,57 @@ def test_soperator_onboarding_skips_external_node_template_when_provider_invento
     )
     assert finding.evidence is not None
     assert finding.evidence["matched_node_group_count"] == 6
+
+
+def test_soperator_onboarding_plans_external_node_template_for_same_soperator_version_k8s_hop() -> None:
+    snapshot = _with_provider_node_template_inventory(
+        _target_compatible_legacy_snapshot()
+    )
+    snapshot["helm_releases"] = [
+        {
+            "name": "soperator",
+            "namespace": "soperator",
+            "chart": "soperator-4.0.2-ps.3",
+            "app_version": "4.0.2",
+        }
+    ]
+    provider = snapshot["provider"]
+    assert isinstance(provider, dict)
+    mk8s_cluster = provider["mk8s_cluster"]
+    assert isinstance(mk8s_cluster, dict)
+    mk8s_cluster["control_plane_version"] = "1.33"
+    node_groups = snapshot["node_groups"]
+    assert isinstance(node_groups, dict)
+    for raw_group in node_groups.values():
+        assert isinstance(raw_group, dict)
+        group_provider = raw_group["provider"]
+        assert isinstance(group_provider, dict)
+        template = group_provider["node_template"]
+        assert isinstance(template, dict)
+        template["k8s_version"] = "1.33"
+
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref="cluster1",
+        pinned_chart_version="4.0.2-ps.3",
+        pinned_app_version="4.0.2",
+        target_k8s_version="1.34",
+    )
+
+    selected_action_ids = {action.id for action in report.actions if action.selected}
+    assert report.state == "existing-soperator-target"
+    assert ONBOARDING_ACTION_UPGRADE_SOPERATOR not in selected_action_ids
+    assert ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE in selected_action_ids
+    assert ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE in selected_action_ids
+    assert "external-node-template-upgrade" in [phase.id for phase in report.migration_plan]
+    finding = next(
+        finding
+        for finding in report.findings
+        if finding.layer == "mk8s-node-template" and finding.status == "remediation-planned"
+    )
+    assert finding.evidence is not None
+    assert finding.evidence["control_plane"]["current_k8s_version"] == "1.33"
+    assert finding.evidence["control_plane"]["target_k8s_version"] == "1.34"
 
 
 def test_soperator_onboarding_keeps_external_node_template_when_provider_inventory_is_partial() -> (
@@ -969,6 +1073,7 @@ def test_soperator_onboarding_report_from_config_respects_selected_modes() -> No
         "external-node-template-upgrade",
         "rolling-compute-migration",
         "final-control-plane-cutover",
+        "populate-jail-refresh",
         "validation-and-rollback-hold",
         "retire-old-resources",
     ]
@@ -983,7 +1088,7 @@ def test_soperator_onboarding_report_from_config_respects_selected_modes() -> No
     approval_action = next(
         action
         for action in report["actions"]
-        if action["id"] == ONBOARDING_ACTION_APPROVE_MIGRATION
+        if action["id"] == ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE
     )
     assert "storage" not in approval_action["title"].lower()
 
@@ -1104,11 +1209,11 @@ def test_onboarding_report_writer_prefers_matching_source_discovery_report(tmp_p
             "migration_plan": [],
         }
     }
-    source_report_path = tmp_path / "generated" / "reports" / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
-    source_report_path.parent.mkdir(parents=True)
-    source_report_path.write_text(
-        json.dumps(source_report),
-        encoding="utf-8",
+    write_source_soperator_discovery_report(
+        tmp_path,
+        target_ref="cluster1",
+        snapshot=_snapshot(),
+        report=source_report["report"],
     )
 
     written = write_soperator_onboarding_reports(payload, tmp_path / "generated")
@@ -1189,20 +1294,281 @@ def test_soperator_onboarding_analyzer_accepts_exact_target_release() -> None:
             release={
                 "name": "soperator",
                 "namespace": "soperator",
-                "chart": "soperator-4.0.1-ps.1",
-                "app_version": "4.0.1",
+                "chart": "soperator-4.0.2-ps.3",
+                "app_version": "4.0.2",
+            }
+        ),
+        target_ref="cluster1",
+        pinned_chart_version="4.0.2-ps.3",
+        pinned_app_version="4.0.2",
+    )
+
+    assert report.state == "existing-soperator-target"
+    assert report.source_version == "4.0.2"
+    assert report.migration_profile_id == "v4-to-target"
+    assert ONBOARDING_ACTION_UPGRADE_SOPERATOR not in {action.id for action in report.actions}
+    assert any(finding.status == "target-version" for finding in report.findings)
+
+
+def _single_support_finding(report: object) -> dict[str, object]:
+    findings = soperator_upgrade_support_findings(report)  # type: ignore[arg-type]
+    assert len(findings) == 1
+    return dict(findings[0])
+
+
+def test_soperator_support_policy_rejects_legacy_target_before_k8s_133() -> None:
+    report = analyze_soperator_onboarding_snapshot(
+        _snapshot(
+            release={
+                "name": "soperator-controller",
+                "namespace": "soperator-system",
+                "chart": "helm-soperator-1.22.4",
+                "app_version": "1.22.4",
+            }
+        ),
+        target_ref="cluster1",
+        pinned_chart_version="1.22.5",
+        pinned_app_version="1.22.5",
+        target_k8s_version="1.33",
+    )
+
+    finding = _single_support_finding(report)
+    assert finding["layer"] == SOPERATOR_UPGRADE_SUPPORT_LAYER
+    assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_UNSUPPORTED
+    assert finding["severity"] == "required"
+    assert finding["evidence"]["rule_id"] == "k8s-1-33-requires-soperator-1-23"
+    assert finding["evidence"]["target_k8s_version"] == "1.33"
+    assert soperator_upgrade_support_requires_override(report)
+
+
+def test_soperator_support_policy_rejects_pre_123_target_before_source_age_rule() -> None:
+    report = analyze_soperator_onboarding_snapshot(
+        _snapshot(
+            release={
+                "name": "slurm-operator",
+                "namespace": "soperator",
+                "chart": "slurm-operator-1.14.1",
+                "app_version": "1.14.1",
+            }
+        ),
+        target_ref="cluster1",
+        pinned_chart_version="1.22.5",
+        pinned_app_version="1.22.5",
+        target_k8s_version="1.33",
+    )
+
+    finding = _single_support_finding(report)
+    assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_UNSUPPORTED
+    assert finding["evidence"]["rule_id"] == "k8s-1-33-requires-soperator-1-23"
+    assert soperator_upgrade_support_requires_override(report)
+
+
+def test_soperator_support_policy_marks_unmatched_legacy_source_not_validated() -> None:
+    report = analyze_soperator_onboarding_snapshot(
+        _snapshot(
+            release={
+                "name": "slurm-operator",
+                "namespace": "soperator",
+                "chart": "slurm-operator-1.14.1",
+                "app_version": "1.14.1",
             }
         ),
         target_ref="cluster1",
         pinned_chart_version="4.0.1-ps.1",
         pinned_app_version="4.0.1",
+        target_k8s_version="1.34",
     )
 
-    assert report.state == "existing-soperator-target"
-    assert report.source_version == "4.0.1"
-    assert report.migration_profile_id == "v4-to-target"
-    assert not report.migration_plan
-    assert any(finding.status == "target-version" for finding in report.findings)
+    finding = _single_support_finding(report)
+    assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_NOT_VALIDATED
+    assert finding["evidence"]["rule_id"] == "legacy-before-1-22-not-validated"
+    assert soperator_upgrade_support_requires_override(report)
+
+
+def test_soperator_support_policy_supports_122_plus_before_k8s_133() -> None:
+    report = analyze_soperator_onboarding_snapshot(
+        _snapshot(
+            release={
+                "name": "soperator-controller",
+                "namespace": "soperator-system",
+                "chart": "helm-soperator-1.22.3",
+                "app_version": "1.22.3",
+            }
+        ),
+        target_ref="cluster1",
+        pinned_chart_version="4.0.2-ps.3",
+        pinned_app_version="4.0.2",
+        target_k8s_version="1.32",
+    )
+
+    finding = _single_support_finding(report)
+    assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_SUPPORTED
+    assert (
+        finding["evidence"]["rule_id"]
+        == "k8s-before-1-33-soperator-1-22-plus-supported"
+    )
+    assert finding["evidence"]["target_version"] == "4.0.2-ps.3"
+    assert finding["evidence"]["target_app_version"] == "4.0.2"
+    assert finding["evidence"]["target_chart_version"] == "4.0.2-ps.3"
+    assert finding["evidence"]["approved_target_chart_version"] == "4.0.2-ps.3"
+    assert finding["evidence"]["recommended_order"] == {
+        "soperator_after_k8s_min": "1.32"
+    }
+    assert not soperator_upgrade_support_requires_override(report)
+
+
+def test_soperator_support_policy_marks_intermediate_target_not_validated() -> None:
+    report = analyze_soperator_onboarding_snapshot(
+        _snapshot(
+            release={
+                "name": "soperator-controller",
+                "namespace": "soperator-system",
+                "chart": "helm-soperator-1.22.4",
+                "app_version": "1.22.4",
+            }
+        ),
+        target_ref="cluster1",
+        pinned_chart_version="1.23.3",
+        pinned_app_version="1.23.3",
+        target_k8s_version="1.33",
+    )
+
+    finding = _single_support_finding(report)
+    assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_NOT_VALIDATED
+    assert finding["severity"] == "required"
+    assert finding["evidence"]["rule_id"] == "soperator-target-before-cxcli-pin-not-validated"
+    assert soperator_upgrade_support_requires_override(report)
+
+
+def test_soperator_support_policy_accepts_v4_target_on_k8s_133() -> None:
+    report = analyze_soperator_onboarding_snapshot(
+        _snapshot(
+            release={
+                "name": "soperator-controller",
+                "namespace": "soperator-system",
+                "chart": "helm-soperator-1.23.3",
+                "app_version": "1.23.3",
+            }
+        ),
+        target_ref="cluster1",
+        pinned_chart_version="4.0.2-ps.3",
+        pinned_app_version="4.0.2",
+        target_k8s_version="1.33",
+    )
+
+    finding = _single_support_finding(report)
+    assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_SUPPORTED
+    assert finding["evidence"]["rule_id"] == "k8s-1-33-soperator-4-supported"
+    assert finding["evidence"]["target_version"] == "4.0.2-ps.3"
+    assert finding["evidence"]["target_app_version"] == "4.0.2"
+    assert finding["evidence"]["recommended_order"] == {
+        "soperator_after_k8s_min": "1.32"
+    }
+    assert not soperator_upgrade_support_requires_override(report)
+
+
+@pytest.mark.parametrize("target_chart_version", ["4.0.2", "4.0.2-ps.1", "4.0.2-ps.999"])
+def test_soperator_support_policy_marks_same_app_non_pin_target_not_validated(
+    target_chart_version: str,
+) -> None:
+    report = analyze_soperator_onboarding_snapshot(
+        _snapshot(
+            release={
+                "name": "soperator-controller",
+                "namespace": "soperator-system",
+                "chart": "helm-soperator-1.22.4",
+                "app_version": "1.22.4",
+            }
+        ),
+        target_ref="cluster1",
+        pinned_chart_version=target_chart_version,
+        pinned_app_version="4.0.2",
+        approved_target_chart_version="4.0.2-ps.3",
+        target_k8s_version="1.33",
+    )
+
+    finding = _single_support_finding(report)
+    assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_NOT_VALIDATED
+    assert finding["severity"] == "required"
+    assert (
+        finding["evidence"]["rule_id"]
+        == "soperator-target-same-app-non-cxcli-pin-not-validated"
+    )
+    assert finding["evidence"]["target_version"] == target_chart_version
+    assert finding["evidence"]["target_app_version"] == "4.0.2"
+    assert finding["evidence"]["approved_target_chart_version"] == "4.0.2-ps.3"
+    assert soperator_upgrade_support_requires_override(report)
+
+
+def test_soperator_support_policy_marks_newer_upstream_target_not_validated() -> None:
+    report = analyze_soperator_onboarding_snapshot(
+        _snapshot(
+            release={
+                "name": "soperator-controller",
+                "namespace": "soperator-system",
+                "chart": "helm-soperator-1.22.4",
+                "app_version": "1.22.4",
+            }
+        ),
+        target_ref="cluster1",
+        pinned_chart_version="4.1.1",
+        pinned_app_version="4.1.1",
+        target_k8s_version="1.33",
+    )
+
+    finding = _single_support_finding(report)
+    assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_NOT_VALIDATED
+    assert finding["severity"] == "required"
+    assert finding["evidence"]["rule_id"] == "soperator-target-newer-than-cxcli-pin-not-validated"
+    assert soperator_upgrade_support_requires_override(report)
+
+
+def test_soperator_support_policy_marks_unmatched_path_not_validated() -> None:
+    report = analyze_soperator_onboarding_snapshot(
+        _snapshot(
+            release={
+                "name": "soperator-controller",
+                "namespace": "soperator-system",
+                "chart": "helm-soperator-1.22.4",
+                "app_version": "1.22.4",
+            }
+        ),
+        target_ref="cluster1",
+        pinned_chart_version="5.0.0",
+        pinned_app_version="5.0.0",
+        target_k8s_version="1.33",
+    )
+
+    finding = _single_support_finding(report)
+    assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_NOT_VALIDATED
+    assert finding["evidence"]["rule_id"] == "default-not-validated"
+    assert soperator_upgrade_support_requires_override(report)
+
+
+def test_soperator_support_policy_override_records_marker() -> None:
+    report = analyze_soperator_onboarding_snapshot(
+        _snapshot(
+            release={
+                "name": "soperator-controller",
+                "namespace": "soperator-system",
+                "chart": "helm-soperator-1.22.4",
+                "app_version": "1.22.4",
+            }
+        ),
+        target_ref="cluster1",
+        pinned_chart_version="1.22.5",
+        pinned_app_version="1.22.5",
+        target_k8s_version="1.33",
+    )
+
+    overridden = soperator_onboarding_report_with_support_override(report, override_used=True)
+    finding = _single_support_finding(overridden)
+
+    assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_UNSUPPORTED
+    assert finding["severity"] == "recommended"
+    assert finding["evidence"]["override_used"] is True
+    assert finding["evidence"]["original_severity"] == "required"
+    assert not soperator_upgrade_support_requires_override(overridden)
 
 
 def test_soperator_onboarding_analyzer_ignores_shadowed_stale_source_record() -> None:
@@ -1315,6 +1681,123 @@ def test_soperator_onboarding_analyzer_requires_source_version_for_incompatible_
     assert any(finding.status == "source-version-required" for finding in report.findings)
 
 
+def test_soperator_onboarding_analyzer_uses_detected_version_for_nonstandard_release_identity() -> (
+    None
+):
+    report = analyze_soperator_onboarding_snapshot(
+        _snapshot(
+            release={
+                "name": "soperator",
+                "namespace": "custom",
+                "chart": "helm-soperator-3.0.7",
+                "app_version": "3.0.7",
+            }
+        ),
+        target_ref="cluster1",
+        pinned_chart_version="4.0.2-ps.1",
+        pinned_app_version="4.0.2",
+    )
+
+    assert report.state == "existing-soperator-supported"
+    assert report.source_version == "3.0.7"
+    assert report.migration_profile_id == "v3-to-target"
+    assert ONBOARDING_ACTION_UPGRADE_SOPERATOR in {action.id for action in report.actions}
+    assert not any(finding.status == "source-version-required" for finding in report.findings)
+    release_finding = next(
+        finding for finding in report.findings if finding.status == "helm-release-detected"
+    )
+    assert release_finding.evidence.get("source_version") == "3.0.7"
+    assert release_finding.evidence.get("migration_profile_id") == "v3-to-target"
+    assert "name=soperator" in release_finding.message
+    assert "namespace=custom" in release_finding.message
+    assert "chart=helm-soperator-3.0.7" in release_finding.message
+    assert "version=3.0.7" in release_finding.message
+    assert "matched migration profile v3-to-target" in release_finding.message
+
+
+def test_soperator_onboarding_analyzer_uses_resource_labels_when_helm_release_missing() -> None:
+    snapshot = _snapshot()
+    snapshot["helm_releases"] = []
+    snapshot["crds"] = ["slurmclusters.slurm.nebius.ai", "nodesets.slurm.nebius.ai"]
+    snapshot["namespaces"] = ["soperator"]
+    snapshot["soperator_resources"] = [
+        {
+            "kind": "NodeSet",
+            "metadata": {
+                "name": "worker",
+                "namespace": "soperator",
+                "labels": {
+                    "app.kubernetes.io/instance": "soperator",
+                    "app.kubernetes.io/name": "soperator",
+                    "app.kubernetes.io/version": "4.0.2",
+                    "helm.sh/chart": "soperator-4.0.2-ps.3",
+                },
+            },
+        }
+    ]
+
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref="cluster1",
+        pinned_chart_version="4.0.2-ps.3",
+        pinned_app_version="4.0.2",
+    )
+
+    assert report.state == "existing-soperator-target"
+    assert report.source_version == "4.0.2"
+    assert not any(finding.status == "source-version-required" for finding in report.findings)
+    assert any(
+        finding.status == "resource-label-version-detected"
+        and finding.evidence["release"]["chart_version"] == "4.0.2-ps.3"
+        for finding in report.findings
+    )
+
+
+def test_soperator_onboarding_analyzer_prefers_canonical_resource_labels() -> None:
+    snapshot = _snapshot()
+    snapshot["helm_releases"] = []
+    snapshot["crds"] = ["slurmclusters.slurm.nebius.ai", "nodesets.slurm.nebius.ai"]
+    snapshot["namespaces"] = ["soperator", "custom"]
+    snapshot["soperator_resources"] = [
+        {
+            "kind": "NodeSet",
+            "metadata": {
+                "name": "custom-worker",
+                "namespace": "custom",
+                "labels": {
+                    "app.kubernetes.io/instance": "soperator",
+                    "app.kubernetes.io/name": "soperator",
+                    "app.kubernetes.io/version": "3.0.7",
+                    "helm.sh/chart": "soperator-3.0.7",
+                },
+            },
+        },
+        {
+            "kind": "NodeSet",
+            "metadata": {
+                "name": "worker",
+                "namespace": "soperator",
+                "labels": {
+                    "app.kubernetes.io/instance": "soperator",
+                    "app.kubernetes.io/name": "soperator",
+                    "app.kubernetes.io/version": "4.0.2",
+                    "helm.sh/chart": "soperator-4.0.2-ps.3",
+                },
+            },
+        },
+    ]
+
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref="cluster1",
+        pinned_chart_version="4.0.2-ps.3",
+        pinned_app_version="4.0.2",
+    )
+
+    assert report.state == "existing-soperator-target"
+    assert report.source_version == "4.0.2"
+
+
 def test_soperator_onboarding_analyzer_source_version_finding_names_profile_contract() -> None:
     snapshot = _snapshot()
     snapshot["crds"] = ["slurmclusters.slurm.nebius.ai"]
@@ -1386,7 +1869,7 @@ def test_soperator_onboarding_source_version_allows_noncanonical_release() -> No
     assert report.remediation
     assert report.migration_plan
     assert ONBOARDING_ACTION_UPGRADE_SOPERATOR in {action.id for action in report.actions}
-    assert ONBOARDING_ACTION_APPROVE_MIGRATION in {action.id for action in report.actions}
+    assert ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE in {action.id for action in report.actions}
     assert ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION in {action.id for action in report.actions}
     assert any(
         finding.layer == "soperator" and finding.status == "source-version-selected"
@@ -1518,7 +2001,16 @@ def test_soperator_onboarding_analyzer_uses_profile_for_detected_patch(
         and finding.evidence.get("source_version") == source_version
         for finding in report.findings
     )
-    assert any(finding.status == "noncanonical-release-detected" for finding in report.findings)
+    release_finding = next(
+        finding for finding in report.findings if finding.status == "helm-release-detected"
+    )
+    assert release_finding.evidence.get("source_version") == source_version
+    assert release_finding.evidence.get("migration_profile_id") == "v3-to-target"
+    assert "name=soperator" in release_finding.message
+    assert "namespace=custom" in release_finding.message
+    assert f"chart=helm-soperator-{source_version}" in release_finding.message
+    assert f"version={source_version}" in release_finding.message
+    assert "matched migration profile v3-to-target" in release_finding.message
 
 
 def test_soperator_onboarding_analyzer_blocks_collection_errors() -> None:
@@ -1753,6 +2245,72 @@ def _onboarding_payload() -> dict[str, object]:
     return payload
 
 
+def _locked_upgrade_path_payload() -> dict[str, object]:
+    jail_rootfs = {
+        "current_image": "cr.example/populate_jail:4.0.2-slurm25.11.3-cuda12.9.0",
+        "current_version": "4.0.2-slurm25.11.3-cuda12.9.0",
+        "current_source": "completed-populate-jail-job",
+        "current_job_name": "mk8s-populate-jail",
+        "live_desired_image": "cr.example/populate_jail:4.0.2-slurm25.11.3-cuda12.9.0",
+        "live_desired_version": "4.0.2-slurm25.11.3-cuda12.9.0",
+        "live_desired_source": "slurmcluster.spec.populateJail.image",
+        "slurmcluster_name": "mk8s",
+        "target_image": "cr.example/populate_jail:4.0.2-slurm25.11.3-cuda12.9.0",
+        "target_version": "4.0.2-slurm25.11.3-cuda12.9.0",
+        "target_source": "pinned-chart-defaults",
+        "refresh_required": False,
+        "reason": "current populate-jail image matches target chart image",
+    }
+    return {
+        "schema": SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA,
+        "locked": True,
+        "source_k8s_version": "1.32",
+        "target_k8s_version": "1.33",
+        "soperator_app": {
+            "current_version": "1.23.3",
+            "target_version": "4.0.2",
+            "upgrade_required": True,
+        },
+        "soperator_chart": {
+            "current_version": "1.23.3",
+            "target_version": "4.0.2-ps.3",
+            "upgrade_required": True,
+        },
+        "jail_rootfs": jail_rootfs,
+        "support_status": "supported",
+        "support_rule_id": "k8s-1-33-soperator-4-supported",
+        "recommended_order": [],
+        "recommended_order_policy": {},
+        "segments": [
+            {
+                "id": "segment-1-kubernetes-1-32-1-33",
+                "index": 1,
+                "kind": "external-node-template-hop",
+                "title": "Kubernetes 1.32 -> 1.33",
+                "current_k8s_version": "1.32",
+                "target_k8s_version": "1.33",
+                "soperator_app": {
+                    "current_version": "4.0.2",
+                    "target_version": "4.0.2",
+                    "upgrade_required": False,
+                },
+                "soperator_chart": {
+                    "current_version": "4.0.2-ps.3",
+                    "target_version": "4.0.2-ps.3",
+                    "upgrade_required": False,
+                },
+                "jail_rootfs": jail_rootfs,
+                "k8s_upgrade_required": True,
+                "soperator_upgrade_required": False,
+                "actions": [
+                    ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
+                    ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
+                ],
+            }
+        ],
+    }
+
+
 def test_onboarding_acceptance_refuses_stale_analysis() -> None:
     payload = _onboarding_payload()
     validate_soperator_onboarding_acceptance(payload, target_ref="cluster1")
@@ -1887,6 +2445,137 @@ def test_runtime_validation_accepts_external_soperator_target_without_mk8s_infra
     validate_runtime_payload(_onboarding_payload())
 
 
+def test_runtime_validation_accepts_soperator_onboarding_with_locked_upgrade_path() -> None:
+    payload = _onboarding_payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]  # type: ignore[index]
+    onboarding["actions"] = [  # type: ignore[index]
+        ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
+        ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
+    ]
+    onboarding["storage_mode"] = ONBOARDING_STORAGE_MODE_KEEP_EXISTING  # type: ignore[index]
+    onboarding["node_template_upgrade"] = {  # type: ignore[index]
+        "target_k8s_version": "1.33",
+        "target_os": "ubuntu24.04",
+        "target_gpu_stack_preset": "cuda13.0",
+        "rollout": {
+            "strategy": "zero-surge",
+            "worker_group_strategy": {
+                "max_surge_count": 0,
+                "max_unavailable_count": 1,
+                "drain_timeout": "30m",
+            },
+        },
+    }
+    onboarding["upgrade_path"] = _locked_upgrade_path_payload()  # type: ignore[index]
+    onboarding["analysis_fingerprint"] = soperator_onboarding_fingerprint(  # type: ignore[index]
+        payload,
+        target_ref="cluster1",
+    )
+
+    validate_runtime_payload(payload)
+
+
+def test_runtime_validation_rejects_target_only_bad_soperator_onboarding() -> None:
+    payload = _onboarding_payload()
+    payload["apps"]["charts"] = []  # type: ignore[index]
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]  # type: ignore[index]
+    onboarding["actions"] = "upgrade-soperator"  # type: ignore[index]
+
+    with pytest.raises(ValueError, match=r"soperator_onboarding\.actions must be a list"):
+        validate_runtime_payload(payload)
+
+
+def test_runtime_validation_rejects_soperator_onboarding_missing_actions() -> None:
+    payload = _onboarding_payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]  # type: ignore[index]
+    onboarding.pop("actions")  # type: ignore[union-attr]
+
+    with pytest.raises(ValueError, match=r"soperator_onboarding\.actions is required"):
+        validate_runtime_payload(payload)
+
+
+def test_runtime_validation_rejects_soperator_onboarding_unknown_key() -> None:
+    payload = _onboarding_payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]  # type: ignore[index]
+    onboarding["analysis_report"] = {}  # type: ignore[index]
+
+    with pytest.raises(ValueError, match=r"soperator_onboarding has unsupported field"):
+        validate_runtime_payload(payload)
+
+
+def test_runtime_validation_rejects_soperator_onboarding_actions_string_even_when_fingerprinted() -> None:
+    payload = _onboarding_payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]  # type: ignore[index]
+    onboarding["actions"] = "upgrade-soperator"  # type: ignore[index]
+    onboarding["analysis_fingerprint"] = soperator_onboarding_fingerprint(  # type: ignore[index]
+        payload,
+        target_ref="cluster1",
+    )
+
+    with pytest.raises(ValueError, match=r"soperator_onboarding\.actions must be a list"):
+        validate_runtime_payload(payload)
+
+
+@pytest.mark.parametrize("target_k8s_version", ["not-a-version", "1.33.1"])
+def test_runtime_validation_rejects_soperator_onboarding_bad_target_k8s_version(
+    target_k8s_version: str,
+) -> None:
+    payload = _onboarding_payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]  # type: ignore[index]
+    onboarding["node_template_upgrade"] = {  # type: ignore[index]
+        "target_k8s_version": target_k8s_version,
+    }
+    onboarding["analysis_fingerprint"] = soperator_onboarding_fingerprint(  # type: ignore[index]
+        payload,
+        target_ref="cluster1",
+    )
+
+    with pytest.raises(ValueError, match=r"target_k8s_version must be a Kubernetes major\.minor"):
+        validate_runtime_payload(payload)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "match"),
+    [
+        (
+            lambda path: path.update({"schema": "wrong-schema"}),
+            r"upgrade_path\.schema must be",
+        ),
+        (
+            lambda path: path["segments"][0].update({"actions": ["not-a-current-action"]}),
+            r"upgrade_path\.segments\[0\]\.actions\[0\] has unsupported value",
+        ),
+        (
+            lambda path: path["segments"][0].pop("title"),
+            r"upgrade_path\.segments\[0\]\.title must be a non-empty string",
+        ),
+        (
+            lambda path: path.pop("support_status"),
+            r"upgrade_path\.support_status is required",
+        ),
+    ],
+)
+def test_runtime_validation_rejects_soperator_onboarding_malformed_upgrade_path(
+    mutation: Callable[[dict[str, object]], object],
+    match: str,
+) -> None:
+    payload = _onboarding_payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]  # type: ignore[index]
+    upgrade_path = _locked_upgrade_path_payload()
+    mutation(upgrade_path)
+    onboarding["upgrade_path"] = upgrade_path  # type: ignore[index]
+
+    with pytest.raises(ValueError, match=match):
+        validate_runtime_payload(payload)
+
+
 def test_runtime_validation_accepts_soperator_worker_rollout_config() -> None:
     payload = _onboarding_payload()
     target = payload["deploy"]["targets"][0]  # type: ignore[index]
@@ -1927,6 +2616,22 @@ def test_runtime_validation_rejects_soperator_worker_rollout_conflicting_budget(
         validate_runtime_payload(payload)
 
 
+def test_runtime_validation_rejects_soperator_fixed_groups_with_parallel_cap() -> None:
+    payload = _onboarding_payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]  # type: ignore[index]
+    onboarding["node_template_upgrade"] = {  # type: ignore[index]
+        "rollout": {
+            "strategy": "safe-surge",
+            "worker_wave_groups": 2,
+            "max_parallel_worker_groups": 2,
+        }
+    }
+
+    with pytest.raises(ValueError, match="only supported with worker_wave_percent"):
+        validate_runtime_payload(payload)
+
+
 def test_runtime_validation_rejects_zero_surge_worker_wave_fields() -> None:
     payload = _onboarding_payload()
     target = payload["deploy"]["targets"][0]  # type: ignore[index]
@@ -1957,7 +2662,7 @@ def test_onboarding_report_writer_persists_target_report(tmp_path) -> None:
 
 
 def test_source_discovery_report_writer_persists_full_snapshot(tmp_path) -> None:
-    snapshot = _snapshot()
+    snapshot = _with_provider_node_template_inventory(_snapshot())
     report = analyze_soperator_onboarding_snapshot(
         snapshot,
         target_ref="cluster1",
@@ -1972,13 +2677,341 @@ def test_source_discovery_report_writer_persists_full_snapshot(tmp_path) -> None
         report=report,
         cluster_id="mk8scluster-123",
         cluster_name="cluster1",
+        target_versions={
+            "k8s_version": (
+                soperator_onboarding_module.ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION
+            )
+        },
+        guidance_lines=("- Soperator upgrade path: status=supported, rule=test-rule",),
     )
 
-    assert path == tmp_path / "generated" / "reports" / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert path == (
+        tmp_path
+        / "generated"
+        / "reports"
+        / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
+        / "cluster1"
+        / "manifest.json"
+    )
+    payload = load_soperator_discovery_bundle(path)
     assert payload["cluster_id"] == "mk8scluster-123"
+    assert (
+        payload["current_k8s_version"]
+        == soperator_onboarding_module.ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION
+    )
+    assert (
+        payload["target_k8s_version"]
+        == soperator_onboarding_module.ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION
+    )
     assert payload["report"]["state"] == "no-soperator-detected"
     assert payload["snapshot"]["node_groups"]["h100"]["gpu"] is True
+    summary = (path.parent / "summary.md").read_text(encoding="utf-8")
+    assert "- Current Kubernetes version:" in summary
+    assert "- Target Kubernetes version:" in summary
+    assert "## Upgrade Guidance" in summary
+    assert "- Soperator upgrade path: status=supported, rule=test-rule" in summary
+
+
+def test_source_discovery_report_writer_treats_output_dir_as_root(tmp_path) -> None:
+    output_root = tmp_path / "custom-root"
+    jail_image = (
+        "cr.eu-north1.nebius.cloud/soperator/populate_jail:"
+        "4.0.2-slurm25.11.3-cuda12.9.0"
+    )
+    snapshot = _snapshot(
+        release={
+            "name": "soperator",
+            "namespace": "soperator",
+            "chart": "soperator-4.0.2-ps.3",
+            "app_version": "4.0.2",
+        }
+    )
+    snapshot["soperator_resources"] = [
+        {
+            "kind": "NodeSet",
+            "metadata": {
+                "name": "worker",
+                "namespace": "soperator",
+                "labels": {
+                    "app.kubernetes.io/instance": "soperator",
+                    "app.kubernetes.io/name": "soperator",
+                    "app.kubernetes.io/version": "4.0.2",
+                    "helm.sh/chart": "soperator-4.0.2-ps.3",
+                },
+            },
+        }
+    ]
+    snapshot["soperator_resources"] += [
+        {
+            "kind": "SlurmCluster",
+            "metadata": {"name": "mk8s", "namespace": "soperator"},
+            "spec": {"populateJail": {"image": jail_image}},
+        }
+    ]
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref="cluster1",
+        pinned_chart_version="4.0.2-ps.3",
+        pinned_app_version="4.0.2",
+    )
+
+    path = write_source_soperator_discovery_report(
+        tmp_path,
+        target_ref="cluster1",
+        snapshot=snapshot,
+        report=report,
+        output_dir=output_root,
+        target_versions={
+            "jail_rootfs": {
+                "target_image": jail_image,
+                "target_source": "test-target",
+            }
+        },
+    )
+
+    assert path == (
+        output_root
+        / "generated"
+        / "reports"
+        / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
+        / "cluster1"
+        / "manifest.json"
+    )
+    assert not (output_root / "manifest.json").exists()
+    summary = (path.parent / "summary.md").read_text(encoding="utf-8")
+    assert "- Soperator status: `installed`" in summary
+    assert "- Source version: `4.0.2`" in summary
+    assert "- Soperator chart version: `4.0.2-ps.3`" in summary
+    assert "- Jail rootfs version: `4.0.2-slurm25.11.3-cuda12.9.0`" in summary
+    payload = load_soperator_discovery_bundle(path)
+    assert payload["jail_rootfs"]["current_image"] == jail_image
+    assert payload["jail_rootfs"]["current_version"] == "4.0.2-slurm25.11.3-cuda12.9.0"
+    assert payload["jail_rootfs"]["target_image"] == jail_image
+    assert payload["jail_rootfs"]["refresh_required"] is False
+    assert payload["report"]["jail_rootfs"]["refresh_required"] is False
+    kubernetes = json.loads((path.parent / "kubernetes.json").read_text(encoding="utf-8"))
+    assert [item["metadata"]["name"] for item in kubernetes["nodesets"]] == ["worker"]
+
+
+def test_source_discovery_report_writer_marks_jail_refresh_when_target_image_changes(
+    tmp_path,
+) -> None:
+    current_image = (
+        "cr.eu-north1.nebius.cloud/soperator/populate_jail:"
+        "4.0.2-slurm25.11.3-cuda12.8.0"
+    )
+    target_image = (
+        "cr.eu-north1.nebius.cloud/soperator/populate_jail:"
+        "4.0.2-slurm25.11.3-cuda12.9.0"
+    )
+    snapshot = _snapshot(
+        release={
+            "name": "soperator",
+            "namespace": "soperator",
+            "chart": "soperator-4.0.2-ps.3",
+            "app_version": "4.0.2",
+        }
+    )
+    snapshot["soperator_resources"] = [
+        {
+            "kind": "SlurmCluster",
+            "metadata": {"name": "mk8s", "namespace": "soperator"},
+            "spec": {"populateJail": {"image": current_image}},
+        }
+    ]
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref="cluster1",
+        pinned_chart_version="4.0.2-ps.3",
+        pinned_app_version="4.0.2",
+    )
+
+    path = write_source_soperator_discovery_report(
+        tmp_path,
+        target_ref="cluster1",
+        snapshot=snapshot,
+        report=report,
+        target_versions={
+            "jail_rootfs": {
+                "target_image": target_image,
+                "target_source": "test-target",
+            }
+        },
+    )
+
+    payload = load_soperator_discovery_bundle(path)
+    jail_rootfs = payload["jail_rootfs"]
+    assert jail_rootfs["current_image"] == current_image
+    assert jail_rootfs["current_version"] == "4.0.2-slurm25.11.3-cuda12.8.0"
+    assert jail_rootfs["target_image"] == target_image
+    assert jail_rootfs["target_version"] == "4.0.2-slurm25.11.3-cuda12.9.0"
+    assert jail_rootfs["refresh_required"] is True
+    assert "differs" in jail_rootfs["reason"]
+    summary = (path.parent / "summary.md").read_text(encoding="utf-8")
+    assert "- Target Jail rootfs version: `4.0.2-slurm25.11.3-cuda12.9.0`" in summary
+
+
+def test_source_discovery_report_writer_prefers_completed_populate_jail_job_image(
+    tmp_path,
+) -> None:
+    live_image = (
+        "cr.eu-north1.nebius.cloud/soperator/populate_jail:"
+        "4.0.2-slurm25.11.3-cuda12.8.0"
+    )
+    completed_job_image = (
+        "cr.eu-north1.nebius.cloud/soperator/populate_jail:"
+        "4.0.2-slurm25.11.3-cuda12.9.0"
+    )
+    snapshot = _snapshot(
+        release={
+            "name": "soperator",
+            "namespace": "soperator",
+            "chart": "soperator-4.0.2-ps.3",
+            "app_version": "4.0.2",
+        }
+    )
+    snapshot["soperator_resources"] = [
+        {
+            "kind": "SlurmCluster",
+            "metadata": {"name": "mk8s", "namespace": "soperator"},
+            "spec": {"populateJail": {"image": live_image}},
+        }
+    ]
+    snapshot["soperator_namespace_resources"] = [
+        {
+            "kind": "Job",
+            "metadata": {
+                "name": "mk8s-populate-jail",
+                "namespace": "soperator",
+                "creationTimestamp": "2026-07-05T10:00:00Z",
+            },
+            "status": {"succeeded": 1, "completionTime": "2026-07-05T10:03:00Z"},
+            "containers": [{"name": "populate-jail", "image": completed_job_image}],
+        }
+    ]
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref="cluster1",
+        pinned_chart_version="4.0.2-ps.3",
+        pinned_app_version="4.0.2",
+    )
+
+    path = write_source_soperator_discovery_report(
+        tmp_path,
+        target_ref="cluster1",
+        snapshot=snapshot,
+        report=report,
+        target_versions={
+            "jail_rootfs": {
+                "target_image": completed_job_image,
+                "target_source": "test-target",
+            }
+        },
+    )
+
+    payload = load_soperator_discovery_bundle(path)
+    jail_rootfs = payload["jail_rootfs"]
+    assert jail_rootfs["current_image"] == completed_job_image
+    assert jail_rootfs["current_source"] == "completed-populate-jail-job"
+    assert jail_rootfs["current_job_name"] == "mk8s-populate-jail"
+    assert jail_rootfs["live_desired_image"] == live_image
+    assert jail_rootfs["target_image"] == completed_job_image
+    assert jail_rootfs["refresh_required"] is False
+
+
+def test_source_discovery_report_writer_filters_resource_labels_by_namespace(tmp_path) -> None:
+    snapshot = _snapshot()
+    snapshot["helm_releases"] = []
+    snapshot["crds"] = ["slurmclusters.slurm.nebius.ai", "nodesets.slurm.nebius.ai"]
+    snapshot["soperator_resources"] = [
+        {
+            "kind": "NodeSet",
+            "metadata": {
+                "name": "worker",
+                "namespace": "soperator",
+                "labels": {
+                    "app.kubernetes.io/instance": "soperator",
+                    "app.kubernetes.io/name": "soperator",
+                    "app.kubernetes.io/version": "1.23.3",
+                    "helm.sh/chart": "soperator-1.23.3",
+                },
+            },
+        },
+        {
+            "kind": "NodeSet",
+            "metadata": {
+                "name": "custom-worker",
+                "namespace": "custom",
+                "labels": {
+                    "app.kubernetes.io/instance": "soperator",
+                    "app.kubernetes.io/name": "soperator",
+                    "app.kubernetes.io/version": "3.0.7",
+                    "helm.sh/chart": "soperator-3.0.7",
+                },
+            },
+        },
+    ]
+
+    path = write_source_soperator_discovery_report(
+        tmp_path,
+        target_ref="cluster1",
+        snapshot=snapshot,
+        report={
+            "state": "existing-soperator-unknown",
+            "source_version": "",
+            "target_version": "4.0.2-ps.3",
+            "fingerprint": "fingerprint",
+            "findings": [],
+            "actions": [],
+        },
+        namespace="custom",
+        release_name="soperator",
+    )
+
+    payload = load_soperator_discovery_bundle(path)
+    assert payload["namespace"] == "custom"
+    assert payload["source_version"] == "3.0.7"
+    assert payload["chart_version"] == "3.0.7"
+
+
+def test_source_discovery_report_writer_omits_malformed_k8s_versions(tmp_path) -> None:
+    snapshot = _snapshot()
+    snapshot["provider"] = {
+        "mk8s_cluster": {
+            "id": "mk8scluster-123",
+            "name": "cluster1",
+            "control_plane_version": "version pending",
+        }
+    }
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref="cluster1",
+        pinned_chart_version="4.0.1-ps.1",
+        pinned_app_version="4.0.1",
+    )
+
+    path = write_source_soperator_discovery_report(
+        tmp_path,
+        target_ref="cluster1",
+        snapshot=snapshot,
+        report=report,
+        cluster_id="mk8scluster-123",
+        cluster_name="cluster1",
+        target_versions={"k8s_version": "not-a-version"},
+    )
+
+    payload = load_soperator_discovery_bundle(path)
+    assert payload["current_k8s_version"] == ""
+    assert payload["target_k8s_version"] == ""
+    summary = (path.parent / "summary.md").read_text(encoding="utf-8")
+    assert "- Current Kubernetes version:" not in summary
+    assert "- Target Kubernetes version:" not in summary
+
+
+def test_soperator_discovery_k8s_minor_text_rejects_freeform_status_text() -> None:
+    assert soperator_discovery_k8s_minor_text("v1.32.7") == "1.32"
+    assert soperator_discovery_k8s_minor_text("1.33+provider.1") == "1.33"
+    assert soperator_discovery_k8s_minor_text("version 1.32 pending") == ""
 
 
 def test_source_discovery_report_writer_is_stable_for_same_discovery(tmp_path) -> None:
@@ -1998,7 +3031,11 @@ def test_source_discovery_report_writer_is_stable_for_same_discovery(tmp_path) -
         cluster_id="mk8scluster-123",
         cluster_name="cluster1",
     )
-    before = path.read_text(encoding="utf-8")
+    before = {
+        item.name: item.read_text(encoding="utf-8")
+        for item in sorted(path.parent.iterdir())
+        if item.is_file()
+    }
 
     report_payload = report.to_dict()
     report_payload["analyzed_at"] = "2030-01-01T00:00:00Z"
@@ -2011,7 +3048,12 @@ def test_source_discovery_report_writer_is_stable_for_same_discovery(tmp_path) -
         cluster_name="cluster1",
     )
 
-    assert path.read_text(encoding="utf-8") == before
+    after = {
+        item.name: item.read_text(encoding="utf-8")
+        for item in sorted(path.parent.iterdir())
+        if item.is_file()
+    }
+    assert after == before
 
 
 def test_onboarding_report_writer_preserves_collection_errors(tmp_path) -> None:

@@ -53,6 +53,7 @@ They should say, in effect:
 ```text
 Here is the workspace root.
 Here is the durable task-state path.
+Here are bounded same-workspace prior task-state candidate paths, when relevant.
 Do not create task state from hooks.
 Read current task state when it already exists and prior context may matter.
 For complex work, use global-context-management.
@@ -70,6 +71,11 @@ manual or legacy fallback path is created.
 
 They must not persist raw prompts, broad command output, stack traces, secrets,
 customer data, private URLs, or broad environment dumps.
+They also must not inject historical task-state contents into model context.
+For complex prompts, `UserPromptSubmit` may list only a small set of
+same-workspace prior `current.md` candidate paths from the same
+`$CODEX_HOME/task-state/<workspace>-<hash>/` bucket. The parent agent decides
+whether any candidate is relevant enough to read.
 
 ### Task-State Lifecycle
 
@@ -89,10 +95,18 @@ that later edits cannot persist. That allowlist is separate from broader
 runtime files such as `$CODEX_HOME/hooks`, which should remain protected unless
 the user intentionally syncs hook sources.
 
+The current session's advertised `current.md` remains the only write target.
+Hook-suggested prior same-workspace `current.md` paths are read candidates, not
+active state. Read them only when they appear relevant to the current task,
+treat them as stale hints, and verify any useful facts against current repo or
+runtime evidence.
+
 Use the task-state file in three places:
 
 1. At task start, resume, or after compaction, read the current file when prior
-   decisions, validation status, or next action may affect the work.
+   decisions, validation status, or next action may affect the work. If the hook
+   suggests related prior same-workspace task-state candidates, read only the
+   relevant candidate summaries.
 2. During the task, update it with concise checkpoints after planning, major
    edits, validation, and risk review.
 3. Before the final answer or a long pause, leave the latest status and next
@@ -103,6 +117,12 @@ Verify facts that may have drifted, keep raw logs and secrets out of the file,
 and prefer short decisions over copied command output. If the file is written
 but never read on continuation, it becomes an audit trail rather than useful
 context management.
+
+Keep `current.md` as a rolling summary, not an append-only transcript. Replace
+stale or superseded details with the latest validated state, retain only the
+objective, constraints, decisions, changed files, validation status, risks, and
+next action needed for continuation, and summarize any older task-state file
+that has grown too large to scan quickly before relying on it.
 
 ### Skill
 
@@ -142,8 +162,15 @@ Subagents inspect, summarize, and report. They do not edit code. The main agent
 owns consolidation, implementation, final verification, and the final answer.
 The main agent also owns cleanup: after spawning a helper, it should wait for
 the final summary, fold the useful result back into the parent thread, and
-close the completed subagent thread when close controls are available and no
-follow-up is needed.
+close every spawned subagent handle with `close_agent` or equivalent close
+controls once it is completed or no longer needed.
+Completed agents can remain open and count toward the concurrency limit until
+they are closed, so cleanup is part of the parent agent's completion contract
+when close controls exist.
+If the parent is finalizing while a helper is still running and the result is
+no longer needed, it should close that handle before the final response. If the
+result is still needed, it should wait for a terminal status, consolidate the
+result, then close the handle.
 Do not spawn every configured role by default. Keep `max_threads = 4` as the
 conservative local thread budget. Use `repo_mapper` and `test_strategist` early
 only when their work is useful and independent, close them after consolidation,
@@ -151,6 +178,9 @@ then use `risk_reviewer` near the end only for non-trivial or risky changes.
 When several helpers are running, the main agent should close each completed
 handle as soon as its terminal result arrives, then keep waiting for the
 remaining handles until all spawned helpers are closed.
+Before the final answer, the main agent should run a final lifecycle sweep over
+every spawned handle and report any handle that could not be closed because
+close controls were unavailable or failed.
 
 Subagents are not a guaranteed visible button or separate UI in every surface.
 They depend on the `multi_agent` feature, current runtime tools, configured
@@ -222,9 +252,11 @@ Parent agent:
   2. Continue parent work while helpers run when the parent is not blocked.
   3. Wait for helper results before relying on their findings.
   4. Treat wait results and async completion notices as terminal results.
-  5. Close each completed handle as soon as no follow-up is needed.
-  6. Use helper output as evidence, not final authority.
-  7. Own edits, verification, risk judgment, and the final answer.
+  5. Close each completed or no-longer-needed handle when close controls exist.
+  6. Sweep all spawned handles before the final answer.
+  7. Report any unavailable or failed close operation.
+  8. Use helper output as evidence, not final authority.
+  9. Own edits, verification, risk judgment, and the final answer.
 ```
 
 ## Runtime Boundaries
@@ -240,9 +272,11 @@ What it can do is change future behavior:
 - delegate broad read-only mapping and validation planning when authorized by
   the prompt or local hook policy, useful, and available
 - require concise summaries from subagents
-- close completed subagent threads after their results are consolidated, when
-  close controls are available
+- close completed or no-longer-needed subagent threads after their results are
+  consolidated, when close controls are available
 - repeat wait-and-close until every spawned subagent handle is closed
+- sweep spawned handles before the final answer and report any close failure or
+  unavailable close controls
 - push final risk review into a bounded read-only pass
 
 If context is still growing too quickly, check the working pattern first:
@@ -262,8 +296,9 @@ For a complex task, the intended flow is:
 4. Use read-only subagents when they reduce parent-thread noise, delegation is
    authorized by the prompt or local hook policy, and the current runtime
    permits delegation. Use `repo_mapper` and `test_strategist` early only when
-   useful and independent; close completed helpers after consolidation. Do not
-   spawn every configured role by default.
+   useful and independent; close completed helpers after consolidation and
+   close no-longer-needed running helpers before finalizing. Do not spawn every
+   configured role by default.
 5. Implement the smallest coherent change in the main thread.
 6. Inspect the diff and run focused validation.
 7. Use `risk_reviewer` near the end only for non-trivial or risky changes.
@@ -280,6 +315,7 @@ The hook does this:
 Before Codex starts working:
   "Here is the repo.
    Here is the task-state path.
+   Here are likely related prior state paths, if any.
    Advertise it for complex prompts; do not create it automatically.
    Read it when it already exists and prior context may matter.
    Use the global workflow for complex work."
@@ -287,7 +323,8 @@ Before Codex starts working:
 The Skill does this:
 
 During the task:
-  "Read useful prior task state, then follow the exact process."
+  "Read useful prior task state or hook-suggested related summaries,
+   verify stale facts, then follow the exact process."
 
 The subagents do this when delegation is authorized and available:
 
@@ -299,7 +336,9 @@ The main agent does this after delegation:
   "Keep working when not blocked.
    Wait for final helper summaries.
    Treat wait results and async completion notices as terminal.
-   Close each completed handle.
+   Close each completed or no-longer-needed handle.
+   Sweep all spawned handles before the final answer.
+   Report unavailable or failed cleanup.
    Use helper output as evidence.
    Own the final decision."
 ```
@@ -342,9 +381,10 @@ fresh Codex session has loaded and trusted the hooks.
 
 The local template validator uses disposable Codex homes. It verifies hook path
 calculation, lazy SessionStart behavior, private task-state permissions
-including reuse-time permission repair, prompt-leak prevention, and that an
-existing nonempty `current.md` is preserved for the agent to read rather than
-overwritten or copied into hook context.
+including reuse-time permission repair, prompt-leak prevention, bounded
+same-workspace related task-state candidate discovery, no unrelated workspace
+candidate leakage, and that existing nonempty `current.md` files are preserved
+for the agent to read rather than overwritten or copied into hook context.
 
 Runtime subagent activation is also surface-dependent. Treat it as unverified
 until a fresh session can actually spawn a read-only helper after a prompt
@@ -425,9 +465,9 @@ not permitted. A useful non-mutating probe is:
 
 ```text
 Use $global-context-management. Explicitly spawn one read-only repo_mapper
-subagent to inspect this repository. Do not edit files. Wait for it, then
-report whether the subagent was spawned, and keep raw command output out of
-the answer.
+subagent to inspect this repository. Do not edit files. Wait for it, close it
+after the result when close controls are available, then report whether the
+subagent was spawned and closed. Keep raw command output out of the answer.
 ```
 
 To test policy-driven injection without hardcoding agent names into the public

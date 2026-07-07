@@ -7,9 +7,10 @@ All notable changes to this project are tracked here. This changelog follows
 ## How to use this file
 
 - Keep `## [Unreleased]` at the top and add bullets as changes land.
-- Before release tagging, move `Unreleased` into a dated release section with
-  `./publish-release.sh --prep X.Y.Z`.
-- After changelog PR merge to `__MAIN_BRANCH__`, run
+- Before release tagging, start from clean synced `__MAIN_BRANCH__` and move
+  `Unreleased` into a dated release section with
+  `./publish-release.sh --prep X.Y.Z`; it creates and pushes a release branch.
+- After the release-prep PR merges to `__MAIN_BRANCH__`, run
   `./publish-release.sh --publish X.Y.Z` on clean synced `__MAIN_BRANCH__`.
 - The prep step fails before editing `CHANGELOG.md` if the target tag already
   exists locally or on `origin`.

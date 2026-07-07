@@ -5,6 +5,7 @@ Use this checklist as the durable test plan for `agentic-sdlc-test`.
 ## Required SDLC Skills
 
 - `sdlc-align-specs`
+- `sdlc-auto-steering`
 - `sdlc-classify-failure`
 - `sdlc-commit`
 - `sdlc-create-design`
@@ -18,6 +19,7 @@ Use this checklist as the durable test plan for `agentic-sdlc-test`.
 - `sdlc-start`
 - `sdlc-tdd`
 - `sdlc-tui-test`
+- `sdlc-update-documents`
 - `sdlc-uat-tests`
 - `sdlc-unit-tests`
 - `sdlc-validate-codes`
@@ -50,7 +52,15 @@ Verify `docs/agentic-sdlc-design.md` includes:
 - `Quick preflight test`
 - `Full workflow test`
 - `$agentic-sdlc-test`
+- `$sdlc-start`
+- `allow_implicit_invocation: false`
 - `~/.codex/sdlc-verification/report.md`
+- `sdlc-auto-steering`
+- `sdlc-update-documents`
+- `steering/auto-steering.json`
+- `documents.md`
+- steering dispositions such as `requirements-change`, `design-change`, and
+  `docs-update`
 - path-agnostic filesystem target handling and ordinary outbound network
   command allowance, with only unsafe content or guarded action checks
 
@@ -66,6 +76,8 @@ Verify:
 - No duplicate SDLC skill names exist.
 - Each SDLC description starts with
   `Use only as part of the Agentic SDLC workflow;`.
+- Each required `sdlc-*` skill has `agents/openai.yaml` with
+  `policy.allow_implicit_invocation: false`.
 - No project-local `.agents/skills` directory is required by the disposable
   project.
 
@@ -78,7 +90,7 @@ Verify read-only:
 - Stop continuation hook is configured.
 - Existing non-SDLC `SessionStart` and `UserPromptSubmit` hooks are preserved.
 - `UserPromptSubmit` does not perform SDLC routing.
-- Stop continuation routes through `sdlc-start`.
+- Stop continuation routes through explicit `$sdlc-start` invocation.
 
 Do not install, trust, edit, delete, or rewrite hooks during verification.
 
@@ -131,7 +143,7 @@ Continuation cases:
 - Critical or pause/no-PR steering is present.
 - UAT failed with an addressable classification.
 
-Continuation prompts must say to use `sdlc-start`, include project root,
+Continuation prompts must say to use `$sdlc-start`, include project root,
 project ID, run ID, current feature, current phase, next recommended skill, and
 instructions to read local state first, avoid locked-plan edits, and persist
 evidence before stopping.
@@ -148,7 +160,8 @@ Use a disposable Python project that validates a Nebius-style resource name:
 
 Run the SDLC skills in order through local disposable state. Passing evidence
 requires committed requirements/design, locked local plan, tests before
-implementation, validation evidence, test evidence, evaluation evidence, UAT
+implementation, auto-steering evidence, validation evidence, test evidence,
+evaluation evidence, documentation update evidence when docs changed, UAT
 evidence, one local feature-scoped commit after evidence passes, and no private
 state committed.
 
@@ -184,6 +197,15 @@ Pause after the current feature. Do not create a PR.
 
 Verify `sdlc-start` reads `STEERING.md`, Stop continuation respects the
 instruction, no PR is created, and clearing steering allows resume.
+
+Submit mid-run prompts that create a requirements change, design change, and
+docs update. Verify `sdlc-auto-steering` records each prompt in private
+steering state, redacts unsafe material, assigns a disposition, and routes
+product-truth changes to `sdlc-create-requirements` or `sdlc-create-design`
+before implementation treats them as true.
+
+Verify `sdlc-update-documents` records documentation evidence after evaluation
+or UAT when project-facing docs changed.
 
 For long-running continuation, verify local state survives context loss,
 feature isolation is preserved, and max-iteration/no-progress guards prevent

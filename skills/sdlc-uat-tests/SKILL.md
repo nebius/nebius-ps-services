@@ -1,6 +1,6 @@
 ---
 name: sdlc-uat-tests
-description: "Use only as part of the Agentic SDLC workflow; use after all Agentic SDLC feature commits are complete to run product-level user acceptance testing across the whole system before pull request creation."
+description: "Use only as part of the Agentic SDLC workflow; use after all Agentic SDLC feature commits are complete to run product-level user acceptance testing across the whole system, using any confirmed safe live experiment environment, before pull request creation."
 ---
 
 # UAT Tests
@@ -28,10 +28,12 @@ Validate the full product, not just individual features, before PR creation.
 - All feature evidence.
 - Current branch.
 - Product startup instructions.
+- Live Experiment Environment section from `docs/requirements.md`, when present.
 
 ## Required Reads
 
 - `docs/requirements.md`.
+- Live Experiment Environment section in `docs/requirements.md`.
 - `docs/design.md`.
 - Feature evidence.
 - Current source tree.
@@ -49,6 +51,10 @@ Validate the full product, not just individual features, before PR creation.
 - Use `assets/templates/uat-report.md.template` for the report.
 - Build a UAT matrix from acceptance criteria.
 - Select GUI, TUI, API, service, or mixed harness.
+- Use the Live Experiment Environment only when it is marked provided, has
+  explicit non-production or disposable confirmation, and the UAT actions fit
+  the recorded allowed operations and reset process. If unavailable or unsafe,
+  classify the blocker instead of improvising against production.
 - Run end-to-end user journeys and negative criteria.
 - Validate cross-feature interactions.
 - Record evidence and classify failures.
@@ -66,6 +72,8 @@ Validate the full product, not just individual features, before PR creation.
 - Cross-feature design issue maps to `DESIGN_DEFECT`.
 - Missing acceptance coverage maps to `SPEC_GAP`.
 - Environment problem maps to `ENVIRONMENT_DEFECT`.
+- Unsafe or unconfirmed live environment use maps to `POLICY_BLOCK`.
+- Human-owned access or approval gaps map to `HUMAN_INPUT_REQUIRED`.
 
 ## Must Not
 
@@ -73,6 +81,9 @@ Validate the full product, not just individual features, before PR creation.
 - Merge.
 - Ignore failed negative criteria.
 - Modify requirements or design directly.
+- Use a production or unconfirmed environment for live experiments.
+- Exceed the allowed actions recorded in `docs/requirements.md`.
+- Store credentials, private endpoints, customer data, or raw logs in UAT evidence.
 
 ## Completion Criteria
 

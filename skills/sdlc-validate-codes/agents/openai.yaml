@@ -1,4 +1,6 @@
 interface:
   display_name: "SDLC Validate Codes"
-  short_description: "Validate build and code health"
-  default_prompt: "Use $sdlc-validate-codes to answer whether the implemented Agentic SDLC feature can be built or run correctly before deeper behavior tests."
+  short_description: "Validate build, lint, type, config, and review quality"
+  default_prompt: "Use $sdlc-validate-codes to run project-native build, parse, lint, type, import, dependency, and configuration validation for the current Agentic SDLC feature, then use $code-review in review-only mode before marking the feature validated."
+policy:
+  allow_implicit_invocation: false

@@ -1,15 +1,19 @@
 # Align
 
-`align` is the repository consistency skill. Use it when a project needs a
-senior review-and-repair pass across implementation, wiring, tests, CI,
-configuration, CLI behavior, help text, documentation, and changelog entries.
+`align` is the repository consistency and post-change quality-gate skill. Use
+it when a project needs a senior review-and-repair pass across implementation,
+wiring, tests, CI, configuration, CLI behavior, help text, documentation, and
+changelog entries.
 
 ## What It Does
 
 - Inspects the actual project contract before editing.
 - Synthesizes the active thread, relevant Agent Memory, and task-state context
   before deciding what to align.
+- Separates requested or agent-touched changes from unrelated dirty files.
 - Finds mismatches between code, tests, workflows, docs, and examples.
+- Runs mandatory changed-scope code-review, lint/syntax, security, cross-code,
+  and focused test/build validation lanes before completion.
 - Applies small, evidence-backed fixes instead of broad rewrites.
 - Keeps behavior changes aligned with tests and user-facing documentation.
 - Reports remaining uncertainty instead of guessing.
@@ -26,10 +30,16 @@ Gather current thread, memory, and related state context
 Map the relevant project contract
   |
   v
+Separate active scope from unrelated dirty files
+  |
+  v
 Compare code, tests, docs, workflows, and config
   |
   v
 Patch confirmed inconsistencies
+  |
+  v
+Run code-review, lint/syntax, security, cross-code, and focused test/build gates
   |
   v
 Run focused validation and report residual risk
@@ -39,14 +49,25 @@ Run focused validation and report residual risk
 
 1. Consolidate the latest user request, current thread, relevant Agent Memory,
    and related task or workflow state.
-2. Inspect the relevant codebase surfaces before changing anything.
-3. Establish the intended behavior from nearby evidence.
-4. Prioritize real bugs, broken wiring, stale docs, missing tests, and unsafe
+2. Separate active scope from unrelated dirty files.
+3. Inspect the relevant codebase surfaces before changing anything.
+4. Establish the intended behavior from nearby evidence.
+5. Prioritize real bugs, broken wiring, stale docs, missing tests, and unsafe
    assumptions.
-5. Patch the smallest responsible surface.
-6. Update tests, docs, examples, help text, and changelog entries when they are
+6. Patch the smallest responsible surface.
+7. Update tests, docs, examples, help text, and changelog entries when they are
    affected.
-7. Validate with focused commands first, then broader checks when appropriate.
+8. Validate with mandatory changed-scope gates: cross-code wiring checks,
+   `code-review`, `linter`, `apply-security`, and focused repository-native
+   tests or builds.
+9. Broaden only when shared contracts, security-sensitive surfaces, or unclear
+   dependency boundaries require it.
+
+`apply-security` may be selected implicitly outside `align`; inside `align`, it
+is mandatory. If it is not visible in the initial skills list because of
+skill-list budget, installation, or discovery limits, `align` resolves and
+reads the sibling or installed `apply-security/SKILL.md` before applying its
+required-reference and safe-remediation rules.
 
 ## Core Concepts
 
@@ -54,7 +75,13 @@ Run focused validation and report residual risk
 - Memory and task state are decision inputs, not proof until verified against
   current repository or runtime evidence.
 - Preserve intended behavior unless a bug or stale contract is proven.
+- Preserve unrelated user changes; report them instead of folding them into
+  scope silently.
 - Prefer one canonical path over compatibility shims unless requested.
+- Keep validation incremental and changed-scope first; do not default to a
+  full-repo scan.
+- Use safe-only remediation: fix low-risk confirmed issues and report risky
+  security, public-contract, or architecture changes for explicit approval.
 - Keep edits easy to review.
 
 ## Files

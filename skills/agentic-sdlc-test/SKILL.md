@@ -99,7 +99,8 @@ remotes.
    python3 agentic-sdlc-test/scripts/verify_agentic_sdlc.py
    ```
 
-   This script performs read-only discovery of global `sdlc-*` skills and hook
+   This script performs read-only discovery of global `sdlc-*` skills,
+   explicit-only `agents/openai.yaml` invocation policy, and hook
    configuration, creates a disposable verification root, runs hook fixture
    tests against disposable `CODEX_HOME` state, and writes a report. It does
    not edit installed skills or hooks.
@@ -111,10 +112,12 @@ remotes.
    Use the disposable project only. Explicitly load and follow these phase
    skills in order:
    `sdlc-create-requirements`, `sdlc-start`, `sdlc-gather-context`,
-   `sdlc-create-design`, `sdlc-create-plan`, `sdlc-tdd`,
+   `sdlc-create-design`, `sdlc-auto-steering`, `sdlc-create-plan`, `sdlc-tdd`,
    `sdlc-implement-plan`, `sdlc-validate-codes`, `sdlc-unit-tests`,
-   `sdlc-evaluate`, `sdlc-align-specs`, `sdlc-commit`, and
-   `sdlc-uat-tests`. Do not use `sdlc-merge-pr`, and do not create a real PR.
+   `sdlc-evaluate`, `sdlc-update-documents`, `sdlc-align-specs`,
+   `sdlc-commit`, and `sdlc-uat-tests`. Run `sdlc-update-documents` again
+   after UAT when final docs changed. Do not use `sdlc-merge-pr`, and do not
+   create a real PR.
 5. Verify rerun and change-request behavior.
    Rerun `sdlc-start` with no product changes, then apply the safe change
    request from the checklist and confirm stable IDs, immutable locked plans,

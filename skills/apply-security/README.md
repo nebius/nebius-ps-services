@@ -5,6 +5,12 @@ codebases that mix infrastructure, deployment, CI/CD, shell, and application
 code. It is built for conservative security engineering: find real risk, rank
 it clearly, and apply small patches only when they preserve intended behavior.
 
+It is implicitly invokable so Codex can use it as a general security adviser
+during design, implementation, review, and validation sessions. Implicit
+activation does not expand the task scope by itself: broad scans, risky
+security changes, live checks, and non-local remediations still require the
+user or a coordinator skill to authorize that scope.
+
 ## Core Workflow
 
 1. Select a mode: `scan`, `plan`, `patch`, `verify`, or `explain`.
@@ -23,6 +29,8 @@ it clearly, and apply small patches only when they preserve intended behavior.
   supported area.
 - `references/reporting-and-validation.md`: report formats, validation command
   selection, limitations, rollout guidance, and merge checklist.
+- `evals/trigger-prompts.md`: should-trigger and should-not-trigger examples
+  for implicit routing.
 - `agents/openai.yaml`: UI metadata and default prompt.
 
 ## Safety Model

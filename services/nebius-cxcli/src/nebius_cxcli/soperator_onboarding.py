@@ -21,10 +21,18 @@ import yaml
 
 from .component_instances import normalize_component_token
 from .runtime_config import to_plain_data
+from .soperator_discovery import (
+    SOPERATOR_DISCOVERY_DIR_NAME,
+    load_soperator_discovery_bundle,
+    soperator_discovery_manifest_path,
+    write_soperator_discovery_bundle,
+)
+from .soperator_populate_jail import POPULATE_JAIL_REFRESH_PHASE_ID
 
 ONBOARDING_SCHEMA = "nebius-cxcli-soperator-onboarding/v2"
+SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA = "nebius-cxcli-ext-soperator-upgrade-path/v2"
 ONBOARDING_REPORT_DIR = "reports"
-SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME = "ext-soperator-onboard-source-discovery-report.json"
+SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME = SOPERATOR_DISCOVERY_DIR_NAME
 ONBOARDING_STATE_NO_SOPERATOR_DETECTED = "no-soperator-detected"
 ONBOARDING_STATE_EXISTING_SOPERATOR_SUPPORTED = "existing-soperator-supported"
 ONBOARDING_STATE_EXISTING_SOPERATOR_TARGET = "existing-soperator-target"
@@ -34,7 +42,7 @@ ONBOARDING_STATE_ANALYSIS_INCOMPLETE = "analysis-incomplete"
 ONBOARDING_ACTION_INSTALL_SOPERATOR = "install-soperator"
 ONBOARDING_ACTION_ADOPT_SOPERATOR = "adopt-soperator"
 ONBOARDING_ACTION_UPGRADE_SOPERATOR = "upgrade-soperator"
-ONBOARDING_ACTION_APPROVE_MIGRATION = "approve-soperator-migration"
+ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE = "approve-external-soperator-upgrade"
 ONBOARDING_ACTION_CONFIGURE_STORAGE = "configure-soperator-storage"
 ONBOARDING_ACTION_CREATE_ALIGNED_SFS = "create-aligned-sfs"
 ONBOARDING_ACTION_PLAN_DATA_MIGRATION = "plan-soperator-data-migration"
@@ -47,7 +55,7 @@ ONBOARDING_ACTION_IDS = frozenset(
         ONBOARDING_ACTION_INSTALL_SOPERATOR,
         ONBOARDING_ACTION_ADOPT_SOPERATOR,
         ONBOARDING_ACTION_UPGRADE_SOPERATOR,
-        ONBOARDING_ACTION_APPROVE_MIGRATION,
+        ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
         ONBOARDING_ACTION_CONFIGURE_STORAGE,
         ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
         ONBOARDING_ACTION_PLAN_DATA_MIGRATION,
@@ -57,19 +65,30 @@ ONBOARDING_ACTION_IDS = frozenset(
         ONBOARDING_ACTION_ENABLE_TOPOLOGY,
     }
 )
-ONBOARDING_MIGRATION_ACTION_IDS = frozenset(
+ONBOARDING_EXTERNAL_UPGRADE_ACTION_IDS = frozenset(
     {
         ONBOARDING_ACTION_UPGRADE_SOPERATOR,
-        ONBOARDING_ACTION_APPROVE_MIGRATION,
+        ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
         ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
         ONBOARDING_ACTION_PLAN_DATA_MIGRATION,
         ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
         ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
     }
 )
-ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION = "1.33"
+ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION = "1.34"
 ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS = "ubuntu24.04"
 ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_GPU_STACK_PRESET = "cuda13.0"
+SOPERATOR_UPGRADE_SUPPORT_LAYER = "soperator-upgrade-support"
+SOPERATOR_UPGRADE_SUPPORT_STATUS_SUPPORTED = "supported"
+SOPERATOR_UPGRADE_SUPPORT_STATUS_SUPPORTED_WITH_WARNING = "supported_with_warning"
+SOPERATOR_UPGRADE_SUPPORT_STATUS_UNSUPPORTED = "unsupported"
+SOPERATOR_UPGRADE_SUPPORT_STATUS_NOT_VALIDATED = "not_validated"
+SOPERATOR_UPGRADE_SUPPORT_REJECT_STATUSES = frozenset(
+    {
+        SOPERATOR_UPGRADE_SUPPORT_STATUS_UNSUPPORTED,
+        SOPERATOR_UPGRADE_SUPPORT_STATUS_NOT_VALIDATED,
+    }
+)
 ONBOARDING_STORAGE_MODE_KEEP_EXISTING = "keep-existing-storage"
 ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS = "create-aligned-sfs"
 ONBOARDING_COMPUTE_MODE_KEEP_EXISTING = "keep-existing-compute"
@@ -112,7 +131,6 @@ SOPERATOR_MIGRATION_PROFILE_DATA_FILE = Path(__file__).with_name(
 SOPERATOR_COMPATIBLE_RELEASE_NAMES = frozenset({"soperator", "slurm-operator"})
 SOPERATOR_COMPATIBLE_CONTROLLER_RELEASE_NAMES = frozenset({"soperator-controller"})
 SOPERATOR_COMPATIBLE_CHART_IDENTITIES = frozenset({"soperator", "helm-soperator", "slurm-operator"})
-SOPERATOR_HELM_DISCOVERY_NAMESPACES = ("soperator", "soperator-system", "flux-system")
 GPU_STACK_HELM_DISCOVERY_NAMESPACES = ("nvidia-gpu-operator", "nvidia-network-operator")
 _EPHEMERAL_HELM_RELEASE_KEYS = frozenset(
     {"description", "last_deployed", "revision", "status", "updated"}
@@ -292,6 +310,7 @@ def soperator_onboarding_fingerprint(
                     onboarding.get("migration_profile_id", "") or ""
                 ).strip(),
                 "node_template_upgrade": to_plain_data(onboarding.get("node_template_upgrade", {})),
+                "upgrade_path": to_plain_data(onboarding.get("upgrade_path", {})),
                 "collection_errors": list(onboarding.get("collection_errors", []) or []),
             },
         },
@@ -307,10 +326,13 @@ def soperator_onboarding_report_path(target_ref: str) -> str:
     return f"generated/{ONBOARDING_REPORT_DIR}/soperator-onboarding-{normalized}.json"
 
 
-def source_soperator_discovery_report_path(project_dir: Path) -> Path:
-    return (
-        project_dir / "generated" / ONBOARDING_REPORT_DIR / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
-    )
+def source_soperator_discovery_report_path(
+    project_dir: Path,
+    target_ref: str | None = None,
+) -> Path:
+    if target_ref:
+        return soperator_discovery_manifest_path(project_dir, target_ref)
+    return project_dir / "generated" / ONBOARDING_REPORT_DIR / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
 
 
 def soperator_onboarding_target(
@@ -890,6 +912,275 @@ def _soperator_migration_profile_is_generation_fallback(profile: Mapping[str, An
     return str(profile.get("profile_match", "") or "").strip() == "generation-fallback"
 
 
+def _version_tuple_for_support(version: str) -> tuple[int, int, int] | None:
+    normalized = normalize_soperator_release_version(version)
+    if not normalized:
+        return None
+    parts = [int(part) for part in normalized.split(".")[:3]]
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts[:3])
+
+
+def _k8s_minor_tuple_for_support(version: str) -> tuple[int, int] | None:
+    text = str(version or "").strip().lstrip("v")
+    match = re.search(r"(?P<major>[0-9]+)\.(?P<minor>[0-9]+)", text)
+    if match is None:
+        return None
+    return int(match.group("major")), int(match.group("minor"))
+
+
+def normalize_k8s_minor_version(version: str) -> str:
+    parsed = _k8s_minor_tuple_for_support(version)
+    if parsed is None:
+        return str(version or "").strip().lstrip("v")
+    return f"{parsed[0]}.{parsed[1]}"
+
+
+def _support_version_compare(left: str, right: str) -> int | None:
+    left_tuple = _version_tuple_for_support(left)
+    right_tuple = _version_tuple_for_support(right)
+    if left_tuple is None or right_tuple is None:
+        return None
+    if left_tuple < right_tuple:
+        return -1
+    if left_tuple > right_tuple:
+        return 1
+    return 0
+
+
+def _support_k8s_at_least(version: str, minimum: str) -> bool:
+    parsed = _k8s_minor_tuple_for_support(version)
+    parsed_minimum = _k8s_minor_tuple_for_support(minimum)
+    if parsed is None or parsed_minimum is None:
+        return False
+    return parsed >= parsed_minimum
+
+
+def _support_version_range_matches(version: str, range_text: str) -> bool:
+    normalized = normalize_soperator_release_version(version)
+    text = str(range_text or "").strip()
+    if not text:
+        return True
+    if not normalized:
+        return False
+    for raw_part in text.split(","):
+        part = raw_part.strip()
+        if not part:
+            continue
+        match = re.fullmatch(r"(<=|>=|<|>|==|=)?\s*v?([0-9]+(?:\.[0-9]+){0,3})", part)
+        if match is None:
+            return False
+        operator = match.group(1) or "=="
+        comparison = _support_version_compare(normalized, match.group(2))
+        if comparison is None:
+            return False
+        if operator in {"=", "=="} and comparison != 0:
+            return False
+        if operator == "<" and comparison >= 0:
+            return False
+        if operator == "<=" and comparison > 0:
+            return False
+        if operator == ">" and comparison <= 0:
+            return False
+        if operator == ">=" and comparison < 0:
+            return False
+    return True
+
+
+def _soperator_upgrade_support_rules() -> tuple[Mapping[str, Any], ...]:
+    payload = _load_soperator_migration_profile_data()
+    rules = payload.get("support_rules") if isinstance(payload, Mapping) else None
+    if not isinstance(rules, Sequence) or isinstance(rules, (str, bytes, bytearray)):
+        return ()
+    return tuple(rule for rule in rules if isinstance(rule, Mapping))
+
+
+def _soperator_upgrade_support_rule_matches(
+    rule: Mapping[str, Any],
+    *,
+    source_version: str,
+    target_version: str,
+    target_chart_version: str,
+    approved_target_chart_version: str,
+    target_k8s_version: str,
+) -> bool:
+    source_range = str(rule.get("source_version_range", "") or "").strip()
+    target_range = str(rule.get("target_version_range", "") or "").strip()
+    target_chart_policy = str(rule.get("target_chart_version_policy", "") or "").strip()
+    target_k8s_min = str(rule.get("target_k8s_min", "") or "").strip()
+    target_k8s_max = str(rule.get("target_k8s_max", "") or "").strip()
+    if source_range and not _support_version_range_matches(source_version, source_range):
+        return False
+    if target_range and not _support_version_range_matches(target_version, target_range):
+        return False
+    if target_chart_policy:
+        chart_comparison = compare_chart_versions(
+            target_chart_version,
+            approved_target_chart_version,
+        )
+        if target_chart_policy == "cxcli_pin" and chart_comparison != "equal":
+            return False
+        if target_chart_policy == "not_cxcli_pin" and chart_comparison == "equal":
+            return False
+    if target_k8s_min and not _support_k8s_at_least(target_k8s_version, target_k8s_min):
+        return False
+    return not (
+        target_k8s_max and _support_k8s_at_least(target_k8s_version, target_k8s_max)
+    )
+
+
+def _soperator_upgrade_support_status_finding(
+    *,
+    source_version: str,
+    target_version: str,
+    approved_target_chart_version: str = "",
+    current_k8s_version: str,
+    target_k8s_version: str,
+) -> SoperatorOnboardingFinding | None:
+    source = normalize_soperator_release_version(source_version)
+    target = normalize_soperator_release_version(target_version)
+    target_chart = str(target_version or "").strip()
+    approved_target_chart = str(approved_target_chart_version or target_chart).strip()
+    target_k8s = normalize_k8s_minor_version(target_k8s_version)
+    current_k8s = normalize_k8s_minor_version(current_k8s_version)
+    if not source or not target:
+        return None
+    matched_rule: Mapping[str, Any] | None = None
+    for rule in _soperator_upgrade_support_rules():
+        if _soperator_upgrade_support_rule_matches(
+            rule,
+            source_version=source,
+            target_version=target,
+            target_chart_version=target_chart,
+            approved_target_chart_version=approved_target_chart,
+            target_k8s_version=target_k8s,
+        ):
+            matched_rule = rule
+            break
+    status = SOPERATOR_UPGRADE_SUPPORT_STATUS_NOT_VALIDATED
+    rule_id = "default-not-validated"
+    message = (
+        "No committed cxcli Soperator/Kubernetes support rule matched this source, "
+        "target, and Kubernetes target version path. Run a smoke test or rerun with "
+        "--allow-unsupported-soperator-upgrade-path for an explicit testing override."
+    )
+    references: tuple[str, ...] = ()
+    recommended_order: Mapping[str, Any] | None = None
+    if matched_rule is not None:
+        status = str(matched_rule.get("status", "") or "").strip() or status
+        rule_id = str(matched_rule.get("id", "") or "").strip() or rule_id
+        message = str(matched_rule.get("message", "") or "").strip() or message
+        raw_recommended_order = matched_rule.get("recommended_order")
+        if isinstance(raw_recommended_order, Mapping):
+            recommended_order = dict(raw_recommended_order)
+        raw_references = matched_rule.get("references")
+        if isinstance(raw_references, Sequence) and not isinstance(
+            raw_references,
+            (str, bytes, bytearray),
+        ):
+            references = tuple(str(item) for item in raw_references if str(item or "").strip())
+    severity = "info"
+    if status in SOPERATOR_UPGRADE_SUPPORT_REJECT_STATUSES:
+        severity = "required"
+    elif status == SOPERATOR_UPGRADE_SUPPORT_STATUS_SUPPORTED_WITH_WARNING:
+        severity = "recommended"
+    evidence: dict[str, Any] = {
+        "rule_id": rule_id,
+        "source_version": source,
+        "target_version": target_chart or target,
+        "target_app_version": target,
+        "target_chart_version": target_chart,
+        "approved_target_chart_version": approved_target_chart,
+        "current_k8s_version": current_k8s,
+        "target_k8s_version": target_k8s,
+        "override_used": False,
+        "references": list(references),
+    }
+    if recommended_order:
+        evidence["recommended_order"] = dict(recommended_order)
+    return SoperatorOnboardingFinding(
+        layer=SOPERATOR_UPGRADE_SUPPORT_LAYER,
+        status=status,
+        severity=severity,
+        message=message,
+        evidence=evidence,
+    )
+
+
+def soperator_upgrade_support_findings(
+    report: SoperatorOnboardingReport | Mapping[str, Any],
+) -> tuple[Mapping[str, Any], ...]:
+    raw_findings: Any
+    if isinstance(report, SoperatorOnboardingReport):
+        raw_findings = report.to_dict().get("findings")
+    else:
+        raw_findings = report.get("findings")
+    if not isinstance(raw_findings, Sequence) or isinstance(
+        raw_findings,
+        (str, bytes, bytearray),
+    ):
+        return ()
+    findings: list[Mapping[str, Any]] = []
+    for raw_finding in raw_findings:
+        if not isinstance(raw_finding, Mapping):
+            continue
+        if str(raw_finding.get("layer", "") or "").strip() == SOPERATOR_UPGRADE_SUPPORT_LAYER:
+            findings.append(raw_finding)
+    return tuple(findings)
+
+
+def soperator_upgrade_support_requires_override(
+    report: SoperatorOnboardingReport | Mapping[str, Any],
+) -> bool:
+    for finding in soperator_upgrade_support_findings(report):
+        if (
+            str(finding.get("status", "") or "").strip()
+            in SOPERATOR_UPGRADE_SUPPORT_REJECT_STATUSES
+        ):
+            evidence = finding.get("evidence")
+            if isinstance(evidence, Mapping) and evidence.get("override_used") is True:
+                continue
+            return True
+    return False
+
+
+def _soperator_support_finding_with_override(
+    finding: SoperatorOnboardingFinding,
+) -> SoperatorOnboardingFinding:
+    if finding.layer != SOPERATOR_UPGRADE_SUPPORT_LAYER:
+        return finding
+    if finding.status not in SOPERATOR_UPGRADE_SUPPORT_REJECT_STATUSES:
+        return finding
+    evidence = dict(finding.evidence or {})
+    evidence["override_used"] = True
+    evidence["original_severity"] = finding.severity
+    return replace(
+        finding,
+        severity="recommended",
+        message=(
+            "Override accepted for unsupported Soperator upgrade path. "
+            + finding.message
+        ),
+        evidence=evidence,
+    )
+
+
+def soperator_onboarding_report_with_support_override(
+    report: SoperatorOnboardingReport,
+    *,
+    override_used: bool,
+) -> SoperatorOnboardingReport:
+    if not override_used:
+        return report
+    return replace(
+        report,
+        findings=tuple(
+            _soperator_support_finding_with_override(finding) for finding in report.findings
+        ),
+    )
+
+
 def _soperator_migration_profile_match_finding(
     *,
     profile: Mapping[str, Any],
@@ -963,7 +1254,7 @@ def _migration_approval_phase_title(
     return "Customer approval of Soperator remediation plan"
 
 
-def _migration_approval_action_title(
+def _external_upgrade_approval_action_title(
     *,
     include_data_migration: bool,
     include_compute_migration: bool,
@@ -1011,13 +1302,13 @@ def _default_soperator_migration_plan(
                 "external-node-template-upgrade",
                 "Upgrade external MK8s control plane and node templates",
                 progress_label=(
-                    "External MK8s Upgrade: control plane first, worker groups zero-surge by default"
+                    "External MK8s Upgrade: control plane first, service roles safe-surge by default"
                 ),
                 requires_customer_approval=True,
                 notes=(
                     "Run direct Nebius cluster and node-group updates; do not call Terraform.",
                     "Upgrade the control plane first, one Kubernetes minor at a time when needed.",
-                    "Upgrade service-role source node groups with a temporary zero-surge strategy.",
+                    "Upgrade service-role source node groups with serial safe-surge by default.",
                     "Upgrade worker source node groups with zero-surge by default, or safe-surge "
                     "waves when selected, and restore each group's original strategy.",
                 ),
@@ -1073,7 +1364,7 @@ def _default_soperator_migration_plan(
             rolling_notes = (
                 "Create or reuse service-role node groups without duplicating worker capacity.",
                 "Map worker NodeSets to detected existing worker node groups.",
-                "Apply migration-owned template changes with serial zero-surge service-role "
+                "Apply migration-owned template changes with serial safe-surge service-role "
                 "updates and zero-surge worker updates by default.",
             )
         else:
@@ -1148,6 +1439,26 @@ def _default_soperator_migration_plan(
                     quiet_window=True,
                     notes=final_notes,
                 ),
+                *(
+                    (
+                        _migration_phase(
+                            POPULATE_JAIL_REFRESH_PHASE_ID,
+                            "Jail Upgrade: refresh shared Soperator jail rootfs",
+                            progress_label=(
+                                "Jail Upgrade: populate passive active/passive rootfs slot"
+                            ),
+                            notes=(
+                                "Populate the passive jail rootfs slot with the target image.",
+                                "Keep persistent jail mounts outside the rootfs slots before "
+                                "switching login and worker consumers.",
+                                "Switch consumers only after the login Service has ready "
+                                "endpoints, and keep the previous slot available for rollback.",
+                            ),
+                        ),
+                    )
+                    if include_soperator_upgrade
+                    else ()
+                ),
                 _migration_phase(
                     "validation-and-rollback-hold",
                     "Validation and rollback hold",
@@ -1194,10 +1505,10 @@ def soperator_onboarding_report_for_modes(
             continue
         if action.id == ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION and not include_compute_migration:
             continue
-        if action.id == ONBOARDING_ACTION_APPROVE_MIGRATION:
+        if action.id == ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE:
             action = replace(
                 action,
-                title=_migration_approval_action_title(
+                title=_external_upgrade_approval_action_title(
                     include_data_migration=include_data_migration,
                     include_compute_migration=include_compute_migration,
                     include_soperator_upgrade=include_soperator_upgrade,
@@ -1348,17 +1659,17 @@ def _configured_soperator_action(
             selected=True,
             reason="Upgrades are allowed when live version is older and profiled.",
         ),
-        ONBOARDING_ACTION_APPROVE_MIGRATION: SoperatorOnboardingAction(
-            id=ONBOARDING_ACTION_APPROVE_MIGRATION,
-            title=_migration_approval_action_title(
+        ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE: SoperatorOnboardingAction(
+            id=ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
+            title=_external_upgrade_approval_action_title(
                 include_data_migration=include_data_migration,
                 include_compute_migration=include_compute_migration,
                 include_soperator_upgrade=include_soperator_upgrade,
             ),
-            layer="migration",
+            layer="external-upgrade",
             selected=True,
             disruptive=True,
-            reason="Migration changes require customer approval before execution.",
+            reason="External upgrade changes require customer approval before execution.",
         ),
         ONBOARDING_ACTION_CONFIGURE_STORAGE: SoperatorOnboardingAction(
             id=ONBOARDING_ACTION_CONFIGURE_STORAGE,
@@ -1417,7 +1728,7 @@ def _configured_soperator_action(
             reason=(
                 "External Soperator targets are not Terraform-owned, so cxcli must align "
                 "Kubernetes version, node OS image, and Nebius GPU driver preset through "
-                "direct Nebius updates during migration."
+                "direct Nebius updates during the external upgrade."
             ),
         ),
         ONBOARDING_ACTION_ENABLE_TOPOLOGY: SoperatorOnboardingAction(
@@ -1458,7 +1769,7 @@ def _migration_plan_for_action_ids(
     action_ids: Sequence[str],
 ) -> tuple[SoperatorMigrationPhase, ...]:
     selected_ids = set(action_ids)
-    if not selected_ids & ONBOARDING_MIGRATION_ACTION_IDS:
+    if not selected_ids & ONBOARDING_EXTERNAL_UPGRADE_ACTION_IDS:
         return ()
     return _default_soperator_migration_plan(
         include_target_gpu_reconciliation=ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK
@@ -1509,6 +1820,89 @@ def _release_detected_version(release: Mapping[str, Any]) -> str:
     return ""
 
 
+def _resource_metadata(resource: Mapping[str, Any]) -> Mapping[str, Any]:
+    metadata = resource.get("metadata")
+    return metadata if isinstance(metadata, Mapping) else {}
+
+
+def _resource_labels(resource: Mapping[str, Any]) -> Mapping[str, Any]:
+    labels = _resource_metadata(resource).get("labels")
+    return labels if isinstance(labels, Mapping) else {}
+
+
+def _soperator_resource_release_candidate(
+    snapshot: Mapping[str, Any],
+    *,
+    namespace: str = "",
+    release_name: str = "",
+) -> Mapping[str, Any] | None:
+    resources = snapshot.get("soperator_resources")
+    if not isinstance(resources, Sequence) or isinstance(resources, (str, bytes, bytearray)):
+        return None
+    requested_namespace = str(namespace or "").strip().lower()
+    requested_release = str(release_name or "").strip().lower()
+    candidates: list[Mapping[str, Any]] = []
+    for resource in resources:
+        if not isinstance(resource, Mapping):
+            continue
+        labels = _resource_labels(resource)
+        chart = str(labels.get("helm.sh/chart", "") or "").strip()
+        app_version = str(labels.get("app.kubernetes.io/version", "") or "").strip()
+        instance_name = str(labels.get("app.kubernetes.io/instance", "") or "").strip()
+        app_name = str(labels.get("app.kubernetes.io/name", "") or "").strip()
+        metadata = _resource_metadata(resource)
+        resource_namespace = str(metadata.get("namespace", "") or "soperator").strip()
+        if not chart and not app_version:
+            continue
+        identity = " ".join((chart, app_version, instance_name, app_name)).lower()
+        if "soperator" not in identity and "slurm-operator" not in identity:
+            continue
+        if requested_namespace and resource_namespace.lower() != requested_namespace:
+            continue
+        if requested_release and instance_name.lower() != requested_release:
+            continue
+        candidates.append(
+            {
+                "name": instance_name or "soperator",
+                "namespace": resource_namespace,
+                "chart": chart,
+                "chart_version": _release_chart_version({"chart": chart}),
+                "app_version": app_version,
+                "status": "resource-labels",
+                "detected_from": "kubernetes-resource-labels",
+            }
+        )
+    if not candidates:
+        return None
+    return sorted(
+        candidates,
+        key=lambda item: (
+            str(item.get("namespace", "") or "").lower() != "soperator",
+            str(item.get("name", "") or "").lower() != "soperator",
+            str(item.get("namespace", "") or ""),
+            str(item.get("name", "") or ""),
+            str(item.get("chart", "") or ""),
+        ),
+    )[0]
+
+
+def _release_detected_summary(
+    release: Mapping[str, Any],
+    *,
+    source_version: str,
+    migration_profile_id: str = "",
+) -> str:
+    parts = [
+        f"name={_release_name(release) or 'unknown'}",
+        f"namespace={_release_namespace(release) or 'unknown'}",
+        f"chart={str(release.get('chart', '') or '').strip() or 'unknown'}",
+        f"version={source_version or _release_detected_version(release) or 'unknown'}",
+    ]
+    profile = str(migration_profile_id or "").strip()
+    suffix = f"; matched migration profile {profile}" if profile else ""
+    return "Detected Soperator Helm release: " + ", ".join(parts) + suffix + "."
+
+
 def _release_namespace(release: Mapping[str, Any]) -> str:
     return str(release.get("namespace", "") or "").strip()
 
@@ -1527,6 +1921,14 @@ def _is_soperator_release_candidate(release: Mapping[str, Any]) -> bool:
         release_name in SOPERATOR_COMPATIBLE_RELEASE_NAMES
         or release_name in SOPERATOR_COMPATIBLE_CONTROLLER_RELEASE_NAMES
         or _release_chart_identity(release) in SOPERATOR_COMPATIBLE_CHART_IDENTITIES
+    )
+
+
+def _has_known_soperator_release_name(release: Mapping[str, Any]) -> bool:
+    release_name = _release_name(release)
+    return (
+        release_name in SOPERATOR_COMPATIBLE_RELEASE_NAMES
+        or release_name in SOPERATOR_COMPATIBLE_CONTROLLER_RELEASE_NAMES
     )
 
 
@@ -1901,8 +2303,12 @@ def _node_template_inventory_analysis(
     snapshot: Mapping[str, Any],
     node_groups: Mapping[str, Any],
     gpu_groups: set[str],
+    target_k8s_version: str | None = None,
 ) -> dict[str, Any]:
-    target_k8s = ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION
+    target_k8s = (
+        normalize_k8s_minor_version(target_k8s_version or "")
+        or ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION
+    )
     target_os = ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS
     target_gpu = ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_GPU_STACK_PRESET
     control_plane_version = _provider_control_plane_version(snapshot)
@@ -2020,7 +2426,9 @@ def analyze_soperator_onboarding_snapshot(
     target_ref: str,
     pinned_chart_version: str = "",
     pinned_app_version: str = "",
+    approved_target_chart_version: str = "",
     source_version_override: str = "",
+    target_k8s_version: str | None = None,
 ) -> SoperatorOnboardingReport:
     node_groups = snapshot.get("node_groups")
     if not isinstance(node_groups, Mapping):
@@ -2034,6 +2442,11 @@ def analyze_soperator_onboarding_snapshot(
         (release for release in soperator_candidates if _is_compatible_soperator_release(release)),
         None,
     )
+    resource_release = (
+        _soperator_resource_release_candidate(snapshot) if soperator_release is None else None
+    )
+    if soperator_release is None and resource_release is not None:
+        soperator_release = resource_release
     crd_names = _sequence_of_names(snapshot.get("crds"))
     has_soperator_crds = any(name in SOPERATOR_CRD_NAMES for name in crd_names)
     namespace_names = _sequence_of_names(snapshot.get("namespaces"))
@@ -2049,9 +2462,16 @@ def analyze_soperator_onboarding_snapshot(
         snapshot=snapshot,
         node_groups=node_groups,
         gpu_groups=gpu_groups,
+        target_k8s_version=target_k8s_version,
     )
     manual_source_version = normalize_soperator_release_version(source_version_override)
     target_version = normalize_soperator_release_version(pinned_chart_version or pinned_app_version)
+    target_chart_version = str(pinned_chart_version or pinned_app_version or "").strip()
+    approved_target_chart = str(
+        approved_target_chart_version or target_chart_version
+    ).strip()
+    target_k8s = str(node_template_inventory.get("target_k8s_version", "") or "").strip()
+    external_node_template_required = not bool(node_template_inventory.get("complete"))
 
     findings: list[SoperatorOnboardingFinding] = []
     actions: list[SoperatorOnboardingAction] = []
@@ -2303,7 +2723,7 @@ def analyze_soperator_onboarding_snapshot(
                     "storage layout is incomplete. Missing required storage keys: "
                     f"{', '.join(missing_storage_keys)}. Select create-aligned-sfs to "
                     "plan aligned Nebius SFS creation, or keep-existing-storage to "
-                    "preserve the discovered storage contract without an SFS migration plan."
+                    "preserve the discovered storage contract without storage realignment."
                 ),
                 action_id=ONBOARDING_ACTION_CONFIGURE_STORAGE,
                 evidence={
@@ -2381,10 +2801,17 @@ def analyze_soperator_onboarding_snapshot(
             target_version=target_version,
         )
     )
-    incompatible_release = next(
-        (release for release in incompatible_releases if release not in shadowed_stale_releases),
-        None,
+    reviewable_incompatible_releases = tuple(
+        release for release in incompatible_releases if release not in shadowed_stale_releases
     )
+    incompatible_release = next(
+        (
+            release
+            for release in reviewable_incompatible_releases
+            if _has_known_soperator_release_name(release)
+        ),
+        None,
+    ) or next(iter(reviewable_incompatible_releases), None)
     if shadowed_stale_releases:
         findings.append(
             SoperatorOnboardingFinding(
@@ -2400,9 +2827,31 @@ def analyze_soperator_onboarding_snapshot(
             )
         )
 
-    detected_source_version = (
-        _release_detected_version(soperator_release)
+    if resource_release is not None:
+        findings.append(
+            SoperatorOnboardingFinding(
+                layer="soperator",
+                status="resource-label-version-detected",
+                severity="info",
+                message=(
+                    "Detected Soperator version from Kubernetes resource labels because "
+                    "Helm release metadata was not available."
+                ),
+                evidence={"release": dict(resource_release)},
+            )
+        )
+
+    detected_source_release = (
+        soperator_release
         if isinstance(soperator_release, Mapping)
+        else incompatible_release
+        if isinstance(incompatible_release, Mapping)
+        and _has_known_soperator_release_name(incompatible_release)
+        else None
+    )
+    detected_source_version = (
+        _release_detected_version(detected_source_release)
+        if isinstance(detected_source_release, Mapping)
         else ""
     )
     detected_source_profile = (
@@ -2443,16 +2892,28 @@ def analyze_soperator_onboarding_snapshot(
             findings.append(
                 SoperatorOnboardingFinding(
                     layer="soperator",
-                    status="noncanonical-release-detected",
+                    status="helm-release-detected",
                     severity="recommended",
                     message=(
-                        "Compatible Soperator release version was detected and matched to a "
-                        "migration profile; the noncanonical Soperator-like Helm release is "
-                        "kept as review evidence instead of requiring source-version input."
+                        _release_detected_summary(
+                            incompatible_release,
+                            source_version=detected_source_version,
+                            migration_profile_id=str(
+                                detected_source_profile.get("profile_id", "")
+                                if isinstance(detected_source_profile, Mapping)
+                                else ""
+                            ),
+                        )
+                        + " No manual source-version input is required."
                     ),
                     evidence={
                         "release": dict(incompatible_release),
                         "source_version": detected_source_version,
+                        "migration_profile_id": str(
+                            detected_source_profile.get("profile_id", "")
+                            if isinstance(detected_source_profile, Mapping)
+                            else ""
+                        ),
                     },
                 )
             )
@@ -2464,7 +2925,7 @@ def analyze_soperator_onboarding_snapshot(
                 status="source-version-selected",
                 severity="recommended",
                 message=(
-                    "Existing Soperator-like Helm release has noncanonical identity; "
+                    "Existing Soperator Helm release has non-standard identity; "
                     "operator-selected source version will be used for migration profile matching."
                 ),
                 evidence={
@@ -2525,10 +2986,12 @@ def analyze_soperator_onboarding_snapshot(
     remediation: tuple[SoperatorRemediationItem, ...] = ()
     migration_plan: tuple[SoperatorMigrationPhase, ...] = ()
 
-    if source_version and (isinstance(soperator_release, Mapping) or manual_source_version_applies):
-        if isinstance(soperator_release, Mapping):
-            live_chart = _release_chart_version(soperator_release)
-            live_app = str(soperator_release.get("app_version", "") or "").strip()
+    if source_version and (
+        isinstance(detected_source_release, Mapping) or manual_source_version_applies
+    ):
+        if isinstance(detected_source_release, Mapping):
+            live_chart = _release_chart_version(detected_source_release)
+            live_app = str(detected_source_release.get("app_version", "") or "").strip()
         else:
             live_chart = source_version
             live_app = source_version
@@ -2577,6 +3040,68 @@ def analyze_soperator_onboarding_snapshot(
                     evidence={"live_chart": live_chart, "live_app": live_app},
                 )
             )
+            if external_node_template_required:
+                provider_inventory_available = bool(
+                    node_template_inventory.get("provider_inventory_available")
+                )
+                migration_plan = _default_soperator_migration_plan(
+                    include_target_gpu_reconciliation=any(
+                        action.id == ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK
+                        and action.selected
+                        for action in actions
+                    ),
+                    include_external_node_template_upgrade=True,
+                    include_soperator_upgrade=False,
+                    include_data_migration=False,
+                    include_compute_migration=False,
+                )
+                findings.append(
+                    SoperatorOnboardingFinding(
+                        layer="mk8s-node-template",
+                        status="remediation-planned",
+                        severity="required",
+                        message=(
+                            "External MK8s control plane and node templates will be "
+                            "upgraded during the external upgrade through direct Nebius updates "
+                            "because the target is not Terraform-owned by cxcli."
+                            if provider_inventory_available
+                            else (
+                                "External MK8s control plane and node-template provider "
+                                "inventory was not available during onboarding; cxcli will "
+                                "verify and align the external node templates during "
+                                "the external upgrade."
+                            )
+                        ),
+                        action_id=ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
+                        evidence=_node_template_inventory_finding_evidence(
+                            node_template_inventory
+                        ),
+                    )
+                )
+                actions.append(
+                    SoperatorOnboardingAction(
+                        id=ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
+                        title="Upgrade external MK8s control plane and node templates",
+                        layer="mk8s-node-template",
+                        selected=True,
+                        disruptive=True,
+                        reason=(
+                            "The Soperator chart is already current, but the external MK8s "
+                            "control plane or node-group templates do not match the requested "
+                            "Kubernetes/node-template target."
+                        ),
+                    )
+                )
+                actions.append(
+                    SoperatorOnboardingAction(
+                        id=ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
+                        title="Approve external MK8s node-template remediation",
+                        layer="external-upgrade",
+                        selected=True,
+                        disruptive=True,
+                        reason="External node-template changes require customer approval before execution.",
+                    )
+                )
         else:
             migration_profile = soperator_migration_profile_for_version(
                 source_version,
@@ -2607,6 +3132,21 @@ def analyze_soperator_onboarding_snapshot(
                     )
                 )
         if comparison == "older" or app_comparison == "older":
+            control_plane_inventory = node_template_inventory.get("control_plane")
+            current_k8s = (
+                str(control_plane_inventory.get("current_k8s_version", "") or "").strip()
+                if isinstance(control_plane_inventory, Mapping)
+                else ""
+            )
+            support_finding = _soperator_upgrade_support_status_finding(
+                source_version=source_version,
+                target_version=target_chart_version or target_version,
+                approved_target_chart_version=approved_target_chart,
+                current_k8s_version=current_k8s,
+                target_k8s_version=target_k8s,
+            )
+            if support_finding is not None:
+                findings.append(support_finding)
             if migration_profile is not None and not release_identity_needs_source_version:
                 state = ONBOARDING_STATE_EXISTING_SOPERATOR_SUPPORTED
                 remediation = _remediation_items_for_profile(
@@ -2614,7 +3154,6 @@ def analyze_soperator_onboarding_snapshot(
                     storage_present=storage_present,
                     target_version=pinned_chart_version or target_version,
                 )
-                external_node_template_required = not bool(node_template_inventory.get("complete"))
                 migration_plan = _default_soperator_migration_plan(
                     include_target_gpu_reconciliation=any(
                         action.id == ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK
@@ -2654,12 +3193,12 @@ def analyze_soperator_onboarding_snapshot(
                 )
                 actions.append(
                     SoperatorOnboardingAction(
-                        id=ONBOARDING_ACTION_APPROVE_MIGRATION,
+                        id=ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
                         title="Approve Soperator role, storage, and SlurmCluster remediation",
-                        layer="migration",
+                        layer="external-upgrade",
                         selected=True,
                         disruptive=True,
-                        reason="Migration changes require customer approval before execution.",
+                        reason="External upgrade changes require customer approval before execution.",
                     )
                 )
                 if external_node_template_required:
@@ -2673,14 +3212,14 @@ def analyze_soperator_onboarding_snapshot(
                             severity="required",
                             message=(
                                 "External MK8s control plane and node templates will be "
-                                "upgraded during migration through direct Nebius updates "
+                                "upgraded during the external upgrade through direct Nebius updates "
                                 "because the target is not Terraform-owned by cxcli."
                                 if provider_inventory_available
                                 else (
                                     "External MK8s control plane and node-template provider "
                                     "inventory was not available during onboarding; cxcli will "
                                     "verify and align the external node templates during "
-                                    "migration before it manages Soperator."
+                                    "the external upgrade before it manages Soperator."
                                 )
                             ),
                             action_id=ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
@@ -2699,7 +3238,7 @@ def analyze_soperator_onboarding_snapshot(
                             reason=(
                                 "External Soperator targets are not Terraform-owned, so cxcli "
                                 "must align Kubernetes version, node OS image, and Nebius GPU "
-                                "driver preset through direct Nebius updates during migration."
+                                "driver preset through direct Nebius updates during the external upgrade."
                             ),
                         )
                     )
@@ -2823,6 +3362,25 @@ def analyze_soperator_onboarding_snapshot(
             )
         )
 
+    if source_version and target_version and not any(
+        finding.layer == SOPERATOR_UPGRADE_SUPPORT_LAYER for finding in findings
+    ):
+        control_plane_inventory = node_template_inventory.get("control_plane")
+        current_k8s = (
+            str(control_plane_inventory.get("current_k8s_version", "") or "").strip()
+            if isinstance(control_plane_inventory, Mapping)
+            else ""
+        )
+        support_finding = _soperator_upgrade_support_status_finding(
+            source_version=source_version,
+            target_version=target_chart_version or target_version,
+            approved_target_chart_version=approved_target_chart,
+            current_k8s_version=current_k8s,
+            target_k8s_version=target_k8s,
+        )
+        if support_finding is not None:
+            findings.append(support_finding)
+
     return SoperatorOnboardingReport(
         schema=ONBOARDING_SCHEMA,
         target_ref=normalize_component_token(target_ref),
@@ -2898,8 +3456,8 @@ def _matching_source_discovery_report(
     if source_report_path is None or not source_report_path.exists():
         return None
     try:
-        payload = json.loads(source_report_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        payload = load_soperator_discovery_bundle(source_report_path)
+    except (OSError, ValueError, json.JSONDecodeError):
         return None
     if not isinstance(payload, Mapping):
         return None
@@ -2916,6 +3474,10 @@ def _matching_source_discovery_report(
         actual = str(report.get(key, "") or "").strip()
         if expected and actual != expected:
             return None
+    upgrade_path = onboarding.get("upgrade_path")
+    if isinstance(upgrade_path, Mapping):
+        report = dict(report)
+        report["upgrade_path"] = copy.deepcopy(to_plain_data(upgrade_path))
     return copy.deepcopy(dict(report))
 
 
@@ -2977,6 +3539,7 @@ def build_soperator_onboarding_report_from_config(
     target_ref: str,
     pinned_chart_version: str = "",
     pinned_app_version: str = "",
+    approved_target_chart_version: str = "",
     source_report_path: Path | None = None,
 ) -> dict[str, Any]:
     target = soperator_onboarding_target(payload_or_config, target_ref=target_ref)
@@ -3002,6 +3565,7 @@ def build_soperator_onboarding_report_from_config(
         target_ref=target_ref,
         pinned_chart_version=pinned_chart_version,
         pinned_app_version=pinned_app_version,
+        approved_target_chart_version=approved_target_chart_version,
     )
     if isinstance(onboarding, Mapping):
         storage_mode = str(onboarding.get("storage_mode", "") or "").strip()
@@ -3015,6 +3579,10 @@ def build_soperator_onboarding_report_from_config(
         if onboarding.get("accepted") is True:
             report = _report_with_accepted_onboarding_contract(report, onboarding)
     report_payload = report.to_dict()
+    if isinstance(onboarding, Mapping):
+        upgrade_path = onboarding.get("upgrade_path")
+        if isinstance(upgrade_path, Mapping):
+            report_payload["upgrade_path"] = copy.deepcopy(to_plain_data(upgrade_path))
     report_payload["accepted_fingerprint"] = soperator_onboarding_fingerprint(
         payload_or_config,
         target_ref=target_ref,
@@ -3028,6 +3596,7 @@ def write_soperator_onboarding_reports(
     *,
     pinned_chart_version: str = "",
     pinned_app_version: str = "",
+    approved_target_chart_version: str = "",
 ) -> list[Path]:
     written: list[Path] = []
     reports_dir = generated_dir / ONBOARDING_REPORT_DIR
@@ -3037,7 +3606,11 @@ def write_soperator_onboarding_reports(
             target_ref=target_ref,
             pinned_chart_version=pinned_chart_version,
             pinned_app_version=pinned_app_version,
-            source_report_path=source_soperator_discovery_report_path(generated_dir.parent),
+            approved_target_chart_version=approved_target_chart_version,
+            source_report_path=source_soperator_discovery_report_path(
+                generated_dir.parent,
+                target_ref,
+            ),
         )
         path = reports_dir / f"soperator-onboarding-{target_ref}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -3070,45 +3643,39 @@ def write_source_soperator_discovery_report(
     report: SoperatorOnboardingReport | Mapping[str, Any],
     cluster_id: str = "",
     cluster_name: str = "",
+    source_kind: str = "external",
+    command: Sequence[str] | None = None,
+    namespace: str = "",
+    release_name: str = "",
+    kube_context: str = "",
+    chart_values: Mapping[str, Any] | None = None,
+    slurm_snapshot: Mapping[str, Any] | None = None,
+    accounting_snapshot: Mapping[str, Any] | None = None,
+    target_versions: Mapping[str, Any] | None = None,
+    guidance_lines: Sequence[str] | None = None,
+    output_dir: Path | None = None,
+    redaction: str = "support",
 ) -> Path:
-    path = source_soperator_discovery_report_path(target_dir)
-    report_payload = (
-        report.to_dict() if isinstance(report, SoperatorOnboardingReport) else dict(report)
+    return write_soperator_discovery_bundle(
+        target_dir,
+        target_ref=target_ref,
+        snapshot=snapshot,
+        report=report,
+        source_kind=source_kind,
+        command=command,
+        cluster_id=cluster_id,
+        cluster_name=cluster_name,
+        namespace=namespace,
+        release_name=release_name,
+        kube_context=kube_context,
+        chart_values=chart_values,
+        slurm_snapshot=slurm_snapshot,
+        accounting_snapshot=accounting_snapshot,
+        target_versions=target_versions,
+        guidance_lines=guidance_lines,
+        output_dir=output_dir,
+        redaction=redaction,
     )
-    payload = {
-        "schema": "nebius-cxcli-source-soperator-discovery/v1",
-        "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-        "target_ref": normalize_component_token(target_ref),
-        "cluster_id": str(cluster_id or "").strip(),
-        "cluster_name": str(cluster_name or "").strip(),
-        "report": report_payload,
-        "snapshot": to_plain_data(snapshot),
-    }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    _preserve_source_discovery_timestamps_if_stable(path=path, payload=payload)
-    rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
-    if path.exists():
-        with suppress(OSError):
-            if path.read_text(encoding="utf-8") == rendered:
-                return path
-    tmp_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as handle:
-            tmp_path = Path(handle.name)
-            handle.write(rendered)
-        tmp_path.replace(path)
-    finally:
-        if tmp_path is not None and tmp_path.exists():
-            with suppress(OSError):
-                tmp_path.unlink()
-    return path
 
 
 def collect_kubectl_soperator_snapshot(
@@ -3168,7 +3735,7 @@ def collect_kubectl_soperator_snapshot(
                 "--context",
                 context,
                 "get",
-                "deployments,statefulsets,daemonsets,pods,services,configmaps,secrets",
+                "deployments,statefulsets,daemonsets,pods,jobs,services,configmaps,secrets",
                 "-n",
                 "soperator",
                 "-o",
@@ -3209,16 +3776,17 @@ def collect_kubectl_soperator_snapshot(
             errors=collection_errors,
             extra_env=extra_env,
         )
-    helm_releases = []
-    for namespace in SOPERATOR_HELM_DISCOVERY_NAMESPACES:
-        namespace_releases = _helm_json(
-            ["helm", "--kube-context", context, "list", "-n", namespace, "-o", "json"],
-            timeout,
-            errors=collection_errors,
-            extra_env=extra_env,
-        )
-        if isinstance(namespace_releases, list):
-            helm_releases.extend(namespace_releases)
+    all_helm_releases = _helm_json(
+        ["helm", "--kube-context", context, "list", "-A", "-o", "json"],
+        timeout,
+        errors=collection_errors,
+        extra_env=extra_env,
+    )
+    helm_releases = [
+        release
+        for release in all_helm_releases
+        if isinstance(release, Mapping) and _is_soperator_release_candidate(release)
+    ] if isinstance(all_helm_releases, list) else []
     gpu_stack_helm_releases = []
     for namespace in GPU_STACK_HELM_DISCOVERY_NAMESPACES:
         namespace_releases = _helm_json(
@@ -3376,6 +3944,25 @@ def _sanitize_namespace_resource_items(items: Any) -> list[dict[str, Any]]:
             row["data_keys"] = sorted(str(key) for key in data) if isinstance(data, Mapping) else []
         elif kind in {"Deployment", "StatefulSet", "DaemonSet", "Pod"}:
             row["status"] = item.get("status") if isinstance(item.get("status"), Mapping) else {}
+        elif kind == "Job":
+            row["status"] = item.get("status") if isinstance(item.get("status"), Mapping) else {}
+            spec = item.get("spec") if isinstance(item.get("spec"), Mapping) else {}
+            template = spec.get("template") if isinstance(spec.get("template"), Mapping) else {}
+            pod_spec = template.get("spec") if isinstance(template.get("spec"), Mapping) else {}
+            containers = pod_spec.get("containers")
+            if isinstance(containers, Sequence) and not isinstance(
+                containers, (str, bytes, bytearray)
+            ):
+                row["containers"] = [
+                    {
+                        "name": container.get("name"),
+                        "image": container.get("image"),
+                    }
+                    for container in containers
+                    if isinstance(container, Mapping)
+                ]
+            else:
+                row["containers"] = []
         elif kind == "Service":
             spec = item.get("spec") if isinstance(item.get("spec"), Mapping) else {}
             row["spec"] = {

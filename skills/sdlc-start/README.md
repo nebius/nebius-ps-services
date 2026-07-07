@@ -6,7 +6,9 @@ installed into a Codex runtime only when `install-skills.sh` is run.
 ## What It Does
 
 Coordinate the SDLC loop by reading specs, checkpoints, and local state,
-selecting the next feature, and choosing exactly one next skill.
+encouraging a safe live experiment environment when useful, selecting the next
+feature, refreshing active steering when needed, and choosing exactly one next
+skill.
 
 ## Main Boundaries
 
@@ -14,6 +16,8 @@ selecting the next feature, and choosing exactly one next skill.
 - Do not implement code directly.
 - Do not commit, push, create PRs, review PRs, or merge.
 - Do not bypass validation, tests, or evaluation.
+- Do not store live environment credentials or raw logs in run state.
+- Do not let hooks, cron, or background daemons select SDLC phases.
 
 ## Primary Inputs
 
@@ -21,11 +25,14 @@ selecting the next feature, and choosing exactly one next skill.
 - `docs/design.md` when present.
 - Existing local run state when present.
 - User instruction or continuation prompt.
+- Optional live experiment environment details to route through requirements.
+- Active `STEERING.md` and `steering/auto-steering.json` when present.
 
 ## Output
 
 - Active run state is accurate and backed by a checkpoint.
 - Current feature and next skill are explicit.
+- Steering is refreshed or routed through `sdlc-auto-steering` when pending.
 - Each state transition writes a checkpoint and history entry.
 - Repeated resumes without state changes do not duplicate history.
 - The loop can resume after context loss.
@@ -43,13 +50,13 @@ runtime hooks:
 - `tests/test_sdlc_hooks.py`
 
 Patch these source files before touching installed runtime copies under
-`$CODEX_HOME/hooks`. The Stop hook must emit `sdlc-start` and canonical
-`sdlc-*` skill names, while still accepting short phase aliases as input. The
-PreToolUse hook does not block file targets by path; repo files, outside-repo
-files, credential directories, Codex runtime files, global `AGENTS.md`, locked
-SDLC plans, and private SDLC state are all path-allowed for operator
-flexibility. It still blocks secret-bearing payloads, dangerous shell patterns,
-and guarded Git/GitHub actions.
+`$CODEX_HOME/hooks`. The Stop hook must emit explicit `$sdlc-start`
+continuation prompts and canonical `sdlc-*` skill names, while still accepting
+short phase aliases as input. The PreToolUse hook does not block file targets
+by path; repo files, outside-repo files, credential directories, Codex runtime
+files, global `AGENTS.md`, locked SDLC plans, and private SDLC state are all
+path-allowed for operator flexibility. It still blocks secret-bearing payloads,
+dangerous shell patterns, and guarded Git/GitHub actions.
 
 Validate the source bundle from the `skills/` directory:
 

@@ -79,16 +79,19 @@ user input or unambiguous project configuration:
    tags such as `1.2.3-rc.1`; if no tag was provided, ask before continuing.
 3. For `setup`, create or update chart-local release assets from `assets/` and
    validate the chart publish registration/workflow. Stop with a setup report.
-4. For `prep`, run the skill-owned helper script:
+4. For `prep`, require the current checkout to be the clean, synced default
+   branch. If the user is on any other branch, or the tree is dirty, stop and
+   ask them to merge their branch to the default branch, switch to it,
+   fast-forward, and rerun. Then run the skill-owned helper script:
    `scripts/publish-helm-doer.sh --mode prep ...`
-   It updates the chart changelog and `Chart.yaml`, validates dependencies,
-   runs strict chart lint/template checks, commits release prep, and pushes the
-   current branch.
+   The helper creates `release/<tag>` from the default branch, updates the
+   chart changelog and `Chart.yaml`, validates dependencies, runs strict chart
+   lint/template checks, commits release prep, and pushes that release branch.
 5. For `complete`, run `prep`, invoke `create-pr`, then invoke `merge-pr` after
-   checks pass.
+   checks pass for `release/<tag>`.
 6. After merge, switch to the default branch, fetch, and fast-forward only.
    Verify the merged changelog and `Chart.yaml` contain the release version.
-7. Run `publish` from clean synced default branch:
+7. Run `publish` only from the clean, synced default branch:
    `scripts/publish-helm-doer.sh --mode publish ...`
    The helper creates and pushes only the annotated tag. If `Chart.yaml` still
    has a different version, stop and run `prep`; do not tag a release expecting
@@ -117,7 +120,13 @@ The project-local helper script is optional after this refactor. The skill-owned
 - Do not print, request, or persist secret values.
 - Ask for missing release tag or destination inputs instead of guessing.
 - Do not include chart basename or version in `--oci-repository`.
-- Do not commit release prep directly on the default branch.
+- Treat the default branch as the release source of truth. `prep` and
+  `publish` must start from a clean, synced default branch.
+- If the user is on a feature branch or has local changes, fail fast before
+  editing files and ask them to create and merge a PR to the default branch,
+  switch to the default branch, fast-forward, and rerun.
+- Do not use cherry-pick or commit-copy workflows to move release content
+  between branches unless the user explicitly asks for that reconstruction.
 - Treat `Chart.yaml` version changes as release-prep changes that must be
   merged before tagging; the publish/tag phase is intentionally read-only for
   chart metadata.
@@ -148,7 +157,7 @@ not evidence-backed, or outside this skill's scope, report that it was skipped.
 Return:
 
 - mode, chart directory, chart name, tag, version, tag prefix
-- PR URL and merge result when `complete` mode is used
+- release branch, PR URL, and merge result when `complete` mode is used
 - pushed tag and workflow run URL/conclusion
 - OCI chart reference and pull verification result
 - validation commands run

@@ -10,14 +10,16 @@ data:
   ensure_mounted_filestore.sh: |
     #!/bin/sh
 
-    usage() { echo "usage: ${0} -d <device_name> -p <path> -s <sleep_period_between_checks> [-h]" >&2; exit 1; }
+    usage() { echo "usage: ${0} -d <device_name> -p <path> -s <sleep_period_between_checks> [-c <relative_dirs>] [-h]" >&2; exit 1; }
 
-    while getopts d:p:s:h flag
+    create_dirs=""
+    while getopts d:p:s:c:h flag
     do
         case "${flag}" in
             d) device_name=${OPTARG};;
             p) path=${OPTARG};;
             s) sleep_period=${OPTARG};;
+            c) create_dirs=${OPTARG};;
             h) usage;;
             *) usage;;
         esac
@@ -69,20 +71,25 @@ data:
 
     while true; do
         ensure_mounted
+        for relative_dir in $create_dirs; do
+            mkdir -m 755 -p "$host_path/$relative_dir"
+        done
         /bin/sleep $sleep_period
     done
 
   ensure_mounted_glusterfs.sh: |
     #!/bin/sh
 
-    usage() { echo "usage: ${0} -g <glusterfs_hostname> -p <path> -s <sleep_period_between_checks> [-h]" >&2; exit 1; }
+    usage() { echo "usage: ${0} -g <glusterfs_hostname> -p <path> -s <sleep_period_between_checks> [-c <relative_dirs>] [-h]" >&2; exit 1; }
 
-    while getopts g:p:s:h flag
+    create_dirs=""
+    while getopts g:p:s:c:h flag
     do
         case "${flag}" in
             g) gluster_hostname=${OPTARG};;
             p) path=${OPTARG};;
             s) sleep_period=${OPTARG};;
+            c) create_dirs=${OPTARG};;
             h) usage;;
             *) usage;;
         esac
@@ -143,6 +150,9 @@ data:
 
         while true; do
             ensure_mounted
+            for relative_dir in $create_dirs; do
+                mkdir -m 755 -p "$host_path/$relative_dir"
+            done
             /bin/sleep $sleep_period
         done
     )

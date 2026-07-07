@@ -186,7 +186,7 @@ def test_soperator_validation_fails_missing_gpu_driver_jail_nodeset_contract() -
 
     soperator_validation._check_gpu_driver_jail_nodeset_contract(
         _runner,
-        {"namespace": "soperator"},
+        {"namespace": "soperator", "target_version": "4.0.2-ps.3"},
         checks,
     )
 
@@ -208,6 +208,44 @@ def test_soperator_validation_fails_missing_gpu_driver_jail_nodeset_contract() -
                     "driver_jail_init": False,
                 }
             ],
+        }
+    ]
+
+
+def test_soperator_validation_skips_gpu_driver_jail_nodeset_contract_for_old_chart() -> None:
+    checks: list[dict[str, object]] = []
+    calls: list[tuple[str, ...]] = []
+
+    def _runner(
+        args,
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorValidationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        return SoperatorValidationCommandResult(command, 0, '{"items": []}', "")
+
+    soperator_validation._check_gpu_driver_jail_nodeset_contract(
+        _runner,
+        {"namespace": "soperator", "target_version": "4.0.1-ps.2"},
+        checks,
+    )
+
+    assert calls == []
+    assert checks == [
+        {
+            "name": "GPU driver jail NodeSet contract",
+            "status": "skipped",
+            "passed": False,
+            "summary": (
+                "Soperator chart version 4.0.1-ps.2 predates the chart-owned "
+                "GPU driver jail NodeSet contract."
+            ),
+            "target_version": "4.0.1-ps.2",
+            "minimum_contract_version": "4.0.2-ps.3",
         }
     ]
 
@@ -590,11 +628,12 @@ def test_run_soperator_cluster_validation_writes_smoke_report(tmp_path: Path) ->
     assert report["test_purpose"] == "deployment-testing"
     assert report["scope"] == "soperator-deployment-snapshot"
     assert report["passed"] is True
-    assert report["summary"] == "6/6 Soperator/Slurm checks passed."
+    assert report["summary"] == "7/7 Soperator/Slurm checks passed."
     assert [check["name"] for check in report["checks"]] == [
         "Soperator manager deployment",
         "Soperator storage snapshot",
         "Soperator pod scheduling snapshot",
+        "Soperator pod health snapshot",
         "SlurmCluster visibility",
         "NodeSet visibility",
         "GPU driver jail NodeSet contract",
@@ -969,6 +1008,259 @@ def test_soperator_cluster_validation_reports_pending_soperator_pods(
     assert skipped[0]["name"] == "Soperator pod scheduling snapshot"
     assert "mk8s-acct-db-0" in skipped[0]["summary"]
     assert "unschedulable" in skipped[0]["summary"]
+
+
+def test_soperator_cluster_validation_recovers_stuck_populate_jail_job(
+    tmp_path: Path,
+) -> None:
+    spec = {
+        "kind": SOPERATOR_CLUSTER_VALIDATION_KIND,
+        "name": "Soperator cluster smoke test (training)",
+        "target_ref": "training",
+        "namespace": "soperator",
+        "cluster_name": "training",
+        "report_file": "deploy-smoke-report-training.json",
+        "populate_jail_recovery_timeout_seconds": 0,
+    }
+    deleted_pods: list[str] = []
+    job_completed = False
+
+    def _pods_payload() -> dict:
+        items = [
+            {
+                "metadata": {
+                    "name": "login-0",
+                    "labels": {"app.kubernetes.io/component": "login"},
+                },
+                "status": {"phase": "Running"},
+            },
+            {
+                "metadata": {
+                    "name": "training-populate-jail-abc",
+                    "labels": {"job-name": "training-populate-jail"},
+                },
+                "spec": {"nodeName": "system-node-1"},
+                "status": {"phase": "Running"},
+            },
+            {
+                "metadata": {"name": "jail-mount-xyz"},
+                "spec": {"nodeName": "system-node-1"},
+                "status": {"phase": "Running"},
+            },
+        ]
+        return {"items": items}
+
+    def _runner(
+        args,
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorValidationCommandResult:
+        nonlocal job_completed
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        if command[:7] == (
+            "kubectl",
+            "-n",
+            "soperator",
+            "get",
+            "job",
+            "training-populate-jail",
+            "-o",
+        ):
+            status = {"succeeded": 1} if job_completed else {"active": 1, "succeeded": 0}
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                json.dumps({"spec": {"completions": 1, "backoffLimit": 6}, "status": status}),
+                "",
+            )
+        if command[:5] == ("kubectl", "-n", "soperator", "get", "pods"):
+            return SoperatorValidationCommandResult(command, 0, json.dumps(_pods_payload()), "")
+        if command[:6] == ("kubectl", "-n", "soperator", "exec", "jail-mount-xyz", "--"):
+            return SoperatorValidationCommandResult(command, 0, "2026-06-30T01:50:26+00:00\n", "")
+        if command[:6] == (
+            "kubectl",
+            "-n",
+            "soperator",
+            "delete",
+            "pod",
+            "training-populate-jail-abc",
+        ):
+            deleted_pods.append(command[5])
+            job_completed = True
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                'pod "training-populate-jail-abc" deleted\n',
+                "",
+            )
+        if command[:6] == ("kubectl", "-n", "soperator", "get", "slurmclusters", "-o"):
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "training"},
+                                "status": {"phase": "Available"},
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:6] == ("kubectl", "-n", "soperator", "exec", "login-0", "--"):
+            if command[6:9] == ("sinfo", "-h", "-o"):
+                return SoperatorValidationCommandResult(command, 0, "idle\n", "")
+            if command[6:8] == ("squeue", "-h"):
+                return SoperatorValidationCommandResult(command, 0, "", "")
+            if command[6:8] == ("bash", "-lc"):
+                return SoperatorValidationCommandResult(
+                    command,
+                    0,
+                    "cxcli-soperator-srun-ok\nworker-0\n",
+                    "",
+                )
+        return _standard_or_ok(command)
+
+    written = run_soperator_cluster_validations(
+        [spec],
+        reports_dir=tmp_path,
+        command_runner=_runner,
+    )
+
+    assert deleted_pods == ["training-populate-jail-abc"]
+    report = json.loads(written[0].read_text(encoding="utf-8"))
+    assert report["passed"] is True
+    recovery = next(check for check in report["checks"] if check["name"] == "Populate jail recovery")
+    assert recovery["status"] == "passed"
+    assert recovery["pod_name"] == "training-populate-jail-abc"
+    assert recovery["jail_mount_pod"] == "jail-mount-xyz"
+    assert recovery["sentinel_path"] == "/host/mnt/jail/.populated"
+
+
+def test_populate_jail_job_failed_detects_zero_backoff_limit() -> None:
+    assert (
+        soperator_validation._job_failed(  # noqa: SLF001
+            {"spec": {"backoffLimit": 0}, "status": {"failed": 1}}
+        )
+        is True
+    )
+    assert (
+        soperator_validation._job_failed(  # noqa: SLF001
+            {"spec": {}, "status": {"failed": 1}}
+        )
+        is False
+    )
+
+
+def test_soperator_cluster_validation_fails_on_crash_looping_soperator_pod(
+    tmp_path: Path,
+) -> None:
+    spec = {
+        "kind": SOPERATOR_CLUSTER_VALIDATION_KIND,
+        "name": "Soperator cluster smoke test (training)",
+        "target_ref": "training",
+        "namespace": "soperator",
+        "cluster_name": "training",
+        "report_file": "deploy-smoke-report-training.json",
+    }
+
+    def _runner(
+        args,
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorValidationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        if command[:5] == ("kubectl", "-n", "soperator", "get", "pods"):
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {
+                                    "name": "login-0",
+                                    "labels": {"app.kubernetes.io/component": "login"},
+                                },
+                                "status": {"phase": "Running"},
+                            },
+                            {
+                                "metadata": {"name": "worker-0"},
+                                "status": {
+                                    "phase": "Running",
+                                    "initContainerStatuses": [
+                                        {
+                                            "name": "cxcli-gpu-driver-jail",
+                                            "state": {
+                                                "waiting": {
+                                                    "reason": "CrashLoopBackOff",
+                                                    "message": (
+                                                        "back-off restarting failed container"
+                                                    ),
+                                                }
+                                            },
+                                        }
+                                    ],
+                                },
+                            },
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:6] == ("kubectl", "-n", "soperator", "get", "slurmclusters", "-o"):
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "training"},
+                                "status": {"phase": "Available"},
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:6] == ("kubectl", "-n", "soperator", "exec", "login-0", "--"):
+            if command[6:9] == ("sinfo", "-h", "-o"):
+                return SoperatorValidationCommandResult(command, 0, "idle\n", "")
+            if command[6:8] == ("squeue", "-h"):
+                return SoperatorValidationCommandResult(command, 0, "", "")
+            if command[6:8] == ("bash", "-lc"):
+                return SoperatorValidationCommandResult(
+                    command,
+                    0,
+                    "cxcli-soperator-srun-ok\nworker-0\n",
+                    "",
+                )
+        return _standard_or_ok(command)
+
+    with pytest.raises(RuntimeError, match="Soperator pod health snapshot"):
+        run_soperator_cluster_validations(
+            [spec],
+            reports_dir=tmp_path,
+            command_runner=_runner,
+        )
+
+    report = json.loads(
+        (tmp_path / "deploy-smoke-report-training.json").read_text(encoding="utf-8")
+    )
+    failed = [check for check in report["checks"] if check["status"] == "failed"]
+    assert failed[0]["name"] == "Soperator pod health snapshot"
+    assert "worker-0" in failed[0]["summary"]
+    assert "cxcli-gpu-driver-jail" in failed[0]["summary"]
+    assert "CrashLoopBackOff" in failed[0]["summary"]
 
 
 @pytest.mark.parametrize(

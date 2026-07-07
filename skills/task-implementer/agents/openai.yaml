@@ -1,0 +1,6 @@
+interface:
+  display_name: "Task Implementer"
+  short_description: "Sequential brownfield task implementation"
+  default_prompt: "Use $task-implementer to break a brownfield request into ordered task-1..task-n steps, implement one task per fresh Codex session, run validation and code-review, fix scoped findings, commit through $commit, and maintain a markdown handoff checkpoint."
+policy:
+  allow_implicit_invocation: false

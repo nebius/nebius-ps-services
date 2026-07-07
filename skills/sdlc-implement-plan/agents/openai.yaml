@@ -2,3 +2,5 @@ interface:
   display_name: "SDLC Implement Plan"
   short_description: "Implement locked feature plan"
   default_prompt: "Use $sdlc-implement-plan to implement Agentic SDLC production code for one feature while staying inside the locked plan."
+policy:
+  allow_implicit_invocation: false

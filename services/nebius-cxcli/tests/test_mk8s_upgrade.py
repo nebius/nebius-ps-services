@@ -1241,6 +1241,52 @@ def test_wait_for_node_template_rollout_uses_sdk_status_without_sdk_updates() ->
     assert fake.calls == [("wait-node-template", "cluster-1:ng-system:1.33:ubuntu24.04:None:3600")]
 
 
+def test_wait_node_group_node_template_requires_stable_ready_observation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ready_once = _node_group(id="ng-system", name="system", version="1.33")
+    ready_once.status = _ready_status()
+    not_ready = _node_group(id="ng-system", name="system", version="1.33")
+    not_ready.status = SimpleNamespace(
+        ready_node_count=0,
+        target_node_count=1,
+        node_count=1,
+        outdated_node_count=0,
+        reconciling=True,
+    )
+    ready_again = _node_group(id="ng-system", name="system", version="1.33")
+    ready_again.status = _ready_status()
+    stable_ready = _node_group(id="ng-system", name="system", version="1.33")
+    stable_ready.status = _ready_status()
+    observations = [ready_once, not_ready, ready_again, stable_ready]
+    calls: list[str] = []
+    sleeps: list[float] = []
+
+    executor = object.__new__(upgrade.Mk8sKubernetesVersionExecutor)
+
+    def _list_node_groups(_cluster_id: str) -> tuple[SimpleNamespace, ...]:
+        calls.append("list")
+        return (observations.pop(0),)
+
+    monkeypatch.setattr(executor, "list_node_groups", _list_node_groups)
+    monkeypatch.setattr(upgrade.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    result = upgrade.Mk8sKubernetesVersionExecutor.wait_node_group_node_template(
+        executor,
+        cluster_id="cluster-1",
+        node_group_id="ng-system",
+        version="1.33",
+        os="ubuntu24.04",
+        drivers_preset=None,
+        timeout_seconds=3600,
+        poll_seconds=15,
+    )
+
+    assert result is stable_ready
+    assert len(calls) == 4
+    assert sleeps == [15, 15, 15]
+
+
 def test_force_delete_drain_timeout_does_not_shorten_rollout_wait() -> None:
     class FakeExecutor:
         def __init__(self) -> None:

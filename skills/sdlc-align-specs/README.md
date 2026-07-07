@@ -5,7 +5,8 @@ installed into a Codex runtime only when `install-skills.sh` is run.
 
 ## What It Does
 
-Verify that SDLC specs, plans, implementation, tests, and evidence tell one consistent story.
+Verify that SDLC specs, plans, implementation, documentation, tests, and
+evidence tell one consistent story.
 
 ## Main Boundaries
 
@@ -16,7 +17,8 @@ Verify that SDLC specs, plans, implementation, tests, and evidence tell one cons
 
 ## Primary Inputs
 
-- Requirements, design, current feature plan, changed files, tests, and evidence.
+- Requirements, design, current feature plan, changed files, tests,
+  documentation, steering, and evidence.
 - Current feature ID or full-run scope.
 
 ## Output

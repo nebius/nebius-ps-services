@@ -1797,6 +1797,8 @@ class Mk8sKubernetesVersionExecutor:
         target_version = parse_k8s_version(version).minor_text
         target_os = validate_os_image_value(os)
         deadline = time.monotonic() + timeout_seconds
+        stable_ready_observations = 0
+        stable_ready_required = 2
         while True:
             for candidate in self.list_node_groups(cluster_id):
                 metadata = getattr(candidate, "metadata", None)
@@ -1808,10 +1810,19 @@ class Mk8sKubernetesVersionExecutor:
                     os=target_os,
                     drivers_preset=drivers_preset,
                 ):
-                    return candidate
+                    stable_ready_observations += 1
+                    if stable_ready_observations >= stable_ready_required:
+                        return candidate
+                    last_summary = (
+                        "node group reported ready once; waiting for a second "
+                        f"stable observation: {node_group_node_template_rollout_summary(candidate)}"
+                    )
+                    break
+                stable_ready_observations = 0
                 last_summary = node_group_node_template_rollout_summary(candidate)
                 break
             else:
+                stable_ready_observations = 0
                 last_summary = f"node group {node_group_id} was not found"
             if time.monotonic() >= deadline:
                 raise TimeoutError(

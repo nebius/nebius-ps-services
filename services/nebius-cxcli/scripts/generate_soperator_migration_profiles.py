@@ -465,6 +465,119 @@ def _source_controller_quiesce_contract(
     }
 
 
+def _support_rules() -> list[dict[str, Any]]:
+    return [
+        {
+            "id": "k8s-1-33-requires-soperator-1-23",
+            "status": "unsupported",
+            "target_k8s_min": "1.33",
+            "target_version_range": "<1.23.0",
+            "message": (
+                "Kubernetes 1.33+ requires Soperator 1.23.0 or newer for this "
+                "legacy path to avoid worker procMount/hostUsers admission failures."
+            ),
+            "references": [
+                "https://github.com/nebius/soperator/issues/1446",
+                "https://github.com/nebius/soperator/pull/1482",
+                "https://kubernetes.io/blog/2025/04/25/userns-enabled-by-default/",
+            ],
+        },
+        {
+            "id": "legacy-before-1-22-not-validated",
+            "status": "not_validated",
+            "source_version_range": "<1.22.0",
+            "message": (
+                "Soperator source versions older than 1.22.x are not validated by "
+                "cxcli for this upgrade path. Run a smoke test or rerun with "
+                "--allow-unsupported-soperator-upgrade-path for an explicit testing override."
+            ),
+            "references": [
+                "https://github.com/nebius/soperator/releases",
+            ],
+        },
+        {
+            "id": "k8s-before-1-33-soperator-1-22-plus-supported",
+            "status": "supported",
+            "source_version_range": ">=1.22.0",
+            "target_version_range": "=4.0.2",
+            "target_chart_version_policy": "cxcli_pin",
+            "target_k8s_max": "1.33",
+            "message": (
+                "Soperator 1.22.0 or newer upgrading directly to the cxcli-pinned "
+                "Soperator target on Kubernetes versions before 1.33 matches the "
+                "committed cxcli upgrade-path policy. Kubernetes minor-hop validation "
+                "still applies."
+            ),
+            "recommended_order": {"soperator_after_k8s_min": "1.32"},
+            "references": [
+                "https://docs.nebius.com/kubernetes/versions",
+            ],
+        },
+        {
+            "id": "soperator-target-same-app-non-cxcli-pin-not-validated",
+            "status": "not_validated",
+            "target_version_range": "=4.0.2",
+            "target_chart_version_policy": "not_cxcli_pin",
+            "message": (
+                "Soperator chart packages with the same upstream app version as "
+                "the cxcli-pinned target are not validated unless they match the "
+                "component_sources.yaml chart pin exactly. Keep the cxcli-pinned "
+                "target or rerun with --allow-unsupported-soperator-upgrade-path "
+                "after explicit testing."
+            ),
+            "references": [
+                "component_sources.yaml",
+            ],
+        },
+        {
+            "id": "soperator-target-before-cxcli-pin-not-validated",
+            "status": "not_validated",
+            "target_version_range": ">=1.23.0,<4.0.2",
+            "message": (
+                "Intermediate Soperator targets before the cxcli-pinned target are "
+                "not part of the canonical cxcli upgrade path. Upgrade directly to "
+                "the cxcli-pinned target or rerun with "
+                "--allow-unsupported-soperator-upgrade-path after explicit testing."
+            ),
+            "references": [
+                "https://github.com/nebius/soperator/issues/1510",
+                "https://github.com/nebius/soperator/pull/1512",
+            ],
+        },
+        {
+            "id": "soperator-target-newer-than-cxcli-pin-not-validated",
+            "status": "not_validated",
+            "target_version_range": ">4.0.2,<5.0.0",
+            "message": (
+                "Soperator targets newer than the cxcli-pinned target are not "
+                "validated by cxcli yet. Keep the cxcli-pinned target or rerun "
+                "with --allow-unsupported-soperator-upgrade-path after explicit "
+                "testing."
+            ),
+            "references": [
+                "https://github.com/nebius/soperator/releases",
+            ],
+        },
+        {
+            "id": "k8s-1-33-soperator-4-supported",
+            "status": "supported",
+            "target_k8s_min": "1.33",
+            "target_version_range": "=4.0.2",
+            "target_chart_version_policy": "cxcli_pin",
+            "message": (
+                "The cxcli-pinned Soperator target on Kubernetes 1.33+ matches the "
+                "committed cxcli upgrade-path policy, including ActiveChecks "
+                "hostUsers handling."
+            ),
+            "recommended_order": {"soperator_after_k8s_min": "1.32"},
+            "references": [
+                "https://github.com/nebius/soperator/pull/1980",
+                "https://github.com/nebius/soperator/pull/2364",
+            ],
+        },
+    ]
+
+
 def _profile_payload(
     releases: list[dict[str, Any]],
     *,
@@ -515,6 +628,7 @@ def _profile_payload(
         "generated_from": "github-releases-api-and-release-tarballs",
         "target_policy": "component_sources.yaml pinned soperator chart version",
         "generator_scope": GENERATOR_SCOPE,
+        "support_rules": _support_rules(),
         "profile_groups": {
             "legacy-v1-to-target": {
                 "title": "Legacy v1 Soperator to pinned target",

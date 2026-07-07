@@ -1,0 +1,6 @@
+interface:
+  display_name: "Research"
+  short_description: "Technical due diligence research for design decisions"
+  default_prompt: "Use $research to investigate a technology, architecture pattern, API, protocol, RFC, product, or feature requirement. Search internal Slack and Confluence context first when relevant, use MCP/app access if connectors are unavailable, verify technical claims with official vendor or authoritative external sources, and label organization-specific guidance separately from vendor facts and industry practice."
+policy:
+  allow_implicit_invocation: true

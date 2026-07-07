@@ -43,6 +43,95 @@
 ---
 */}}
 
+{{/* Active/passive jail rootfs strategy. */}}
+{{- define "slurm-cluster-storage.jailRootfs.strategy" -}}
+    {{- default "activePassive" .Values.jailRootfs.strategy | trim -}}
+{{- end }}
+
+{{/* Whether active/passive jail rootfs storage is enabled. */}}
+{{- define "slurm-cluster-storage.jailRootfs.activePassive.enabled" -}}
+    {{- if eq (include "slurm-cluster-storage.jailRootfs.strategy" .) "activePassive" -}}true{{- else -}}false{{- end -}}
+{{- end }}
+
+{{/* Active/passive jail store mount path on Kubernetes hosts. */}}
+{{- define "slurm-cluster-storage.jailRootfs.store.path" -}}
+    {{- default "/mnt/jail-store" .Values.jailRootfs.store.mountPath | trim -}}
+{{- end }}
+
+{{/* Active/passive jail rootfs generations path on Kubernetes hosts. */}}
+{{- define "slurm-cluster-storage.jailRootfs.rootfs.path" -}}
+    {{- default (printf "%s/rootfs" (include "slurm-cluster-storage.jailRootfs.store.path" .)) .Values.jailRootfs.store.rootfsPath | trim -}}
+{{- end }}
+
+{{/* Active/passive slot local path. Usage: include helper with (list $ "slot-a"). */}}
+{{- define "slurm-cluster-storage.jailRootfs.slot.path" -}}
+    {{- $root := index . 0 -}}
+    {{- $slotName := index . 1 -}}
+    {{- $slots := default dict $root.Values.jailRootfs.slots -}}
+    {{- $slot := get $slots $slotName | default dict -}}
+    {{- $rootfsPath := include "slurm-cluster-storage.jailRootfs.rootfs.path" $root -}}
+    {{- $managedDefault := printf "/mnt/jail-store/rootfs/%s" $slotName -}}
+    {{- $configured := default "" $slot.localPath | trim -}}
+    {{- if or (not $configured) (eq $configured $managedDefault) -}}
+        {{- printf "%s/%s" $rootfsPath $slotName -}}
+    {{- else -}}
+        {{- $configured -}}
+    {{- end -}}
+{{- end }}
+
+{{/* Active/passive slot volume source name. Usage: include helper with (list $ "slot-a"). */}}
+{{- define "slurm-cluster-storage.jailRootfs.slot.volumeSourceName" -}}
+    {{- $root := index . 0 -}}
+    {{- $slotName := index . 1 -}}
+    {{- $slots := default dict $root.Values.jailRootfs.slots -}}
+    {{- $slot := get $slots $slotName | default dict -}}
+    {{- default (printf "jail-rootfs-%s" $slotName) $slot.volumeSourceName | trim -}}
+{{- end }}
+
+{{/* Active/passive slot PVC name. Usage: include helper with (list $ "slot-a"). */}}
+{{- define "slurm-cluster-storage.jailRootfs.slot.pvc" -}}
+    {{- $root := index . 0 -}}
+    {{- $slotName := index . 1 -}}
+    {{- $slots := default dict $root.Values.jailRootfs.slots -}}
+    {{- $slot := get $slots $slotName | default dict -}}
+    {{- default (printf "jail-rootfs-%s-pvc" $slotName) $slot.pvcName | trim | quote -}}
+{{- end }}
+
+{{/* Active/passive slot PV name. Usage: include helper with (list $ "slot-a"). */}}
+{{- define "slurm-cluster-storage.jailRootfs.slot.pv" -}}
+    {{- cat (include "slurm-cluster-storage.jailRootfs.slot.volumeSourceName" .) "pv" | include "mashedkebab" | quote -}}
+{{- end }}
+
+{{/* Persistent jail mount stable volume source name. Usage: include helper with (list $ mount). */}}
+{{- define "slurm-cluster-storage.jailPersistentMount.name" -}}
+    {{- $mount := index . 1 -}}
+    {{- $path := required "jailPersistentMounts[].mountPath is required." $mount.mountPath -}}
+    {{- $slug := trimAll "-" (regexReplaceAll "[^a-z0-9]+" (lower (trimAll "/" $path)) "-") -}}
+    {{- $slug = default "root" $slug -}}
+    {{- $base := printf "jail-persistent-%s" $slug -}}
+    {{- if gt (len $base) 52 -}}
+        {{- printf "%s-%s" (trimSuffix "-" (trunc 43 $base)) (trunc 8 (sha1sum $path)) -}}
+    {{- else -}}
+        {{- $base -}}
+    {{- end -}}
+{{- end }}
+
+{{/* Persistent jail mount PVC name. Usage: include helper with (list $ mount). */}}
+{{- define "slurm-cluster-storage.jailPersistentMount.pvc" -}}
+    {{- printf "%s-pvc" (include "slurm-cluster-storage.jailPersistentMount.name" .) | quote -}}
+{{- end }}
+
+{{/* Persistent jail mount PV name. Usage: include helper with (list $ mount). */}}
+{{- define "slurm-cluster-storage.jailPersistentMount.pv" -}}
+    {{- printf "%s-pv" (include "slurm-cluster-storage.jailPersistentMount.name" .) | quote -}}
+{{- end }}
+
+{{/* Persistent jail mount local path. Usage: include helper with (list $ mount). */}}
+{{- define "slurm-cluster-storage.jailPersistentMount.path" -}}
+    {{- $mount := index . 1 -}}
+    {{- trimSuffix "/" (required "jailPersistentMounts[].localPath is required." $mount.localPath | trim) -}}
+{{- end }}
+
 {{/* Jail volume */}}
 {{- define "slurm-cluster-storage.volume.jail.name" -}}
     {{- required "Jail volume name is required." .Values.volume.jail.name | trim | include "mashedkebab" -}}

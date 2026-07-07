@@ -17,8 +17,9 @@ belongs to the installed Codex `PreToolUse` hook in
 Required:
 
 - tenant ID: Nebius tenant ID that owns the project
-- project ID: Nebius project ID where the agent will work
-- project name: human-readable project name used to derive the group name
+- exactly one project selector:
+  - project ID: Nebius project ID where the agent will work
+  - project name: human-readable project name under the tenant
 
 Defaults:
 
@@ -26,7 +27,7 @@ Defaults:
 - credential file: `~/.nebius/codex-agent-authkey.<project_id>.json`
 - default project selector: `~/.nebius/codex-agent-default-project-id`
 - CLI profile: `codex-agent-<project_id>`
-- group: `codex-agent-<project-name-slug>`
+- group: `codex-agent-<project-name-slug>`, resolved from the project metadata
 - role: `editor`
 - permission scope: project-level access permit on `<project_id>`
 
@@ -39,7 +40,14 @@ command instead of running it.
 ```bash
 bash scripts/agent-nebius-auth.sh ensure \
   --tenant-id <tenant_id> \
-  --project-id <project_id> \
+  --project-id <project_id>
+```
+
+or:
+
+```bash
+bash scripts/agent-nebius-auth.sh ensure \
+  --tenant-id <tenant_id> \
   --project-name <project_name>
 ```
 
@@ -60,14 +68,14 @@ the root installer from the skills repo root:
 The root installer owns hook payload sync and `hooks.json` registration. The
 setup script must not edit `$CODEX_HOME/config.toml`, shell out to the
 installer, or duplicate installer merge logic; the skill workflow may run the
-installer as a separate explicit hook-install step. The old `--install-hook`
-flag fails fast with the installer command to use. Codex runs matching hooks
-from all active sources, so do not keep a stale inline `config.toml`
-registration next to the installer-managed `hooks.json` entry. When the root
-installer registers this hook, it removes the old marked inline
-`agent-nebius-auth` block from `$CODEX_HOME/config.toml`, backs that file up,
-and migrates the legacy project selector to
-`~/.nebius/codex-agent-default-project-id` without printing the project ID.
+installer as a separate explicit hook-install step. The unsupported
+`--install-hook` flag fails fast with the installer command to use. Codex runs
+matching hooks from all active sources, so do not keep an inline `config.toml`
+registration next to the installer-managed `hooks.json` entry. This skill does
+not migrate inline hook configuration or project selectors from
+`$CODEX_HOME/config.toml`; the installer rejects stale inline agent-nebius-auth
+hook entries before copying hooks or writing `hooks.json`. Remove any stale
+inline hook entry manually before registering the canonical hook.
 
 ## Setup Behavior
 
@@ -77,6 +85,12 @@ account credential and CLI profile. It intentionally does not install or
 register Codex hooks. The root `install-skills.sh --install-hooks
 agent-nebius-auth/assets/hooks --register-hooks` path is the canonical
 payload/`hooks.json` registration mode for this hook.
+The setup script requires a tenant ID plus exactly one project selector. If
+`--project-id` is provided, the script resolves the project name from Nebius
+project metadata only when group IAM work is needed. If `--project-name` is
+provided, the script resolves the project ID with `nebius iam project
+get-by-name` before creating local profile and credential paths. Passing both
+selectors fails fast.
 After a successful setup, the script records the selected project ID in
 `~/.nebius/codex-agent-default-project-id` so the generic installer-managed
 hook can select the correct project-specific agent profile without an inline
@@ -98,7 +112,8 @@ When the credential file exists, the script:
 4. Verifies that the profile can mint a service-account token.
 5. Verifies basic project access through the service-account profile.
 6. If a human/admin Nebius session is available, verifies and repairs IAM
-   drift for the service account, group, access permit, and membership.
+   drift for the service account, project-name-derived group, access permit,
+   and membership.
 7. If token minting fails, replaces the credential file only when `--repair`
    is set and the current human/admin session can regenerate it.
 8. Records the project ID in `~/.nebius/codex-agent-default-project-id` for the
@@ -145,17 +160,33 @@ On `PreToolUse` for `Bash`, the hook:
    `~/.nebius/codex-agent-authkey.<project_id>.json` file.
 4. Derives the profile as `codex-agent-<project_id>`.
 5. Rewrites the pending command so the shell process mints a short-lived token
-   with `nebius iam get-access-token --profile "$PROFILE"` and exports
-   `TOKEN`, `NEBIUS_IAM_TOKEN`, `NEBIUS_PROFILE`, and `NEBIUS_PROJECT_ID`.
+   with `nebius iam get-access-token --profile "$NEBIUS_PROFILE"` and exports
+   `TOKEN`, `NEBIUS_IAM_TOKEN`, `NEBIUS_PROFILE`, `NEBIUS_PROJECT_ID`, and
+   `NEBIUS_AUTH_CREDENTIALS_FILE`.
 6. For direct `nebius` CLI commands without an explicit profile, rewrites the
    command to use `nebius --profile codex-agent-<project_id>`.
+
+For API-style commands, the rewritten shell process also defines
+`nebius_refresh_token`. The hook calls it once before the user command starts
+and wires child Bash processes through a restricted temporary `BASH_ENV` helper
+file that contains the function definition but no token value. The helper-owned
+`BASH_ENV` is isolated and does not source a caller-supplied `BASH_ENV`, because
+ambient Bash startup files can print or trace secret-bearing environments.
+Long-running Bash scripts that use raw Bearer-token API calls must call
+`nebius_refresh_token` again near each Nebius operation, or use clients that
+read `NEBIUS_AUTH_CREDENTIALS_FILE` or the agent CLI profile and can refresh
+auth internally. A command that relies on this helper must include
+`nebius_refresh_token` or another Nebius-sensitive indicator so the hook knows
+to inject auth. A hook cannot refresh environment variables inside an already
+running process.
 
 Do not return tokens through `additionalContext`, stderr, stdout, task state,
 docs, or final responses. The rewritten command contains only the token-minting
 command substitution, not the token value. The hook must fail closed for direct
 token-minting commands, nested token-minting commands, shell tracing, and
 obvious environment-printing commands such as `echo`, `printf`, `printenv`,
-`env`, `export`, or `set` when token injection would be active.
+`env`, `export`, or `set`, including common nested shell or Python environment
+dump forms, when token injection would be active.
 
 Do not inject Nebius credentials into every Terraform command globally. Treat
 Terraform as Nebius-sensitive only when the command or nearby Terraform files
@@ -192,7 +223,7 @@ Run local regression checks after hook changes:
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/test_pre_tool_use_nebius_auth.py
 PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/test_agent_nebius_auth_setup.py
-PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/test_install_hook_migration.py
+PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/test_install_hook_registration.py
 ```
 
 ## Learning Loop

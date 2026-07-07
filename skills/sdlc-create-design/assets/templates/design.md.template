@@ -21,92 +21,117 @@ id_policy: "Feature IDs are stable. Never renumber existing IDs."
 
 - Requirements: docs/requirements.md
 - Context packs: local sdlc-gather-context outputs
+- Codebase evidence: TODO README, architecture docs, source files, tests, configs
 
 ### Architecture Goal
 
-<Architecture goal.>
+TODO: Architecture goal.
 
 ### Product Behavior Summary
 
-<User-visible behavior.>
+TODO: User-visible behavior.
+
+### Existing System Summary
+
+TODO: Current components, data owners, interfaces, tests,
+deployment/configuration, and constraints that shape the design.
 
 ## Technology Choices
 
-<Chosen stack, runtime, external dependencies, and internal dependencies.>
+TODO: Chosen stack, runtime, external dependencies, internal dependencies,
+verified source basis, and unresolved technology questions.
 
 ## Architecture
 
 ### Components
 
-- <component>: <responsibility>
+- TODO component: TODO responsibility
 
 ### Data Flow
 
-<Data movement.>
+TODO: Data movement.
 
 ### Control Flow
 
-<Trigger and execution flow.>
+TODO: Trigger and execution flow.
 
 ### State Model
 
-<Persisted, generated, cached, and runtime state.>
+TODO: Persisted, generated, cached, and runtime state.
 
 ### Error Model
 
-<Failure handling and recovery.>
+TODO: Failure handling and recovery.
 
 ### Security Model
 
-<Auth, authorization, secrets, input validation, network boundary.>
+TODO: Auth, authorization, secrets, input validation, network boundary.
 
 ### Observability Model
 
-<Logs, metrics, traces, screenshots, transcripts, evidence.>
+TODO: Logs, metrics, traces, screenshots, transcripts, evidence.
+
+### Rollout And Rollback Model
+
+TODO: Release path, migration or compatibility notes, rollback path, and stop
+conditions.
 
 ## Feature Designs
 
 <!-- FEATURE: FEAT-001 reqs=REQ-001 status=ready priority=P0 version=1 -->
-### FEAT-001: <feature name>
+### FEAT-001: TODO feature name
 
 #### Requirements Covered
 
-- REQ-001: <requirement name>
+- REQ-001: TODO requirement name
 
 #### Context Evidence
 
-- Official docs: <summary>
-- Internal docs: <summary>
-- Codebase evidence: <files, modules, tests, patterns>
+- Official docs: TODO summary
+- Internal docs: TODO summary
+- Codebase evidence: TODO files, modules, tests, patterns
 
-#### Design
+#### Design Details
 
-<Concrete design.>
+TODO: Concrete design.
+
+#### Selected Option
+
+TODO: Chosen design option and why it best satisfies the requirements.
+
+#### Alternatives Considered
+
+- Baseline/current approach: TODO trade-off, cost, risk, reversibility
+- Simpler/conservative alternative: TODO trade-off, cost, risk, revisit trigger
 
 #### Implementation Boundaries
 
-- Must change: <file/module/component>
-- Must not change: <file/module/component>
+- Must change: TODO file/module/component
+- Must not change: TODO file/module/component
 
 #### Test-First Success Criteria
 
-- TDD-001: <test expected to fail before implementation and pass after>
+- TDD-001: TODO test expected to fail before implementation and pass after
 
 #### Validation Plan
 
-<Syntax, lint, type, config, dependency, security, build.>
+TODO: Syntax, lint, type, config, dependency, security, build.
 
 #### Test Plan
 
-<Unit, integration, component, mock, regression.>
+TODO: Unit, integration, component, mock, regression.
 
 #### Evaluation Plan
 
-<sdlc-gui-test | sdlc-tui-test | api-uat | performance | manual-review>
+TODO: sdlc-gui-test | sdlc-tui-test | api-uat | performance | manual-review
+
+#### Rollout And Rollback
+
+TODO: Feature-level rollout, migration, rollback, and stop conditions.
 
 #### Done Definition
 
-Requirement coverage: <REQ IDs>
+Requirement coverage: TODO REQ IDs
 Validation: passing
 Tests: passing
 Evaluation: passing

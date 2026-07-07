@@ -56,9 +56,6 @@ Route selectively like this:
   of making the branch merge-ready.
 - `nebius`: when the PR depends on live Nebius IAM, VPC, quota, MK8s, or SDK
   behavior.
-- `onboard-nebius-cxcli`: when the PR changes `services/nebius-cxcli` onboarding
-  contracts such as `component_sources.yaml`, validation/runtime wiring, or
-  bundled module/chart onboarding.
 - `terraform`: when the PR is mainly about Terraform module or environment
   structure, interfaces, validation, or security posture.
 - `publish-release`, `publish-image`, or `publish-helm`: when the PR changes a

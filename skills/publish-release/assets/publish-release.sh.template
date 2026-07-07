@@ -44,19 +44,17 @@ log_success() {
 show_usage() {
   printf '%b\n' "${S_BOLD}Usage:${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./publish-release.sh${S_RESET} ${S_DIM}--prep X.Y.Z [--no-push]${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./publish-release.sh${S_RESET} ${S_DIM}--publish X.Y.Z [--allow-non-main]${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./publish-release.sh${S_RESET} ${S_DIM}--publish X.Y.Z${S_RESET}"
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Modes:${S_RESET}"
-  printf '%b\n' "  ${S_YELLOW}--prep${S_RESET}     Update ${CHANGELOG_FILE}, commit it, and push current branch."
-  printf '%b\n' "                 First push auto-sets origin/<current-branch> as upstream when needed."
+  printf '%b\n' "  ${S_YELLOW}--prep${S_RESET}     Require clean synced ${MAIN_BRANCH}, create release/${TAG_PREFIX}-vX.Y.Z, update ${CHANGELOG_FILE}, commit it, and push the release branch."
   printf '%b\n' "                 Fails if tag ${TAG_PREFIX}-vX.Y.Z already exists locally or on origin."
   printf '%b\n' "  ${S_YELLOW}--publish${S_RESET}  Create and push tag ${TAG_PREFIX}-vX.Y.Z."
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Options:${S_RESET}"
   printf '%b\n' "  ${S_YELLOW}--no-push${S_RESET}          For --prep only: do not push the branch."
-  printf '%b\n' "  ${S_YELLOW}--allow-non-main${S_RESET}   Allow --publish from a non-${MAIN_BRANCH} branch."
   printf '%b\n' "  ${S_YELLOW}-h, --help${S_RESET}         Show help."
   printf '\n'
 
@@ -120,10 +118,49 @@ push_current_branch() {
   git push --set-upstream origin "HEAD:${branch}"
 }
 
-ensure_not_default_branch() {
+release_source_required_note() {
+  log_note "First open and merge a PR for your current branch into ${MAIN_BRANCH}, then switch to ${MAIN_BRANCH}, fast-forward, and rerun."
+}
+
+ensure_release_source_ready() {
   local branch="$1"
-  if [[ "${branch}" == "${MAIN_BRANCH}" ]]; then
-    log_error "--prep must run from a feature branch, not ${MAIN_BRANCH}."
+  local mode="$2"
+  local status_output=""
+  ensure_named_branch "${branch}"
+  if [[ "${branch}" != "${MAIN_BRANCH}" ]]; then
+    log_error "--${mode} must run from ${MAIN_BRANCH}; current branch is ${branch}."
+    release_source_required_note
+    exit 1
+  fi
+  status_output="$(git status --short --untracked-files=all)"
+  if [[ -n "${status_output}" ]]; then
+    log_error "--${mode} requires a clean working tree on ${MAIN_BRANCH}."
+    printf '%s\n' "${status_output}" >&2
+    release_source_required_note
+    exit 1
+  fi
+  ensure_branch_synced "${MAIN_BRANCH}"
+}
+
+release_branch_name() {
+  local tag="$1"
+  printf 'release/%s\n' "${tag}"
+}
+
+ensure_release_branch_absent() {
+  local branch="$1"
+  local remote_status=0
+  if git show-ref --verify --quiet "refs/heads/${branch}"; then
+    log_error "Release branch already exists locally: ${branch}"
+    exit 1
+  fi
+  git ls-remote --exit-code --heads origin "${branch}" >/dev/null 2>&1 || remote_status=$?
+  if [[ "${remote_status}" -eq 0 ]]; then
+    log_error "Release branch already exists on origin: ${branch}"
+    exit 1
+  fi
+  if [[ "${remote_status}" -ne 2 ]]; then
+    log_error "Unable to check origin for release branch: ${branch}"
     exit 1
   fi
 }
@@ -274,11 +311,15 @@ prep_release() {
   local tag="$1"
   local do_push="$2"
   local branch="$3"
+  local release_branch=""
 
-  ensure_clean_worktree
-  ensure_named_branch "${branch}"
-  ensure_not_default_branch "${branch}"
+  ensure_release_source_ready "${branch}" "prep"
   ensure_tag_absent "${tag}"
+  release_branch="$(release_branch_name "${tag}")"
+  ensure_release_branch_absent "${release_branch}"
+  git switch -c "${release_branch}"
+  branch="${release_branch}"
+  log_success "Created release branch ${release_branch} from ${MAIN_BRANCH}."
   log_note "Updating ${CHANGELOG_FILE} for ${tag}..."
   update_changelog "${tag}"
 
@@ -291,7 +332,7 @@ prep_release() {
   fi
 
   if [[ "${do_push}" -eq 1 ]]; then
-    log_note "Pushing current branch..."
+    log_note "Pushing release branch..."
     push_current_branch "${branch}"
     log_success "Branch pushed."
   fi
@@ -356,7 +397,6 @@ main() {
 
   local mode=""
   local raw_version=""
-  local allow_non_main=0
   local no_push=0
 
   while [[ $# -gt 0 ]]; do
@@ -370,8 +410,8 @@ main() {
         shift
         ;;
       --allow-non-main)
-        allow_non_main=1
-        shift
+        log_error "--allow-non-main is not supported; publish must run from the clean synced ${MAIN_BRANCH} branch."
+        exit 1
         ;;
       --no-push)
         no_push=1
@@ -423,14 +463,7 @@ main() {
       prep_release "${tag}" "$(( 1 - no_push ))" "${branch}"
       ;;
     publish)
-      ensure_clean_worktree
-      if [[ "${allow_non_main}" -eq 0 && "${branch}" != "${MAIN_BRANCH}" ]]; then
-        log_error "--publish must run on ${MAIN_BRANCH} (current: ${branch}). Use --allow-non-main to override."
-        exit 1
-      fi
-      if [[ "${allow_non_main}" -eq 0 ]]; then
-        ensure_branch_synced "${MAIN_BRANCH}"
-      fi
+      ensure_release_source_ready "${branch}" "publish"
       create_and_push_tag "${tag}"
       ;;
     *)

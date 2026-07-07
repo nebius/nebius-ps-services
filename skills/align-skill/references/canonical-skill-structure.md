@@ -1,13 +1,56 @@
 # Canonical Skill Structure
 
-Use this structure unless the local repository has a clearer convention.
-This structure is based on the OpenAI Codex Agent Skills documentation, Codex
-best practices, and the open Agent Skills specification:
+Use this reference to choose the smallest correct skill structure for the
+target. Do not present repository-specific requirements as universal OpenAI
+requirements.
+
+This structure is based on the current OpenAI Codex Agent Skills documentation,
+Codex best practices, and the open Agent Skills specification:
 
 - [OpenAI Codex Agent Skills](https://developers.openai.com/codex/skills)
 - [OpenAI Codex best practices](https://developers.openai.com/codex/learn/best-practices)
 - [Agent Skills specification](https://agentskills.io/specification)
 - [Agent Skills best practices](https://agentskills.io/skill-creation/best-practices)
+
+## Structure Profiles
+
+### OpenAI Portable Minimum
+
+OpenAI Codex requires a skill directory with `SKILL.md`. The front matter must
+include `name` and `description`.
+
+```text
+skill-name/
+`-- SKILL.md
+```
+
+Use this for instruction-only skills that do not need metadata, scripts,
+references, or output assets.
+
+### OpenAI Portable Standard
+
+Use optional folders only when they serve the skill. A common portable layout is:
+
+```text
+skill-name/
+|-- SKILL.md
+|-- agents/
+|   `-- openai.yaml
+|-- references/
+|-- scripts/
+`-- assets/
+```
+
+OpenAI treats `agents/openai.yaml` as optional metadata for UI metadata,
+invocation policy, and tool dependencies. OpenAI docs also describe optional
+scripts and references; use `assets/` when metadata, templates, examples, or
+output scaffolds need reusable files.
+
+### This Repository's Source-Owned Standard
+
+Repo-owned skills in this tree use a stricter standard so metadata,
+invocation policy, learning-loop coverage, trigger examples, and validation can
+be reviewed consistently:
 
 ```text
 skill-name/
@@ -20,6 +63,12 @@ skill-name/
 `-- scripts/
 ```
 
+Every repo-owned skill must keep `agents/openai.yaml`. Do not remove it because
+upstream OpenAI docs classify it as optional. Do not create empty resource
+directories just to match the tree; add `assets/`, `evals/`, `references/`, or
+`scripts/` when they have useful files or when the local repository convention
+requires them.
+
 ## Required Files
 
 Every skill requires `SKILL.md` with YAML front matter and Markdown body.
@@ -31,19 +80,32 @@ Front matter must include:
 
 The `name` should match the parent folder.
 
-## Optional Folders
+## Metadata and Optional Folders
 
-- `scripts/`: executable repeatable checks or helpers. Use when deterministic
-  reliability is needed or agents keep rewriting the same helper.
+- `agents/`: OpenAI metadata. Upstream Codex treats `agents/openai.yaml` as
+  optional, but this repository requires it for source-owned skills so UI
+  metadata, default prompts, dependencies, and invocation policy can be
+  validated. Use `agents/openai.yaml`, not `agents.openai.yaml`.
 - `references/`: longer docs, rubrics, policies, vendor notes, and technical
   references loaded only when needed.
+- `scripts/`: executable repeatable checks or helpers. Use when deterministic
+  reliability is needed or agents keep rewriting the same helper.
 - `assets/`: templates, examples, schemas, starter files, and static resources
   used as inputs or output scaffolds.
 - `evals/`: reusable trigger prompts or quality-evaluation examples. Use when
   activation behavior needs repeatable evidence; keep examples public-safe and
   free of secrets or customer data.
-- `agents/`: agent-specific metadata only when needed by the local repository
-  convention. In this repository, use `agents/openai.yaml` for UI metadata.
+
+## File Purpose Table
+
+| Path | OpenAI status | This repo | Purpose |
+| --- | --- | --- | --- |
+| `SKILL.md` | Required | Required | Runtime instructions plus front matter `name` and `description`. |
+| `agents/openai.yaml` | Optional | Required and preserved for every source-owned skill | UI metadata, default prompt, invocation policy, and tool dependencies. |
+| `references/` | Optional | Optional | Long guidance loaded only when relevant. |
+| `scripts/` | Optional | Optional | Deterministic helpers or validators. |
+| `assets/` | Optional | Optional | Templates and reusable output/input resources. |
+| `evals/` | Repo convention | Optional | Trigger and quality examples used as repeatable review evidence. |
 
 ## SKILL.md Section Template
 
@@ -82,6 +144,63 @@ For larger skills, keep only core routing and workflow instructions in
 `SKILL.md`; move long checklists and examples into `references/` or `assets/`.
 For scaffolded skill folders, draft skill content, or update work, read
 `references/skill-authoring-best-practices.md` after target scope is known.
+
+## OpenAI Metadata
+
+Use this exact path:
+
+```text
+skill-name/
+|-- SKILL.md
+`-- agents/
+    `-- openai.yaml
+```
+
+OpenAI Codex uses `agents/openai.yaml` for optional UI metadata, invocation
+policy, and tool dependencies. In this repository, every source-owned skill
+must include it with at least `interface.display_name`,
+`interface.short_description`, `interface.default_prompt`, and
+`policy.allow_implicit_invocation`.
+
+Start from `assets/openai-agent-metadata.yaml.template`:
+
+```yaml
+interface:
+  display_name: "Human Name"
+  short_description: "Short user-facing summary"
+  default_prompt: "Use $skill-name to do the repeatable workflow."
+policy:
+  allow_implicit_invocation: true
+# dependencies:
+#   tools:
+#     - type: "mcp"
+#       value: "tool-name"
+#       description: "Official tool or MCP server"
+#       transport: "streamable_http"
+#       url: "https://example.com/mcp"
+```
+
+Set `allow_implicit_invocation` from the skill contract:
+
+- `true`: ordinary reusable workflow skills that Codex may choose when the user
+  prompt matches the front matter `description`.
+- `false`: skills that must be explicitly requested by the user or a workflow
+  coordinator, including Git commit/push/PR/merge flows, release/publish flows,
+  auth or local setup, high-risk security mutation, container attachment,
+  external MCP installation, workflow verification harnesses, and all `sdlc-*`
+  Agentic SDLC phase skills.
+
+If `SKILL.md` says the skill should run only after an explicit request, reflect
+that in `agents/openai.yaml`; do not rely on prose alone. If the policy is
+unclear, keep the change report honest and ask for the intended invocation
+contract before setting the file.
+
+For non-listed skills that are explicit-only, make the rule machine-checkable:
+put wording such as `Use only when the user explicitly asks...` in the front
+matter `description`, or add a concise `## Invocation Policy` section stating
+that explicit invocation is required. Avoid treating ordinary safety guardrails
+for one destructive action as a reason to disable implicit invocation for the
+whole skill.
 
 ## Stateful Workflow Skill Profile
 

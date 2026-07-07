@@ -1,4 +1,0 @@
-interface:
-  display_name: "Release Generator"
-  short_description: "Manual release.sh release flow"
-  default_prompt: "Use $release-generator only for manual release prep, publish, or verify flows with the bundled release.sh template and no CI workflow."

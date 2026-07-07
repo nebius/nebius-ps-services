@@ -1,3 +1,8 @@
+{{- $activePassive := eq (include "slurm-cluster-storage.jailRootfs.activePassive.enabled" .) "true" }}
+{{- $adoption := default dict .Values.jailRootfs.adoption }}
+{{- $legacyActive := eq (default "" $adoption.activeSource) "legacy-rootfs" }}
+{{- $legacyRollback := eq (default "" $adoption.rollbackSource) "legacy-rootfs" }}
+{{- if or (not $activePassive) $legacyActive $legacyRollback }}
 apiVersion: v1
 kind: PersistentVolume
 metadata:
@@ -25,3 +30,4 @@ spec:
       nodeSelectorTerms:
         - matchExpressions:
 {{ .Values.storage.jail.matchExpressions | toYaml | indent 12 }}
+{{- end }}

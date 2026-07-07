@@ -49,7 +49,7 @@ User asks for Codex setup
 config-codex skill selects public templates
   |
   v
-Existing local files are backed up
+Existing local files are inspected; changed targets are backed up
   |
   v
 $CODEX_HOME is patched or populated
@@ -95,9 +95,11 @@ default contract:
   sort it, normalize comments, or create a backup.
 
 For `AGENTS.md`, exact template parity is a no-op. Otherwise, add or update
-only the compact managed context section. For `config.toml`, parse the file
-first and patch the minimum settings needed for hooks, multi-agent support, and
-the three read-only custom agent config layers.
+only the compact managed context section. Empty or stale managed markers do not
+satisfy validation; the content between the markers must carry the current
+durable guidance. For `config.toml`, parse the file first and patch the
+minimum settings needed for hooks, multi-agent support, and the three read-only
+custom agent config layers.
 
 Do not treat `assets/config.toml.template` as desired state for existing
 machines. It is the create-only baseline for a missing config plus examples of
@@ -120,9 +122,10 @@ skill.
 
 Hook scripts, custom-agent TOML files, and optional policy files are template
 assets rather than semantic patch targets. Copy them when missing. If an
-existing file byte-matches the previous template, replacing it with the current
-template is idempotent and safe. If it differs from the expected template, stop
-and show the diff instead of overwriting local customizations.
+existing file matches the current template, leave it unchanged. If it differs
+from the expected template, stop and show the diff instead of overwriting local
+customizations; replace it only after the user has reviewed the diff and
+confirmed that the local customization should be discarded.
 
 `hooks.json` is a semantic merge target, not a byte-for-byte payload template.
 The required global-context `SessionStart` and `UserPromptSubmit` entries must
@@ -147,9 +150,11 @@ The hook layer injects durable context before Codex starts work:
 ```text
 Here is the workspace root.
 Here is the task-state path.
+Here are bounded same-workspace prior task-state candidate paths, when relevant.
 Do not create task state automatically.
 Read existing task state when prior context may matter.
 Keep raw logs and broad exploration output out of task state.
+Keep current.md as a rolling summary, not an append-only transcript.
 Use skills for workflow-specific instructions.
 ```
 
@@ -159,6 +164,17 @@ continuity is useful. The config template allows sandbox writes under
 `$CODEX_HOME/task-state`; any installed PreToolUse guard should allow that
 same path while continuing to protect unrelated runtime files such as
 `$CODEX_HOME/hooks`.
+The task-state file is a compact continuation record: replace stale or
+superseded details with the latest validated state, keep only the objective,
+constraints, decisions, changed files, validation status, risks, and next
+action needed for continuation, and summarize oversized historical files
+before relying on them.
+For complex prompts, the prompt-time hook may also list a bounded set of
+same-workspace prior `current.md` candidate paths from the same workspace hash
+bucket. It injects paths only, not historical task-state contents. The parent
+agent should read only relevant candidates as stale hints, verify them against
+current repo or runtime evidence, and keep the current session's advertised
+`current.md` as the write target.
 If a user deliberately opts in by creating
 `$CODEX_HOME/hooks/global_context_policy.json`, the `UserPromptSubmit` hook can
 also discover configured read-only agents from `$CODEX_HOME/config.toml` and
@@ -204,10 +220,16 @@ The custom agent config layers define three bounded roles:
 
 They inspect, summarize, and report. The main agent owns edits, final
 decisions, and cleanup. After a helper returns its final summary, the main
-agent should consolidate the useful result and close the completed subagent
-thread when close controls are available and no follow-up is needed.
+agent should consolidate the useful result and close every spawned subagent
+handle with `close_agent` or equivalent close controls once it is completed or
+no longer needed. Completed helpers can remain open and count toward the
+concurrency limit until closed, so cleanup is part of the parent agent's
+completion contract when close controls exist.
 With multiple helpers, it should close each completed handle as its terminal
-result arrives and continue waiting on the remaining handles.
+result arrives and continue waiting on the remaining handles. Before the final
+answer, it should run a final lifecycle sweep over every spawned handle and
+report any handle that could not be closed because close controls were
+unavailable or failed.
 
 The expected operating model is:
 
@@ -217,9 +239,11 @@ Parent agent:
   2. Continue parent work while helpers run when the parent is not blocked.
   3. Wait for helper results before relying on their findings.
   4. Treat wait results and async completion notices as terminal results.
-  5. Close each completed handle as soon as no follow-up is needed.
-  6. Use helper output as evidence, not final authority.
-  7. Own edits, verification, risk judgment, and the final answer.
+  5. Close each completed or no-longer-needed handle when close controls exist.
+  6. Sweep all spawned handles before the final answer.
+  7. Report any unavailable or failed close operation.
+  8. Use helper output as evidence, not final authority.
+  9. Own edits, verification, risk judgment, and the final answer.
 ```
 
 Custom agents require the `multi_agent` feature, the configured `[agents.*]`
@@ -289,8 +313,7 @@ setup.
 
    ```bash
    python3 config-codex/scripts/check-local-idempotency.py \
-     --codex-home "$CODEX_HOME" \
-     --strict-agents-template
+     --codex-home "$CODEX_HOME"
    ```
 
 5. If the preflight fails, let Codex patch only the failed surfaces from the
@@ -423,12 +446,13 @@ setup.
    ```
 
    The probe should also show that complex-task guidance tells Codex to read
-   current task state when prior context may matter and update it at
-   checkpoints. To prove subagent activation, run a second probe whose prompt
-   explicitly asks Codex to spawn a read-only helper, or enable the local hook
-   policy and run a complex prompt that should discover configured read-only
-   agents from `$CODEX_HOME` and authorize the parent agent to dynamically
-   choose useful helpers.
+   current task state when prior context may matter, consider bounded related
+   same-workspace prior task-state candidate paths when matching summaries
+   exist, and update the current `current.md` at checkpoints. To prove subagent
+   activation, run a second probe whose prompt explicitly asks Codex to spawn a
+   read-only helper, or enable the local hook policy and run a complex prompt
+   that should discover configured read-only agents from `$CODEX_HOME` and
+   authorize the parent agent to dynamically choose useful helpers.
 
    If subagent controls are not visible in an otherwise authorized probe, the
    agent should use `tool_search` to look for deferred multi-agent/subagent
@@ -441,10 +465,12 @@ setup.
    `global-context-management/scripts/validate-local-templates.py` for
    hook-unit validation because it uses disposable temporary homes and checks
    that `SessionStart` and `UserPromptSubmit` do not create missing scaffold
-   files, an existing nonempty `current.md` is preserved for the agent to read
-   instead of being overwritten or injected into hook context, and loose
-   task-state file permissions are repaired on reuse. No manual or legacy
-   task-state path is created when a hook payload lacks `session_id`.
+   files, related same-workspace prior task-state candidate paths are bounded
+   and do not leak contents or unrelated workspace files, an existing nonempty
+   `current.md` is preserved for the agent to read instead of being overwritten
+   or injected into hook context, and loose task-state file permissions are
+   repaired on reuse. No manual or legacy task-state path is created when a
+   hook payload lacks `session_id`.
 
 ## File Responsibilities
 
@@ -464,7 +490,10 @@ setup.
 - `scripts/check-local-idempotency.py`: read-only preflight that checks the
   minimal no-change contract for an already configured Codex home without
   printing config values. It checks required global hook registrations as a
-  subset so extra reviewed workflow hooks can coexist.
+  subset so extra reviewed workflow hooks can coexist, and validates the
+  current managed `AGENTS.md` block content when the whole file does not match
+  the template. Exact `AGENTS.md` template parity and public MCP baseline
+  parity are explicit audit modes, not normal laptop setup requirements.
 
 Low-level hook file sync can use the root installer:
 
@@ -476,10 +505,12 @@ Low-level hook file sync can use the root installer:
 The first command syncs every reviewed hook-only bundle under the source skills
 folder. The second command syncs only this skill's hook payload templates. Both
 copy into `$CODEX_HOME/hooks` with `.template` stripped from installed file
-names. Add `--register-hooks` when the installer should semantically merge the
-bundle's hook registration into `$CODEX_HOME/hooks.json`; registration still
-does not trust hooks, patch `config.toml`, or replace the full `config-codex`
-setup workflow.
+names, copy missing hook files, leave matching hook files unchanged, and stop
+before replacing any differing existing hook file. Add `--register-hooks` when
+the installer should semantically merge the bundle's hook registration into
+`$CODEX_HOME/hooks.json`; registration still does not trust hooks, patch
+`config.toml`, replace `AGENTS.md`, or replace the full `config-codex` setup
+workflow.
 
 - `agents/openai.yaml`: UI metadata and implicit invocation policy.
 
@@ -491,8 +522,7 @@ From the skills repo root:
 python3 align-skill/scripts/validate-skill-structure.py config-codex
 python3 align-skill/scripts/validate-skill-structure.py global-context-management
 python3 config-codex/scripts/check-local-idempotency.py \
-  --codex-home "$HOME/.codex" \
-  --strict-agents-template
+  --codex-home "$HOME/.codex"
 python3 config-codex/scripts/test-check-local-idempotency.py
 python3 global-context-management/scripts/validate-local-templates.py
 markdownlint README.md CHANGELOG.md config-codex/**/*.md

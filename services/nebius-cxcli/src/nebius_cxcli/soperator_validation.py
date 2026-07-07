@@ -79,6 +79,24 @@ _SOPERATOR_STORAGE_PENDING_MARKERS = (
     "mountvolume",
     "volume",
 )
+_SOPERATOR_POPULATE_JAIL_JOB_SUFFIX = "populate-jail"
+_SOPERATOR_POPULATE_JAIL_SENTINEL_FILE = ".populated"
+_SOPERATOR_POPULATE_JAIL_RECOVERY_TIMEOUT_SECONDS = 180
+_SOPERATOR_POD_UNHEALTHY_WAITING_REASONS = {
+    "CrashLoopBackOff",
+    "CreateContainerConfigError",
+    "CreateContainerError",
+    "ErrImagePull",
+    "ImagePullBackOff",
+    "InvalidImageName",
+    "RunContainerError",
+}
+_SOPERATOR_POD_UNHEALTHY_TERMINATED_REASONS = {
+    "ContainerCannotRun",
+    "Error",
+    "OOMKilled",
+}
+_GPU_DRIVER_JAIL_NODESET_CONTRACT_MIN_VERSION = "4.0.2-ps.3"
 
 
 def _smoke_script(
@@ -446,6 +464,12 @@ class _PendingSoperatorPod:
     name: str
     message: str
     storage_related: bool = False
+
+
+@dataclass(frozen=True)
+class _UnhealthySoperatorPod:
+    name: str
+    message: str
 
 
 @dataclass(frozen=True)
@@ -1709,6 +1733,395 @@ def _pending_soperator_pods(
     return pending, command
 
 
+def _soperator_pods_payload(
+    runner: SoperatorValidationCommandRunner,
+    spec: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], Sequence[str]]:
+    namespace = str(spec.get("namespace", "") or SOPERATOR_NAMESPACE).strip()
+    command = _kubectl_args(spec, "-n", namespace, "get", "pods", "-o", "json")
+    payload = _json_command(
+        runner,
+        command,
+        timeout_seconds=_snapshot_command_timeout_seconds(spec),
+    )
+    return payload, command
+
+
+def _int_from_mapping(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _populate_jail_job_name(spec: Mapping[str, Any]) -> str:
+    cluster_name = str(spec.get("cluster_name", "") or spec.get("target_ref") or "").strip()
+    if not cluster_name:
+        return ""
+    return f"{cluster_name}-{_SOPERATOR_POPULATE_JAIL_JOB_SUFFIX}"
+
+
+def _job_succeeded(payload: Mapping[str, Any]) -> bool:
+    spec = _as_mapping(payload.get("spec"))
+    status = _as_mapping(payload.get("status"))
+    completions = max(_int_from_mapping(spec.get("completions") or 1), 1)
+    return _int_from_mapping(status.get("succeeded")) >= completions
+
+
+def _job_failed(payload: Mapping[str, Any]) -> bool:
+    spec = _as_mapping(payload.get("spec"))
+    status = _as_mapping(payload.get("status"))
+    failed = _int_from_mapping(status.get("failed"))
+    backoff_limit = _int_from_mapping(spec.get("backoffLimit", 6))
+    return failed > 0 and failed > backoff_limit
+
+
+def _pod_name(item: Mapping[str, Any]) -> str:
+    return str(_as_mapping(item.get("metadata")).get("name", "") or "").strip()
+
+
+def _pod_node_name(item: Mapping[str, Any]) -> str:
+    return str(_as_mapping(item.get("spec")).get("nodeName", "") or "").strip()
+
+
+def _pod_phase(item: Mapping[str, Any]) -> str:
+    return str(_as_mapping(item.get("status")).get("phase", "") or "").strip()
+
+
+def _pod_owned_by_job(item: Mapping[str, Any], *, job_name: str) -> bool:
+    metadata = _as_mapping(item.get("metadata"))
+    labels = _as_mapping(metadata.get("labels"))
+    if str(labels.get("job-name", "") or "").strip() == job_name:
+        return True
+    if str(labels.get("batch.kubernetes.io/job-name", "") or "").strip() == job_name:
+        return True
+    for owner in _as_sequence(metadata.get("ownerReferences")):
+        if not isinstance(owner, Mapping):
+            continue
+        if str(owner.get("kind", "") or "").strip() != "Job":
+            continue
+        if str(owner.get("name", "") or "").strip() == job_name:
+            return True
+    return False
+
+
+def _active_populate_jail_pods(
+    payload: Mapping[str, Any],
+    *,
+    job_name: str,
+) -> list[Mapping[str, Any]]:
+    pods: list[Mapping[str, Any]] = []
+    for item in _as_sequence(payload.get("items")):
+        if not isinstance(item, Mapping):
+            continue
+        if not _pod_owned_by_job(item, job_name=job_name):
+            continue
+        phase = _pod_phase(item)
+        if phase in {"Succeeded", "Failed"}:
+            continue
+        if not _pod_name(item) or not _pod_node_name(item):
+            continue
+        pods.append(item)
+    return pods
+
+
+def _jail_mount_pod_name_for_node(
+    payload: Mapping[str, Any],
+    *,
+    storage: _SoperatorJailStorage,
+    node_name: str,
+) -> str:
+    pod_prefix = f"{storage.mount_daemonset_name}-"
+    for item in _as_sequence(payload.get("items")):
+        if not isinstance(item, Mapping):
+            continue
+        name = _pod_name(item)
+        if not name.startswith(pod_prefix):
+            continue
+        if _pod_node_name(item) != node_name:
+            continue
+        phase = _pod_phase(item)
+        if phase and phase != "Running":
+            continue
+        return name
+    return ""
+
+
+def _host_jail_sentinel_path(storage: _SoperatorJailStorage) -> str:
+    local_path = "/" + storage.local_path.strip("/")
+    return f"/host{local_path.rstrip('/')}/{_SOPERATOR_POPULATE_JAIL_SENTINEL_FILE}"
+
+
+def _wait_for_populate_jail_job_complete(
+    runner: SoperatorValidationCommandRunner,
+    spec: Mapping[str, Any],
+    *,
+    job_name: str,
+    timeout_seconds: float,
+) -> tuple[bool, str]:
+    namespace = str(spec.get("namespace", "") or SOPERATOR_NAMESPACE).strip()
+    command = _kubectl_args(spec, "-n", namespace, "get", "job", job_name, "-o", "json")
+    deadline = time.monotonic() + max(timeout_seconds, 0.0)
+    last_detail = "job did not report completion"
+    while True:
+        result = runner(
+            command,
+            timeout_seconds=_snapshot_command_timeout_seconds(spec),
+            check=False,
+        )
+        if result.returncode != 0:
+            last_detail = _command_detail(result)
+        else:
+            try:
+                payload = json.loads(result.stdout or "{}")
+            except json.JSONDecodeError as exc:
+                last_detail = f"invalid job JSON: {exc}"
+            else:
+                if isinstance(payload, Mapping) and _job_succeeded(payload):
+                    return True, "job completed"
+                if isinstance(payload, Mapping) and _job_failed(payload):
+                    return False, "job exceeded its backoff limit"
+                status = _as_mapping(_as_mapping(payload).get("status"))
+                last_detail = (
+                    "job status "
+                    f"active={_int_from_mapping(status.get('active'))}, "
+                    f"succeeded={_int_from_mapping(status.get('succeeded'))}, "
+                    f"failed={_int_from_mapping(status.get('failed'))}"
+                )
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False, last_detail
+        time.sleep(min(_SOPERATOR_CLUSTER_READY_POLL_SECONDS, remaining))
+
+
+def _recover_stuck_populate_jail_job(
+    runner: SoperatorValidationCommandRunner,
+    spec: Mapping[str, Any],
+    checks: list[dict[str, Any]],
+) -> None:
+    job_name = _populate_jail_job_name(spec)
+    if not job_name:
+        return
+    namespace = str(spec.get("namespace", "") or SOPERATOR_NAMESPACE).strip()
+    job_command = _kubectl_args(spec, "-n", namespace, "get", "job", job_name, "-o", "json")
+    try:
+        job_payload = _json_command(
+            runner,
+            job_command,
+            timeout_seconds=_snapshot_command_timeout_seconds(spec),
+        )
+    except RuntimeError:
+        return
+    if _job_succeeded(job_payload):
+        return
+    status = _as_mapping(job_payload.get("status"))
+    if _int_from_mapping(status.get("active")) <= 0:
+        return
+    try:
+        pods_payload, _pods_command = _soperator_pods_payload(runner, spec)
+    except RuntimeError:
+        return
+    active_pods = _active_populate_jail_pods(pods_payload, job_name=job_name)
+    if not active_pods:
+        return
+    storage = _soperator_jail_storage(spec)
+    sentinel_path = _host_jail_sentinel_path(storage)
+    for pod in active_pods:
+        pod_name = _pod_name(pod)
+        node_name = _pod_node_name(pod)
+        mount_pod_name = _jail_mount_pod_name_for_node(
+            pods_payload,
+            storage=storage,
+            node_name=node_name,
+        )
+        if not mount_pod_name:
+            continue
+        sentinel_command = _kubectl_args(
+            spec,
+            "-n",
+            namespace,
+            "exec",
+            mount_pod_name,
+            "--",
+            "sh",
+            "-lc",
+            f"test -s {shlex.quote(sentinel_path)} && cat {shlex.quote(sentinel_path)}",
+        )
+        sentinel = runner(
+            sentinel_command,
+            timeout_seconds=_snapshot_command_timeout_seconds(spec),
+            check=False,
+        )
+        if sentinel.returncode != 0:
+            continue
+        delete_command = _kubectl_args(
+            spec,
+            "-n",
+            namespace,
+            "delete",
+            "pod",
+            pod_name,
+            "--wait=false",
+        )
+        deleted = runner(
+            delete_command,
+            timeout_seconds=_snapshot_command_timeout_seconds(spec),
+            check=False,
+        )
+        if deleted.returncode != 0:
+            _append_check(
+                checks,
+                name="Populate jail recovery",
+                status="failed",
+                summary=(
+                    f"populate-jail job {job_name} appears complete on node {node_name}, "
+                    f"but deleting stuck pod {pod_name} failed: "
+                    f"{_compact_output(_command_detail(deleted), limit=300)}"
+                ),
+                command=delete_command,
+                stdout=deleted.stdout,
+                stderr=deleted.stderr,
+                extra={
+                    "job_name": job_name,
+                    "pod_name": pod_name,
+                    "node_name": node_name,
+                    "sentinel_path": sentinel_path,
+                },
+            )
+            return
+        timeout_seconds = _float_setting(
+            spec.get("populate_jail_recovery_timeout_seconds"),
+            default=float(_SOPERATOR_POPULATE_JAIL_RECOVERY_TIMEOUT_SECONDS),
+        )
+        recovered, detail = _wait_for_populate_jail_job_complete(
+            runner,
+            spec,
+            job_name=job_name,
+            timeout_seconds=timeout_seconds,
+        )
+        _append_check(
+            checks,
+            name="Populate jail recovery",
+            status="passed" if recovered else "failed",
+            summary=(
+                f"populate-jail job {job_name} had written {sentinel_path} on node "
+                f"{node_name} but pod {pod_name} stayed active; deleted the pod and "
+                + ("the job completed." if recovered else f"the job did not complete: {detail}.")
+            ),
+            command=delete_command,
+            extra={
+                "job_name": job_name,
+                "pod_name": pod_name,
+                "node_name": node_name,
+                "jail_mount_pod": mount_pod_name,
+                "sentinel_path": sentinel_path,
+                "sentinel": _compact_output(sentinel.stdout, limit=200),
+            },
+        )
+        return
+
+
+def _container_problem(status: Mapping[str, Any], *, init_container: bool) -> str:
+    name = str(status.get("name", "") or "container").strip()
+    label = "init container" if init_container else "container"
+    state = _as_mapping(status.get("state"))
+    waiting = _as_mapping(state.get("waiting"))
+    waiting_reason = str(waiting.get("reason", "") or "").strip()
+    if waiting_reason in _SOPERATOR_POD_UNHEALTHY_WAITING_REASONS:
+        message = str(waiting.get("message", "") or "").strip()
+        suffix = f": {_compact_output(message, limit=220)}" if message else ""
+        return f"{label} {name} waiting {waiting_reason}{suffix}"
+    terminated = _as_mapping(state.get("terminated"))
+    exit_code = _int_from_mapping(terminated.get("exitCode"))
+    terminated_reason = str(terminated.get("reason", "") or "").strip()
+    if exit_code != 0 and (
+        not terminated_reason or terminated_reason in _SOPERATOR_POD_UNHEALTHY_TERMINATED_REASONS
+    ):
+        message = str(terminated.get("message", "") or "").strip()
+        reason_text = f" {terminated_reason}" if terminated_reason else ""
+        suffix = f": {_compact_output(message, limit=220)}" if message else ""
+        return f"{label} {name} terminated{reason_text} exit_code={exit_code}{suffix}"
+    return ""
+
+
+def _unhealthy_soperator_pods(payload: Mapping[str, Any]) -> list[_UnhealthySoperatorPod]:
+    unhealthy: list[_UnhealthySoperatorPod] = []
+    for item in _as_sequence(payload.get("items")):
+        if not isinstance(item, Mapping):
+            continue
+        name = _pod_name(item)
+        if not name:
+            continue
+        status = _as_mapping(item.get("status"))
+        phase = str(status.get("phase", "") or "").strip()
+        problems: list[str] = []
+        if phase == "Failed":
+            reason = str(status.get("reason", "") or "").strip()
+            message = str(status.get("message", "") or "").strip()
+            detail = ": ".join(part for part in (reason, message) if part)
+            problems.append(detail or "pod phase Failed")
+        for raw_status in _as_sequence(status.get("initContainerStatuses")):
+            if isinstance(raw_status, Mapping):
+                problem = _container_problem(raw_status, init_container=True)
+                if problem:
+                    problems.append(problem)
+        for raw_status in _as_sequence(status.get("containerStatuses")):
+            if isinstance(raw_status, Mapping):
+                problem = _container_problem(raw_status, init_container=False)
+                if problem:
+                    problems.append(problem)
+        if problems:
+            unhealthy.append(
+                _UnhealthySoperatorPod(
+                    name=name,
+                    message="; ".join(problems[:3]),
+                )
+            )
+    return unhealthy
+
+
+def _check_soperator_pod_health_snapshot(
+    runner: SoperatorValidationCommandRunner,
+    spec: Mapping[str, Any],
+    checks: list[dict[str, Any]],
+) -> None:
+    try:
+        payload, command = _soperator_pods_payload(runner, spec)
+    except RuntimeError as exc:
+        _append_check(
+            checks,
+            name="Soperator pod health snapshot",
+            status="failed",
+            summary=f"Soperator pods are not readable for health snapshot: {exc}.",
+        )
+        return
+    unhealthy = _unhealthy_soperator_pods(payload)
+    if not unhealthy:
+        _append_check(
+            checks,
+            name="Soperator pod health snapshot",
+            status="passed",
+            summary="No failed or crash-looping Soperator pods were visible in the fast snapshot.",
+            command=command,
+        )
+        return
+    shown = "; ".join(f"{item.name}: {item.message}" for item in unhealthy[:5])
+    if len(unhealthy) > 5:
+        shown += f"; +{len(unhealthy) - 5} more"
+    _append_check(
+        checks,
+        name="Soperator pod health snapshot",
+        status="failed",
+        summary="Failed or crash-looping Soperator pod(s) visible in the fast snapshot: " + shown,
+        command=command,
+        extra={
+            "unhealthy_pods": [
+                {"name": item.name, "message": item.message} for item in unhealthy
+            ],
+        },
+    )
+
+
 def _soperator_storage_unready_summaries(
     runner: SoperatorValidationCommandRunner,
     spec: Mapping[str, Any],
@@ -1959,6 +2372,42 @@ def _resource_item_name(item: Mapping[str, Any]) -> str:
     return str(_as_mapping(item.get("metadata")).get("name", "") or "").strip()
 
 
+def _chart_version_key(value: Any) -> tuple[tuple[int, ...], int] | None:
+    text = str(value or "").strip().removeprefix("v")
+    match = re.search(r"([0-9]+(?:\.[0-9]+){1,3})(?:-ps\.(\d+))?", text)
+    if match is None:
+        return None
+    core = tuple(int(part) for part in match.group(1).split("."))
+    ps_suffix = int(match.group(2)) if match.group(2) is not None else -1
+    return core, ps_suffix
+
+
+def _chart_version_at_least(value: Any, minimum: str) -> bool | None:
+    value_key = _chart_version_key(value)
+    minimum_key = _chart_version_key(minimum)
+    if value_key is None or minimum_key is None:
+        return None
+    value_core, value_ps = value_key
+    minimum_core, minimum_ps = minimum_key
+    core_len = max(len(value_core), len(minimum_core))
+    normalized_value_core = value_core + (0,) * (core_len - len(value_core))
+    normalized_minimum_core = minimum_core + (0,) * (core_len - len(minimum_core))
+    if normalized_value_core != normalized_minimum_core:
+        return normalized_value_core > normalized_minimum_core
+    return value_ps >= minimum_ps
+
+
+def _gpu_driver_jail_nodeset_contract_required(spec: Mapping[str, Any]) -> bool:
+    target_version = str(spec.get("target_version", "") or "").strip()
+    if not target_version:
+        return True
+    required = _chart_version_at_least(
+        target_version,
+        _GPU_DRIVER_JAIL_NODESET_CONTRACT_MIN_VERSION,
+    )
+    return True if required is None else required
+
+
 def _nodeset_gpu_driver_jail_mount_ok(spec: Mapping[str, Any]) -> bool:
     volumes = _as_mapping(_as_mapping(spec.get("slurmd")).get("volumes"))
     mounts = volumes.get("customVolumeMounts")
@@ -2000,6 +2449,22 @@ def _check_gpu_driver_jail_nodeset_contract(
     spec: Mapping[str, Any],
     checks: list[dict[str, Any]],
 ) -> None:
+    target_version = str(spec.get("target_version", "") or "").strip()
+    if not _gpu_driver_jail_nodeset_contract_required(spec):
+        _append_check(
+            checks,
+            name="GPU driver jail NodeSet contract",
+            status="skipped",
+            summary=(
+                f"Soperator chart version {target_version} predates the chart-owned "
+                "GPU driver jail NodeSet contract."
+            ),
+            extra={
+                "target_version": target_version,
+                "minimum_contract_version": _GPU_DRIVER_JAIL_NODESET_CONTRACT_MIN_VERSION,
+            },
+        )
+        return
     namespace = str(spec.get("namespace", "") or SOPERATOR_NAMESPACE).strip()
     command = _kubectl_args(spec, "-n", namespace, "get", "nodesets", "-o", "json")
     result = runner(command, timeout_seconds=_snapshot_command_timeout_seconds(spec), check=False)
@@ -3450,6 +3915,8 @@ def run_soperator_cluster_validations(
             if not deploy_mode:
                 _wait_for_slurmcluster_available(runner, spec)
             _wait_for_soperator_storage_and_pods(runner, spec)
+            if deploy_mode:
+                _recover_stuck_populate_jail_job(runner, spec, checks)
             _check_soperator_storage_readiness(
                 runner,
                 spec,
@@ -3462,6 +3929,8 @@ def run_soperator_cluster_validations(
                 checks,
                 fail_on_pending=not deploy_mode,
             )
+            if deploy_mode:
+                _check_soperator_pod_health_snapshot(runner, spec, checks)
             _check_slurmcluster(runner, spec, checks, require_available=not deploy_mode)
             _check_nodeset_visibility(runner, spec, checks)
             _check_gpu_driver_jail_nodeset_contract(runner, spec, checks)

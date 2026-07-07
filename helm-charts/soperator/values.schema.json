@@ -19,7 +19,6 @@
         "none",
         "downscale",
         "downscaleAndDeletePopulateJail",
-        "downscaleAndOverwritePopulateJail",
         "skipPopulateJail"
       ]
     },

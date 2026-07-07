@@ -2,3 +2,5 @@ interface:
   display_name: "Publish Image"
   short_description: "Publish container images end to end"
   default_prompt: "Use $publish-image --mode complete --tag X.Y.Z to prep, PR, merge, tag, wait for CI, and verify a container image release."
+policy:
+  allow_implicit_invocation: false

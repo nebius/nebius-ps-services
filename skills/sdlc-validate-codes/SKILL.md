@@ -1,25 +1,34 @@
 ---
 name: sdlc-validate-codes
-description: "Use only as part of the Agentic SDLC workflow; use after implementation or before `sdlc-commit` in the Agentic SDLC loop to check whether the project can build, parse, lint, type-check, import, and validate configuration correctly."
+description: "Use only as part of the Agentic SDLC workflow; use after implementation or before `sdlc-commit` to run build, parse, lint, type, import, dependency, and configuration validation, then use `code-review` as a review-only implementation-quality gate before marking the feature validated."
 ---
 
 # Validate Codes
 
 ## Purpose
 
-Answer whether the implemented feature can be built or run correctly before deeper behavior tests.
+Answer whether the implemented feature can be built or run correctly and has
+passed a review-only implementation-quality gate before deeper behavior tests.
 
 ## When To Use
 
 - Implementation completed and syntax, lint, type, import, config, or build checks must run.
+- Mechanical validation passed and changed implementation needs `code-review`
+  before the feature can move to behavior tests.
 - A classified validation defect needs repair evidence.
 - The SDLC loop reaches validation for the current feature.
 
 ## When Not To Use
 
 - Do not use as a substitute for behavior tests or evaluation.
-- Do not use to silently fix code unless the parent task expects repair.
+- Do not use to fix code; classify blockers and route repairs to the
+  responsible SDLC phase.
 - Do not treat missing configured tooling as success.
+- Do not use `code-review` for GitHub PR readiness; use `review-pr` after PR
+  creation.
+- Do not let this phase edit implementation for review findings; route repair
+  to `sdlc-implement-plan`, `sdlc-tdd`, `sdlc-create-design`, or the
+  responsible owner.
 
 ## Inputs
 
@@ -27,15 +36,20 @@ Answer whether the implemented feature can be built or run correctly before deep
 - Locked plan.
 - Changed files.
 - Project tooling.
+- Existing tests and design context needed for implementation review.
 
 ## Required Reads
 
 - Project config, package manager files, build files, linter and type checker config.
 - Changed source files.
+- Locked plan, relevant feature design, and test files for the current feature.
+- `code-review/SKILL.md` when available, and its quality rubric for meaningful
+  implementation review.
 
 ## Writes
 
 - `evidence/FEAT-*/validate.md`.
+- Code review summary and decision in validation evidence.
 - Validation status.
 - Failure classification if needed.
 
@@ -46,6 +60,15 @@ Answer whether the implemented feature can be built or run correctly before deep
 - Run the smallest reliable validation set first.
 - Include syntax, linting, type checking when configured, Python import checks when relevant, config validation, and feasible build checks.
 - Record exact commands and outcomes.
+- After mechanical checks pass, use `code-review` in review-only mode on the
+  current feature diff, changed files, nearby tests, locked plan, and design
+  context. Do not let `code-review` edit files from this phase.
+- If `code-review` cannot be loaded or its review cannot run, classify the
+  blocker instead of silently waiving the review gate.
+- Record the `code-review` decision, findings, residual risks, and owner-review
+  needs in validation evidence.
+- Mark validation as passing only when mechanical checks pass and `code-review`
+  finds no blocking issue in the reviewed scope.
 
 ## Idempotency
 
@@ -57,20 +80,31 @@ Answer whether the implemented feature can be built or run correctly before deep
 
 - Syntax, lint, type, import, build, or config failure maps to `VALIDATION_DEFECT`.
 - Missing tooling maps to `ENVIRONMENT_DEFECT` unless intentionally absent.
+- Missing or unavailable `code-review` maps to `ENVIRONMENT_DEFECT` unless
+  local SDLC policy explicitly waives the review gate.
 - Design flaw discovered by validation routes to `sdlc-create-design`.
+- Blocking `code-review` findings route to the earliest responsible phase:
+  implementation defects to `sdlc-implement-plan`, missing or wrong tests to
+  `sdlc-tdd`, design defects to `sdlc-create-design`, and owner-only decisions
+  to human input.
 
 ## Must Not
 
 - Change requirements or design.
 - Skip configured validation.
 - Treat missing tooling as success.
+- Mark validation passed when `code-review` requested changes, owner review, or
+  more context.
+- Use `code-review` to mutate source code during this phase.
 - Overwrite test or evaluation evidence.
 
 ## Completion Criteria
 
 - Validation evidence exists.
 - Required checks pass or blocker is classified.
-- State moves to `validated` only on pass.
+- `code-review` decision is recorded.
+- State moves to `validated` only when mechanical validation passes and
+  `code-review` does not request changes or owner review.
 
 ## SDLC Invariants
 

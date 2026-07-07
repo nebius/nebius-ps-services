@@ -754,6 +754,32 @@ def _should_prompt_add_routes_after_apply(
     )
 
 
+def _vm_ready_for_config_push(health: dict[str, t.Any]) -> bool:
+    """Return True when it is safe to SSH-push gateway config."""
+    return bool(
+        health.get("reachable")
+        and health.get("cloud_init_complete")
+        and health.get("esp4_ready", True)
+        and not health.get("esp4_reboot_pending", False)
+    )
+
+
+def _vm_packages_verified(health: dict[str, t.Any]) -> bool:
+    """Return True when bootstrap packages were verified on the VM."""
+    return bool(health.get("strongswan_installed") and health.get("frr_installed"))
+
+
+def _print_vm_wait_reason(vm_name: str, health: dict[str, t.Any]) -> None:
+    if not health.get("reachable"):
+        print(f"[dim]{vm_name}: SSH not ready yet[/dim]")
+    elif not health.get("cloud_init_complete"):
+        print(f"[dim]{vm_name}: Cloud-init still running (packages being installed)[/dim]")
+    elif health.get("esp4_reboot_pending"):
+        print(f"[dim]{vm_name}: ESP4/kernel update prepared; waiting for reboot[/dim]")
+    elif not health.get("esp4_ready", True):
+        print(f"[dim]{vm_name}: ESP4 is not loadable yet[/dim]")
+
+
 def _resolve_local_config(
     local_config_file: Path | None,
     *,
@@ -1168,11 +1194,7 @@ def apply(
             all_healthy = True
             for vm_name, vm_ip in vm_ips.items():
                 health = vm_mgr.check_vm_health(vm_name, vm_ip)
-                if (
-                    health["cloud_init_complete"]
-                    and health["strongswan_installed"]
-                    and health["frr_installed"]
-                ):
+                if _vm_ready_for_config_push(health) and _vm_packages_verified(health):
                     print(f"[green]{vm_name} ({vm_ip}): {health['message']}[/green]")
                 elif health["reachable"]:
                     print(f"[yellow]{vm_name} ({vm_ip}): {health['message']}[/yellow]")
@@ -1181,42 +1203,53 @@ def apply(
                     print(f"[red]{vm_name} ({vm_ip}): {health['message']}[/red]")
                     all_healthy = False
 
-            # If VMs are not fully healthy (cloud-init not complete or packages not installed), wait additional time
+            # If VMs are not fully healthy, wait for the bootstrap gate before pushing configs.
             if not all_healthy:
                 import time
 
                 print(
-                    "[yellow]Waiting for cloud-init to complete and packages to be installed...[/yellow]"
+                    "[yellow]Waiting for cloud-init, ESP4 readiness, and package installation...[/yellow]"
                 )
-                max_wait = 300  # Wait up to 5 minutes for cloud-init
+                max_wait = 900  # First boot can include apt upgrade plus one reboot.
                 wait_interval = 10
+                wait_elapsed = 0
                 for attempt in range(max_wait // wait_interval):
                     time.sleep(wait_interval)
+                    wait_elapsed = (attempt + 1) * wait_interval
                     all_ready = True
+                    packages_verified = True
                     for vm_name, vm_ip in vm_ips.items():
                         health = vm_mgr.check_vm_health(vm_name, vm_ip)
-                        # Check if VM is reachable AND cloud-init is complete
-                        if not health["reachable"] or not health["cloud_init_complete"]:
+                        if not _vm_ready_for_config_push(health):
                             all_ready = False
-                            if not health["reachable"]:
-                                print(f"[dim]{vm_name}: SSH not ready yet[/dim]")
-                            elif not health["cloud_init_complete"]:
-                                print(
-                                    f"[dim]{vm_name}: Cloud-init still running (packages being installed)[/dim]"
-                                )
+                            _print_vm_wait_reason(vm_name, health)
                             break
+                        if not _vm_packages_verified(health):
+                            packages_verified = False
                     if all_ready:
+                        if not packages_verified:
+                            print(
+                                "[yellow]Bootstrap gate is ready, but package/service verification is incomplete; continuing with config push.[/yellow]"
+                            )
+                        else:
+                            print(
+                                f"[green]✓ All VMs ready: SSH accessible, cloud-init complete, ESP4 ready, and packages verified (waited {wait_elapsed}s)[/green]"
+                            )
                         print(
-                            f"[green]✓ All VMs ready: SSH accessible and cloud-init complete (waited {(attempt + 1) * wait_interval}s)[/green]"
+                            f"[green]✓ Config push gate passed after {wait_elapsed}s[/green]"
                         )
                         break
                     print(
-                        f"[dim]Waiting for bootstrap to complete... ({(attempt + 1) * wait_interval}s elapsed)[/dim]"
+                        f"[dim]Waiting for bootstrap to complete... ({wait_elapsed}s elapsed)[/dim]"
                     )
                 else:
                     print(
-                        "[yellow]Warning: Cloud-init did not complete within timeout, attempting config push anyway...[/yellow]"
+                        "[red]VM bootstrap did not become ready for config push within timeout.[/red]"
                     )
+                    print(
+                        "[yellow]Rerun apply after cloud-init and any ESP4/kernel reboot finish.[/yellow]"
+                    )
+                    raise typer.Exit(code=1)
         else:
             print("[yellow]Some VMs did not become reachable within timeout[/yellow]")
 

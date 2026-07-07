@@ -19,13 +19,15 @@ All notable changes to the reusable Codex skills are tracked here.
   `sdlc-gather-context`, `sdlc-create-design`, `sdlc-create-plan`,
   `sdlc-tdd`, `sdlc-implement-plan`, `sdlc-validate-codes`,
   `sdlc-unit-tests`, `sdlc-evaluate`, `sdlc-classify-failure`,
-  `sdlc-gui-test`, `sdlc-tui-test`, `sdlc-commit`, `sdlc-uat-tests`,
+  `sdlc-auto-steering`, `sdlc-gui-test`, `sdlc-tui-test`,
+  `sdlc-update-documents`, `sdlc-commit`, `sdlc-uat-tests`,
   `sdlc-merge-pr`, and `sdlc-align-specs`. These skills keep committed
-  product truth in `docs/requirements.md` and
-  `docs/design.md`, keep execution state under `~/.codex/sdlc-runs`, and
-  model the SDLC loop as skill-selected phases rather than a workflow CLI. The
-  SDLC flow reuses existing `create-pr` and `review-pr` as PR creation and
-  review handoff phases.
+  product truth in `docs/requirements.md` and `docs/design.md`, keep execution
+  state under `~/.codex/sdlc-runs`, record mid-run prompts in private steering
+  state, update project-facing docs from implemented evidence, and model the
+  SDLC loop as skill-selected phases rather than a workflow CLI. The SDLC flow
+  reuses existing `create-pr` and `review-pr` as PR creation and review
+  handoff phases.
 - Added SDLC templates for requirements, design, context packs, locked feature
   plans, validation/test/evaluation evidence, local commit evidence, and UAT
   reports, plus state-schema and failure-taxonomy references.
@@ -43,6 +45,38 @@ All notable changes to the reusable Codex skills are tracked here.
   Agent Skill folders, including `SKILL.md`, references, assets, scripts,
   official vendor-doc verification, safety guardrails, canonical structure, and
   validation evidence.
+- Added the `brainstorm` Codex skill for evidence-first, chat-only ideation
+  before implementation, with source priority across the current project
+  folder, sibling repo folders, related skills, internal Confluence/Slack/Jira
+  sources when available, and official vendor docs.
+- Added the `create-learning-course` Codex skill for creating public-safe
+  course workspaces, syllabi, lessons, exercises, glossaries, learning records,
+  reusable assets, and publication review checkpoints from a learner mission
+  and trusted sources, using a mission-led learning model inspired by the
+  public teach-skill pattern with explicit redaction and
+  sensitive-information guardrails.
+- Added the `research` Codex skill for senior-engineer technical due
+  diligence on technologies, APIs, RFCs, protocols, architecture patterns,
+  products, and feature requirements, with ranked sources, internals,
+  operations, limitations, alternatives, and actionable recommendations.
+- Added the `design` Codex skill for general software design before
+  implementation, covering brownfield and greenfield paths, requirement
+  understanding, code/docs inspection, `research`-backed topic and technology
+  due diligence, component and architecture design, alternatives evaluation,
+  and Codex `/plan` handoff.
+- Added the `code-review` Codex skill for strict implementation-quality audits
+  of the current branch, local diff, changed files, or provided patches,
+  focused on maintainability, abstraction quality, modularity, type boundaries,
+  file-size growth, spaghetti branches, and missed structural simplifications.
+- Added the `system-design-rules` Codex skill for applying a refined 100-rule
+  software system design checklist to architecture proposals, ADRs, design
+  docs, API and data model choices, reliability, security, observability,
+  performance, cost, migration, and team-ownership decisions before
+  implementation.
+- Added the `task-implementer` Codex skill for narrow brownfield implementation
+  loops that order prompt-derived work as `task-1` through `task-n`, keep one
+  write task active at a time, and hand off between fresh Codex sessions
+  through private markdown checkpoints.
 - Added the `agentic-sdlc-test` Codex skill for safely verifying the Agentic
   SDLC workflow from outside the workflow with global `sdlc-*` skill discovery,
   hook configuration inspection, disposable PreToolUse and Stop hook fixture
@@ -89,20 +123,175 @@ All notable changes to the reusable Codex skills are tracked here.
   official Grafana MCP server, wiring it into Codex, refreshing a
   Nebius-managed Grafana token file, discovering Grafana datasources, and
   keeping external Grafana static-key setup guarded and optional.
+- Added the explicit-only `nebius-audit-log` Codex skill for bounded,
+  read-only Nebius Control Plane Audit Logs queries by resource or current
+  subject, with a sanitized CLI helper, official Nebius reference notes, and
+  fake-CLI unit tests.
 - Added skill-local `README.md` files across reusable skills so each skill
   folder has human-facing architecture, workflow, core concept, and file
   responsibility documentation.
-- Added the `onboard-nebius-cxcli` Codex skill as the central onboarding guide
-  for Nebius Terraform modules that need to be wired into
-  `services/nebius-cxcli`, including catalog-first onboarding and optional
-  code-owned layers for wizard/provider, runtime validation, status polling,
-  and cluster handoff behavior.
 - Added the `publish-helm` Codex skill for OCI Helm chart publishing.
 - Added the `review-pr` Codex skill for GitHub-backed PR review and
   merge-readiness work.
 
+### Removed
+
+- Removed the `onboard-nebius-cxcli` and `release-generator` skills.
+
 ### Changed
 
+- Hardened `publish-release`, `publish-image`, and `publish-helm` so release
+  prep and publish phases must start from a clean, synced default branch; prep
+  now creates and pushes `release/<tag>` from that branch, and the old
+  non-default-branch publish escape hatch fails fast.
+- Refreshed `align-skill` against current official OpenAI Codex skill guidance,
+  separating the portable `SKILL.md` minimum from this repository's stricter
+  source-owned skill structure, clarifying optional upstream
+  `agents/openai.yaml` versus required repo policy, documenting optional
+  `references/`, `scripts/`, `assets/`, and repo-local `evals/` surfaces, and
+  updating the OpenAI metadata template. The repo standard preserves
+  `agents/openai.yaml` for every source-owned skill so invocation policy and
+  interface metadata stay reviewable.
+- Hardened `config-codex` laptop setup so existing `AGENTS.md` and
+  `config.toml` are treated as merge targets by default, exact template checks
+  are explicit audit modes, default validation rejects empty or stale managed
+  `AGENTS.md` blocks, and hook installation stops before replacing differing
+  existing hook files.
+- Enhanced `align` into a changed-scope post-change quality gate that
+  coordinates mandatory cross-code validation, `code-review`, `linter`,
+  `apply-security`, and focused test/build lanes while keeping safe-only
+  remediation, incremental scope expansion, and explicit approval for risky
+  security or public-contract changes.
+- Expanded `code-review` from strict structural implementation-quality review
+  into a neutral, evidence-based findings-first review skill that also covers
+  bugs, regressions, meaningful test gaps, reliability and operations risk,
+  security-adjacent implementation issues, owner-review needs, and severity
+  decisions while preserving boundaries with `review-pr`, `align`,
+  `apply-security`, and `system-design-rules`.
+- Hardened `task-implementer` into an explicit-only sequential implementation
+  loop where each task session validates the active task, runs `code-review`,
+  fixes scoped findings, commits through `$commit`, records review and commit
+  evidence in the private handoff, stops, and hands the markdown context to the
+  next fresh Codex session.
+- Changed `apply-security` to implicit invocation so it can act as a general
+  security adviser during design, implementation, review, and validation
+  sessions, while keeping patching constrained to authorized low-risk
+  remediations.
+- Clarified that `align` coordinates the `apply-security` security lane by
+  resolving and reading the `apply-security/SKILL.md` contract directly when it
+  is absent from the initial skills list because of budget, installation, or
+  discovery limits.
+- Refined `align` wording so its child-skill coordination, mandatory
+  `apply-security` lane, and high-risk security approval boundaries are clearer
+  and less repetitive.
+- Clarified that `align` separates active changed scope from unrelated dirty
+  worktree files and reports unrelated changes instead of silently treating
+  them as alignment scope.
+- Extended `agent-nebius-auth` runtime injection for long-running Bash commands
+  by exporting `NEBIUS_AUTH_CREDENTIALS_FILE`, defining a
+  `nebius_refresh_token` Bash helper through a restricted temporary `BASH_ENV`
+  file for child Bash processes, denying common nested environment dumps, and
+  documenting the credential-file or per-operation refresh pattern for raw
+  Nebius API calls.
+- Fixed `nebius_refresh_token` so every refresh clears existing token
+  environment variables before invoking the Nebius CLI profile token command,
+  preventing later refreshes from reusing a stale `NEBIUS_IAM_TOKEN`.
+- Hardened `install-grafana-mcp-for-nebius` local config checks so an existing
+  Codex MCP server that points at a byte-identical source or installed wrapper
+  copy is treated as matching state instead of a replacement-required
+  mismatch.
+- Hardened `install-grafana-mcp-for-nebius` token safety so the Nebius wrapper
+  refuses external Grafana URLs, config checks redact token-like MCP fields,
+  arbitrary byte-identical wrapper copies are not trusted, shell startup scans
+  block persisted token exports, and token refresh intervals must stay below
+  the Nebius token lifetime.
+- Aligned `install-grafana-mcp-for-nebius` metadata and trusted source-wrapper
+  checks so project/resource query prompts use PromQL-compatible datasource
+  wording and source checkouts are recognized by skill-relative path rather
+  than a user-specific repository path.
+- Expanded `install-grafana-mcp-for-nebius` usage docs with a bounded
+  datasource-discovery, label-discovery, and project/resource metric-query
+  workflow for Nebius-managed Grafana.
+- Simplified `install-grafana-mcp-for-nebius` usage prompts around
+  user-facing Grafana questions, added a redacted MK8s GPU usage example, and
+  documented the Codex-to-MCP-to-Grafana query flow.
+- Updated `brainstorm` so major design or architecture decisions consult the
+  installed `design` and `system-design-rules` skills as advisory context when
+  accessible while keeping brainstorming chat-only until the user asks to
+  switch workflows.
+- Set `create-learning-course` to explicit-only invocation because course
+  creation can create or revise many local files.
+- Tightened the `design` skill so topic, feature-requirement, architecture,
+  product, standard, and technology due diligence routes through `research`
+  when that skill is available, leaving `design` focused on synthesis,
+  alternatives, and `/plan` handoff.
+- Extended the `design` skill so standard, deep, architecture-heavy, or
+  hard-to-reverse solution designs apply `system-design-rules` as an advisory
+  checklist before final `/plan` handoff while leaving checklist-only reviews
+  owned by `system-design-rules`.
+- Strengthened `sdlc-create-design` with the same phased design discipline used
+  by `design` while preserving Agentic SDLC ownership of `docs/design.md`: it
+  now records existing-system evidence, selected and rejected options,
+  implementation boundaries, validation/test/evaluation plans, rollout,
+  rollback, and context-gap routing before a feature can move to planning.
+- Strengthened `sdlc-validate-codes` so mechanical build/lint/type/import,
+  dependency, and configuration checks are followed by `code-review` in
+  review-only mode; blocking review findings now keep the feature out of the
+  `validated` state and route repair to the responsible SDLC phase.
+- Extended the Agentic SDLC requirements, start, evaluation, and UAT skills
+  with an optional Live Experiment Environment contract so users can provide a
+  confirmed non-production or disposable target, safe connection references,
+  allowed actions, reset instructions, approvals, and evidence limits for later
+  agent experiments without storing secret values.
+- Updated the `research` skill source order so organization-tied research
+  searches internal Slack and Confluence sources through available connectors
+  first, uses MCP or app-tool access for internal systems when connectors are
+  unavailable, verifies technical claims with official vendor or authoritative
+  external sources, and labels organization-specific guidance separately from
+  vendor facts and industry practice.
+- Simplified `install-skills.sh --install-all-hooks --register-hooks` output
+  into a single per-source `Hooks status` report and only shows the restart and
+  trust warning when hook files or registrations changed.
+- Simplified `agent-nebius-auth` setup inputs so operators pass `--tenant-id`
+  plus exactly one project selector, either `--project-id` or
+  `--project-name`; the setup script now resolves the missing project metadata
+  through Nebius project lookup and fails fast when both selectors are passed.
+- Aligned the `config-codex` global `AGENTS.md` template with the compact live
+  Codex policy and synced mirrored prompt-hook delegation wording across
+  `config-codex` and `global-context-management` validation.
+- Added bounded same-workspace prior task-state candidate discovery to the
+  `global-context-management` prompt hook and mirrored `config-codex` hook
+  template, exposing candidate paths only while keeping historical task-state
+  contents out of model context and preserving the current session
+  `current.md` as the write target.
+- Hardened `global-context-management` and mirrored `config-codex` guidance so
+  parent agents must close every spawned subagent handle that is completed or
+  no longer needed before finalizing when close controls are available, and
+  must report any unavailable or failed cleanup instead of leaving helper
+  sessions open silently.
+- Strengthened `global-context-management` and `config-codex` task-state
+  guidance so `$CODEX_HOME/task-state/<workspace>-<hash>/<session-id>/current.md`
+  is documented, templated, and hook-advertised as a compact rolling summary
+  rather than an append-only transcript.
+- Reworked the root `README.md` with a short table of contents and a complete
+  grouped skill catalog covering every live source skill, its invocation
+  policy, and a concise description.
+- Hardened `align-skill` authoring guidance and validator coverage for current
+  OpenAI Codex skill metadata: `agents/openai.yaml` is documented as optional
+  upstream but required by this repository's source-skill convention, the
+  OpenAI metadata template now includes invocation policy, and validator tests
+  cover wrong metadata paths plus explicit-only policy derived from `SKILL.md`.
+- Added explicit `agents/openai.yaml` invocation policies across all source
+  skills: operational setup, commit, PR, merge, publish, security, code-info,
+  container, Grafana MCP, `agentic-sdlc-test`, and every `sdlc-*` workflow
+  skill now disable implicit invocation, while the remaining non-SDLC skills
+  opt in to implicit matching. The Agentic SDLC Stop hook now emits explicit
+  `$sdlc-start` continuation prompts, and the skill-structure validator checks
+  invocation policy drift.
+- Updated the `config-codex` global `AGENTS.md` template to include compact Git
+  workflow defaults, explicit implicit-skill invocation policy, narrower
+  mutating skill-script permission wording, and a broader changed-surface
+  `$align` rule for code, config, and documentation changes.
 - Hardened `agent-nebius-auth` setup idempotency so Nebius profile
   create/update restores the previously active human/admin CLI profile, setup
   serializes global profile mutations, agent service-account profiles are not
@@ -110,16 +299,17 @@ All notable changes to the reusable Codex skills are tracked here.
   cover profile drift on rerun, effective `NEBIUS_PROFILE` selection,
   interrupted profile creation, and concurrent setup.
 - Changed `agent-nebius-auth` so the setup script no longer writes an inline
-  Codex hook block to `$CODEX_HOME/config.toml`. The old `--install-hook` flag
-  now fails fast and points operators to the canonical
+  Codex hook block to `$CODEX_HOME/config.toml`. The unsupported
+  `--install-hook` flag now fails fast and points operators to the canonical
   `install-skills.sh --install-hooks agent-nebius-auth/assets/hooks
   --register-hooks` path for payload sync and `hooks.json` registration, while
   setup records the selected project under `~/.nebius` for the generic hook to
   read locally.
-- Added an installer-side `agent-nebius-auth` migration cleanup: registering
-  the hook now removes the old marked inline `config.toml` block, backs up the
-  file, and migrates the legacy project selector to
-  `~/.nebius/codex-agent-default-project-id` without printing the project ID.
+- Removed the installer-side `agent-nebius-auth` inline `config.toml`
+  migration cleanup. The canonical path is now fail-fast setup plus root
+  installer hook sync/`hooks.json` registration only; stale inline hook entries
+  are rejected before hook files or `hooks.json` are changed and must be removed
+  manually instead of being migrated.
 - Added a skill-local `agent-nebius-auth/README.md` with the setup-only
   workflow, installer-managed hook registration, runtime hook behavior,
   idempotency checks, and validation commands.
@@ -221,12 +411,8 @@ All notable changes to the reusable Codex skills are tracked here.
   out-of-band remediation steps when a PreToolUse or permission guard blocks a
   safe patch, and added disposable fixture coverage for local idempotency
   policy-file edge cases.
-- Narrowed the Agentic SDLC PreToolUse guard so `apply_patch` may align only the
-  exact resolved `$CODEX_HOME/AGENTS.md` file, while deletion, moves, shell
-  writes, MCP writes, `$CODEX_HOME/config.toml`, and `$CODEX_HOME/hooks` remain
-  blocked; the Agentic SDLC verifier now requires this contract in the design
-  document and can locate the repo design doc when run from an installed skill
-  copy.
+- Hardened the Agentic SDLC verifier path resolution so installed skill copies
+  can locate the repo design doc when checking the current checkout.
 - Renamed SDLC-only workflow skills and the coordinator to `sdlc-*` names, and
   made their front matter descriptions start with
   `Use only as part of the Agentic SDLC workflow;` so tool discovery separates
@@ -388,10 +574,11 @@ All notable changes to the reusable Codex skills are tracked here.
   inject model-visible context and do not directly call subagent tools.
 - Clarified the read-only subagent lifecycle: the parent agent should ask
   helpers for concise final summaries, wait for results, consolidate them, and
-  close completed subagent threads when close controls are available and no
-  follow-up is needed. When multiple helpers are running, the parent should
-  close each completed handle as its terminal result arrives and continue
-  waiting on the remaining handles.
+  close spawned subagent handles when close controls are available once they
+  are completed or no longer needed. When multiple helpers are running, the
+  parent should close each completed handle as its terminal result arrives,
+  continue waiting on the remaining handles, and report any unavailable or
+  failed cleanup before finalizing.
 - Documented the parent/subagent mental model in the `config-codex` and
   `global-context-management` READMEs.
 - Clarified that direct live hook probes with synthetic `session_id` values can
@@ -452,9 +639,6 @@ All notable changes to the reusable Codex skills are tracked here.
   externally owned branches, resolve safe base-branch conflicts only when
   permissions allow, and report exact blockers when a contributor branch cannot
   be updated.
-- Renamed the Nebius cxcli onboarding skill to `onboard-nebius-cxcli`, updating
-  the skill folder, `SKILL.md` metadata, OpenAI agent metadata, sibling-skill
-  routing, repo docs, and nebius-cxcli documentation references.
 - Updated `install-skills.sh` so source-owned renamed or removed skills
   converge on reinstall and target-only skills are listed at the end with a
   short default-target `--remove-skill` hint instead of being silently ignored.

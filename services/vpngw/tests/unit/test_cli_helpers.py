@@ -177,6 +177,79 @@ def test_apply_prints_add_routes_hint_after_initial_static_creation(tmp_path: Pa
     assert "<your-config.yaml>" not in result.stdout
 
 
+def test_apply_waits_for_esp4_ready_before_config_push(tmp_path: Path) -> None:
+    config_path = tmp_path / "static.config.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+
+    local_cfg = {
+        "tenant_id": "tenant-test",
+        "project_id": "project-test",
+        "region_id": "eu-west1",
+        "gateway_group": {"vm_spec": {}},
+        "gateway": {"local_prefixes": ["10.0.0.0/16"]},
+        "defaults": {"routing": {"mode": "static"}},
+    }
+    plan = _static_route_plan()
+    pushed_targets: list[str] = []
+
+    pending_health = {
+        "reachable": True,
+        "cloud_init_complete": True,
+        "strongswan_installed": True,
+        "frr_installed": True,
+        "agent_installed": False,
+        "esp4_ready": False,
+        "esp4_reboot_pending": True,
+        "message": "ESP4/kernel update prepared; waiting for gateway reboot",
+    }
+    ready_health = {
+        "reachable": True,
+        "cloud_init_complete": True,
+        "strongswan_installed": True,
+        "frr_installed": True,
+        "agent_installed": True,
+        "esp4_ready": True,
+        "esp4_reboot_pending": False,
+        "message": "VM ready",
+    }
+    health_results = [pending_health, pending_health, ready_health]
+
+    class FakeVMManager:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def check_changes(self, spec) -> list[tuple[str, VMDiff]]:
+            return []
+
+        def ensure_group(self, spec, recreate=False, local_prefixes=None) -> dict[str, str]:
+            return {"nebius-vpn-gw-0": "203.0.113.10"}
+
+        def wait_for_vm_network(self, vm_name, vm_ip, timeout=180) -> bool:
+            return True
+
+        def check_vm_health(self, vm_name, vm_ip) -> dict[str, object]:
+            return health_results.pop(0)
+
+    class FakeSSHPush:
+        def push_config_and_reload(self, target, inst_cfg, cfg) -> None:
+            pushed_targets.append(target)
+
+    with (
+        patch("nebius_vpngw.cli.load_local_config", return_value=local_cfg),
+        patch("nebius_vpngw.cli.merge_with_peer_configs", return_value=plan),
+        patch("nebius_vpngw.cli._ensure_authentication", return_value="token"),
+        patch("nebius_vpngw.cli.VMManager", FakeVMManager),
+        patch("nebius_vpngw.cli.SSHPush", return_value=FakeSSHPush()),
+        patch("time.sleep", return_value=None),
+    ):
+        result = CliRunner().invoke(app, ["apply", "--local-config-file", str(config_path)])
+
+    assert result.exit_code == 0
+    assert pushed_targets == ["203.0.113.10"]
+    assert "waiting for reboot" in result.stdout
+    assert "Config push gate passed" in result.stdout
+
+
 def test_prep_network_allows_missing_peer_psk_placeholders(
     tmp_path: Path,
     sample_config: dict,

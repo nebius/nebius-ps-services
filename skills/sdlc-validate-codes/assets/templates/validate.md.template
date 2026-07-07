@@ -1,15 +1,26 @@
-# FEAT-<id> Validation Evidence
+# FEAT-TODO Validation Evidence
 
 ## Commands
 
 | Command | Purpose | Result |
 | --- | --- | --- |
-| `<command>` | <purpose> | <pass|fail|blocked> |
+| `TODO command` | TODO purpose | TODO pass/fail/blocked |
 
 ## Summary
 
-<Validation result.>
+TODO: Validation result.
+
+## Code Review
+
+| Scope | Decision | Blocking Findings | Owner Review Needed |
+| --- | --- | --- | --- |
+| TODO changed files or feature diff | TODO approve/request-changes/needs-owner-review/blocked | TODO none or summary | TODO none or owner/scope |
+
+## Review Routing
+
+TODO: If code-review blocked validation, record the responsible SDLC phase or
+human-owned decision.
 
 ## Failure Classification
 
-<classification or none>
+TODO: classification or none

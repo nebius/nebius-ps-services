@@ -14,8 +14,17 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [nebius-vpngw-v0.5.9] - 2026-07-07
+
+- Added an ESP4 readiness preflight for new gateway VMs and a
+  `misc/fix-vpngw-esp4.sh` repair helper for existing gateways affected by
+  Ubuntu Dirty Frag module-block mitigations.
 - Added a project mypy check and fixed current static typing errors in the
   VPN gateway source tree.
+- Fixed local and release wheel builds by declaring the `vcs-versioning`
+  provider required for the configured `semver-pep440` version scheme.
+- Fixed release workflow artifact glob resolution so actionlint/shellcheck
+  validation does not depend on unsafe word splitting.
 - Fixed route command SSH handling so `add-routes-local` BGP route discovery and
   `list-routes-remote` gateway queries honor configured SSH user and private key
   settings.

@@ -1,0 +1,6 @@
+interface:
+  display_name: "SDLC Auto Steering"
+  short_description: "Capture and classify active SDLC steering"
+  default_prompt: "Use $sdlc-auto-steering to refresh private Agentic SDLC steering state before the next workflow phase."
+policy:
+  allow_implicit_invocation: false

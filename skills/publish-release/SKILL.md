@@ -49,15 +49,18 @@ the user before continuing.
    `<tag-prefix>-vMAJOR.MINOR.PATCH`.
 3. For `setup`, create or update reusable release assets from `assets/`,
    validate the generated shell/workflow files, and stop with a setup report.
-4. For `prep`, run the skill-owned helper script:
+4. For `prep`, require the current checkout to be the clean, synced default
+   branch. If the user is on any other branch, or the tree is dirty, stop and
+   ask them to merge their branch to the default branch, switch to it,
+   fast-forward, and rerun. Then run the skill-owned helper script:
    `scripts/publish-release-doer.sh --mode prep ...`
-   It updates `CHANGELOG.md`, commits release prep, and pushes the current
-   branch. It must not edit the default branch directly.
-5. For `complete`, run `prep`, invoke `create-pr`, then invoke `merge-pr` after
-   checks pass.
+   The helper creates `release/<tag>` from the default branch, updates
+   `CHANGELOG.md`, commits release prep, and pushes that release branch.
+5. For `complete`, run `prep`, invoke `create-pr` for `release/<tag>`, then
+   invoke `merge-pr` after checks pass.
 6. After merge, switch to the default branch, fetch, and fast-forward only.
    Verify the release changelog section from prep is present.
-7. Run `publish` from clean synced default branch:
+7. Run `publish` only from the clean, synced default branch:
    `scripts/publish-release-doer.sh --mode publish ...`
    The helper verifies the runtime package version when configured, creates the
    annotated tag, and pushes only the tag.
@@ -84,7 +87,13 @@ The project-local helper script is optional after this refactor. The skill-owned
   sources or generated examples.
 - Store only variable and secret names in workflow templates.
 - Do not print, request, or persist secret values.
-- Do not commit changelog edits directly on the default branch.
+- Treat the default branch as the release source of truth. `prep` and
+  `publish` must start from a clean, synced default branch.
+- If the user is on a feature branch or has local changes, fail fast before
+  editing files and ask them to create and merge a PR to the default branch,
+  switch to the default branch, fast-forward, and rerun.
+- Do not use cherry-pick or commit-copy workflows to move release content
+  between branches unless the user explicitly asks for that reconstruction.
 - Do not force-push, use admin merge, bypass branch protection, or ignore
   required checks/reviews.
 - Stop when GitHub approvals, environment approvals, missing credentials, or
@@ -114,7 +123,7 @@ not evidence-backed, or outside this skill's scope, report that it was skipped.
 Return:
 
 - mode, project directory, tag, version, tag prefix
-- PR URL and merge result when `complete` mode is used
+- release branch, PR URL, and merge result when `complete` mode is used
 - pushed tag and workflow run URL/conclusion
 - GitHub Release URL and asset verification result
 - validation commands run

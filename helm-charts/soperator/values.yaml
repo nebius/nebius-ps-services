@@ -17,7 +17,6 @@ useDefaultAppArmorProfile: false
 # - none: No maintenance is performed. The cluster operates normally.
 # - downscale: Scales down all components to 0.
 # - downscaleAndDeletePopulateJail: Scales down all components to 0 and deletes the populateJail Job.
-# - downscaleAndOverwritePopulateJail: Scales down all components to 0 and overwrites populateJail.
 # - skipPopulateJail: Skips the execution of the populateJail job during maintenance.
 maintenance: "none"
 # Slurm cluster type. Use gpu when any worker NodeSet requests GPUs.
@@ -276,13 +275,6 @@ volumeSources:
     size: ""
     persistentVolumeClaim:
       claimName: "controller-spool-pvc"
-      readOnly: false
-  - name: jail
-    createPVC: false
-    storageClassName: ""
-    size: ""
-    persistentVolumeClaim:
-      claimName: "jail-pvc"
       readOnly: false
 #  - name: jail-snapshot
 #    createPVC: false
@@ -804,10 +796,10 @@ slurmNodes:
       spool:
         volumeSourceName: "controller-spool"
       jail:
-        volumeSourceName: "jail"
+        volumeSourceName: "jail-rootfs-slot-a"
       customMounts: []
   login:
-    size: 1
+    size: 2
     k8sNodeFilterName: "login"
     # Uncomment to control whether pod containers use the host user namespace.
     # hostUsers: false
@@ -876,7 +868,7 @@ slurmNodes:
     customInitContainers: []
     volumes:
       jail:
-        volumeSourceName: "jail"
+        volumeSourceName: "jail-rootfs-slot-a"
       jailSubMounts: []
       # jailSubMounts:
       #   - name: "mlcommons-sd-bench-data"
@@ -951,7 +943,7 @@ slurmNodes:
     customInitContainers: []
     volumes:
       jail:
-        volumeSourceName: "jail"
+        volumeSourceName: "jail-rootfs-slot-a"
   rest:
     enabled: true
     size: 1
@@ -1299,9 +1291,40 @@ uninstallCleanup:
 storageClass:
   local:
     name: slurm-local-pv
+jailRootfs:
+  # activePassive provisions two logical rootfs slots under one SFS-backed host
+  # mount. Slot names are physical names; active/passive roles swap by changing
+  # activeSlot/passiveSlot in values.
+  strategy: activePassive
+  activeSlot: slot-a
+  passiveSlot: slot-b
+  store:
+    mountPath: /mnt/jail-store
+    rootfsPath: /mnt/jail-store/rootfs
+    volumeKey: jail
+  slots:
+    slot-a:
+      volumeSourceName: jail-rootfs-slot-a
+      pvcName: jail-rootfs-slot-a-pvc
+      localPath: /mnt/jail-store/rootfs/slot-a
+    slot-b:
+      volumeSourceName: jail-rootfs-slot-b
+      pvcName: jail-rootfs-slot-b-pvc
+      localPath: /mnt/jail-store/rootfs/slot-b
+jailPersistentMounts:
+  # Writable customer-owned paths that stay outside rootfs generation slots and
+  # are mounted back into every active rootfs. cxcli-managed clusters default
+  # /home to /mnt/jail-store/shared/home; external single-SFS adoption defaults
+  # /home to /mnt/jail/shared/home and accepts explicit additional mounts under
+  # the same physical jail SFS shared area.
+  - mountPath: /home
+    localPath: /mnt/jail-store/shared/home
 volume:
   jail:
     name: jail
+    # Total backing-store capacity for the jail SFS. For active/passive local-path
+    # PVs this request is informational; the real capacity is the Terraform-managed
+    # SFS mounted at jailRootfs.store.mountPath.
     size: 2Ti
     # filestore: Nebius SFS/Filestore mounted with virtiofs.
     # glusterfs: external GlusterFS server.
@@ -1517,7 +1540,7 @@ nodesets:
           emptyDir: {}
         jail:
           persistentVolumeClaim:
-            claimName: jail-pvc
+            claimName: jail-rootfs-slot-a-pvc
         jailSubMounts: []
         sharedMemorySize: 64Gi
         # Optional additional worker mounts. The chart injects and owns the

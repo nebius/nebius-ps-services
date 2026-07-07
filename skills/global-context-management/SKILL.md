@@ -58,6 +58,8 @@ implementation and final judgment.
 - The durable task-state path injected by hooks, when available.
 - An existing task-state file at that path, when it exists and prior context may
   matter.
+- Optional same-workspace prior task-state candidate paths injected by hooks for
+  complex prompts, when bounded relevance checks find likely related summaries.
 - Optional user-enabled hook-policy context that requests bounded read-only
   delegation for the current prompt.
 - Current runtime tool availability, including whether subagent controls are
@@ -67,6 +69,9 @@ implementation and final judgment.
 
 - Read the injected task-state file at task start, resume, or after compaction
   when it exists and prior decisions may matter.
+- Read hook-suggested same-workspace prior task-state candidates only when they
+  appear relevant to the current task; treat them as stale hints and verify
+  against current repository or runtime evidence.
 - Read target project files with targeted `rg`, `rg --files`, and small file
   ranges before editing.
 - When changing this skill or its local setup contract, read `README.md`,
@@ -148,6 +153,14 @@ PreToolUse write guard is installed, it must allow writes under
 `$CODEX_HOME/task-state` while continuing to block unrelated `$CODEX_HOME`
 runtime edits such as hook rewrites.
 
+For complex prompts, `UserPromptSubmit` may also list a small bounded set of
+same-workspace prior `current.md` candidate paths from the same
+`$CODEX_HOME/task-state/<workspace>-<hash>/` bucket. The hook must not inject
+historical task-state contents. The parent agent may read a candidate only when
+it appears relevant to the current task, and must treat it as stale context to
+verify instead of active truth. The current session's advertised `current.md`
+remains the only write target.
+
 At the start of a complex task, resume, or context transition, read the
 existing task-state file before planning when it may contain prior decisions,
 validation status, or next action. Treat task state as a concise continuity
@@ -170,6 +183,14 @@ Keep task state concise:
 ## Next action
 ```
 
+Treat `current.md` as a rolling summary, not an append-only log. Replace stale
+or superseded details with the latest validated state, keep only the objective,
+constraints, decisions, changed files, validation status, risks, and next
+action needed for continuation, and avoid raw command output, broad file lists,
+full prompts, stack traces, secrets, customer data, private URLs, or copied
+documentation. If a task-state file grows large enough that it is harder to
+scan than the current thread, summarize it before relying on it.
+
 Update task state after initial exploration, before implementation, after major
 edits, after validation, before a long pause or compaction, and before the
 final response. The file is useful only if it is read on continuation and kept
@@ -183,6 +204,8 @@ small enough to act on.
   logs or duplicating prior plans.
 - Spawn each useful subagent role only once for a specific sidecar question
   unless a new, distinct follow-up is needed.
+- Track every spawned subagent handle until it is closed or explicitly reported
+  as unclosable by the current runtime.
 - Re-run validation after edits and record the current status instead of
   preserving stale results.
 
@@ -226,8 +249,8 @@ delegation:
 
 Do not spawn every configured role by default. With a conservative
 `max_threads = 4` budget, use `repo_mapper` and `test_strategist` early only
-when their work is useful and independent, close completed helpers after
-consolidating their summaries, and reserve `risk_reviewer` for near-final
+when their work is useful and independent, close completed helpers immediately
+after consolidating their summaries, and reserve `risk_reviewer` for near-final
 review of non-trivial or risky changes.
 
 After delegation is authorized, the default decision should be to dynamically
@@ -240,12 +263,20 @@ only because the user did not name the exact role.
 Ask subagents for concise final summaries only, and tell them to stop after
 returning the result instead of waiting for follow-up prompts. The parent
 agent owns the lifecycle: spawn bounded read-only helpers, wait for their final
-results, consolidate what matters, and close completed subagent threads when
-the runtime exposes close controls and no follow-up is needed.
+results, consolidate what matters, and close every spawned subagent handle with
+`close_agent` or equivalent close controls once it is completed or no longer
+needed. Completed agents remain open and can count toward concurrency until
+closed, so cleanup is not optional when close controls exist.
+If finalizing while a helper is still running and its result is no longer
+needed, close it before the final response. If the result is needed, wait for a
+terminal status, consolidate the result, then close the handle.
 When multiple subagents are running, close each completed handle as soon as its
 terminal result is received, whether that result arrives from `wait_agent` or
 from an asynchronous completion notification. Repeat wait-and-close until every
 spawned subagent has been closed.
+Before the final response, perform a final lifecycle sweep over every spawned
+subagent handle. Report any handle that could not be closed because close
+controls were unavailable or failed.
 
 Do not use multiple write-capable agents in the same workspace unless the user
 explicitly asks for worktrees or parallel implementation.
@@ -260,11 +291,17 @@ for a subagent would stall the next step.
   do not create a manual or repo-local fallback.
 - If task state exists but appears stale, treat it as a hint and verify drifted
   facts before acting on them.
+- If hook-suggested related task-state candidates are absent, irrelevant,
+  unreadable, or stale, continue from current thread, memory, and repository
+  evidence instead of inventing fallback state.
 - If delegation is authorized and useful but controls are not visible, use
   `tool_search` to look for multi-agent/subagent tools before reporting
   delegation unavailable.
 - If subagent spawning is denied, unavailable, or forbidden by active
   instructions, continue locally with narrower reads and report that boundary.
+- If subagent close controls are unavailable or closing fails for a spawned
+  handle, report the residual open or running handle instead of leaving it
+  silent.
 - If validation fails, classify whether the failure is from changed source,
   duplicated template drift, environment/runtime availability, or optional
   profile mismatch before retrying.
@@ -272,14 +309,17 @@ for a subagent would stall the next step.
 ## Process
 
 1. Understand the task and constraints.
-2. Read existing global task state when prior context may matter; create the
-   task-state file only when complex work needs continuity, then update it.
+2. Read existing global task state when prior context may matter. If the hook
+   suggests same-workspace prior task-state candidates, read only the relevant
+   ones and verify their claims. Create the current task-state file only when
+   complex work needs continuity, then update it.
 3. Explore with targeted reads; use read-only subagents when delegation is
    authorized by the prompt or a user-enabled local hook policy, useful for the
    task, available, and permitted. Wait for their final summaries and close
    completed subagent threads after consolidation when close controls are
-   available. For multiple subagents, repeat wait-and-close until every spawned
-   handle is closed.
+   available. Close no-longer-needed running helpers before finalizing. For
+   multiple subagents, repeat wait-and-close until every spawned handle is
+   closed or explicitly reported as unclosable.
 4. Plan the smallest coherent implementation.
 5. Edit in focused patches using existing project conventions.
 6. Inspect the diff.
@@ -287,7 +327,8 @@ for a subagent would stall the next step.
 8. Use `risk_reviewer` before finalizing non-trivial or risky changes when
    subagent delegation is authorized by the prompt or a user-enabled local hook
    policy, useful, available, and permitted.
-9. Update task state and return the final summary.
+9. Perform a final subagent lifecycle sweep, update task state, and return the
+   final summary.
 
 ## Completion Criteria
 
@@ -297,8 +338,10 @@ for a subagent would stall the next step.
   residual risk rather than raw logs or broad dumps.
 - Task state, when available and useful, reflects current plan, validation
   status, risks, and next action.
-- Any spawned subagents have returned final summaries and been closed when close
-  controls are available.
+- Any spawned subagents have returned final summaries or been deemed no longer
+  needed, and every spawned handle has been closed when close controls are
+  available. No running or completed handle remains open silently; any
+  unavailable or failed cleanup is reported.
 - Relevant docs, README, changelog, duplicated templates, and validators are
   aligned for changed behavior.
 

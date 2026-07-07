@@ -29,6 +29,11 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- printf "%s-slurm-scripts" (include "slurm-cluster.name" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
+{{/* Cluster-scoped ConfigMap name for generated Slurm configs mounted into worker jails. */}}
+{{- define "slurm-cluster.slurmConfigsConfigMapName" -}}
+{{- printf "%s-slurm-configs" (include "slurm-cluster.name" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
 {{- define "validateAccountingConfig" -}}
 {{- if .Values.slurmNodes.accounting.enabled -}}
   {{- if not (or .Values.slurmNodes.accounting.externalDB.enabled .Values.slurmNodes.accounting.mariadbOperator.enabled) -}}
@@ -65,6 +70,86 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
   {{- fail "Top-level mariadbOperator is not supported. Use mariadb-operator.installOperator for the MariaDB Operator subchart and slurmNodes.accounting.mariadbOperator for the SlurmCluster MariaDB CR." -}}
 {{- end -}}
 {{- end -}}
+
+{{- define "validateJailRootfsConfig" -}}
+{{- $cfg := .Values.jailRootfs | default dict -}}
+{{- $strategy := default "activePassive" $cfg.strategy -}}
+{{- if ne $strategy "activePassive" -}}
+  {{- fail (printf "jailRootfs.strategy must be activePassive; got %q." $strategy) -}}
+{{- end -}}
+{{- $activeSlot := default "slot-a" $cfg.activeSlot -}}
+{{- $passiveSlot := default "slot-b" $cfg.passiveSlot -}}
+{{- if not (has $activeSlot (list "slot-a" "slot-b")) -}}
+  {{- fail (printf "jailRootfs.activeSlot must be slot-a or slot-b; got %q." $activeSlot) -}}
+{{- end -}}
+{{- if not (has $passiveSlot (list "slot-a" "slot-b")) -}}
+  {{- fail (printf "jailRootfs.passiveSlot must be slot-a or slot-b; got %q." $passiveSlot) -}}
+{{- end -}}
+{{- if eq $activeSlot $passiveSlot -}}
+  {{- fail "jailRootfs.activeSlot and jailRootfs.passiveSlot must be different." -}}
+{{- end -}}
+	{{- $store := default dict $cfg.store -}}
+	{{- $storePath := default "/mnt/jail-store" $store.mountPath -}}
+	{{- if not (regexMatch "^/[-A-Za-z0-9._/]+$" $storePath) -}}
+	  {{- fail (printf "jailRootfs.store.mountPath must be an absolute normalized path; got %q." $storePath) -}}
+	{{- end -}}
+	{{- if contains ".." $storePath -}}
+	  {{- fail (printf "jailRootfs.store.mountPath must not contain '..'; got %q." $storePath) -}}
+	{{- end -}}
+	{{- $rootfsPath := default (printf "%s/rootfs" $storePath) $store.rootfsPath -}}
+	{{- if not (regexMatch "^/[-A-Za-z0-9._/]+$" $rootfsPath) -}}
+	  {{- fail (printf "jailRootfs.store.rootfsPath must be an absolute normalized path; got %q." $rootfsPath) -}}
+	{{- end -}}
+	{{- if contains ".." $rootfsPath -}}
+	  {{- fail (printf "jailRootfs.store.rootfsPath must not contain '..'; got %q." $rootfsPath) -}}
+	{{- end -}}
+	{{- if not (hasPrefix (printf "%s/" $storePath) $rootfsPath) -}}
+	  {{- fail (printf "jailRootfs.store.rootfsPath must be below jailRootfs.store.mountPath %s; got %q." $storePath $rootfsPath) -}}
+	{{- end -}}
+	{{- $slots := default dict $cfg.slots -}}
+	{{- range $slotName := list "slot-a" "slot-b" -}}
+	  {{- $slot := get $slots $slotName | default dict -}}
+	  {{- $managedDefault := printf "/mnt/jail-store/rootfs/%s" $slotName -}}
+	  {{- $configuredPath := default "" $slot.localPath -}}
+	  {{- $path := ternary (printf "%s/%s" $rootfsPath $slotName) $configuredPath (or (not $configuredPath) (eq $configuredPath $managedDefault)) -}}
+	  {{- if ne $path (printf "%s/%s" $rootfsPath $slotName) -}}
+	    {{- fail (printf "jailRootfs.slots.%s.localPath must be %s/%s; got %q." $slotName $rootfsPath $slotName $path) -}}
+	  {{- end -}}
+  {{- if not (regexMatch "^/[-A-Za-z0-9._/]+$" $path) -}}
+    {{- fail (printf "jailRootfs.slots.%s.localPath must be an absolute normalized path; got %q." $slotName $path) -}}
+  {{- end -}}
+  {{- if contains ".." $path -}}
+    {{- fail (printf "jailRootfs.slots.%s.localPath must not contain '..'; got %q." $slotName $path) -}}
+  {{- end -}}
+	  {{- $_ := required (printf "jailRootfs.slots.%s.volumeSourceName is required." $slotName) (default (printf "jail-rootfs-%s" $slotName) $slot.volumeSourceName) -}}
+	  {{- $_ := required (printf "jailRootfs.slots.%s.pvcName is required." $slotName) (default (printf "jail-rootfs-%s-pvc" $slotName) $slot.pvcName) -}}
+	{{- end -}}
+	{{- $seenPersistentMounts := dict -}}
+	{{- range $index, $mount := default list .Values.jailPersistentMounts -}}
+	  {{- $mountPath := required (printf "jailPersistentMounts[%d].mountPath is required." $index) $mount.mountPath -}}
+	  {{- $localPath := required (printf "jailPersistentMounts[%d].localPath is required." $index) $mount.localPath -}}
+	  {{- $normalizedMountPath := trimSuffix "/" $mountPath -}}
+	  {{- $normalizedLocalPath := trimSuffix "/" $localPath -}}
+	  {{- if or (eq $normalizedMountPath "") (eq $normalizedMountPath "/") (not (hasPrefix "/" $normalizedMountPath)) (contains ".." $normalizedMountPath) (contains "//" $normalizedMountPath) -}}
+	    {{- fail (printf "jailPersistentMounts[%d].mountPath must be an absolute normalized non-root path without '..'; got %q." $index $mountPath) -}}
+	  {{- end -}}
+	  {{- if hasKey $seenPersistentMounts $normalizedMountPath -}}
+	    {{- fail (printf "duplicate jailPersistentMounts mountPath %q." $normalizedMountPath) -}}
+	  {{- end -}}
+	  {{- $_ := set $seenPersistentMounts $normalizedMountPath true -}}
+	  {{- if or (eq $normalizedLocalPath "") (eq $normalizedLocalPath "/") (not (hasPrefix "/" $normalizedLocalPath)) (contains ".." $normalizedLocalPath) (contains "//" $normalizedLocalPath) -}}
+	    {{- fail (printf "jailPersistentMounts[%d].localPath must be an absolute normalized non-root path without '..'; got %q." $index $localPath) -}}
+	  {{- end -}}
+	  {{- if not (hasPrefix (printf "%s/" $storePath) $normalizedLocalPath) -}}
+	    {{- fail (printf "jailPersistentMounts[%d].localPath must be below jailRootfs.store.mountPath %s; got %q." $index $storePath $localPath) -}}
+	  {{- end -}}
+	  {{- range $systemPath := list $rootfsPath (printf "%s/slot-a" $rootfsPath) (printf "%s/slot-b" $rootfsPath) (printf "%s/.cxcli" $storePath) -}}
+	    {{- if or (eq $normalizedLocalPath $systemPath) (hasPrefix (printf "%s/" $systemPath) $normalizedLocalPath) (hasPrefix (printf "%s/" $normalizedLocalPath) $systemPath) -}}
+	      {{- fail (printf "jailPersistentMounts[%d].localPath must not overlap rootfs or cxcli system path %s; got %q." $index $systemPath $localPath) -}}
+	    {{- end -}}
+	  {{- end -}}
+	{{- end -}}
+	{{- end -}}
 
 {{- define "validateCxcliRenderedConfig" -}}
 {{- if hasKey .Values "nodeGroupMapping" -}}

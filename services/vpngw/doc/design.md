@@ -1174,7 +1174,9 @@ sysctl --system (loads 99-zzz-vpngw.conf)
     ↓
 ufw.service (firewall)
     ↓
-strongswan.service (IPsec)
+nebius-vpngw-esp4-preflight.service
+    ↓
+strongswan-starter.service (IPsec)
     ↓
 frr.service (BGP)
     ↓
@@ -1191,10 +1193,11 @@ Each service has a systemd override in `/etc/systemd/system/<service>.d/override
 After=network-online.target cloud-init.service
 Wants=network-online.target
 
-# /etc/systemd/system/strongswan.service.d/override.conf
+# /etc/systemd/system/strongswan-starter.service.d/override.conf
 [Unit]
-After=ufw.service network-online.target
+After=nebius-vpngw-esp4-preflight.service ufw.service network-online.target
 Wants=ufw.service
+Requires=nebius-vpngw-esp4-preflight.service
 
 # /etc/systemd/system/frr.service.d/override.conf
 [Unit]
@@ -1210,6 +1213,8 @@ Wants=strongswan.service frr.service
 **Why This Ordering Matters:**
 
 - **UFW after cloud-init**: Prevents cloud-init network changes from racing with UFW
+- **ESP4 preflight before strongSwan**: Ensures the IPv4 ESP kernel module is
+  loadable before strongSwan tries to install CHILD_SAs into XFRM
 - **strongSwan after UFW**: Ensures netfilter framework is initialized before IPsec tunnels
 - **FRR after strongSwan**: BGP needs XFRM interfaces created by strongSwan
 - **Agent after FRR**: Routing guard validates routes installed by FRR
@@ -1353,6 +1358,9 @@ ip route show 169.254.169.0/24  # Metadata service OK
 - UFW firewall (allows IPsec UDP 500/4500, ESP)
 - auditd for command and config file monitoring
 - Automated security updates (unattended-upgrades)
+- ESP4 module preflight that removes only temporary `esp4` deny rules, leaves
+  `esp6`/`rxrpc` policy untouched, and gates VPN services until `esp4` is
+  loadable after any required reboot
 - IP forwarding enabled, ICMP redirects disabled
 
 ### CRITICAL: UFW Must Be Active

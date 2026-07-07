@@ -64,6 +64,8 @@ For existing `$CODEX_HOME/AGENTS.md`:
   is missing.
 - If managed markers already exist, update only the content between those
   markers.
+- Treat empty or stale managed markers as incomplete; update the managed block
+  content rather than accepting marker presence alone.
 - Do not delete, rewrite, or deduplicate user-authored sections outside the
   managed block.
 
@@ -116,6 +118,15 @@ For existing `$CODEX_HOME/config.toml`:
    - optional hook policy template
    - custom-agent TOML templates
    - task-state template
+   The task-state template must keep `current.md` as a compact rolling
+   summary, not an append-only transcript: replace stale details with the
+   latest validated state, omit raw logs and secrets, and summarize oversized
+   historical task-state files before relying on them.
+   Prompt-time hooks may list bounded same-workspace prior task-state candidate
+   paths for complex prompts, but must not inject historical task-state
+   contents. The parent agent should read only relevant candidates as stale
+   hints, verify them against current repo or runtime evidence, and keep the
+   current session's advertised `current.md` as the write target.
    For hook scripts, custom-agent assets, and optional policy assets, use
    replace-if-unmodified behavior:
    copy missing files, leave matching files unchanged, and stop for review when
@@ -123,14 +134,17 @@ For existing `$CODEX_HOME/config.toml`:
    For `hooks.json`, verify the required global `SessionStart` and
    `UserPromptSubmit` entries are present, but preserve additional workflow hook
    entries such as SDLC `PreToolUse` and `Stop`.
-   The root `install-skills.sh --install-all-hooks` helper can perform a
-   direct sync of all reviewed hook-only bundles when that is explicitly
-   needed. Use `install-skills.sh --install-hooks config-codex/assets/hooks`
-   only for a single-bundle sync. Both paths strip `.template` from installed
-   hook file names. Add `--register-hooks` only when the operator explicitly
-   wants the installer to semantically merge the bundle's hook registration into
-   `hooks.json`; neither path trusts hooks, patches `config.toml`, or replaces
-   this full setup workflow.
+   The root `install-skills.sh --install-all-hooks` helper can install reviewed
+   hook-only bundles when that is explicitly needed. Use
+   `install-skills.sh --install-hooks config-codex/assets/hooks` only for a
+   single-bundle install. Both paths strip `.template` from installed hook file
+   names, copy missing hook files, leave matching hook files unchanged, and stop
+   before replacing any differing existing hook file. Add `--register-hooks`
+   only when the operator explicitly wants the installer to semantically merge
+   the bundle's hook registration into `hooks.json`; add
+   `--replace-hooks-json` only when the selected source manifests should replace
+   `hooks.json` after backup. Neither path trusts hooks, patches `config.toml`,
+   replaces `AGENTS.md`, or replaces this full setup workflow.
 9. Confirm `global-context-management` and `config-codex` are installed,
    discoverable, or explicitly enabled as skill folders. Do not add explicit
    skill entries if discovery already works.
@@ -184,10 +198,15 @@ not evidence-backed, or outside this skill's scope, report that it was skipped.
 
 Use the focused checks in `references/local-setup.md`. At minimum:
 
-- Run `python3 scripts/check-local-idempotency.py --strict-agents-template` for
-  a laptop already expected to match the canonical global `AGENTS.md` template.
-  This script is read-only and allows extra reviewed hook registrations in
-  `hooks.json` when the required global hooks are present.
+- Run `python3 scripts/check-local-idempotency.py` for normal laptop setup.
+  This script is read-only, validates the merge-safe no-change contract, and
+  validates the current `AGENTS.md` managed block content when exact template
+  parity is not present. It allows extra reviewed hook registrations in
+  `hooks.json` when the required global hooks are present. Use
+  `--strict-agents-template` only for explicit canonical template/install-copy
+  audits, and use
+  `--require-template-mcp-servers` only when the user explicitly wants the
+  public MCP baseline audited against the template.
 - For source changes to the idempotency script, run
   `python3 scripts/test-check-local-idempotency.py`; it uses disposable local
   fixtures and does not inspect the user's real Codex home.
@@ -199,21 +218,25 @@ Use the focused checks in `references/local-setup.md`. At minimum:
 
 Do not claim runtime activation is proven until a fresh Codex session has
 loaded the config, the hooks have been trusted in `/hooks`, and a non-mutating
-probe shows the injected task-state path and read/update guidance.
+probe shows the injected task-state path, read/update guidance, and bounded
+related prior task-state candidate hints when matching prior summaries exist.
 
 Do not claim subagent activation is proven until a fresh Codex session receives
 a prompt request or local hook policy request to use subagents and can spawn a
-read-only helper, or reports that delegation is unavailable or not permitted in
-that surface. If delegation is authorized and useful but subagent controls are
-not visible, and `tool_search` is available, the fresh session should first
-search for multi-agent/subagent tools before reporting delegation unavailable.
-If a local hook policy is enabled, verify it in a fresh trusted-hook session
-before claiming hook-assisted delegation works. Do not claim that hooks,
-skills, `multi_agent`, or `[agents.*]` config directly spawn subagents. They
+read-only helper and close that helper before finalizing, or reports that
+delegation or close controls are unavailable or not permitted in that surface.
+If delegation is authorized and useful but subagent controls are not visible,
+and `tool_search` is available, the fresh session should first search for
+multi-agent/subagent tools before reporting delegation unavailable. If a local
+hook policy is enabled, verify it in a fresh trusted-hook session before
+claiming hook-assisted delegation works. Do not claim that hooks, skills,
+`multi_agent`, or `[agents.*]` config directly spawn or close subagents. They
 make delegation possible when the runtime policy allows it. After a prompt or
 local hook policy request authorizes delegation, the fresh session should
 dynamically choose and spawn targeted read-only helper roles itself when useful;
-the prompt does not need to name the exact role.
+before the final response, it should close every spawned helper handle that is
+completed or no longer needed when close controls are available, and report any
+unavailable or failed cleanup. The prompt does not need to name the exact role.
 
 ## References
 

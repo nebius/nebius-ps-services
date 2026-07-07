@@ -1,13 +1,14 @@
 ---
 name: sdlc-create-design
-description: "Use only as part of the Agentic SDLC workflow; use when `docs/design.md` must be created or updated from `docs/requirements.md` and gathered feature context. This Agentic SDLC skill owns design.md and stable FEAT IDs."
+description: "Use only as part of the Agentic SDLC workflow; use when `docs/design.md` must be created or updated from `docs/requirements.md`, gathered context, and codebase evidence. This skill owns design.md, stable FEAT IDs, design decisions, alternatives, and implementation-ready validation boundaries."
 ---
 
 # Create Design
 
 ## Purpose
 
-Convert requirements and gathered context into implementable architecture and feature designs in `docs/design.md`.
+Convert requirements and gathered context into evidence-backed architecture
+and feature designs in `docs/design.md`.
 
 ## When To Use
 
@@ -20,6 +21,8 @@ Convert requirements and gathered context into implementable architecture and fe
 - Do not use to create local execution plans.
 - Do not use to implement code or modify tests.
 - Do not use to rewrite requirements.
+- Do not use for non-SDLC design docs, ADRs, or `/plan` handoffs; use
+  `design` for those.
 
 ## Inputs
 
@@ -27,13 +30,15 @@ Convert requirements and gathered context into implementable architecture and fe
 - Feature context packs.
 - Existing `docs/design.md` when present.
 - Current codebase shape.
+- Technology, vendor, security, operational, and testing constraints.
 
 ## Required Reads
 
 - Requirements.
 - Context packs.
 - Existing design.
-- Project structure, tests, and relevant source files.
+- Project README, architecture docs, tests, configs, and relevant source files.
+- Active SDLC run state and latest checkpoint when a run exists.
 
 ## Writes
 
@@ -44,11 +49,27 @@ Convert requirements and gathered context into implementable architecture and fe
 ## Process
 
 - Use `assets/templates/design.md.template` when creating the file.
-- Map `REQ-*` blocks to stable `FEAT-*` blocks.
-- Preserve existing feature IDs and append new IDs instead of renumbering.
-- Define architecture, component boundaries, data flow, control flow, state, error, security, and observability models.
-- Define validation, test, evaluation, TDD success criteria, rollback, and done definition per ready feature.
-- Mark features as ready, draft, blocked, or stale and update the change log.
+- Understand requirements first: summarize product behavior, non-goals,
+  acceptance criteria, priorities, constraints, and open questions.
+- Understand the existing system before designing: inspect current components,
+  owners, public interfaces, data flow, tests, deployment/configuration, and
+  nearby patterns.
+- Use gathered context as the source of technology and vendor truth. If
+  version-sensitive, vendor, internal, codebase, or test context is missing or
+  unverifiable, route to `sdlc-gather-context` instead of guessing.
+- Map `REQ-*` blocks to stable `FEAT-*` blocks. Preserve existing feature IDs
+  and append new IDs instead of renumbering.
+- Define architecture, component boundaries, APIs or commands, data flow,
+  control flow, state, error, security, observability, operations, rollout,
+  rollback, and ownership models.
+- For non-trivial or hard-to-reverse decisions, compare the baseline/current
+  approach, the selected design, and one simpler or more conservative
+  alternative when meaningful. Record the selected option, rejected
+  alternatives, trade-offs, reversibility, and revisit trigger.
+- Define implementation boundaries, validation, test, evaluation, TDD success
+  criteria, rollback, and done definition per ready feature.
+- Mark features as ready, draft, blocked, or stale and update the decision log,
+  change log, and design fingerprint.
 
 ## Idempotency
 
@@ -61,6 +82,8 @@ Convert requirements and gathered context into implementable architecture and fe
 - If design cannot satisfy requirements, mark `DESIGN_DEFECT` or `SPEC_GAP`.
 - If context is missing, route to `sdlc-gather-context`.
 - If requirements are contradictory, route to `sdlc-create-requirements`.
+- If a feature is not implementable without a risky or irreversible choice,
+  keep it draft or blocked and record the decision needed before planning.
 
 ## Must Not
 
@@ -74,7 +97,9 @@ Convert requirements and gathered context into implementable architecture and fe
 
 - `docs/design.md` exists.
 - Every P0 requirement maps to at least one feature.
-- Every ready feature has validation, test, evaluation, and implementation boundaries.
+- Every ready feature has selected and rejected options, implementation
+  boundaries, validation, test, evaluation, rollout, rollback, and done
+  criteria.
 - Open design questions are explicit.
 
 ## SDLC Invariants

@@ -1,6 +1,6 @@
 ---
 name: sdlc-evaluate
-description: "Use only as part of the Agentic SDLC workflow; use after validation and tests in the Agentic SDLC loop to determine whether the current feature solves the real-world requirement using acceptance criteria and the correct evaluation harness."
+description: "Use only as part of the Agentic SDLC workflow; use after validation and tests in the Agentic SDLC loop to determine whether the current feature solves the real-world requirement using acceptance criteria, the correct evaluation harness, and any confirmed safe live experiment environment."
 ---
 
 # SDLC Evaluate
@@ -28,10 +28,12 @@ Evaluate observed product behavior against real-world acceptance criteria.
 - Validation evidence.
 - Test evidence.
 - Product type.
+- Live Experiment Environment section from `docs/requirements.md`, when present.
 
 ## Required Reads
 
 - Requirement block.
+- Live Experiment Environment section in `docs/requirements.md`.
 - Feature design.
 - Locked plan.
 - Validation and test evidence.
@@ -47,6 +49,10 @@ Evaluate observed product behavior against real-world acceptance criteria.
 
 - Use `assets/templates/evaluate.md.template` for evidence.
 - Select the evaluation route: `sdlc-gui-test`, `sdlc-tui-test`, API/service checks, or manual review.
+- Use the Live Experiment Environment only when it is marked provided, has
+  explicit non-production or disposable confirmation, and the intended checks
+  fit the recorded allowed actions. Otherwise fall back to local, mocked, dry
+  run, or manual evaluation as appropriate.
 - Compare observed behavior against acceptance and negative criteria.
 - Record control, observation, and evaluation evidence.
 
@@ -60,6 +66,10 @@ Evaluate observed product behavior against real-world acceptance criteria.
 
 - Real behavior mismatch maps to `EVALUATION_DEFECT`.
 - Automation failure maps to `ENVIRONMENT_DEFECT` or `EVALUATION_DEFECT` based on cause.
+- Missing required live environment access maps to `ENVIRONMENT_DEFECT` or
+  `HUMAN_INPUT_REQUIRED` based on whether setup or a human-owned decision is
+  missing.
+- Unsafe or unconfirmed live environment use maps to `POLICY_BLOCK`.
 - Acceptance issue maps to `SPEC_GAP`.
 - Design mismatch maps to `DESIGN_DEFECT`.
 
@@ -68,6 +78,9 @@ Evaluate observed product behavior against real-world acceptance criteria.
 - Ignore negative criteria.
 - Mark pass without observable evidence.
 - Overwrite validation or test evidence.
+- Use a production or unconfirmed environment for live experiments.
+- Exceed the allowed actions recorded in `docs/requirements.md`.
+- Store credentials, private endpoints, customer data, or raw logs in evidence.
 
 ## Completion Criteria
 

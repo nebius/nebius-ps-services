@@ -5,13 +5,16 @@ installed into a Codex runtime only when `install-skills.sh` is run.
 
 ## What It Does
 
-Evaluate observed product behavior against real-world acceptance criteria.
+Evaluate observed product behavior against real-world acceptance criteria,
+using the requirements Live Experiment Environment only when it is confirmed
+safe and allowed.
 
 ## Main Boundaries
 
 - Ignore negative criteria.
 - Mark pass without observable evidence.
 - Overwrite validation or test evidence.
+- Use production or unconfirmed environments for live experiments.
 
 ## Primary Inputs
 
@@ -20,6 +23,7 @@ Evaluate observed product behavior against real-world acceptance criteria.
 - Validation evidence.
 - Test evidence.
 - Product type.
+- Live Experiment Environment section from `docs/requirements.md`, when present.
 
 ## Output
 

@@ -1,0 +1,6 @@
+interface:
+  display_name: "SDLC Update Documents"
+  short_description: "Update docs after SDLC implementation evidence"
+  default_prompt: "Use $sdlc-update-documents to update project-facing documentation from implemented Agentic SDLC evidence and resolved steering."
+policy:
+  allow_implicit_invocation: false

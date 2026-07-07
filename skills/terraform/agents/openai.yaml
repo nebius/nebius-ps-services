@@ -2,3 +2,5 @@ interface:
   display_name: "Terraform"
   short_description: "Generate hardened Terraform scaffolds"
   default_prompt: "Use $terraform to scaffold a production-grade Terraform module or environment root with fail-fast validation, bounded version constraints, examples, remote state, and security best practices."
+policy:
+  allow_implicit_invocation: true

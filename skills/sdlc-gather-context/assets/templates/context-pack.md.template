@@ -9,7 +9,7 @@
 
 | Source | Type | Date Checked | Finding |
 | --- | --- | --- | --- |
-| <source> | <official-docs|internal-docs|code|tests> | <YYYY-MM-DD> | <summary> |
+| <source> | <official-docs / internal-docs / code / tests> | <YYYY-MM-DD> | <summary> |
 
 ## Facts That Affect Design Or Implementation
 

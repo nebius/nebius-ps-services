@@ -193,7 +193,7 @@ nodesets:
           emptyDir: {}
         jail:
           persistentVolumeClaim:
-            claimName: jail-pvc
+            claimName: jail-rootfs-slot-a-pvc
         jailSubMounts: []
         sharedMemorySize: 512Mi
       security:

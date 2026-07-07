@@ -105,7 +105,31 @@ class PreToolUseNebiusAuthTest(unittest.TestCase):
 
         self.assertIn(sensitive_command(), command)
         self.assertIn("NEBIUS_IAM_" + "TO" + "KEN", command)
+        self.assertIn("nebius_refresh_token() {", command)
+        self.assertIn("unset TOKEN NEBIUS_IAM_" + "TO" + "KEN", command)
+        self.assertIn('if [ -n "${BASH_VERSION:-}" ]; then', command)
+        self.assertIn("export -f nebius_refresh_token", command)
+        self.assertIn("nebius_refresh_token\n", command)
         self.assertIn(f"export NEBIUS_PROJECT_ID={PROJECT}", command)
+        self.assertIn(
+            f"export NEBIUS_AUTH_CREDENTIALS_FILE={self.credential_file}",
+            command,
+        )
+
+    def test_refresh_helper_is_available_to_long_running_shell_command(self) -> None:
+        command = self.updated_command("nebius_refresh_token && ./poll.sh")
+
+        self.assertIn("nebius_refresh_token() {", command)
+        self.assertIn("unset TOKEN NEBIUS_IAM_" + "TO" + "KEN", command)
+        self.assertIn('if [ -n "${BASH_VERSION:-}" ]; then', command)
+        self.assertIn("export -f nebius_refresh_token", command)
+        self.assertIn("nebius_refresh_token && ./poll.sh", command)
+
+    def test_refresh_helper_mention_does_not_trigger_token_injection(self) -> None:
+        self.assertEqual(
+            self.evaluate_command("python3 -c 'print(\"nebius_refresh_token\")'"),
+            {},
+        )
 
     def test_rewrites_direct_nebius_cli_without_profile(self) -> None:
         command = self.updated_command("nebius iam service-account list")
@@ -164,6 +188,40 @@ class PreToolUseNebiusAuthTest(unittest.TestCase):
             self.permission_decision(f"set -x && curl https://{service_host()}/"),
             "deny",
         )
+        self.assertEqual(
+            self.permission_decision("nebius_refresh_token && bash -c env"),
+            "deny",
+        )
+        self.assertEqual(
+            self.permission_decision("nebius_refresh_token&&bash -c env"),
+            "deny",
+        )
+        self.assertEqual(
+            self.permission_decision("nebius_refresh_token;bash -c env"),
+            "deny",
+        )
+        self.assertEqual(
+            self.permission_decision(
+                "nebius_refresh_token && bash -c 'printenv NEBIUS_IAM_TOKEN'"
+            ),
+            "deny",
+        )
+        self.assertEqual(
+            self.permission_decision("nebius_refresh_token && bash -c ' env'"),
+            "deny",
+        )
+        self.assertEqual(
+            self.permission_decision(
+                "nebius_refresh_token && python3 -c 'import os; print(os.environ)'"
+            ),
+            "deny",
+        )
+
+    def test_rewritten_bash_env_helper_does_not_chain_ambient_bash_env(self) -> None:
+        command = self.updated_command("nebius_refresh_token && ./poll.sh")
+
+        self.assertIn("export BASH_ENV=\"$NEBIUS_REFRESH_BASH_ENV\"", command)
+        self.assertNotIn("NEBIUS_REFRESH_PREVIOUS_BASH_ENV", command)
 
     def test_bare_terraform_is_not_rewritten(self) -> None:
         self.assertEqual(self.evaluate_command("terraform plan"), {})

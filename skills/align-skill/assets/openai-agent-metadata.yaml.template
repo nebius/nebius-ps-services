@@ -1,0 +1,16 @@
+interface:
+  display_name: "{{DISPLAY_NAME}}"
+  short_description: "{{SHORT_DESCRIPTION}}"
+  # icon_small: "./assets/small-logo.svg"
+  # icon_large: "./assets/large-logo.png"
+  # brand_color: "#3B82F6"
+  default_prompt: "Use ${{SKILL_NAME}} to {{DEFAULT_PROMPT_ACTION}}."
+policy:
+  allow_implicit_invocation: {{ALLOW_IMPLICIT_INVOCATION}}
+# dependencies:
+#   tools:
+#     - type: "mcp"
+#       value: "{{MCP_SERVER_NAME}}"
+#       description: "{{MCP_SERVER_DESCRIPTION}}"
+#       transport: "streamable_http"
+#       url: "{{MCP_SERVER_URL}}"

@@ -4,10 +4,10 @@ This folder contains public, reusable Codex skills for common engineering
 workflows. Each skill lives in its own folder and is discovered by the presence
 of `SKILL.md`.
 
-This root README is the concise index and install guide. Most skill folders
-also have a local `README.md` that explains what the skill does, its
-architecture, core concepts, workflow, and important files. `SKILL.md` remains
-the runtime instruction file Codex loads when the skill is used.
+This root README is the concise catalog and install guide. Most skill folders
+also have a local `README.md` that explains architecture, core concepts,
+workflow, and important files. `SKILL.md` remains the runtime instruction file
+Codex loads when the skill is used.
 
 Every reusable skill includes a `## Learning Loop` section in `SKILL.md`. When
 durable, public-safe, evidence-backed knowledge is discovered while using a
@@ -18,53 +18,125 @@ report-only work, the agent should report why source capture was skipped.
 
 For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 
-## Included Skills
+## Table of Contents
 
-- End-to-end project alignment: `align`
-- Codex Agent Nebius service-account auth bootstrap and repair:
-  `agent-nebius-auth`
-- Agentic SDLC workflow verification: `agentic-sdlc-test`
-- Agentic SDLC workflow skills: `sdlc-create-requirements`, `sdlc-start`,
-  `sdlc-gather-context`, `sdlc-create-design`, `sdlc-create-plan`,
-  `sdlc-tdd`, `sdlc-implement-plan`, `sdlc-validate-codes`,
-  `sdlc-unit-tests`, `sdlc-evaluate`, `sdlc-classify-failure`,
-  `sdlc-gui-test`, `sdlc-tui-test`, `sdlc-align-specs`, `sdlc-commit`,
-  `sdlc-uat-tests`, `sdlc-merge-pr`, plus the reused `create-pr` and
-  `review-pr` handoff skills
-- Skill folder hardening, alignment, and validation: `align-skill`
-- Security review and safe remediation across infra, CI/CD, shell, and app
-  code: `apply-security`
-- Disposable Ubuntu project container setup: `attach-ubuntu`
-- Fast local whole-repository commits on the current branch: `commit`
-- Commit and push the current feature branch: `commit-push`
-- Branch-safe GitHub pull request creation with safe check repair: `create-pr`
-- Branch-protection-respecting GitHub pull request merging: `merge-pr`
-- Read-only copy/paste-friendly local or GitHub repo code metrics: `code-info`
-- Public-safe local Codex runtime configuration: `config-codex`
-- GitHub Actions authoring and review: `github-workflows`
-- Global context management for long Codex tasks: `global-context-management`
-- Stack-aware `.gitignore` generation and cleanup: `gitignore`
-- Helm chart hardening and validation: `helmchart`
-- Grafana MCP setup for Nebius Observability in Codex:
-  `install-grafana-mcp-for-nebius`
-- Shell, Markdown, and Python linting: `linter`
-- Nebius cloud automation, quota, and MK8s GPU workflows: `nebius`
-- Nebius cxcli component onboarding: `onboard-nebius-cxcli`
-- End-to-end OCI Helm chart publishing: `publish-helm`
-- End-to-end container image publishing: `publish-image`
-- End-to-end GitHub Release publishing: `publish-release`
-- Python project scaffolding and hardening: `python-project`
-- Manual release-script generation: `release-generator`
-- GitHub pull request review and merge-readiness repair: `review-pr`
-- Bash and shell automation engineering: `shell-scripting`
-- Terraform module and repo engineering: `terraform`
+- [Skill Catalog](#skill-catalog)
+- [Using Skills in Codex Chat](#using-skills-in-codex-chat)
+- [Skill Details](#skill-details)
+- [Skills Installer](#skills-installer)
+
+## Skill Catalog
+
+The catalog below mirrors the live skill folders in this source tree. The
+`Invocation` column reflects `agents/openai.yaml`:
+
+- `Implicit allowed`: Codex may select the skill when the prompt matches.
+- `Explicit only`: invoke the skill directly with `$skill-name`.
+
+### Alignment and Authoring
+
+| Skill | Invocation | Description |
+| --- | --- | --- |
+| `align` | Implicit allowed | Project-wide alignment and changed-scope quality gates across code, wiring, tests, CI, CLI/help, config, documentation, workflows, project skills, code review, lint/syntax, and security. |
+| `align-skill` | Implicit allowed | Review, harden, validate, and improve existing or newly scaffolded Codex or Agent Skill folders after an initial scaffold or draft exists. |
+| `brainstorm` | Implicit allowed | Explore ideas in chat with source-ranked project, repo, skill, internal, vendor, and advisory design-skill context before implementation. |
+| `code-review` | Implicit allowed | Neutral findings-first review of local diffs, local branches, changed files, modules, repository areas, or patches for bugs, tests, reliability, maintainability, and structural simplification. |
+| `create-learning-course` | Explicit only | Create public-safe learning courses, course workspaces, syllabi, lessons, exercises, glossaries, and publication review checkpoints. |
+| `global-context-management` | Implicit allowed | Keep complex Codex tasks focused with durable task state, concise parent-thread context, targeted read-only subagents when authorized, focused validation, and final risk review. |
+| `research` | Implicit allowed | Senior-engineer technical due diligence with internal Slack/Confluence context first where relevant, MCP fallback for internal systems, vendor verification, alternatives, and recommendations. |
+
+### Local Setup and Information
+
+| Skill | Invocation | Description |
+| --- | --- | --- |
+| `agent-nebius-auth` | Explicit only | Bootstrap, repair, verify, or install Codex Agent Nebius service-account authentication and its token-injection hook. |
+| `agentic-sdlc-test` | Explicit only | Verify the Agentic SDLC system from outside the workflow with disposable hook fixture tests, golden-path guidance, and a safe local report. |
+| `attach-ubuntu` | Explicit only | Launch or reuse a disposable Ubuntu Docker container for the current project and best-effort open it through VS Code Dev Containers. |
+| `code-info` | Explicit only | Produce read-only, copy/paste-friendly code metrics for local folders or GitHub repositories without changing files. |
+| `config-codex` | Explicit only | Configure a public-safe local Codex home setup, including global policy, MCP config, hooks, task-state layout, custom read-only agents, and validation. |
+| `install-grafana-mcp-for-nebius` | Explicit only | Install and configure the official Grafana MCP server for Codex against Nebius-managed Grafana observability data. |
+
+### Git, Pull Requests, and Publishing
+
+| Skill | Invocation | Description |
+| --- | --- | --- |
+| `commit` | Explicit only | Create one fast local Git commit on the current branch after repo-root `git add -A` and lightweight staged validation; never pushes. |
+| `commit-push` | Explicit only | Commit all current feature-branch changes from the repo root and push the branch to `origin` without opening a pull request. |
+| `create-pr` | Explicit only | Create or reuse GitHub pull requests from local work or named branches, with branch-safe preparation, validation, and readiness reporting. |
+| `merge-pr` | Explicit only | Verify and merge a ready GitHub pull request without admin bypass after checking reviews, checks, mergeability, branch state, and head SHA. |
+| `publish-helm` | Explicit only | Publish an OCI Helm chart end to end: prepare release changes, PR/merge, tag, wait for workflow, verify the chart, and report the result. |
+| `publish-image` | Explicit only | Publish a container image end to end: prepare release changes, PR/merge, tag, wait for workflow, verify image tags/digest, and report the result. |
+| `publish-release` | Explicit only | Publish a GitHub Release end to end: prepare release changes, PR/merge, tag, wait for workflow, verify assets, and report the result. |
+| `review-pr` | Explicit only | Review a GitHub pull request by number, URL, or current branch, fix safe issues when possible, and report merge readiness or blockers. |
+
+### Project Engineering
+
+| Skill | Invocation | Description |
+| --- | --- | --- |
+| `apply-security` | Implicit allowed | Advise on, review, and safely remediate security issues across design, implementation, infrastructure, deployment, Helm, Kubernetes, Terraform, CI/CD, shell, and application code. |
+| `design` | Implicit allowed | Design software features, applications, components, APIs, data flows, and technology choices before implementation, using `research` and `system-design-rules` where relevant before the `/plan` handoff. |
+| `github-workflows` | Implicit allowed | Create, review, or standardize GitHub Actions for PR/merge CI, merge automation, reusable workflows, permissions, and release/image YAML. |
+| `gitignore` | Implicit allowed | Create or update stack-aware `.gitignore` files with sensible macOS, VS Code, and detected language/tool defaults. |
+| `helmchart` | Implicit allowed | Create, review, harden, refactor, lint, template, or standardize Helm charts and chart CI. |
+| `linter` | Implicit allowed | Lint and conservatively auto-fix shell, Markdown, and Python files with tools such as `shellcheck`, `markdownlint`, and Ruff. |
+| `nebius` | Implicit allowed | Automate Nebius SDK/cloud workflows for IAM, object storage, VPC, quota, MK8s readiness, GPU/operator decisions, and observability wiring. |
+| `nebius-audit-log` | Explicit only | Query Nebius Control Plane Audit Logs by resource or current subject with bounded, sanitized read-only CLI output. |
+| `python-project` | Implicit allowed | Scaffold or harden Python projects with modern packaging, `src/` layout, Ruff, pytest, Typer, Pydantic, services, APIs, and CI. |
+| `shell-scripting` | Implicit allowed | Create, refactor, or review Bash automation with strict mode, safe argument parsing, idempotency, and readable CLI output. |
+| `system-design-rules` | Implicit allowed | Evaluate system designs, ADRs, architecture options, APIs, data ownership, reliability, security, observability, scale, cost, and team boundaries with a practical design checklist. |
+| `task-implementer` | Explicit only | Break brownfield implementation-loop requests into ordered `task-1`..`task-n` work items and run them sequentially with validation, `code-review`, `$commit`, and markdown handoff checkpoints between fresh Codex sessions. |
+| `terraform` | Implicit allowed | Scaffold, standardize, or improve Terraform repositories and modules with state guidance, validation, security controls, examples, and CI. |
+
+### Agentic SDLC Workflow
+
+All `sdlc-*` skills are explicit-only and should run through the Agentic SDLC
+workflow, normally starting with `$sdlc-start`.
+
+| Skill | Invocation | Description |
+| --- | --- | --- |
+| `sdlc-align-specs` | Explicit only | Check SDLC requirements, design, plans, tests, implementation, documentation, and evidence for consistency. |
+| `sdlc-auto-steering` | Explicit only | Refresh private active-run steering by recording mid-run user prompts, classifying them, and deriving compact reminders before the next SDLC phase. |
+| `sdlc-classify-failure` | Explicit only | Classify failed SDLC phases and route the loop to the earliest responsible phase. |
+| `sdlc-commit` | Explicit only | Create a local feature-scoped SDLC commit after validation, tests, and evaluation pass; never pushes. |
+| `sdlc-create-design` | Explicit only | Create or update `docs/design.md` from requirements, gathered context, and codebase evidence, preserving stable feature IDs and implementation-ready design boundaries. |
+| `sdlc-create-plan` | Explicit only | Create a locked private local execution plan for one ready feature before tests or implementation. |
+| `sdlc-create-requirements` | Explicit only | Create or update `docs/requirements.md` from user prompts, tickets, stories, change requests, and optional safe live experiment environment details while preserving stable requirement IDs. |
+| `sdlc-evaluate` | Explicit only | Evaluate whether the current feature solves the real-world requirement using acceptance criteria, the right harness, and any confirmed safe live experiment environment. |
+| `sdlc-gather-context` | Explicit only | Build compact feature context packs from product, vendor, internal, codebase, and test sources. |
+| `sdlc-gui-test` | Explicit only | Control and evaluate browser UI behavior against SDLC acceptance criteria with screenshots or accessibility snapshots when available. |
+| `sdlc-implement-plan` | Explicit only | Implement production code for the current locked feature plan after `sdlc-tdd`, staying inside plan boundaries. |
+| `sdlc-merge-pr` | Explicit only | Merge a specific Agentic SDLC pull request only after explicit user request and final readiness checks. |
+| `sdlc-start` | Explicit only | Start, resume, or continue the Agentic SDLC workflow, encourage safe live environment capture when useful, and choose the next phase from local run state. |
+| `sdlc-tdd` | Explicit only | Convert acceptance criteria and design success criteria into failing or already-green tests before implementation. |
+| `sdlc-tui-test` | Explicit only | Control and evaluate terminal, CLI wizard, or TUI flows with transcript and exit-code evidence. |
+| `sdlc-update-documents` | Explicit only | Update project-facing README, changelog, usage docs, examples, or generated docs from implemented SDLC evidence without editing requirements or design. |
+| `sdlc-uat-tests` | Explicit only | Run product-level user acceptance testing across the whole system, using any confirmed safe live experiment environment, before PR creation. |
+| `sdlc-unit-tests` | Explicit only | Run behavior, regression, integration, component, contract, or mock-based tests for the current feature. |
+| `sdlc-validate-codes` | Explicit only | Run build, parse, lint, type, import, dependency, and configuration validation for the current feature, then use `code-review` as a review-only quality gate. |
 
 ## Using Skills in Codex Chat
 
-Use the exact skill name with a leading `$` in the Codex chat box, then add
-the task you want. For example, use `$align` for this project,
-`$shell-scripting` to harden a Bash script, or `$terraform` to scaffold or
-review Terraform code.
+For deterministic explicit invocation, use the exact skill name with a leading
+`$` in the Codex chat box, then add the task you want. For example, use
+`$align` for this project, `$shell-scripting` to harden a Bash script, or
+`$terraform` to scaffold or review Terraform code. Official Codex docs also
+describe explicit invocation as including the skill directly in the prompt;
+using `$skill-name` remains the clearest repo convention.
+
+OpenAI Codex treats `agents/openai.yaml` as optional skill metadata for UI,
+invocation policy, and dependencies. In this repository, every source skill
+must keep that file so invocation policy and useful interface metadata can be
+reviewed and validated. Skills marked `Explicit only` in the catalog use
+`allow_implicit_invocation: false` and should be started explicitly with
+`$skill-name`. Skills marked `Implicit allowed` use
+`allow_implicit_invocation: true` so Codex may select them when the task
+matches their metadata.
+
+For structure, the OpenAI portable minimum is a skill folder with `SKILL.md`
+containing front matter `name` and `description`. This repository uses a
+stricter source-owned standard: `agents/openai.yaml` for metadata and
+invocation policy, a standard `## Learning Loop`, and optional `references/`,
+`scripts/`, `assets/`, and `evals/` only when they serve the skill.
 
 ### Prompt Examples
 
@@ -90,6 +162,20 @@ $agentic-sdlc-test Verify the Agentic SDLC workflow against docs/agentic-sdlc-de
 $align-skill Review and standardize skills/foo against the canonical skill structure and official vendor docs.
 
 $align-skill Harden this scaffolded skill folder into a safe, secure, fast Codex skill, then validate it.
+
+$brainstorm Explore this architecture idea, gather the relevant project docs, related skills, internal context, and official vendor docs, and challenge weak assumptions before we implement anything.
+
+$create-learning-course Create a public-safe course workspace for engineers learning Kubernetes networking, with mission, syllabus, sources, HTML lessons, exercises, glossary, and publication review.
+
+$research Research Kubernetes Gateway API, search internal Slack and Confluence context first if relevant, explain how it works internally, identify limitations and alternatives, and recommend when we should or should not use it.
+
+$design Design this new feature before implementation: read the requirements, inspect the existing code and docs, route unfamiliar topic and technology research through $research, apply $system-design-rules to the non-trivial design decisions, compare options, and create a /plan handoff.
+
+$code-review Review the current local branch for bugs, regressions, test gaps, reliability risks, maintainability blockers, and missed structural simplifications.
+
+$system-design-rules Review this ADR against the system design checklist, compare the trade-offs, and identify missing reliability, data, security, observability, cost, and ownership decisions.
+
+$task-implementer Break this brownfield change into ordered task-1..task-n work items, implement them sequentially with validation, code-review, fixes, a $commit checkpoint, and a markdown handoff, then use a fresh Codex session for each task.
 
 $apply-security Scan this repository for infrastructure, CI/CD, shell, and application security issues, then produce a prioritized remediation plan with safe patch candidates.
 
@@ -132,15 +218,24 @@ otherwise read the script or report the command that would be used.
 
 ## Skill Details
 
+The catalog above is the complete live index. This section gives extra context
+for the broader, commonly reused skills and groups the Agentic SDLC phases
+together so the workflow reads as one lifecycle.
+
 ### `align`
 
-`align` is the end-to-end repair and consistency skill. Use it when a project
-needs code, module wiring, tests, CI, CLI behavior, config, examples, help
-output, README/design docs, workflows, and applicable project skills reviewed
-together as a cautious senior code-review style alignment pass. It first
-synthesizes the current thread, relevant Agent Memory, and durable task-state
-context, then verifies that context against current repository or runtime
-evidence before making safe fixes.
+`align` is the end-to-end repair, consistency, and post-change quality-gate
+skill. Use it when a project needs code, module wiring, tests, CI, CLI
+behavior, config, examples, help output, README/design docs, workflows, and
+applicable project skills reviewed together as a cautious senior alignment
+pass. It synthesizes the current thread, relevant Agent Memory, and durable
+task-state context, separates active scope from unrelated dirty files, and
+verifies that context against current repository or runtime evidence before
+making safe fixes. Before completion, it runs mandatory changed-scope lanes for
+cross-code validation, `code-review`, `linter`, `apply-security`, and focused
+repository-native tests or builds. It uses safe-only remediation, reports risky
+blockers for explicit approval, and resolves `apply-security/SKILL.md` directly
+when the mandatory security lane is not visible in the initial skills list.
 
 ### `align-skill`
 
@@ -152,15 +247,112 @@ official vendor-doc verification, canonical structure, validation evidence, fast
 authoring practices, optional stateful-workflow section profiles, and reusable
 learning capture in local skill source materials need to be aligned.
 
+### `brainstorm`
+
+`brainstorm` supports evidence-first, chat-only ideation before implementation.
+It restates the topic, builds a compact source plan, gathers context from the
+current project folder first, then sibling repo folders, related skills,
+internal Confluence/Slack/Jira sources when available, and official vendor
+docs. It separates facts from hypotheses, challenges weak assumptions, compares
+options, consults `design` and `system-design-rules` for major decisions when
+those skills are installed and accessible, and stops short of editing files,
+creating tickets, sending messages, or mutating external systems. If the user
+pivots to execution, it should
+summarize the brainstorm and hand off to the appropriate implementation,
+alignment, SDLC, or communication skill.
+
+### `create-learning-course`
+
+`create-learning-course` turns a learner mission, trusted source set, target
+audience, and desired outcomes into a public-safe course workspace. It creates
+or revises artifacts such as `MISSION.md`, `COURSE.md`, `SYLLABUS.md`,
+`RESOURCES.md`, HTML or Markdown lessons, exercises, glossaries, reference
+sheets, learning records, reusable assets, and `PUBLICATION-REVIEW.md`.
+Invoke it explicitly with `$create-learning-course`; implicit invocation is
+disabled because the workflow can create or revise many local files.
+It is our course-authoring workflow: mission-led, source-grounded,
+practice-heavy, and backed by explicit redaction, source-citation,
+high-stakes-topic, and publication-safety checks so generated courses avoid
+secrets, private endpoints, customer data, raw logs, and proprietary internal
+material. Its detailed workflow reference keeps attribution for the public
+teaching-skill pattern that inspired the learning model.
+
+### `research`
+
+`research` performs senior-engineer technical due diligence on technologies,
+frameworks, APIs, protocols, RFCs, products, architecture patterns, and feature
+requirements. For organization-tied questions, it searches internal Slack and
+Confluence context through available connectors first, uses MCP or app-tool
+access for internal systems when connectors are unavailable, then verifies
+technical claims against official vendor documentation and authoritative
+external sources. The output cross-checks internal and external evidence and
+labels organization-specific guidance, vendor-documented behavior, general
+industry practice, and unverified claims. Use `brainstorm` for open-ended
+ideation, `design` for solution design and `/plan` handoff, and
+`system-design-rules` for checklist review of an existing proposal.
+
+### `design`
+
+`design` turns requirements, existing-system evidence, and `research`-backed
+topic, requirement, and technology due diligence into a concrete software
+design before implementation. It follows a phased workflow: understand
+requirements, understand the existing system or greenfield context, route
+missing knowledge through `research` when available, design the solution, apply
+`system-design-rules` to non-trivial solution decisions, evaluate alternatives,
+and create a Codex `/plan` handoff. Use it for new features,
+major changes, APIs, data flows, integrations, and new applications when the
+user wants a practical design and implementation-ready plan, not immediate
+coding. Use `brainstorm` for open-ended ideation, `system-design-rules` for
+checklist review of an existing proposal, and `sdlc-create-design` for
+Agentic SDLC-owned `docs/design.md`.
+
+### `code-review`
+
+`code-review` performs a neutral, evidence-based review of the current local
+branch, local diff, changed files, module, repository area, or provided patch.
+Use it when the user wants findings-first feedback on bugs, regressions, test
+gaps, reliability risks, security-adjacent issues, maintainability,
+abstraction quality, modularity, type boundaries, file-size growth, spaghetti
+branches, and missed structural simplifications. It is review-first and should
+not edit code unless the user explicitly asks for fixes. `review-pr` remains
+the GitHub PR review, readiness, and branch-update workflow, while `align`
+remains the broader project consistency and repair workflow. Use
+`apply-security` for security-specific scans, threat modeling, and remediation,
+and `system-design-rules` for design-phase architecture decisions.
+
+### `system-design-rules`
+
+`system-design-rules` applies a refined 100-rule software system design
+checklist to architecture proposals, ADRs, design docs, API and data model
+choices, reliability plans, security posture, observability, performance,
+cost, migration, and team-ownership decisions before implementation. It scales
+review depth to risk, separates facts from assumptions, compares options by
+trade-offs and reversibility, and returns concrete design guidance, validation
+needs, and open questions instead of treating principles as universal laws.
+
+### `task-implementer`
+
+`task-implementer` coordinates small and medium brownfield implementation
+requests that need ordered execution across fresh Codex contexts. It inspects
+the target code before ordering work, records a `task-1` through `task-n` queue
+in a private markdown handoff under `$CODEX_HOME/task-implementer/`, implements
+one task at a time, runs focused validation, uses `code-review`, fixes scoped
+findings, commits the completed task through `$commit`, and updates the handoff
+with changed files, validation, review result, fixes, commit evidence,
+blockers, and the next-session prompt. Because it mutates code, invokes local
+commit checkpoints, and may launch follow-on implementation sessions, it is
+explicit-only. Use `$sdlc-start` for Agentic SDLC and `align` for final
+changed-surface alignment.
+
 ### `agentic-sdlc-test`
 
 `agentic-sdlc-test` verifies the Agentic SDLC workflow from outside the
 workflow. It checks `docs/agentic-sdlc-design.md`, global `sdlc-*` skill
-discovery, hook configuration, disposable PreToolUse and Stop hook fixture
-behavior, idempotency, failure routing, steering, and disposable golden-path
-execution. It writes the report under `~/.codex/sdlc-verification/` and must
-not change real projects, installed skills, hooks, hook trust, or agent
-configuration.
+discovery, explicit-only SDLC invocation policy, hook configuration,
+disposable PreToolUse and Stop hook fixture behavior, idempotency, failure
+routing, steering, and disposable golden-path execution. It writes the report
+under `~/.codex/sdlc-verification/` and must not change real projects,
+installed skills, hooks, hook trust, or agent configuration.
 
 ### `agent-nebius-auth`
 
@@ -169,7 +361,10 @@ Codex Agent Nebius authentication. It uses a service account, tenant group,
 project-level access permit, authorized-key credential file, CLI profile, and a
 Codex `PreToolUse` hook that injects short-lived Nebius token environment
 variables into matching Bash commands without returning token material as model
-context. Install or refresh the hook through the root installer, for example
+context. The hook also exports the agent credential file path and wires a Bash
+`nebius_refresh_token` helper through a restricted temporary `BASH_ENV` file
+for long-running raw API scripts. Install or refresh the hook through the root
+installer, for example
 `./install-skills.sh --install-hooks agent-nebius-auth/assets/hooks --register-hooks`;
 the setup script does not patch `$CODEX_HOME/config.toml` and instead records
 the selected project under `~/.nebius` for the hook to read locally.
@@ -183,13 +378,26 @@ and explicit final merge.
 Strictly SDLC-only skills use the `sdlc-` prefix, with the coordinator named
 `sdlc-start`, so tool discovery does not confuse workflow phases such as
 `sdlc-commit` with ordinary Git commands or general-purpose engineering skills.
+All `sdlc-*` skills set `allow_implicit_invocation: false`; start or resume the
+workflow explicitly with `$sdlc-start`, then let the coordinator record the next
+recommended phase in local run state.
 The committed product truth is `docs/requirements.md` and `docs/design.md`;
 private run state, plans, evidence, screenshots, transcripts, and steering live
 under `~/.codex/sdlc-runs/<project-id>/<run-id>/` and must not be committed.
+`STEERING.md` is the active-run inbox and steering ledger for mid-run user
+prompts, while `steering/auto-steering.json` stores machine-readable
+dispositions and compact reminders. Requirements or design changes captured in
+steering still route through the owning product-truth skills before
+implementation treats them as true.
+`docs/requirements.md` may also record an optional Live Experiment Environment
+so later evaluation and UAT can use a confirmed non-production or disposable
+target with safe connection, allowed-action, reset, and evidence rules.
 Optional global PreToolUse and Stop hooks can enforce SDLC invariants from that
-local state. Sensitive Git actions use short-lived local authorization files
-under the active run's `permissions/` directory; the skills create those files
-only immediately before the guarded action.
+local state. The Stop hook routes continuation through explicit `$sdlc-start`
+invocation rather than directly into phase skills. Sensitive Git actions use
+short-lived local authorization files under the active run's `permissions/`
+directory; the skills create those files only immediately before the guarded
+action.
 The canonical source for those optional SDLC hooks is
 `sdlc-start/assets/hooks/`. Patch that source first, validate it with
 `sdlc-start/assets/hooks/tests/test_sdlc_hooks.py`, and sync reviewed hook
@@ -203,27 +411,41 @@ See `docs/agentic-sdlc-design.md` for the architecture, template ownership,
 local state layout, hook boundaries, and full skill-by-skill lifecycle.
 
 - `sdlc-create-requirements`: creates or updates `docs/requirements.md` from user
-  prompts, tickets, or approved change requests while preserving stable
-  `REQ-*` IDs.
+  prompts, tickets, approved change requests, and optional safe live experiment
+  environment details while preserving stable `REQ-*` IDs.
 - `sdlc-start`: coordinates the active SDLC run, reads steering and local
   checkpoints, selects the highest-priority incomplete feature, and chooses one
-  next skill without duplicating history on unchanged resumes.
+  next skill without duplicating history on unchanged resumes. At run start, it
+  encourages safe live experiment environment capture through requirements.
 - `sdlc-gather-context`: builds compact feature context packs from official docs,
   internal sources, code, and tests.
 - `sdlc-create-design`: creates or updates `docs/design.md`, maps requirements to
-  stable `FEAT-*` blocks, and defines validation, test, and evaluation plans.
+  stable `FEAT-*` blocks, records selected and rejected design options, and
+  defines implementation, validation, test, evaluation, rollout, and rollback
+  boundaries.
+- `sdlc-auto-steering`: refreshes private active-run steering, records every
+  mid-run user prompt safely, classifies entries, derives compact reminders,
+  and routes requirements, design, docs, or human-input changes back through
+  `sdlc-start`.
 - `sdlc-create-plan`: creates locked private local execution plans for one feature.
 - `sdlc-tdd`: writes or maps tests before implementation.
 - `sdlc-implement-plan`: implements production code for the current locked feature
   plan only.
 - `sdlc-validate-codes`: runs syntax, lint, type, import, config, dependency, and
-  build checks where configured.
+  build checks where configured, then uses `code-review` in review-only mode to
+  catch blocking implementation-quality issues before behavior tests.
 - `sdlc-unit-tests`: runs feature behavior, regression, integration, component,
   contract, or mock-based tests.
 - `sdlc-evaluate`: observes feature behavior against acceptance criteria and routes
-  to GUI, TUI, API, service, or manual evaluation.
+  to GUI, TUI, API, service, or manual evaluation, using a confirmed safe live
+  experiment environment only within recorded allowed actions.
+- `sdlc-update-documents`: updates project-facing README, changelog, examples,
+  usage docs, docs indexes, or generated docs after evaluated implementation or
+  UAT evidence, while routing requirements and design drift to their owner
+  skills.
 - `sdlc-align-specs`: checks SDLC requirements, design, plans, tests,
-  implementation, and evidence for consistency before commit or PR readiness.
+  implementation, docs, and evidence for consistency before commit or PR
+  readiness.
 - `sdlc-classify-failure`: classifies failed phases before retrying and routes to
   the earliest responsible SDLC phase.
 - `sdlc-gui-test`: controls and evaluates browser UI flows with screenshots or
@@ -233,7 +455,9 @@ local state layout, hook boundaries, and full skill-by-skill lifecycle.
 - `sdlc-commit`: creates local feature-scoped Git commits after validation, tests,
   and evaluation pass; it never pushes and does not replace the general
   `commit` or `commit-push` skills.
-- `sdlc-uat-tests`: runs product-level user acceptance testing before PR creation.
+- `sdlc-uat-tests`: runs product-level user acceptance testing before PR
+  creation, using a confirmed safe live experiment environment only within
+  recorded allowed operations and reset rules.
 - `create-pr`: existing PR skill reused as the SDLC handoff after UAT passes;
   it opens or reuses the PR and summarizes SDLC evidence.
 - `review-pr`: existing PR review skill reused for SDLC merge-readiness review
@@ -245,9 +469,11 @@ local state layout, hook boundaries, and full skill-by-skill lifecycle.
 
 `apply-security` reviews infrastructure, deployment, Helm, Kubernetes,
 Terraform, CI/CD, Bash, Python, Java, JavaScript, TypeScript, and Rust code for
-security issues, ranks findings by severity, confidence, exploitability, and
-blast radius, plans safe remediations, and applies minimal patches only when
-they preserve intended behavior or have explicit approval.
+security issues. It can be selected implicitly during design, implementation,
+review, and validation sessions as a security adviser. It ranks findings by
+severity, confidence, exploitability, and blast radius, plans safe
+remediations, and applies minimal patches only when the current task allows
+edits and the change preserves intended behavior or has explicit approval.
 
 ### `attach-ubuntu`
 
@@ -314,7 +540,8 @@ generate coverage, or stage files.
 public-safe templates. Use it for `$CODEX_HOME` layout, global `AGENTS.md`
 policy, `config.toml` features and MCP servers, hooks, task-state directories,
 custom read-only agents, and validation without copying personal paths or
-secrets into a public repository.
+secrets into a public repository. Existing laptop `AGENTS.md` and
+`config.toml` files are merge targets, not template replacement targets.
 
 ### `github-workflows`
 
@@ -330,14 +557,17 @@ recoverable by using durable task-state files, limiting noisy parent-thread
 exploration, delegating bounded read-only investigation when the user
 explicitly authorizes delegation or enables a local hook delegation policy and
 the runtime permits it, choosing targeted helper roles after authorization
-instead of requiring the prompt to name them, closing completed subagent
-threads after their results are consolidated when close controls are available,
+instead of requiring the prompt to name them, closing every spawned subagent
+handle that is completed or no longer needed before finalizing when close
+controls are available, reporting any unavailable or failed cleanup,
 and reviewing risk before final answers. Its public skill files stay generic;
 local hooks, custom agent config, and task-state files belong under
 `$CODEX_HOME`. The hook setup advertises session-scoped task-state paths
-without creating missing state files; an existing file is meant to be read at
-task start, resume, or after compaction when prior context may matter, then
-updated with concise decisions, validation status, and next action. This
+without creating missing state files and may suggest bounded same-workspace
+prior task-state candidate paths for complex prompts without injecting their
+contents; an existing file is meant to be read at task start, resume, or after
+compaction when prior context may matter, then updated with concise decisions,
+validation status, and next action. This
 non-SDLC setup owns `SessionStart` and `UserPromptSubmit` only; Agentic SDLC
 skills and guardrails own SDLC phase selection, run state, `PreToolUse`, and
 `Stop`.
@@ -358,7 +588,8 @@ templates, schema, and validation.
 MCP server for Codex, refreshes the Nebius-managed Grafana token file, keeps
 external Grafana service-account/static-key setup out of the default path, and
 guides agents through idempotent Codex MCP registration, datasource discovery,
-Prometheus, Loki, trace-tool checks, and read-only validation.
+PromQL-compatible monitoring, Loki, trace-tool checks, and read-only
+validation.
 
 ### `linter`
 
@@ -372,10 +603,12 @@ Python. Use it when you want syntax checks, `shellcheck`, `markdownlint`, or
 including IAM bootstrap, object storage, VPC inspection, route analysis, quota
 checks, observability, and MK8s GPU/operator decisions.
 
-### `onboard-nebius-cxcli`
+### `nebius-audit-log`
 
-`onboard-nebius-cxcli` is the repo-specific onboarding skill for adding Nebius
-Terraform-backed components into `nebius-cxcli`.
+`nebius-audit-log` is an explicit-only read-only workflow for Nebius Control
+Plane Audit Logs queries. It resolves tenant, region, time window, resource or
+current subject filters, keeps page size bounded by default, and sanitizes
+output unless raw output is explicitly requested.
 
 ### `publish-helm`
 
@@ -411,11 +644,6 @@ the GitHub Release and expected assets, and returns a publish report.
 `python-project` scaffolds and hardens Python repositories with reusable modern
 defaults such as `pyproject.toml`, setuptools-scm, `src/` layout, Ruff, pytest,
 Typer, and Pydantic.
-
-### `release-generator`
-
-`release-generator` is the manual-only fallback for projects that explicitly
-want a local `release.sh` workflow and no CI release pipeline.
 
 ### `review-pr`
 
@@ -472,7 +700,9 @@ script as the source and installs every sibling skill folder that contains
 The `--install-hooks` option is deliberately separate from normal skill
 installation. It copies hook files from an explicit source hook directory into
 `${CODEX_HOME:-$HOME/.codex}/hooks`, stripping `.template` suffixes for
-installed files. Add `--register-hooks` to merge that bundle's
+installed files. It copies missing hook files, leaves matching files unchanged,
+and stops before replacing any differing existing hook file. Add
+`--register-hooks` to merge that bundle's
 `hooks.json` or `hooks.json.template` registration manifest into
 `${CODEX_HOME:-$HOME/.codex}/hooks.json`.
 The `--install-all-hooks` option is also explicit, but discovers every reviewed
@@ -482,10 +712,11 @@ With `--register-hooks`, it also merges each discovered bundle's registration
 manifest while preserving existing hook entries. Add `--replace-hooks-json`
 only when you intentionally want to back up and replace `hooks.json` with a
 clean file built from the selected source manifests. Hook install modes are
-idempotent: unchanged files are not recopied, registration appends only missing
-source entries by default, refuses duplicate Python hook files within the same
-hook event, and any extra installed hook files or hook registrations are
-reported for review instead of removed automatically.
+idempotent: unchanged files are not recopied, differing existing hook files are
+left for manual review, registration appends only missing source entries by
+default, refuses duplicate Python hook files within the same hook event, and
+any extra installed hook files or hook registrations are reported for review
+instead of removed automatically.
 
 ### Supported Sources
 
@@ -581,11 +812,13 @@ CODEX_HOME=~/custom-codex ./install-skills.sh --install-all-hooks --register-hoo
   guardrails, not skills. Use a hook-only source directory such as
   `sdlc-start/assets/hooks` or `config-codex/assets/hooks`. Without
   `--register-hooks`, this only syncs files under
-  `${CODEX_HOME:-$HOME/.codex}/hooks`.
+  `${CODEX_HOME:-$HOME/.codex}/hooks`, and it stops before replacing any
+  differing existing hook file.
 - `--install-all-hooks` discovers only skill-owned hook-only directories named
   `*/assets/hooks` under this source folder, checks for conflicting installed
   file names, and syncs all reviewed hook bundles into
-  `${CODEX_HOME:-$HOME/.codex}/hooks`.
+  `${CODEX_HOME:-$HOME/.codex}/hooks` without overwriting differing existing
+  hook files.
 - `--register-hooks` can be combined with either hook-install mode. It looks
   for `hooks.json` or `hooks.json.template` in the hook directory or its parent,
   validates the source and destination JSON, backs up an existing
@@ -594,11 +827,11 @@ CODEX_HOME=~/custom-codex ./install-skills.sh --install-all-hooks --register-hoo
   create or preserve multiple registrations for the same hook event and Python
   hook filename, such as two `Stop` entries pointing at
   `stop_sdlc_continue.py`.
-- When registering `agent-nebius-auth`, the installer also removes the old
-  marked inline `agent-nebius-auth` block from
-  `${CODEX_HOME:-$HOME/.codex}/config.toml`, backs that file up, and migrates
-  the legacy project selector to `~/.nebius/codex-agent-default-project-id`
-  without printing the project ID.
+- `agent-nebius-auth` keeps hook installation canonical: setup writes the
+  project selector under `~/.nebius`, while the root installer syncs hook files
+  and `hooks.json` only. It does not migrate inline `config.toml` hook entries;
+  it rejects stale inline agent-nebius-auth entries before copying hooks or
+  writing `hooks.json`.
 - `--replace-hooks-json` can be combined with `--register-hooks` to replace
   `${CODEX_HOME:-$HOME/.codex}/hooks.json` with a clean file built from the
   selected source manifest or manifests. This removes hand-written and stale

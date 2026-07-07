@@ -29,10 +29,11 @@ set -euo pipefail
 #   - Drift visibility: destination skills missing from the selected source are
 #     listed at the end with a --remove-skill hint instead of being removed unless
 #     they are still marked as owned by the same source.
-#   - Hook drift visibility: hook installation lists extra installed hook files
-#     and hooks.json registrations that are not present in the selected source
-#     manifests, but it never deletes them automatically unless
-#     --replace-hooks-json is explicitly set for registrations.
+#   - Hook drift visibility: hook installation copies missing hook files and
+#     leaves differing existing hook files for manual review. It lists extra
+#     installed hook files and hooks.json registrations that are not present in
+#     the selected source manifests, but it never deletes them automatically
+#     unless --replace-hooks-json is explicitly set for registrations.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_SRC_DIR="${SCRIPT_DIR}"
@@ -64,6 +65,10 @@ log_success() {
 
 log_warn() {
   printf '%b\n' "${S_YELLOW}${1}${S_RESET}" >&2
+}
+
+log_action_required() {
+  printf '%b\n' "${S_YELLOW}${S_BOLD}${1}${S_RESET}" >&2
 }
 
 log_note() {
@@ -115,6 +120,7 @@ show_usage() {
   printf '%b\n' "  ${S_YELLOW}--remove-skill${S_RESET}   Remove one skill by its visible Codex skill name or folder name"
   printf '%b\n' "  ${S_YELLOW}--install-hooks${S_RESET}  Copy hook files from a source hook directory into"
   printf '%b\n' "                    ${S_CYAN}\${CODEX_HOME:-~/.codex}/hooks${S_RESET}, stripping .template suffixes"
+  printf '%b\n' "                    and refusing to replace differing existing hook files"
   printf '%b\n' "                    without modifying hooks.json unless --register-hooks is also set"
   printf '%b\n' "  ${S_YELLOW}--install-all-hooks${S_RESET}"
   printf '%b\n' "                    Copy hook files from every ${S_CYAN}*/assets/hooks${S_RESET} directory"
@@ -151,11 +157,12 @@ show_usage() {
   printf '%b\n' "  - Reinstalling from a source that still contains the skill will add it back."
   printf '%b\n' "  - ${S_CYAN}--install-hooks${S_RESET} is opt-in because hooks are runtime guardrails, not skills."
   printf '%b\n' "  - ${S_CYAN}--install-all-hooks${S_RESET} discovers only hook-only ${S_CYAN}*/assets/hooks${S_RESET} directories under this source."
+  printf '%b\n' "  - Existing hook files with different content are left unchanged for manual review."
   printf '%b\n' "  - ${S_CYAN}--register-hooks${S_RESET} preserves existing ${S_CYAN}hooks.json${S_RESET} entries and appends missing source entries."
   printf '%b\n' "  - ${S_CYAN}--register-hooks${S_RESET} refuses duplicate Python hook files within the same hook event."
   printf '%b\n' "  - ${S_CYAN}--replace-hooks-json${S_RESET} explicitly backs up and replaces ${S_CYAN}hooks.json${S_RESET} with selected source entries."
   printf '%b\n' "  - Hook installation reports extra installed hook files and ${S_CYAN}hooks.json${S_RESET} entries not present in the selected source."
-  printf '%b\n' "  - After installing hooks, restart Codex and review/trust the hook entries in ${S_CYAN}/hooks${S_RESET}."
+  printf '%b\n' "  - After installing new or changed hooks, restart Codex and review/trust the hook entries in ${S_CYAN}/hooks${S_RESET}."
   printf '%b\n' "  - If newly installed skills are not visible, restart the VS Code extension host ${S_DIM}(Developer: Restart Extension Host)${S_RESET}."
 }
 
@@ -573,6 +580,103 @@ find_hook_registration_manifest() {
   return 1
 }
 
+hook_source_label() {
+  local hook_src="$1"
+
+  if [[ "${hook_src}" == "${DEFAULT_SRC_DIR}/"* ]]; then
+    printf '%s\n' "${hook_src#"${DEFAULT_SRC_DIR}/"}"
+    return 0
+  fi
+
+  printf '%s\n' "${hook_src}"
+}
+
+HOOK_SYNC_INSTALLED=0
+HOOK_SYNC_UNCHANGED=0
+HOOK_SYNC_TOTAL=0
+HOOK_FILE_STATUS_FILE=""
+
+preflight_hook_file_conflicts() {
+  local codex_home="$1"
+  local hook_dest="${codex_home}/hooks"
+  local hook_src=""
+  local src=""
+  local rel=""
+  local dest_rel=""
+  local dest=""
+  local conflicts=0
+
+  shift
+  for hook_src in "$@"; do
+    while IFS= read -r -d '' src; do
+      rel="${src#"${hook_src}/"}"
+      is_installable_hook_rel "${rel}" || continue
+      dest_rel="${rel%.template}"
+      dest="${hook_dest}/${dest_rel}"
+      if [[ -f "${dest}" ]] && ! cmp -s "${src}" "${dest}"; then
+        if [[ "${conflicts}" -eq 0 ]]; then
+          log_error "refusing to replace existing customized hook file(s)"
+        fi
+        printf '%b\n' "  source: ${S_CYAN}${src}${S_RESET}" >&2
+        printf '%b\n' "  target: ${S_CYAN}${dest}${S_RESET}" >&2
+        conflicts=$((conflicts + 1))
+      fi
+    done < <(find "${hook_src}" -type f -print0)
+  done
+
+  if [[ "${conflicts}" -gt 0 ]]; then
+    log_note "Review the target file(s), then remove or update them manually before rerunning hook installation."
+    log_note "This installer copies missing hook files and repairs matching file permissions, but it does not overwrite local hook customizations."
+    exit 1
+  fi
+}
+
+sync_hook_files() {
+  local hook_src="$1"
+  local codex_home="$2"
+  local hook_dest="${codex_home}/hooks"
+  local source_label=""
+  local src=""
+  local rel=""
+  local dest_rel=""
+
+  HOOK_SYNC_INSTALLED=0
+  HOOK_SYNC_UNCHANGED=0
+  HOOK_SYNC_TOTAL=0
+  source_label="$(hook_source_label "${hook_src}")"
+
+  mkdir -p "${hook_dest}"
+
+  while IFS= read -r -d '' src; do
+    rel="${src#"${hook_src}/"}"
+    is_installable_hook_rel "${rel}" || continue
+
+    dest_rel="${rel%.template}"
+    HOOK_SYNC_TOTAL=$((HOOK_SYNC_TOTAL + 1))
+    if [[ -f "${hook_dest}/${dest_rel}" ]] && cmp -s "${src}" "${hook_dest}/${dest_rel}"; then
+      chmod 0644 "${hook_dest}/${dest_rel}"
+      HOOK_SYNC_UNCHANGED=$((HOOK_SYNC_UNCHANGED + 1))
+    else
+      mkdir -p "$(dirname "${hook_dest}/${dest_rel}")"
+      install -m 0644 "${src}" "${hook_dest}/${dest_rel}"
+      HOOK_SYNC_INSTALLED=$((HOOK_SYNC_INSTALLED + 1))
+    fi
+  done < <(find "${hook_src}" -type f -print0)
+
+  if [[ "${HOOK_SYNC_TOTAL}" -eq 0 ]]; then
+    log_error "no hook files found in source directory: ${hook_src}"
+    log_note "Expected files ending in .py, .json, .py.template, or .json.template."
+    exit 1
+  fi
+
+  if [[ -n "${HOOK_FILE_STATUS_FILE}" ]]; then
+    printf 'FILE\t%s\t%s\t%s\n' \
+      "${source_label}" \
+      "${HOOK_SYNC_INSTALLED}" \
+      "${HOOK_SYNC_UNCHANGED}" >> "${HOOK_FILE_STATUS_FILE}"
+  fi
+}
+
 write_source_hook_files_manifest() {
   local output_file="$1"
   local hook_src=""
@@ -761,7 +865,7 @@ print_extra_destination_hooks() {
   print_extra_hook_registrations "${codex_home}" "$@"
 }
 
-has_agent_nebius_auth_hook_source() {
+agent_nebius_auth_hook_source_selected() {
   local hook_src=""
 
   for hook_src in "$@"; do
@@ -773,161 +877,32 @@ has_agent_nebius_auth_hook_source() {
   return 1
 }
 
-legacy_agent_nebius_auth_config_hook_migration() {
-  local mode="$1"
-  local codex_home="$2"
+reject_inline_agent_nebius_auth_config_hook() {
+  local codex_home="$1"
+  local config="${codex_home}/config.toml"
 
-  shift 2
-  has_agent_nebius_auth_hook_source "$@" || return 0
-  command -v python3 >/dev/null 2>&1 || return 0
+  shift
+  agent_nebius_auth_hook_source_selected "$@" || return 0
+  [[ -f "${config}" ]] || return 0
 
-  python3 - "${mode}" "${codex_home}" <<'PY'
-from __future__ import annotations
-
-import os
-from pathlib import Path
-import re
-import shutil
-import stat
-import sys
-import tempfile
-from datetime import datetime, timezone
-
-
-def fail(message: str) -> None:
-    print(f"ERROR: {message}", file=sys.stderr)
-    raise SystemExit(1)
-
-
-mode = sys.argv[1]
-codex_home = Path(sys.argv[2]).expanduser()
-config = codex_home / "config.toml"
-begin_marker = "# agent-nebius-auth managed block begin"
-end_marker = "# agent-nebius-auth managed block end"
-selector = Path.home() / ".nebius" / "codex-agent-default-project-id"
-project_id_re = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
-
-if mode not in {"check", "migrate"}:
-    fail(f"unsupported legacy agent-nebius-auth migration mode: {mode}")
-
-if not config.exists():
-    raise SystemExit(0)
-
-lines = config.read_text(encoding="utf-8").splitlines(keepends=True)
-kept: list[str] = []
-current_block: list[str] = []
-blocks: list[str] = []
-skipping = False
-
-for line in lines:
-    stripped = line.rstrip("\n")
-    if stripped == begin_marker:
-        if skipping:
-            fail(f"{config} contains nested agent-nebius-auth managed blocks")
-        skipping = True
-        current_block = [line]
-        if kept and kept[-1].strip() == "":
-            kept.pop()
-        continue
-    if stripped == end_marker:
-        if not skipping:
-            fail(f"{config} contains an agent-nebius-auth block end without a begin")
-        current_block.append(line)
-        blocks.append("".join(current_block))
-        current_block = []
-        skipping = False
-        continue
-    if skipping:
-        current_block.append(line)
-    else:
-        kept.append(line)
-
-if skipping:
-    fail(f"{config} contains an agent-nebius-auth block begin without an end")
-
-if not blocks:
-    raise SystemExit(0)
-
-project_ids: set[str] = set()
-for block in blocks:
-    for match in re.finditer(r"\bCODEX_NEBIUS_PROJECT_ID=([A-Za-z0-9._:-]+)", block):
-        project_ids.add(match.group(1))
-
-if len(project_ids) > 1:
-    fail(
-        f"{config} contains multiple legacy agent-nebius-auth project selectors. "
-        "Set ~/.nebius/codex-agent-default-project-id manually and remove the "
-        "legacy block before rerunning."
-    )
-
-project_id = next(iter(project_ids), "")
-if project_id and not project_id_re.fullmatch(project_id):
-    fail(f"{config} contains an invalid legacy agent-nebius-auth project selector")
-
-selector_message = ""
-if project_id:
-    existing_selector = ""
-    if selector.exists():
-        existing_selector = selector.read_text(encoding="utf-8").strip()
-    if existing_selector and existing_selector != project_id:
-        fail(
-            f"{selector} already selects a different project. Choose the intended "
-            "project manually before removing the legacy agent-nebius-auth block."
-        )
-
-if mode == "check":
-    raise SystemExit(0)
-
-if project_id:
-    if not existing_selector:
-        selector.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        temp_fd, temp_name = tempfile.mkstemp(
-            prefix=f".{selector.name}.", dir=str(selector.parent)
-        )
-        with os.fdopen(temp_fd, "w", encoding="utf-8") as handle:
-            handle.write(f"{project_id}\n")
-        os.chmod(temp_name, 0o600)
-        os.replace(temp_name, selector)
-        selector_message = "Migrated legacy agent-nebius-auth project selector to ~/.nebius/codex-agent-default-project-id"
-    else:
-        selector_message = "Legacy agent-nebius-auth project selector already matched ~/.nebius/codex-agent-default-project-id"
-
-backup = config.with_name(
-    f"config.toml.bak.agent-nebius-auth.{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
-)
-shutil.copy2(config, backup)
-mode = stat.S_IMODE(config.stat().st_mode)
-fd, temp_name = tempfile.mkstemp(prefix=".config.toml.", dir=str(codex_home))
-try:
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write("".join(kept))
-    os.chmod(temp_name, mode)
-    os.replace(temp_name, config)
-finally:
-    if os.path.exists(temp_name):
-        os.unlink(temp_name)
-
-print(f"Removed legacy agent-nebius-auth inline config hook block(s): {len(blocks)} -> {config}")
-print(f"Backed up previous config.toml: {backup}")
-if selector_message:
-    print(selector_message)
-PY
+  if grep -Eq 'agent-nebius-auth managed block begin|pre_tool_use_nebius_auth\.py' "${config}"; then
+    log_error "agent-nebius-auth inline config.toml hook entry detected: ${config}"
+    log_note "Remove the inline agent-nebius-auth hook entry before registering the canonical hooks.json entry."
+    log_note "Then rerun: ./install-skills.sh --install-hooks agent-nebius-auth/assets/hooks --register-hooks"
+    exit 1
+  fi
 }
 
-check_legacy_agent_nebius_auth_config_hook_migration() {
-  legacy_agent_nebius_auth_config_hook_migration "check" "$@"
-}
-
-migrate_legacy_agent_nebius_auth_config_hook() {
-  legacy_agent_nebius_auth_config_hook_migration "migrate" "$@"
-}
+HOOK_REGISTRATION_STATUS_FILE=""
 
 register_hooks_manifests() {
   local codex_home="$1"
   local replace_hooks_json="$2"
   local hook_src=""
+  local source_label=""
   local manifest_src=""
-  local manifest_paths=()
+  local manifest_args=()
+  local status_file="${HOOK_REGISTRATION_STATUS_FILE:-}"
 
   shift 2
   require_command "python3" "for hooks.json registration"
@@ -938,10 +913,11 @@ register_hooks_manifests() {
       log_note "Place the registration manifest in the hook directory or its parent directory."
       exit 1
     fi
-    manifest_paths+=("${manifest_src}")
+    source_label="$(hook_source_label "${hook_src}")"
+    manifest_args+=("${source_label}" "${manifest_src}")
   done
 
-  python3 - "${codex_home}" "${replace_hooks_json}" "${manifest_paths[@]}" <<'PY'
+  python3 - "${codex_home}" "${replace_hooks_json}" "${status_file}" "${manifest_args[@]}" <<'PY'
 import json
 import os
 import re
@@ -950,6 +926,7 @@ import shlex
 import stat
 import sys
 import tempfile
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -1085,14 +1062,33 @@ def existing_script_index(
 
 codex_home = Path(sys.argv[1]).expanduser()
 replace_hooks_json = sys.argv[2] == "1"
-manifest_paths = [Path(value).expanduser() for value in sys.argv[3:]]
+status_file = sys.argv[3]
+manifest_args = sys.argv[4:]
+if len(manifest_args) % 2 != 0:
+    fail("internal error: hook registration source arguments must be label/path pairs")
+source_manifests = [
+    (manifest_args[index], Path(manifest_args[index + 1]).expanduser())
+    for index in range(0, len(manifest_args), 2)
+]
 hooks_json = codex_home / "hooks.json"
-if not manifest_paths:
+if not source_manifests:
     fail("--register-hooks requires at least one source manifest")
 
+def entry_label(event_name: str, entry: dict[str, object]) -> str:
+    names = entry_python_script_names(entry)
+    if names:
+        return f"{event_name} {' '.join(names)}"
+    return event_name
+
+
 source_hooks: dict[str, list[dict[str, object]]] = {}
-for manifest_path in manifest_paths:
-    for event_name, entries in load_manifest(manifest_path, codex_home).items():
+loaded_sources: list[
+    tuple[str, Path, dict[str, list[dict[str, object]]]]
+] = []
+for source_label, manifest_path in source_manifests:
+    loaded_hooks = load_manifest(manifest_path, codex_home)
+    loaded_sources.append((source_label, manifest_path, loaded_hooks))
+    for event_name, entries in loaded_hooks.items():
         target_entries = source_hooks.setdefault(event_name, [])
         for entry in entries:
             if entry not in target_entries:
@@ -1108,6 +1104,7 @@ existing_count = 0
 had_existing = hooks_json.exists()
 added = 0
 unchanged_entries = 0
+registration_statuses: list[tuple[str, str, str]] = []
 
 if had_existing:
     try:
@@ -1135,29 +1132,40 @@ else:
         fail(f"{hooks_json} must contain a top-level hooks object")
     target_script_entries = existing_script_index(hooks_json, target_hooks)
 
-    for event_name, source_entries in source_hooks.items():
-        target_entries = target_hooks.setdefault(event_name, [])
-        if not isinstance(target_entries, list):
-            fail(f"{hooks_json} hooks.{event_name} must be an array")
-        for entry in source_entries:
-            if entry in target_entries:
-                unchanged_entries += 1
-                continue
-            for script_name in entry_python_script_names(entry):
-                existing_entry = target_script_entries.get((event_name, script_name))
-                if existing_entry is not None:
-                    fail(
-                        "Refusing to register duplicate "
-                        f"{event_name} hook script {script_name!r}: {hooks_json} "
-                        "already has a different entry for that Python file. "
-                        "Remove the obsolete entry manually or rerun with "
-                        "--replace-hooks-json when the selected source manifests "
-                        "should be authoritative."
-                    )
-            target_entries.append(entry)
-            added += 1
-            for script_name in entry_python_script_names(entry):
-                target_script_entries[(event_name, script_name)] = entry
+    for source_label, _manifest_path, loaded_hooks in loaded_sources:
+        for event_name, source_entries in loaded_hooks.items():
+            target_entries = target_hooks.setdefault(event_name, [])
+            if not isinstance(target_entries, list):
+                fail(f"{hooks_json} hooks.{event_name} must be an array")
+            for entry in source_entries:
+                label = entry_label(event_name, entry)
+                if entry in target_entries:
+                    unchanged_entries += 1
+                    registration_statuses.append((source_label, "unchanged", label))
+                    continue
+                for script_name in entry_python_script_names(entry):
+                    existing_entry = target_script_entries.get((event_name, script_name))
+                    if existing_entry is not None:
+                        fail(
+                            "Refusing to register duplicate "
+                            f"{event_name} hook script {script_name!r}: {hooks_json} "
+                            "already has a different entry for that Python file. "
+                            "Remove the obsolete entry manually or rerun with "
+                            "--replace-hooks-json when the selected source manifests "
+                            "should be authoritative."
+                        )
+                target_entries.append(entry)
+                added += 1
+                registration_statuses.append((source_label, "added", label))
+                for script_name in entry_python_script_names(entry):
+                    target_script_entries[(event_name, script_name)] = entry
+
+if replace_hooks_json:
+    status = "unchanged" if existing_valid and existing_target == new_target else "selected"
+    for source_label, _manifest_path, loaded_hooks in loaded_sources:
+        for event_name, source_entries in loaded_hooks.items():
+            for entry in source_entries:
+                registration_statuses.append((source_label, status, entry_label(event_name, entry)))
 
 if replace_hooks_json:
     unchanged = existing_valid and existing_target == target
@@ -1166,6 +1174,8 @@ else:
 
 codex_home.mkdir(parents=True, exist_ok=True)
 backup_path = ""
+summary_message = ""
+extra_messages: list[str] = []
 if not unchanged:
     if hooks_json.exists():
         backup_path = str(
@@ -1191,35 +1201,77 @@ if not unchanged:
             os.unlink(tmp_name)
 
     if replace_hooks_json:
-        print(
+        summary_message = (
             f"Rebuilt hook registrations: {source_count} entries from "
-            f"{len(manifest_paths)} source manifest(s) -> {hooks_json}"
+            f"{len(source_manifests)} source manifest(s) -> {hooks_json}"
         )
         if existing_valid:
             removed = max(existing_count - source_count, 0)
             if removed:
-                print(f"Removed existing hook registrations not in selected source manifests: {removed}")
+                extra_messages.append(
+                    f"Removed existing hook registrations not in selected source manifests: {removed}"
+                )
         else:
             if had_existing:
-                print("Previous hooks.json was not valid JSON and was replaced from source manifests.")
+                extra_messages.append(
+                    "Previous hooks.json was not valid JSON and was replaced from source manifests."
+                )
     else:
-        print(
-            f"Registered hook entries added: {added}, unchanged: {unchanged_entries} "
-            f"from {len(manifest_paths)} source manifest(s) -> {hooks_json}"
+        summary_message = (
+            f"Hook registrations summary: added {added}, unchanged {unchanged_entries} "
+            f"from {len(source_manifests)} source manifest(s) -> {hooks_json}"
         )
     if backup_path:
-        print(f"Backed up previous hooks.json: {backup_path}")
+        extra_messages.append(f"Backed up previous hooks.json: {backup_path}")
 else:
     if replace_hooks_json:
-        print(
+        summary_message = (
             f"Hook registrations unchanged: {source_count} source entries from "
-            f"{len(manifest_paths)} source manifest(s) -> {hooks_json}"
+            f"{len(source_manifests)} source manifest(s) -> {hooks_json}"
         )
     else:
-        print(
-            f"Registered hook entries added: 0, unchanged: {unchanged_entries} "
-            f"from {len(manifest_paths)} source manifest(s) -> {hooks_json}"
+        summary_message = (
+            f"Hook registrations summary: added 0, unchanged {unchanged_entries} "
+            f"from {len(source_manifests)} source manifest(s) -> {hooks_json}"
         )
+
+if status_file:
+    source_counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    total_status_counts: dict[str, int] = defaultdict(int)
+    for source_label, status, _label in registration_statuses:
+        source_counts[source_label][status] += 1
+        total_status_counts[status] += 1
+
+    with Path(status_file).open("a", encoding="utf-8") as handle:
+        handle.write(f"DEST\t{hooks_json}\n")
+        for source_label, _manifest_path in source_manifests:
+            counts = source_counts[source_label]
+            handle.write(
+                "SOURCE\t"
+                f"{source_label}\t"
+                f"{counts['added']}\t"
+                f"{counts['unchanged']}\t"
+                f"{counts['selected']}\n"
+            )
+        handle.write(
+            f"TOTAL\t{total_status_counts['added']}\t"
+            f"{total_status_counts['unchanged']}\t"
+            f"{total_status_counts['selected']}\t"
+            f"{0 if unchanged else 1}\t{summary_message}\n"
+        )
+        for message in extra_messages:
+            handle.write(f"MESSAGE\t{message}\n")
+else:
+    print("Hook registrations:")
+    current_source = ""
+    for source_label, status, label in registration_statuses:
+        if source_label != current_source:
+            print(f"  {source_label} -> {hooks_json}")
+            current_source = source_label
+        print(f"    {status} {label}")
+    print(summary_message)
+    for message in extra_messages:
+        print(message)
 PY
 }
 
@@ -1231,6 +1283,160 @@ register_hooks_manifest() {
   register_hooks_manifests "${codex_home}" "${replace_hooks_json}" "${hook_src}"
 }
 
+HOOK_STATUS_REVIEW_NEEDED=0
+
+format_two_counts() {
+  local first_label="$1"
+  local first_count="$2"
+  local second_label="$3"
+  local second_count="$4"
+
+  if [[ "${first_count}" -gt 0 && "${second_count}" -gt 0 ]]; then
+    printf '%s %s, %s %s\n' "${first_label}" "${first_count}" "${second_label}" "${second_count}"
+  elif [[ "${first_count}" -gt 0 ]]; then
+    printf '%s %s\n' "${first_label}" "${first_count}"
+  else
+    printf '%s %s\n' "${second_label}" "${second_count}"
+  fi
+}
+
+format_registration_counts() {
+  local added="$1"
+  local unchanged="$2"
+  local selected="$3"
+  local parts=()
+  local result=""
+  local part=""
+
+  if [[ "${added}" -gt 0 ]]; then
+    parts+=("added ${added}")
+  fi
+  if [[ "${selected}" -gt 0 ]]; then
+    parts+=("selected ${selected}")
+  fi
+  if [[ "${unchanged}" -gt 0 || "${#parts[@]}" -eq 0 ]]; then
+    parts+=("unchanged ${unchanged}")
+  fi
+
+  for part in "${parts[@]}"; do
+    if [[ -z "${result}" ]]; then
+      result="${part}"
+    else
+      result="${result}, ${part}"
+    fi
+  done
+  printf '%s\n' "${result}"
+}
+
+registration_status_for_source() {
+  local status_file="$1"
+  local source_label="$2"
+
+  [[ -f "${status_file}" ]] || return 1
+  awk -F '\t' -v source_label="${source_label}" \
+    '$1 == "SOURCE" && $2 == source_label { print $3 "\t" $4 "\t" $5; found = 1; exit } END { exit found ? 0 : 1 }' \
+    "${status_file}"
+}
+
+registration_dest_from_status() {
+  local status_file="$1"
+
+  [[ -f "${status_file}" ]] || return 1
+  awk -F '\t' '$1 == "DEST" { print $2; found = 1; exit } END { exit found ? 0 : 1 }' "${status_file}"
+}
+
+registration_total_from_status() {
+  local status_file="$1"
+
+  [[ -f "${status_file}" ]] || return 1
+  awk -F '\t' '$1 == "TOTAL" { print $2 "\t" $3 "\t" $4 "\t" $5; found = 1; exit } END { exit found ? 0 : 1 }' "${status_file}"
+}
+
+print_registration_messages() {
+  local status_file="$1"
+
+  [[ -f "${status_file}" ]] || return 0
+  awk -F '\t' '$1 == "MESSAGE" { print $2 }' "${status_file}"
+}
+
+print_combined_hook_status() {
+  local codex_home="$1"
+  local file_status_file="$2"
+  local registration_status_file="$3"
+  local register_hooks="$4"
+  local hook_dest="${codex_home}/hooks"
+  local registration_dest=""
+  local kind=""
+  local source_label=""
+  local file_updated=0
+  local file_unchanged=0
+  local reg_added=0
+  local reg_unchanged=0
+  local reg_selected=0
+  local total_file_updated=0
+  local total_file_unchanged=0
+  local total_reg_added=0
+  local total_reg_unchanged=0
+  local total_reg_selected=0
+  local reg_changed=0
+  local source_changed=0
+  local reg_line=""
+
+  HOOK_STATUS_REVIEW_NEEDED=0
+  registration_dest="$(registration_dest_from_status "${registration_status_file}" 2>/dev/null || true)"
+  if [[ -z "${registration_dest}" ]]; then
+    registration_dest="${codex_home}/hooks.json"
+  fi
+
+  printf '%b\n' "${S_BOLD}Hooks status:${S_RESET}"
+  while IFS=$'\t' read -r kind source_label file_updated file_unchanged; do
+    [[ "${kind}" == "FILE" ]] || continue
+    total_file_updated=$((total_file_updated + file_updated))
+    total_file_unchanged=$((total_file_unchanged + file_unchanged))
+    reg_added=0
+    reg_unchanged=0
+    reg_selected=0
+    if [[ "${register_hooks}" -eq 1 ]]; then
+      reg_line="$(registration_status_for_source "${registration_status_file}" "${source_label}" 2>/dev/null || true)"
+      if [[ -n "${reg_line}" ]]; then
+        IFS=$'\t' read -r reg_added reg_unchanged reg_selected <<< "${reg_line}"
+      fi
+    fi
+
+    source_changed=0
+    if [[ "${file_updated}" -gt 0 || "${reg_added}" -gt 0 || "${reg_selected}" -gt 0 ]]; then
+      source_changed=1
+    fi
+
+    if [[ "${source_changed}" -eq 1 ]]; then
+      printf '%b\n' "  ${S_YELLOW}changed${S_RESET} ${S_CYAN}${source_label}${S_RESET}"
+    else
+      printf '%b\n' "  unchanged ${S_CYAN}${source_label}${S_RESET}"
+    fi
+    printf '%b\n' "    files: $(format_two_counts updated "${file_updated}" unchanged "${file_unchanged}") -> ${hook_dest}"
+    if [[ "${register_hooks}" -eq 1 ]]; then
+      printf '%b\n' "    registrations: $(format_registration_counts "${reg_added}" "${reg_unchanged}" "${reg_selected}") -> ${registration_dest}"
+    else
+      printf '%b\n' "    registrations: not requested"
+    fi
+  done < "${file_status_file}"
+
+  if [[ "${register_hooks}" -eq 1 ]]; then
+    reg_line="$(registration_total_from_status "${registration_status_file}" 2>/dev/null || true)"
+    if [[ -n "${reg_line}" ]]; then
+      IFS=$'\t' read -r total_reg_added total_reg_unchanged total_reg_selected reg_changed <<< "${reg_line}"
+    fi
+    printf '%b\n' "Summary: files updated ${total_file_updated}, unchanged ${total_file_unchanged}; registrations $(format_registration_counts "${total_reg_added}" "${total_reg_unchanged}" "${total_reg_selected}")"
+    print_registration_messages "${registration_status_file}"
+  else
+    printf '%b\n' "Summary: files updated ${total_file_updated}, unchanged ${total_file_unchanged}; registrations not requested"
+  fi
+
+  if [[ "${total_file_updated}" -gt 0 || "${total_reg_added}" -gt 0 || "${total_reg_selected}" -gt 0 || "${reg_changed}" -gt 0 ]]; then
+    HOOK_STATUS_REVIEW_NEEDED=1
+  fi
+}
+
 install_hooks() {
   local hook_source_arg="$1"
   local codex_home="$2"
@@ -1238,13 +1444,8 @@ install_hooks() {
   local report_extras="${4:-1}"
   local replace_hooks_json="${5:-0}"
   local hook_src=""
-  local hook_dest="${codex_home}/hooks"
-  local src=""
-  local rel=""
-  local dest_rel=""
-  local installed=0
-  local unchanged=0
-  local total=0
+  local file_status_file=""
+  local registration_status_file=""
 
   require_command "install" "for hook installation"
   require_command "cmp" "for hook idempotency checks"
@@ -1257,6 +1458,9 @@ install_hooks() {
     exit 1
   fi
 
+  reject_inline_agent_nebius_auth_config_hook "${codex_home}" "${hook_src}"
+  preflight_hook_file_conflicts "${codex_home}" "${hook_src}"
+
   if [[ "${register_hooks}" -eq 1 ]]; then
     require_command "python3" "for hooks.json registration"
     if ! find_hook_registration_manifest "${hook_src}" >/dev/null; then
@@ -1264,44 +1468,25 @@ install_hooks() {
       log_note "Place the registration manifest in the hook directory or its parent directory."
       exit 1
     fi
-    check_legacy_agent_nebius_auth_config_hook_migration "${codex_home}" "${hook_src}"
   fi
 
-  mkdir -p "${hook_dest}"
-
-  while IFS= read -r -d '' src; do
-    rel="${src#"${hook_src}/"}"
-    is_installable_hook_rel "${rel}" || continue
-
-    dest_rel="${rel%.template}"
-    total=$((total + 1))
-    if [[ -f "${hook_dest}/${dest_rel}" ]] && cmp -s "${src}" "${hook_dest}/${dest_rel}"; then
-      chmod 0644 "${hook_dest}/${dest_rel}"
-      unchanged=$((unchanged + 1))
-      continue
-    fi
-
-    mkdir -p "$(dirname "${hook_dest}/${dest_rel}")"
-    install -m 0644 "${src}" "${hook_dest}/${dest_rel}"
-    installed=$((installed + 1))
-  done < <(find "${hook_src}" -type f -print0)
-
-  if [[ "${total}" -eq 0 ]]; then
-    log_error "no hook files found in source directory: ${hook_src}"
-    log_note "Expected files ending in .py, .json, .py.template, or .json.template."
-    exit 1
-  fi
-
-  log_success "Done. Hook files installed/updated: ${installed}, unchanged: ${unchanged} from ${hook_src} -> ${hook_dest}"
-  log_note "Template suffixes were stripped for installed hook files."
+  file_status_file="$(mktemp)"
+  registration_status_file="$(mktemp)"
+  HOOK_FILE_STATUS_FILE="${file_status_file}"
+  sync_hook_files "${hook_src}" "${codex_home}"
+  HOOK_FILE_STATUS_FILE=""
   if [[ "${register_hooks}" -eq 1 ]]; then
+    HOOK_REGISTRATION_STATUS_FILE="${registration_status_file}"
     register_hooks_manifest "${hook_src}" "${codex_home}" "${replace_hooks_json}"
-    migrate_legacy_agent_nebius_auth_config_hook "${codex_home}" "${hook_src}"
+    HOOK_REGISTRATION_STATUS_FILE=""
   else
     log_note "This did not modify hooks.json. Pass --register-hooks to merge a source registration manifest."
   fi
-  log_note "This did not trust hooks."
-  log_note "Restart Codex, open /hooks, and review the hook entries before relying on them."
+  print_combined_hook_status "${codex_home}" "${file_status_file}" "${registration_status_file}" "${register_hooks}"
+  if [[ "${HOOK_STATUS_REVIEW_NEEDED}" -eq 1 ]]; then
+    log_action_required "Action required: hook files or registrations changed. Restart Codex and review/trust entries in /hooks."
+  fi
+  rm -f "${file_status_file}" "${registration_status_file}"
   if [[ "${report_extras}" -eq 1 ]]; then
     print_extra_destination_hooks "${codex_home}" "${hook_src}"
   fi
@@ -1389,13 +1574,19 @@ install_all_hooks() {
   local source_root=""
   local hook_src=""
   local hook_dirs=()
-  local displayed=""
+  local file_status_file=""
+  local registration_status_file=""
 
   if [[ ! -d "${source_root_arg}" ]]; then
     log_error "source skills folder not found: ${source_root_arg}"
     exit 1
   fi
   source_root="$(cd "${source_root_arg}" && pwd -P)"
+
+  require_command "install" "for hook installation"
+  require_command "cmp" "for hook idempotency checks"
+  require_command "chmod" "for hook permission repair"
+  require_command "find" "for hook source discovery"
 
   while IFS= read -r hook_src; do
     [[ -n "${hook_src}" ]] || continue
@@ -1410,6 +1601,9 @@ install_all_hooks() {
 
   validate_hook_dest_collisions "${hook_dirs[@]}"
 
+  reject_inline_agent_nebius_auth_config_hook "${codex_home}" "${hook_dirs[@]}"
+  preflight_hook_file_conflicts "${codex_home}" "${hook_dirs[@]}"
+
   if [[ "${register_hooks}" -eq 1 ]]; then
     require_command "python3" "for hooks.json registration"
     for hook_src in "${hook_dirs[@]}"; do
@@ -1419,28 +1613,30 @@ install_all_hooks() {
         exit 1
       fi
     done
-    check_legacy_agent_nebius_auth_config_hook_migration "${codex_home}" "${hook_dirs[@]}"
   fi
 
-  log_note "Discovered hook source directories:"
+  file_status_file="$(mktemp)"
+  registration_status_file="$(mktemp)"
+  HOOK_FILE_STATUS_FILE="${file_status_file}"
   for hook_src in "${hook_dirs[@]}"; do
-    displayed="${hook_src#"${source_root}/"}"
-    log_note "  - ${displayed}"
+    sync_hook_files "${hook_src}" "${codex_home}"
   done
-
-  for hook_src in "${hook_dirs[@]}"; do
-    install_hooks "${hook_src}" "${codex_home}" 0 0
-  done
+  HOOK_FILE_STATUS_FILE=""
 
   if [[ "${register_hooks}" -eq 1 ]]; then
+    HOOK_REGISTRATION_STATUS_FILE="${registration_status_file}"
     register_hooks_manifests "${codex_home}" "${replace_hooks_json}" "${hook_dirs[@]}"
-    migrate_legacy_agent_nebius_auth_config_hook "${codex_home}" "${hook_dirs[@]}"
+    HOOK_REGISTRATION_STATUS_FILE=""
   else
     log_note "This did not modify hooks.json. Pass --register-hooks to merge discovered source registration manifests."
   fi
+  print_combined_hook_status "${codex_home}" "${file_status_file}" "${registration_status_file}" "${register_hooks}"
+  if [[ "${HOOK_STATUS_REVIEW_NEEDED}" -eq 1 ]]; then
+    log_action_required "Action required: hook files or registrations changed. Restart Codex and review/trust entries in /hooks."
+  fi
+  rm -f "${file_status_file}" "${registration_status_file}"
 
   print_extra_destination_hooks "${codex_home}" "${hook_dirs[@]}"
-  log_success "Done. Processed all hooks from ${#hook_dirs[@]} source directorie(s)."
 }
 
 init_output_style

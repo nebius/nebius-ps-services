@@ -17,9 +17,10 @@ local Codex home.
 
 - Hooks are runtime guardrails, not skills. They must not make workflow phase
   decisions that belong to `sdlc-start`.
-- The Stop hook must route continuation through `sdlc-start` and use canonical
-  `sdlc-*` skill names in prompts. Short phase aliases may be accepted as
-  input, but they must not be emitted as the next recommended skill.
+- The Stop hook must route continuation through explicit `$sdlc-start`
+  invocation and use canonical `sdlc-*` skill names in prompts. Short phase
+  aliases may be accepted as input, but they must not be emitted as the next
+  recommended skill.
 - `STEERING.md` pause and PR-control text, including `Pause after the current
   feature. Do not create a PR.`, must trigger a continuation through
   `sdlc-start` so the coordinator can persist the paused or no-PR decision.

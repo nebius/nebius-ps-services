@@ -119,7 +119,9 @@ jobs:
         run: |
           set -euo pipefail
           bash -n misc/gcp-vpngw.sh
+          bash -n misc/fix-vpngw-esp4.sh
           ./misc/gcp-vpngw.sh --help >/dev/null
+          ./misc/fix-vpngw-esp4.sh --help >/dev/null
 
       - name: Lint
         if: steps.state.outputs.release_exists == 'false'
@@ -142,9 +144,8 @@ jobs:
         id: asset
         run: |
           set -euo pipefail
-          shopt -s nullglob
-          assets=( ${ASSET_GLOB} )
-          shopt -u nullglob
+          assets=()
+          mapfile -t assets < <(compgen -G "${ASSET_GLOB}" | sort)
           if [[ "${#assets[@]}" -eq 0 ]]; then
             echo "::error::No release asset found with glob ${ASSET_GLOB}"
             exit 1

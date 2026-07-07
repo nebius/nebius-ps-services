@@ -2,3 +2,5 @@ interface:
   display_name: "SDLC TDD"
   short_description: "Write SDLC tests first"
   default_prompt: "Use $sdlc-tdd to define Agentic SDLC success before implementation by creating tests that prove the current feature behavior."
+policy:
+  allow_implicit_invocation: false

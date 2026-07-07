@@ -1,4 +1,6 @@
 interface:
   display_name: "Apply Security"
-  short_description: "Review and patch codebase security risks"
-  default_prompt: "Use $apply-security to scan this repository for infrastructure, CI/CD, and application security issues, then plan safe minimal remediations."
+  short_description: "Security review, advice, and safe patching"
+  default_prompt: "Review this design, code, diff, or repository for security risks. Advise within the current scope and apply only authorized low-risk remediations."
+policy:
+  allow_implicit_invocation: true

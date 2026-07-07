@@ -4,7 +4,7 @@
 
 | Command | Scope | Result |
 | --- | --- | --- |
-| `<command>` | <unit|integration|component|regression> | <pass|fail|blocked> |
+| `<command>` | <unit / integration / component / regression> | <pass / fail / blocked> |
 
 ## Acceptance Criteria Covered
 

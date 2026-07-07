@@ -1,4 +1,6 @@
 interface:
   display_name: "SDLC Create Requirements"
-  short_description: "Generate SDLC requirements"
-  default_prompt: "Use $sdlc-create-requirements to convert user intent into durable, testable Agentic SDLC product requirements in `docs/requirements.md`."
+  short_description: "Generate guarded SDLC requirements"
+  default_prompt: "Use $sdlc-create-requirements to convert user intent into durable, testable Agentic SDLC product requirements in `docs/requirements.md`, including an optional safe Live Experiment Environment section when the user provides one."
+policy:
+  allow_implicit_invocation: false

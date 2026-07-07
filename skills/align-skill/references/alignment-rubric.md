@@ -5,6 +5,7 @@ practical checklist, not a reason to rewrite unrelated content.
 
 Source basis:
 
+- [OpenAI Codex Agent Skills](https://developers.openai.com/codex/skills)
 - [OpenAI Codex best practices](https://developers.openai.com/codex/learn/best-practices)
 - [Agent Skills best practices](https://agentskills.io/skill-creation/best-practices)
 - [Optimizing skill descriptions](https://agentskills.io/skill-creation/optimizing-descriptions)
@@ -15,6 +16,7 @@ Source basis:
 
 | Area | Check |
 | --- | --- |
+| Structure profile | Review distinguishes OpenAI portable minimum requirements from local repo-specific standards. |
 | Name and folder consistency | `name` is lowercase hyphenated, valid, and matches the parent folder. |
 | SDLC-only naming | Skills used only inside the Agentic SDLC state machine use `sdlc-*` names and start descriptions with `Use only as part of the Agentic SDLC workflow;`. |
 | Description specificity | Description says what the skill does and when to use it. |

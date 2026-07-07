@@ -303,6 +303,109 @@ def test_init_nebius_sdk_prefer_operator_auth_uses_iam_token_before_runtime_auth
     assert sdk.kwargs["parent_id"] == "project-1"
 
 
+def test_init_nebius_sdk_prefer_operator_auth_prefers_credentials_file_over_iam_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_nebius_modules(monkeypatch)
+    credentials_file = tmp_path / "codex-agent-authkey.project-1.json"
+    credentials_file.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("NEBIUS_AUTH_CREDENTIALS_FILE", str(credentials_file))
+    monkeypatch.setenv("NEBIUS_PROFILE", "codex-agent-project-1")
+    monkeypatch.setenv("NEBIUS_IAM_TOKEN", "operator-token-123")
+    monkeypatch.setattr(
+        sdk_auth.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("CLI token should not be needed"),
+    )
+
+    sdk: Any = sdk_auth.init_nebius_sdk(
+        parent_id="project-1",
+        context="quota assessment",
+        prefer_operator_auth=True,
+    )
+
+    assert sdk.kwargs["credentials_file_name"] == credentials_file.resolve()
+    assert "credentials" not in sdk.kwargs
+    assert sdk.kwargs["parent_id"] == "project-1"
+
+
+def test_init_nebius_sdk_prefer_operator_auth_ignores_missing_codex_credentials_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_nebius_modules(monkeypatch)
+    credentials_file = tmp_path / "codex-agent-authkey.project-1.json"
+    monkeypatch.setenv("NEBIUS_AUTH_CREDENTIALS_FILE", str(credentials_file))
+    monkeypatch.setenv("NEBIUS_PROFILE", "codex-agent-project-1")
+    monkeypatch.setenv("NEBIUS_IAM_TOKEN", "operator-token-123")
+    monkeypatch.setattr(
+        sdk_auth.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("CLI token should not be needed"),
+    )
+
+    sdk: Any = sdk_auth.init_nebius_sdk(
+        parent_id="project-1",
+        context="quota assessment",
+        prefer_operator_auth=True,
+    )
+
+    assert sdk.kwargs["credentials"] == "operator-token-123"
+    assert "credentials_file_name" not in sdk.kwargs
+    assert sdk.kwargs["parent_id"] == "project-1"
+
+
+def test_init_nebius_sdk_prefer_operator_auth_keeps_generic_credentials_after_iam_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_nebius_modules(monkeypatch)
+    credentials_file = tmp_path / "runtime-auth.json"
+    credentials_file.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("NEBIUS_AUTH_CREDENTIALS_FILE", str(credentials_file))
+    monkeypatch.setenv("NEBIUS_IAM_TOKEN", "operator-token-123")
+    monkeypatch.delenv("NEBIUS_PROFILE", raising=False)
+    monkeypatch.setattr(
+        sdk_auth.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("CLI token should not be needed"),
+    )
+
+    sdk: Any = sdk_auth.init_nebius_sdk(
+        parent_id="project-1",
+        context="quota assessment",
+        prefer_operator_auth=True,
+    )
+
+    assert sdk.kwargs["credentials"] == "operator-token-123"
+    assert "credentials_file_name" not in sdk.kwargs
+    assert sdk.kwargs["parent_id"] == "project-1"
+
+
+def test_init_nebius_sdk_prefer_operator_auth_keeps_mismatched_codex_file_after_iam_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_nebius_modules(monkeypatch)
+    credentials_file = tmp_path / "codex-agent-authkey.project-other.json"
+    credentials_file.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("NEBIUS_AUTH_CREDENTIALS_FILE", str(credentials_file))
+    monkeypatch.setenv("NEBIUS_PROFILE", "codex-agent-project-1")
+    monkeypatch.setenv("NEBIUS_IAM_TOKEN", "operator-token-123")
+    monkeypatch.setattr(
+        sdk_auth.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("CLI token should not be needed"),
+    )
+
+    sdk: Any = sdk_auth.init_nebius_sdk(
+        parent_id="project-1",
+        context="quota assessment",
+        prefer_operator_auth=True,
+    )
+
+    assert sdk.kwargs["credentials"] == "operator-token-123"
+    assert "credentials_file_name" not in sdk.kwargs
+    assert sdk.kwargs["parent_id"] == "project-1"
+
+
 def test_init_nebius_sdk_prefer_operator_auth_uses_sdk_config_before_runtime_auth(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

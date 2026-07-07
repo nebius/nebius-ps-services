@@ -35,6 +35,7 @@ def write_skill(
     *,
     description: str | None = None,
     include_learning_loop: bool = True,
+    allow_implicit_invocation: str | None = "true",
 ) -> None:
     skill_dir.mkdir(parents=True, exist_ok=True)
     sections = [body]
@@ -57,6 +58,23 @@ def write_skill(
         ),
         encoding="utf-8",
     )
+    if allow_implicit_invocation is not None:
+        agents_dir = skill_dir / "agents"
+        agents_dir.mkdir()
+        (agents_dir / "openai.yaml").write_text(
+            "\n".join(
+                [
+                    "interface:",
+                    f'  display_name: "{name}"',
+                    f'  short_description: "Fixture for {name}"',
+                    f'  default_prompt: "Use ${name} for this fixture."',
+                    "policy:",
+                    f"  allow_implicit_invocation: {allow_implicit_invocation}",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
 
 
 def run_validator(
@@ -279,6 +297,7 @@ def test_sdlc_only_name_and_description_contract() -> None:
             root / "sdlc-good",
             "sdlc-good",
             description=f"{prefix} use for a workflow phase.",
+            allow_implicit_invocation="false",
         )
         write_skill(
             root / "plain-skill",
@@ -307,6 +326,204 @@ def test_sdlc_only_name_and_description_contract() -> None:
         )
 
 
+def test_missing_openai_metadata_policy_fails() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_skill(
+            root / "missing-policy",
+            "missing-policy",
+            allow_implicit_invocation=None,
+        )
+
+        result = run_validator(root)
+        output = result.stdout + result.stderr
+        if result.returncode == 0:
+            raise AssertionError(f"expected validator failure\n{output}")
+
+        assert_contains(
+            output,
+            "missing agents/openai.yaml metadata with "
+            "policy.allow_implicit_invocation",
+        )
+
+
+def test_wrong_openai_metadata_path_fails() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        skill_dir = root / "wrong-path"
+        write_skill(
+            skill_dir,
+            "wrong-path",
+            allow_implicit_invocation=None,
+        )
+        (skill_dir / "agents.openai.yaml").write_text(
+            "policy:\n  allow_implicit_invocation: true\n",
+            encoding="utf-8",
+        )
+
+        result = run_validator(root)
+        output = result.stdout + result.stderr
+        if result.returncode == 0:
+            raise AssertionError(f"expected validator failure\n{output}")
+
+        assert_contains(
+            output,
+            "found agents.openai.yaml; OpenAI metadata must live at "
+            "agents/openai.yaml",
+        )
+
+
+def test_invocation_policy_contract_fails_for_wrong_value() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_skill(
+            root / "commit",
+            "commit",
+            allow_implicit_invocation="true",
+        )
+
+        result = run_validator(root)
+        output = result.stdout + result.stderr
+        if result.returncode == 0:
+            raise AssertionError(f"expected validator failure\n{output}")
+
+        assert_contains(
+            output,
+            "policy.allow_implicit_invocation must be false for commit",
+        )
+
+
+def test_description_declared_explicit_policy_must_be_false() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_skill(
+            root / "manual-release",
+            "manual-release",
+            description="Use only when the user explicitly asks to create a manual release artifact.",
+            allow_implicit_invocation="true",
+        )
+
+        result = run_validator(root)
+        output = result.stdout + result.stderr
+        if result.returncode == 0:
+            raise AssertionError(f"expected validator failure\n{output}")
+
+        assert_contains(
+            output,
+            "policy.allow_implicit_invocation must be false for manual-release",
+        )
+
+
+def test_invocation_policy_section_can_require_explicit_only() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_skill(
+            root / "guarded-workflow",
+            "guarded-workflow",
+            "## Invocation Policy\n\nExplicit invocation required.\n",
+            allow_implicit_invocation="true",
+        )
+
+        result = run_validator(root)
+        output = result.stdout + result.stderr
+        if result.returncode == 0:
+            raise AssertionError(f"expected validator failure\n{output}")
+
+        assert_contains(
+            output,
+            "policy.allow_implicit_invocation must be false for guarded-workflow",
+        )
+
+
+def test_ordinary_skill_policy_must_be_true() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_skill(
+            root / "ordinary-skill",
+            "ordinary-skill",
+            allow_implicit_invocation="false",
+        )
+
+        result = run_validator(root)
+        output = result.stdout + result.stderr
+        if result.returncode == 0:
+            raise AssertionError(f"expected validator failure\n{output}")
+
+        assert_contains(
+            output,
+            "policy.allow_implicit_invocation must be true for ordinary-skill",
+        )
+
+
+def test_apply_security_policy_can_be_implicit() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_skill(
+            root / "apply-security",
+            "apply-security",
+            (
+                "## Invocation Policy\n\n"
+                "Implicit invocation is allowed. Patch only when the current "
+                "task allows edits and the remediation is low risk.\n"
+            ),
+            description=(
+                "Use as a security reviewer, adviser, and safe remediation "
+                "helper for design, implementation, review, and validation."
+            ),
+            allow_implicit_invocation="true",
+        )
+
+        result = run_validator(root)
+        output = result.stdout + result.stderr
+        if result.returncode != 0:
+            raise AssertionError(output)
+
+        assert_contains(output, "Validated 1 skill(s): 0 failure(s), 0 warning(s)")
+
+
+def test_guardrail_text_does_not_make_whole_skill_explicit_only() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_skill(
+            root / "safe-helper",
+            "safe-helper",
+            (
+                "## Guardrails\n\n"
+                "- Run destructive actions only when the user explicitly asks.\n"
+            ),
+            allow_implicit_invocation="true",
+        )
+
+        result = run_validator(root)
+        output = result.stdout + result.stderr
+        if result.returncode != 0:
+            raise AssertionError(output)
+
+        assert_contains(output, "Validated 1 skill(s): 0 failure(s), 0 warning(s)")
+
+
+def test_sdlc_invocation_policy_must_be_explicit_only() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        prefix = "Use only as part of the Agentic SDLC workflow;"
+        write_skill(
+            root / "sdlc-plan",
+            "sdlc-plan",
+            description=f"{prefix} use for a workflow phase.",
+            allow_implicit_invocation="true",
+        )
+
+        result = run_validator(root)
+        output = result.stdout + result.stderr
+        if result.returncode == 0:
+            raise AssertionError(f"expected validator failure\n{output}")
+
+        assert_contains(
+            output,
+            "policy.allow_implicit_invocation must be false for sdlc-plan",
+        )
+
+
 def main() -> int:
     tests = [
         test_evals_folder_and_unknown_folder_warning,
@@ -316,6 +533,15 @@ def main() -> int:
         test_stateful_workflow_profile_passes_complete_sections,
         test_stateful_workflow_profile_missing_heading_fails,
         test_sdlc_only_name_and_description_contract,
+        test_missing_openai_metadata_policy_fails,
+        test_wrong_openai_metadata_path_fails,
+        test_invocation_policy_contract_fails_for_wrong_value,
+        test_description_declared_explicit_policy_must_be_false,
+        test_invocation_policy_section_can_require_explicit_only,
+        test_ordinary_skill_policy_must_be_true,
+        test_apply_security_policy_can_be_implicit,
+        test_guardrail_text_does_not_make_whole_skill_explicit_only,
+        test_sdlc_invocation_policy_must_be_explicit_only,
     ]
     for test in tests:
         test()

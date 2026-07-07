@@ -447,6 +447,16 @@ WantedBy=multi-user.target
                                 with sftp.file("/tmp/setup-vpngw-firewall.sh", "w") as f:
                                     f.write(firewall_script.read_text())
                                 print("[SSHPush] Staged firewall setup script")
+
+                            esp4_preflight_script = (
+                                systemd_dir / "nebius-vpngw-esp4-preflight.sh"
+                            )
+                            if esp4_preflight_script.exists():
+                                with sftp.file(
+                                    "/tmp/nebius-vpngw-esp4-preflight.sh", "w"
+                                ) as f:
+                                    f.write(esp4_preflight_script.read_text())
+                                print("[SSHPush] Staged ESP4 preflight helper")
                     except Exception as e:
                         print(f"[SSHPush] Failed to stage systemd unit: {e}")
                 else:
@@ -503,6 +513,8 @@ WantedBy=multi-user.target
             "if [ -f /etc/systemd/system/nebius-vpngw-health-monitor.service ]; then sudo chmod 0644 /etc/systemd/system/nebius-vpngw-health-monitor.service; fi",
             "if [ -f /tmp/setup-vpngw-firewall.sh ]; then sudo mv /tmp/setup-vpngw-firewall.sh /usr/local/bin/setup-vpngw-firewall.sh; fi",
             "if [ -f /usr/local/bin/setup-vpngw-firewall.sh ]; then sudo chmod 0755 /usr/local/bin/setup-vpngw-firewall.sh; fi",
+            "if [ -f /tmp/nebius-vpngw-esp4-preflight.sh ]; then sudo mv /tmp/nebius-vpngw-esp4-preflight.sh /usr/local/bin/nebius-vpngw-esp4-preflight.sh; fi",
+            "if [ -f /usr/local/bin/nebius-vpngw-esp4-preflight.sh ]; then sudo chmod 0755 /usr/local/bin/nebius-vpngw-esp4-preflight.sh; fi",
             # Refresh systemd unit if staged
             "if [ -f /tmp/nebius-vpngw-agent.service ]; then sudo mv /tmp/nebius-vpngw-agent.service /etc/systemd/system/nebius-vpngw-agent.service; fi",
             "sudo chmod 0644 /etc/systemd/system/nebius-vpngw-agent.service",

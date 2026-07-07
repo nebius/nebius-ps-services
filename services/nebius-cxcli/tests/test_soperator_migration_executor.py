@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
-from collections.abc import Sequence
+import sys
+import types
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -11,12 +15,16 @@ import pytest
 
 from nebius_cxcli import soperator_migration as migration
 from nebius_cxcli.quota_checks import QuotaCheck, QuotaReport, QuotaRequirement
+from nebius_cxcli.soperator_jail_capacity import GIB, evaluate_jail_capacity
 from nebius_cxcli.soperator_migration import (
     SoperatorMigrationCommandResult,
-    execute_soperator_migration,
     soperator_migration_checkpoint_path,
 )
+from nebius_cxcli.soperator_migration import (
+    execute_soperator_migration as _execute_soperator_migration,
+)
 from nebius_cxcli.soperator_onboarding import (
+    SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA,
     analyze_soperator_onboarding_snapshot,
     soperator_onboarding_fingerprint,
 )
@@ -53,6 +61,56 @@ def _snapshot(version: str = "3.0.5") -> dict[str, Any]:
 
 
 @pytest.mark.parametrize(
+    ("phase_id", "expected_stage"),
+    [
+        ("external-node-template-upgrade", "MK8s Node Upgrades"),
+        ("target-gpu-stack-remediation", "MK8s Node Upgrades"),
+        ("post-upgrade-mk8s-check", "MK8s Node Upgrades"),
+        ("discovery-and-plan", "Soperator Upgrade"),
+        ("customer-approval", "Soperator Upgrade"),
+        ("create-aligned-sfs", "Soperator Upgrade"),
+        ("online-bulk-data-sync", "Soperator Upgrade"),
+        ("rolling-compute-migration", "Soperator Upgrade"),
+        ("final-control-plane-cutover", "Soperator Upgrade"),
+        ("populate-jail-refresh", "Jail Upgrade"),
+        ("validation-and-rollback-hold", "Soperator Upgrade"),
+        ("retire-old-resources", "Soperator Upgrade"),
+        ("post-upgrade-helm-check", "Soperator Upgrade"),
+        ("backup", "Soperator Upgrade"),
+    ],
+)
+def test_external_soperator_upgrade_top_level_stage_groups_known_phases(
+    phase_id: str,
+    expected_stage: str,
+) -> None:
+    assert migration.external_soperator_upgrade_top_level_stage(phase_id) == expected_stage
+
+
+def test_external_upgrade_status_summary_distinguishes_operator_stop() -> None:
+    assert (
+        migration._external_upgrade_status_summary(  # noqa: SLF001
+            pending_phase="external-node-template-upgrade",
+            pending_reason=(
+                "External Soperator upgrade stopped by operator while affected Slurm "
+                "jobs are still present."
+            ),
+            mutation_performed=False,
+        )
+        == "stopped by operator before upgrade mutation; rerun the same command "
+        "after choosing how to handle affected Slurm jobs."
+    )
+    assert (
+        migration._external_upgrade_status_summary(  # noqa: SLF001
+            pending_phase="rolling-compute-migration",
+            pending_reason="External Soperator upgrade stopped by operator.",
+            mutation_performed=True,
+        )
+        == "stopped by operator after upgrade mutation; rerun the same command "
+        "after choosing how to handle affected Slurm jobs."
+    )
+
+
+@pytest.mark.parametrize(
     "stderr",
     [
         "not found",
@@ -68,6 +126,403 @@ def test_command_not_found_recognizes_explicit_not_found_status(stderr: str) -> 
     )
 
     assert migration._command_not_found(result) is True
+
+
+def test_default_command_runner_retries_transient_kubectl_auth_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def _run(
+        args: list[str],
+        *,
+        input: str | None,
+        text: bool,
+        capture_output: bool,
+        timeout: int,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        del input, text, capture_output, timeout, check
+        calls.append(args)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(
+                args,
+                1,
+                "",
+                (
+                    "Unable to connect to the server: getting credentials: "
+                    "authentication handshake failed: Client.Timeout exceeded "
+                    "while awaiting headers"
+                ),
+            )
+        return subprocess.CompletedProcess(args, 0, "ok", "")
+
+    monkeypatch.setattr(migration.subprocess, "run", _run)
+    monkeypatch.setattr(migration.time, "sleep", lambda _seconds: None)
+
+    result = migration._default_command_runner(  # noqa: SLF001
+        ["kubectl", "get", "pods"],
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == "ok"
+    assert len(calls) == 2
+
+
+def test_default_command_runner_retries_read_timeout_for_read_only_kubectl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def _run(
+        args: list[str],
+        *,
+        input: str | None,
+        text: bool,
+        capture_output: bool,
+        timeout: int,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        del input, text, capture_output, timeout, check
+        calls.append(args)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(args, 1, "", "read: operation timed out")
+        return subprocess.CompletedProcess(args, 0, "ok", "")
+
+    monkeypatch.setattr(migration.subprocess, "run", _run)
+    monkeypatch.setattr(migration.time, "sleep", lambda _seconds: None)
+
+    result = migration._default_command_runner(  # noqa: SLF001
+        ["kubectl", "--context", "external-context", "get", "pods"],
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == "ok"
+    assert len(calls) == 2
+
+
+def test_default_command_runner_does_not_retry_read_timeout_for_kubectl_exec(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def _run(
+        args: list[str],
+        *,
+        input: str | None,
+        text: bool,
+        capture_output: bool,
+        timeout: int,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        del input, text, capture_output, timeout, check
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 1, "", "read: operation timed out")
+
+    monkeypatch.setattr(migration.subprocess, "run", _run)
+    monkeypatch.setattr(migration.time, "sleep", lambda _seconds: None)
+
+    result = migration._default_command_runner(  # noqa: SLF001
+        [
+            "kubectl",
+            "--context",
+            "external-context",
+            "exec",
+            "login-0",
+            "--",
+            "bash",
+            "-lc",
+            "scontrol update nodename=worker-0 state=resume",
+        ],
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert len(calls) == 1
+
+
+def test_node_group_payload_reads_through_nebius_api() -> None:
+    class _Api:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def get_node_group(self, node_group_id: str) -> Mapping[str, Any]:
+            self.calls.append(node_group_id)
+            return {"metadata": {"id": node_group_id}}
+
+    api = _Api()
+    payload = migration._node_group_payload_by_id(  # noqa: SLF001
+        nebius_api=api,  # type: ignore[arg-type]
+        node_group_id="node-group-1",
+    )
+
+    assert payload["metadata"]["id"] == "node-group-1"
+    assert api.calls == ["node-group-1"]
+
+
+def test_sdk_cluster_control_plane_update_preserves_required_identity_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    current_cluster = {
+        "metadata": {
+            "id": "mk8scluster-123",
+            "parent_id": "project-123",
+            "name": "cluster-a",
+        },
+        "spec": {
+            "control_plane": {
+                "version": "1.32",
+                "subnet_id": "vpcsubnet-123",
+            }
+        },
+        "status": {
+            "control_plane": {
+                "endpoints": {
+                    "private_endpoint": "https://private.example.invalid",
+                    "public_endpoint": "https://public.example.invalid",
+                }
+            }
+        },
+    }
+
+    class _Message:
+        def __init__(self, **kwargs: Any) -> None:
+            self.__dict__.update(kwargs)
+
+    class _UpdateClusterRequest(_Message):
+        def set_mask(self, mask: object) -> None:
+            self.mask = mask
+
+    class _Request:
+        def __init__(self, *, id: str) -> None:
+            self.id = id
+
+    class _GetOperation:
+        def wait(self) -> Mapping[str, Any]:
+            return current_cluster
+
+    class _UpdateOperation:
+        def wait(self) -> object:
+            return object()
+
+    class _ClusterClient:
+        def get(self, request: _Request) -> _GetOperation:
+            captured["get_request_id"] = request.id
+            return _GetOperation()
+
+        def update(self, request: _UpdateClusterRequest) -> _UpdateOperation:
+            captured["update_request"] = request
+            return _UpdateOperation()
+
+    common_module = types.ModuleType("nebius.api.nebius.common.v1")
+    common_module.ResourceMetadata = _Message  # type: ignore[attr-defined]
+    mk8s_module = types.ModuleType("nebius.api.nebius.mk8s.v1")
+    mk8s_module.ClusterSpec = _Message  # type: ignore[attr-defined]
+    mk8s_module.ControlPlaneEndpointsSpec = _Message  # type: ignore[attr-defined]
+    mk8s_module.ControlPlaneSpec = _Message  # type: ignore[attr-defined]
+    mk8s_module.GetClusterRequest = _Request  # type: ignore[attr-defined]
+    mk8s_module.PublicEndpointSpec = _Message  # type: ignore[attr-defined]
+    mk8s_module.UpdateClusterRequest = _UpdateClusterRequest  # type: ignore[attr-defined]
+    fieldmask_module = types.ModuleType("nebius.base.fieldmask")
+    fieldmask_module.Mask = types.SimpleNamespace(unmarshal=lambda value: value)  # type: ignore[attr-defined]
+
+    monkeypatch.setitem(sys.modules, "nebius.api.nebius.common.v1", common_module)
+    monkeypatch.setitem(sys.modules, "nebius.api.nebius.mk8s.v1", mk8s_module)
+    monkeypatch.setitem(sys.modules, "nebius.base.fieldmask", fieldmask_module)
+    monkeypatch.setattr(migration, "wait_nebius_operation", lambda *args, **kwargs: None)
+
+    api = object.__new__(migration._SdkSoperatorMigrationNebiusApi)  # noqa: SLF001
+    api._cluster_client = _ClusterClient()
+
+    result = api.update_cluster_control_plane(
+        cluster_id="mk8scluster-123",
+        control_plane_version="1.33",
+    )
+
+    update_request = captured["update_request"]
+    assert result == current_cluster
+    assert captured["get_request_id"] == "mk8scluster-123"
+    assert update_request.metadata.id == "mk8scluster-123"
+    assert update_request.metadata.parent_id == "project-123"
+    assert update_request.metadata.name == "cluster-a"
+    assert update_request.spec.control_plane.version == "1.33"
+    assert update_request.spec.control_plane.subnet_id == "vpcsubnet-123"
+    assert isinstance(update_request.spec.control_plane.endpoints.public_endpoint, _Message)
+    assert update_request.mask == "spec.control_plane.version"
+
+
+def test_sdk_node_group_updates_preserve_required_identity_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    current_node_group = {
+        "metadata": {
+            "id": "nodegroup-123",
+            "parent_id": "mk8scluster-123",
+            "name": "worker-a",
+        },
+        "spec": {
+            "version": "1.32",
+            "fixed_node_count": 2,
+            "template": {"os": "ubuntu22.04-driverless"},
+        },
+    }
+
+    class _Message:
+        def __init__(self, **kwargs: Any) -> None:
+            self.__dict__.update(kwargs)
+
+    class _UpdateNodeGroupRequest(_Message):
+        def set_mask(self, mask: object) -> None:
+            self.mask = mask
+
+    class _Request:
+        def __init__(self, *, id: str) -> None:
+            self.id = id
+
+    class _GetOperation:
+        def wait(self) -> Mapping[str, Any]:
+            return current_node_group
+
+    class _UpdateOperation:
+        def wait(self) -> object:
+            return object()
+
+    class _NodeGroupClient:
+        def get(self, request: _Request) -> _GetOperation:
+            captured.setdefault("get_request_ids", []).append(request.id)
+            return _GetOperation()
+
+        def update(self, request: _UpdateNodeGroupRequest) -> _UpdateOperation:
+            captured.setdefault("update_requests", []).append(request)
+            return _UpdateOperation()
+
+    common_module = types.ModuleType("nebius.api.nebius.common.v1")
+    common_module.ResourceMetadata = _Message  # type: ignore[attr-defined]
+    mk8s_module = types.ModuleType("nebius.api.nebius.mk8s.v1")
+    mk8s_module.GetNodeGroupRequest = _Request  # type: ignore[attr-defined]
+    mk8s_module.NodeGroupSpec = _Message  # type: ignore[attr-defined]
+    mk8s_module.UpdateNodeGroupRequest = _UpdateNodeGroupRequest  # type: ignore[attr-defined]
+    fieldmask_module = types.ModuleType("nebius.base.fieldmask")
+    fieldmask_module.Mask = types.SimpleNamespace(unmarshal=lambda value: value)  # type: ignore[attr-defined]
+
+    monkeypatch.setitem(sys.modules, "nebius.api.nebius.common.v1", common_module)
+    monkeypatch.setitem(sys.modules, "nebius.api.nebius.mk8s.v1", mk8s_module)
+    monkeypatch.setitem(sys.modules, "nebius.base.fieldmask", fieldmask_module)
+    monkeypatch.setattr(migration, "sdk_parse_message", lambda cls, payload: cls(**payload))
+    monkeypatch.setattr(migration, "wait_nebius_operation", lambda *args, **kwargs: None)
+
+    api = object.__new__(migration._SdkSoperatorMigrationNebiusApi)  # noqa: SLF001
+    api._node_group_client = _NodeGroupClient()
+
+    api.update_node_group(
+        node_group_id="nodegroup-123",
+        original_node_group=current_node_group,
+        update_args=("--version", "1.33"),
+        strategy_args=(),
+    )
+    api.scale_node_group(node_group_id="nodegroup-123", count=3)
+
+    update_request, scale_request = captured["update_requests"]
+    assert update_request.metadata.id == "nodegroup-123"
+    assert update_request.metadata.parent_id == "mk8scluster-123"
+    assert update_request.metadata.name == "worker-a"
+    assert update_request.mask == "spec.version"
+    assert scale_request.metadata.id == "nodegroup-123"
+    assert scale_request.metadata.parent_id == "mk8scluster-123"
+    assert scale_request.metadata.name == "worker-a"
+    assert scale_request.mask == "spec.fixed_node_count"
+
+
+def test_node_group_payload_propagates_nebius_api_error() -> None:
+    class _Api:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def get_node_group(self, node_group_id: str) -> Mapping[str, Any]:
+            self.calls.append(node_group_id)
+            raise RuntimeError("Nebius API node-group get failed: PermissionDenied")
+
+    api = _Api()
+
+    with pytest.raises(RuntimeError, match="PermissionDenied"):
+        migration._node_group_payload_by_id(  # noqa: SLF001
+            nebius_api=api,  # type: ignore[arg-type]
+            node_group_id="node-group-1",
+        )
+
+    assert api.calls == ["node-group-1"]
+
+
+def test_execution_source_contract_ignores_slurmcluster_secrets_redaction() -> None:
+    redacted = _snapshot()
+    live = _snapshot()
+    redacted["soperator_resources"] = [
+        {
+            "apiVersion": "slurm.nebius.ai/v1alpha1",
+            "kind": "SlurmCluster",
+            "metadata": {"name": "soperator", "namespace": "soperator"},
+            "spec": {"secrets": "[redacted]", "clusterName": "soperator"},
+        }
+    ]
+    live["soperator_resources"] = [
+        {
+            "apiVersion": "slurm.nebius.ai/v1alpha1",
+            "kind": "SlurmCluster",
+            "metadata": {"name": "soperator", "namespace": "soperator"},
+            "spec": {"secrets": {}, "clusterName": "soperator"},
+        }
+    ]
+
+    assert migration._fingerprint(
+        migration._execution_source_contract(redacted)
+    ) == migration._fingerprint(migration._execution_source_contract(live))
+
+
+def test_execution_source_contract_ignores_redacted_secret_like_keys() -> None:
+    redacted = _snapshot()
+    live = _snapshot()
+    redacted["soperator_resources"] = [
+        {
+            "apiVersion": "slurm.nebius.ai/v1",
+            "kind": "SlurmCluster",
+            "metadata": {"name": "soperator", "namespace": "soperator"},
+            "spec": {
+                "slurmNodes": {
+                    "accounting": {
+                        "mariadbOperator": {
+                            "enabled": True,
+                            "protectedSecret": "[redacted]",
+                        }
+                    }
+                }
+            },
+        }
+    ]
+    live["soperator_resources"] = [
+        {
+            "apiVersion": "slurm.nebius.ai/v1",
+            "kind": "SlurmCluster",
+            "metadata": {"name": "soperator", "namespace": "soperator"},
+            "spec": {
+                "slurmNodes": {
+                    "accounting": {
+                        "mariadbOperator": {
+                            "enabled": True,
+                            "protectedSecret": True,
+                        }
+                    }
+                }
+            },
+        }
+    ]
+
+    assert migration._fingerprint(
+        migration._execution_source_contract(redacted)
+    ) == migration._fingerprint(migration._execution_source_contract(live))
 
 
 @pytest.mark.parametrize(
@@ -128,6 +583,11 @@ def _source_worker_nodeset(name: str, *, gpu: bool) -> dict[str, Any]:
                             "volumeSource": {"configMap": {"name": "legacy-slurm-scripts"}},
                         },
                         {
+                            "name": "slurm-configs-jail",
+                            "mountPath": "/mnt/jail/etc/slurm",
+                            "volumeSource": {"configMap": {"name": "legacy-slurm-configs"}},
+                        },
+                        {
                             "name": "site-scratch",
                             "mountPath": "/site/scratch",
                             "volumeSource": {"emptyDir": {}},
@@ -151,13 +611,35 @@ def _source_worker_nodeset(name: str, *, gpu: bool) -> dict[str, Any]:
     }
 
 
-def _source_report(snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
+def test_worker_nodeset_ready_state_prefers_ready_replicas() -> None:
+    ready, detail = migration._worker_nodeset_ready_state(  # noqa: SLF001
+        {
+            "spec": {"replicas": 2},
+            "status": {
+                "phase": "Ready",
+                "replicas": 2,
+                "readyReplicas": 1,
+                "conditions": [{"type": "PodsReady", "status": "False"}],
+            },
+        }
+    )
+
+    assert ready is False
+    assert detail == "phase=Ready, ready=1/2"
+
+
+def _source_report(
+    snapshot: dict[str, Any] | None = None,
+    *,
+    target_k8s_version: str = "1.32",
+) -> dict[str, Any]:
     snapshot = snapshot or _snapshot()
     report = analyze_soperator_onboarding_snapshot(
         snapshot,
         target_ref="external-cluster",
         pinned_chart_version="4.0.1-ps.1",
         pinned_app_version="4.0.1",
+        target_k8s_version=target_k8s_version,
     ).to_dict()
     return {
         "schema": "nebius-cxcli-source-soperator-discovery/v1",
@@ -187,8 +669,19 @@ def test_node_group_rollout_timeout_uses_live_status_count() -> None:
     )
 
 
-def _payload(*, include_placements: bool = False) -> dict[str, Any]:
-    values: dict[str, Any] = {}
+def _payload(
+    *,
+    include_placements: bool = False,
+    target_k8s_version: str = "1.32",
+) -> dict[str, Any]:
+    values: dict[str, Any] = {
+        "externalNfs": {
+            "enabled": True,
+            "server": "nfs.example.invalid",
+            "path": "/exports/home",
+            "mountPath": "/home",
+        }
+    }
     soperator_row: dict[str, Any] = {
         "id": "soperator",
         "instance_id": "external-cluster",
@@ -256,8 +749,9 @@ def _payload(*, include_placements: bool = False) -> dict[str, Any]:
                         "actions": [
                             "adopt-soperator",
                             "reconcile-target-gpu-stack",
+                            "upgrade-external-node-template",
                             "upgrade-soperator",
-                            "approve-soperator-migration",
+                            "approve-external-soperator-upgrade",
                             "create-aligned-sfs",
                             "plan-soperator-data-migration",
                             "plan-soperator-compute-migration",
@@ -266,6 +760,11 @@ def _payload(*, include_placements: bool = False) -> dict[str, Any]:
                         "target_version": "4.0.1-ps.1",
                         "migration_profile_id": "v3-to-target",
                         "analysis_fingerprint": "",
+                        "node_template_upgrade": {
+                            "target_k8s_version": target_k8s_version,
+                            "target_os": "ubuntu24.04",
+                            "target_gpu_stack_preset": "cuda13.0",
+                        },
                     },
                 }
             ]
@@ -277,6 +776,205 @@ def _payload(*, include_placements: bool = False) -> dict[str, Any]:
         target_ref="external-cluster",
     )
     return payload
+
+
+def _locked_upgrade_path_fixture() -> dict[str, Any]:
+    jail_rootfs = {
+        "current_image": "cr.example/populate_jail:3.0.5-slurm-cuda12.8.0",
+        "current_version": "3.0.5-slurm-cuda12.8.0",
+        "current_source": "completed-populate-jail-job",
+        "current_job_name": "mk8s-populate-jail",
+        "live_desired_image": "cr.example/populate_jail:3.0.5-slurm-cuda12.8.0",
+        "live_desired_version": "3.0.5-slurm-cuda12.8.0",
+        "live_desired_source": "slurmcluster.spec.populateJail.image",
+        "slurmcluster_name": "mk8s",
+        "target_image": "cr.example/populate_jail:4.0.1-slurm-cuda12.9.0",
+        "target_version": "4.0.1-slurm-cuda12.9.0",
+        "target_source": "pinned-chart-defaults",
+        "refresh_required": True,
+        "reason": "target populate-jail image differs from current jail rootfs image",
+    }
+    return {
+        "schema": SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA,
+        "locked": True,
+        "source_k8s_version": "1.31",
+        "target_k8s_version": "1.32",
+        "soperator_app": {
+            "current_version": "3.0.5",
+            "target_version": "4.0.1",
+            "upgrade_required": True,
+        },
+        "soperator_chart": {
+            "current_version": "3.0.5",
+            "target_version": "4.0.1-ps.1",
+            "upgrade_required": True,
+        },
+        "jail_rootfs": jail_rootfs,
+        "segments": [
+            {
+                "id": "segment-1-kubernetes-1-31-1-32-soperator",
+                "title": "Kubernetes 1.31 -> 1.32 plus Soperator",
+                "index": 1,
+                "kind": "external-upgrade",
+                "current_k8s_version": "1.31",
+                "target_k8s_version": "1.32",
+                "soperator_app": {
+                    "current_version": "3.0.5",
+                    "target_version": "4.0.1",
+                    "upgrade_required": True,
+                },
+                "soperator_chart": {
+                    "current_version": "3.0.5",
+                    "target_version": "4.0.1-ps.1",
+                    "upgrade_required": True,
+                },
+                "jail_rootfs": jail_rootfs,
+                "k8s_upgrade_required": True,
+                "soperator_upgrade_required": True,
+                "actions": [
+                    "approve-external-soperator-upgrade",
+                    "upgrade-external-node-template",
+                    "upgrade-soperator",
+                ],
+            }
+        ],
+    }
+
+
+def _backup_metadata(label: str = "original-pre-upgrade") -> dict[str, Any]:
+    return {
+        "path": f"backups/{label}.tar.gz",
+        "sha256": f"{label}-sha256",
+        "manifest_sha256": f"{label}-manifest-sha256",
+        "included_categories": [
+            "accounting",
+            "generated",
+            "kubernetes",
+            "recreation",
+            "slurm",
+            "soperator",
+            "source",
+        ],
+        "raw_secret_material": True,
+        "accounting_db_dump": True,
+    }
+
+
+def _backup_metadata_with_archive(
+    config_path: Path,
+    label: str = "original-pre-upgrade",
+) -> dict[str, Any]:
+    metadata = _backup_metadata(label)
+    archive_bytes = f"test backup archive: {label}\n".encode()
+    archive_path = config_path.parent / str(metadata["path"])
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    archive_path.write_bytes(archive_bytes)
+    metadata["size_bytes"] = len(archive_bytes)
+    metadata["sha256"] = hashlib.sha256(archive_bytes).hexdigest()
+    return metadata
+
+
+def _backup_metadata_with_existing_archive(
+    config_path: Path,
+    metadata: Mapping[str, Any],
+) -> dict[str, Any]:
+    normalized = dict(metadata)
+    archive_path = config_path.parent / str(normalized["path"])
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    if archive_path.exists():
+        archive_bytes = archive_path.read_bytes()
+    else:
+        archive_bytes = f"test backup archive: {archive_path.name}\n".encode()
+        archive_path.write_bytes(archive_bytes)
+    normalized["size_bytes"] = len(archive_bytes)
+    normalized["sha256"] = hashlib.sha256(archive_bytes).hexdigest()
+    return normalized
+
+
+def execute_soperator_migration(*args: Any, **kwargs: Any):
+    if kwargs.get("approved") is True:
+        raw_config_path = kwargs.get("config_path") if "config_path" in kwargs else args[0]
+        config_path = Path(raw_config_path)
+        if "backup_metadata" in kwargs:
+            kwargs["backup_metadata"] = _backup_metadata_with_existing_archive(
+                config_path,
+                kwargs["backup_metadata"],
+            )
+        else:
+            kwargs["backup_metadata"] = _backup_metadata_with_archive(
+                config_path,
+                "test-pre-upgrade",
+            )
+    if kwargs.get("nebius_api") is None and kwargs.get("command_runner") is None:
+        kwargs["command_runner"] = _FakeCommandRunner()
+    return _execute_soperator_migration(*args, **kwargs)
+
+
+_STALE_KUBE_RBAC_PROXY_REPOSITORY = "gcr.io/kubebuilder/kube-rbac-proxy"
+_TARGET_KUBE_RBAC_PROXY_REPOSITORY = "registry.k8s.io/kubebuilder/kube-rbac-proxy"
+_TARGET_KUBE_RBAC_PROXY_TAG = "v0.15.0"
+
+
+def _target_soperator_chart_values(payload: dict[str, Any]) -> dict[str, Any]:
+    charts = payload["apps"]["charts"]  # type: ignore[index]
+    assert isinstance(charts, list)
+    values = charts[0]["values"]
+    assert isinstance(values, dict)
+    return values
+
+
+def _seed_stale_kube_rbac_proxy_values(payload: dict[str, Any]) -> None:
+    values = _target_soperator_chart_values(payload)
+    values["controllerManager"] = {
+        "kubeRbacProxy": {
+            "image": {
+                "repository": _STALE_KUBE_RBAC_PROXY_REPOSITORY,
+                "tag": _TARGET_KUBE_RBAC_PROXY_TAG,
+                "pullPolicy": "Always",
+            }
+        }
+    }
+    values["soperator-checks"] = {
+        "checks": {
+            "kubeRbacProxy": {
+                "image": {
+                    "repository": _STALE_KUBE_RBAC_PROXY_REPOSITORY,
+                    "tag": _TARGET_KUBE_RBAC_PROXY_TAG,
+                    "pullPolicy": "IfNotPresent",
+                }
+            }
+        }
+    }
+
+
+def _assert_target_kube_rbac_proxy_values(helm_values: dict[str, Any]) -> None:
+    controller_image = helm_values["controllerManager"]["kubeRbacProxy"]["image"]
+    assert controller_image["repository"] == _TARGET_KUBE_RBAC_PROXY_REPOSITORY
+    assert controller_image["tag"] == _TARGET_KUBE_RBAC_PROXY_TAG
+    assert controller_image["pullPolicy"] == "Always"
+
+    checks_image = helm_values["soperator-checks"]["checks"]["kubeRbacProxy"]["image"]
+    assert checks_image["repository"] == _TARGET_KUBE_RBAC_PROXY_REPOSITORY
+    assert checks_image["tag"] == _TARGET_KUBE_RBAC_PROXY_TAG
+    assert checks_image["pullPolicy"] == "IfNotPresent"
+
+
+def test_patch_target_kube_rbac_proxy_images_repairs_missing_or_malformed_paths() -> None:
+    values: dict[str, Any] = {
+        "controllerManager": {"kubeRbacProxy": {"image": "stale"}},
+        "soperator-checks": "stale",
+    }
+
+    migration._patch_target_kube_rbac_proxy_images(values)  # noqa: SLF001
+
+    assert values["controllerManager"]["kubeRbacProxy"]["image"] == {
+        "repository": _TARGET_KUBE_RBAC_PROXY_REPOSITORY,
+        "tag": _TARGET_KUBE_RBAC_PROXY_TAG,
+    }
+    assert values["soperator-checks"]["checks"]["kubeRbacProxy"]["image"] == {
+        "repository": _TARGET_KUBE_RBAC_PROXY_REPOSITORY,
+        "tag": _TARGET_KUBE_RBAC_PROXY_TAG,
+    }
 
 
 def _add_external_gpu_cluster_inventory(payload: dict[str, Any]) -> None:
@@ -318,6 +1016,270 @@ def _stub_migration_quota_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(migration, "assess_live_quota_requirements", _assess)
 
 
+class _FakeNebiusApi:
+    def __init__(self, runner: _FakeCommandRunner) -> None:
+        self.runner = runner
+        self.calls: list[tuple[Any, ...]] = []
+
+    def get_filesystem_by_name(self, *, project_id: str, name: str) -> Mapping[str, Any]:
+        self.calls.append(("filesystem.get_by_name", project_id, name))
+        result = self.runner(
+            [
+                "nebius",
+                "compute",
+                "filesystem",
+                "get-by-name",
+                "--parent-id",
+                project_id,
+                "--name",
+                name,
+                "--format",
+                "json",
+            ],
+            check=False,
+        )
+        if result.returncode != 0:
+            return {}
+        return json.loads(result.stdout or "{}")
+
+    def create_filesystem(
+        self,
+        *,
+        project_id: str,
+        spec: migration.SoperatorAlignedFilesystemSpec,
+        timeout_seconds: int = 1800,
+    ) -> Mapping[str, Any]:
+        self.calls.append(("filesystem.create", project_id, spec.name, timeout_seconds))
+        args = [
+            "nebius",
+            "compute",
+            "filesystem",
+            "create",
+            "--parent-id",
+            project_id,
+            "--name",
+            spec.name,
+            "--type",
+            spec.filesystem_type,
+            "--size-gibibytes",
+            str(spec.size_gib),
+            "--block-size-bytes",
+            str(spec.block_size_kib * 1024),
+            "--format",
+            "json",
+            "--timeout",
+            "30m",
+        ]
+        if spec.forbid_deletion:
+            args.insert(-4, "--forbid-deletion")
+        result = self.runner(args, timeout_seconds=timeout_seconds)
+        return json.loads(result.stdout or "{}")
+
+    def get_node_group(self, node_group_id: str) -> Mapping[str, Any]:
+        self.calls.append(("node_group.get", node_group_id))
+        result = self.runner(
+            ["nebius", "mk8s", "node-group", "get", node_group_id, "--format", "json"]
+        )
+        return json.loads(result.stdout or "{}")
+
+    def list_node_groups(self, cluster_id: str) -> tuple[Mapping[str, Any], ...]:
+        self.calls.append(("node_group.list", cluster_id))
+        result = self.runner(
+            [
+                "nebius",
+                "mk8s",
+                "node-group",
+                "list",
+                "--parent-id",
+                cluster_id,
+                "--format",
+                "json",
+                "--all",
+            ]
+        )
+        parsed = json.loads(result.stdout or "{}")
+        items = parsed.get("items", []) if isinstance(parsed, dict) else []
+        return tuple(item for item in items if isinstance(item, Mapping))
+
+    def update_node_group(
+        self,
+        *,
+        node_group_id: str,
+        original_node_group: Mapping[str, Any],
+        update_args: Sequence[str],
+        strategy_args: Sequence[str],
+        clear_template_gpu_settings: bool = False,
+        timeout_seconds: int = 2700,
+    ) -> Mapping[str, Any]:
+        self.calls.append(
+            (
+                "node_group.update",
+                node_group_id,
+                tuple(update_args),
+                tuple(strategy_args),
+                clear_template_gpu_settings,
+                timeout_seconds,
+            )
+        )
+        result = self.runner(
+            [
+                "nebius",
+                "mk8s",
+                "node-group",
+                "update",
+                node_group_id,
+                *update_args,
+                *strategy_args,
+                "--format",
+                "json",
+                "--timeout",
+                migration._node_group_rollout_timeout_text(timeout_seconds),  # noqa: SLF001
+            ],
+            timeout_seconds=timeout_seconds,
+        )
+        payload = json.loads(result.stdout or "{}")
+        if clear_template_gpu_settings:
+            for node_group in self.runner.existing_node_groups:
+                metadata = node_group.get("metadata")
+                if isinstance(metadata, dict) and metadata.get("id") == node_group_id:
+                    template = node_group.get("spec", {}).get("template", {})
+                    if isinstance(template, dict):
+                        template.pop("gpu_settings", None)
+                        template.pop("gpuSettings", None)
+                    payload = node_group
+                    break
+        return payload
+
+    def create_node_group(
+        self,
+        *,
+        payload: Mapping[str, Any],
+        timeout_seconds: int = 3600,
+    ) -> Mapping[str, Any]:
+        metadata = dict(payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {})
+        name = str(metadata.get("name", "") or "")
+        parent_id = str(metadata.get("parent_id", "") or metadata.get("parentId", "") or "")
+        self.calls.append(("node_group.create", name, parent_id, timeout_seconds))
+        result = self.runner(
+            [
+                "nebius",
+                "mk8s",
+                "node-group",
+                "create",
+                json.dumps(payload, sort_keys=True),
+                "--format",
+                "json",
+                "--timeout",
+                "60m",
+            ],
+            timeout_seconds=timeout_seconds,
+        )
+        return json.loads(result.stdout or "{}")
+
+    def scale_node_group(
+        self,
+        *,
+        node_group_id: str,
+        count: int,
+        timeout_seconds: int = 3000,
+    ) -> None:
+        self.calls.append(("node_group.scale", node_group_id, count, timeout_seconds))
+        self.runner(
+            [
+                "nebius",
+                "mk8s",
+                "node-group",
+                "update",
+                node_group_id,
+                "--fixed-node-count",
+                str(count),
+                "--format",
+                "json",
+                "--timeout",
+                "45m",
+            ],
+            timeout_seconds=timeout_seconds,
+            check=False,
+        )
+
+    def delete_node_group(
+        self,
+        *,
+        node_group_id: str,
+        timeout_seconds: int = 3000,
+    ) -> None:
+        self.calls.append(("node_group.delete", node_group_id, timeout_seconds))
+        self.runner(
+            ["nebius", "mk8s", "node-group", "delete", node_group_id, "--timeout", "45m"],
+            timeout_seconds=timeout_seconds,
+            check=False,
+        )
+
+    def get_cluster(self, cluster_id: str) -> Mapping[str, Any]:
+        self.calls.append(("cluster.get", cluster_id))
+        result = self.runner(["nebius", "mk8s", "cluster", "get", cluster_id, "--format", "json"])
+        return json.loads(result.stdout or "{}")
+
+    def update_cluster_control_plane(
+        self,
+        *,
+        cluster_id: str,
+        control_plane_version: str,
+        timeout_seconds: int = 3600,
+    ) -> Mapping[str, Any]:
+        self.calls.append(("cluster.update_control_plane", cluster_id, control_plane_version))
+        result = self.runner(
+            [
+                "nebius",
+                "mk8s",
+                "cluster",
+                "update",
+                cluster_id,
+                "--control-plane-version",
+                control_plane_version,
+                "--format",
+                "json",
+                "--timeout",
+                "60m",
+            ],
+            timeout_seconds=timeout_seconds,
+        )
+        return json.loads(result.stdout or "{}")
+
+    def list_allocations(self, *, project_id: str) -> tuple[Mapping[str, Any], ...]:
+        self.calls.append(("allocation.list", project_id))
+        return tuple(self.runner.allocations)
+
+    def get_allocation(self, allocation_id: str) -> Mapping[str, Any]:
+        self.calls.append(("allocation.get", allocation_id))
+        for allocation in self.runner.allocations:
+            metadata = allocation.get("metadata")
+            if isinstance(metadata, Mapping) and metadata.get("id") == allocation_id:
+                return allocation
+        raise RuntimeError(f"allocation not found: {allocation_id}")
+
+    def update_allocation_labels(
+        self,
+        *,
+        allocation_id: str,
+        original_allocation: Mapping[str, Any],
+        labels: Mapping[str, str],
+        timeout_seconds: int = 300,
+    ) -> Mapping[str, Any]:
+        self.calls.append(
+            ("allocation.update_labels", allocation_id, dict(labels), timeout_seconds)
+        )
+        for allocation in self.runner.allocations:
+            metadata = allocation.setdefault("metadata", {})
+            if isinstance(metadata, dict) and metadata.get("id") == allocation_id:
+                metadata["labels"] = dict(labels)
+                return allocation
+        raise RuntimeError(f"allocation not found: {allocation_id}")
+
+    def close(self) -> None:
+        self.calls.append(("close",))
+
+
 class _FakeCommandRunner:
     def __init__(
         self,
@@ -340,9 +1302,11 @@ class _FakeCommandRunner:
         live_workloads: dict[tuple[str, str, str], dict[str, Any]] | None = None,
         live_kubernetes_resources: dict[str, list[dict[str, Any]]] | None = None,
         helm_storage_secrets: list[dict[str, Any]] | None = None,
+        allocations: list[dict[str, Any]] | None = None,
         worker_topology_by_nodeset: dict[str, dict[str, int]] | None = None,
         slurm_resource_names: list[str] | None = None,
         slurm_queue_output: str = "",
+        slurm_queue_outputs: list[str] | None = None,
         slurm_queue_returncode: int = 0,
         cluster: dict[str, Any] | None = None,
     ) -> None:
@@ -395,15 +1359,32 @@ class _FakeCommandRunner:
                         "labels": {"app.kubernetes.io/component": "login"},
                     },
                     "status": {"phase": "Running"},
+                },
+                {
+                    "metadata": {
+                        "name": "worker-0",
+                        "labels": {
+                            "slurm.nebius.ai/nodeset": "worker",
+                            "slurm.nebius.ai/worker": "true",
+                        },
+                    },
+                    "spec": {"nodeName": "node-a"},
+                    "status": {"phase": "Running"},
                 }
             ]
         )
         self.live_pvcs = list(live_pvcs or [])
+        self.live_jobs: dict[tuple[str, str], dict[str, Any]] = {}
         self.live_slurmclusters = list(
             live_slurmclusters
             or [
                 {
                     "metadata": {"name": "external-cluster", "namespace": "soperator"},
+                    "spec": {
+                        "populateJail": {
+                            "image": "registry.example/soperator/populate-jail:4.0.1-ps.1"
+                        }
+                    },
                     "status": {"phase": "Available"},
                 }
             ]
@@ -451,6 +1432,23 @@ class _FakeCommandRunner:
                 for release in self.helm_releases
             ]
         )
+        self.allocations = list(
+            allocations
+            if allocations is not None
+            else [
+                {
+                    "metadata": {
+                        "id": "vpcallocation-login",
+                        "name": "login",
+                        "labels": {},
+                    },
+                    "spec": {"ipv4_public": {"cidr": "203.0.113.10/32"}},
+                    "status": {
+                        "details": {"allocated_cidr": "203.0.113.10/32"},
+                    },
+                }
+            ]
+        )
         self.helm_manifests = dict(
             helm_manifests
             or {
@@ -485,8 +1483,45 @@ spec:
                         "updatedReplicas": 1,
                     },
                 },
+                (
+                    "StatefulSet",
+                    "soperator",
+                    "login",
+                ): {
+                    "metadata": {"generation": 1},
+                    "spec": {"replicas": 2},
+                    "status": {
+                        "observedGeneration": 1,
+                        "readyReplicas": 2,
+                        "updatedReplicas": 2,
+                    },
+                },
             }
         )
+        self.live_services = [
+            {
+                "metadata": {
+                    "name": "login",
+                    "namespace": "soperator",
+                    "uid": "svc-login",
+                    "annotations": {
+                        "nebius.com/load-balancer-allocation-id": "vpcallocation-login",
+                    },
+                },
+                "spec": {"type": "LoadBalancer", "clusterIP": "10.0.0.10"},
+                "status": {"loadBalancer": {"ingress": [{"ip": "203.0.113.10"}]}},
+            },
+        ]
+        self.live_endpoint_slices = [
+            {
+                "metadata": {
+                    "name": "login-ready",
+                    "namespace": "soperator",
+                    "labels": {"kubernetes.io/service-name": "login"},
+                },
+                "endpoints": [{"conditions": {"ready": True}}],
+            }
+        ]
         self.live_kubernetes_resources = {
             key: list(value) for key, value in (live_kubernetes_resources or {}).items()
         }
@@ -499,8 +1534,11 @@ spec:
             ]
         )
         self.slurm_queue_output = slurm_queue_output
+        self.slurm_queue_outputs = list(slurm_queue_outputs or [])
         self.slurm_queue_returncode = slurm_queue_returncode
         self.file_update_payloads: list[dict[str, Any]] = []
+        self._populate_jail_refresh_saved_pods: list[dict[str, Any]] | None = None
+        self.nebius_api = _FakeNebiusApi(self)
 
     def _upsert_helm_release(
         self,
@@ -805,6 +1843,46 @@ spec:
             return SoperatorMigrationCommandResult(command, 1, "", "not found")
         if command and command[0] == "helm" and "history" in command:
             return SoperatorMigrationCommandResult(command, 0, json.dumps(self.helm_history), "")
+        if command and command[0] == "helm" and "template" in command:
+            namespace = command[command.index("-n") + 1] if "-n" in command else "soperator"
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                f"""
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: slurm-local-pv
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: soperator-mount-scripts
+  namespace: {namespace}
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: jail-persistent-home-pv
+spec:
+  claimRef:
+    namespace: {namespace}
+    name: jail-persistent-home-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jail-persistent-home-pvc
+  namespace: {namespace}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: jail-mount
+  namespace: {namespace}
+""",
+                "",
+            )
         if command and command[0] == "helm" and "upgrade" in command:
             release_name = command[command.index("--install") + 1] if "--install" in command else ""
             namespace = command[command.index("-n") + 1] if "-n" in command else ""
@@ -957,6 +2035,184 @@ spec:
                     "",
                 )
         if (
+            len(command) >= 9
+            and command[:3] == ("kubectl", "--context", "external-context")
+            and command[3] == "-n"
+            and command[4] == "soperator"
+            and command[5] == "get"
+            and command[6].startswith("job/")
+            and command[-2:] == ("-o", "json")
+        ):
+            name = command[6].split("/", 1)[1]
+            stored = self.live_jobs.get(("soperator", name))
+            if stored is not None:
+                return SoperatorMigrationCommandResult(command, 0, json.dumps(stored), "")
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps({"status": {"conditions": [{"type": "Complete", "status": "True"}]}}),
+                "",
+            )
+        if (
+            len(command) >= 7
+            and command[:3] == ("kubectl", "--context", "external-context")
+            and command[3] == "-n"
+            and command[4] == "soperator"
+            and command[5] == "logs"
+            and command[6].endswith("-jail-capacity-probe")
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "active_used_kib=83886080\npassive_available_kib=134217728\n",
+                "",
+            )
+        if (
+            len(command) >= 7
+            and command[:3] == ("kubectl", "--context", "external-context")
+            and command[3] == "-n"
+            and command[4] == "soperator"
+            and command[5] == "logs"
+            and command[6].endswith("-jail-persistent-source-probe")
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "\n".join(
+                    (
+                        '{"mount_path":"/home","source_path":"/store/home","target_path":"/store/shared/home","marker_path":"/store/.cxcli/persistent-migrations/home.json","source_status":"present","marker_status":"none","marker_present":false}',
+                        '{"mount_path":"/data","source_path":"/store/data","target_path":"/store/shared/data","marker_path":"/store/.cxcli/persistent-migrations/data.json","source_status":"present","marker_status":"none","marker_present":false}',
+                        '{"mount_path":"/scripts","source_path":"/store/scripts","target_path":"/store/shared/scripts","marker_path":"/store/.cxcli/persistent-migrations/scripts.json","source_status":"absent","marker_status":"none","marker_present":false}',
+                        '{"mount_path":"/models","source_path":"/store/models","target_path":"/store/shared/models","marker_path":"/store/.cxcli/persistent-migrations/models.json","source_status":"absent","marker_status":"none","marker_present":false}',
+                    )
+                )
+                + "\n",
+                "",
+            )
+        if (
+            len(command) >= 7
+            and command[:3] == ("kubectl", "--context", "external-context")
+            and command[3] == "-n"
+            and command[4] == "soperator"
+            and command[5] == "logs"
+            and command[6].endswith("-jail-persistent-migration")
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "\n".join(
+                    (
+                        "persistent mount migration copied: /home",
+                        "persistent mount migration copied: /data",
+                        "persistent mount migration source missing: /scripts",
+                        "persistent mount migration source missing: /models",
+                    )
+                )
+                + "\n",
+                "",
+            )
+        if command == ("kubectl", "--context", "external-context", "apply", "-f", "-"):
+            try:
+                payload = json.loads(input_text or "{}")
+            except json.JSONDecodeError:
+                payload = {}
+            items = payload.get("items") if isinstance(payload, dict) else None
+            if isinstance(items, list):
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    metadata = item.get("metadata")
+                    if not isinstance(metadata, dict):
+                        continue
+                    name = str(metadata.get("name", "") or "")
+                    namespace = str(metadata.get("namespace", "") or "soperator")
+                    if not name:
+                        continue
+                    if item.get("kind") == "Job":
+                        stored_job = json.loads(json.dumps(item))
+                        stored_job.setdefault("status", {}).setdefault(
+                            "conditions", [{"type": "Complete", "status": "True"}]
+                        )
+                        stored_job.setdefault("status", {}).setdefault("succeeded", 1)
+                        self.live_jobs[(namespace, name)] = stored_job
+                        continue
+                    if item.get("kind") != "PersistentVolumeClaim":
+                        continue
+                    self.live_pvcs = [
+                        pvc
+                        for pvc in self.live_pvcs
+                        if not (
+                            isinstance(pvc.get("metadata"), dict)
+                            and str(pvc["metadata"].get("name", "") or "") == name
+                            and str(pvc["metadata"].get("namespace", "") or "soperator")
+                            == namespace
+                        )
+                    ]
+                    self.live_pvcs.append({"metadata": {"name": name, "namespace": namespace}})
+            return SoperatorMigrationCommandResult(command, 0, "{}", "")
+        if (
+            len(command) >= 9
+            and command[:3] == ("kubectl", "--context", "external-context")
+            and command[3] == "-n"
+            and command[5] == "get"
+            and "/" in command[6]
+            and "-o" in command
+            and command[command.index("-o") + 1] == "json"
+        ):
+            namespace = command[4]
+            resource_type, name = command[6].split("/", 1)
+            if resource_type not in self.live_kubernetes_resources:
+                return SoperatorMigrationCommandResult(command, 0, "{}", "")
+            resources = self.live_kubernetes_resources.get(resource_type, [])
+            for item in resources:
+                metadata = item.get("metadata")
+                if not isinstance(metadata, dict):
+                    continue
+                if (
+                    str(metadata.get("namespace", "") or "") == namespace
+                    and str(metadata.get("name", "") or "") == name
+                ):
+                    return SoperatorMigrationCommandResult(
+                        command,
+                        0,
+                        json.dumps(item),
+                        "",
+                    )
+            if namespace == "soperator":
+                return SoperatorMigrationCommandResult(command, 0, "{}", "")
+            return SoperatorMigrationCommandResult(command, 1, "", "NotFound")
+        if (
+            len(command) >= 10
+            and command[:3] == ("kubectl", "--context", "external-context")
+            and command[3] == "-n"
+            and command[5] == "scale"
+            and "/" in command[6]
+            and "--replicas" in command
+        ):
+            namespace = command[4]
+            resource_type, name = command[6].split("/", 1)
+            replicas = int(command[command.index("--replicas") + 1])
+            for item in self.live_kubernetes_resources.get(resource_type, []):
+                metadata = item.get("metadata")
+                if not isinstance(metadata, dict):
+                    continue
+                if (
+                    str(metadata.get("namespace", "") or "") == namespace
+                    and str(metadata.get("name", "") or "") == name
+                ):
+                    spec = item.setdefault("spec", {})
+                    if not isinstance(spec, dict):
+                        spec = {}
+                        item["spec"] = spec
+                    spec["replicas"] = replicas
+                    status = item.setdefault("status", {})
+                    if not isinstance(status, dict):
+                        status = {}
+                        item["status"] = status
+                    status["availableReplicas"] = replicas
+                    status["readyReplicas"] = replicas
+            return SoperatorMigrationCommandResult(command, 0, "{}", "")
+        if (
             len(command) >= 10
             and command[:3] == ("kubectl", "--context", "external-context")
             and command[3] == "-n"
@@ -1087,6 +2343,34 @@ spec:
                         item["spec"] = spec
                     spec["suspend"] = True
             return SoperatorMigrationCommandResult(command, 0, "{}", "")
+        if command[:7] == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "annotate",
+            "service",
+        ):
+            service_name = command[7]
+            annotations = [
+                item
+                for item in command[8:]
+                if "=" in item and not item.startswith("--")
+            ]
+            for item in self.live_services:
+                metadata = item.setdefault("metadata", {})
+                if not isinstance(metadata, dict) or metadata.get("name") != service_name:
+                    continue
+                service_annotations = metadata.setdefault("annotations", {})
+                if not isinstance(service_annotations, dict):
+                    service_annotations = {}
+                    metadata["annotations"] = service_annotations
+                for annotation in annotations:
+                    key, value = annotation.split("=", 1)
+                    service_annotations[key] = value
+                return SoperatorMigrationCommandResult(command, 0, "service/login annotated", "")
+            return SoperatorMigrationCommandResult(command, 1, "", "service not found")
         if (
             command
             and command[0] == "kubectl"
@@ -1094,17 +2378,44 @@ spec:
             and "-n" in command
             and "get" in command
             and "-o" in command
-            and command[-1] == "json"
+            and command[command.index("-o") + 1] == "json"
         ):
             kind_by_resource = {
                 "deployment": "Deployment",
                 "deploy": "Deployment",
                 "statefulset": "StatefulSet",
+                "statefulset.apps.kruise.io": "StatefulSet",
+                "statefulsets.apps.kruise.io": "StatefulSet",
                 "daemonset": "DaemonSet",
             }
             resource = command[command.index("get") + 1]
-            name = command[command.index("get") + 2]
             namespace = command[command.index("-n") + 1]
+            if resource in {"service", "services", "svc"}:
+                return SoperatorMigrationCommandResult(
+                    command,
+                    0,
+                    json.dumps({"items": self.live_services}),
+                    "",
+                )
+            if resource.startswith("endpointslices"):
+                selector = command[command.index("-l") + 1] if "-l" in command else ""
+                service_name = selector.removeprefix("kubernetes.io/service-name=")
+                items = [
+                    item
+                    for item in self.live_endpoint_slices
+                    if not service_name
+                    or item.get("metadata", {}).get("labels", {}).get(
+                        "kubernetes.io/service-name"
+                    )
+                    == service_name
+                ]
+                return SoperatorMigrationCommandResult(
+                    command,
+                    0,
+                    json.dumps({"items": items}),
+                    "",
+                )
+            name = command[command.index("get") + 2]
             kind = kind_by_resource.get(resource)
             workload = self.live_workloads.get((kind or "", namespace, name))
             if workload is not None:
@@ -1159,26 +2470,6 @@ spec:
                 json.dumps({"items": self.live_pvcs}),
                 "",
             )
-        if (
-            len(command) >= 9
-            and command[:6]
-            == (
-                "kubectl",
-                "--context",
-                "external-context",
-                "-n",
-                "soperator",
-                "get",
-            )
-            and command[6].startswith("job/")
-            and command[-2:] == ("-o", "json")
-        ):
-            return SoperatorMigrationCommandResult(
-                command,
-                0,
-                json.dumps({"status": {"conditions": [{"type": "Complete", "status": "True"}]}}),
-                "",
-            )
         if command[:7] == (
             "kubectl",
             "--context",
@@ -1193,9 +2484,58 @@ spec:
                 metadata = item.get("metadata")
                 if isinstance(metadata, dict) and metadata.get("name") == name:
                     payload = json.loads(json.dumps(item))
+                    payload.setdefault("spec", {}).setdefault("populateJail", {}).setdefault(
+                        "image",
+                        "registry.example/soperator/populate-jail:4.0.1-ps.1",
+                    )
                     payload.setdefault("status", {"phase": "Available"})
                     return SoperatorMigrationCommandResult(command, 0, json.dumps(payload), "")
             return SoperatorMigrationCommandResult(command, 1, "", "NotFound")
+        if (
+            command[:7]
+            == (
+                "kubectl",
+                "--context",
+                "external-context",
+                "-n",
+                "soperator",
+                "get",
+                "job",
+            )
+            and command[-2:] == ("-o", "json")
+        ):
+            stored = self.live_jobs.get(("soperator", command[7]))
+            if stored is not None:
+                return SoperatorMigrationCommandResult(command, 0, json.dumps(stored), "")
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "metadata": {"name": command[7], "namespace": "soperator"},
+                        "spec": {
+                            "template": {
+                                "spec": {
+                                    "containers": [
+                                        {
+                                            "name": "populate-jail",
+                                            "image": (
+                                                "registry.example/soperator/"
+                                                "populate-jail:4.0.1-ps.1"
+                                            ),
+                                        }
+                                    ]
+                                }
+                            }
+                        },
+                        "status": {
+                            "succeeded": 1,
+                            "conditions": [{"type": "Complete", "status": "True"}],
+                        },
+                    }
+                ),
+                "",
+            )
         if command[:7] == (
             "kubectl",
             "--context",
@@ -1233,6 +2573,51 @@ spec:
                 json.dumps({"items": self.live_flux_helmreleases}),
                 "",
             )
+        if (
+            len(command) >= 13
+            and command[:6]
+            == (
+                "kubectl",
+                "--context",
+                "external-context",
+                "-n",
+                "soperator",
+                "exec",
+            )
+            and command[7:10] == ("-c", "slurmd", "--")
+            and command[10:12] == ("/bin/sh", "-ceu")
+        ):
+            return SoperatorMigrationCommandResult(command, 0, "/home sfs-home fuse.sfs\n", "")
+        if (
+            len(command) >= 13
+            and command[:6]
+            == (
+                "kubectl",
+                "--context",
+                "external-context",
+                "-n",
+                "soperator",
+                "exec",
+            )
+            and command[7:12] == ("-c", "slurmd", "--", "slurmd", "-C")
+            and command[12] == "--parameters=l3cache_as_socket"
+        ):
+            pod_name = command[6]
+            for nodeset_name, topology in self.worker_topology_by_nodeset.items():
+                if not pod_name.startswith(f"{nodeset_name}-"):
+                    continue
+                return SoperatorMigrationCommandResult(
+                    command,
+                    0,
+                    (
+                        f"NodeName={pod_name} CPUs={topology['cpus']} Boards=1 "
+                        f"SocketsPerBoard={topology['sockets']} "
+                        f"CoresPerSocket={topology['cores_per_socket']} "
+                        f"ThreadsPerCore={topology['threads_per_core']} "
+                        "Parameters=l3cache_as_socket Gres=gpu:nvidia_h100_80gb_hbm3:8\n"
+                    ),
+                    "",
+                )
         if (
             len(command) >= 12
             and command[:6]
@@ -1326,8 +2711,22 @@ spec:
             "login-0",
             "--",
         ):
-            if command[8:11] == ("sinfo", "-h", "-o"):
-                if len(command) > 11 and command[11] == "%N %T":
+            if command[8] == "sinfo" and command[-1] == "%N %T":
+                if "-N" in command:
+                    return SoperatorMigrationCommandResult(
+                        command,
+                        0,
+                        "\n".join(
+                            (
+                                "worker-gpu-0 drained",
+                                "worker-gpu-1 drained",
+                                "worker-cpu-0 idle",
+                                "worker-cpu-1 idle",
+                            )
+                        ),
+                        "",
+                    )
+                if len(command) > 11:
                     return SoperatorMigrationCommandResult(
                         command,
                         0,
@@ -1335,11 +2734,45 @@ spec:
                         "",
                     )
                 return SoperatorMigrationCommandResult(command, 0, "idle\nallocated\n", "")
+            if command[8:] == ("scontrol", "show", "nodes"):
+                node_names = list(
+                    str(item.get("metadata", {}).get("name", "") or "")
+                    for item in self.live_nodes
+                    if isinstance(item.get("metadata"), dict)
+                )
+                for fallback_node in ("node-a", "node-b", "cpu-node-a", "worker-0", "worker-gpu-0"):
+                    if fallback_node not in node_names:
+                        node_names.append(fallback_node)
+                return SoperatorMigrationCommandResult(
+                    command,
+                    0,
+                    "\n".join(
+                        f"NodeName={node} NodeHostName={node} Partitions=main"
+                        for node in node_names
+                        if node
+                    ),
+                    "",
+                )
+            if command[8:11] == ("scontrol", "show", "node") and command[-1] == "-o":
+                nodes = command[11].split(",") if len(command) > 11 else []
+                return SoperatorMigrationCommandResult(
+                    command,
+                    0,
+                    "\n".join(f"NodeName={node} Partitions=main State=IDLE" for node in nodes),
+                    "",
+                )
             if command[8:10] == ("squeue", "-h"):
+                if "PENDING" in command:
+                    return SoperatorMigrationCommandResult(command, 0, "", "")
+                queue_output = (
+                    self.slurm_queue_outputs.pop(0)
+                    if self.slurm_queue_outputs
+                    else self.slurm_queue_output
+                )
                 return SoperatorMigrationCommandResult(
                     command,
                     self.slurm_queue_returncode,
-                    self.slurm_queue_output,
+                    queue_output,
                     "" if self.slurm_queue_returncode == 0 else "squeue failed",
                 )
             if command[8:10] == ("bash", "-lc") and "cxcli-soperator-smoke" in command[10]:
@@ -1349,6 +2782,10 @@ spec:
                     "cxcli-soperator-srun-ok\nworker-0\n",
                     "",
                 )
+            if command[8:10] == ("/bin/sh", "-ceu"):
+                return SoperatorMigrationCommandResult(command, 0, "/home sfs-home fuse.sfs\n", "")
+            if command[8:10] == ("sh", "-ceu") and "ss -Htn" in command[10]:
+                return SoperatorMigrationCommandResult(command, 0, "0\n", "")
             return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
         if command[:7] == (
             "kubectl",
@@ -1529,6 +2966,10 @@ def test_execute_writes_checkpoint_and_stops_before_mutation(tmp_path: Path) -> 
     assert result.completed_phases == ("discovery-and-plan",)
     assert result.pending_phase == "customer-approval"
     assert "customer approval is required before mutating phases" in result.pending_reason
+    assert (
+        "Upgrade status: waiting for customer approval; no upgrade mutation was performed."
+        in result.lines
+    )
     checkpoint_path = soperator_migration_checkpoint_path(
         tmp_path / "config.yaml",
         "external-cluster",
@@ -1537,6 +2978,174 @@ def test_execute_writes_checkpoint_and_stops_before_mutation(tmp_path: Path) -> 
     assert checkpoint["completed_phases"] == ["discovery-and-plan"]
     assert checkpoint["pending_phase"] == "customer-approval"
     assert checkpoint["events"][0]["event"] == "execute-preflight-completed"
+
+
+def test_execute_requires_backup_metadata_before_approved_mutation(tmp_path: Path) -> None:
+    runner = _FakeCommandRunner()
+
+    with pytest.raises(RuntimeError, match="requires restore-capable backup metadata"):
+        _execute_soperator_migration(
+            config_path=tmp_path / "config.yaml",
+            target_ref="external-cluster",
+            payload=_payload(),
+            source_report=_source_report(),
+            snapshot_collector=lambda *, kube_context: _snapshot(),
+            approved=True,
+            command_runner=runner,
+        )
+
+    commands = [call[0] for call in runner.calls]
+    assert not any(
+        command[:4] == ("nebius", "compute", "filesystem", "create") for command in commands
+    )
+    assert not any(command[:4] == ("nebius", "mk8s", "cluster", "update") for command in commands)
+    assert not any(
+        command[:4] == ("helm", "--kube-context", "external-context", "upgrade")
+        for command in commands
+    )
+
+
+def test_execute_rejects_sparse_backup_metadata_before_approved_mutation(
+    tmp_path: Path,
+) -> None:
+    sparse_backup = {
+        "path": "backups/sparse.tar.gz",
+        "sha256": "sparse-sha256",
+        "manifest_sha256": "sparse-manifest-sha256",
+    }
+
+    with pytest.raises(RuntimeError, match="backup metadata is sparse"):
+        _execute_soperator_migration(
+            config_path=tmp_path / "config.yaml",
+            target_ref="external-cluster",
+            payload=_payload(),
+            source_report=_source_report(),
+            backup_metadata=sparse_backup,
+            snapshot_collector=lambda *, kube_context: _snapshot(),
+            approved=True,
+            command_runner=_FakeCommandRunner(),
+        )
+
+
+def test_resume_backup_metadata_rejects_archive_sha_mismatch(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    archive_path = tmp_path / "backups" / "ext-soperator-upgrade.tar.gz"
+    archive_path.parent.mkdir()
+    archive_path.write_text("backup archive v1\n", encoding="utf-8")
+    checkpoint_path = soperator_migration_checkpoint_path(config_path, "external-cluster")
+    checkpoint_path.parent.mkdir(parents=True)
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+                "target_ref": "external-cluster",
+                "completed_phases": ["target-gpu-stack-remediation"],
+                "pending_phase": "external-node-template-upgrade",
+                "backup": {
+                    "path": str(archive_path),
+                    "sha256": "0" * 64,
+                    "manifest_sha256": "manifest-sha",
+                    "included_categories": sorted(
+                        migration._EXTERNAL_UPGRADE_BACKUP_REQUIRED_CATEGORIES  # noqa: SLF001
+                    ),
+                },
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="archive SHA256 does not match"):
+        migration.external_soperator_upgrade_resume_backup_metadata(
+            config_path,
+            "external-cluster",
+        )
+
+
+def test_resume_backup_metadata_uses_size_fast_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    archive_path = tmp_path / "backups" / "ext-soperator-upgrade.tar.gz"
+    archive_path.parent.mkdir()
+    archive_bytes = b"backup archive v1\n"
+    archive_path.write_bytes(archive_bytes)
+    checkpoint_path = soperator_migration_checkpoint_path(config_path, "external-cluster")
+    checkpoint_path.parent.mkdir(parents=True)
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+                "target_ref": "external-cluster",
+                "completed_phases": ["target-gpu-stack-remediation"],
+                "pending_phase": "external-node-template-upgrade",
+                "backup": {
+                    "path": str(archive_path),
+                    "size_bytes": len(archive_bytes),
+                    "sha256": "not-read-on-size-match",
+                    "manifest_sha256": "manifest-sha",
+                    "included_categories": sorted(
+                        migration._EXTERNAL_UPGRADE_BACKUP_REQUIRED_CATEGORIES  # noqa: SLF001
+                    ),
+                },
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    def _fail_sha(_path: Path) -> str:
+        raise AssertionError("full archive hash should not run when size metadata matches")
+
+    monkeypatch.setattr(migration, "_external_upgrade_file_sha256", _fail_sha)
+
+    metadata = migration.external_soperator_upgrade_resume_backup_metadata(
+        config_path,
+        "external-cluster",
+    )
+
+    assert metadata is not None
+    assert metadata["size_bytes"] == len(archive_bytes)
+
+
+def test_resume_backup_metadata_rejects_archive_size_mismatch(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    archive_path = tmp_path / "backups" / "ext-soperator-upgrade.tar.gz"
+    archive_path.parent.mkdir()
+    archive_path.write_text("backup archive v1\n", encoding="utf-8")
+    checkpoint_path = soperator_migration_checkpoint_path(config_path, "external-cluster")
+    checkpoint_path.parent.mkdir(parents=True)
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+                "target_ref": "external-cluster",
+                "completed_phases": ["target-gpu-stack-remediation"],
+                "pending_phase": "external-node-template-upgrade",
+                "backup": {
+                    "path": str(archive_path),
+                    "size_bytes": archive_path.stat().st_size + 1,
+                    "sha256": "not-used",
+                    "manifest_sha256": "manifest-sha",
+                    "included_categories": sorted(
+                        migration._EXTERNAL_UPGRADE_BACKUP_REQUIRED_CATEGORIES  # noqa: SLF001
+                    ),
+                },
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="archive size does not match"):
+        migration.external_soperator_upgrade_resume_backup_metadata(
+            config_path,
+            "external-cluster",
+        )
 
 
 def test_write_checkpoint_preserves_existing_file_when_replace_fails(
@@ -1629,7 +3238,7 @@ def test_write_migrate_report_uses_default_text_file_mode_for_new_file(tmp_path:
 
 def test_write_migrate_report_preserves_existing_file_mode(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
-    report_path = tmp_path / "generated" / "reports" / "ext-soperator-migrate-report.md"
+    report_path = tmp_path / "generated" / "reports" / "ext-soperator-upgrade-report.md"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text("# Existing Migration Report\n", encoding="utf-8")
     report_path.chmod(0o640)
@@ -1645,7 +3254,7 @@ def test_write_migrate_report_preserves_existing_file_when_replace_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    report_path = tmp_path / "generated" / "reports" / "ext-soperator-migrate-report.md"
+    report_path = tmp_path / "generated" / "reports" / "ext-soperator-upgrade-report.md"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text("# Existing Migration Report\n", encoding="utf-8")
     before = report_path.read_text(encoding="utf-8")
@@ -1659,7 +3268,7 @@ def test_write_migrate_report_preserves_existing_file_when_replace_fails(
         _write_minimal_migrate_report(config_path)
 
     assert report_path.read_text(encoding="utf-8") == before
-    assert not list(report_path.parent.glob(".ext-soperator-migrate-report.md.*.tmp"))
+    assert not list(report_path.parent.glob(".ext-soperator-upgrade-report.md.*.tmp"))
 
 
 def test_execute_quota_preflight_blocks_before_mutation(
@@ -1679,7 +3288,7 @@ def test_execute_quota_preflight_blocks_before_mutation(
                 QuotaCheck(
                     component_id="soperator-migration",
                     instance_id="external-cluster",
-                    component_label="Soperator migration target external-cluster",
+                    component_label="External Soperator upgrade target external-cluster",
                     quota_name="compute.filesystem.count",
                     region="eu-north1",
                     required=3,
@@ -1733,12 +3342,13 @@ def test_quota_preflight_does_not_count_preserved_worker_groups(
 
     monkeypatch.setattr(migration, "estimate_mk8s_quota_requirements", _record_quota_inputs)
 
+    runner = _FakeCommandRunner()
     requirements, gaps, lines = migration._new_target_node_group_quota_requirements(
         payload=_payload(include_placements=True),
         target_ref="external-cluster",
         source_report=_source_report(snapshot),
         worker_node_groups=("gpu-pool",),
-        command_runner=_FakeCommandRunner(),
+        nebius_api=runner.nebius_api,
     )
 
     assert requirements == []
@@ -1761,7 +3371,7 @@ def test_quota_preflight_does_not_count_preserved_worker_groups(
     ) in lines
 
 
-def test_worker_safe_surge_quota_preflight_counts_active_wave(
+def test_safe_surge_quota_preflight_counts_service_and_worker_active_groups(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     snapshot = _snapshot_with_compute_source()
@@ -1782,22 +3392,29 @@ def test_worker_safe_surge_quota_preflight_counts_active_wave(
 
     monkeypatch.setattr(migration, "estimate_mk8s_quota_requirements", _record_quota_inputs)
 
-    requirements, gaps, lines = migration._worker_surge_node_group_quota_requirements(
+    runner = _FakeCommandRunner()
+    requirements, gaps, lines = migration._safe_surge_node_group_quota_requirements(
         payload=payload,
         target_ref="external-cluster",
         source_report=_source_report(snapshot),
         worker_node_groups=("gpu-pool",),
-        command_runner=_FakeCommandRunner(),
+        nebius_api=runner.nebius_api,
         rollout=rollout,
     )
 
     assert requirements == []
     assert gaps == []
-    assert recorded_inputs
-    planned_groups = recorded_inputs[0]["node_groups"]
-    assert isinstance(planned_groups, dict)
-    assert set(planned_groups) == {"external-cluster-gpu-pool-safe-surge"}
-    assert planned_groups["external-cluster-gpu-pool-safe-surge"]["node_count"] == 1
+    assert len(recorded_inputs) == 2
+    service_planned_groups = recorded_inputs[0]["node_groups"]
+    assert isinstance(service_planned_groups, dict)
+    assert set(service_planned_groups) == {"external-cluster-cpu-pool-safe-surge"}
+    assert service_planned_groups["external-cluster-cpu-pool-safe-surge"]["node_count"] == 1
+    worker_planned_groups = recorded_inputs[1]["node_groups"]
+    assert isinstance(worker_planned_groups, dict)
+    assert set(worker_planned_groups) == {"external-cluster-gpu-pool-safe-surge"}
+    assert worker_planned_groups["external-cluster-gpu-pool-safe-surge"]["node_count"] == 1
+    assert any("safe-surge service group cpu-pool" in line for line in lines)
+    assert any("safe-surge worker wave 1" in line for line in lines)
     assert any("requires 1 temporary surge node(s) per group" in line for line in lines)
 
 
@@ -1824,8 +3441,8 @@ def test_execute_worker_safe_surge_quota_shortage_blocks_before_mutation(
     runner = _FakeCommandRunner()
     recorded_inputs: list[dict[str, Any]] = []
 
-    def _estimate_worker_safe_surge(**kwargs: object):
-        if kwargs.get("context") != "soperator migration worker safe-surge quota preflight":
+    def _estimate_safe_surge(**kwargs: object):
+        if kwargs.get("context") != "external soperator upgrade safe-surge quota preflight":
             return (), ()
         inputs = kwargs.get("inputs")
         assert isinstance(inputs, dict)
@@ -1833,19 +3450,19 @@ def test_execute_worker_safe_surge_quota_shortage_blocks_before_mutation(
         return (
             QuotaRequirement(
                 component_id="mk8s",
-                instance_id="external-cluster-soperator-worker-surge-wave-1",
-                component_label="external worker safe-surge",
+                instance_id="external-cluster-soperator-safe-surge-worker-wave-1",
+                component_label="external safe-surge",
                 quota_name="compute.instance.count",
                 region="eu-north1",
                 required=1,
-                reason="safe-surge worker wave",
+                reason="safe-surge active group",
             ),
         ), ()
 
-    def _insufficient_worker_safe_surge(**kwargs: object) -> QuotaReport:
+    def _insufficient_safe_surge(**kwargs: object) -> QuotaReport:
         requirements = tuple(kwargs.get("requirements") or ())
         assert any(
-            isinstance(item, QuotaRequirement) and item.reason == "safe-surge worker wave"
+            isinstance(item, QuotaRequirement) and item.reason == "safe-surge active group"
             for item in requirements
         )
         return QuotaReport(
@@ -1856,12 +3473,12 @@ def test_execute_worker_safe_surge_quota_shortage_blocks_before_mutation(
             checks=(
                 QuotaCheck(
                     component_id="mk8s",
-                    instance_id="external-cluster-soperator-worker-surge-wave-1",
-                    component_label="external worker safe-surge",
+                    instance_id="external-cluster-soperator-safe-surge-worker-wave-1",
+                    component_label="external safe-surge",
                     quota_name="compute.instance.count",
                     region="eu-north1",
                     required=1,
-                    reason="safe-surge worker wave",
+                    reason="safe-surge active group",
                     unit="1",
                     available=0,
                     sufficient=False,
@@ -1875,11 +3492,11 @@ def test_execute_worker_safe_surge_quota_shortage_blocks_before_mutation(
             ),
         )
 
-    monkeypatch.setattr(migration, "estimate_mk8s_quota_requirements", _estimate_worker_safe_surge)
+    monkeypatch.setattr(migration, "estimate_mk8s_quota_requirements", _estimate_safe_surge)
     monkeypatch.setattr(
         migration,
         "assess_live_quota_requirements",
-        _insufficient_worker_safe_surge,
+        _insufficient_safe_surge,
     )
 
     with pytest.raises(RuntimeError, match="quota preflight failed before any cluster mutation"):
@@ -1911,6 +3528,12 @@ def test_external_node_template_rollout_config_validation_and_cli_precedence() -
     default_rollout = migration.resolve_external_node_template_rollout(onboarding)
     assert default_rollout.to_manifest_dict() == {
         "strategy": "zero-surge",
+        "service_role_strategy": "safe-surge",
+        "service_role_group_strategy": {
+            "max_surge_count": 1,
+            "max_unavailable_count": 0,
+            "drain_timeout": "30m",
+        },
         "worker_group_strategy": {
             "max_surge_count": 0,
             "max_unavailable_count": 1,
@@ -1938,8 +3561,14 @@ def test_external_node_template_rollout_config_validation_and_cli_precedence() -
     )
     assert override.to_manifest_dict() == {
         "strategy": "safe-surge",
+        "service_role_strategy": "safe-surge",
         "worker_wave_percent": 5,
         "max_parallel_worker_groups": 3,
+        "service_role_group_strategy": {
+            "max_surge_count": 1,
+            "max_unavailable_count": 0,
+            "drain_timeout": "30m",
+        },
         "worker_group_strategy": {
             "max_surge_count": 2,
             "max_unavailable_count": 1,
@@ -1954,6 +3583,41 @@ def test_external_node_template_rollout_config_validation_and_cli_precedence() -
             worker_wave_percent=1,
         )
 
+    with pytest.raises(ValueError, match="only supported with worker_wave_percent"):
+        migration.resolve_external_node_template_rollout(
+            onboarding,
+            strategy="safe-surge",
+            worker_wave_groups=1,
+            max_parallel_worker_groups=1,
+        )
+
+    onboarding["node_template_upgrade"] = {
+        "rollout": {
+            "strategy": "safe-surge",
+            "worker_wave_percent": 10,
+            "max_parallel_worker_groups": 2,
+        }
+    }
+    fixed_override = migration.resolve_external_node_template_rollout(
+        onboarding,
+        worker_wave_groups=1,
+    )
+    assert fixed_override.to_manifest_dict() == {
+        "strategy": "safe-surge",
+        "service_role_strategy": "safe-surge",
+        "worker_wave_groups": 1,
+        "service_role_group_strategy": {
+            "max_surge_count": 1,
+            "max_unavailable_count": 0,
+            "drain_timeout": "30m",
+        },
+        "worker_group_strategy": {
+            "max_surge_count": 1,
+            "max_unavailable_count": 0,
+            "drain_timeout": "30m",
+        },
+    }
+
     onboarding["node_template_upgrade"] = {
         "rollout": {
             "worker_wave_groups": 1,
@@ -1961,6 +3625,16 @@ def test_external_node_template_rollout_config_validation_and_cli_precedence() -
         }
     }
     with pytest.raises(ValueError, match="must set only one"):
+        migration.resolve_external_node_template_rollout(onboarding)
+
+    onboarding["node_template_upgrade"] = {
+        "rollout": {
+            "strategy": "safe-surge",
+            "worker_wave_groups": 1,
+            "max_parallel_worker_groups": 1,
+        }
+    }
+    with pytest.raises(ValueError, match="only supported with worker_wave_percent"):
         migration.resolve_external_node_template_rollout(onboarding)
 
     onboarding["node_template_upgrade"] = {
@@ -2006,7 +3680,7 @@ def test_external_node_template_completion_recheck_rejects_k8s_downgrade_target(
     runner = _FakeCommandRunner(
         cluster={
             "metadata": {"id": "cluster-123", "name": "external-cluster"},
-            "spec": {"control_plane": {"version": "1.33"}},
+            "spec": {"control_plane": {"version": "1.34"}},
         }
     )
 
@@ -2016,6 +3690,7 @@ def test_external_node_template_completion_recheck_rejects_k8s_downgrade_target(
             source_report=_source_report(),
             target_ref="external-cluster",
             worker_node_groups=(),
+            nebius_api=runner.nebius_api,
             command_runner=runner,
         )
 
@@ -2028,6 +3703,22 @@ def test_external_node_template_k8s_version_checks_fail_closed_on_malformed_live
         migration._ensure_external_node_template_k8s_not_downgrade("garbage", "1.33")
     with pytest.raises(RuntimeError, match="could not parse"):
         migration._minor_version_at_least("garbage", "1.33")
+
+
+def test_execute_external_node_template_rejects_skipped_k8s_minor(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(RuntimeError, match="Run the next hop first with --to-k8s-version 1.32"):
+        execute_soperator_migration(
+            config_path=tmp_path / "config.yaml",
+            target_ref="external-cluster",
+            payload=_payload(target_k8s_version="1.34"),
+            source_report=_source_report(target_k8s_version="1.34"),
+            backup_metadata=_backup_metadata("skip-minor"),
+            snapshot_collector=lambda *, kube_context: _snapshot(),
+            approved=True,
+            command_runner=_FakeCommandRunner(),
+        )
 
 
 def test_sfs_attachment_uses_zero_surge_strategy_and_restores_original() -> None:
@@ -2054,12 +3745,13 @@ def test_sfs_attachment_uses_zero_surge_strategy_and_restores_original() -> None
         target_ref="external-cluster",
     )
     specs_by_key = {spec.key: spec for spec in specs}
+    assert "jail" not in specs_by_key
 
     changed, attachments = migration._attach_filesystems_to_source_node_groups(
-        command_runner=runner,
+        nebius_api=runner.nebius_api,
         source_report=_source_report(),
-        attachment_keys_by_group={"gpu-pool": ("jail",)},
-        filesystem_ids_by_key={"jail": "filesystem-jail"},
+        attachment_keys_by_group={"gpu-pool": ("controller-spool",)},
+        filesystem_ids_by_key={"controller-spool": "filesystem-controller-spool"},
         specs_by_key=specs_by_key,
     )
 
@@ -2068,7 +3760,7 @@ def test_sfs_attachment_uses_zero_surge_strategy_and_restores_original() -> None
         {
             "source_group": "gpu-pool",
             "node_group_id": "nodegroup-gpu-pool",
-            "filesystem_keys": ["jail"],
+            "filesystem_keys": ["controller-spool"],
             "strategy": "zero-surge",
             "strategy_restored": True,
             "updated": True,
@@ -2128,7 +3820,7 @@ def test_external_node_template_update_clears_stale_cpu_driver_preset() -> None:
     )
 
 
-def test_zero_surge_full_update_file_clears_cpu_gpu_settings() -> None:
+def test_zero_surge_sdk_update_clears_cpu_gpu_settings() -> None:
     runner = _FakeCommandRunner(
         existing_node_groups=[
             {
@@ -2154,7 +3846,7 @@ def test_zero_surge_full_update_file_clears_cpu_gpu_settings() -> None:
     )
 
     migration._update_node_group_with_zero_surge_strategy(
-        command_runner=runner,
+        nebius_api=runner.nebius_api,
         node_group_id="nodegroup-worker-cpu",
         update_args=("--version", "1.33"),
         original_node_group=runner.existing_node_groups[0],
@@ -2174,13 +3866,8 @@ def test_zero_surge_full_update_file_clears_cpu_gpu_settings() -> None:
         )
     ]
     assert update_calls
-    assert "--file" in update_calls[0]
     assert "--template-gpu-settings-drivers-preset" not in update_calls[0]
     node_group = runner.existing_node_groups[0]
-    assert runner.file_update_payloads
-    file_spec = runner.file_update_payloads[0]["spec"]
-    assert isinstance(file_spec, dict)
-    assert file_spec["strategy"]["drain_timeout"] == "1800s"
     spec = node_group["spec"]
     assert isinstance(spec, dict)
     assert spec["version"] == "1.33"
@@ -2192,14 +3879,16 @@ def test_zero_surge_full_update_file_clears_cpu_gpu_settings() -> None:
 
 
 def test_execute_records_approval_and_runs_checkpointed_mutators(tmp_path: Path) -> None:
-    source_report = _source_report()
+    snapshot = _snapshot()
+    source_report = _source_report(snapshot)
     runner = _FakeCommandRunner()
     result = execute_soperator_migration(
         config_path=tmp_path / "config.yaml",
         target_ref="external-cluster",
         payload=_payload(),
         source_report=source_report,
-        snapshot_collector=lambda *, kube_context: _snapshot(),
+        backup_metadata=_backup_metadata(),
+        snapshot_collector=lambda *, kube_context: snapshot,
         approved=True,
         command_runner=runner,
         worker_rollout_strategy="safe-surge",
@@ -2215,15 +3904,19 @@ def test_execute_records_approval_and_runs_checkpointed_mutators(tmp_path: Path)
         "online-bulk-data-sync",
         "rolling-compute-migration",
         "final-control-plane-cutover",
+        "populate-jail-refresh",
         "validation-and-rollback-hold",
         "retire-old-resources",
+        "post-upgrade-mk8s-check",
+        "post-upgrade-helm-check",
     )
     assert result.pending_phase == "none"
     assert "Auto-selected source worker node groups: gpu-pool" in "\n".join(result.lines)
     assert "target-gpu-stack-remediation: Applied target GPU stack chart" in "\n".join(result.lines)
-    assert "post-migration-helm-check: Verified target Soperator Helm chart readiness" in "\n".join(
+    assert "post-upgrade-helm-check: Verified target Soperator Helm chart readiness" in "\n".join(
         result.lines
     )
+    assert "Phase validation post-upgrade-helm-check: PASS" in "\n".join(result.lines)
     assert "Data sync skipped: no old Soperator storage was detected" in "\n".join(result.lines)
     assert any(
         call[0][:4] == ("nebius", "compute", "filesystem", "create") for call in runner.calls
@@ -2237,15 +3930,108 @@ def test_execute_records_approval_and_runs_checkpointed_mutators(tmp_path: Path)
     assert checkpoint["completed_phases"] == list(result.completed_phases)
     assert checkpoint["pending_phase"] == "none"
     assert checkpoint["worker_node_groups"] == ["gpu-pool"]
-    assert checkpoint["events"][1]["event"] == "customer-approval-recorded"
+    assert "customer-approval-recorded" in {event["event"] for event in checkpoint["events"]}
     assert set(checkpoint["phase_state"]["create-aligned-sfs"]["filesystems"]) == {
-        "jail",
         "controller-spool",
         "accounting",
     }
     assert {
         item["id"] for item in checkpoint["phase_state"]["target-gpu-stack-remediation"]["charts"]
     } == {"nvidia-gpu-operator", "nvidia-network-operator"}
+    gpu_stack_helm_upgrades = [
+        call
+        for call in runner.calls
+        if call[0][:5] == ("helm", "--kube-context", "external-context", "upgrade", "--install")
+        and call[0][5] in {"gpu-operator", "network-operator"}
+    ]
+    assert gpu_stack_helm_upgrades
+    assert all("--force-conflicts" in call[0] for call in gpu_stack_helm_upgrades)
+    for phase_id in result.completed_phases:
+        if phase_id in {"discovery-and-plan", "customer-approval"}:
+            continue
+        verification = checkpoint["phase_state"][phase_id]["fast_verification"]
+        assert verification["status"] in {"passed", "skipped"}
+        if verification["status"] == "passed":
+            assert verification["passed"] is True
+        else:
+            assert verification["passed"] is None
+        assert verification["verified_at"]
+    assert "execute-phase-fast-verification-passed" in {
+        event["event"] for event in checkpoint["events"]
+    }
+    reports_dir = tmp_path / "generated" / "reports"
+    migrate_report = (reports_dir / "ext-soperator-upgrade-report.md").read_text(encoding="utf-8")
+    upgrade_json_report = json.loads(
+        (reports_dir / "ext-soperator-upgrade-report.json").read_text(encoding="utf-8")
+    )
+    assert "## Stage Fast Verification" in migrate_report
+    assert "`target-gpu-stack-remediation`: `PASS`" in migrate_report
+    stage_verification = {
+        item["phase_id"]: item for item in upgrade_json_report["stage_verification"]
+    }
+    assert stage_verification["external-node-template-upgrade"]["status"] == "passed"
+    assert stage_verification["target-gpu-stack-remediation"]["passed"] is True
+    assert stage_verification["online-bulk-data-sync"]["status"] == "skipped"
+    assert stage_verification["retire-old-resources"]["status"] == "skipped"
+    assert stage_verification["post-upgrade-mk8s-check"]["status"] == "passed"
+    assert stage_verification["post-upgrade-helm-check"]["status"] == "passed"
+    phase_reports = {item["id"]: item for item in upgrade_json_report["phases"]}
+    assert phase_reports["external-node-template-upgrade"]["top_level_stage"] == (
+        "MK8s Node Upgrades"
+    )
+    assert phase_reports["post-upgrade-mk8s-check"]["top_level_stage"] == ("MK8s Node Upgrades")
+    assert phase_reports["post-upgrade-helm-check"]["top_level_stage"] == "Soperator Upgrade"
+    assert phase_reports["populate-jail-refresh"]["top_level_stage"] == "Jail Upgrade"
+    assert phase_reports["target-gpu-stack-remediation"]["fast_verification"]["status"] == "passed"
+    assert phase_reports["post-upgrade-helm-check"]["fast_verification"]["status"] == "passed"
+    assert "- Top-level stage: `MK8s Node Upgrades`" in migrate_report
+    assert "- Top-level stage: `Soperator Upgrade`" in migrate_report
+    assert "- Top-level stage: `Jail Upgrade`" in migrate_report
+    populate_phase = checkpoint["phase_state"]["populate-jail-refresh"]
+    assert populate_phase["slurm_job_scope_nodes"]
+    assert populate_phase["slurm_quiet_at"]
+    assert populate_phase["slurm_resumed_at"]
+
+    def _helm_input_values(index: int) -> dict[str, Any]:
+        raw = runner.calls[index][1]
+        try:
+            parsed = json.loads(raw or "{}")
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    refresh_indices = [
+        index
+        for index, (command, _input_text) in enumerate(runner.calls)
+        if command
+        and command[0] == "helm"
+        and "upgrade" in command
+        and _helm_input_values(index).get("jailRootfs", {}).get("refresh", {}).get("mode")
+        == "populatePassiveSlot"
+    ]
+    assert refresh_indices
+    refresh_index = refresh_indices[-1]
+    assert populate_phase["active_slot"] == "slot-b"
+    assert populate_phase["rollback_slot"] == "slot-a"
+    drain_indices = [
+        index
+        for index, (command, _input_text) in enumerate(runner.calls)
+        if command[8:] == ("scontrol", "update", "PartitionName=ALL", "State=DRAIN")
+    ]
+    resume_indices = [
+        index
+        for index, (command, _input_text) in enumerate(runner.calls)
+        if command[8:] == ("scontrol", "update", "PartitionName=ALL", "State=UP")
+    ]
+    last_drain_before_refresh = max(
+        index for index in drain_indices if index < refresh_index
+    )
+    last_resume_before_refresh = max(
+        (index for index in resume_indices if index < refresh_index),
+        default=-1,
+    )
+    assert last_drain_before_refresh > last_resume_before_refresh
+    assert any(index > refresh_index for index in resume_indices)
 
     runner.calls.clear()
     resumed = execute_soperator_migration(
@@ -2273,7 +4059,7 @@ def test_execute_records_approval_and_runs_checkpointed_mutators(tmp_path: Path)
     ]
     assert mutating_commands == []
     assert "live state already satisfies completed action" in "\n".join(resumed.lines)
-    assert "post-migration-helm-check: Verified target Soperator Helm chart readiness" in "\n".join(
+    assert "post-upgrade-helm-check: Verified target Soperator Helm chart readiness" in "\n".join(
         resumed.lines
     )
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
@@ -2282,11 +4068,885 @@ def test_execute_records_approval_and_runs_checkpointed_mutators(tmp_path: Path)
     assert checkpoint["worker_node_groups"] == ["gpu-pool"]
 
 
+def test_execute_fast_verification_failure_keeps_same_phase_pending(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = _snapshot()
+    source_report = _source_report(snapshot)
+    monkeypatch.setattr(
+        migration,
+        "_target_gpu_stack_remediation_satisfied",
+        lambda **_kwargs: False,
+    )
+
+    result = execute_soperator_migration(
+        config_path=tmp_path / "config.yaml",
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=source_report,
+        backup_metadata=_backup_metadata("fast-verification-pending"),
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        approved=True,
+        command_runner=_FakeCommandRunner(),
+        worker_rollout_strategy="safe-surge",
+    )
+
+    assert result.pending_phase == "target-gpu-stack-remediation"
+    assert "fast stage verification failed after target-gpu-stack-remediation" in (
+        result.pending_reason
+    )
+    assert result.mutation_performed is True
+    assert "target-gpu-stack-remediation" not in result.completed_phases
+    checkpoint_path = soperator_migration_checkpoint_path(
+        tmp_path / "config.yaml",
+        "external-cluster",
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["pending_phase"] == "target-gpu-stack-remediation"
+    verification = checkpoint["phase_state"]["target-gpu-stack-remediation"]["fast_verification"]
+    assert verification["status"] == "failed"
+    assert verification["passed"] is False
+    assert (
+        "target GPU stack Helm releases or post-render patches are not ready"
+        in (verification["summary"])
+    )
+    assert (
+        checkpoint["phase_state"]["external-node-template-upgrade"]["fast_verification"]["status"]
+        == "passed"
+    )
+    assert "execute-phase-fast-verification-failed" in {
+        event["event"] for event in checkpoint["events"]
+    }
+    reports_dir = tmp_path / "generated" / "reports"
+    migrate_report = (reports_dir / "ext-soperator-upgrade-report.md").read_text(encoding="utf-8")
+    upgrade_json_report = json.loads(
+        (reports_dir / "ext-soperator-upgrade-report.json").read_text(encoding="utf-8")
+    )
+    assert "`target-gpu-stack-remediation`: `FAIL`" in migrate_report
+    assert upgrade_json_report["pending_phase"] == "target-gpu-stack-remediation"
+    stage_verification = {
+        item["phase_id"]: item for item in upgrade_json_report["stage_verification"]
+    }
+    assert stage_verification["target-gpu-stack-remediation"]["status"] == "failed"
+    assert stage_verification["rolling-compute-migration"]["status"] == "not_run"
+
+
+@pytest.mark.parametrize(
+    ("phase_id", "verifier_name", "next_phase_id"),
+    [
+        (
+            "online-bulk-data-sync",
+            "_online_bulk_data_sync_fast_verification_checks",
+            "rolling-compute-migration",
+        ),
+        (
+            "rolling-compute-migration",
+            "_rolling_compute_fast_verification_checks",
+            "final-control-plane-cutover",
+        ),
+        (
+            "validation-and-rollback-hold",
+            "_validation_hold_fast_verification_checks",
+            "retire-old-resources",
+        ),
+        (
+            "retire-old-resources",
+            "_retire_old_resources_fast_verification_checks",
+            "post-upgrade-mk8s-check",
+        ),
+    ],
+)
+def test_execute_phase_fast_verification_failure_keeps_same_phase_pending(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    phase_id: str,
+    verifier_name: str,
+    next_phase_id: str,
+) -> None:
+    summary = f"{phase_id} verification evidence was not satisfied."
+
+    def _fail_phase_verification(**_kwargs: Any) -> tuple[str, list[Mapping[str, str]]]:
+        return (
+            summary,
+            [
+                migration._fast_verification_check(  # noqa: SLF001
+                    phase_id,
+                    "failed",
+                    "phase proof missing",
+                )
+            ],
+        )
+
+    monkeypatch.setattr(migration, verifier_name, _fail_phase_verification)
+
+    result = execute_soperator_migration(
+        config_path=tmp_path / "config.yaml",
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=_source_report(_snapshot()),
+        backup_metadata=_backup_metadata(f"{phase_id}-pending"),
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        approved=True,
+        command_runner=_FakeCommandRunner(),
+        worker_rollout_strategy="safe-surge",
+    )
+
+    assert result.pending_phase == phase_id
+    assert f"fast stage verification failed after {phase_id}" in result.pending_reason
+    assert phase_id not in result.completed_phases
+    result_text = "\n".join(result.lines)
+    assert f"Phase validation {phase_id}: FAIL - {summary}" in result_text
+
+    reports_dir = tmp_path / "generated" / "reports"
+    migrate_report = (reports_dir / "ext-soperator-upgrade-report.md").read_text(
+        encoding="utf-8"
+    )
+    upgrade_json_report = json.loads(
+        (reports_dir / "ext-soperator-upgrade-report.json").read_text(encoding="utf-8")
+    )
+    assert upgrade_json_report["pending_phase"] == phase_id
+    assert phase_id in upgrade_json_report["pending_reason"]
+    assert f"`{phase_id}`: `FAIL`" in migrate_report
+    assert f"`{next_phase_id}`: `PENDING`" in migrate_report
+    stage_verification = {
+        item["phase_id"]: item for item in upgrade_json_report["stage_verification"]
+    }
+    verification = stage_verification[phase_id]
+    assert verification["status"] == "failed"
+    assert verification["passed"] is False
+    assert verification["verified_at"]
+    assert verification["checks"][0]["summary"] == "phase proof missing"
+    assert stage_verification[next_phase_id]["status"] == "not_run"
+
+
+def test_execute_runtime_error_keeps_current_phase_pending_and_resumes_same_phase(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = _snapshot()
+    source_report = _source_report(snapshot)
+    runner = _FakeCommandRunner()
+    original_handler = migration._execute_target_gpu_stack_remediation_phase
+    handler_calls = 0
+
+    def _fail_once_target_gpu_stack(**kwargs: Any) -> tuple[bool, list[str]]:
+        nonlocal handler_calls
+        handler_calls += 1
+        if handler_calls == 1:
+            checkpoint = kwargs["checkpoint"]
+            assert isinstance(checkpoint, dict)
+            phase = checkpoint.setdefault("phase_state", {}).setdefault(
+                migration._TARGET_GPU_STACK_PHASE_ID,
+                {},
+            )
+            phase["attempt_recorded_before_failure"] = True
+            writer = kwargs.get("checkpoint_writer")
+            if callable(writer):
+                writer()
+            raise RuntimeError("target GPU stack failed mid-phase")
+        return original_handler(**kwargs)
+
+    monkeypatch.setattr(
+        migration,
+        "_execute_target_gpu_stack_remediation_phase",
+        _fail_once_target_gpu_stack,
+    )
+
+    with pytest.raises(RuntimeError, match="target GPU stack failed mid-phase"):
+        execute_soperator_migration(
+            config_path=tmp_path / "config.yaml",
+            target_ref="external-cluster",
+            payload=_payload(),
+            source_report=source_report,
+            backup_metadata=_backup_metadata("runtime-error-pending"),
+            snapshot_collector=lambda *, kube_context: snapshot,
+            approved=True,
+            command_runner=runner,
+            worker_rollout_strategy="safe-surge",
+        )
+
+    checkpoint_path = soperator_migration_checkpoint_path(
+        tmp_path / "config.yaml",
+        "external-cluster",
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["pending_phase"] == migration._TARGET_GPU_STACK_PHASE_ID
+    assert checkpoint["pending_reason"] == "target GPU stack failed mid-phase"
+    assert checkpoint["completed_phases"] == [
+        "discovery-and-plan",
+        "customer-approval",
+        "external-node-template-upgrade",
+    ]
+    assert migration._TARGET_GPU_STACK_PHASE_ID not in checkpoint["completed_phases"]
+    assert checkpoint["phase_state"][migration._TARGET_GPU_STACK_PHASE_ID][
+        "attempt_recorded_before_failure"
+    ] is True
+    assert "execute-phase-failed" in {event["event"] for event in checkpoint["events"]}
+    assert (tmp_path / "generated" / "reports" / "ext-soperator-upgrade-report.md").exists()
+
+    runner.calls.clear()
+    resumed = execute_soperator_migration(
+        config_path=tmp_path / "config.yaml",
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=source_report,
+        snapshot_collector=lambda *, kube_context: snapshot,
+        command_runner=runner,
+        worker_rollout_strategy="safe-surge",
+    )
+
+    assert handler_calls == 2
+    assert resumed.pending_phase == "none"
+    assert migration._TARGET_GPU_STACK_PHASE_ID in resumed.completed_phases
+    assert any(
+        call[0][:4] == ("helm", "--kube-context", "external-context", "upgrade")
+        for call in runner.calls
+    )
+
+
+def test_execute_populate_jail_failure_keeps_checkpointed_phase_pending(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = _snapshot()
+    source_report = _source_report(snapshot)
+    runner = _FakeCommandRunner()
+    locked_upgrade_path = _locked_upgrade_path_fixture()
+    segment_id = locked_upgrade_path["segments"][0]["id"]
+    original_handler = migration._execute_populate_jail_refresh_phase
+    handler_calls = 0
+
+    def _fail_once_populate_jail_refresh(**kwargs: Any) -> tuple[bool, list[str]]:
+        nonlocal handler_calls
+        handler_calls += 1
+        if handler_calls == 1:
+            checkpoint = kwargs["checkpoint"]
+            assert isinstance(checkpoint, dict)
+            phase = checkpoint.setdefault("phase_state", {}).setdefault(
+                migration.POPULATE_JAIL_REFRESH_PHASE_ID,
+                {},
+            )
+            phase["attempt_recorded_before_failure"] = True
+            writer = kwargs.get("checkpoint_writer")
+            if callable(writer):
+                writer()
+            raise RuntimeError("populate jail refresh failed mid-phase")
+        return original_handler(**kwargs)
+
+    monkeypatch.setattr(
+        migration,
+        "_execute_populate_jail_refresh_phase",
+        _fail_once_populate_jail_refresh,
+    )
+
+    with pytest.raises(RuntimeError, match="populate jail refresh failed mid-phase"):
+        execute_soperator_migration(
+            config_path=tmp_path / "config.yaml",
+            target_ref="external-cluster",
+            payload=_payload(),
+            source_report=source_report,
+            backup_metadata=_backup_metadata("populate-jail-pending"),
+            snapshot_collector=lambda *, kube_context: snapshot,
+            approved=True,
+            command_runner=runner,
+            worker_rollout_strategy="safe-surge",
+            locked_upgrade_path=locked_upgrade_path,
+            upgrade_path_fingerprint="locked-path-fingerprint",
+            upgrade_path_segment_id=segment_id,
+        )
+
+    checkpoint_path = soperator_migration_checkpoint_path(
+        tmp_path / "config.yaml",
+        "external-cluster",
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["pending_phase"] == migration.POPULATE_JAIL_REFRESH_PHASE_ID
+    assert checkpoint["pending_reason"] == "populate jail refresh failed mid-phase"
+    assert checkpoint["completed_phases"] == [
+        "discovery-and-plan",
+        "customer-approval",
+        "external-node-template-upgrade",
+        "target-gpu-stack-remediation",
+        "create-aligned-sfs",
+        "online-bulk-data-sync",
+        "rolling-compute-migration",
+        "final-control-plane-cutover",
+    ]
+    assert migration.POPULATE_JAIL_REFRESH_PHASE_ID not in checkpoint["completed_phases"]
+    assert migration.POPULATE_JAIL_REFRESH_PHASE_ID in checkpoint["planned_phases"]
+    assert checkpoint["segment_state"][segment_id]["planned_phases"] == checkpoint[
+        "planned_phases"
+    ]
+    assert checkpoint["phase_state"][migration.POPULATE_JAIL_REFRESH_PHASE_ID][
+        "attempt_recorded_before_failure"
+    ] is True
+    assert any(
+        event["event"] == "execute-phase-failed"
+        and event.get("phase") == migration.POPULATE_JAIL_REFRESH_PHASE_ID
+        for event in checkpoint["events"]
+    )
+    upgrade_json_report = json.loads(
+        (
+            tmp_path / "generated" / "reports" / "ext-soperator-upgrade-report.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert upgrade_json_report["pending_phase"] == migration.POPULATE_JAIL_REFRESH_PHASE_ID
+
+    runner.calls.clear()
+    resumed = execute_soperator_migration(
+        config_path=tmp_path / "config.yaml",
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=source_report,
+        snapshot_collector=lambda *, kube_context: snapshot,
+        command_runner=runner,
+        worker_rollout_strategy="safe-surge",
+        locked_upgrade_path=locked_upgrade_path,
+        upgrade_path_fingerprint="locked-path-fingerprint",
+        upgrade_path_segment_id=segment_id,
+    )
+
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert handler_calls == 2
+    assert resumed.pending_phase == "none"
+    assert migration.POPULATE_JAIL_REFRESH_PHASE_ID in resumed.completed_phases
+    assert checkpoint["pending_phase"] == "none"
+    assert checkpoint["segment_state"][segment_id]["planned_phases"] == checkpoint[
+        "planned_phases"
+    ]
+
+
+def test_execute_keyboard_interrupt_keeps_current_phase_pending_and_resumes_same_phase(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = _snapshot()
+    source_report = _source_report(snapshot)
+    runner = _FakeCommandRunner()
+    original_handler = migration._execute_target_gpu_stack_remediation_phase
+    handler_calls = 0
+
+    def _interrupt_once_target_gpu_stack(**kwargs: Any) -> tuple[bool, list[str]]:
+        nonlocal handler_calls
+        handler_calls += 1
+        if handler_calls == 1:
+            checkpoint = kwargs["checkpoint"]
+            assert isinstance(checkpoint, dict)
+            phase = checkpoint.setdefault("phase_state", {}).setdefault(
+                migration._TARGET_GPU_STACK_PHASE_ID,
+                {},
+            )
+            phase["attempt_recorded_before_interrupt"] = True
+            writer = kwargs.get("checkpoint_writer")
+            if callable(writer):
+                writer()
+            raise KeyboardInterrupt
+        return original_handler(**kwargs)
+
+    monkeypatch.setattr(
+        migration,
+        "_execute_target_gpu_stack_remediation_phase",
+        _interrupt_once_target_gpu_stack,
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        execute_soperator_migration(
+            config_path=tmp_path / "config.yaml",
+            target_ref="external-cluster",
+            payload=_payload(),
+            source_report=source_report,
+            backup_metadata=_backup_metadata("keyboard-interrupt-pending"),
+            snapshot_collector=lambda *, kube_context: snapshot,
+            approved=True,
+            command_runner=runner,
+            worker_rollout_strategy="safe-surge",
+        )
+
+    checkpoint_path = soperator_migration_checkpoint_path(
+        tmp_path / "config.yaml",
+        "external-cluster",
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["pending_phase"] == migration._TARGET_GPU_STACK_PHASE_ID
+    assert checkpoint["pending_reason"] == "interrupted by user"
+    assert checkpoint["completed_phases"] == [
+        "discovery-and-plan",
+        "customer-approval",
+        "external-node-template-upgrade",
+    ]
+    assert checkpoint["phase_state"][migration._TARGET_GPU_STACK_PHASE_ID][
+        "attempt_recorded_before_interrupt"
+    ] is True
+    assert "execute-interrupted" in {event["event"] for event in checkpoint["events"]}
+
+    runner.calls.clear()
+    resumed = execute_soperator_migration(
+        config_path=tmp_path / "config.yaml",
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=source_report,
+        snapshot_collector=lambda *, kube_context: snapshot,
+        command_runner=runner,
+        worker_rollout_strategy="safe-surge",
+    )
+
+    assert handler_calls == 2
+    assert resumed.pending_phase == "none"
+    assert migration._TARGET_GPU_STACK_PHASE_ID in resumed.completed_phases
+
+
+def test_execute_final_helm_check_failure_writes_pending_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_report = _source_report(_snapshot())
+    original_helm_verifier = migration._verify_completed_soperator_migration_helm_state
+    verifier_calls = 0
+
+    def _fail_final_helm_check(**kwargs: Any) -> list[str]:
+        nonlocal verifier_calls
+        verifier_calls += 1
+        if verifier_calls >= 2:
+            raise RuntimeError("target Helm release is not ready")
+        return original_helm_verifier(**kwargs)
+
+    monkeypatch.setattr(
+        migration,
+        "_verify_completed_soperator_migration_helm_state",
+        _fail_final_helm_check,
+    )
+
+    result = execute_soperator_migration(
+        config_path=tmp_path / "config.yaml",
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=source_report,
+        backup_metadata=_backup_metadata("final-helm-pending"),
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        approved=True,
+        command_runner=_FakeCommandRunner(),
+        worker_rollout_strategy="safe-surge",
+    )
+
+    assert result.pending_phase == "post-upgrade-helm-check"
+    assert result.pending_reason == "target Helm release is not ready"
+    assert "Phase validation post-upgrade-helm-check: FAIL - target Helm release is not ready" in (
+        "\n".join(result.lines)
+    )
+    checkpoint_path = soperator_migration_checkpoint_path(
+        tmp_path / "config.yaml",
+        "external-cluster",
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["pending_phase"] == "post-upgrade-helm-check"
+    assert (
+        checkpoint["phase_state"]["post-upgrade-mk8s-check"]["fast_verification"]["status"]
+        == "passed"
+    )
+    helm_verification = checkpoint["phase_state"]["post-upgrade-helm-check"]["fast_verification"]
+    assert helm_verification["status"] == "failed"
+    assert helm_verification["passed"] is False
+    assert "execute-phase-fast-verification-failed" in {
+        event["event"] for event in checkpoint["events"]
+    }
+    reports_dir = tmp_path / "generated" / "reports"
+    upgrade_json_report = json.loads(
+        (reports_dir / "ext-soperator-upgrade-report.json").read_text(encoding="utf-8")
+    )
+    stage_verification = {
+        item["phase_id"]: item for item in upgrade_json_report["stage_verification"]
+    }
+    assert stage_verification["post-upgrade-mk8s-check"]["status"] == "passed"
+    assert stage_verification["post-upgrade-helm-check"]["status"] == "failed"
+    assert upgrade_json_report["pending_phase"] == "post-upgrade-helm-check"
+    migrate_report = (reports_dir / "ext-soperator-upgrade-report.md").read_text(encoding="utf-8")
+    assert "`post-upgrade-helm-check`: `FAIL`" in migrate_report
+
+
+def test_execute_skips_target_helm_readiness_for_adopted_external_node_upgrade(
+    tmp_path: Path,
+) -> None:
+    payload = _payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]
+    assert isinstance(onboarding, dict)
+    onboarding["storage_mode"] = "keep-existing-storage"
+    onboarding["compute_mode"] = "keep-existing-compute"
+    onboarding["actions"] = [
+        "adopt-soperator",
+        "reconcile-target-gpu-stack",
+        "upgrade-external-node-template",
+        "approve-external-soperator-upgrade",
+    ]
+    onboarding["source_version"] = "4.0.1"
+    onboarding["target_version"] = "4.0.1"
+    onboarding["analysis_fingerprint"] = soperator_onboarding_fingerprint(
+        payload,
+        target_ref="external-cluster",
+    )
+    source_snapshot = _snapshot(version="4.0.1")
+    source_report = _source_report(source_snapshot)
+    report = source_report["report"]
+    assert isinstance(report, dict)
+    report["migration_plan"] = [
+        {"id": "discovery-and-plan", "status": "complete"},
+        {
+            "id": "customer-approval",
+            "status": "planned",
+            "requires_customer_approval": True,
+        },
+        {"id": migration._EXTERNAL_NODE_TEMPLATE_PHASE_ID, "status": "planned"},
+        {"id": migration._TARGET_GPU_STACK_PHASE_ID, "status": "planned"},
+    ]
+    runner = _FakeCommandRunner(helm_releases=[])
+
+    result = execute_soperator_migration(
+        config_path=tmp_path / "config.yaml",
+        target_ref="external-cluster",
+        payload=payload,
+        source_report=source_report,
+        backup_metadata=_backup_metadata("adopted-external-node-upgrade"),
+        snapshot_collector=lambda *, kube_context: source_snapshot,
+        approved=True,
+        command_runner=runner,
+        worker_rollout_strategy="safe-surge",
+    )
+
+    assert result.pending_phase == "none"
+    assert result.completed_phases == (
+        "discovery-and-plan",
+        "customer-approval",
+        "external-node-template-upgrade",
+        "target-gpu-stack-remediation",
+        "post-upgrade-mk8s-check",
+        "post-upgrade-helm-check",
+    )
+    output = "\n".join(result.lines)
+    assert (
+        "post-upgrade-helm-check: Skipped target Soperator Helm chart readiness: "
+        "no target Soperator Helm release is installed or expected"
+    ) in output
+    assert not any(
+        call[0][:6]
+        == ("helm", "--kube-context", "external-context", "get", "manifest", "soperator")
+        for call in runner.calls
+    )
+    checkpoint_path = soperator_migration_checkpoint_path(
+        tmp_path / "config.yaml",
+        "external-cluster",
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    helm_verification = checkpoint["phase_state"]["post-upgrade-helm-check"][
+        "fast_verification"
+    ]
+    assert helm_verification["status"] == "passed"
+    assert "Skipped target Soperator Helm chart readiness" in helm_verification["summary"]
+
+
+def test_execute_final_helm_check_keyboard_interrupt_writes_pending_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_report = _source_report(_snapshot())
+    original_helm_verifier = migration._verify_completed_soperator_migration_helm_state
+    verifier_calls = 0
+
+    def _interrupt_final_helm_check(**kwargs: Any) -> list[str]:
+        nonlocal verifier_calls
+        verifier_calls += 1
+        if verifier_calls >= 2:
+            raise KeyboardInterrupt
+        return original_helm_verifier(**kwargs)
+
+    monkeypatch.setattr(
+        migration,
+        "_verify_completed_soperator_migration_helm_state",
+        _interrupt_final_helm_check,
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        execute_soperator_migration(
+            config_path=tmp_path / "config.yaml",
+            target_ref="external-cluster",
+            payload=_payload(),
+            source_report=source_report,
+            backup_metadata=_backup_metadata("final-helm-interrupted"),
+            snapshot_collector=lambda *, kube_context: _snapshot(),
+            approved=True,
+            command_runner=_FakeCommandRunner(),
+            worker_rollout_strategy="safe-surge",
+        )
+
+    checkpoint_path = soperator_migration_checkpoint_path(
+        tmp_path / "config.yaml",
+        "external-cluster",
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["pending_phase"] == "post-upgrade-helm-check"
+    assert checkpoint["pending_reason"] == "interrupted by user"
+    assert "post-upgrade-helm-check" not in checkpoint["completed_phases"]
+    assert "execute-interrupted" in {event["event"] for event in checkpoint["events"]}
+    reports_dir = tmp_path / "generated" / "reports"
+    upgrade_json_report = json.loads(
+        (reports_dir / "ext-soperator-upgrade-report.json").read_text(encoding="utf-8")
+    )
+    assert upgrade_json_report["pending_phase"] == "post-upgrade-helm-check"
+    assert upgrade_json_report["pending_reason"] == "interrupted by user"
+
+
+def test_execute_final_mk8s_check_failure_writes_pending_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_report = _source_report(_snapshot())
+    original_mk8s_verifier = migration._verify_completed_soperator_migration_mk8s_state
+    verifier_calls = 0
+    helm_calls = 0
+
+    def _fail_final_mk8s_check(**kwargs: Any) -> list[str]:
+        nonlocal verifier_calls
+        verifier_calls += 1
+        if verifier_calls >= 2:
+            raise RuntimeError("target MK8s node-template state is not ready")
+        return original_mk8s_verifier(**kwargs)
+
+    def _record_helm_check(**_kwargs: Any) -> list[str]:
+        nonlocal helm_calls
+        helm_calls += 1
+        return ["Verified target Soperator Helm chart readiness."]
+
+    monkeypatch.setattr(
+        migration,
+        "_verify_completed_soperator_migration_mk8s_state",
+        _fail_final_mk8s_check,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_verify_completed_soperator_migration_helm_state",
+        _record_helm_check,
+    )
+
+    result = execute_soperator_migration(
+        config_path=tmp_path / "config.yaml",
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=source_report,
+        backup_metadata=_backup_metadata("final-mk8s-pending"),
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        approved=True,
+        command_runner=_FakeCommandRunner(),
+        worker_rollout_strategy="safe-surge",
+    )
+
+    assert result.pending_phase == "post-upgrade-mk8s-check"
+    assert result.pending_reason == "target MK8s node-template state is not ready"
+    assert (
+        "Phase validation post-upgrade-mk8s-check: FAIL - "
+        "target MK8s node-template state is not ready"
+    ) in "\n".join(result.lines)
+    assert helm_calls == 1
+    checkpoint_path = soperator_migration_checkpoint_path(
+        tmp_path / "config.yaml",
+        "external-cluster",
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["pending_phase"] == "post-upgrade-mk8s-check"
+    mk8s_verification = checkpoint["phase_state"]["post-upgrade-mk8s-check"]["fast_verification"]
+    assert mk8s_verification["status"] == "failed"
+    assert mk8s_verification["passed"] is False
+    assert "post-upgrade-helm-check" not in checkpoint["phase_state"]
+    reports_dir = tmp_path / "generated" / "reports"
+    upgrade_json_report = json.loads(
+        (reports_dir / "ext-soperator-upgrade-report.json").read_text(encoding="utf-8")
+    )
+    stage_verification = {
+        item["phase_id"]: item for item in upgrade_json_report["stage_verification"]
+    }
+    assert stage_verification["post-upgrade-mk8s-check"]["status"] == "failed"
+    assert stage_verification["post-upgrade-helm-check"]["status"] == "not_run"
+    assert upgrade_json_report["pending_phase"] == "post-upgrade-mk8s-check"
+    migrate_report = (reports_dir / "ext-soperator-upgrade-report.md").read_text(encoding="utf-8")
+    assert "`post-upgrade-mk8s-check`: `FAIL`" in migrate_report
+    assert "`post-upgrade-helm-check`: `PENDING`" in migrate_report
+
+
+def test_execute_preserves_original_backup_metadata_after_mutating_resume(
+    tmp_path: Path,
+) -> None:
+    source_report = _source_report()
+    config_path = tmp_path / "config.yaml"
+    original_backup = _backup_metadata_with_archive(config_path, "original-pre-upgrade")
+    replacement_backup = _backup_metadata("partial-state")
+    execute_soperator_migration(
+        config_path=config_path,
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=source_report,
+        backup_metadata=original_backup,
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        approved=True,
+        command_runner=_FakeCommandRunner(),
+        worker_rollout_strategy="safe-surge",
+    )
+
+    result = execute_soperator_migration(
+        config_path=config_path,
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=source_report,
+        backup_metadata=replacement_backup,
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        command_runner=_FakeCommandRunner(),
+        worker_rollout_strategy="safe-surge",
+    )
+
+    assert result.pending_phase == "none"
+    checkpoint_path = soperator_migration_checkpoint_path(config_path, "external-cluster")
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["backup"] == original_backup
+    assert any(event["event"] == "backup-metadata-preserved" for event in checkpoint["events"])
+    upgrade_json_report = json.loads(
+        (tmp_path / "generated" / "reports" / "ext-soperator-upgrade-report.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert upgrade_json_report["backup"] == original_backup
+
+
+def test_execute_uses_checkpoint_phase_plan_after_mutating_resume_refresh(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    source_report = _source_report()
+    report = source_report["report"]
+    assert isinstance(report, dict)
+    report["migration_plan"] = [
+        {"id": "discovery-and-plan", "status": "complete"},
+        {
+            "id": "customer-approval",
+            "status": "planned",
+            "requires_customer_approval": True,
+        },
+    ]
+    planned_phases = (
+        "discovery-and-plan",
+        "customer-approval",
+        "external-node-template-upgrade",
+        "target-gpu-stack-remediation",
+        "rolling-compute-migration",
+        "final-control-plane-cutover",
+        migration.POPULATE_JAIL_REFRESH_PHASE_ID,
+        "validation-and-rollback-hold",
+        "retire-old-resources",
+        "post-upgrade-mk8s-check",
+        "post-upgrade-helm-check",
+    )
+    checkpoint_path = soperator_migration_checkpoint_path(config_path, "external-cluster")
+    checkpoint_path.parent.mkdir(parents=True)
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+                "target_ref": "external-cluster",
+                "source_report_fingerprint": "pre-mutation-source-report",
+                "source_version": "3.0.5",
+                "target_version": "4.0.1-ps.1",
+                "planned_phases": list(planned_phases),
+                "completed_phases": [
+                    "discovery-and-plan",
+                    "customer-approval",
+                    "external-node-template-upgrade",
+                    "target-gpu-stack-remediation",
+                    "rolling-compute-migration",
+                ],
+                "pending_phase": "final-control-plane-cutover",
+                "events": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    captured: dict[str, tuple[str, ...]] = {}
+
+    def _capture_checkpoint_for_run(**kwargs: Any) -> dict[str, Any]:
+        captured["phase_ids"] = tuple(kwargs["phase_ids"])
+        raise RuntimeError("captured checkpoint phase plan")
+
+    monkeypatch.setattr(migration, "_checkpoint_for_run", _capture_checkpoint_for_run)
+
+    with pytest.raises(RuntimeError, match="captured checkpoint phase plan"):
+        execute_soperator_migration(
+            config_path=config_path,
+            target_ref="external-cluster",
+            payload=_payload(),
+            source_report=source_report,
+            snapshot_collector=lambda *, kube_context: _snapshot(),
+            approved=True,
+            command_runner=_FakeCommandRunner(),
+            worker_rollout_strategy="safe-surge",
+        )
+
+    assert captured["phase_ids"] == planned_phases
+
+
+def test_execute_uses_fresh_backup_after_completed_prior_hop(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    checkpoint_path = soperator_migration_checkpoint_path(config_path, "external-cluster")
+    checkpoint_path.parent.mkdir(parents=True)
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+                "target_ref": "external-cluster",
+                "source_report_fingerprint": "previous-hop",
+                "source_version": "3.0.5",
+                "target_version": "4.0.1-ps.1",
+                "pending_phase": "none",
+                "planned_phases": [
+                    "discovery-and-plan",
+                    "customer-approval",
+                    "external-node-template-upgrade",
+                ],
+                "completed_phases": [
+                    "discovery-and-plan",
+                    "customer-approval",
+                    "external-node-template-upgrade",
+                ],
+                "backup": _backup_metadata("previous-hop"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    fresh_backup = _backup_metadata("fresh-hop")
+
+    result = execute_soperator_migration(
+        config_path=config_path,
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=_source_report(),
+        backup_metadata=fresh_backup,
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        approved=True,
+        command_runner=_FakeCommandRunner(),
+        worker_rollout_strategy="safe-surge",
+    )
+
+    assert result.pending_phase == "none"
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["backup"] == _backup_metadata_with_existing_archive(
+        config_path,
+        fresh_backup,
+    )
+    assert checkpoint["source_report_fingerprint"] != "previous-hop"
+
+
 def test_execute_clears_stale_pending_phase_after_successful_resume(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source_report = _source_report()
+    snapshot = _snapshot()
+    source_report = _source_report(snapshot)
     runner = _FakeCommandRunner()
     validation_calls = 0
     retire_pending_observations: list[tuple[str, str]] = []
@@ -2306,11 +4966,24 @@ def test_execute_clears_stale_pending_phase_after_successful_resume(
             {},
         )
         phase["validation_contract_revision"] = migration._VALIDATION_HOLD_REVISION
+        phase["shared_safety_verification"] = {
+            "status": "passed",
+            "passed": True,
+            "checks": [],
+        }
+        phase["soperator_cluster_validation_count"] = 1
+        phase["soperator_cluster_validation_reports"] = [
+            "generated/reports/deploy-smoke-report-external-cluster.json"
+        ]
+        phase["mk8s_gpu_validation_count"] = 0
+        phase["mk8s_gpu_validation_reports"] = []
         return True, ["validation recovered"]
 
     def _observing_retire(**kwargs: Any) -> tuple[bool, list[str]]:
         checkpoint = kwargs["checkpoint"]
         assert isinstance(checkpoint, dict)
+        phase = checkpoint.setdefault("phase_state", {}).setdefault("retire-old-resources", {})
+        phase["skipped_reason"] = "test retire skipped"
         retire_pending_observations.append(
             (
                 str(checkpoint.get("pending_phase", "") or ""),
@@ -2327,6 +5000,7 @@ def test_execute_clears_stale_pending_phase_after_successful_resume(
         target_ref="external-cluster",
         payload=_payload(),
         source_report=source_report,
+        backup_metadata=_backup_metadata("validation-pending"),
         snapshot_collector=lambda *, kube_context: _snapshot(),
         approved=True,
         command_runner=runner,
@@ -2347,14 +5021,14 @@ def test_execute_clears_stale_pending_phase_after_successful_resume(
         target_ref="external-cluster",
         payload=_payload(),
         source_report=source_report,
-        snapshot_collector=lambda *, kube_context: _snapshot(),
+        snapshot_collector=lambda *, kube_context: snapshot,
         approved=True,
         command_runner=runner,
         worker_rollout_strategy="safe-surge",
     )
 
     assert resumed.pending_phase == "none"
-    assert retire_pending_observations == [("none", "")]
+    assert retire_pending_observations == [("retire-old-resources", "")]
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert checkpoint["pending_phase"] == "none"
     assert checkpoint["pending_reason"] == ""
@@ -2363,6 +5037,32 @@ def test_execute_clears_stale_pending_phase_after_successful_resume(
         and event.get("phase") == "validation-and-rollback-hold"
         for event in checkpoint["events"]
     )
+
+
+def test_validation_hold_fast_verification_skips_absent_soperator_smoke() -> None:
+    summary, checks = migration._validation_hold_fast_verification_checks(  # noqa: SLF001
+        checkpoint={
+            "phase_state": {
+                "validation-and-rollback-hold": {
+                    "validation_contract_revision": migration._VALIDATION_HOLD_REVISION,
+                    "shared_safety_verification": {
+                        "status": "passed",
+                        "passed": True,
+                        "checks": [],
+                    },
+                    "soperator_cluster_validation_count": 0,
+                    "soperator_cluster_validation_reports": [],
+                    "mk8s_gpu_validation_count": 0,
+                    "mk8s_gpu_validation_reports": [],
+                }
+            }
+        }
+    )
+
+    statuses = {check["name"]: check["status"] for check in checks}
+    assert summary == "validation hold artifacts and shared safety result are recorded."
+    assert statuses["Soperator deployment snapshot report"] == "skipped"
+    assert statuses["Configured MK8s GPU validation reports"] == "skipped"
 
 
 def test_execute_retires_stale_source_soperator_helm_releases_after_target_ready(
@@ -2493,8 +5193,8 @@ def test_execute_retires_stale_source_soperator_helm_releases_after_target_ready
 
     output = "\n".join(result.lines)
     assert result.pending_phase == "none"
-    assert "post-migration-mk8s-check: External MK8s" in output
-    assert "post-migration-helm-check: Verified target Soperator Helm chart readiness" in output
+    assert "post-upgrade-mk8s-check: External MK8s" in output
+    assert "post-upgrade-helm-check: Verified target Soperator Helm chart readiness" in output
     assert "Retired stale source Soperator Helm release records" in output
     assert "soperator-system/soperator-controller" in output
     assert "soperator/slurm-cluster-storage" in output
@@ -2878,6 +5578,7 @@ def test_execute_retries_completed_gpu_stack_action_when_live_release_is_missing
         target_ref="external-cluster",
         payload=_payload(),
         source_report=source_report,
+        backup_metadata=_backup_metadata("gpu-stack-retry"),
         snapshot_collector=lambda *, kube_context: _snapshot(),
         approved=True,
         command_runner=runner,
@@ -3258,6 +5959,8 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
     monkeypatch.setattr(migration, "mk8s_gpu_validation_specs", _fake_specs)
     monkeypatch.setattr(migration, "run_mk8s_gpu_validations", _fake_run)
 
+    locked_upgrade_path = _locked_upgrade_path_fixture()
+    segment_id = locked_upgrade_path["segments"][0]["id"]
     result = execute_soperator_migration(
         config_path=tmp_path / "config.yaml",
         target_ref="external-cluster",
@@ -3266,6 +5969,9 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
         snapshot_collector=lambda *, kube_context: _snapshot(),
         approved=True,
         command_runner=_FakeCommandRunner(),
+        locked_upgrade_path=locked_upgrade_path,
+        upgrade_path_fingerprint="locked-path-fingerprint",
+        upgrade_path_segment_id=segment_id,
     )
 
     assert result.pending_phase == "none"
@@ -3281,7 +5987,7 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
     result_text = "\n".join(result.lines)
     assert "validation-and-rollback-hold: Starting validation 1/2" in result_text
     assert (
-        "validation-and-rollback-hold: Migrate report will include the MK8s GPU validation rollup."
+        "validation-and-rollback-hold: External Soperator upgrade report will include the MK8s GPU validation rollup."
     ) in result_text
     assert (
         "validation-and-rollback-hold: Deploy-compatible validation report refreshed:"
@@ -3290,11 +5996,21 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
     reports_dir = tmp_path / "generated" / "reports"
     assert not (reports_dir / "acceptance-benchmark-report-external-cluster.json").exists()
     assert "## Validations" in (reports_dir / "deploy-report.md").read_text(encoding="utf-8")
-    migrate_report = (reports_dir / "ext-soperator-migrate-report.md").read_text(encoding="utf-8")
-    assert "## Migration Steps" in migrate_report
-    assert "- Migration performed: `yes`" in migrate_report
+    migrate_report = (reports_dir / "ext-soperator-upgrade-report.md").read_text(encoding="utf-8")
+    upgrade_json_report = json.loads(
+        (reports_dir / "ext-soperator-upgrade-report.json").read_text(encoding="utf-8")
+    )
+    assert "## Upgrade Steps" in migrate_report
+    assert "## Locked Upgrade Path" in migrate_report
+    assert "Kubernetes 1.31 -> 1.32 plus Soperator" in migrate_report
+    assert "ext-soperator-upgrades/external-cluster/segment-1-kubernetes-1-31-1-32-soperator/report.md" in migrate_report
+    assert "## Stage Fast Verification" in migrate_report
+    assert "- Upgrade performed: `yes`" in migrate_report
+    assert "`validation-and-rollback-hold`: `PASS`" in migrate_report
     assert "Soperator and Slurm smoke" in migrate_report
     assert "### MK8s GPU" in migrate_report
+    assert "## Shared Upgrade Safety" in migrate_report
+    assert "shared safety=passed/passed" in migrate_report
     assert "deploy-smoke-report-external-cluster.json" in migrate_report
     assert "`deploy-gpu-stack-readiness-report-external-cluster.json`: `PASS`" in migrate_report
     assert "`deploy-gpu-visibility-report-external-cluster.json`: `PASS`" in migrate_report
@@ -3318,12 +6034,73 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
     assert validation_state["soperator_cluster_validation_count"] == 1
     assert len(validation_state["mk8s_gpu_validation_reports"]) == 2
     assert len(validation_state["soperator_cluster_validation_reports"]) == 1
-    assert checkpoint["migrate_report"].endswith(
-        "generated/reports/ext-soperator-migrate-report.md"
+    assert checkpoint["upgrade_report"].endswith(
+        "generated/reports/ext-soperator-upgrade-report.md"
     )
+    assert checkpoint["upgrade_report_json"].endswith(
+        "generated/reports/ext-soperator-upgrade-report.json"
+    )
+    assert checkpoint["locked_upgrade_path"] == locked_upgrade_path
+    assert checkpoint["upgrade_path_fingerprint"] == "locked-path-fingerprint"
+    assert checkpoint["current_segment_id"] == segment_id
+    assert checkpoint["completed_segment_ids"] == [segment_id]
+    expected_backup = _backup_metadata_with_archive(tmp_path / "config.yaml", "test-pre-upgrade")
+    segment_state = checkpoint["segment_state"][segment_id]
+    assert segment_state["segment_report_path"].endswith(
+        "generated/reports/ext-soperator-upgrades/external-cluster/"
+        "segment-1-kubernetes-1-31-1-32-soperator/report.md"
+    )
+    assert segment_state["backup_path"] == expected_backup["path"]
+    assert checkpoint["upgrade_safety"]["post_upgrade_verification"]["status"] == "passed"
+    assert checkpoint["upgrade_safety"]["protected_customer_state"]["before_hash"]
+    assert checkpoint["upgrade_safety"]["protected_customer_state"]["after_hash"]
+    assert upgrade_json_report["schema"] == migration.SOPERATOR_MIGRATION_REPORT_SCHEMA
+    assert upgrade_json_report["target_ref"] == "external-cluster"
+    assert upgrade_json_report["upgrade_performed"] is True
+    assert upgrade_json_report["pending_phase"] == "none"
+    assert upgrade_json_report["checkpoint_path"].endswith(
+        ".nebius-cxcli/ext-soperator-upgrades/external-cluster/checkpoint.json"
+    )
+    assert upgrade_json_report["backup"]["path"] == expected_backup["path"]
+    assert upgrade_json_report["backup"]["sha256"] == expected_backup["sha256"]
+    assert upgrade_json_report["backup"]["size_bytes"] == expected_backup["size_bytes"]
+    assert upgrade_json_report["locked_upgrade_path"] == locked_upgrade_path
+    assert upgrade_json_report["upgrade_path_progress"]["fingerprint"] == (
+        "locked-path-fingerprint"
+    )
+    assert upgrade_json_report["upgrade_path_progress"]["completed_segment_ids"] == [segment_id]
+    assert upgrade_json_report["segment_history"][0]["status"] == "completed"
+    assert upgrade_json_report["segment_history"][0]["backup_path"] == expected_backup["path"]
+    segment_report_path, segment_json_report_path = (
+        migration.ext_soperator_upgrade_segment_report_paths(
+            tmp_path / "config.yaml",
+            "external-cluster",
+            segment_id,
+        )
+    )
+    assert segment_report_path.exists()
+    assert segment_json_report_path.exists()
+    segment_markdown_report = segment_report_path.read_text(encoding="utf-8")
+    segment_json_report = json.loads(segment_json_report_path.read_text(encoding="utf-8"))
+    assert segment_json_report["latest_markdown_report"].endswith(
+        "generated/reports/ext-soperator-upgrade-report.md"
+    )
+    assert segment_json_report["markdown_report"] == str(segment_report_path)
+    assert "### populate-jail-refresh" in segment_markdown_report
+    assert "Jail Upgrade" in segment_markdown_report
+    assert "populate-jail-refresh" in {phase["id"] for phase in segment_json_report["phases"]}
+    assert upgrade_json_report["post_upgrade_verification"]["status"] == "passed"
+    assert upgrade_json_report["protected_customer_state"]["before_hash"]
+    assert upgrade_json_report["fast_smoke"]["status"] == "passed"
+    assert {item["phase_id"]: item["status"] for item in upgrade_json_report["stage_verification"]}[
+        "validation-and-rollback-hold"
+    ] == "passed"
+    assert "validation-and-rollback-hold" in {
+        phase["id"] for phase in upgrade_json_report["phases"]
+    }
 
 
-def test_external_node_template_quiesces_one_node_service_roles(
+def test_external_node_template_quiesces_zero_surge_service_roles(
     tmp_path: Path,
 ) -> None:
     snapshot = _snapshot(version="3.0.5")
@@ -3340,13 +6117,13 @@ def test_external_node_template_quiesces_one_node_service_roles(
         },
         "login": {
             "gpu": False,
-            "node_count": 1,
+            "node_count": 2,
             "labels": {
                 "nebius.com/node-group": "login",
                 "nebius.com/node-group-id": "nodegroup-login",
                 "slurm.nebius.ai/nodeset": "login",
             },
-            "nodes": ["login-node-a"],
+            "nodes": ["login-node-a", "login-node-b"],
         },
         "accounting": {
             "gpu": False,
@@ -3407,9 +6184,9 @@ def test_external_node_template_quiesces_one_node_service_roles(
                 },
             },
             {
-                **_legacy_service_node_group("login"),
+                **_legacy_service_node_group("login", fixed_node_count=2),
                 "spec": {
-                    **_legacy_service_node_group("login")["spec"],
+                    **_legacy_service_node_group("login", fixed_node_count=2)["spec"],
                     "version": "1.32",
                 },
             },
@@ -3462,6 +6239,44 @@ def test_external_node_template_quiesces_one_node_service_roles(
             "metadata": {"id": "cluster-123", "name": "external-cluster"},
             "spec": {"control_plane": {"version": "1.32"}},
         },
+        live_kubernetes_resources={
+            "deployment": [
+                {
+                    "metadata": {
+                        "name": "security-profiles-operator-webhook",
+                        "namespace": "security-profiles-operator-system",
+                    },
+                    "spec": {"replicas": 3},
+                    "status": {"availableReplicas": 3, "readyReplicas": 3},
+                }
+            ],
+            "statefulsets.apps.kruise.io": [
+                {
+                    "metadata": {"name": "login", "namespace": "soperator"},
+                    "spec": {"replicas": 2},
+                    "status": {"availableReplicas": 2, "readyReplicas": 2},
+                }
+            ]
+        },
+        live_slurmclusters=[
+            {
+                "kind": "SlurmCluster",
+                "metadata": {"name": "external-cluster", "namespace": "soperator"},
+                "spec": {"slurmNodes": {}},
+                "status": {"phase": "Available"},
+            },
+            {
+                "kind": "SlurmCluster",
+                "metadata": {"name": "soperator", "namespace": "soperator"},
+                "spec": {
+                    "slurmNodes": {
+                        "accounting": {"enabled": True},
+                        "login": {"size": 2},
+                    }
+                },
+                "status": {"phase": "Available"},
+            },
+        ],
     )
 
     result = execute_soperator_migration(
@@ -3472,6 +6287,7 @@ def test_external_node_template_quiesces_one_node_service_roles(
         snapshot_collector=lambda *, kube_context: snapshot,
         approved=True,
         command_runner=runner,
+        worker_rollout_strategy="zero-surge",
     )
 
     assert result.pending_phase == "none"
@@ -3503,11 +6319,96 @@ def test_external_node_template_quiesces_one_node_service_roles(
         "--context",
         "external-context",
         "-n",
+        "security-profiles-operator-system",
+        "scale",
+        "deployment/security-profiles-operator-webhook",
+        "--replicas",
+        "2",
+    ) in commands
+    assert (
+        "kubectl",
+        "--context",
+        "external-context",
+        "-n",
+        "security-profiles-operator-system",
+        "scale",
+        "deployment/security-profiles-operator-webhook",
+        "--replicas",
+        "3",
+    ) in commands
+    assert (
+        "kubectl",
+        "--context",
+        "external-context",
+        "-n",
+        "soperator",
+        "patch",
+        "slurmcluster/soperator",
+        "--type",
+        "merge",
+        "-p",
+        '{"spec": {"slurmNodes": {"login": {"size": 1}}}}',
+    ) in commands
+    assert (
+        "kubectl",
+        "--context",
+        "external-context",
+        "-n",
         "soperator",
         "scale",
         "statefulsets.apps.kruise.io/login",
         "--replicas",
-        "0",
+        "1",
+    ) in commands
+    assert (
+        "kubectl",
+        "--context",
+        "external-context",
+        "-n",
+        "soperator",
+        "scale",
+        "statefulsets.apps.kruise.io/login",
+        "--replicas",
+        "2",
+    ) in commands
+    assert (
+        "kubectl",
+        "--context",
+        "external-context",
+        "-n",
+        "soperator",
+        "patch",
+        "slurmcluster/soperator",
+        "--type",
+        "merge",
+        "-p",
+        '{"spec": {"slurmNodes": {"login": {"size": 2}}}}',
+    ) in commands
+    assert (
+        "kubectl",
+        "--context",
+        "external-context",
+        "-n",
+        "soperator",
+        "patch",
+        "slurmcluster/soperator",
+        "--type",
+        "merge",
+        "-p",
+        '{"spec": {"slurmNodes": {"accounting": {"enabled": false}}}}',
+    ) in commands
+    assert (
+        "kubectl",
+        "--context",
+        "external-context",
+        "-n",
+        "soperator",
+        "patch",
+        "slurmcluster/soperator",
+        "--type",
+        "merge",
+        "-p",
+        '{"spec": {"slurmNodes": {"accounting": {"enabled": true}}}}',
     ) in commands
     assert (
         "kubectl",
@@ -3553,15 +6454,28 @@ def test_execute_upgrades_external_node_template_with_safe_surge_strategy(
     tmp_path: Path,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    source_report = _source_report()
-    runner = _FakeCommandRunner()
+    snapshot = _snapshot()
+    snapshot["node_groups"]["login"] = {
+        "gpu": False,
+        "node_count": 1,
+        "labels": {
+            "nebius.com/node-group": "login",
+            "nebius.com/node-group-id": "nodegroup-login",
+            "slurm.nebius.ai/nodeset": "login",
+        },
+        "nodes": ["login-node-a"],
+    }
+    source_report = _source_report(snapshot)
+    runner = _FakeCommandRunner(
+        existing_node_groups=[_legacy_service_node_group("login")],
+    )
 
     result = execute_soperator_migration(
         config_path=config_path,
         target_ref="external-cluster",
         payload=_payload(),
         source_report=source_report,
-        snapshot_collector=lambda *, kube_context: _snapshot(),
+        snapshot_collector=lambda *, kube_context: snapshot,
         approved=True,
         command_runner=runner,
         worker_rollout_strategy="safe-surge",
@@ -3573,7 +6487,7 @@ def test_execute_upgrades_external_node_template_with_safe_surge_strategy(
     ]
     assert [
         command[command.index("--control-plane-version") + 1] for command in cluster_updates
-    ] == ["1.32", "1.33"]
+    ] == ["1.32"]
     node_template_updates = [
         call[0]
         for call in runner.calls
@@ -3583,7 +6497,7 @@ def test_execute_upgrades_external_node_template_with_safe_surge_strategy(
     ]
     assert node_template_updates
     update_command = node_template_updates[0]
-    assert update_command[update_command.index("--version") + 1] == "1.33"
+    assert update_command[update_command.index("--version") + 1] == "1.32"
     assert (
         update_command[update_command.index("--template-gpu-settings-drivers-preset") + 1]
         == "cuda13.0"
@@ -3609,6 +6523,33 @@ def test_execute_upgrades_external_node_template_with_safe_surge_strategy(
     assert restore_command[restore_command.index("--strategy-max-surge-count") + 1] == "1"
     assert restore_command[restore_command.index("--strategy-max-unavailable-count") + 1] == "0"
     assert restore_command[restore_command.index("--strategy-drain-timeout") + 1] == "0s"
+    login_update_commands = [
+        call[0]
+        for call in runner.calls
+        if call[0][:4] == ("nebius", "mk8s", "node-group", "update")
+        and call[0][4] == "nodegroup-login"
+        and "--version" in call[0]
+    ]
+    assert login_update_commands
+    login_update_command = login_update_commands[0]
+    assert login_update_command[login_update_command.index("--strategy-max-surge-count") + 1] == "1"
+    assert (
+        login_update_command[login_update_command.index("--strategy-max-unavailable-count") + 1]
+        == "0"
+    )
+    assert login_update_command[login_update_command.index("--strategy-drain-timeout") + 1] == "30m"
+    commands = [call[0] for call in runner.calls]
+    assert (
+        "kubectl",
+        "--context",
+        "external-context",
+        "-n",
+        "soperator",
+        "scale",
+        "statefulsets.apps.kruise.io/login",
+        "--replicas",
+        "0",
+    ) not in commands
 
     checkpoint = json.loads(
         soperator_migration_checkpoint_path(config_path, "external-cluster").read_text(
@@ -3618,19 +6559,38 @@ def test_execute_upgrades_external_node_template_with_safe_surge_strategy(
     phase = checkpoint["phase_state"]["external-node-template-upgrade"]
     assert checkpoint["external_node_template_rollout"] == {
         "strategy": "safe-surge",
+        "service_role_strategy": "safe-surge",
         "worker_wave_percent": 1,
+        "service_role_group_strategy": {
+            "max_surge_count": 1,
+            "max_unavailable_count": 0,
+            "drain_timeout": "30m",
+        },
         "worker_group_strategy": {
             "max_surge_count": 1,
             "max_unavailable_count": 0,
             "drain_timeout": "30m",
         },
     }
-    assert phase["control_plane"]["hops"]["1.33"]["status"] == "completed"
+    assert phase["control_plane"]["hops"]["1.32"]["status"] == "completed"
+    assert phase["node_groups"]["login"]["strategy"] == "safe-surge"
+    assert (
+        phase["node_groups"]["login"]["login_service_ready_before_node_update"][
+            "ready_endpoints"
+        ]
+        >= 1
+    )
+    assert (
+        phase["node_groups"]["login"]["login_service_ready_after_node_update"][
+            "ready_endpoints"
+        ]
+        >= 1
+    )
     assert phase["node_groups"]["gpu-pool"]["strategy"] == "safe-surge"
     assert phase["node_groups"]["gpu-pool"]["strategy_restored"] is True
     assert phase["worker_waves"] == [["gpu-pool"]]
     assert any(
-        line.startswith("post-migration-mk8s-check: External MK8s node-template verified")
+        line.startswith("post-upgrade-mk8s-check: External MK8s node-template verified")
         for line in result.lines
     )
 
@@ -3737,6 +6697,10 @@ def test_execute_external_node_template_parallel_worker_failure_checkpoints_afte
             _live_worker_group("worker-gpu-a", "nodegroup-worker-a"),
             _live_worker_group("worker-gpu-b", "nodegroup-worker-b"),
         ],
+        cluster={
+            "metadata": {"id": "cluster-123", "name": "external-cluster"},
+            "spec": {"control_plane": {"version": "1.32"}},
+        },
         live_nodes=[
             {
                 "metadata": {
@@ -3788,6 +6752,10 @@ def test_execute_external_node_template_parallel_worker_failure_checkpoints_afte
 class _TimeoutAfterAcceptedNodeTemplateUpdateRunner(_FakeCommandRunner):
     def __init__(self, *, leave_rollout_in_progress: bool = False) -> None:
         super().__init__(
+            cluster={
+                "metadata": {"id": "cluster-123", "name": "external-cluster"},
+                "spec": {"control_plane": {"version": "1.32"}},
+            },
             existing_node_groups=[
                 {
                     "metadata": {
@@ -3817,7 +6785,7 @@ class _TimeoutAfterAcceptedNodeTemplateUpdateRunner(_FakeCommandRunner):
                     },
                     "status": _ready_node_group_status(version="1.32", nodes=2),
                 }
-            ]
+            ],
         )
         self.leave_rollout_in_progress = leave_rollout_in_progress
         self.timed_out = False
@@ -3844,11 +6812,12 @@ class _TimeoutAfterAcceptedNodeTemplateUpdateRunner(_FakeCommandRunner):
                 check=check,
             )
             if self.leave_rollout_in_progress:
+                target_version = command[command.index("--version") + 1]
                 for node_group in self.existing_node_groups:
                     metadata = node_group.get("metadata")
                     if isinstance(metadata, dict) and metadata.get("id") == "nodegroup-gpu-pool":
                         node_group["status"] = {
-                            "version": "1.32",
+                            "version": target_version,
                             "ready_node_count": 1,
                             "target_node_count": 2,
                             "node_count": 3,
@@ -3901,8 +6870,9 @@ def test_execute_external_node_template_reconciles_accepted_timeout_when_ready(
     result = execute_soperator_migration(
         config_path=config_path,
         target_ref="external-cluster",
-        payload=_payload(),
-        source_report=_source_report(),
+        payload=_payload(target_k8s_version="1.33"),
+        source_report=_source_report(target_k8s_version="1.33"),
+        backup_metadata=_backup_metadata("waiting-rollout"),
         snapshot_collector=lambda *, kube_context: _snapshot(),
         approved=True,
         command_runner=runner,
@@ -3918,7 +6888,7 @@ def test_execute_external_node_template_reconciles_accepted_timeout_when_ready(
     ]
     assert len(node_template_updates) == 1
     assert any(
-        line.startswith("post-migration-mk8s-check: External MK8s node-template verified")
+        line.startswith("post-upgrade-mk8s-check: External MK8s node-template verified")
         for line in result.lines
     )
 
@@ -3932,8 +6902,9 @@ def test_execute_external_node_template_resume_waiting_rollout_without_duplicate
     result = execute_soperator_migration(
         config_path=config_path,
         target_ref="external-cluster",
-        payload=_payload(),
-        source_report=_source_report(),
+        payload=_payload(target_k8s_version="1.33"),
+        source_report=_source_report(target_k8s_version="1.33"),
+        backup_metadata=_backup_metadata("waiting-rollout"),
         snapshot_collector=lambda *, kube_context: _snapshot(),
         approved=True,
         command_runner=runner,
@@ -3967,8 +6938,8 @@ def test_execute_external_node_template_resume_waiting_rollout_without_duplicate
     resumed = execute_soperator_migration(
         config_path=config_path,
         target_ref="external-cluster",
-        payload=_payload(),
-        source_report=_source_report(),
+        payload=_payload(target_k8s_version="1.33"),
+        source_report=_source_report(target_k8s_version="1.33"),
         snapshot_collector=lambda *, kube_context: _snapshot(),
         approved=True,
         command_runner=runner,
@@ -4028,8 +6999,9 @@ def test_execute_external_node_template_resumes_failed_timeout_from_live_state(
         execute_soperator_migration(
             config_path=config_path,
             target_ref="external-cluster",
-            payload=_payload(),
-            source_report=_source_report(),
+            payload=_payload(target_k8s_version="1.33"),
+            source_report=_source_report(target_k8s_version="1.33"),
+            backup_metadata=_backup_metadata("failed-timeout"),
             snapshot_collector=lambda *, kube_context: _snapshot(),
             approved=True,
             command_runner=runner,
@@ -4068,8 +7040,8 @@ def test_execute_external_node_template_resumes_failed_timeout_from_live_state(
     resumed = execute_soperator_migration(
         config_path=config_path,
         target_ref="external-cluster",
-        payload=_payload(),
-        source_report=_source_report(),
+        payload=_payload(target_k8s_version="1.33"),
+        source_report=_source_report(target_k8s_version="1.33"),
         snapshot_collector=lambda *, kube_context: _snapshot(),
         approved=True,
         command_runner=runner,
@@ -4184,6 +7156,7 @@ def test_execute_rejects_changed_worker_rollout_settings_after_checkpoint(
         target_ref="external-cluster",
         payload=_payload(),
         source_report=_source_report(),
+        backup_metadata=_backup_metadata("rollout-settings"),
         snapshot_collector=lambda *, kube_context: _snapshot(),
         approved=True,
         command_runner=_FakeCommandRunner(),
@@ -4391,29 +7364,3276 @@ def test_execute_external_node_template_blocks_nonempty_slurm_queue_before_mutat
     snapshot = _snapshot_with_compute_source()
     runner = _FakeCommandRunner(slurm_queue_output="RUNNING\nPENDING\n")
 
-    with pytest.raises(RuntimeError, match="Slurm queue is not empty"):
-        execute_soperator_migration(
-            config_path=tmp_path / "config.yaml",
-            target_ref="external-cluster",
-            payload=_payload(include_placements=True),
-            source_report=_source_report(snapshot),
-            snapshot_collector=lambda *, kube_context: snapshot,
-            approved=True,
-            command_runner=runner,
-        )
+    result = execute_soperator_migration(
+        config_path=tmp_path / "config.yaml",
+        target_ref="external-cluster",
+        payload=_payload(include_placements=True),
+        source_report=_source_report(snapshot),
+        snapshot_collector=lambda *, kube_context: snapshot,
+        approved=True,
+        command_runner=runner,
+        job_policy="fail",
+    )
 
+    assert result.pending_phase == "external-node-template-upgrade"
+    assert "Affected Slurm jobs exist for the upgrade scope" in result.pending_reason
     assert not any(
         call[0][:4] == ("nebius", "mk8s", "node-group", "update") and "--version" in call[0]
         for call in runner.calls
     )
 
 
+def test_execute_external_node_template_rechecks_slurm_queue_before_worker_wave(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot_with_compute_source()
+    runner = _FakeCommandRunner(slurm_queue_outputs=["", "RUNNING\n"])
+
+    result = execute_soperator_migration(
+        config_path=tmp_path / "config.yaml",
+        target_ref="external-cluster",
+        payload=_payload(include_placements=True),
+        source_report=_source_report(snapshot),
+        snapshot_collector=lambda *, kube_context: snapshot,
+        approved=True,
+        command_runner=runner,
+        job_policy="fail",
+    )
+
+    assert result.pending_phase == "external-node-template-upgrade"
+    assert "Affected Slurm jobs exist for the upgrade scope" in result.pending_reason
+    worker_updates = [
+        call[0]
+        for call in runner.calls
+        if call[0][:4] == ("nebius", "mk8s", "node-group", "update")
+        and call[0][4] == "nodegroup-gpu-pool"
+        and "--version" in call[0]
+    ]
+    assert worker_updates == []
+
+
+def _external_upgrade_slurm_runner(
+    *,
+    queue_outputs: list[str],
+    calls: list[tuple[str, ...]],
+    pending_queue_outputs: list[str] | None = None,
+) -> Callable[..., SoperatorMigrationCommandResult]:
+    pending_outputs = pending_queue_outputs if pending_queue_outputs is not None else []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "login-0"},
+                                "status": {"phase": "Running"},
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:8] == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "exec",
+            "login-0",
+            "--",
+        ):
+            if command[8:] == ("scontrol", "show", "nodes"):
+                return SoperatorMigrationCommandResult(
+                    command,
+                    0,
+                    "NodeName=worker-gpu-0-0 NodeHostName=worker-gpu-0-0 Partitions=gpu",
+                    "",
+                )
+            if command[8:11] == ("scontrol", "show", "node") and command[-1] == "-o":
+                return SoperatorMigrationCommandResult(
+                    command,
+                    0,
+                    f"NodeName={command[11]} Partitions=gpu State=IDLE",
+                    "",
+                )
+            if command[8:10] == ("squeue", "-h"):
+                if "PENDING" in command:
+                    return SoperatorMigrationCommandResult(
+                        command,
+                        0,
+                        pending_outputs.pop(0) if pending_outputs else "",
+                        "",
+                    )
+                return SoperatorMigrationCommandResult(command, 0, queue_outputs.pop(0), "")
+        return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
+
+    return runner
+
+
+def test_external_upgrade_slurm_jobs_translates_kubernetes_node_names() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {"items": [{"metadata": {"name": "login-0"}, "status": {"phase": "Running"}}]}
+                ),
+                "",
+            )
+        if command[8:] == ("scontrol", "show", "nodes"):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "\n".join(
+                    (
+                        "NodeName=worker-3 Arch=x86_64 CoresPerSocket=8",
+                        "   NodeAddr=10.1.18.140 NodeHostName=worker-3 Version=24.11.6 Partitions=main",
+                        "   InstanceId=computeinstance-e00e8ctxvehgkyged0",
+                    )
+                ),
+                "",
+            )
+        if command[8:] == ("scontrol", "show", "node", "worker-3", "-o"):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "NodeName=worker-3 Partitions=main State=IDLE",
+                "",
+            )
+        if command[8:10] == ("squeue", "-h"):
+            return SoperatorMigrationCommandResult(command, 0, "", "")
+        return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
+
+    jobs = migration._external_upgrade_slurm_jobs(
+        command_runner=runner,
+        kube_context="external-context",
+        node_names=("computeinstance-e00e8ctxvehgkyged0",),
+    )
+
+    assert jobs == ()
+    squeue_calls = [call for call in calls if call[8:10] == ("squeue", "-h")]
+    active_squeue_calls = [
+        call for call in squeue_calls if migration._EXTERNAL_UPGRADE_ACTIVE_SQUEUE_STATES in call
+    ]
+    assert len(active_squeue_calls) == 1
+    assert active_squeue_calls[0][-2:] == ("-w", "worker-3")
+
+
+def test_external_upgrade_slurm_jobs_skips_stale_deleted_computeinstance_nodes() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {"items": [{"metadata": {"name": "login-0"}, "status": {"phase": "Running"}}]}
+                ),
+                "",
+            )
+        if command[8:] == ("scontrol", "show", "nodes"):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "\n".join(
+                    (
+                        "NodeName=worker-0 NodeHostName=worker-0 Partitions=main",
+                        "   InstanceId=computeinstance-new-0",
+                        "NodeName=worker-1 NodeHostName=worker-1 Partitions=main",
+                        "   InstanceId=computeinstance-new-1",
+                    )
+                ),
+                "",
+            )
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "get",
+            "nodes",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {"metadata": {"name": "computeinstance-new-0"}},
+                            {"metadata": {"name": "computeinstance-new-1"}},
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[8:10] == ("squeue", "-h"):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "42|alice|RUNNING|gpu|worker-0|1|1|None|00:05|30:00|25:00|unrelated\n",
+                "",
+            )
+        return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
+
+    jobs = migration._external_upgrade_slurm_jobs(
+        command_runner=runner,
+        kube_context="external-context",
+        node_names=("computeinstance-old-0", "computeinstance-old-1"),
+    )
+
+    assert jobs == ()
+    assert any(
+        call[:5] == ("kubectl", "--context", "external-context", "get", "nodes")
+        for call in calls
+    )
+    assert not any(call[8:10] == ("squeue", "-h") for call in calls)
+
+
+def test_external_upgrade_slurm_jobs_empty_scope_returns_no_jobs() -> None:
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        if command[8:10] == ("squeue", "-h"):
+            raise AssertionError("empty affected-node scope must not query all Slurm jobs")
+        return SoperatorMigrationCommandResult(command, 0, "", "")
+
+    jobs = migration._external_upgrade_slurm_jobs(
+        command_runner=runner,
+        kube_context="external-context",
+        node_names=(),
+    )
+
+    assert jobs == ()
+
+
+def test_external_upgrade_worker_nodeset_slurm_nodes_maps_running_worker_pods() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "login-0"},
+                                "status": {"phase": "Running"},
+                            },
+                            {
+                                "metadata": {
+                                    "name": "controller-0",
+                                    "labels": {"slurm.nebius.ai/nodeset-name": "controller"},
+                                },
+                                "status": {"phase": "Running"},
+                            },
+                            {
+                                "metadata": {
+                                    "name": "worker-gpu-0",
+                                    "labels": {"slurm.nebius.ai/nodeset-name": "worker-gpu"},
+                                },
+                                "status": {"phase": "Running"},
+                            },
+                            {
+                                "metadata": {
+                                    "name": "worker-cpu-0",
+                                    "labels": {"slurm.nebius.ai/nodeset": "worker-cpu"},
+                                },
+                                "status": {"phase": "Running"},
+                            },
+                            {
+                                "metadata": {
+                                    "name": "worker-gpu-pending",
+                                    "labels": {"slurm.nebius.ai/nodeset-name": "worker-gpu"},
+                                },
+                                "status": {"phase": "Pending"},
+                            },
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[8:] == ("scontrol", "show", "nodes"):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "\n".join(
+                    (
+                        "NodeName=worker-gpu-0-0 NodeHostName=worker-gpu-0",
+                        "NodeName=worker-cpu-0-0 NodeHostName=worker-cpu-0",
+                    )
+                ),
+                "",
+            )
+        return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
+
+    nodes = migration._external_upgrade_worker_nodeset_slurm_nodes(  # noqa: SLF001
+        command_runner=runner,
+        kube_context="external-context",
+    )
+
+    assert nodes == ("worker-gpu-0-0", "worker-cpu-0-0")
+    assert any(call[8:] == ("scontrol", "show", "nodes") for call in calls)
+
+
+def test_external_upgrade_slurm_jobs_fails_closed_for_unmapped_kubernetes_node() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {"items": [{"metadata": {"name": "login-0"}, "status": {"phase": "Running"}}]}
+                ),
+                "",
+            )
+        if command[8:] == ("scontrol", "show", "nodes"):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "\n".join(
+                    (
+                        "NodeName=worker-3 Arch=x86_64 CoresPerSocket=8",
+                        "   NodeAddr=10.1.18.140 NodeHostName=worker-3 Version=24.11.6",
+                        "   InstanceId=computeinstance-e00e8ctxvehgkyged0",
+                    )
+                ),
+                "",
+            )
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "get",
+            "nodes",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(command, 1, "", "node inventory unavailable")
+        if command[8:10] == ("squeue", "-h"):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "42|alice|RUNNING|gpu|worker-9|00:05|30:00|25:00|unrelated\n",
+                "",
+            )
+        if command[8:9] == ("scancel",):
+            return SoperatorMigrationCommandResult(command, 0, "cancelled\n", "")
+        return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
+
+    with pytest.raises(RuntimeError, match="could not map Kubernetes node"):
+        migration._handle_external_upgrade_slurm_jobs(  # noqa: SLF001
+            command_runner=runner,
+            kube_context="external-context",
+            node_names=("computeinstance-missing",),
+            policy="cancel-all",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            wait_timeout_seconds=0,
+            refresh_interval_seconds=1,
+        )
+
+    assert not any(call[8:10] == ("squeue", "-h") for call in calls)
+    assert not any(call[8:9] == ("scancel",) for call in calls)
+
+
+def test_external_upgrade_slurm_jobs_falls_back_to_controller_for_login_config_failure() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {"items": [{"metadata": {"name": "login-0"}, "status": {"phase": "Running"}}]}
+                ),
+                "",
+            )
+        if command[6:9] == ("login-0", "--", "scontrol"):
+            return SoperatorMigrationCommandResult(
+                command,
+                1,
+                "",
+                "scontrol: fatal: Could not establish a configuration source",
+            )
+        if command[6:11] == (
+            "login-0",
+            "--",
+            "env",
+            f"SLURM_CONF={migration._SOPERATOR_LEGACY_SLURM_CONF}",  # noqa: SLF001
+            "scontrol",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                1,
+                "",
+                "scontrol: fatal: Could not establish a configuration source",
+            )
+        if command[6:11] == ("controller-0", "-c", "slurmctld", "--", "scontrol"):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "\n".join(
+                    (
+                        "NodeName=worker-0 Arch=x86_64 CoresPerSocket=8",
+                        "   NodeAddr=10.1.18.140 NodeHostName=worker-0 Version=24.11.6 Partitions=main",
+                        "   InstanceId=computeinstance-e00worker0",
+                    )
+                ),
+                "",
+            )
+        if command[6:9] == ("login-0", "--", "squeue"):
+            return SoperatorMigrationCommandResult(
+                command,
+                1,
+                "",
+                "squeue: fatal: Could not establish a configuration source",
+            )
+        if command[6:11] == (
+            "login-0",
+            "--",
+            "env",
+            f"SLURM_CONF={migration._SOPERATOR_LEGACY_SLURM_CONF}",  # noqa: SLF001
+            "squeue",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                1,
+                "",
+                "squeue: fatal: Could not establish a configuration source",
+            )
+        if command[6:11] == ("controller-0", "-c", "slurmctld", "--", "squeue"):
+            if "PENDING" in command:
+                return SoperatorMigrationCommandResult(command, 0, "", "")
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "42|user|RUNNING|main|worker-0|00:01|00:30|00:29|long-job\n",
+                "",
+            )
+        return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
+
+    jobs = migration._external_upgrade_slurm_jobs(
+        command_runner=runner,
+        kube_context="external-context",
+        node_names=("computeinstance-e00worker0",),
+    )
+
+    assert [job.job_id for job in jobs] == ["42"]
+    assert [job.allocated_nodes for job in jobs] == ["worker-0"]
+    assert any(call[6:11] == ("controller-0", "-c", "slurmctld", "--", "squeue") for call in calls)
+
+
+def test_kubectl_exec_login_retries_slurm_with_legacy_conf_before_controller() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {"items": [{"metadata": {"name": "login-0"}, "status": {"phase": "Running"}}]}
+                ),
+                "",
+            )
+        if command[6:9] == ("login-0", "--", "squeue"):
+            return SoperatorMigrationCommandResult(
+                command,
+                1,
+                "",
+                "squeue: error: resolve_ctls_from_dns_srv: res_nsearch error: Unknown host\n"
+                "squeue: fatal: Could not establish a configuration source",
+            )
+        if command[6:11] == (
+            "login-0",
+            "--",
+            "env",
+            f"SLURM_CONF={migration._SOPERATOR_LEGACY_SLURM_CONF}",  # noqa: SLF001
+            "squeue",
+        ):
+            return SoperatorMigrationCommandResult(command, 0, "RUNNING\n", "")
+        return SoperatorMigrationCommandResult(command, 1, "", "unexpected command")
+
+    result = migration._kubectl_exec_login(  # noqa: SLF001
+        command_runner=runner,
+        kube_context="external-context",
+        args=("squeue", "-h", "-o", "%T"),
+        check=False,
+        timeout_seconds=7,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == "RUNNING\n"
+    assert result.args[8:11] == (
+        "env",
+        f"SLURM_CONF={migration._SOPERATOR_LEGACY_SLURM_CONF}",  # noqa: SLF001
+        "squeue",
+    )
+    assert not any(call[6:11] == ("controller-0", "-c", "slurmctld", "--", "squeue") for call in calls)
+
+
+def test_kubectl_exec_login_falls_back_to_controller_after_timeout() -> None:
+    calls: list[tuple[str, ...]] = []
+    timeouts: list[int] = []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        timeouts.append(timeout_seconds)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {"items": [{"metadata": {"name": "login-0"}, "status": {"phase": "Running"}}]}
+                ),
+                "",
+            )
+        if command[6:9] == ("login-0", "--", "squeue"):
+            raise subprocess.TimeoutExpired(command, timeout_seconds)
+        if command[6:11] == (
+            "login-0",
+            "--",
+            "env",
+            f"SLURM_CONF={migration._SOPERATOR_LEGACY_SLURM_CONF}",  # noqa: SLF001
+            "squeue",
+        ):
+            raise subprocess.TimeoutExpired(command, timeout_seconds)
+        if command[6:11] == ("controller-0", "-c", "slurmctld", "--", "squeue"):
+            return SoperatorMigrationCommandResult(command, 0, "", "")
+        return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
+
+    result = migration._kubectl_exec_login(  # noqa: SLF001
+        command_runner=runner,
+        kube_context="external-context",
+        args=("squeue", "-h", "-o", "%T"),
+        check=False,
+        timeout_seconds=7,
+    )
+
+    assert result.returncode == 0
+    assert result.args[6:11] == ("controller-0", "-c", "slurmctld", "--", "squeue")
+    assert 7 in timeouts
+    assert any(call[6:9] == ("login-0", "--", "squeue") for call in calls)
+
+
+def test_login_service_identity_guard_rejects_public_ip_change() -> None:
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="changed load_balancer_external",
+    ):
+        migration._assert_login_service_identity_preserved(  # noqa: SLF001
+            before=(
+                {
+                    "name": "external-soperator-login-svc",
+                    "uid": "old-service",
+                    "cluster_ip": "10.0.0.10",
+                    "load_balancer_external": ["203.0.113.146"],
+                    "load_balancer_allocation_id": "vpcallocation-old",
+                },
+            ),
+            after=(
+                {
+                    "name": "external-soperator-login-svc",
+                    "uid": "old-service",
+                    "cluster_ip": "10.0.0.10",
+                    "load_balancer_external": ["203.0.113.147"],
+                    "load_balancer_allocation_id": "vpcallocation-old",
+                },
+            ),
+        )
+
+
+def test_login_service_load_balancer_precondition_requires_allocation_annotation() -> None:
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="missing annotation nebius.com/load-balancer-allocation-id",
+    ):
+        migration._assert_login_service_stable_load_balancer_preconditions(  # noqa: SLF001
+            (
+                {
+                    "name": "external-soperator-login-svc",
+                    "type": "LoadBalancer",
+                    "load_balancer_type": "internal",
+                    "load_balancer_external": ["10.10.20.30"],
+                    "load_balancer_allocation_id": "",
+                },
+            )
+        )
+
+
+def test_login_service_load_balancer_allocation_auto_converts_and_persists_values() -> None:
+    runner = _FakeCommandRunner(
+        allocations=[
+            {
+                "metadata": {
+                    "id": "vpcallocation-login",
+                    "name": "login",
+                    "labels": {
+                        "nebius.com/managed-by": "mk8s",
+                        "customer": "keep",
+                    },
+                },
+                "spec": {"ipv4_public": {"cidr": "203.0.113.10/32"}},
+                "status": {"details": {"allocated_cidr": "203.0.113.10/32"}},
+            }
+        ]
+    )
+    runner.live_services[0]["metadata"]["annotations"] = {}
+    values: dict[str, Any] = {}
+
+    identities, decisions, lines = migration.stabilize_soperator_login_load_balancer_allocations(
+        command_runner=runner,
+        kube_context="external-context",
+        project_id="project-1",
+        nebius_api=runner.nebius_api,
+        values=values,
+    )
+
+    assert identities[0]["load_balancer_allocation_id"] == "vpcallocation-login"
+    assert [decision.as_payload() for decision in decisions] == [
+        {
+            "service_name": "login",
+            "status": "converted-dynamic",
+            "address": "203.0.113.10",
+            "load_balancer_type": "external",
+            "allocation_id": "vpcallocation-login",
+            "allocation_cidr": "203.0.113.10/32",
+            "removed_labels": ["nebius.com/managed-by"],
+            "persisted_to_values": True,
+        }
+    ]
+    assert "Converted dynamic login LoadBalancer allocation" in lines[0]
+    assert runner.live_services[0]["metadata"]["annotations"] == {
+        "nebius.com/load-balancer-allocation-id": "vpcallocation-login",
+    }
+    assert runner.allocations[0]["metadata"]["labels"] == {"customer": "keep"}
+    assert values["slurmNodes"]["login"]["sshdServiceAnnotations"] == {
+        "nebius.com/load-balancer-allocation-id": "vpcallocation-login",
+    }
+    assert ("allocation.list", "project-1") in runner.nebius_api.calls
+    assert (
+        "allocation.update_labels",
+        "vpcallocation-login",
+        {"customer": "keep"},
+        300,
+    ) in runner.nebius_api.calls
+
+
+def test_login_service_load_balancer_allocation_persists_internal_type() -> None:
+    runner = _FakeCommandRunner(
+        allocations=[
+            {
+                "metadata": {"id": "vpcallocation-login-private", "labels": {}},
+                "spec": {"ipv4_private": {"cidr": "10.10.20.30/32"}},
+                "status": {"details": {"allocated_cidr": "10.10.20.30/32"}},
+            }
+        ]
+    )
+    runner.live_services[0] = {
+        "metadata": {
+            "name": "login",
+            "namespace": "soperator",
+            "uid": "svc-login",
+            "annotations": {"nebius.com/load-balancer-type": "internal"},
+        },
+        "spec": {"type": "LoadBalancer", "clusterIP": "10.0.0.10"},
+        "status": {"loadBalancer": {"ingress": [{"ip": "10.10.20.30"}]}},
+    }
+    values: dict[str, Any] = {}
+
+    _identities, decisions, _lines = (
+        migration.stabilize_soperator_login_load_balancer_allocations(
+            command_runner=runner,
+            kube_context="external-context",
+            project_id="project-1",
+            nebius_api=runner.nebius_api,
+            values=values,
+        )
+    )
+
+    assert decisions[0].allocation_id == "vpcallocation-login-private"
+    assert runner.live_services[0]["metadata"]["annotations"] == {
+        "nebius.com/load-balancer-type": "internal",
+        "nebius.com/load-balancer-allocation-id": "vpcallocation-login-private",
+    }
+    assert values["slurmNodes"]["login"]["sshdServiceAnnotations"] == {
+        "nebius.com/load-balancer-allocation-id": "vpcallocation-login-private",
+        "nebius.com/load-balancer-type": "internal",
+    }
+
+
+@pytest.mark.parametrize(
+    ("allocations", "match"),
+    [
+        (
+            [
+                {
+                    "metadata": {"id": "vpcallocation-other", "labels": {}},
+                    "spec": {"ipv4_public": {"cidr": "203.0.113.11/32"}},
+                    "status": {"details": {"allocated_cidr": "203.0.113.11/32"}},
+                }
+            ],
+            "could not find a unique external Nebius VPC allocation",
+        ),
+        (
+            [
+                {
+                    "metadata": {"id": "vpcallocation-a", "labels": {}},
+                    "spec": {"ipv4_public": {"cidr": "203.0.113.10/32"}},
+                    "status": {"details": {"allocated_cidr": "203.0.113.10/32"}},
+                },
+                {
+                    "metadata": {"id": "vpcallocation-b", "labels": {}},
+                    "spec": {"ipv4_public": {"cidr": "203.0.113.10/32"}},
+                    "status": {"details": {"allocated_cidr": "203.0.113.10/32"}},
+                },
+            ],
+            "matched multiple Nebius VPC allocations",
+        ),
+        (
+            [
+                {
+                    "metadata": {"id": "vpcallocation-private", "labels": {}},
+                    "spec": {"ipv4_private": {"cidr": "203.0.113.10/32"}},
+                    "status": {"details": {"allocated_cidr": "203.0.113.10/32"}},
+                }
+            ],
+            "could not find a unique external Nebius VPC allocation",
+        ),
+    ],
+)
+def test_login_service_load_balancer_allocation_failures_block_handoff(
+    allocations: list[dict[str, Any]],
+    match: str,
+) -> None:
+    runner = _FakeCommandRunner(allocations=allocations)
+    runner.live_services[0]["metadata"]["annotations"] = {}
+
+    with pytest.raises(migration.SoperatorMigrationPhasePending, match=match):
+        migration.stabilize_soperator_login_load_balancer_allocations(
+            command_runner=runner,
+            kube_context="external-context",
+            project_id="project-1",
+            nebius_api=runner.nebius_api,
+            values={},
+        )
+
+
+def test_login_service_load_balancer_allocation_config_mismatch_blocks_handoff() -> None:
+    runner = _FakeCommandRunner()
+    values = {
+        "slurmNodes": {
+            "login": {
+                "sshdServiceAnnotations": {
+                    "nebius.com/load-balancer-allocation-id": "vpcallocation-other",
+                }
+            }
+        }
+    }
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="already declares nebius.com/load-balancer-allocation-id=vpcallocation-other",
+    ):
+        migration.stabilize_soperator_login_load_balancer_allocations(
+            command_runner=runner,
+            kube_context="external-context",
+            project_id="project-1",
+            nebius_api=runner.nebius_api,
+            values=values,
+        )
+
+
+def test_login_service_identity_required_fails_closed_on_kubectl_error() -> None:
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        return SoperatorMigrationCommandResult(command, 1, "", "rbac denied")
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="could not list Services",
+    ):
+        migration._login_service_identities(  # noqa: SLF001
+            command_runner=runner,
+            kube_context="external-context",
+            required=True,
+        )
+
+
+def test_login_service_identity_required_fails_closed_on_malformed_json() -> None:
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        return SoperatorMigrationCommandResult(command, 0, "{", "")
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="invalid Service JSON",
+    ):
+        migration._login_service_identities(  # noqa: SLF001
+            command_runner=runner,
+            kube_context="external-context",
+            required=True,
+        )
+
+
+def test_wait_active_login_session_policy_leaves_phase_pending() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {"items": [{"metadata": {"name": "login-0"}, "status": {"phase": "Running"}}]}
+                ),
+                "",
+            )
+        if command[6:10] == ("login-0", "--", "sh", "-ceu"):
+            return SoperatorMigrationCommandResult(command, 0, "1\n", "")
+        return SoperatorMigrationCommandResult(command, 1, "", "unexpected command")
+
+    phase: dict[str, Any] = {}
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="active SSH session",
+    ):
+        migration._wait_for_login_session_policy(  # noqa: SLF001
+            phase=phase,
+            command_runner=runner,
+            kube_context="external-context",
+            policy=migration.EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE,
+            timeout_seconds=0,
+        )
+
+    drain = phase["login_continuity"]["session_drain"]
+    assert drain["status"] == "pending"
+    assert drain["active_sessions"] == 1
+    assert any(call[6:10] == ("login-0", "--", "sh", "-ceu") for call in calls)
+
+
+def test_wait_active_login_session_policy_checks_only_source_login_pods() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command[6:10] == ("source-login-0", "--", "sh", "-ceu"):
+            return SoperatorMigrationCommandResult(command, 0, "0\n", "")
+        if command[6:10] == ("target-login-0", "--", "sh", "-ceu"):
+            return SoperatorMigrationCommandResult(command, 0, "1\n", "")
+        return SoperatorMigrationCommandResult(command, 1, "", "unexpected command")
+
+    phase: dict[str, Any] = {}
+    lines = migration._wait_for_login_session_policy(  # noqa: SLF001
+        phase=phase,
+        command_runner=runner,
+        kube_context="external-context",
+        policy=migration.EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE,
+        timeout_seconds=0,
+        pod_names=("source-login-0",),
+    )
+
+    assert lines == ["Login continuity: active SSH sessions drained before source retirement."]
+    assert any(call[6:10] == ("source-login-0", "--", "sh", "-ceu") for call in calls)
+    assert not any(call[6:10] == ("target-login-0", "--", "sh", "-ceu") for call in calls)
+
+
+def test_external_upgrade_slurm_jobs_fails_closed_for_invalid_node_name() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {"items": [{"metadata": {"name": "login-0"}, "status": {"phase": "Running"}}]}
+                ),
+                "",
+            )
+        if command[8:] == ("scontrol", "show", "nodes"):
+            return SoperatorMigrationCommandResult(command, 1, "", "slurmctld unavailable")
+        if command[8:10] == ("squeue", "-h") and "-w" in command:
+            return SoperatorMigrationCommandResult(
+                command, 1, "", "squeue: error: Invalid node name computeinstance-1"
+            )
+        if command[8:10] == ("squeue", "-h"):
+            return SoperatorMigrationCommandResult(command, 0, "", "")
+        return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
+
+    with pytest.raises(RuntimeError, match="Slurm rejected the scoped node filter"):
+        migration._external_upgrade_slurm_jobs(  # noqa: SLF001
+            command_runner=runner,
+            kube_context="external-context",
+            node_names=("computeinstance-1",),
+        )
+
+    squeue_calls = [call for call in calls if call[8:10] == ("squeue", "-h")]
+    assert len(squeue_calls) == 1
+    assert squeue_calls[0][-2:] == ("-w", "computeinstance-1")
+
+
+def test_external_upgrade_slurm_jobs_include_scoped_pending_jobs() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {"items": [{"metadata": {"name": "login-0"}, "status": {"phase": "Running"}}]}
+                ),
+                "",
+            )
+        if command[8:] == ("scontrol", "show", "nodes"):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "NodeName=worker-0 NodeHostName=worker-0 Partitions=main",
+                "",
+            )
+        if command[8:] == ("scontrol", "show", "node", "worker-0", "-o"):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "NodeName=worker-0 Partitions=main State=IDLE",
+                "",
+            )
+        if (
+            command[8:10] == ("squeue", "-h")
+            and "PENDING" in command
+            and command[-2:]
+            == (
+                "-p",
+                "main",
+            )
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "12|root|PENDING|main||||Priority|0:00|35:00|35:00|pending-main\n",
+                "",
+            )
+        if command[8:10] == ("squeue", "-h") and "PENDING" in command:
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                (
+                    "12|root|PENDING|main||||Priority|0:00|35:00|35:00|pending-main\n"
+                    "13|root|PENDING|other||||Resources|0:00|35:00|35:00|unrelated\n"
+                    "14|root|PENDING|other||worker-0||Priority|0:00|35:00|35:00|pending-node\n"
+                ),
+                "",
+            )
+        if (
+            command[8:10] == ("squeue", "-h")
+            and migration._EXTERNAL_UPGRADE_ACTIVE_SQUEUE_STATES in command
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "10|root|STOPPED|main|worker-0|||None|0:09|35:00|34:51|stopped\n",
+                "",
+            )
+        if command[8:10] == ("squeue", "-h"):
+            return SoperatorMigrationCommandResult(command, 0, "", "")
+        return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
+
+    jobs = migration._external_upgrade_slurm_jobs(
+        command_runner=runner,
+        kube_context="external-context",
+        node_names=("worker-0",),
+    )
+
+    assert [job.job_id for job in jobs] == ["10", "12", "14"]
+    assert jobs[0].state == "STOPPED"
+    assert jobs[1].impact_scope == "pending-partition"
+    assert jobs[2].impact_scope == "pending-node"
+    assert any(call[-2:] == ("-p", "main") for call in calls if "PENDING" in call)
+    assert any(call[-2:] != ("-p", "main") for call in calls if "PENDING" in call)
+
+
+def test_external_upgrade_prompt_selector_includes_pending_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pending_job = migration.AffectedSlurmJob(
+        job_id="12",
+        user="root",
+        state="PENDING",
+        partition="main",
+        allocated_nodes="",
+        requested_nodes="",
+        scheduled_nodes="",
+        reason="Priority",
+        elapsed="0:00",
+        limit="35:00",
+        remaining="35:00",
+        name="pending-main",
+        impact_scope="pending-partition",
+    )
+    captured: dict[str, object] = {}
+
+    def _prompt_slurm_job_control(*args: object, **kwargs: object) -> tuple[str, tuple[str, ...]]:
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return ("cancel-selected", ("12",))
+
+    monkeypatch.setattr(migration, "_external_upgrade_is_tty_session", lambda: True)
+    monkeypatch.setattr(migration, "prompt_slurm_job_control", _prompt_slurm_job_control)
+
+    action, selected = migration._prompt_external_upgrade_slurm_job_control(
+        (pending_job,),
+        prompt_pause=None,
+    )
+
+    assert action == "cancel-selected"
+    assert selected == ("12",)
+    assert captured["args"][0] == (pending_job,)
+    assert captured["kwargs"]["is_tty"] is True
+
+
+def test_external_upgrade_slurm_jobs_fail_closed_when_partition_lookup_fails() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {"items": [{"metadata": {"name": "login-0"}, "status": {"phase": "Running"}}]}
+                ),
+                "",
+            )
+        if command[8:] == ("scontrol", "show", "nodes"):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "NodeName=worker-0 NodeHostName=worker-0 Partitions=main",
+                "",
+            )
+        if (
+            command[8:10] == ("squeue", "-h")
+            and migration._EXTERNAL_UPGRADE_ACTIVE_SQUEUE_STATES in command
+        ):
+            return SoperatorMigrationCommandResult(command, 0, "", "")
+        if command[8:] == ("scontrol", "show", "node", "worker-0", "-o"):
+            return SoperatorMigrationCommandResult(command, 1, "", "slurmctld unavailable")
+        if command[8:10] == ("squeue", "-h"):
+            raise AssertionError("pending squeue should not run after partition lookup failure")
+        return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
+
+    with pytest.raises(RuntimeError, match="could not inspect Slurm partitions"):
+        migration._external_upgrade_slurm_jobs(
+            command_runner=runner,
+            kube_context="external-context",
+            node_names=("worker-0",),
+        )
+
+    assert not any(call[8:10] == ("squeue", "-h") and "PENDING" in call for call in calls)
+
+
+def test_external_upgrade_fail_policy_pauses_status_for_job_table() -> None:
+    calls: list[tuple[str, ...]] = []
+    pause_events: list[str] = []
+
+    @contextmanager
+    def _pause() -> Iterator[None]:
+        pause_events.append("pause")
+        yield
+        pause_events.append("resume")
+
+    with pytest.raises(migration.SoperatorMigrationPhasePending):
+        migration._handle_external_upgrade_slurm_jobs(
+            command_runner=_external_upgrade_slurm_runner(
+                queue_outputs=[
+                    "42|alice|RUNNING|gpu|worker-gpu-0-0|worker-gpu-0-0||None|00:05|30:00|25:00|active\n"
+                ],
+                calls=calls,
+            ),
+            kube_context="external-context",
+            node_names=("worker-gpu-0-0",),
+            policy="fail",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            wait_timeout_seconds=0,
+            refresh_interval_seconds=1,
+            interactive_prompt_pause=_pause,
+        )
+
+    assert pause_events == ["pause", "resume"]
+
+
+def test_external_upgrade_interactive_policy_rejects_non_tty_before_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    monkeypatch.setattr(migration, "_external_upgrade_is_tty_session", lambda: False)
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        return SoperatorMigrationCommandResult(command, 0, "", "")
+
+    with pytest.raises(RuntimeError, match="interactive terminal"):
+        migration._handle_external_upgrade_slurm_jobs(
+            command_runner=runner,
+            kube_context="external-context",
+            node_names=("worker-0",),
+            policy="interactive",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            wait_timeout_seconds=0,
+            refresh_interval_seconds=1,
+        )
+
+    assert calls == []
+
+
+def test_external_upgrade_job_policy_defaults_by_terminal_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(migration, "_external_upgrade_is_tty_session", lambda: False)
+    assert migration._external_upgrade_job_policy(None) == "fail"  # noqa: SLF001
+
+    monkeypatch.setattr(migration, "_external_upgrade_is_tty_session", lambda: True)
+    assert migration._external_upgrade_job_policy(None) == "interactive"  # noqa: SLF001
+    assert (
+        migration._external_upgrade_job_policy(None, default_policy="fail") == "fail"  # noqa: SLF001
+    )
+    assert migration._external_upgrade_job_policy("wait-to-finish") == "wait-to-finish"  # noqa: SLF001
+
+    monkeypatch.setattr(migration, "_external_upgrade_is_tty_session", lambda: False)
+    assert (
+        migration._external_upgrade_job_policy(
+            "interactive",
+            allow_resolved_interactive=True,
+        )
+        == "interactive"
+    )
+    with pytest.raises(RuntimeError, match="interactive terminal"):
+        migration._external_upgrade_job_policy("interactive")  # noqa: SLF001
+    with pytest.raises(RuntimeError, match="wait-to-finish"):
+        migration._external_upgrade_job_policy("wait")  # noqa: SLF001
+
+
+def test_external_upgrade_resolved_interactive_policy_skips_late_tty_recheck(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(migration, "_external_upgrade_is_tty_session", lambda: False)
+
+    lines = migration._handle_external_upgrade_slurm_jobs(
+        command_runner=_external_upgrade_slurm_runner(
+            queue_outputs=[""],
+            calls=calls,
+        ),
+        kube_context="external-context",
+        node_names=("worker-gpu-0-0",),
+        policy="interactive",
+        cancel_job_ids=(),
+        requeue_job_ids=(),
+        wait_timeout_seconds=0,
+        refresh_interval_seconds=1,
+        allow_resolved_interactive_job_policy=True,
+    )
+
+    assert lines == ["Slurm job preflight: no affected jobs in the upgrade scope."]
+    assert any(command[8:10] == ("squeue", "-h") for command in calls)
+
+
+def test_external_upgrade_wait_then_cancel_requires_positive_timeout() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        return SoperatorMigrationCommandResult(command, 0, "", "")
+
+    with pytest.raises(RuntimeError, match="positive --job-wait-timeout"):
+        migration._handle_external_upgrade_slurm_jobs(
+            command_runner=runner,
+            kube_context="external-context",
+            node_names=("worker-0",),
+            policy="wait-then-cancel",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            wait_timeout_seconds=0,
+            refresh_interval_seconds=1,
+        )
+
+    assert calls == []
+
+
+def test_external_upgrade_slurm_quiet_rechecks_after_partition_drain() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="started or remained after Slurm partition drain",
+    ):
+        migration._ensure_slurm_quiet(
+            command_runner=_external_upgrade_slurm_runner(
+                queue_outputs=[
+                    "",
+                    "99|root|RUNNING|gpu|worker-gpu-0-0|||None|0:01|30:00|29:59|late-job\n",
+                ],
+                calls=calls,
+            ),
+            kube_context="external-context",
+            node_names=("worker-gpu-0-0",),
+            job_policy="fail",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            job_wait_timeout_seconds=0,
+            job_refresh_interval_seconds=1,
+        )
+
+    drain_index = next(
+        index
+        for index, call in enumerate(calls)
+        if call[8:] == ("scontrol", "update", "PartitionName=ALL", "State=DRAIN")
+    )
+    active_squeue_indices = [
+        index
+        for index, call in enumerate(calls)
+        if (
+            call[8:10] == ("squeue", "-h")
+            and migration._EXTERNAL_UPGRADE_ACTIVE_SQUEUE_STATES in call
+        )
+    ]
+    assert len(active_squeue_indices) == 2
+    assert active_squeue_indices[-1] > drain_index
+    assert any(
+        call[8:] == ("scontrol", "update", "PartitionName=ALL", "State=UP") for call in calls
+    )
+
+
+def test_populate_jail_refresh_phase_job_policy_fail_blocks_before_helm_overwrite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = _FakeCommandRunner(
+        live_pods=[
+            {
+                "metadata": {"name": "login-0"},
+                "status": {"phase": "Running"},
+            },
+            {
+                "metadata": {
+                    "name": "worker-gpu-0",
+                    "labels": {"slurm.nebius.ai/nodeset-name": "worker-gpu"},
+                },
+                "status": {"phase": "Running"},
+            },
+        ],
+        slurm_queue_output=(
+            "42|alice|RUNNING|gpu|worker-gpu-0|worker-gpu-0||None|"
+            "00:05|30:00|25:00|active\n"
+        ),
+    )
+    helm_calls: list[Mapping[str, Any]] = []
+    monkeypatch.setattr(
+        migration,
+        "_patch_target_values_for_compute",
+        lambda **_kwargs: {
+            "maintenance": "none",
+            "populateJail": {"overwrite": False},
+            "externalNfs": {
+                "enabled": True,
+                "server": "nfs.example.invalid",
+                "path": "/exports/home",
+                "mountPath": "/home",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        migration,
+        "_helm_upgrade_target_soperator",
+        lambda **kwargs: helm_calls.append(kwargs),
+    )
+    checkpoint: dict[str, Any] = {
+        "phase_state": {},
+        "worker_node_groups": ["gpu-pool"],
+    }
+
+    with pytest.raises(migration.SoperatorMigrationPhasePending, match="Affected Slurm jobs"):
+        migration._execute_populate_jail_refresh_phase(  # noqa: SLF001
+            checkpoint=checkpoint,
+            payload={},
+            source_report={"report": {"target_version": "4.0.1"}},
+            live_snapshot={},
+            target_ref="external-cluster",
+            kube_context="external-context",
+            command_runner=runner,
+            populate_jail_refresh="force",
+            job_policy="fail",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            job_wait_timeout_seconds=0,
+            job_refresh_interval_seconds=1,
+            login_session_policy=migration.EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE,
+            login_session_drain_timeout_seconds=0,
+        )
+
+    assert helm_calls == []
+    assert any(
+        command[8:10] == ("squeue", "-h") for command, _input_text in runner.calls
+    )
+    assert not any(
+        command[8:] == ("scontrol", "update", "PartitionName=ALL", "State=DRAIN")
+        for command, _input_text in runner.calls
+    )
+
+
+def test_populate_jail_refresh_phase_capacity_fail_blocks_before_slurm_and_helm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = _FakeCommandRunner(
+        live_pods=[
+            {"metadata": {"name": "login-0"}, "status": {"phase": "Running"}},
+            {
+                "metadata": {
+                    "name": "worker-gpu-0",
+                    "labels": {"slurm.nebius.ai/nodeset-name": "worker-gpu"},
+                },
+                "status": {"phase": "Running"},
+            },
+        ],
+        slurm_queue_output=(
+            "42|alice|RUNNING|gpu|worker-gpu-0|worker-gpu-0||None|"
+            "00:05|30:00|25:00|active\n"
+        ),
+    )
+    helm_calls: list[Mapping[str, Any]] = []
+    probe_kwargs: dict[str, Any] = {}
+    target_values = migration.apply_jail_persistent_mount_values(
+        {
+            "populateJail": {"overwrite": False},
+            "externalNfs": {
+                "enabled": True,
+                "server": "nfs.example.invalid",
+                "path": "/exports/home",
+                "mountPath": "/home",
+            },
+        },
+        target_ref="external-cluster",
+        layout="external",
+    )
+    monkeypatch.setattr(
+        migration,
+        "_patch_target_values_for_compute",
+        lambda **_kwargs: target_values,
+    )
+
+    def _fake_probe_active_passive_jail_capacity(*_args: Any, **kwargs: Any) -> Any:
+        probe_kwargs.update(kwargs)
+        return evaluate_jail_capacity(
+            passive_available_bytes=8 * GIB,
+            active_used_bytes=80 * GIB,
+        )
+
+    monkeypatch.setattr(
+        migration,
+        "probe_active_passive_jail_capacity",
+        _fake_probe_active_passive_jail_capacity,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_helm_upgrade_target_soperator",
+        lambda **kwargs: helm_calls.append(kwargs),
+    )
+    checkpoint: dict[str, Any] = {
+        "phase_state": {},
+        "worker_node_groups": ["gpu-pool"],
+    }
+
+    with pytest.raises(migration.SoperatorMigrationPhasePending, match="passive jail rootfs"):
+        migration._execute_populate_jail_refresh_phase(  # noqa: SLF001
+            checkpoint=checkpoint,
+            payload={},
+            source_report={"report": {"target_version": "4.0.1"}},
+            live_snapshot={},
+            target_ref="external-cluster",
+            kube_context="external-context",
+            command_runner=runner,
+            populate_jail_refresh="force",
+            job_policy="fail",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            job_wait_timeout_seconds=0,
+            job_refresh_interval_seconds=1,
+            login_session_policy=migration.EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE,
+            login_session_drain_timeout_seconds=0,
+        )
+
+    populate_phase = checkpoint["phase_state"]["populate-jail-refresh"]
+    assert populate_phase["capacity_preflight"]["status"] == "failed"
+    assert populate_phase["rootfs_slots"]["passive_pvc"] == "jail-rootfs-slot-b-pvc"
+    assert probe_kwargs["active_pvc"] == "jail-pvc"
+    assert probe_kwargs["passive_pvc"] == "jail-pvc"
+    assert probe_kwargs["active_rootfs_path"] == "/mnt/jail"
+    assert checkpoint["populate_jail_refresh"]["capacity_preflight"]["shortage_gib"] == 92
+    assert helm_calls == []
+    assert not any("squeue" in " ".join(command) for command, _input_text in runner.calls)
+
+
+def test_populate_jail_refresh_phase_completed_migration_does_not_reserve_copy_space(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _payload()
+    target_values = migration.apply_jail_persistent_mount_values(
+        {"nodesets": [{"name": "worker"}]},
+        target_ref="external-cluster",
+        layout="external",
+    )
+    payload["apps"]["charts"][0]["values"] = target_values
+    runner = _FakeCommandRunner()
+    probe_kwargs: dict[str, Any] = {}
+    monkeypatch.setattr(
+        migration,
+        "_patch_target_values_for_compute",
+        lambda **_kwargs: target_values,
+    )
+
+    def _fake_probe_active_passive_jail_capacity(*_args: Any, **kwargs: Any) -> Any:
+        probe_kwargs.update(kwargs)
+        return evaluate_jail_capacity(
+            passive_available_bytes=8 * GIB,
+            active_used_bytes=80 * GIB,
+        )
+
+    monkeypatch.setattr(
+        migration,
+        "probe_active_passive_jail_capacity",
+        _fake_probe_active_passive_jail_capacity,
+    )
+    checkpoint: dict[str, Any] = {
+        "phase_state": {
+            "populate-jail-refresh": {
+                "legacy_persistent_mount_migration": {
+                    "status": "completed",
+                    "entries": [
+                        {
+                            "mount_path": "/home",
+                            "source_path": "/mnt/jail/home",
+                            "target_local_path": "/mnt/jail/shared/home",
+                            "status": "completed",
+                        }
+                    ],
+                }
+            }
+        },
+        "worker_node_groups": ["gpu-pool"],
+    }
+
+    with pytest.raises(migration.SoperatorMigrationPhasePending, match="passive jail rootfs"):
+        migration._execute_populate_jail_refresh_phase(  # noqa: SLF001
+            checkpoint=checkpoint,
+            payload=payload,
+            source_report={"report": {"target_version": "4.0.1"}},
+            live_snapshot={},
+            target_ref="external-cluster",
+            kube_context="external-context",
+            command_runner=runner,
+            populate_jail_refresh="force",
+            job_policy="fail",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            job_wait_timeout_seconds=0,
+            job_refresh_interval_seconds=1,
+            login_session_policy=migration.EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE,
+            login_session_drain_timeout_seconds=0,
+        )
+
+    populate_phase = checkpoint["phase_state"]["populate-jail-refresh"]
+    assert populate_phase["legacy_persistent_mount_migration"]["status"] == "completed"
+    assert probe_kwargs["extra_required_paths"] == ()
+    assert probe_kwargs["exclude_paths"] == (
+        "/mnt/jail/.cxcli",
+        "/mnt/jail/shared/home",
+        "/mnt/jail/shared/data",
+        "/mnt/jail/shared/scripts",
+        "/mnt/jail/shared/models",
+        "/mnt/jail/home",
+        "/mnt/jail/data",
+        "/mnt/jail/scripts",
+        "/mnt/jail/models",
+    )
+
+
+def test_populate_jail_refresh_phase_migrates_legacy_persistent_mounts_before_populate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _payload()
+    target_values = migration.apply_jail_persistent_mount_values(
+        {
+            "nodesets": [
+                {
+                    "name": "worker",
+                    "slurmd": {
+                        "volumes": {
+                            "jail": {
+                                "persistentVolumeClaim": {"claimName": "jail-pvc"},
+                            }
+                        }
+                    },
+                }
+            ],
+        },
+        target_ref="external-cluster",
+        persistent_mounts=migration.parse_jail_persistent_mount_specs(
+            ("/data=/mnt/jail/shared/data",)
+        ),
+        layout="external",
+    )
+    payload["apps"]["charts"][0]["values"] = target_values
+    runner = _FakeCommandRunner()
+    helm_calls: list[Mapping[str, Any]] = []
+    monkeypatch.setattr(
+        migration,
+        "_patch_target_values_for_compute",
+        lambda **_kwargs: target_values,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_helm_upgrade_target_soperator",
+        lambda **kwargs: helm_calls.append(kwargs),
+    )
+    checkpoint: dict[str, Any] = {
+        "phase_state": {},
+        "worker_node_groups": ["gpu-pool"],
+    }
+
+    mutated, lines = migration._execute_populate_jail_refresh_phase(  # noqa: SLF001
+        checkpoint=checkpoint,
+        payload=payload,
+        source_report=_source_report(),
+        live_snapshot={},
+        target_ref="external-cluster",
+        kube_context="external-context",
+        command_runner=runner,
+        populate_jail_refresh="force",
+        job_policy="fail",
+        cancel_job_ids=(),
+        requeue_job_ids=(),
+        job_wait_timeout_seconds=0,
+        job_refresh_interval_seconds=1,
+        login_session_policy=migration.EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE,
+        login_session_drain_timeout_seconds=0,
+    )
+
+    assert mutated is True
+    assert any(line.startswith("Persistent mount migration job completed:") for line in lines)
+    assert len(helm_calls) == 2
+    populate_phase = checkpoint["phase_state"]["populate-jail-refresh"]
+    migration_state = populate_phase["legacy_persistent_mount_migration"]
+    assert migration_state["status"] == "completed"
+    assert [entry["status"] for entry in migration_state["entries"]] == [
+        "completed",
+        "completed",
+        "completed",
+        "completed",
+    ]
+    source_status_by_path = {
+        entry["mount_path"]: entry["source_status"] for entry in migration_state["entries"]
+    }
+    assert source_status_by_path == {
+        "/home": "present",
+        "/data": "present",
+        "/scripts": "absent",
+        "/models": "absent",
+    }
+    copy_status_by_path = {
+        entry["mount_path"]: entry["copy_status"] for entry in migration_state["entries"]
+    }
+    assert copy_status_by_path == {
+        "/home": "copied",
+        "/data": "copied",
+        "/scripts": "source_missing",
+        "/models": "source_missing",
+    }
+    decision_status_by_path = {
+        entry["mount_path"]: entry["status"]
+        for entry in checkpoint["persistent_jail_mounts"]["decisions"]
+    }
+    assert decision_status_by_path == {
+        "/home": "present",
+        "/data": "present",
+        "/scripts": "absent",
+        "/models": "absent",
+    }
+    decision_copy_status_by_path = {
+        entry["mount_path"]: entry.get("copy_status")
+        for entry in checkpoint["persistent_jail_mounts"]["decisions"]
+    }
+    assert decision_copy_status_by_path == {
+        "/home": "copied",
+        "/data": "copied",
+        "/scripts": "source_missing",
+        "/models": "source_missing",
+    }
+    source_probe = populate_phase["legacy_persistent_mount_source_probe"]
+    assert source_probe["status"] == "completed"
+    assert {entry["mount_path"] for entry in source_probe["entries"]} == {
+        "/home",
+        "/data",
+        "/scripts",
+        "/models",
+    }
+    assert populate_phase["persistent_migration_writer_hold"]["status"] == "restored"
+    assert populate_phase["login_service_ready_before_switch"]["status"] == "skipped"
+    assert checkpoint["populate_jail_refresh"]["legacy_persistent_mount_migration"][
+        "status"
+    ] == "completed"
+
+    applied_jobs: list[tuple[int, Mapping[str, Any]]] = []
+    for index, (command, input_text) in enumerate(runner.calls):
+        if command != ("kubectl", "--context", "external-context", "apply", "-f", "-"):
+            continue
+        try:
+            payload_text = json.loads(input_text or "{}")
+        except json.JSONDecodeError:
+            payload_text = migration.yaml.safe_load(input_text or "{}") or {}
+        for item in payload_text.get("items", []):
+            if isinstance(item, Mapping) and item.get("kind") == "Job":
+                applied_jobs.append((index, item))
+
+    capacity_job_index, capacity_job = next(
+        (index, job)
+        for index, job in applied_jobs
+        if str(job["metadata"]["name"]).endswith("-jail-capacity-probe")
+    )
+    source_probe_job_index, source_probe_job = next(
+        (index, job)
+        for index, job in applied_jobs
+        if job["metadata"]["labels"]["app.kubernetes.io/component"]
+        == "jail-persistent-source-probe"
+    )
+    migration_job_index, migration_job = next(
+        (index, job)
+        for index, job in applied_jobs
+        if job["metadata"]["labels"]["app.kubernetes.io/component"]
+        == "jail-persistent-migration"
+    )
+    populate_job_index, populate_job = next(
+        (index, job)
+        for index, job in applied_jobs
+        if job["metadata"]["labels"]["app.kubernetes.io/component"] == "populate-jail"
+    )
+    assert source_probe_job_index < capacity_job_index < migration_job_index < populate_job_index
+    assert (
+        source_probe_job["spec"]["template"]["spec"]["containers"][0]["volumeMounts"]
+        == [{"name": "jail-store", "mountPath": "/store", "readOnly": True}]
+    )
+
+    capacity_script = capacity_job["spec"]["template"]["spec"]["containers"][0]["command"][-1]
+    assert "subtract_path /mnt/active/home" in capacity_script
+    assert "subtract_path /mnt/active/data" in capacity_script
+    assert "subtract_path /mnt/active/scripts" in capacity_script
+    assert "subtract_path /mnt/active/models" in capacity_script
+    assert "add_extra_required_path /mnt/active/home" in capacity_script
+    assert "add_extra_required_path /mnt/active/data" in capacity_script
+    assert "add_extra_required_path /mnt/active/scripts" not in capacity_script
+    assert "add_extra_required_path /mnt/active/models" not in capacity_script
+
+    migration_spec = migration_job["spec"]["template"]["spec"]
+    assert migration_spec["volumes"] == [
+        {"name": "jail-store", "persistentVolumeClaim": {"claimName": "jail-pvc"}}
+    ]
+    container = migration_spec["containers"][0]
+    assert container["volumeMounts"] == [{"name": "jail-store", "mountPath": "/store"}]
+    script = container["command"][-1]
+    assert "copy_entry /store/home /store/shared/home" in script
+    assert "copy_entry /store/data /store/shared/data" in script
+    assert "copy_entry /store/scripts /store/shared/scripts" in script
+    assert "copy_entry /store/models /store/shared/models" in script
+    assert "/store/.cxcli/persistent-migrations/home.json" in script
+    assert "/store/.cxcli/persistent-migrations/data.json" in script
+    assert "/store/.cxcli/persistent-migrations/scripts.json" in script
+    assert "/store/.cxcli/persistent-migrations/models.json" in script
+    assert "marker_matches()" in script
+    assert "return 1" in script
+    assert "source_missing marker is stale" in script
+    assert '\\"source_path\\":\\"$source_path\\"' in script
+    assert "marker does not match this copy" in script
+    assert "tar --xattrs --acls --numeric-owner -cpf - ." in script
+    assert "target is non-empty without marker" in script
+
+    populate_spec = populate_job["spec"]["template"]["spec"]
+    assert populate_spec["volumes"] == [
+        {
+            "name": "jail-rootfs",
+            "persistentVolumeClaim": {"claimName": "jail-rootfs-slot-b-pvc"},
+        }
+    ]
+
+
+def test_populate_jail_refresh_target_ready_blocks_before_login_hold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _payload()
+    target_values = migration.apply_jail_persistent_mount_values(
+        {"nodesets": [{"name": "worker"}]},
+        target_ref="external-cluster",
+        layout="external",
+    )
+    payload["apps"]["charts"][0]["values"] = target_values
+    runner = _FakeCommandRunner()
+    monkeypatch.setattr(
+        migration,
+        "_patch_target_values_for_compute",
+        lambda **_kwargs: target_values,
+    )
+    checkpoint: dict[str, Any] = {
+        "phase_state": {},
+        "worker_node_groups": ["gpu-pool"],
+    }
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="target-ready login session policy refuses",
+    ):
+        migration._execute_populate_jail_refresh_phase(  # noqa: SLF001
+            checkpoint=checkpoint,
+            payload=payload,
+            source_report=_source_report(),
+            live_snapshot={},
+            target_ref="external-cluster",
+            kube_context="external-context",
+            command_runner=runner,
+            populate_jail_refresh="force",
+            job_policy="fail",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            job_wait_timeout_seconds=0,
+            job_refresh_interval_seconds=1,
+        )
+
+    hold_policy = checkpoint["phase_state"]["populate-jail-refresh"][
+        "persistent_migration_login_hold_policy"
+    ]
+    assert hold_policy["status"] == "pending"
+    assert not any(
+        command[:8]
+        == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "scale",
+            "statefulsets.apps.kruise.io/login",
+        )
+        for command, _input_text in runner.calls
+    )
+
+
+def test_persistent_mount_migration_marker_requires_valid_status(tmp_path: Path) -> None:
+    store = tmp_path / "store"
+    source = store / "home"
+    target = store / "shared" / "home"
+    marker = store / ".cxcli" / "persistent-migrations" / "home.json"
+    source.mkdir(parents=True)
+    target.mkdir(parents=True)
+    marker.parent.mkdir(parents=True)
+    marker.write_text(
+        json.dumps(
+            {
+                "status": "started",
+                "mount_path": "/home",
+                "source_path": str(source),
+                "target_path": str(target),
+            },
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    script = migration._persistent_mount_migration_shell_command(  # noqa: SLF001
+        [
+            {
+                "mount_path": "/home",
+                "source_store_path": "/home",
+                "target_store_path": "/shared/home",
+                "marker_store_path": "/.cxcli/persistent-migrations/home.json",
+            }
+        ]
+    ).replace("/store", str(store))
+
+    result = subprocess.run(["bash", "-c", script], check=False, capture_output=True, text=True)
+
+    assert result.returncode == 16
+    assert "marker does not match this copy" in result.stderr
+
+
+def test_persistent_mount_migration_source_missing_marker_fails_if_source_appears(
+    tmp_path: Path,
+) -> None:
+    store = tmp_path / "store"
+    source = store / "home"
+    target = store / "shared" / "home"
+    marker = store / ".cxcli" / "persistent-migrations" / "home.json"
+    source.mkdir(parents=True)
+    target.mkdir(parents=True)
+    marker.parent.mkdir(parents=True)
+    marker.write_text(
+        json.dumps(
+            {
+                "status": "source_missing",
+                "mount_path": "/home",
+                "source_path": str(source),
+                "target_path": str(target),
+            },
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    script = migration._persistent_mount_migration_shell_command(  # noqa: SLF001
+        [
+            {
+                "mount_path": "/home",
+                "source_store_path": "/home",
+                "target_store_path": "/shared/home",
+                "marker_store_path": "/.cxcli/persistent-migrations/home.json",
+            }
+        ]
+    ).replace("/store", str(store))
+
+    result = subprocess.run(["bash", "-c", script], check=False, capture_output=True, text=True)
+
+    assert result.returncode == 18
+    assert "source_missing marker is stale" in result.stderr
+
+
+def test_populate_jail_refresh_phase_restores_writers_when_migration_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _payload()
+    target_values = migration.apply_jail_persistent_mount_values(
+        {
+            "nodesets": [
+                {
+                    "name": "worker",
+                    "slurmd": {
+                        "volumes": {
+                            "jail": {
+                                "persistentVolumeClaim": {"claimName": "jail-pvc"},
+                            }
+                        }
+                    },
+                }
+            ],
+        },
+        target_ref="external-cluster",
+        layout="external",
+    )
+    payload["apps"]["charts"][0]["values"] = target_values
+    runner = _FakeCommandRunner()
+    monkeypatch.setattr(
+        migration,
+        "_patch_target_values_for_compute",
+        lambda **_kwargs: target_values,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_helm_upgrade_target_soperator",
+        lambda **_kwargs: pytest.fail("populate values must not apply after copy failure"),
+    )
+
+    def _fail_persistent_migration_job(*_args: Any, **kwargs: Any) -> None:
+        if kwargs.get("job_label") == "Soperator persistent mount migration Job":
+            raise RuntimeError("persistent copy failed")
+
+    monkeypatch.setattr(
+        migration,
+        "_wait_for_job_complete_or_failed",
+        _fail_persistent_migration_job,
+    )
+    checkpoint: dict[str, Any] = {
+        "phase_state": {},
+        "worker_node_groups": ["gpu-pool"],
+    }
+
+    with pytest.raises(RuntimeError, match="persistent copy failed"):
+        migration._execute_populate_jail_refresh_phase(  # noqa: SLF001
+            checkpoint=checkpoint,
+            payload=payload,
+            source_report=_source_report(),
+            live_snapshot={},
+            target_ref="external-cluster",
+            kube_context="external-context",
+            command_runner=runner,
+            populate_jail_refresh="force",
+            job_policy="fail",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            job_wait_timeout_seconds=0,
+            job_refresh_interval_seconds=1,
+            login_session_policy=migration.EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE,
+            login_session_drain_timeout_seconds=0,
+        )
+
+    populate_phase = checkpoint["phase_state"]["populate-jail-refresh"]
+    assert populate_phase["persistent_migration_writer_hold"]["status"] == "restored"
+    assert "slurm_resumed_after_failure_at" in populate_phase
+    commands = [call for call, _input_text in runner.calls]
+    assert (
+        "kubectl",
+        "--context",
+        "external-context",
+        "-n",
+        "soperator",
+        "scale",
+        "statefulsets.apps.kruise.io/login",
+        "--replicas",
+        "0",
+    ) in commands
+    assert (
+        "kubectl",
+        "--context",
+        "external-context",
+        "-n",
+        "soperator",
+        "scale",
+        "statefulsets.apps.kruise.io/login",
+        "--replicas",
+        "1",
+    ) in commands
+    assert (
+        "kubectl",
+        "--context",
+        "external-context",
+        "-n",
+        "soperator",
+        "patch",
+        "nodeset/worker",
+        "--type",
+        "merge",
+        "-p",
+        '{"spec": {"replicas": 2}}',
+    ) in commands
+    assert any(
+        command[8:] == ("scontrol", "update", "PartitionName=ALL", "State=UP")
+        for command in commands
+    )
+
+
+def test_populate_jail_refresh_phase_keeps_writers_held_after_completed_copy_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _payload()
+    target_values = migration.apply_jail_persistent_mount_values(
+        {
+            "nodesets": [
+                {
+                    "name": "worker",
+                    "slurmd": {
+                        "volumes": {
+                            "jail": {
+                                "persistentVolumeClaim": {"claimName": "jail-pvc"},
+                            }
+                        }
+                    },
+                }
+            ],
+        },
+        target_ref="external-cluster",
+        layout="external",
+    )
+    payload["apps"]["charts"][0]["values"] = target_values
+    runner = _FakeCommandRunner()
+    monkeypatch.setattr(
+        migration,
+        "_patch_target_values_for_compute",
+        lambda **_kwargs: target_values,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_helm_upgrade_target_soperator",
+        lambda **_kwargs: None,
+    )
+
+    def _fail_passive_populate_job(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("passive populate failed after persistent copy")
+
+    monkeypatch.setattr(
+        migration,
+        "wait_for_active_passive_populate_jail_job",
+        _fail_passive_populate_job,
+    )
+    checkpoint: dict[str, Any] = {
+        "phase_state": {},
+        "worker_node_groups": ["gpu-pool"],
+    }
+
+    with pytest.raises(RuntimeError, match="passive populate failed after persistent copy"):
+        migration._execute_populate_jail_refresh_phase(  # noqa: SLF001
+            checkpoint=checkpoint,
+            payload=payload,
+            source_report=_source_report(),
+            live_snapshot={},
+            target_ref="external-cluster",
+            kube_context="external-context",
+            command_runner=runner,
+            populate_jail_refresh="force",
+            job_policy="fail",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            job_wait_timeout_seconds=0,
+            job_refresh_interval_seconds=1,
+            login_session_policy=migration.EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE,
+            login_session_drain_timeout_seconds=0,
+        )
+
+    populate_phase = checkpoint["phase_state"]["populate-jail-refresh"]
+    assert populate_phase["legacy_persistent_mount_migration"]["status"] == "completed"
+    assert populate_phase["persistent_migration_writer_hold"]["status"] == "held"
+    assert populate_phase["persistent_migration_failure_boundary"] == {
+        "status": "writers_held",
+        "reason": (
+            "persistent mount migration already completed; keeping legacy writers "
+            "stopped so the shared copy cannot become stale"
+        ),
+    }
+    assert populate_phase["slurm_resume_after_failure"]["status"] == "skipped"
+    commands = [call for call, _input_text in runner.calls]
+    assert (
+        "kubectl",
+        "--context",
+        "external-context",
+        "-n",
+        "soperator",
+        "scale",
+        "statefulsets.apps.kruise.io/login",
+        "--replicas",
+        "1",
+    ) not in commands
+    assert not any(
+        command[8:] == ("scontrol", "update", "PartitionName=ALL", "State=UP")
+        for command in commands
+    )
+
+
+def test_prepare_jail_persistent_mount_payload_patches_target_values() -> None:
+    payload = _payload()
+    payload["apps"]["charts"][0]["values"] = {"nodesets": [{"name": "worker"}]}
+
+    patched, state = migration._prepare_jail_persistent_mount_payload(  # noqa: SLF001
+        payload=payload,
+        target_ref="external-cluster",
+        jail_persistent_mounts=("/data=/mnt/jail/shared/data",),
+        populate_jail_refresh="auto",
+    )
+
+    values = patched["apps"]["charts"][0]["values"]
+    assert state["status"] == "planned"
+    assert state["copy_required"] is True
+    assert state["auto_preserve_paths"] == ["/home", "/data", "/scripts", "/models"]
+    decision_status = {
+        item["mount_path"]: item["status"]
+        for item in state["decisions"]
+    }
+    assert decision_status == {
+        "/home": "pending-probe",
+        "/data": "explicit",
+        "/scripts": "pending-probe",
+        "/models": "pending-probe",
+    }
+    assert values["jailPersistentMounts"] == [
+        {"mountPath": "/home", "localPath": "/mnt/jail/shared/home"},
+        {"mountPath": "/data", "localPath": "/mnt/jail/shared/data"},
+        {"mountPath": "/scripts", "localPath": "/mnt/jail/shared/scripts"},
+        {"mountPath": "/models", "localPath": "/mnt/jail/shared/models"},
+    ]
+    assert state["migration"]["status"] == "planned"
+    assert state["migration"]["entries"] == [
+        {
+            "name": "jail-persistent-migration-home",
+            "mount_path": "/home",
+            "source_path": "/mnt/jail/home",
+            "source_store_path": "/home",
+            "target_local_path": "/mnt/jail/shared/home",
+            "target_store_path": "/shared/home",
+            "marker_path": "/mnt/jail/.cxcli/persistent-migrations/home.json",
+            "marker_store_path": "/.cxcli/persistent-migrations/home.json",
+            "bytes_planned": None,
+            "pvc_name": "",
+            "status": "planned",
+        },
+        {
+            "name": "jail-persistent-migration-data",
+            "mount_path": "/data",
+            "source_path": "/mnt/jail/data",
+            "source_store_path": "/data",
+            "target_local_path": "/mnt/jail/shared/data",
+            "target_store_path": "/shared/data",
+            "marker_path": "/mnt/jail/.cxcli/persistent-migrations/data.json",
+            "marker_store_path": "/.cxcli/persistent-migrations/data.json",
+            "bytes_planned": None,
+            "pvc_name": "",
+            "status": "planned",
+        },
+        {
+            "name": "jail-persistent-migration-scripts",
+            "mount_path": "/scripts",
+            "source_path": "/mnt/jail/scripts",
+            "source_store_path": "/scripts",
+            "target_local_path": "/mnt/jail/shared/scripts",
+            "target_store_path": "/shared/scripts",
+            "marker_path": "/mnt/jail/.cxcli/persistent-migrations/scripts.json",
+            "marker_store_path": "/.cxcli/persistent-migrations/scripts.json",
+            "bytes_planned": None,
+            "pvc_name": "",
+            "status": "planned",
+        },
+        {
+            "name": "jail-persistent-migration-models",
+            "mount_path": "/models",
+            "source_path": "/mnt/jail/models",
+            "source_store_path": "/models",
+            "target_local_path": "/mnt/jail/shared/models",
+            "target_store_path": "/shared/models",
+            "marker_path": "/mnt/jail/.cxcli/persistent-migrations/models.json",
+            "marker_store_path": "/.cxcli/persistent-migrations/models.json",
+            "bytes_planned": None,
+            "pvc_name": "",
+            "status": "planned",
+        },
+    ]
+    assert values["jailRootfs"]["store"]["rootfsPath"] == "/mnt/jail/.cxcli/rootfs"
+    assert values["jailRootfs"]["adoption"]["activeSource"] == "legacy-rootfs"
+    assert "sfs" not in values
+    phase_ids = migration._phase_ids_with_jail_persistent_mount_prerequisites(  # noqa: SLF001
+        phase_ids=("customer-approval",),
+        payload=patched,
+        target_ref="external-cluster",
+    )
+    assert phase_ids == ("customer-approval", "populate-jail-refresh")
+
+
+def test_prepare_jail_persistent_mount_payload_preserves_existing_external_home() -> None:
+    payload = _payload()
+    payload["apps"]["charts"][0]["values"] = {
+        "externalNfs": {
+            "enabled": True,
+            "mountPath": "/home",
+            "server": "nfs.example.invalid",
+            "path": "/exports/home",
+        }
+    }
+
+    patched, state = migration._prepare_jail_persistent_mount_payload(  # noqa: SLF001
+        payload=payload,
+        target_ref="external-cluster",
+        jail_persistent_mounts=(),
+        populate_jail_refresh="auto",
+    )
+
+    assert state["status"] == "verified"
+    assert state["copy_required"] is True
+    assert {
+        item["mount_path"]: item["status"]
+        for item in state["decisions"]
+    } == {
+        "/home": "existing-submount",
+        "/data": "pending-probe",
+        "/scripts": "pending-probe",
+        "/models": "pending-probe",
+    }
+    assert state["migration"]["status"] == "planned"
+    assert patched["apps"]["charts"][0]["values"]["jailPersistentMounts"] == [
+        {"mountPath": "/data", "localPath": "/mnt/jail/shared/data"},
+        {"mountPath": "/scripts", "localPath": "/mnt/jail/shared/scripts"},
+        {"mountPath": "/models", "localPath": "/mnt/jail/shared/models"},
+    ]
+
+
+def test_external_upgrade_cancel_selected_policy_cancels_jobs() -> None:
+    calls: list[tuple[str, ...]] = []
+    queue_outputs = [
+        "42|alice|RUNNING|gpu|worker-gpu-0-0|00:05|30:00|25:00|restartable-train\n",
+        "",
+    ]
+
+    lines = migration._handle_external_upgrade_slurm_jobs(
+        command_runner=_external_upgrade_slurm_runner(
+            queue_outputs=queue_outputs,
+            calls=calls,
+        ),
+        kube_context="external-context",
+        node_names=("worker-gpu-0-0",),
+        policy="cancel-selected",
+        cancel_job_ids=("42",),
+        requeue_job_ids=(),
+        wait_timeout_seconds=0,
+        refresh_interval_seconds=1,
+    )
+
+    assert lines == ["Slurm job preflight: cleared affected jobs with policy cancel-selected."]
+    assert any(call[8:] == ("scancel", "42") for call in calls)
+
+
+def test_external_upgrade_cancel_selected_policy_cancels_pending_jobs() -> None:
+    calls: list[tuple[str, ...]] = []
+    pending_outputs = [
+        "12|alice|PENDING|gpu||worker-gpu-0-0||Priority|0:00|30:00|30:00|pending-train\n",
+        "",
+    ]
+
+    lines = migration._handle_external_upgrade_slurm_jobs(
+        command_runner=_external_upgrade_slurm_runner(
+            queue_outputs=["", ""],
+            pending_queue_outputs=pending_outputs,
+            calls=calls,
+        ),
+        kube_context="external-context",
+        node_names=("worker-gpu-0-0",),
+        policy="cancel-selected",
+        cancel_job_ids=("12",),
+        requeue_job_ids=(),
+        wait_timeout_seconds=0,
+        refresh_interval_seconds=1,
+    )
+
+    assert lines == ["Slurm job preflight: cleared affected jobs with policy cancel-selected."]
+    assert any(call[8:] == ("scancel", "12") for call in calls)
+
+
+def test_external_upgrade_requeue_selected_rejects_pending_jobs() -> None:
+    calls: list[tuple[str, ...]] = []
+    pending_outputs = [
+        "12|alice|PENDING|gpu||worker-gpu-0-0||Priority|0:00|30:00|30:00|pending-train\n"
+    ]
+
+    with pytest.raises(RuntimeError, match="cannot requeue pending Slurm job"):
+        migration._handle_external_upgrade_slurm_jobs(
+            command_runner=_external_upgrade_slurm_runner(
+                queue_outputs=[""],
+                pending_queue_outputs=pending_outputs,
+                calls=calls,
+            ),
+            kube_context="external-context",
+            node_names=("worker-gpu-0-0",),
+            policy="requeue-selected",
+            cancel_job_ids=(),
+            requeue_job_ids=("12",),
+            wait_timeout_seconds=0,
+            refresh_interval_seconds=1,
+        )
+
+    assert not any(call[8:10] == ("scontrol", "requeue") for call in calls)
+
+
+def test_external_upgrade_cancel_all_policy_cancels_all_jobs() -> None:
+    calls: list[tuple[str, ...]] = []
+    queue_outputs = [
+        "\n".join(
+            (
+                "42|alice|RUNNING|gpu|worker-gpu-0-0|00:05|30:00|25:00|restartable-train",
+                "43|bob|RUNNING|gpu|worker-gpu-0-0|00:02|30:00|28:00|restartable-eval",
+            )
+        )
+        + "\n",
+        "",
+    ]
+
+    lines = migration._handle_external_upgrade_slurm_jobs(
+        command_runner=_external_upgrade_slurm_runner(
+            queue_outputs=queue_outputs,
+            calls=calls,
+        ),
+        kube_context="external-context",
+        node_names=("worker-gpu-0-0",),
+        policy="cancel-all",
+        cancel_job_ids=(),
+        requeue_job_ids=(),
+        wait_timeout_seconds=0,
+        refresh_interval_seconds=1,
+    )
+
+    assert lines == ["Slurm job preflight: cleared affected jobs with policy cancel-all."]
+    assert any(call[8:] == ("scancel", "42", "43") for call in calls)
+
+
+def test_external_upgrade_wait_to_finish_policy_waits_until_jobs_clear(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+    queue_outputs = [
+        "42|alice|RUNNING|gpu|worker-gpu-0-0|00:05|30:00|25:00|restartable-train\n",
+        "42|alice|RUNNING|gpu|worker-gpu-0-0|00:05|30:00|25:00|restartable-train\n",
+        "",
+    ]
+    sleeps: list[int] = []
+    monkeypatch.setattr(migration.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    lines = migration._handle_external_upgrade_slurm_jobs(
+        command_runner=_external_upgrade_slurm_runner(
+            queue_outputs=queue_outputs,
+            calls=calls,
+        ),
+        kube_context="external-context",
+        node_names=("worker-gpu-0-0",),
+        policy="wait-to-finish",
+        cancel_job_ids=(),
+        requeue_job_ids=(),
+        wait_timeout_seconds=30,
+        refresh_interval_seconds=1,
+    )
+
+    assert lines == ["Slurm job preflight: waited for affected jobs to finish."]
+    assert sleeps == [1]
+    assert queue_outputs == []
+
+
+def test_external_upgrade_interactive_wait_completed_returns_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+    queue_outputs = [
+        "42|alice|RUNNING|gpu|worker-gpu-0-0|00:05|30:00|25:00|restartable-train\n",
+    ]
+    prompted: list[tuple[str, tuple[str, ...]]] = []
+
+    def _prompt(
+        jobs: Sequence[migration.AffectedSlurmJob],
+        **_kwargs: object,
+    ) -> tuple[str, tuple[str, ...]]:
+        prompted.append(("prompted", tuple(job.job_id for job in jobs)))
+        return migration.SLURM_JOB_CONTROL_WAIT_COMPLETED, ()
+
+    monkeypatch.setattr(
+        migration,
+        "_prompt_external_upgrade_slurm_job_control",
+        _prompt,
+    )
+
+    lines = migration._handle_external_upgrade_slurm_jobs(
+        command_runner=_external_upgrade_slurm_runner(
+            queue_outputs=queue_outputs,
+            calls=calls,
+        ),
+        kube_context="external-context",
+        node_names=("worker-gpu-0-0",),
+        policy="interactive",
+        cancel_job_ids=(),
+        requeue_job_ids=(),
+        wait_timeout_seconds=30,
+        refresh_interval_seconds=1,
+        allow_resolved_interactive_job_policy=True,
+    )
+
+    assert lines == ["Slurm job preflight: waited for affected jobs to finish."]
+    assert prompted == [("prompted", ("42",))]
+    assert queue_outputs == []
+
+
+def test_external_upgrade_interactive_wait_timeout_raises_without_cancel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+    queue_outputs = [
+        "42|alice|RUNNING|gpu|worker-gpu-0-0|00:05|30:00|25:00|restartable-train\n",
+    ]
+
+    monkeypatch.setattr(
+        migration,
+        "_prompt_external_upgrade_slurm_job_control",
+        lambda _jobs, **_kwargs: (migration.SLURM_JOB_CONTROL_WAIT_TIMEOUT, ("42",)),
+    )
+
+    with pytest.raises(RuntimeError, match="Timed out waiting for Slurm jobs"):
+        migration._handle_external_upgrade_slurm_jobs(
+            command_runner=_external_upgrade_slurm_runner(
+                queue_outputs=queue_outputs,
+                calls=calls,
+            ),
+            kube_context="external-context",
+            node_names=("worker-gpu-0-0",),
+            policy="interactive",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            wait_timeout_seconds=30,
+            refresh_interval_seconds=1,
+            allow_resolved_interactive_job_policy=True,
+        )
+
+    assert not any(call[8:9] == ("scancel",) for call in calls)
+
+
+def test_external_upgrade_wait_then_cancel_waits_then_cancels_displayed_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+    decisions: list[dict[str, Any]] = []
+    active_job = migration.AffectedSlurmJob(
+        job_id="42",
+        user="alice",
+        state="RUNNING",
+        partition="gpu",
+        allocated_nodes="worker-gpu-0-0",
+        requested_nodes="",
+        scheduled_nodes="",
+        reason="",
+        elapsed="00:05",
+        limit="30:00",
+        remaining="25:00",
+        name="restartable-train",
+        impact_scope="allocated-node",
+    )
+    pending_job = migration.AffectedSlurmJob(
+        job_id="43",
+        user="alice",
+        state="PENDING",
+        partition="gpu",
+        allocated_nodes="",
+        requested_nodes="worker-gpu-0-0",
+        scheduled_nodes="",
+        reason="Priority",
+        elapsed="00:00",
+        limit="30:00",
+        remaining="30:00",
+        name="pending-train",
+        impact_scope="pending-node",
+    )
+    wait_results = [(active_job, pending_job), ()]
+
+    monkeypatch.setattr(
+        migration,
+        "_wait_for_external_upgrade_slurm_jobs_until_timeout",
+        lambda **_kwargs: wait_results.pop(0),
+    )
+
+    lines = migration._handle_external_upgrade_slurm_jobs(
+        command_runner=_external_upgrade_slurm_runner(
+            queue_outputs=[
+                "42|alice|RUNNING|gpu|worker-gpu-0-0||||00:05|30:00|25:00|restartable-train\n",
+                "42|alice|RUNNING|gpu|worker-gpu-0-0||||00:05|30:00|25:00|restartable-train\n",
+            ],
+            pending_queue_outputs=[
+                "43|alice|PENDING|gpu||worker-gpu-0-0||Priority|00:00|30:00|30:00|pending-train\n",
+                "",
+                "43|alice|PENDING|gpu||worker-gpu-0-0||Priority|00:00|30:00|30:00|pending-train\n",
+                "",
+            ],
+            calls=calls,
+        ),
+        kube_context="external-context",
+        node_names=("worker-gpu-0-0",),
+        policy="wait-then-cancel",
+        cancel_job_ids=(),
+        requeue_job_ids=(),
+        wait_timeout_seconds=3600,
+        refresh_interval_seconds=30,
+        decision_recorder=decisions.append,
+    )
+
+    assert lines == ["Slurm job preflight: waited, cancelled timed-out affected jobs, and cleared."]
+    assert any(call[8:] == ("scancel", "42", "43") for call in calls)
+    assert [decision["action"] for decision in decisions] == [
+        "blocking-jobs-detected",
+        "wait-then-cancel-wait-started",
+        "wait-then-cancel-timeout",
+        "wait-then-cancel-auto-cancel",
+        "wait-then-cancel-cleared",
+    ]
+
+
+def test_external_upgrade_non_terminal_wait_prints_once_per_poll(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    printed: list[Any] = []
+    sleeps: list[float] = []
+    active_job = migration.AffectedSlurmJob(
+        job_id="42",
+        user="alice",
+        state="RUNNING",
+        partition="gpu",
+        allocated_nodes="worker-gpu-0-0",
+        requested_nodes="",
+        scheduled_nodes="",
+        reason="",
+        elapsed="00:05",
+        limit="30:00",
+        remaining="25:00",
+        name="restartable-train",
+        impact_scope="allocated-node",
+    )
+    job_polls = [(active_job,), ()]
+
+    class _FakeConsole:
+        is_terminal = False
+
+        def print(self, value: Any, **_kwargs: Any) -> None:
+            printed.append(value)
+
+    monkeypatch.setattr(migration, "_console", _FakeConsole())
+    monkeypatch.setattr(
+        migration,
+        "_external_upgrade_slurm_jobs",
+        lambda **_kwargs: job_polls.pop(0),
+    )
+    monkeypatch.setattr(migration.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    remaining = migration._wait_for_external_upgrade_slurm_jobs_until_timeout(  # noqa: SLF001
+        command_runner=_external_upgrade_slurm_runner(queue_outputs=[], calls=[]),
+        kube_context="external-context",
+        node_names=("worker-gpu-0-0",),
+        timeout_seconds=0,
+        refresh_interval_seconds=30,
+    )
+
+    assert remaining == ()
+    assert sleeps == [30]
+    assert len(printed) == 2
+    assert str(printed[0].title).startswith("Waiting for affected Slurm jobs")
+    assert printed[1] == "No affected Slurm jobs remain"
+
+
+def test_external_upgrade_non_terminal_wait_retries_transient_login_exec_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    printed: list[Any] = []
+    sleeps: list[float] = []
+    polls: list[object] = [
+        RuntimeError(
+            "External Soperator upgrade could not inspect Slurm jobs from a login pod: "
+            'error: Internal error occurred: unable to upgrade connection: container not found ("sshd")'
+        ),
+        (),
+    ]
+
+    class _FakeConsole:
+        is_terminal = False
+
+        def print(self, value: Any, **_kwargs: Any) -> None:
+            printed.append(value)
+
+    def _jobs(**_kwargs: Any) -> tuple[migration.AffectedSlurmJob, ...]:
+        result = polls.pop(0)
+        if isinstance(result, RuntimeError):
+            raise result
+        return result
+
+    monkeypatch.setattr(migration, "_console", _FakeConsole())
+    monkeypatch.setattr(migration, "_external_upgrade_slurm_jobs", _jobs)
+    monkeypatch.setattr(migration.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    remaining = migration._wait_for_external_upgrade_slurm_jobs_until_timeout(  # noqa: SLF001
+        command_runner=_external_upgrade_slurm_runner(queue_outputs=[], calls=[]),
+        kube_context="external-context",
+        node_names=("worker-gpu-0-0",),
+        timeout_seconds=0,
+        refresh_interval_seconds=5,
+    )
+
+    assert remaining == ()
+    assert sleeps == [5]
+    assert str(printed[0]).startswith("Waiting for Slurm login readiness")
+    assert printed[1] == "No affected Slurm jobs remain"
+
+
+def test_external_upgrade_requeue_selected_policy_requeues_jobs() -> None:
+    calls: list[tuple[str, ...]] = []
+    queue_outputs = [
+        "42|alice|RUNNING|gpu|worker-gpu-0-0|00:05|30:00|25:00|restartable-train\n",
+        "",
+    ]
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "login-0"},
+                                "status": {"phase": "Running"},
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if (
+            command[:8]
+            == (
+                "kubectl",
+                "--context",
+                "external-context",
+                "-n",
+                "soperator",
+                "exec",
+                "login-0",
+                "--",
+            )
+            and command[8:11] == ("scontrol", "show", "node")
+            and command[-1] == "-o"
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                f"NodeName={command[11]} Partitions=gpu State=IDLE",
+                "",
+            )
+        if command[:8] == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "exec",
+            "login-0",
+            "--",
+        ) and command[8:10] == ("squeue", "-h"):
+            if "PENDING" in command:
+                return SoperatorMigrationCommandResult(command, 0, "", "")
+            return SoperatorMigrationCommandResult(command, 0, queue_outputs.pop(0), "")
+        return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
+
+    lines = migration._handle_external_upgrade_slurm_jobs(
+        command_runner=runner,
+        kube_context="external-context",
+        node_names=("worker-gpu-0-0",),
+        policy="requeue-selected",
+        cancel_job_ids=(),
+        requeue_job_ids=("42",),
+        wait_timeout_seconds=0,
+        refresh_interval_seconds=1,
+    )
+
+    assert lines == ["Slurm job preflight: cleared affected jobs with policy requeue-selected."]
+    assert any(call[8:] == ("scontrol", "requeue", "42") for call in calls)
+
+
+def test_external_upgrade_requeue_hold_selected_policy_holds_jobs() -> None:
+    calls: list[tuple[str, ...]] = []
+    queue_outputs = [
+        "42|alice|RUNNING|gpu|worker-gpu-0-0|00:05|30:00|25:00|restartable-train\n",
+        "",
+    ]
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "login-0"},
+                                "status": {"phase": "Running"},
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if (
+            command[:8]
+            == (
+                "kubectl",
+                "--context",
+                "external-context",
+                "-n",
+                "soperator",
+                "exec",
+                "login-0",
+                "--",
+            )
+            and command[8:11] == ("scontrol", "show", "node")
+            and command[-1] == "-o"
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                f"NodeName={command[11]} Partitions=gpu State=IDLE",
+                "",
+            )
+        if command[:8] == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "exec",
+            "login-0",
+            "--",
+        ) and command[8:10] == ("squeue", "-h"):
+            if "PENDING" in command:
+                return SoperatorMigrationCommandResult(command, 0, "", "")
+            return SoperatorMigrationCommandResult(command, 0, queue_outputs.pop(0), "")
+        return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
+
+    lines = migration._handle_external_upgrade_slurm_jobs(
+        command_runner=runner,
+        kube_context="external-context",
+        node_names=("worker-gpu-0-0",),
+        policy="requeue-hold-selected",
+        cancel_job_ids=(),
+        requeue_job_ids=("42",),
+        wait_timeout_seconds=0,
+        refresh_interval_seconds=1,
+    )
+
+    assert lines == [
+        "Slurm job preflight: cleared affected jobs with policy requeue-hold-selected."
+    ]
+    assert any(call[8:] == ("scontrol", "requeuehold", "42") for call in calls)
+
+
+def test_external_upgrade_requeue_hold_all_policy_holds_all_jobs() -> None:
+    calls: list[tuple[str, ...]] = []
+    queue_outputs = [
+        "\n".join(
+            (
+                "42|alice|RUNNING|gpu|worker-gpu-0-0|00:05|30:00|25:00|restartable-train",
+                "43|bob|RUNNING|gpu|worker-gpu-0-0|00:02|30:00|28:00|restartable-eval",
+            )
+        )
+        + "\n",
+        "",
+    ]
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "login-0"},
+                                "status": {"phase": "Running"},
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if (
+            command[:8]
+            == (
+                "kubectl",
+                "--context",
+                "external-context",
+                "-n",
+                "soperator",
+                "exec",
+                "login-0",
+                "--",
+            )
+            and command[8:11] == ("scontrol", "show", "node")
+            and command[-1] == "-o"
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                f"NodeName={command[11]} Partitions=gpu State=IDLE",
+                "",
+            )
+        if command[:8] == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "exec",
+            "login-0",
+            "--",
+        ) and command[8:10] == ("squeue", "-h"):
+            if "PENDING" in command:
+                return SoperatorMigrationCommandResult(command, 0, "", "")
+            return SoperatorMigrationCommandResult(command, 0, queue_outputs.pop(0), "")
+        return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
+
+    lines = migration._handle_external_upgrade_slurm_jobs(
+        command_runner=runner,
+        kube_context="external-context",
+        node_names=("worker-gpu-0-0",),
+        policy="requeue-hold-all",
+        cancel_job_ids=(),
+        requeue_job_ids=(),
+        wait_timeout_seconds=0,
+        refresh_interval_seconds=1,
+    )
+
+    assert lines == ["Slurm job preflight: cleared affected jobs with policy requeue-hold-all."]
+    assert any(call[8:] == ("scontrol", "requeuehold", "42", "43") for call in calls)
+
+
+def test_external_upgrade_requeue_policy_waits_for_slurm_transition(monkeypatch) -> None:
+    calls: list[tuple[str, ...]] = []
+    queue_outputs = [
+        "42|alice|RUNNING|gpu|worker-gpu-0-0|00:05|30:00|25:00|restartable-train\n",
+        "42|alice|RUNNING|gpu|worker-gpu-0-0|00:05|30:00|25:00|restartable-train\n",
+        "",
+    ]
+    sleeps: list[int] = []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "login-0"},
+                                "status": {"phase": "Running"},
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if (
+            command[:8]
+            == (
+                "kubectl",
+                "--context",
+                "external-context",
+                "-n",
+                "soperator",
+                "exec",
+                "login-0",
+                "--",
+            )
+            and command[8:11] == ("scontrol", "show", "node")
+            and command[-1] == "-o"
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                f"NodeName={command[11]} Partitions=gpu State=IDLE",
+                "",
+            )
+        if command[:8] == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "exec",
+            "login-0",
+            "--",
+        ) and command[8:10] == ("squeue", "-h"):
+            if "PENDING" in command:
+                return SoperatorMigrationCommandResult(command, 0, "", "")
+            return SoperatorMigrationCommandResult(command, 0, queue_outputs.pop(0), "")
+        return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
+
+    monkeypatch.setattr(migration.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    lines = migration._handle_external_upgrade_slurm_jobs(
+        command_runner=runner,
+        kube_context="external-context",
+        node_names=("worker-gpu-0-0",),
+        policy="requeue-all",
+        cancel_job_ids=(),
+        requeue_job_ids=(),
+        wait_timeout_seconds=30,
+        refresh_interval_seconds=1,
+    )
+
+    assert lines == ["Slurm job preflight: cleared affected jobs with policy requeue-all."]
+    assert any(call[8:] == ("scontrol", "requeue", "42") for call in calls)
+    assert sleeps == [1]
+    assert queue_outputs == []
+
+
 def test_completed_migration_mk8s_check_fails_when_live_node_template_drifts() -> None:
-    source_report = _source_report()
+    source_report = _source_report(target_k8s_version="1.34")
     runner = _FakeCommandRunner(
         cluster={
             "metadata": {"id": "cluster-123", "name": "external-cluster"},
-            "spec": {"control_plane": {"version": "1.33"}},
+            "spec": {"control_plane": {"version": "1.34"}},
         },
         existing_node_groups=[
             {
@@ -4423,7 +10643,7 @@ def test_completed_migration_mk8s_check_fails_when_live_node_template_drifts() -
                     "parent_id": "cluster-123",
                 },
                 "spec": {
-                    "version": "1.33",
+                    "version": "1.34",
                     "template": {
                         "resources": {
                             "platform": "gpu-h100-sxm",
@@ -4439,21 +10659,22 @@ def test_completed_migration_mk8s_check_fails_when_live_node_template_drifts() -
 
     with pytest.raises(RuntimeError, match="live node template still needs update args"):
         migration._verify_completed_soperator_migration_mk8s_state(
-            payload=_payload(),
+            payload=_payload(target_k8s_version="1.34"),
             source_report=source_report,
             target_ref="external-cluster",
             worker_node_groups=("gpu-pool",),
             phase_ids=("external-node-template-upgrade",),
+            nebius_api=runner.nebius_api,
             command_runner=runner,
         )
 
 
 def test_completed_migration_mk8s_check_fails_when_status_is_missing() -> None:
-    source_report = _source_report()
+    source_report = _source_report(target_k8s_version="1.34")
     runner = _FakeCommandRunner(
         cluster={
             "metadata": {"id": "cluster-123", "name": "external-cluster"},
-            "spec": {"control_plane": {"version": "1.33"}},
+            "spec": {"control_plane": {"version": "1.34"}},
         },
         existing_node_groups=[
             {
@@ -4463,7 +10684,7 @@ def test_completed_migration_mk8s_check_fails_when_status_is_missing() -> None:
                     "parent_id": "cluster-123",
                 },
                 "spec": {
-                    "version": "1.33",
+                    "version": "1.34",
                     "template": {
                         "resources": {
                             "platform": "gpu-h100-sxm",
@@ -4477,19 +10698,20 @@ def test_completed_migration_mk8s_check_fails_when_status_is_missing() -> None:
         ],
     )
 
-    with pytest.raises(RuntimeError, match="status not returned by Nebius CLI"):
+    with pytest.raises(RuntimeError, match="status not returned by Nebius API"):
         migration._verify_completed_soperator_migration_mk8s_state(
-            payload=_payload(),
+            payload=_payload(target_k8s_version="1.34"),
             source_report=source_report,
             target_ref="external-cluster",
             worker_node_groups=("gpu-pool",),
             phase_ids=("external-node-template-upgrade",),
+            nebius_api=runner.nebius_api,
             command_runner=runner,
         )
 
 
 def test_completed_migration_mk8s_check_fails_when_status_counts_are_missing() -> None:
-    source_report = _source_report()
+    source_report = _source_report(target_k8s_version="1.34")
     runner = _FakeCommandRunner(
         cluster={
             "metadata": {"id": "cluster-123", "name": "external-cluster"},
@@ -4503,7 +10725,7 @@ def test_completed_migration_mk8s_check_fails_when_status_counts_are_missing() -
                     "parent_id": "cluster-123",
                 },
                 "spec": {
-                    "version": "1.33",
+                    "version": "1.34",
                     "template": {
                         "resources": {
                             "platform": "gpu-h100-sxm",
@@ -4513,18 +10735,19 @@ def test_completed_migration_mk8s_check_fails_when_status_counts_are_missing() -
                         "os": {"name": "ubuntu24.04"},
                     },
                 },
-                "status": {"version": "1.33"},
+                "status": {"version": "1.34"},
             }
         ],
     )
 
     with pytest.raises(RuntimeError, match="status missing ready_node_count"):
         migration._verify_completed_soperator_migration_mk8s_state(
-            payload=_payload(),
+            payload=_payload(target_k8s_version="1.34"),
             source_report=source_report,
             target_ref="external-cluster",
             worker_node_groups=("gpu-pool",),
             phase_ids=("external-node-template-upgrade",),
+            nebius_api=runner.nebius_api,
             command_runner=runner,
         )
 
@@ -4556,7 +10779,7 @@ def test_execute_rechecks_live_control_plane_before_skipping_completed_hop(
     assert isinstance(onboarding, dict)
     onboarding["actions"] = ["upgrade-external-node-template"]
     onboarding["node_template_upgrade"] = {
-        "target_k8s_version": "1.33",
+        "target_k8s_version": "1.32",
         "target_os": "ubuntu24.04",
         "target_gpu_stack_preset": "cuda13.0",
     }
@@ -4578,6 +10801,7 @@ def test_execute_rechecks_live_control_plane_before_skipping_completed_hop(
                 "created_at": "2026-06-07T00:00:00Z",
                 "completed_phases": ["discovery-and-plan", "customer-approval"],
                 "customer_approved_at": "2026-06-07T00:00:00Z",
+                "backup": _backup_metadata_with_archive(config_path, "control-plane-hop"),
                 "events": [],
                 "phase_state": {
                     "external-node-template-upgrade": {
@@ -4612,7 +10836,7 @@ def test_execute_rechecks_live_control_plane_before_skipping_completed_hop(
     ]
     assert [
         command[command.index("--control-plane-version") + 1] for command in cluster_updates
-    ] == ["1.32", "1.33"]
+    ] == ["1.32"]
 
 
 def test_execute_auto_selects_console_worker_node_group_names_from_live_inventory(
@@ -4653,6 +10877,7 @@ def test_execute_auto_selects_console_worker_node_group_names_from_live_inventor
     ]
     source_report = _source_report(snapshot)
     payload = _payload(include_placements=True)
+    _seed_stale_kube_rbac_proxy_values(payload)
     target = payload["deploy"]["targets"][0]  # type: ignore[index]
     assert isinstance(target, dict)
     target["cluster_id"] = "cluster-123"
@@ -4779,7 +11004,10 @@ def test_execute_auto_selects_console_worker_node_group_names_from_live_inventor
                     "namespace": "soperator",
                     "annotations": {"meta.helm.sh/release-name": "soperator-nodesets"},
                 },
-                "spec": {"replicas": 2},
+                "spec": {
+                    "replicas": 2,
+                    "nodeConfig": {"dynamic": "", "static": "CPUs=15"},
+                },
                 "status": {"phase": "Ready", "replicas": 2},
             },
             "worker-gpu": {
@@ -4788,7 +11016,16 @@ def test_execute_auto_selects_console_worker_node_group_names_from_live_inventor
                     "namespace": "soperator",
                     "annotations": {"meta.helm.sh/release-name": "soperator-nodesets"},
                 },
-                "spec": {"replicas": 2},
+                "spec": {
+                    "replicas": 2,
+                    "nodeConfig": {
+                        "dynamic": "",
+                        "static": (
+                            "CPUs=128 Boards=1 SocketsPerBoard=2 CoresPerSocket=32 "
+                            "ThreadsPerCore=2 Gres=gpu:8"
+                        ),
+                    },
+                },
                 "status": {"phase": "Ready", "replicas": 2},
             },
         },
@@ -4862,9 +11099,13 @@ def test_execute_auto_selects_console_worker_node_group_names_from_live_inventor
         "worker-cpu",
         "worker-gpu",
     }
-    assert all(index < helm_upgrade_index for index, _call in legacy_nodeset_deletes)
+    assert all(index > helm_upgrade_index for index, _call in legacy_nodeset_deletes)
     assert soperator_helm_upgrade[1] is not None
     helm_values = json.loads(soperator_helm_upgrade[1])
+    _assert_target_kube_rbac_proxy_values(helm_values)
+    assert helm_values["slurmNodes"]["login"]["sshdServiceAnnotations"] == {
+        "nebius.com/load-balancer-allocation-id": "vpcallocation-login",
+    }
     system_terms = [
         {
             "matchExpressions": [
@@ -5116,6 +11357,123 @@ def test_source_worker_nodeset_values_defaults_worker_proc_mount() -> None:
 
     assert values[0]["slurmd"]["security"]["procMount"] == "Default"
     assert values[0]["munge"]["security"]["procMount"] == "Default"
+
+
+def test_parse_slurmd_c_topology_with_l3cache_parameter() -> None:
+    topology = migration._parse_slurmd_c_topology(  # noqa: SLF001
+        "NodeName=worker-0 CPUs=128 Boards=1 SocketsPerBoard=2 "
+        "CoresPerSocket=32 ThreadsPerCore=2 RealMemory=1612639 "
+        "Parameters=l3cache_as_socket Gres=gpu:nvidia_h100_80gb_hbm3:8\n"
+        "Found gpu:nvidia_h100_80gb_hbm3:8 with Autodetect=nvidia\n"
+    )
+
+    assert topology == {
+        "cpus": 128,
+        "boards": 1,
+        "sockets": 2,
+        "cores_per_socket": 32,
+        "threads_per_core": 2,
+        "parameters": "l3cache_as_socket",
+    }
+
+
+def test_patch_target_slurm_runtime_preserves_explicit_slurmd_parameters() -> None:
+    values: dict[str, Any] = {
+        "customSlurmConfig": "SlurmdParameters=numa_node_as_socket\nPluginDir=/old",
+        "nodesets": [
+            {
+                "name": "worker",
+                "nodeConfig": {"static": "CPUs=128 Gres=gpu:8"},
+                "slurmd": {"resources": {"gpu": 8}},
+            }
+        ],
+    }
+
+    migration._patch_target_slurm_runtime(values)  # noqa: SLF001
+
+    assert (
+        values["customSlurmConfig"]
+        == "SlurmdParameters=numa_node_as_socket\nPluginDir=/usr/lib/x86_64-linux-gnu/slurm"
+    )
+
+
+def test_source_worker_nodeset_values_uses_single_mismatched_worker_group_capacity() -> None:
+    nodeset = _source_worker_nodeset("worker", gpu=False)
+    spec = nodeset["spec"]
+    assert isinstance(spec, dict)
+    node_config = spec["nodeConfig"]
+    assert isinstance(node_config, dict)
+    node_config["static"] = (
+        "Boards=1 SocketsPerBoard=1 CoresPerSocket=32 ThreadsPerCore=1 Gres=gpu:1 Port=6818"
+    )
+    spec["customInitContainers"] = [
+        {"name": "cxcli-slurm-config-jail", "image": "chart-owned"},
+        {"name": "cxcli-gpu-driver-jail", "image": "chart-owned"},
+        {"name": "site-init", "image": "site/custom"},
+    ]
+    snapshot = _snapshot()
+    snapshot["soperator_resources"] = [nodeset]
+    snapshot["node_groups"] = {
+        "worker-0-0": {
+            "gpu": True,
+            "node_count": 4,
+            "labels": {
+                "slurm.nebius.ai/nodeset": "worker-0",
+                "nebius.com/node-group-id": "nodegroup-worker-0-0",
+            },
+            "allocatable": {"nvidia.com/gpu": "1"},
+            "nodes": ["node-a"],
+        }
+    }
+    live_snapshot = {
+        "nodes": [
+            {
+                "metadata": {"name": "node-a"},
+                "status": {"capacity": {"cpu": "16"}},
+            }
+        ]
+    }
+
+    values = migration._source_worker_nodeset_values(  # noqa: SLF001
+        _source_report(snapshot),
+        live_snapshot=live_snapshot,
+    )
+
+    assert values[0]["nodeConfig"]["static"] == "CPUs=16 Gres=gpu:1"
+    assert values[0]["customInitContainers"] == [{"name": "site-init", "image": "site/custom"}]
+
+
+def test_source_worker_nodeset_values_uses_single_group_allocatable_when_nodeset_label_differs() -> (
+    None
+):
+    nodeset = _source_worker_nodeset("worker", gpu=False)
+    spec = nodeset["spec"]
+    assert isinstance(spec, dict)
+    node_config = spec["nodeConfig"]
+    assert isinstance(node_config, dict)
+    node_config["static"] = (
+        "Boards=1 SocketsPerBoard=1 CoresPerSocket=32 ThreadsPerCore=1 Gres=gpu:1 Port=6818"
+    )
+    snapshot = _snapshot()
+    snapshot["soperator_resources"] = [nodeset]
+    snapshot["node_groups"] = {
+        "worker-0-0": {
+            "gpu": True,
+            "node_count": 2,
+            "labels": {
+                "nebius.com/node-group": "worker-0-0",
+                "nebius.com/node-group-id": "nodegroup-worker-0-0",
+                "slurm.nebius.ai/nodeset": "worker-0",
+                "nebius.com/resource-preset": "1gpu-16vcpu-200gb",
+            },
+            "allocatable": {"cpu": "15900m", "nvidia.com/gpu": "1"},
+            "nodes": ["old-node-a", "old-node-b"],
+        }
+    }
+
+    values = migration._source_worker_nodeset_values(_source_report(snapshot))  # noqa: SLF001
+
+    assert values[0]["nodeConfig"]["static"] == "CPUs=16 Gres=gpu:1"
 
 
 def test_live_source_slurmcluster_present_treats_timeout_as_absent() -> None:
@@ -5489,7 +11847,7 @@ def test_login_pod_name_treats_timeout_as_absent() -> None:
     assert runner.calls[0][0][-1] == "--request-timeout=20s"
 
 
-def test_final_cutover_reconcile_checks_preserved_worker_node_config() -> None:
+def test_final_cutover_reconcile_checks_preserved_worker_nodeset_readiness() -> None:
     snapshot = _snapshot()
     node_groups = snapshot["node_groups"]
     assert isinstance(node_groups, dict)
@@ -5555,7 +11913,13 @@ def test_final_cutover_reconcile_checks_preserved_worker_node_config() -> None:
     }
     payload = _payload(include_placements=True)
     source_report = _source_report(snapshot)
-    stale_runner = _FakeCommandRunner(
+    unavailable_cluster_runner = _FakeCommandRunner(
+        live_slurmclusters=[
+            {
+                "metadata": {"name": "external-cluster", "namespace": "soperator"},
+                "status": {"phase": "Not available"},
+            }
+        ],
         live_nodesets={
             "worker-cpu": {
                 "metadata": {"name": "worker-cpu", "namespace": "soperator"},
@@ -5577,7 +11941,7 @@ def test_final_cutover_reconcile_checks_preserved_worker_node_config() -> None:
         live_snapshot=snapshot,
         target_ref="external-cluster",
         kube_context="external-context",
-        command_runner=stale_runner,
+        command_runner=unavailable_cluster_runner,
     )
     reconcile_checkpoint = json.loads(json.dumps(checkpoint))
     completed_phases = {
@@ -5600,7 +11964,8 @@ def test_final_cutover_reconcile_checks_preserved_worker_node_config() -> None:
         target_ref="external-cluster",
         kube_context="external-context",
         worker_node_groups=("gpu-pool", "cpu-pool"),
-        command_runner=stale_runner,
+        nebius_api=unavailable_cluster_runner.nebius_api,
+        command_runner=unavailable_cluster_runner,
     )
 
     assert "rolling-compute-migration" not in completed_phases
@@ -5621,7 +11986,14 @@ def test_final_cutover_reconcile_checks_preserved_worker_node_config() -> None:
             },
             "worker-gpu": {
                 "metadata": {"name": "worker-gpu", "namespace": "soperator"},
-                "spec": {"nodeConfig": {"static": "CPUs=128 Gres=gpu:8"}},
+                "spec": {
+                    "nodeConfig": {
+                        "static": (
+                            "Boards=1 SocketsPerBoard=1 CoresPerSocket=32 "
+                            "ThreadsPerCore=1 Gres=gpu:8"
+                        )
+                    }
+                },
                 "status": {"phase": "Ready", "replicas": 2},
             },
         }
@@ -5702,6 +12074,8 @@ def test_execute_runs_gpu_reconciliation_when_report_has_no_migration_plan(
         "discovery-and-plan",
         "customer-approval",
         "target-gpu-stack-remediation",
+        "post-upgrade-mk8s-check",
+        "post-upgrade-helm-check",
     )
     helm_upgrade_calls = [
         call
@@ -5733,6 +12107,16 @@ def test_execute_emits_phase_aware_status_for_storage_and_compute(tmp_path: Path
     )
 
     assert result.pending_phase == "none"
+    assert any("phase execute-preflight" in message for message in messages)
+    assert any("phase backup" in message for message in messages)
+    assert any("phase protected-state-capture" in message for message in messages)
+    assert any("phase post-upgrade-mk8s-check" in message for message in messages)
+    assert any("phase post-upgrade-helm-check" in message for message in messages)
+    assert any("phase report" in message for message in messages)
+    assert not any(
+        "External Soperator upgrade phase" in message and "top-level stage:" in message
+        for message in messages
+    )
     assert any(
         "phase create-aligned-sfs" in message
         and "[Aligned SFS creation]" in message
@@ -5755,6 +12139,16 @@ def test_execute_emits_phase_aware_status_for_storage_and_compute(tmp_path: Path
         and "Soperator" in message
         for message in messages
     )
+    assert any(
+        "phase populate-jail-refresh" in message
+        and "[Jail Upgrade]" in message
+        and "MK8s" in message
+        and "Slurm" in message
+        and "Soperator" in message
+        and "Populate-jail" in message
+        and "no phase-specific status checks are planned" not in message
+        for message in messages
+    )
 
     checkpoint_path = soperator_migration_checkpoint_path(
         tmp_path / "config.yaml",
@@ -5772,6 +12166,17 @@ def test_execute_emits_phase_aware_status_for_storage_and_compute(tmp_path: Path
         "MK8s Node Groups",
         "Slurm Workers",
         "Soperator",
+    }
+    populate_status = next(
+        event
+        for event in status_events
+        if event["phase"] == "populate-jail-refresh" and event["point"] == "phase-start"
+    )
+    assert {signal["name"] for signal in populate_status["signals"]} == {
+        "MK8s Node Groups",
+        "Slurm Workers",
+        "Soperator",
+        "Populate-jail",
     }
 
 
@@ -5819,6 +12224,7 @@ def test_mk8s_status_reports_node_groups_and_replacing_nodes() -> None:
     }
 
     signal = migration._collect_mk8s_status(
+        nebius_api=runner.nebius_api,
         command_runner=runner,
         kube_context="external-context",
         checkpoint=checkpoint,
@@ -5834,6 +12240,87 @@ def test_mk8s_status_reports_node_groups_and_replacing_nodes() -> None:
         "in transition gpu-node-a:replacing (down), gpu-node-b:replacing (cordoned)"
     ) in signal.summary
     assert "problem nodes" not in signal.summary
+
+
+def test_mk8s_status_reports_reconciling_node_group_when_nodes_ready() -> None:
+    runner = _FakeCommandRunner(
+        live_nodes=[
+            {
+                "metadata": {
+                    "name": "system-node-a",
+                    "labels": {"nebius.com/node-group-id": "nodegroup-system"},
+                },
+                "spec": {},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            },
+            {
+                "metadata": {
+                    "name": "system-node-b",
+                    "labels": {"nebius.com/node-group-id": "nodegroup-system"},
+                },
+                "spec": {},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            },
+            {
+                "metadata": {
+                    "name": "system-node-c",
+                    "labels": {"nebius.com/node-group-id": "nodegroup-system"},
+                },
+                "spec": {},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            },
+        ],
+        existing_node_groups=[
+            {
+                "metadata": {"id": "nodegroup-system", "name": "system"},
+                "spec": {"version": "1.32"},
+                "status": {
+                    "ready_node_count": 3,
+                    "target_node_count": 3,
+                    "node_count": 3,
+                    "outdated_node_count": 3,
+                    "reconciling": True,
+                    "state": "PROVISIONING",
+                    "events": [
+                        {
+                            "last_occurrence": {
+                                "code": "Draining",
+                            },
+                        }
+                    ],
+                },
+            }
+        ],
+    )
+    checkpoint = {
+        "phase_state": {
+            "external-node-template-upgrade": {
+                "node_groups": {
+                    "system": {
+                        "status": "updating",
+                        "node_group_name": "system",
+                        "node_group_id": "nodegroup-system",
+                    }
+                }
+            }
+        }
+    }
+
+    signal = migration._collect_mk8s_status(
+        nebius_api=runner.nebius_api,
+        command_runner=runner,
+        kube_context="external-context",
+        checkpoint=checkpoint,
+        phase_id="external-node-template-upgrade",
+    )
+
+    assert signal.name == "MK8s Node Groups"
+    assert signal.state == "degraded"
+    assert "nodegroup-system:3/3 Ready" in signal.summary
+    assert (
+        "updating system:PROVISIONING,ready=3/3,event=Draining,outdated=3,reconciling"
+    ) in signal.summary
+    assert "Nodes: 3/3 Ready" in signal.summary
 
 
 def test_mk8s_status_keeps_problem_label_for_non_upgrading_notready_nodes() -> None:
@@ -5859,6 +12346,7 @@ def test_mk8s_status_keeps_problem_label_for_non_upgrading_notready_nodes() -> N
     )
 
     signal = migration._collect_mk8s_status(
+        nebius_api=runner.nebius_api,
         command_runner=runner,
         kube_context="external-context",
         checkpoint={},
@@ -5914,6 +12402,7 @@ def test_mk8s_status_bounds_many_groups_and_transition_nodes() -> None:
     }
 
     signal = migration._collect_mk8s_status(
+        nebius_api=runner.nebius_api,
         command_runner=runner,
         kube_context="external-context",
         checkpoint=checkpoint,
@@ -5940,6 +12429,7 @@ def test_mk8s_status_sections_empty_node_inventory() -> None:
     runner.live_nodes = []
 
     signal = migration._collect_mk8s_status(
+        nebius_api=runner.nebius_api,
         command_runner=runner,
         kube_context="external-context",
         checkpoint={},
@@ -5959,8 +12449,8 @@ def test_slurm_status_reports_named_worker_states() -> None:
 
     assert signal.name == "Slurm Workers"
     assert signal.state == "draining"
-    assert "workers drained=1, idle=1" in signal.summary
-    assert "problem workers worker-gpu-[0-1]:drained" in signal.summary
+    assert "workers drained=2, idle=2" in signal.summary
+    assert "problem workers worker-gpu-0:drained, worker-gpu-1:drained" in signal.summary
     assert "queue empty" in signal.summary
 
 
@@ -5988,30 +12478,35 @@ def test_status_scope_matches_planned_migration_layers() -> None:
         "mk8s": True,
         "slurm": True,
         "soperator": True,
+        "populate_jail": False,
     }
     assert migration._status_scope_for_phase("target-gpu-stack-remediation", compute_only) == {
         "storage": False,
         "mk8s": True,
         "slurm": False,
         "soperator": False,
+        "populate_jail": False,
     }
     assert migration._status_scope_for_phase("rolling-compute-migration", compute_only) == {
         "storage": False,
         "mk8s": True,
         "slurm": True,
         "soperator": True,
+        "populate_jail": False,
     }
     assert migration._status_scope_for_phase("final-control-plane-cutover", storage_only) == {
         "storage": True,
         "mk8s": True,
         "slurm": True,
         "soperator": True,
+        "populate_jail": False,
     }
     assert migration._status_scope_for_phase("final-control-plane-cutover", compute_only) == {
         "storage": False,
         "mk8s": True,
         "slurm": True,
         "soperator": True,
+        "populate_jail": False,
     }
     assert migration._status_scope_for_phase(
         "validation-and-rollback-hold",
@@ -6021,6 +12516,7 @@ def test_status_scope_matches_planned_migration_layers() -> None:
         "mk8s": False,
         "slurm": False,
         "soperator": False,
+        "populate_jail": False,
     }
 
 
@@ -6076,12 +12572,20 @@ def test_execute_runs_data_copy_jobs_when_source_storage_exists(tmp_path: Path) 
         for call in runner.calls
         if call[0] == ("kubectl", "--context", "external-context", "apply", "-f", "-")
     ]
-    assert len(apply_calls) == 1
-    assert apply_calls[0][1] is not None
-    applied = json.loads(apply_calls[0][1])
+    sync_apply_calls = []
+    for call in apply_calls:
+        try:
+            applied_payload = json.loads(call[1] or "{}")
+        except json.JSONDecodeError:
+            continue
+        names = {item["metadata"]["name"] for item in applied_payload.get("items", [])}
+        if names and all(name.startswith("cxcli-soperator-sync-") for name in names):
+            sync_apply_calls.append(call)
+    assert len(sync_apply_calls) == 1
+    assert sync_apply_calls[0][1] is not None
+    applied = json.loads(sync_apply_calls[0][1])
     job_names = {item["metadata"]["name"] for item in applied["items"]}
     assert job_names == {
-        "cxcli-soperator-sync-jail",
         "cxcli-soperator-sync-controller-spool",
         "cxcli-soperator-sync-accounting",
     }
@@ -6097,12 +12601,85 @@ def test_execute_runs_data_copy_jobs_when_source_storage_exists(tmp_path: Path) 
             "soperator",
             "get",
         )
-        and call[0][6].startswith("job/")
+        and call[0][6].startswith("job/cxcli-soperator-sync-")
     ]
     assert len(job_status_calls) == 6
 
 
-def test_execute_blocks_data_copy_when_target_pvc_is_missing(tmp_path: Path) -> None:
+def test_jail_data_sync_skips_single_sfs_rootfs_copy() -> None:
+    snapshot = _snapshot()
+    snapshot["storage"] = {"jail": {"source": "pvc/jail-pvc"}}
+    snapshot["pvcs"] = [{"metadata": {"name": "jail-pvc", "namespace": "soperator"}}]
+    payload = _payload()
+    payload["apps"]["charts"][0]["values"] = migration.apply_jail_persistent_mount_values(
+        {"nodesets": [{"name": "worker"}]},
+        target_ref="external-cluster",
+        layout="external",
+    )
+    source_report = _source_report(snapshot)
+    checkpoint: dict[str, Any] = {"phase_state": {}}
+    runner = _FakeCommandRunner(live_pvcs=list(snapshot["pvcs"]))
+
+    mutated, lines = migration._execute_online_bulk_data_sync_phase(  # noqa: SLF001
+        checkpoint=checkpoint,
+        payload=payload,
+        source_report=source_report,
+        live_snapshot=snapshot,
+        target_ref="external-cluster",
+        kube_context="external-context",
+        command_runner=runner,
+    )
+
+    assert mutated is False
+    assert "Data sync skipped: no PVC copy pairs were detected." in lines
+    apply_calls = [
+        call
+        for call in runner.calls
+        if call[0] == ("kubectl", "--context", "external-context", "apply", "-f", "-")
+    ]
+    assert apply_calls == []
+    phase = checkpoint["phase_state"]["online-bulk-data-sync"]
+    assert "jail" not in phase["jobs"]
+
+
+def test_persistent_mount_overwrite_checks_accept_configured_mounts() -> None:
+    runner = _FakeCommandRunner()
+
+    checks = migration._persistent_mount_overwrite_checks(  # noqa: SLF001
+        checkpoint={"phase_state": {}},
+        values={
+            "jailPersistentMounts": [
+                {"mountPath": "/home", "localPath": "/mnt/jail/shared/home"},
+            ]
+        },
+        kube_context="external-context",
+        command_runner=runner,
+    )
+
+    by_name = {check["name"]: check for check in checks}
+    assert by_name["persistent jail mounts"]["status"] == "passed"
+    assert runner.calls == []
+
+
+def test_persistent_mount_overwrite_checks_fail_without_home() -> None:
+    runner = _FakeCommandRunner()
+
+    checks = migration._persistent_mount_overwrite_checks(  # noqa: SLF001
+        checkpoint={"phase_state": {}},
+        values={
+            "jailPersistentMounts": [
+                {"mountPath": "/data", "localPath": "/mnt/jail/shared/data"}
+            ]
+        },
+        kube_context="external-context",
+        command_runner=runner,
+    )
+
+    by_name = {check["name"]: check for check in checks}
+    assert by_name["persistent jail mounts"]["status"] == "failed"
+
+
+def test_execute_does_not_block_data_copy_for_missing_target_jail_pvc(tmp_path: Path) -> None:
     snapshot = _snapshot()
     snapshot["storage"] = {"jail": {"source": "pvc/old-jail"}}
     snapshot["pvcs"] = [{"metadata": {"name": "old-jail", "namespace": "soperator"}}]
@@ -6117,8 +12694,7 @@ def test_execute_blocks_data_copy_when_target_pvc_is_missing(tmp_path: Path) -> 
         command_runner=_FakeCommandRunner(),
     )
 
-    assert result.pending_phase == "online-bulk-data-sync"
-    assert "Missing PVCs: target:jail:jail-pvc" in result.pending_reason
+    assert result.pending_phase != "online-bulk-data-sync"
 
 
 def test_online_data_sync_deletes_failed_job_before_reapply() -> None:
@@ -6350,7 +12926,7 @@ def test_execute_does_not_attach_sfs_to_unmapped_node_groups(tmp_path: Path) -> 
         if call[0][:4] == ("nebius", "mk8s", "node-group", "update")
         and "--template-filesystems" in call[0]
     ]
-    assert set(updated_node_groups) == {"nodegroup-cpu-pool", "nodegroup-gpu-pool"}
+    assert set(updated_node_groups) == {"nodegroup-cpu-pool"}
     assert "nodegroup-monitoring" not in updated_node_groups
 
 
@@ -6374,13 +12950,210 @@ def test_execute_refreshes_live_snapshot_after_mutating_phases(tmp_path: Path) -
     assert len(calls) > 1
 
 
+def test_system_service_role_quiesces_webhook_drain_blocker() -> None:
+    assert (
+        migration._source_group_service_quiesce_role(  # noqa: SLF001
+            "system",
+            {"node_count": 3},
+        )
+        == "system"
+    )
+    assert (
+        "scale-down-one",
+        "deployment/security-profiles-operator-webhook",
+        "security-profiles-operator-system",
+    ) in migration._external_service_role_quiesce_resources("system")  # noqa: SLF001
+
+
+def test_accounting_service_quiesce_required_for_multi_node_group() -> None:
+    assert migration._zero_surge_service_quiesce_required(  # noqa: SLF001
+        "accounting",
+        {"node_count": 2},
+    )
+
+
+def test_system_service_role_webhook_quiesce_does_not_scale_up_zero_replicas() -> None:
+    runner = _FakeCommandRunner(
+        live_kubernetes_resources={
+            "deployment": [
+                {
+                    "metadata": {
+                        "name": "security-profiles-operator-webhook",
+                        "namespace": "security-profiles-operator-system",
+                    },
+                    "spec": {"replicas": 0},
+                    "status": {"availableReplicas": 0, "readyReplicas": 0},
+                }
+            ]
+        }
+    )
+    state: dict[str, Any] = {}
+
+    lines = migration._quiesce_external_service_role(  # noqa: SLF001
+        command_runner=runner,
+        kube_context="external-context",
+        role="system",
+        state=state,
+    )
+
+    assert lines == ["Quiesced Soperator system workloads before node-template rollout."]
+    assert state["resources"] == [
+        {
+            "action": "scale-down-one",
+            "namespace": "security-profiles-operator-system",
+            "resource": "deployment/security-profiles-operator-webhook",
+            "exists": True,
+            "replicas": 0,
+            "target_replicas": 0,
+        }
+    ]
+    assert not any(call[0][5] == "scale" for call in runner.calls if len(call[0]) > 5)
+
+
+def test_login_service_quiesce_skips_slurmcluster_without_login_role() -> None:
+    runner = _FakeCommandRunner(
+        live_slurmclusters=[
+            {
+                "kind": "SlurmCluster",
+                "metadata": {"name": "other", "namespace": "soperator"},
+                "spec": {"slurmNodes": {"controller": {"size": 1}}},
+                "status": {"phase": "Available"},
+            }
+        ]
+    )
+    state: dict[str, Any] = {}
+
+    migration._quiesce_external_service_role(  # noqa: SLF001
+        command_runner=runner,
+        kube_context="external-context",
+        role="login",
+        state=state,
+    )
+
+    slurm_items = [item for item in state["resources"] if item["action"] == "slurm-node-size"]
+    assert slurm_items == [
+        {
+            "action": "slurm-node-size",
+            "resource": "slurmclusters",
+            "role": "login",
+            "exists": False,
+            "size": None,
+            "target_size": None,
+        }
+    ]
+    assert not any(
+        len(call[0]) > 7 and call[0][5] == "patch" and call[0][6].startswith("slurmcluster")
+        for call in runner.calls
+    )
+
+
+def test_login_service_quiesce_skips_empty_slurmcluster_list() -> None:
+    runner = _FakeCommandRunner()
+    runner.live_slurmclusters = []
+
+    item = migration._quiesce_slurm_node_size_resource(  # noqa: SLF001
+        command_runner=runner,
+        kube_context="external-context",
+        resource="slurmclusters",
+        role="login",
+    )
+
+    assert item == {
+        "action": "slurm-node-size",
+        "resource": "slurmclusters",
+        "role": "login",
+        "exists": False,
+        "size": None,
+        "target_size": None,
+    }
+    assert not any(
+        len(call[0]) > 7 and call[0][5] == "patch" and call[0][6].startswith("slurmcluster")
+        for call in runner.calls
+    )
+
+
+def test_login_service_quiesce_preserves_zero_slurmcluster_size() -> None:
+    runner = _FakeCommandRunner(
+        live_slurmclusters=[
+            {
+                "kind": "SlurmCluster",
+                "metadata": {"name": "soperator", "namespace": "soperator"},
+                "spec": {"slurmNodes": {"login": {"size": 0}}},
+                "status": {"phase": "Available"},
+            }
+        ]
+    )
+    state: dict[str, Any] = {}
+
+    migration._quiesce_external_service_role(  # noqa: SLF001
+        command_runner=runner,
+        kube_context="external-context",
+        role="login",
+        state=state,
+    )
+    migration._restore_external_service_role(  # noqa: SLF001
+        command_runner=runner,
+        kube_context="external-context",
+        state=state,
+    )
+
+    slurm_items = [item for item in state["resources"] if item["action"] == "slurm-node-size"]
+    assert slurm_items[0]["size"] == 0
+    assert slurm_items[0]["target_size"] == 0
+    assert not any(
+        len(call[0]) > 7 and call[0][5] == "patch" and call[0][6].startswith("slurmcluster")
+        for call in runner.calls
+    )
+
+
+def test_execute_runs_completion_safety_when_plan_omits_validation_phase(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    phase_ids = (
+        "discovery-and-plan",
+        "customer-approval",
+        "external-node-template-upgrade",
+        "target-gpu-stack-remediation",
+        "rolling-compute-migration",
+    )
+    monkeypatch.setattr(
+        migration,
+        "_phase_ids_for_actions",
+        lambda *, report, onboarding, populate_jail_refresh="auto": phase_ids,
+    )
+
+    result = execute_soperator_migration(
+        config_path=tmp_path / "config.yaml",
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=_source_report(),
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        approved=True,
+        command_runner=_FakeCommandRunner(),
+    )
+
+    assert result.pending_phase == "none"
+    assert (
+        "validation-and-rollback-hold: Shared Soperator upgrade safety verification completed: passed."
+        in "\n".join(result.lines)
+    )
+    checkpoint = json.loads(
+        soperator_migration_checkpoint_path(tmp_path / "config.yaml", "external-cluster").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert checkpoint["upgrade_safety"]["post_upgrade_verification"]["status"] == "passed"
+    assert checkpoint["upgrade_safety"]["protected_customer_state"]["after_hash"]
+
+
 def test_execute_rejects_incompatible_existing_aligned_sfs(tmp_path: Path) -> None:
     runner = _FakeCommandRunner(
         existing_filesystems={
-            "external-cluster-jail": {
-                "metadata": {"id": "filesystem-existing-jail"},
+            "external-cluster-controller-spool": {
+                "metadata": {"id": "filesystem-existing-controller-spool"},
                 "spec": {
-                    "size_gibibytes": "128",
+                    "size_gibibytes": "64",
                     "block_size_bytes": "4096",
                     "type": "NETWORK_SSD",
                 },
@@ -6399,8 +13172,9 @@ def test_execute_rejects_incompatible_existing_aligned_sfs(tmp_path: Path) -> No
     )
 
     assert result.pending_phase == "create-aligned-sfs"
-    assert "existing aligned SFS filesystem 'external-cluster-jail' is incompatible" in (
-        result.pending_reason
+    assert (
+        "existing aligned SFS filesystem 'external-cluster-controller-spool' is incompatible"
+        in result.pending_reason
     )
 
 
@@ -6598,6 +13372,15 @@ def test_execute_migrates_compute_when_slurm_resources_exist(tmp_path: Path) -> 
         call for call in runner.calls if call[0][:4] == ("nebius", "mk8s", "node-group", "create")
     ]
     assert len(create_calls) == 4
+    create_payloads = [json.loads(call[0][4]) for call in create_calls]
+    accounting_payload = next(
+        payload
+        for payload in create_payloads
+        if payload["metadata"]["name"] == "external-cluster-accounting"
+    )
+    accounting_labels = accounting_payload["spec"]["template"]["metadata"]["labels"]
+    assert accounting_labels["slurm.nebius.ai/nodeset"] == "accounting"
+    assert accounting_labels["slurm.nebius.ai/nodeset-name"] == "accounting"
     helm_upgrades = [call for call in runner.calls if call[0][0] == "helm" and "upgrade" in call[0]]
     assert [call[0][5] for call in helm_upgrades[:3]] == [
         "gpu-operator",
@@ -6621,8 +13404,14 @@ def test_execute_migrates_compute_when_slurm_resources_exist(tmp_path: Path) -> 
     assert all("--force-conflicts" in call[0] for call in crd_applies)
     helm_values = json.loads(helm_upgrade[1])
     assert helm_values["nameOverride"] == "helm-soperator"
+    assert helm_values["slurmNodes"]["login"]["sshdServiceAnnotations"] == {
+        "nebius.com/load-balancer-allocation-id": "vpcallocation-login",
+    }
     assert helm_values["gpuDriverJail"] == {"enabled": True}
-    assert helm_values["customSlurmConfig"] == "PluginDir=/usr/lib/x86_64-linux-gnu/slurm"
+    assert (
+        helm_values["customSlurmConfig"]
+        == "SlurmdParameters=l3cache_as_socket\nPluginDir=/usr/lib/x86_64-linux-gnu/slurm"
+    )
     assert helm_values["plugStackConfig"]["pyxis"] == {
         "importerPath": "",
         "required": False,
@@ -6856,12 +13645,32 @@ def test_execute_recovers_partial_cutover_without_login_pod(tmp_path: Path) -> N
         },
         {"id": "rolling-compute-migration", "status": "planned"},
     ]
-    runner = _FakeCommandRunner(live_pods=[])
+    runner = _FakeCommandRunner(
+        live_pods=[
+            {
+                "metadata": {
+                    "name": "worker-0",
+                    "labels": {"app.kubernetes.io/component": "worker"},
+                },
+                "status": {"phase": "Running"},
+            }
+        ]
+    )
+    payload = _payload(include_placements=True)
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]
+    assert isinstance(onboarding, dict)
+    onboarding["actions"] = [
+        "adopt-soperator",
+        "upgrade-soperator",
+        "approve-external-soperator-upgrade",
+        "plan-soperator-compute-migration",
+    ]
 
     result = execute_soperator_migration(
         config_path=tmp_path / "config.yaml",
         target_ref="external-cluster",
-        payload=_payload(include_placements=True),
+        payload=payload,
         source_report=source_report,
         snapshot_collector=lambda *, kube_context: snapshot,
         approved=True,
@@ -6914,6 +13723,7 @@ def test_rolling_compute_migration_resumes_slurm_after_post_drain_failure(
     )
 
     with pytest.raises(RuntimeError, match="simulated post-drain failure"):
+        runner = _FakeCommandRunner()
         migration._execute_rolling_compute_migration_phase(
             checkpoint={},
             payload=_payload(),
@@ -6922,10 +13732,196 @@ def test_rolling_compute_migration_resumes_slurm_after_post_drain_failure(
             target_ref="external-cluster",
             kube_context="external-context",
             worker_node_groups=("gpu-pool",),
-            command_runner=_FakeCommandRunner(),
+            nebius_api=runner.nebius_api,
+            command_runner=runner,
         )
 
     assert resumed == ["resumed"]
+
+
+def test_rolling_compute_migration_guards_login_before_source_retirement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    monkeypatch.setattr(
+        migration,
+        "_create_or_reuse_target_node_groups",
+        lambda **_kwargs: (False, []),
+    )
+    monkeypatch.setattr(migration, "_has_soperator_custom_resources", lambda _snapshot: True)
+    monkeypatch.setattr(migration, "_live_source_slurmcluster_present", lambda **_kwargs: True)
+    monkeypatch.setattr(migration, "_external_upgrade_worker_nodeset_slurm_nodes", lambda **_kwargs: ())
+    monkeypatch.setattr(migration, "_ensure_slurm_quiet", lambda **_kwargs: ["quiet"])
+    monkeypatch.setattr(
+        migration,
+        "_ensure_worker_nodeset_topology_checkpoint",
+        lambda **_kwargs: [],
+    )
+    monkeypatch.setattr(migration, "_patch_target_values_for_compute", lambda **_kwargs: {})
+    monkeypatch.setattr(migration, "_delete_pending_accounting_pvcs", lambda **_kwargs: None)
+    monkeypatch.setattr(migration, "_reconcile_target_node_storage_labels", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        migration,
+        "_login_service_identities",
+        lambda **_kwargs: (
+            {
+                "name": "login",
+                "uid": "svc-login",
+                "cluster_ip": "10.0.0.10",
+                "load_balancer_external": ["203.0.113.10"],
+                "load_balancer_allocation_id": "vpcallocation-login",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_helm_upgrade_target_soperator",
+        lambda **_kwargs: events.append("helm"),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_ensure_rolling_login_continuity",
+        lambda **_kwargs: events.append("login") or ["login ready"],
+    )
+    monkeypatch.setattr(
+        migration,
+        "_suspend_legacy_flux_helmreleases",
+        lambda **_kwargs: events.append("suspend") or [],
+    )
+    monkeypatch.setattr(
+        migration,
+        "_scale_down_legacy_soperator_controllers",
+        lambda **_kwargs: events.append("scale") or (True, []),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_delete_conflicting_source_slurm_resources",
+        lambda **_kwargs: events.append("delete"),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_clear_worker_nodeset_ephemeral_storage_aliases",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(migration, "_recreate_target_worker_statefulsets", lambda **_kwargs: None)
+    monkeypatch.setattr(migration, "_wait_for_target_worker_nodesets_ready", lambda **_kwargs: None)
+    monkeypatch.setattr(migration, "_kubectl_rollout_status", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        migration,
+        "_resume_slurm_after_cutover",
+        lambda **_kwargs: ["resumed"],
+    )
+
+    runner = _FakeCommandRunner()
+    mutated, lines = migration._execute_rolling_compute_migration_phase(  # noqa: SLF001
+        checkpoint={},
+        payload=_payload(),
+        source_report=_source_report(),
+        live_snapshot=_snapshot(),
+        target_ref="external-cluster",
+        kube_context="external-context",
+        worker_node_groups=("gpu-pool",),
+        nebius_api=runner.nebius_api,
+        command_runner=runner,
+    )
+
+    assert mutated is True
+    assert events == ["helm", "login", "suspend", "scale", "delete"]
+    assert "login ready" in lines
+
+
+def test_reconcile_slurm_worker_runtime_identity_uses_current_worker_pods() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command[:7] == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {
+                                    "name": "worker-0",
+                                    "labels": {"slurm.nebius.ai/worker": "true"},
+                                },
+                                "spec": {"nodeName": "computeinstance-new-0"},
+                                "status": {"phase": "Running"},
+                            },
+                            {
+                                "metadata": {
+                                    "name": "worker-1",
+                                    "labels": {"slurm.nebius.ai/nodeset": "worker"},
+                                },
+                                "spec": {"nodeName": "computeinstance-new-1"},
+                                "status": {"phase": "Running"},
+                            },
+                            {
+                                "metadata": {
+                                    "name": "login-0",
+                                    "labels": {"app.kubernetes.io/component": "login"},
+                                },
+                                "spec": {"nodeName": "computeinstance-login"},
+                                "status": {"phase": "Running"},
+                            },
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:7] == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "exec",
+            "controller-0",
+        ):
+            script = command[-1]
+            assert "expected_instance=computeinstance-new-0" in script
+            assert "expected_instance=computeinstance-new-1" in script
+            assert "computeinstance-login" not in script
+            assert 'scontrol update NodeName="${node}" InstanceId="${expected_instance}"' in script
+            assert 'scontrol update NodeName="${node}" NodeAddr="${expected_addr}"' in script
+            assert "State=RESUME" not in script
+            assert "resume_nodes" not in script
+            assert "state_lower" not in script
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "worker-0 InstanceId computeinstance-old-0 -> computeinstance-new-0\n",
+                "",
+            )
+        return SoperatorMigrationCommandResult(command, 0, "{}", "")
+
+    lines = migration._reconcile_slurm_worker_runtime_identity(
+        command_runner=runner,
+        kube_context="external-context",
+        target_ref="external-cluster",
+    )
+
+    assert lines == ["worker-0 InstanceId computeinstance-old-0 -> computeinstance-new-0"]
+    assert len(calls) == 2
 
 
 def test_execution_lock_replaces_dead_pid_lock(
@@ -7058,6 +14054,7 @@ def test_completed_compute_reconcile_blocks_until_worker_nodesets_are_ready(
             target_ref="external-cluster",
             kube_context="external-context",
             command_runner=runner,
+            nebius_api=runner.nebius_api,
         )
 
 
@@ -7107,7 +14104,7 @@ def test_execute_clears_interrupted_pending_helm_operation(tmp_path: Path) -> No
         for call in runner.calls
         if call[0][0] == "helm" and "upgrade" in call[0] and call[0][5] == "soperator"
     ]
-    assert len(helm_upgrades) == 2
+    assert len(helm_upgrades) == 4
     assert any(
         call[0][:8]
         == (
@@ -7177,7 +14174,7 @@ def test_execute_retries_soperator_helm_upgrade_while_webhook_starts(
         for call in runner.calls
         if call[0][0] == "helm" and "upgrade" in call[0] and call[0][5] == "soperator"
     ]
-    assert len(helm_upgrades) == 2
+    assert len(helm_upgrades) == 4
 
 
 def test_execute_reconciles_completed_compute_cutover_cleanup(tmp_path: Path) -> None:
@@ -7202,11 +14199,14 @@ def test_execute_reconciles_completed_compute_cutover_cleanup(tmp_path: Path) ->
     ]
     config_path = tmp_path / "config.yaml"
     source_report = _source_report(snapshot)
+    payload = _payload(include_placements=True)
+    _seed_stale_kube_rbac_proxy_values(payload)
     execute_soperator_migration(
         config_path=config_path,
         target_ref="external-cluster",
-        payload=_payload(include_placements=True),
+        payload=payload,
         source_report=source_report,
+        backup_metadata=_backup_metadata("compute-cutover-cleanup"),
         snapshot_collector=lambda *, kube_context: snapshot,
         approved=True,
         command_runner=_FakeCommandRunner(),
@@ -7225,10 +14225,11 @@ def test_execute_reconciles_completed_compute_cutover_cleanup(tmp_path: Path) ->
     result = execute_soperator_migration(
         config_path=config_path,
         target_ref="external-cluster",
-        payload=_payload(include_placements=True),
+        payload=payload,
         source_report=source_report,
         snapshot_collector=lambda *, kube_context: snapshot,
         command_runner=runner,
+        approve_remediation=True,
     )
 
     assert result.pending_phase == "none"
@@ -7236,6 +14237,13 @@ def test_execute_reconciles_completed_compute_cutover_cleanup(tmp_path: Path) ->
     rolling = checkpoint["phase_state"]["rolling-compute-migration"]
     assert rolling["target_values_revision"] == migration._ROLLING_COMPUTE_VALUES_REVISION
     assert "controller_spool_clustername_cleared_at" in rolling
+    helm_upgrade = next(
+        call
+        for call in runner.calls
+        if call[0][0] == "helm" and "upgrade" in call[0] and call[0][5] == "soperator"
+    )
+    assert helm_upgrade[1] is not None
+    _assert_target_kube_rbac_proxy_values(json.loads(helm_upgrade[1]))
     assert any(
         call[0][:8]
         == (
@@ -7319,7 +14327,7 @@ def test_execute_adopts_existing_helm_owned_resource_conflict(tmp_path: Path) ->
         if call[0][:4] == ("helm", "--kube-context", "external-context", "upgrade")
         and call[0][5] == "soperator"
     ]
-    assert len(helm_upgrade_calls) == 2
+    assert len(helm_upgrade_calls) == 4
     assert (
         (
             "kubectl",
@@ -7434,6 +14442,7 @@ def test_execute_allows_target_version_after_mutating_checkpoint_progress(tmp_pa
             target_ref="external-cluster",
             payload=_payload(include_placements=True),
             source_report=source_report,
+            backup_metadata=_backup_metadata("target-version-resume"),
             snapshot_collector=lambda *, kube_context: snapshot,
             approved=True,
             command_runner=_FakeCommandRunner(helm_errors=["helm boom"]),
@@ -7484,10 +14493,18 @@ def test_execute_requires_inferred_worker_groups_for_approved_compute_migration(
         )
     assert "nebius-cxcli ext-soperator onboard" in str(exc_info.value)
 
-    assert not soperator_migration_checkpoint_path(
+    checkpoint_path = soperator_migration_checkpoint_path(
         tmp_path / "config.yaml",
         "external-cluster",
-    ).exists()
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["backup"] == _backup_metadata_with_archive(
+        tmp_path / "config.yaml",
+        "test-pre-upgrade",
+    )
+    assert checkpoint["completed_phases"] == []
+    assert checkpoint["pending_phase"] == "none"
+    assert not checkpoint.get("customer_approved_at")
 
 
 def test_execute_rejects_changed_live_source_version(tmp_path: Path) -> None:
@@ -7686,7 +14703,7 @@ def test_execute_rejects_stale_checkpoint(tmp_path: Path) -> None:
     checkpoint_path.write_text(
         json.dumps(
             {
-                "schema": "nebius-cxcli-soperator-migration-execution/v1",
+                "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
                 "target_ref": "external-cluster",
                 "source_report_fingerprint": "old",
             }
@@ -7704,6 +14721,217 @@ def test_execute_rejects_stale_checkpoint(tmp_path: Path) -> None:
         )
 
 
+def test_execute_allows_premutation_checkpoint_source_report_refresh(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    checkpoint_path = soperator_migration_checkpoint_path(config_path, "external-cluster")
+    checkpoint_path.parent.mkdir(parents=True)
+    payload = _payload()
+    source_report = _source_report()
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]  # type: ignore[index]
+    report = source_report["report"]
+    assert isinstance(onboarding, dict)
+    assert isinstance(report, dict)
+    phase_ids = migration._phase_ids_for_actions(report=report, onboarding=onboarding)
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+                "target_ref": "external-cluster",
+                "source_report_fingerprint": "old-source-report",
+                "source_version": "3.0.5",
+                "target_version": "4.0.1-ps.1",
+                "planned_phases": list(phase_ids),
+                "completed_phases": [],
+                "pending_phase": "none",
+                "events": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = execute_soperator_migration(
+        config_path=config_path,
+        target_ref="external-cluster",
+        payload=payload,
+        source_report=source_report,
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        approved=True,
+        command_runner=_FakeCommandRunner(),
+    )
+    assert result.pending_phase == "none"
+
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["source_report_fingerprint"] == migration._source_report_checkpoint_fingerprint(
+        source_report
+    )
+    assert checkpoint["backup"] == _backup_metadata_with_archive(
+        config_path,
+        "test-pre-upgrade",
+    )
+    events = [event["event"] for event in checkpoint["events"]]
+    refresh_index = events.index("execute-checkpoint-source-report-refreshed")
+    backup_index = events.index("backup-metadata-checkpointed")
+    assert refresh_index < backup_index
+
+
+def test_phase_ids_force_populate_jail_refresh_for_node_template_segment() -> None:
+    payload = _payload(target_k8s_version="1.33")
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]  # type: ignore[index]
+    report = _source_report(target_k8s_version="1.33")["report"]
+    assert isinstance(onboarding, dict)
+    assert isinstance(report, dict)
+    onboarding["actions"] = [
+        "approve-external-soperator-upgrade",
+        "upgrade-external-node-template",
+        "reconcile-target-gpu-stack",
+    ]
+
+    auto_phase_ids = migration._phase_ids_for_actions(
+        report=report,
+        onboarding=onboarding,
+        populate_jail_refresh="auto",
+    )
+    force_phase_ids = migration._phase_ids_for_actions(
+        report=report,
+        onboarding=onboarding,
+        populate_jail_refresh="force",
+    )
+
+    assert migration.POPULATE_JAIL_REFRESH_PHASE_ID not in auto_phase_ids
+    assert migration.POPULATE_JAIL_REFRESH_PHASE_ID in force_phase_ids
+    populate_index = force_phase_ids.index(migration.POPULATE_JAIL_REFRESH_PHASE_ID)
+    assert force_phase_ids.index("external-node-template-upgrade") < populate_index
+    assert force_phase_ids.index("target-gpu-stack-remediation") < populate_index
+    assert populate_index < force_phase_ids.index("post-upgrade-mk8s-check")
+
+
+def test_phase_ids_auto_populate_jail_refresh_for_jail_only_segment() -> None:
+    payload = _payload(target_k8s_version="1.32")
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]  # type: ignore[index]
+    report = _source_report(target_k8s_version="1.32")["report"]
+    assert isinstance(onboarding, dict)
+    assert isinstance(report, dict)
+    onboarding["actions"] = ["approve-external-soperator-upgrade"]
+    report["migration_plan"] = []
+    report["jail_rootfs"] = {
+        "current_version": "4.0.2-slurm25.11.3-cuda12.8.0",
+        "target_version": "4.0.2-slurm25.11.3-cuda12.9.0",
+        "refresh_required": True,
+    }
+
+    phase_ids = migration._phase_ids_for_actions(
+        report=report,
+        onboarding=onboarding,
+        populate_jail_refresh="auto",
+    )
+
+    assert phase_ids[:3] == (
+        "discovery-and-plan",
+        "customer-approval",
+        migration.POPULATE_JAIL_REFRESH_PHASE_ID,
+    )
+    assert "external-node-template-upgrade" not in phase_ids
+    assert "rolling-compute-migration" not in phase_ids
+    assert "post-upgrade-mk8s-check" in phase_ids
+
+
+def test_execute_rejects_retired_migration_checkpoint_path(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    checkpoint_path = migration.legacy_soperator_migration_checkpoint_path(
+        config_path,
+        "external-cluster",
+    )
+    checkpoint_path.parent.mkdir(parents=True)
+    checkpoint_path.write_text('{"schema": "retired"}\n', encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="Retired external Soperator checkpoint found"):
+        execute_soperator_migration(
+            config_path=config_path,
+            target_ref="external-cluster",
+            payload=_payload(),
+            source_report=_source_report(),
+            snapshot_collector=lambda *, kube_context: _snapshot(),
+        )
+
+
+def test_external_upgrade_resume_backup_metadata_rejects_mutating_checkpoint_without_backup(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    checkpoint_path = soperator_migration_checkpoint_path(config_path, "external-cluster")
+    checkpoint_path.parent.mkdir(parents=True)
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+                "target_ref": "external-cluster",
+                "completed_phases": ["target-gpu-stack-remediation"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="no restore-capable backup metadata"):
+        migration.external_soperator_upgrade_resume_backup_metadata(
+            config_path,
+            "external-cluster",
+        )
+
+
+def test_external_upgrade_resume_backup_metadata_ignores_completed_checkpoint(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    checkpoint_path = soperator_migration_checkpoint_path(config_path, "external-cluster")
+    checkpoint_path.parent.mkdir(parents=True)
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+                "target_ref": "external-cluster",
+                "pending_phase": "none",
+                "planned_phases": [
+                    "discovery-and-plan",
+                    "customer-approval",
+                    "external-node-template-upgrade",
+                ],
+                "completed_phases": [
+                    "discovery-and-plan",
+                    "customer-approval",
+                    "external-node-template-upgrade",
+                ],
+                "backup": {
+                    "path": "backups/previous-hop.tar.gz",
+                    "sha256": "previous-hop-sha256",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        migration.external_soperator_upgrade_resume_backup_metadata(
+            config_path,
+            "external-cluster",
+        )
+        is None
+    )
+
+
+def test_external_upgrade_runtime_messages_do_not_use_retired_public_migrate_wording() -> None:
+    source = Path(migration.__file__).read_text(encoding="utf-8")
+    forbidden = (
+        "before executing migration",
+        "after migration",
+        "migration complete",
+        "restart the migration",
+        "rerunning migration",
+        "Soperator external migration",
+    )
+
+    assert [phrase for phrase in forbidden if phrase in source] == []
+
+
 def test_checkpoint_allows_same_plan_report_refresh_after_mutation_started() -> None:
     phase_ids = (
         "discovery-and-plan",
@@ -7713,7 +14941,7 @@ def test_checkpoint_allows_same_plan_report_refresh_after_mutation_started() -> 
     )
     checkpoint = migration._checkpoint_for_run(
         existing={
-            "schema": "nebius-cxcli-soperator-migration-execution/v1",
+            "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
             "target_ref": "external-cluster",
             "source_report_fingerprint": "old",
             "source_version": "1.23.3",
@@ -7735,11 +14963,226 @@ def test_checkpoint_allows_same_plan_report_refresh_after_mutation_started() -> 
     assert checkpoint["events"][-1]["previous_source_report_fingerprint"] == "old"
 
 
+def test_checkpoint_rejects_progress_only_locked_path_state() -> None:
+    with pytest.raises(RuntimeError, match="Old progress-only checkpoints are not supported"):
+        migration._checkpoint_for_run(
+            existing={
+                "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+                "target_ref": "external-cluster",
+                "source_report_fingerprint": "old",
+                "source_version": "3.0.5",
+                "target_version": "4.0.1-ps.1",
+                "planned_phases": ["discovery-and-plan"],
+                "completed_phases": ["discovery-and-plan"],
+                "upgrade_path_fingerprint": "locked-path-fingerprint",
+                "current_segment_id": "segment-1",
+                "completed_segment_ids": ["segment-1"],
+                "events": [],
+            },
+            target_ref="external-cluster",
+            source_report_fingerprint="new",
+            source_version="4.0.1",
+            target_version="4.0.1-ps.1",
+            phase_ids=("discovery-and-plan",),
+            allow_source_report_refresh=True,
+            upgrade_path_fingerprint="locked-path-fingerprint",
+            upgrade_path_segment_id="segment-2",
+        )
+
+
+def test_checkpoint_allows_report_refresh_when_resume_plan_omits_terminal_phases() -> None:
+    phase_ids = (
+        "discovery-and-plan",
+        "customer-approval",
+        "external-node-template-upgrade",
+        "target-gpu-stack-remediation",
+        "rolling-compute-migration",
+    )
+    planned_phases = (
+        *phase_ids,
+        "final-control-plane-cutover",
+        migration.POPULATE_JAIL_REFRESH_PHASE_ID,
+        "validation-and-rollback-hold",
+        "retire-old-resources",
+    )
+    locked_path = _locked_upgrade_path_fixture()
+    locked_path["segments"][0]["id"] = "segment-1"
+    locked_path["segments"][0]["title"] = "Segment 1"
+    checkpoint = migration._checkpoint_for_run(
+        existing={
+            "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+            "target_ref": "external-cluster",
+            "source_report_fingerprint": "old",
+            "source_version": "1.22.3",
+            "target_version": "4.0.2-ps.3",
+            "planned_phases": list(planned_phases),
+            "completed_phases": ["rolling-compute-migration"],
+            "locked_upgrade_path": locked_path,
+            "upgrade_path_fingerprint": "locked-path-fingerprint",
+            "current_segment_id": "segment-1",
+            "segment_state": {"segment-1": {"started_at": "old"}},
+            "events": [],
+        },
+        target_ref="external-cluster",
+        source_report_fingerprint="new",
+        source_version="1.22.3",
+        target_version="4.0.2-ps.3",
+        phase_ids=phase_ids,
+        allow_source_report_refresh=True,
+        upgrade_path_fingerprint="locked-path-fingerprint",
+        upgrade_path_segment_id="segment-1",
+    )
+
+    assert checkpoint["source_report_fingerprint"] == "new"
+    assert checkpoint["planned_phases"] == list(planned_phases)
+    assert checkpoint["segment_state"]["segment-1"]["planned_phases"] == list(planned_phases)
+    assert migration.POPULATE_JAIL_REFRESH_PHASE_ID in checkpoint["planned_phases"]
+    assert checkpoint["events"][-1]["event"] == "execute-checkpoint-source-report-refreshed"
+
+
+def test_external_upgrade_reports_checkpoint_planned_populate_jail_when_current_phase_ids_omit(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    phase_ids = (
+        "discovery-and-plan",
+        "customer-approval",
+        "external-node-template-upgrade",
+        "target-gpu-stack-remediation",
+        "rolling-compute-migration",
+    )
+    planned_phases = (
+        *phase_ids,
+        "final-control-plane-cutover",
+        "populate-jail-refresh",
+        "validation-and-rollback-hold",
+        "retire-old-resources",
+        "post-upgrade-mk8s-check",
+        "post-upgrade-helm-check",
+    )
+    segment_id = "segment-1"
+    locked_path = _locked_upgrade_path_fixture()
+    locked_path["segments"][0]["id"] = segment_id
+    locked_path["segments"][0]["title"] = "Segment 1 with Jail Upgrade"
+    checkpoint = {
+        "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+        "target_ref": "external-cluster",
+        "source_report_fingerprint": "fingerprint",
+        "source_version": "1.22.3",
+        "target_version": "4.0.2-ps.3",
+        "pending_phase": "none",
+        "pending_reason": "",
+        "planned_phases": list(planned_phases),
+        "completed_phases": ["rolling-compute-migration"],
+        "events": [],
+        "phase_state": {
+            "rolling-compute-migration": {
+                "target_node_groups": {"login": "nodegroup-login"},
+            },
+            "populate-jail-refresh": {
+                "result": {
+                    "status": "skipped",
+                    "reason": "target rootfs image already active",
+                }
+            },
+        },
+        "locked_upgrade_path": locked_path,
+        "upgrade_path_fingerprint": "locked-path-fingerprint",
+        "current_segment_id": segment_id,
+        "completed_segment_ids": [segment_id],
+        "segment_state": {segment_id: {}},
+    }
+
+    migration._write_soperator_migrate_report(  # noqa: SLF001
+        config_path=config_path,
+        checkpoint_path=soperator_migration_checkpoint_path(config_path, "external-cluster"),
+        checkpoint=checkpoint,
+        phase_ids=phase_ids,
+        completed_phases={"rolling-compute-migration"},
+        target_ref="external-cluster",
+        source_version="1.22.3",
+        target_version="4.0.2-ps.3",
+        pending_phase="none",
+        pending_reason="",
+        mutation_performed=True,
+    )
+
+    latest_markdown = (
+        tmp_path / "generated" / "reports" / "ext-soperator-upgrade-report.md"
+    ).read_text(encoding="utf-8")
+    latest_json = json.loads(
+        (tmp_path / "generated" / "reports" / "ext-soperator-upgrade-report.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    segment_report_path, segment_json_report_path = migration.ext_soperator_upgrade_segment_report_paths(
+        config_path,
+        "external-cluster",
+        segment_id,
+    )
+    segment_markdown = segment_report_path.read_text(encoding="utf-8")
+    segment_json = json.loads(segment_json_report_path.read_text(encoding="utf-8"))
+
+    assert "### populate-jail-refresh" in latest_markdown
+    assert "Jail Upgrade status=skipped; target rootfs image already active." in latest_markdown
+    assert "### populate-jail-refresh" in segment_markdown
+    assert "Jail Upgrade status=skipped; target rootfs image already active." in segment_markdown
+    latest_phases = {phase["id"]: phase for phase in latest_json["phases"]}
+    segment_phases = {phase["id"]: phase for phase in segment_json["phases"]}
+    assert latest_phases["populate-jail-refresh"]["top_level_stage"] == "Jail Upgrade"
+    assert latest_phases["populate-jail-refresh"]["summary"] == (
+        "Jail Upgrade status=skipped; target rootfs image already active."
+    )
+    assert segment_phases["populate-jail-refresh"] == latest_phases["populate-jail-refresh"]
+
+
+def test_checkpoint_starts_fresh_after_completed_prior_hop() -> None:
+    phase_ids = (
+        "discovery-and-plan",
+        "customer-approval",
+        "external-node-template-upgrade",
+        "target-gpu-stack-remediation",
+    )
+    checkpoint = migration._checkpoint_for_run(
+        existing={
+            "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+            "target_ref": "external-cluster",
+            "source_report_fingerprint": "old",
+            "source_version": "1.22.3",
+            "target_version": "4.0.2-ps.3",
+            "planned_phases": [
+                "discovery-and-plan",
+                "customer-approval",
+                "external-node-template-upgrade",
+            ],
+            "completed_phases": [
+                "discovery-and-plan",
+                "customer-approval",
+                "external-node-template-upgrade",
+            ],
+            "pending_phase": "none",
+            "events": [{"event": "old-hop"}],
+        },
+        target_ref="external-cluster",
+        source_report_fingerprint="new",
+        source_version="4.0.2",
+        target_version="4.0.2-ps.3",
+        phase_ids=phase_ids,
+        allow_source_report_refresh=True,
+    )
+
+    assert checkpoint["source_report_fingerprint"] == "new"
+    assert checkpoint["source_version"] == "4.0.2"
+    assert checkpoint["completed_phases"] == []
+    assert checkpoint["planned_phases"] == list(phase_ids)
+    assert checkpoint["events"] == []
+
+
 def test_checkpoint_rejects_report_refresh_when_plan_changed() -> None:
     with pytest.raises(RuntimeError, match="checkpoint is stale"):
         migration._checkpoint_for_run(
             existing={
-                "schema": "nebius-cxcli-soperator-migration-execution/v1",
+                "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
                 "target_ref": "external-cluster",
                 "source_report_fingerprint": "old",
                 "source_version": "1.23.3",

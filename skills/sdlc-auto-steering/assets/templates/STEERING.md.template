@@ -1,0 +1,38 @@
+# SDLC Steering
+
+This file is private Agentic SDLC run state. Do not commit it.
+
+## Active Runtime Steering
+
+- Current feature: `<FEAT-ID>`
+- Current phase: `<phase>`
+- Routing request: `<none | sdlc-create-requirements | sdlc-create-design | sdlc-update-documents | HUMAN_INPUT_REQUIRED>`
+- Updated at: `<ISO-8601>`
+
+## Auto-Steering Reminders
+
+Keep this section compact. Include only reminders that should affect the next
+SDLC phase.
+
+- `<reminder tied to REQ/FEAT/plan/evidence/steering>`
+
+## User Steering Inbox
+
+Append one entry per user prompt submitted during the active SDLC run. Redact
+unsafe values instead of storing raw secrets, credentials, private endpoints,
+customer data, or noisy logs.
+
+### `<entry-id>`
+
+- Received at: `<ISO-8601>`
+- Source phase: `<phase>`
+- Current feature: `<FEAT-ID or none>`
+- Prompt summary: `<raw prompt when safe, otherwise redacted summary>`
+- Disposition: `<runtime-only | requirements-change | design-change | docs-update | resolved | superseded | rejected | needs-human>`
+- Owner skill: `<sdlc-start | sdlc-create-requirements | sdlc-create-design | sdlc-update-documents | none>`
+- Status: `<pending | active | resolved | blocked>`
+- Notes: `<short reason or blocker>`
+
+## Processed Or Superseded Entries
+
+- `<entry-id>`: `<resolution summary>`
