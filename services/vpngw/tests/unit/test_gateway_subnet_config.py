@@ -4,6 +4,7 @@ import ipaddress
 from types import SimpleNamespace
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
 from nebius_vpngw.config_loader import GatewayGroupSpec
@@ -128,4 +129,10 @@ def test_build_cloud_init_includes_ssh_key_and_local_prefixes() -> None:
     assert "10.0.0.0/16" in rendered
     assert "172.16.0.0/24" in rendered
     assert "/usr/local/bin/setup-vpngw-firewall.sh" in rendered
+    assert "/usr/local/bin/nebius-vpngw-esp4-preflight.sh" in rendered
+    assert "/etc/systemd/system/nebius-vpngw-esp4-preflight.service" in rendered
+    assert "/var/lib/nebius-vpngw/esp4-reboot-pending" in rendered
+    assert "systemctl start nebius-vpngw-esp4-preflight strongswan-starter frr" in rendered
+    assert "  - [ systemctl, start, strongswan-starter ]" not in rendered
     assert "net.ipv4.ip_forward = 1" in rendered
+    assert yaml.safe_load(rendered)["package_upgrade"] is True

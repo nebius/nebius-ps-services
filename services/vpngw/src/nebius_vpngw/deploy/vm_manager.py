@@ -17,6 +17,13 @@ def _read_firewall_setup_script() -> str:
     return script_path.read_text(encoding="utf-8")
 
 
+def _read_esp4_preflight_script() -> str:
+    script_path = (
+        Path(__file__).resolve().parents[1] / "systemd" / "nebius-vpngw-esp4-preflight.sh"
+    )
+    return script_path.read_text(encoding="utf-8")
+
+
 def _parse_ipv4_network(cidr: str) -> ipaddress.IPv4Network | None:
     """Parse a CIDR as IPv4 only.
 
@@ -538,6 +545,8 @@ class VMManager:
                 'strongswan_installed': bool,
                 'frr_installed': bool,
                 'agent_installed': bool,
+                'esp4_ready': bool,
+                'esp4_reboot_pending': bool,
                 'message': str
             }
         """
@@ -550,6 +559,8 @@ class VMManager:
             "strongswan_installed": False,
             "frr_installed": False,
             "agent_installed": False,
+            "esp4_ready": False,
+            "esp4_reboot_pending": False,
             "message": "VM not reachable",
         }
 
@@ -633,6 +644,44 @@ class VMManager:
         except Exception:
             pass
 
+        if result["cloud_init_complete"]:
+            try:
+                esp4_check = subprocess.run(
+                    [
+                        "ssh",
+                        "-o",
+                        "ConnectTimeout=5",
+                        "-o",
+                        "StrictHostKeyChecking=no",
+                        "-o",
+                        "UserKnownHostsFile=/dev/null",
+                        "-o",
+                        "LogLevel=ERROR",
+                        f"ubuntu@{public_ip}",
+                        (
+                            "if [ -f /var/lib/nebius-vpngw/esp4-reboot-pending ]; then "
+                            "echo reboot-pending; exit 75; "
+                            "fi; "
+                            "if [ -x /usr/local/bin/nebius-vpngw-esp4-preflight.sh ]; then "
+                            "sudo /usr/local/bin/nebius-vpngw-esp4-preflight.sh --verify "
+                            ">/dev/null 2>&1; "
+                            "else "
+                            "sudo modprobe esp4 >/dev/null 2>&1; "
+                            "fi"
+                        ),
+                    ],
+                    capture_output=True,
+                    timeout=20,
+                    text=True,
+                )
+                if esp4_check.returncode == 0:
+                    result["esp4_ready"] = True
+                elif esp4_check.returncode == 75 or "reboot-pending" in esp4_check.stdout:
+                    result["esp4_reboot_pending"] = True
+                    result["esp4_ready"] = False
+            except Exception:
+                result["esp4_ready"] = False
+
         # Check installed packages
         try:
             pkg_check = subprocess.run(
@@ -667,10 +716,17 @@ class VMManager:
             result["cloud_init_complete"]
             and result["strongswan_installed"]
             and result["frr_installed"]
+            and result["esp4_ready"]
         ):
-            result["message"] = "✓ VM ready: cloud-init complete, strongSwan and FRR installed"
+            result["message"] = (
+                "✓ VM ready: cloud-init complete, strongSwan and FRR installed, ESP4 ready"
+            )
             if result["agent_installed"]:
                 result["message"] += ", agent running"
+        elif result["esp4_reboot_pending"]:
+            result["message"] = "⏳ ESP4/kernel update prepared; waiting for gateway reboot"
+        elif result["cloud_init_complete"] and not result["esp4_ready"]:
+            result["message"] = "⚠ Cloud-init complete but ESP4 is not ready"
         elif result["cloud_init_complete"]:
             result["message"] = "⚠ Cloud-init complete but packages not verified"
         else:
@@ -3366,14 +3422,36 @@ class VMManager:
                 cloud += f"            {prefix}\n"
 
         firewall_script = _read_firewall_setup_script()
+        esp4_preflight_script = _read_esp4_preflight_script()
         cloud += (
             "  - path: /usr/local/bin/setup-vpngw-firewall.sh\n"
             '    permissions: "0755"\n'
             "    owner: root:root\n"
             "    content: |\n" + textwrap.indent(firewall_script.rstrip() + "\n", "            ")
+            + "  - path: /usr/local/bin/nebius-vpngw-esp4-preflight.sh\n"
+            '    permissions: "0755"\n'
+            "    owner: root:root\n"
+            "    content: |\n"
+            + textwrap.indent(esp4_preflight_script.rstrip() + "\n", "            ")
         )
 
         cloud += (
+            "  - path: /etc/systemd/system/nebius-vpngw-esp4-preflight.service\n"
+            '    permissions: "0644"\n'
+            "    owner: root:root\n"
+            "    content: |\n"
+            "            [Unit]\n"
+            "            Description=Nebius VPNGW ESP4 kernel module readiness preflight\n"
+            "            After=local-fs.target systemd-modules-load.service\n"
+            "            Before=strongswan-starter.service strongswan.service frr.service nebius-vpngw-agent.service\n"
+            "            \n"
+            "            [Service]\n"
+            "            Type=oneshot\n"
+            "            ExecStart=/usr/local/bin/nebius-vpngw-esp4-preflight.sh --verify\n"
+            "            RemainAfterExit=yes\n"
+            "            \n"
+            "            [Install]\n"
+            "            WantedBy=multi-user.target\n"
             "  - path: /etc/frr/daemons\n"
             '    permissions: "0644"\n'
             "    owner: frr:frr\n"
@@ -3452,8 +3530,9 @@ class VMManager:
             "    owner: root:root\n"
             "    content: |\n"
             "            [Unit]\n"
-            "            After=ufw.service network-online.target\n"
+            "            After=nebius-vpngw-esp4-preflight.service ufw.service network-online.target\n"
             "            Wants=ufw.service\n"
+            "            Requires=nebius-vpngw-esp4-preflight.service\n"
             "  - path: /etc/systemd/system/frr.service.d/override.conf\n"
             '    permissions: "0644"\n'
             "    owner: root:root\n"
@@ -3474,12 +3553,15 @@ class VMManager:
         cloud += (
             "runcmd:\n"
             '  - [ bash, -lc, "mkdir -p /etc/nebius-vpngw" ]\n'
+            '  - [ bash, -lc, "mkdir -p /var/lib/nebius-vpngw" ]\n'
             '  - [ bash, -lc, "mkdir -p /etc/ipsec.d" ]\n'
             "  # Install FRR 10.x from official repository (fixes route installation bug in 8.4.4)\n"
             '  - [ bash, -c, "curl -s https://deb.frrouting.org/frr/keys.asc | tee /usr/share/keyrings/frrouting.asc > /dev/null" ]\n'
             '  - [ bash, -c, "UBUNTU_CODENAME=$(lsb_release -cs); echo \\"deb [signed-by=/usr/share/keyrings/frrouting.asc] https://deb.frrouting.org/frr $UBUNTU_CODENAME frr-stable\\" > /etc/apt/sources.list.d/frr.list" ]\n'
             "  - [ apt-get, update ]\n"
             '  - [ bash, -c, "DEBIAN_FRONTEND=noninteractive apt-get install -y frr frr-pythontools" ]\n'
+            "  # Prepare ESP4 after Ubuntu package upgrades; defer VPN services if a reboot is required\n"
+            '  - [ bash, -lc, "/usr/local/bin/nebius-vpngw-esp4-preflight.sh --prepare; rc=$?; if [ $rc -eq 75 ]; then exit 0; fi; exit $rc" ]\n'
             "  # Comment out conflicting sysctl settings in /etc/sysctl.conf (prevents our 99-zzz-vpngw.conf from being overridden)\n"
             "  - [ bash, -c, \"sed -i 's/^net.ipv4.ip_forward=.*/#&  # Overridden by 99-zzz-vpngw.conf/' /etc/sysctl.conf\" ]\n"
             "  - [ bash, -c, \"sed -i 's/^net.ipv4.conf.all.rp_filter=.*/#&  # Overridden by 99-zzz-vpngw.conf/' /etc/sysctl.conf\" ]\n"
@@ -3498,16 +3580,18 @@ class VMManager:
             "  - [ systemctl, enable, auditd ]\n"
             "  - [ systemctl, enable, fail2ban ]\n"
             "  - [ systemctl, enable, log-restart-required.timer ]\n"
+            "  - [ systemctl, enable, nebius-vpngw-esp4-preflight ]\n"
             "  - [ systemctl, enable, strongswan-starter ]\n"
             "  - [ systemctl, enable, frr ]\n"
             "  - [ systemctl, enable, nebius-vpngw-agent ]\n"
             "  - [ systemctl, start, auditd ]\n"
             "  - [ systemctl, start, fail2ban ]\n"
             "  - [ systemctl, start, log-restart-required.timer ]\n"
-            "  - [ systemctl, start, strongswan-starter ]\n"
-            "  - [ systemctl, start, frr ]\n"
+            '  - [ bash, -lc, "if [ ! -f /var/lib/nebius-vpngw/esp4-reboot-pending ]; then systemctl start nebius-vpngw-esp4-preflight strongswan-starter frr; fi" ]\n'
             "  # Reload SSH to apply hardening config\n"
             "  - [ systemctl, reload, ssh ]\n"
+            "  # Reboot only after cloud-init has written files and enabled services\n"
+            '  - [ bash, -lc, "if [ -f /var/lib/nebius-vpngw/esp4-reboot-pending ]; then logger -t vpngw \\"Rebooting to activate ESP4/kernel update before VPN services start\\"; shutdown -r +1 \\"Nebius VPN Gateway rebooting to activate ESP4/kernel update\\"; fi" ]\n'
             "  # Log completion\n"
             "  - [ bash, -c, \"logger -t vpngw 'Cloud-init hardening complete for VPN gateway'\" ]\n"
         )

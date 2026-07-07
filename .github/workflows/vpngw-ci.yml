@@ -61,7 +61,9 @@ jobs:
         run: |
           set -euo pipefail
           bash -n misc/gcp-vpngw.sh
+          bash -n misc/fix-vpngw-esp4.sh
           ./misc/gcp-vpngw.sh --help >/dev/null
+          ./misc/fix-vpngw-esp4.sh --help >/dev/null
       - name: Ruff
         run: python -m ruff check src tests
 
