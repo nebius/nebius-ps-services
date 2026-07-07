@@ -127,15 +127,13 @@ SDLC `PreToolUse` and `Stop` hooks. Do not replace `hooks.json` just to match
 the template byte-for-byte.
 
 The root `install-skills.sh --register-hooks` path follows the same semantic
-merge model for hook bundles by default: it validates `hooks.json`, preserves
-existing entries, and appends only missing source entries. It also refuses
-duplicate Python hook files within the same hook event so stale variants cannot
-silently run alongside current registrations. Hook file installation copies
-missing files, leaves matching files unchanged, and upgrades source-owned
-unmodified hook files using local provenance hashes. It stops before replacing
-unproven local edits so local customizations can be reviewed manually unless
-the operator intentionally lists the hook basename with `--overwrite-hook-files`,
-which backs up each replaced target first. It still does not trust hooks or
+merge model for hook bundles by default: it validates `hooks.json` before
+payload sync, preserves existing entries, and appends only missing source
+entries. It also refuses duplicate Python hook files within the same hook event
+so stale variants cannot silently run alongside current registrations. Hook
+file installation copies missing files, leaves matching files unchanged, and
+records hook file provenance hashes. It backs up differing existing hook files,
+then refreshes them from the selected source. It still does not trust hooks or
 patch `config.toml`. Add
 `--replace-hooks-json` only when the operator intentionally wants to back up
 and replace `hooks.json` with a clean file built from the selected source

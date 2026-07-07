@@ -138,13 +138,15 @@ For existing `$CODEX_HOME/config.toml`:
    hook-only bundles when that is explicitly needed. Use
    `install-skills.sh --install-hooks config-codex/assets/hooks` only for a
    single-bundle install. Both paths strip `.template` from installed hook file
-   names, copy missing hook files, leave matching hook files unchanged, and stop
-   before replacing any differing existing hook file. Add `--register-hooks`
-   only when the operator explicitly wants the installer to semantically merge
-   the bundle's hook registration into `hooks.json`; add
+   names, copy missing hook files, leave matching hook files unchanged, record
+   hook file provenance hashes, and back up differing existing hook files before
+   refreshing them from source. Add `--register-hooks` only when the operator
+   explicitly wants the installer to semantically merge the
+   bundle's hook registration into `hooks.json`; add
    `--replace-hooks-json` only when the selected source manifests should replace
-   `hooks.json` after backup. Neither path trusts hooks, patches `config.toml`,
-   replaces `AGENTS.md`, or replaces this full setup workflow.
+   `hooks.json` after backup. Registration is validated before payload sync.
+   Neither path trusts hooks, patches `config.toml`, replaces `AGENTS.md`, or
+   replaces this full setup workflow.
 9. Confirm `global-context-management` and `config-codex` are installed,
    discoverable, or explicitly enabled as skill folders. Do not add explicit
    skill entries if discovery already works.

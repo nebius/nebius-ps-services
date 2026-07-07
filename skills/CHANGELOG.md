@@ -7,9 +7,8 @@ All notable changes to the reusable Codex skills are tracked here.
 ### Added
 
 - Added hook file provenance to `install-skills.sh` hook payload sync so
-  source-owned unmodified hook files can auto-upgrade safely, plus
-  `--overwrite-hook-files <name[,name...]>` for intentional basename-scoped
-  hook payload replacement with backups under
+  source and target hashes are recorded, and differing existing hook payloads
+  are backed up before being refreshed under
   `$CODEX_HOME/.install-hooks-state/backups/`.
 - Added the `agent-nebius-auth` setup-only skill for bootstrapping and
   repairing Codex Agent Nebius service-account authentication, including an
@@ -155,11 +154,10 @@ All notable changes to the reusable Codex skills are tracked here.
   parent agent should dynamically spawn useful targeted read-only helpers
   without asking for another user prompt only because the original prompt did
   not mention subagents.
-- Made `install-skills.sh --overwrite-hook-files` accept shell-split
-  comma-and-space basename lists, for example
-  `--overwrite-hook-files stop_sdlc_continue.py, test_sdlc_hooks.py`, and
-  improved the `--install-hooks` error when the source hook directory is
-  omitted before another option.
+- Changed hook payload installation so selected source bundles refresh
+  differing existing hook files by default after backup, while hook
+  registration is preflighted before payload sync and still preserves existing
+  `hooks.json` entries unless `--replace-hooks-json` is explicitly set.
 - Aligned `publish-helm`, `publish-image`, and `publish-release` project-local
   shell helper templates with their canonical doer scripts: generated helpers
   now use `--mode prep|publish|verify`, require explicit `--tag`, reject the
@@ -181,8 +179,8 @@ All notable changes to the reusable Codex skills are tracked here.
 - Hardened `config-codex` laptop setup so existing `AGENTS.md` and
   `config.toml` are treated as merge targets by default, exact template checks
   are explicit audit modes, default validation rejects empty or stale managed
-  `AGENTS.md` blocks, and hook installation stops before replacing differing
-  existing hook files.
+  `AGENTS.md` blocks, and reviewed hook payload sync backs up differing
+  existing hook files before refreshing them from source.
 - Enhanced `align` into a changed-scope post-change quality gate that
   coordinates mandatory cross-code validation, `code-review`, `linter`,
   `apply-security`, and focused test/build lanes while keeping safe-only

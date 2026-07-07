@@ -238,6 +238,29 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def write_duplicate_hooks_json_registration(self) -> str:
+        original_hooks = json.dumps(
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "^Bash$",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "python3 /old/pre_tool_use_nebius_auth.py",
+                                }
+                            ],
+                        }
+                    ]
+                }
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        (self.codex_home / "hooks.json").write_text(original_hooks + "\n", encoding="utf-8")
+        return original_hooks + "\n"
+
     def assert_failed_before_mutation(
         self,
         result: subprocess.CompletedProcess[str],
@@ -253,6 +276,53 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         self.assertIn("Remove the inline agent-nebius-auth hook entry", result.stdout)
         self.assertNotIn(PROJECT, result.stdout)
         self.assertNotIn(PROJECT, result.stderr)
+
+    def assert_duplicate_registration_failed_before_payload_mutation(
+        self,
+        result: subprocess.CompletedProcess[str],
+        original_hooks_json: str,
+        original_hook_payload: str,
+    ) -> None:
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            (self.codex_home / "hooks.json").read_text(encoding="utf-8"),
+            original_hooks_json,
+        )
+        self.assertEqual(
+            self.installed_hook_path().read_text(encoding="utf-8"),
+            original_hook_payload,
+        )
+        self.assertFalse(self.hook_provenance_path().exists())
+        self.assertFalse((self.codex_home / ".install-hooks-state" / "backups").exists())
+        self.assertIn("Refusing to register duplicate", result.stderr)
+
+    def test_register_hooks_duplicate_fails_before_payload_overwrite(self) -> None:
+        original_hooks_json = self.write_duplicate_hooks_json_registration()
+        self.installed_hook_path().parent.mkdir(parents=True, exist_ok=True)
+        original_hook_payload = "# local hook customization\n"
+        self.installed_hook_path().write_text(original_hook_payload, encoding="utf-8")
+
+        result = self.run_installer()
+
+        self.assert_duplicate_registration_failed_before_payload_mutation(
+            result,
+            original_hooks_json,
+            original_hook_payload,
+        )
+
+    def test_install_all_hooks_duplicate_registration_fails_before_payload_overwrite(self) -> None:
+        original_hooks_json = self.write_duplicate_hooks_json_registration()
+        self.installed_hook_path().parent.mkdir(parents=True, exist_ok=True)
+        original_hook_payload = "# local hook customization\n"
+        self.installed_hook_path().write_text(original_hook_payload, encoding="utf-8")
+
+        result = self.run_all_hooks_installer()
+
+        self.assert_duplicate_registration_failed_before_payload_mutation(
+            result,
+            original_hooks_json,
+            original_hook_payload,
+        )
 
     def test_register_hooks_fails_when_marked_inline_config_toml_hook_exists(self) -> None:
         self.write_inline_config_block()
@@ -302,21 +372,52 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
 
         self.assert_failed_before_mutation(result, original_config)
 
-    def test_hook_install_refuses_to_replace_customized_hook_file(self) -> None:
+    def test_hook_install_overwrites_customized_hook_file_copy_only(self) -> None:
         self.installed_hook_path().parent.mkdir(parents=True, exist_ok=True)
         custom_hook = "# local hook customization\n"
         self.installed_hook_path().write_text(custom_hook, encoding="utf-8")
 
         result = self.run_installer_copy_only()
 
-        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        source_hook = self.repo_root / HOOK_SOURCE / "pre_tool_use_nebius_auth.py"
         self.assertEqual(
             self.installed_hook_path().read_text(encoding="utf-8"),
-            custom_hook,
+            source_hook.read_text(encoding="utf-8"),
         )
         self.assertFalse((self.codex_home / "hooks.json").exists())
-        self.assertIn("refusing to replace existing customized hook file", result.stderr)
-        self.assertIn("pre_tool_use_nebius_auth.py", result.stderr)
+        backups = list(
+            (self.codex_home / ".install-hooks-state" / "backups").glob(
+                "*/pre_tool_use_nebius_auth.py"
+            )
+        )
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].read_text(encoding="utf-8"), custom_hook)
+        entry = self.hook_provenance()["pre_tool_use_nebius_auth.py"]
+        self.assertEqual(entry["source_sha"], self.file_sha256(source_hook))
+        self.assertEqual(entry["target_sha"], self.file_sha256(self.installed_hook_path()))
+
+    def test_hook_install_overwrites_customized_hook_file_and_registers(self) -> None:
+        self.installed_hook_path().parent.mkdir(parents=True, exist_ok=True)
+        custom_hook = "# local hook customization\n"
+        self.installed_hook_path().write_text(custom_hook, encoding="utf-8")
+
+        result = self.run_installer()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        source_hook = self.repo_root / HOOK_SOURCE / "pre_tool_use_nebius_auth.py"
+        self.assertEqual(
+            self.installed_hook_path().read_text(encoding="utf-8"),
+            source_hook.read_text(encoding="utf-8"),
+        )
+        self.assertEqual(len(self.hook_registrations()), 1)
+        backups = list(
+            (self.codex_home / ".install-hooks-state" / "backups").glob(
+                "*/pre_tool_use_nebius_auth.py"
+            )
+        )
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].read_text(encoding="utf-8"), custom_hook)
 
     def test_hook_install_records_file_provenance(self) -> None:
         result = self.run_installer_copy_only()
@@ -331,7 +432,7 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         self.assertEqual(entry["source_sha"], self.file_sha256(source_hook))
         self.assertEqual(entry["target_sha"], self.file_sha256(self.installed_hook_path()))
 
-    def test_source_changed_unmodified_hook_auto_upgrades_from_provenance(self) -> None:
+    def test_source_changed_existing_hook_overwrites_with_backup(self) -> None:
         hook_source = self.make_hook_source({"demo.py": "print('v1')\n"})
         first = self.run_custom_hook_installer(hook_source)
         (hook_source / "demo.py").write_text("print('v2')\n", encoding="utf-8")
@@ -342,12 +443,15 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
         target = self.installed_hook_target("demo.py")
         self.assertEqual(target.read_text(encoding="utf-8"), "print('v2')\n")
+        backups = list((self.codex_home / ".install-hooks-state" / "backups").glob("*/demo.py"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].read_text(encoding="utf-8"), "print('v1')\n")
         entry = self.hook_provenance()["demo.py"]
         self.assertEqual(entry["source_sha"], self.file_sha256(hook_source / "demo.py"))
         self.assertEqual(entry["target_sha"], self.file_sha256(target))
         self.assertIn("files: updated 1", second.stdout)
 
-    def test_local_hook_edit_still_refuses_after_provenance(self) -> None:
+    def test_local_hook_edit_overwrites_after_provenance(self) -> None:
         hook_source = self.make_hook_source({"demo.py": "print('v1')\n"})
         first = self.run_custom_hook_installer(hook_source)
         target = self.installed_hook_target("demo.py")
@@ -357,28 +461,8 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         second = self.run_custom_hook_installer(hook_source)
 
         self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
-        self.assertNotEqual(second.returncode, 0, second.stdout + second.stderr)
-        self.assertEqual(target.read_text(encoding="utf-8"), custom_hook)
-        self.assertIn("refusing to replace existing customized hook file", second.stderr)
-        self.assertIn("--overwrite-hook-files demo.py", second.stderr)
-
-    def test_overwrite_hook_files_replaces_custom_hook_with_backup(self) -> None:
-        hook_source = self.make_hook_source({"demo.py": "print('v1')\n"})
-        first = self.run_custom_hook_installer(hook_source)
-        target = self.installed_hook_target("demo.py")
-        custom_hook = "print('local edit')\n"
-        target.write_text(custom_hook, encoding="utf-8")
-        (hook_source / "demo.py").write_text("print('v2')\n", encoding="utf-8")
-
-        second = self.run_custom_hook_installer(
-            hook_source,
-            "--overwrite-hook-files",
-            "demo.py",
-        )
-
-        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
         self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
-        self.assertEqual(target.read_text(encoding="utf-8"), "print('v2')\n")
+        self.assertEqual(target.read_text(encoding="utf-8"), "print('v1')\n")
         backups = list((self.codex_home / ".install-hooks-state" / "backups").glob("*/demo.py"))
         self.assertEqual(len(backups), 1)
         self.assertEqual(backups[0].read_text(encoding="utf-8"), custom_hook)
@@ -386,101 +470,40 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         self.assertEqual(entry["source_sha"], self.file_sha256(hook_source / "demo.py"))
         self.assertEqual(entry["target_sha"], self.file_sha256(target))
 
-    def test_overwrite_hook_files_accepts_shell_split_comma_space_list(self) -> None:
-        hook_source = self.make_hook_source(
-            {
-                "one.py": "print('one v1')\n",
-                "two.py": "print('two v1')\n",
-            }
-        )
-        first = self.run_custom_hook_installer(hook_source)
-        first_target = self.installed_hook_target("one.py")
-        second_target = self.installed_hook_target("two.py")
-        first_target.write_text("print('one local')\n", encoding="utf-8")
-        second_target.write_text("print('two local')\n", encoding="utf-8")
-        (hook_source / "one.py").write_text("print('one v2')\n", encoding="utf-8")
-        (hook_source / "two.py").write_text("print('two v2')\n", encoding="utf-8")
+    def test_install_all_hooks_overwrites_existing_nested_hook_file(self) -> None:
+        target = self.installed_hook_target("tests/test_sdlc_hooks.py")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        custom_hook = "# local nested hook customization\n"
+        target.write_text(custom_hook, encoding="utf-8")
 
-        second = self.run_custom_hook_installer(
-            hook_source,
-            "--overwrite-hook-files",
-            "one.py,",
-            "two.py",
-        )
+        result = self.run_all_hooks_installer_copy_only()
 
-        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
-        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
-        self.assertEqual(first_target.read_text(encoding="utf-8"), "print('one v2')\n")
-        self.assertEqual(second_target.read_text(encoding="utf-8"), "print('two v2')\n")
-        self.assertEqual(
-            len(list((self.codex_home / ".install-hooks-state" / "backups").glob("*/one.py"))),
-            1,
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        source_hook = self.repo_root / "sdlc-start" / "assets" / "hooks" / "tests" / "test_sdlc_hooks.py"
+        self.assertEqual(target.read_text(encoding="utf-8"), source_hook.read_text(encoding="utf-8"))
+        backups = list(
+            (self.codex_home / ".install-hooks-state" / "backups").glob(
+                "*/tests/test_sdlc_hooks.py"
+            )
         )
-        self.assertEqual(
-            len(list((self.codex_home / ".install-hooks-state" / "backups").glob("*/two.py"))),
-            1,
-        )
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].read_text(encoding="utf-8"), custom_hook)
 
-    def test_install_all_hooks_accepts_shell_split_comma_space_overwrite_list(self) -> None:
-        result = subprocess.run(
-            [
-                "bash",
-                str(self.installer),
-                "--install-all-hooks",
-                "--overwrite-hook-files",
-                "test_sdlc_hooks.py,",
-                "stop_sdlc_continue.py",
-            ],
+    def test_overwrite_hook_files_flag_is_removed(self) -> None:
+        removed_flag = "--overwrite" "-hook-files"
+        help_result = subprocess.run(
+            ["bash", str(self.installer), "--help"],
             cwd=str(self.repo_root),
             env=self.env,
             text=True,
             capture_output=True,
             check=False,
         )
-
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertTrue(self.installed_hook_target("tests/test_sdlc_hooks.py").exists())
-        self.assertTrue(self.installed_hook_target("stop_sdlc_continue.py").exists())
-
-    def test_overwrite_hook_files_unknown_basename_fails_before_mutation(self) -> None:
-        hook_source = self.make_hook_source({"demo.py": "print('v1')\n"})
-
-        result = self.run_custom_hook_installer(
-            hook_source,
-            "--overwrite-hook-files",
-            "missing.py",
-        )
-
-        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertFalse(self.installed_hook_target("demo.py").exists())
-        self.assertFalse(self.hook_provenance_path().exists())
-        self.assertIn("not present in selected source: missing.py", result.stderr)
-
-    def test_overwrite_hook_files_duplicate_basename_fails_before_mutation(self) -> None:
-        hook_source = self.make_hook_source(
-            {
-                "one/duplicate.py": "print('same')\n",
-                "two/duplicate.py": "print('same')\n",
-            }
-        )
-
-        result = self.run_custom_hook_installer(
-            hook_source,
-            "--overwrite-hook-files",
-            "duplicate.py",
-        )
-
-        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertFalse(self.installed_hook_target("one/duplicate.py").exists())
-        self.assertFalse(self.installed_hook_target("two/duplicate.py").exists())
-        self.assertIn("duplicate basename: duplicate.py", result.stderr)
-
-    def test_overwrite_hook_files_requires_hook_install_mode(self) -> None:
         result = subprocess.run(
             [
                 "bash",
                 str(self.installer),
-                "--overwrite-hook-files",
+                removed_flag,
                 "demo.py",
             ],
             cwd=str(self.repo_root),
@@ -490,11 +513,10 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
             check=False,
         )
 
+        self.assertEqual(help_result.returncode, 0, help_result.stdout + help_result.stderr)
+        self.assertNotIn(removed_flag, help_result.stdout)
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn(
-            "--overwrite-hook-files must be combined with --install-hooks or --install-all-hooks",
-            result.stderr,
-        )
+        self.assertIn(f"unknown option: {removed_flag}", result.stderr)
 
     def test_install_hooks_requires_source_before_other_options(self) -> None:
         result = subprocess.run(
@@ -502,8 +524,7 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
                 "bash",
                 str(self.installer),
                 "--install-hooks",
-                "--overwrite-hook-files",
-                "demo.py",
+                "--register-hooks",
             ],
             cwd=str(self.repo_root),
             env=self.env,

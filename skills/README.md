@@ -691,8 +691,8 @@ be removed with `--remove-skill` when they are not same-source managed.
 ```bash
 ./install-skills.sh [source] [destination_dir]
 ./install-skills.sh --remove-skill <skill_name> [destination_dir]
-./install-skills.sh --install-hooks <source_hook_dir> [--register-hooks] [--replace-hooks-json] [--overwrite-hook-files <name[,name...]>]
-./install-skills.sh --install-all-hooks [--register-hooks] [--replace-hooks-json] [--overwrite-hook-files <name[,name...]>]
+./install-skills.sh --install-hooks <source_hook_dir> [--register-hooks] [--replace-hooks-json]
+./install-skills.sh --install-all-hooks [--register-hooks] [--replace-hooks-json]
 ./install-skills.sh --help
 ```
 
@@ -703,10 +703,9 @@ The `--install-hooks` option is deliberately separate from normal skill
 installation. It copies hook files from an explicit source hook directory into
 `${CODEX_HOME:-$HOME/.codex}/hooks`, stripping `.template` suffixes for
 installed files. It copies missing hook files, leaves matching files unchanged,
-and upgrades source-owned unmodified hook files using local provenance hashes.
-It stops before replacing unproven local edits unless the file basename is
-listed with `--overwrite-hook-files`. Add
-`--register-hooks` to merge that bundle's
+records local provenance hashes, and backs up differing existing hook files under
+`${CODEX_HOME:-$HOME/.codex}/.install-hooks-state/backups/`, then refreshes
+them from the selected source. Add `--register-hooks` to merge that bundle's
 `hooks.json` or `hooks.json.template` registration manifest into
 `${CODEX_HOME:-$HOME/.codex}/hooks.json`.
 The `--install-all-hooks` option is also explicit, but discovers every reviewed
@@ -716,12 +715,12 @@ With `--register-hooks`, it also merges each discovered bundle's registration
 manifest while preserving existing hook entries. Add `--replace-hooks-json`
 only when you intentionally want to back up and replace `hooks.json` with a
 clean file built from the selected source manifests. Hook install modes are
-idempotent: unchanged files are not recopied, source-owned unmodified hook files
-can auto-upgrade, unproven local edits stay untouched unless listed with
-`--overwrite-hook-files`, registration appends only missing source entries by
-default, refuses duplicate Python hook files within the same hook event, and
-any extra installed hook files or hook registrations are reported for review
-instead of removed automatically.
+idempotent: unchanged files are not recopied, hook file provenance is recorded,
+differing existing hook files are backed up before being refreshed,
+registration appends only missing source entries by default, refuses duplicate
+Python hook files within the same hook event, and any extra installed hook
+files or hook registrations are reported for review instead of removed
+automatically.
 
 ### Supported Sources
 
@@ -778,12 +777,6 @@ instead of removed automatically.
 # Copy all reviewed hook bundles and replace hooks.json with only those entries
 ./install-skills.sh --install-all-hooks --register-hooks --replace-hooks-json
 
-# Intentionally replace reviewed hook payload files by basename
-./install-skills.sh --install-all-hooks --overwrite-hook-files stop_sdlc_continue.py, test_sdlc_hooks.py
-
-# Intentionally replace reviewed hook payload files from one hook source
-./install-skills.sh --install-hooks sdlc-start/assets/hooks --overwrite-hook-files stop_sdlc_continue.py, test_sdlc_hooks.py
-
 # Copy hooks into a non-default Codex home
 CODEX_HOME=~/custom-codex ./install-skills.sh --install-all-hooks --register-hooks
 ```
@@ -823,21 +816,20 @@ CODEX_HOME=~/custom-codex ./install-skills.sh --install-all-hooks --register-hoo
   guardrails, not skills. Use a hook-only source directory such as
   `sdlc-start/assets/hooks` or `config-codex/assets/hooks`. Without
   `--register-hooks`, this only syncs files under
-  `${CODEX_HOME:-$HOME/.codex}/hooks`. It upgrades source-owned unmodified hook
-  files using local provenance hashes and stops before replacing unproven local
-  edits unless the basename is listed with `--overwrite-hook-files`.
+  `${CODEX_HOME:-$HOME/.codex}/hooks`. It records hook file provenance hashes
+  and backs up differing existing hook files before refreshing them from source.
 - `--install-all-hooks` discovers only skill-owned hook-only directories named
   `*/assets/hooks` under this source folder, checks for conflicting installed
   file names, and syncs all reviewed hook bundles into
-  `${CODEX_HOME:-$HOME/.codex}/hooks` with the same provenance and explicit
-  overwrite behavior.
+  `${CODEX_HOME:-$HOME/.codex}/hooks` with the same provenance, backup, and
+  refresh behavior.
 - `--register-hooks` can be combined with either hook-install mode. It looks
   for `hooks.json` or `hooks.json.template` in the hook directory or its parent,
-  validates the source and destination JSON, backs up an existing
-  `${CODEX_HOME:-$HOME/.codex}/hooks.json` before changing it, preserves
-  existing entries, and appends only missing source entries. It refuses to
-  create or preserve multiple registrations for the same hook event and Python
-  hook filename, such as two `Stop` entries pointing at
+  validates the source and destination JSON before syncing hook payload files,
+  backs up an existing `${CODEX_HOME:-$HOME/.codex}/hooks.json` before changing
+  it, preserves existing entries, and appends only missing source entries. It
+  refuses to create or preserve multiple registrations for the same hook event
+  and Python hook filename, such as two `Stop` entries pointing at
   `stop_sdlc_continue.py`.
 - `agent-nebius-auth` keeps hook installation canonical: setup writes the
   project selector under `~/.nebius`, while the root installer syncs hook files
@@ -850,12 +842,6 @@ CODEX_HOME=~/custom-codex ./install-skills.sh --install-all-hooks --register-hoo
   registrations that are not in the selected source. Use
   `--install-all-hooks --register-hooks --replace-hooks-json` for a clean file
   containing every reviewed hook bundle under this source folder.
-- `--overwrite-hook-files <name[,name...]>` can be combined with either hook
-  install mode to intentionally replace reviewed hook payload files by
-  basename. The names can be comma-separated, comma-and-space separated, or
-  provided by repeating the flag. It backs up each replaced target under
-  `${CODEX_HOME:-$HOME/.codex}/.install-hooks-state/backups/`, rejects unknown
-  names and duplicate source basenames, and does not affect `hooks.json`.
 - Hook install modes report extra files under
   `${CODEX_HOME:-$HOME/.codex}/hooks` and extra `hooks.json` registrations that
   are not present in the selected source manifests. These reports are advisory:

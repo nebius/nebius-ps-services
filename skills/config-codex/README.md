@@ -510,14 +510,13 @@ The first command syncs every reviewed hook-only bundle under the source skills
 folder. The second command syncs only this skill's hook payload templates. Both
 copy into `$CODEX_HOME/hooks` with `.template` stripped from installed file
 names, copy missing hook files, leave matching hook files unchanged, and
-upgrade source-owned unmodified hook files using local provenance hashes. They
-still stop before replacing unproven local edits unless the hook basename is
-listed with `--overwrite-hook-files`, which backs up each replaced target under
-`$CODEX_HOME/.install-hooks-state/backups/`. Add `--register-hooks` when the
-installer should semantically merge the bundle's hook registration into
-`$CODEX_HOME/hooks.json`; registration still does not trust hooks, patch
-`config.toml`, replace `AGENTS.md`, replace hook payload files, or replace the
-full `config-codex` setup workflow.
+record hook file provenance hashes. They back up differing existing hook files
+under `$CODEX_HOME/.install-hooks-state/backups/`, then refresh them from
+source. Add
+`--register-hooks` when the installer should semantically merge the bundle's
+hook registration into `$CODEX_HOME/hooks.json`; registration is validated
+before payload sync and still does not trust hooks, patch `config.toml`, replace
+`AGENTS.md`, or replace the full `config-codex` setup workflow.
 
 - `agents/openai.yaml`: UI metadata and implicit invocation policy.
 
