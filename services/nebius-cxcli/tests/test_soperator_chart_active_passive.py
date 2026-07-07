@@ -10,17 +10,62 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CHART = REPO_ROOT / "helm-charts" / "soperator"
+_CHART_DEPENDENCIES_READY = False
 
 
-def _render(*args: str) -> list[dict[str, Any]]:
+def _require_helm() -> None:
     if shutil.which("helm") is None:
         pytest.skip("helm is not installed")
+
+
+def _chart_dependency_archives_missing() -> bool:
+    chart_yaml = yaml.safe_load((CHART / "Chart.yaml").read_text(encoding="utf-8"))
+    dependencies = chart_yaml.get("dependencies") if isinstance(chart_yaml, dict) else []
+    if not isinstance(dependencies, list):
+        return False
+    for dependency in dependencies:
+        if not isinstance(dependency, dict):
+            continue
+        name = str(dependency.get("name") or "")
+        version = str(dependency.get("version") or "")
+        if name and version and not (CHART / "charts" / f"{name}-{version}.tgz").exists():
+            return True
+    return False
+
+
+def _ensure_chart_dependencies() -> None:
+    global _CHART_DEPENDENCIES_READY
+    if _CHART_DEPENDENCIES_READY:
+        return
+    if _chart_dependency_archives_missing():
+        result = subprocess.run(
+            ["helm", "dependency", "build", str(CHART)],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            pytest.fail(
+                "helm dependency build failed before rendering "
+                f"{CHART}: {result.stderr or result.stdout}"
+            )
+    _CHART_DEPENDENCIES_READY = True
+
+
+def _helm_template(*args: str, check: bool) -> subprocess.CompletedProcess[str]:
+    _require_helm()
+    _ensure_chart_dependencies()
     result = subprocess.run(
         ["helm", "template", "test", str(CHART), "-n", "soperator", *args],
         text=True,
         capture_output=True,
-        check=True,
+        check=check,
     )
+    return result
+
+
+def _render(*args: str) -> list[dict[str, Any]]:
+    result = _helm_template(*args, check=True)
     return [doc for doc in yaml.safe_load_all(result.stdout) if isinstance(doc, dict)]
 
 
@@ -214,21 +259,9 @@ def test_persistent_mount_names_do_not_collide_when_long_paths_share_prefix() ->
 
 
 def test_active_passive_jail_rootfs_rejects_invalid_slot_path() -> None:
-    if shutil.which("helm") is None:
-        pytest.skip("helm is not installed")
-    result = subprocess.run(
-        [
-            "helm",
-            "template",
-            "test",
-            str(CHART),
-            "-n",
-            "soperator",
-            "--set",
-            "jailRootfs.slots.slot-a.localPath=/tmp/bad",
-        ],
-        text=True,
-        capture_output=True,
+    result = _helm_template(
+        "--set",
+        "jailRootfs.slots.slot-a.localPath=/tmp/bad",
         check=False,
     )
 
@@ -239,23 +272,11 @@ def test_active_passive_jail_rootfs_rejects_invalid_slot_path() -> None:
 
 
 def test_active_passive_jail_rootfs_rejects_persistent_mount_overlap() -> None:
-    if shutil.which("helm") is None:
-        pytest.skip("helm is not installed")
-    result = subprocess.run(
-        [
-            "helm",
-            "template",
-            "test",
-            str(CHART),
-            "-n",
-            "soperator",
-            "--set",
-            "jailPersistentMounts[0].mountPath=/data",
-            "--set",
-            "jailPersistentMounts[0].localPath=/mnt/jail-store/rootfs/slot-a/data",
-        ],
-        text=True,
-        capture_output=True,
+    result = _helm_template(
+        "--set",
+        "jailPersistentMounts[0].mountPath=/data",
+        "--set",
+        "jailPersistentMounts[0].localPath=/mnt/jail-store/rootfs/slot-a/data",
         check=False,
     )
 
@@ -264,27 +285,15 @@ def test_active_passive_jail_rootfs_rejects_persistent_mount_overlap() -> None:
 
 
 def test_active_passive_jail_rootfs_rejects_duplicate_normalized_persistent_mounts() -> None:
-    if shutil.which("helm") is None:
-        pytest.skip("helm is not installed")
-    result = subprocess.run(
-        [
-            "helm",
-            "template",
-            "test",
-            str(CHART),
-            "-n",
-            "soperator",
-            "--set",
-            "jailPersistentMounts[0].mountPath=/data",
-            "--set",
-            "jailPersistentMounts[0].localPath=/mnt/jail-store/shared/data",
-            "--set",
-            "jailPersistentMounts[1].mountPath=/data/",
-            "--set",
-            "jailPersistentMounts[1].localPath=/mnt/jail-store/shared/data-shadow",
-        ],
-        text=True,
-        capture_output=True,
+    result = _helm_template(
+        "--set",
+        "jailPersistentMounts[0].mountPath=/data",
+        "--set",
+        "jailPersistentMounts[0].localPath=/mnt/jail-store/shared/data",
+        "--set",
+        "jailPersistentMounts[1].mountPath=/data/",
+        "--set",
+        "jailPersistentMounts[1].localPath=/mnt/jail-store/shared/data-shadow",
         check=False,
     )
 
@@ -293,23 +302,11 @@ def test_active_passive_jail_rootfs_rejects_duplicate_normalized_persistent_moun
 
 
 def test_active_passive_jail_rootfs_rejects_non_normalized_persistent_mount_paths() -> None:
-    if shutil.which("helm") is None:
-        pytest.skip("helm is not installed")
-    result = subprocess.run(
-        [
-            "helm",
-            "template",
-            "test",
-            str(CHART),
-            "-n",
-            "soperator",
-            "--set",
-            "jailPersistentMounts[0].mountPath=/data//training",
-            "--set",
-            "jailPersistentMounts[0].localPath=/mnt/jail-store/shared/data",
-        ],
-        text=True,
-        capture_output=True,
+    result = _helm_template(
+        "--set",
+        "jailPersistentMounts[0].mountPath=/data//training",
+        "--set",
+        "jailPersistentMounts[0].localPath=/mnt/jail-store/shared/data",
         check=False,
     )
 

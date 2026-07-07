@@ -905,6 +905,8 @@ def execute_soperator_migration(*args: Any, **kwargs: Any):
                 config_path,
                 "test-pre-upgrade",
             )
+    if kwargs.get("nebius_api") is None and kwargs.get("command_runner") is None:
+        kwargs["command_runner"] = _FakeCommandRunner()
     return _execute_soperator_migration(*args, **kwargs)
 
 

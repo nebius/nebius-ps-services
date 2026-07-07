@@ -55,6 +55,9 @@ from nebius_cxcli.soperator_populate_jail import PopulateJailSnapshot
 
 runner = CliRunner()
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+_COPY_PASTE_COMMAND_STYLE_RE = re.compile(
+    r"\x1b\[(?:1;38;2;0;215;255|1;96)m(?P<text>.*?)\x1b\[0m"
+)
 _RICH_BOX_RE = re.compile(r"[\u2500-\u257f]")
 _RUNTIME_AUTH_ENV_KEYS = (
     "NEBIUS_AUTH_CREDENTIALS_FILE",
@@ -75,6 +78,20 @@ def _bundled_tool_versions() -> tuple[str, str]:
     assert isinstance(settings, dict)
     cli_settings = settings["cli"]
     return cli_settings["flux"]["version"], cli_settings["terraform"]["version"]
+
+
+def _assert_copy_paste_command_styled(rendered: str, command: str) -> None:
+    styled_texts = {
+        match.group("text") for match in _COPY_PASTE_COMMAND_STYLE_RE.finditer(rendered)
+    }
+    assert command in styled_texts
+
+
+def _assert_not_copy_paste_command_styled(rendered: str, text: str) -> None:
+    styled_texts = {
+        match.group("text") for match in _COPY_PASTE_COMMAND_STYLE_RE.finditer(rendered)
+    }
+    assert text not in styled_texts
 
 
 def _bundled_flux_install_manifest_url() -> str:
@@ -13207,8 +13224,8 @@ def test_deploy_footer_styles_copy_paste_commands_not_labels(
     plain_rendered = _ANSI_ESCAPE_RE.sub("", rendered)
     assert "# WireGuard connect laptop" in plain_rendered
     assert "wg-quick up /tmp/laptop.conf" in plain_rendered
-    assert "\x1b[1;38;2;0;215;255m# WireGuard connect laptop" not in rendered
-    assert "\x1b[1;38;2;0;215;255mwg-quick up /tmp/laptop.conf\x1b[0m" in rendered
+    _assert_not_copy_paste_command_styled(rendered, "# WireGuard connect laptop")
+    _assert_copy_paste_command_styled(rendered, "wg-quick up /tmp/laptop.conf")
 
 
 def test_deploy_command_passes_one_run_validation_skip_flags(
@@ -19405,9 +19422,10 @@ def test_print_copy_paste_command_styles_command_and_escapes_markup(
     rendered = rich_console.export_text(styles=True)
     plain_rendered = _ANSI_ESCAPE_RE.sub("", rendered)
     assert "nebius-cxcli render /tmp/[red]project[/red]/config.yaml" in plain_rendered
-    assert (
-        "\x1b[1;38;2;0;215;255mnebius-cxcli render /tmp/[red]project[/red]/config.yaml\x1b[0m"
-    ) in rendered
+    _assert_copy_paste_command_styled(
+        rendered,
+        "nebius-cxcli render /tmp/[red]project[/red]/config.yaml",
+    )
 
 
 def test_print_create_next_steps_styles_all_copy_paste_commands(
@@ -19436,7 +19454,13 @@ def test_print_create_next_steps_styles_all_copy_paste_commands(
         "Optional CI bootstrap:",
         f"nebius-cxcli bootstrap-ci {config_arg}",
     ]
-    assert rendered.count("\x1b[1;38;2;0;215;255mnebius-cxcli ") == 4
+    for command in (
+        f"nebius-cxcli validate {config_arg}",
+        f"nebius-cxcli render {config_arg}",
+        f"nebius-cxcli deploy {config_arg}",
+        f"nebius-cxcli bootstrap-ci {config_arg}",
+    ):
+        _assert_copy_paste_command_styled(rendered, command)
 
 
 def test_soperator_deploy_owned_route_styles_copy_paste_commands(
@@ -19469,8 +19493,11 @@ def test_soperator_deploy_owned_route_styles_copy_paste_commands(
     plain_rendered = _ANSI_ESCAPE_RE.sub("", rendered)
     assert "Run these commands to reconcile deploy-owned work:" in plain_rendered
     assert f"nebius-cxcli validate {config_arg}" in plain_rendered
-    assert (f"\x1b[1;38;2;0;215;255mnebius-cxcli validate {config_arg}\x1b[0m") in rendered
-    assert "\x1b[1;38;2;0;215;255mRun these commands" not in rendered
+    _assert_copy_paste_command_styled(rendered, f"nebius-cxcli validate {config_arg}")
+    _assert_not_copy_paste_command_styled(
+        rendered,
+        "Run these commands to reconcile deploy-owned work:",
+    )
 
 
 def test_print_upgrade_plan_lines_styles_warnings_amber(

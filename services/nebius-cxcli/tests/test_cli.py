@@ -9181,7 +9181,8 @@ def test_ext_soperator_upgrade_rejects_progress_only_locked_checkpoint(
     result = runner.invoke(app, ["ext-soperator", "upgrade", str(config_path), "--dry-run"])
 
     assert result.exit_code == 1
-    assert "Old progress-only checkpoints are not supported" in result.output
+    assert "checkpoint cannot resume from" in result.output
+    assert "locked_upgrade_path" in result.output
     assert "ext-soperator onboard" in result.output
 
 
@@ -9988,6 +9989,18 @@ def test_ext_soperator_upgrade_execute_runs_checkpointed_preflight(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config_path = _write_old_soperator_migration_config(tmp_path)
+    fake_runner = _FakeSoperatorMigrationCommandRunner()
+    execute_soperator_migration = cli_module.execute_soperator_migration
+
+    def _execute_with_fake_nebius_api(**kwargs: object) -> object:
+        kwargs.setdefault("command_runner", fake_runner)
+        return execute_soperator_migration(**kwargs)
+
+    monkeypatch.setattr(
+        cli_module,
+        "execute_soperator_migration",
+        _execute_with_fake_nebius_api,
+    )
     monkeypatch.setattr(
         cli_module,
         "collect_kubectl_soperator_snapshot",
