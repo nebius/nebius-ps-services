@@ -19,18 +19,46 @@ def _require_helm() -> None:
 
 
 def _chart_dependency_archives_missing() -> bool:
+    return any(not _chart_dependency_archive_path(dependency).exists() for dependency in _dependencies())
+
+
+def _dependencies() -> list[dict[str, Any]]:
     chart_yaml = yaml.safe_load((CHART / "Chart.yaml").read_text(encoding="utf-8"))
     dependencies = chart_yaml.get("dependencies") if isinstance(chart_yaml, dict) else []
     if not isinstance(dependencies, list):
-        return False
-    for dependency in dependencies:
-        if not isinstance(dependency, dict):
-            continue
+        return []
+    return [dependency for dependency in dependencies if isinstance(dependency, dict)]
+
+
+def _chart_dependency_archive_path(dependency: dict[str, Any]) -> Path:
+    name = str(dependency.get("name") or "")
+    version = str(dependency.get("version") or "")
+    return CHART / "charts" / f"{name}-{version}.tgz"
+
+
+def _remote_dependency_repositories() -> dict[str, str]:
+    repositories: dict[str, str] = {}
+    for dependency in _dependencies():
         name = str(dependency.get("name") or "")
-        version = str(dependency.get("version") or "")
-        if name and version and not (CHART / "charts" / f"{name}-{version}.tgz").exists():
-            return True
-    return False
+        repository = str(dependency.get("repository") or "")
+        if name and "://" in repository and not repository.startswith("file://"):
+            repositories[f"cxcli-{name}"] = repository
+    return repositories
+
+
+def _ensure_dependency_repositories() -> None:
+    for name, repository in _remote_dependency_repositories().items():
+        result = subprocess.run(
+            ["helm", "repo", "add", name, repository, "--force-update"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            pytest.fail(
+                "helm repo add failed before rendering "
+                f"{CHART}: {result.stderr or result.stdout}"
+            )
 
 
 def _ensure_chart_dependencies() -> None:
@@ -38,6 +66,7 @@ def _ensure_chart_dependencies() -> None:
     if _CHART_DEPENDENCIES_READY:
         return
     if _chart_dependency_archives_missing():
+        _ensure_dependency_repositories()
         result = subprocess.run(
             ["helm", "dependency", "build", str(CHART)],
             text=True,

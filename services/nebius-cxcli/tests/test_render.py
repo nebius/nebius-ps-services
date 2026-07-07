@@ -2420,7 +2420,11 @@ def test_soperator_chart_schema_rejects_unknown_nodeconfigurator_container_keys(
     )
 
     assert result.returncode != 0
-    assert "additional properties 'args' not allowed" in result.stderr
+    normalized_stderr = result.stderr.lower()
+    assert "customcontainer" in normalized_stderr
+    assert "args" in normalized_stderr
+    assert "additional propert" in normalized_stderr
+    assert "not allowed" in normalized_stderr
 
 
 def test_render_local_soperator_mixed_profile_writes_shape_specific_nodesets(
