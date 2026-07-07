@@ -7,6 +7,7 @@ cd "${SCRIPT_DIR}"
 TAG_PREFIX="__PROJECT_TAG_PREFIX__"
 MAIN_BRANCH="__MAIN_BRANCH__"
 CHANGELOG_FILE="CHANGELOG.md"
+IMAGE_NAME="__IMAGE_NAME__"
 
 S_RESET=""
 S_BOLD=""
@@ -42,23 +43,32 @@ log_success() {
 
 show_usage() {
   printf '%b\n' "${S_BOLD}Usage:${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./publish-image.sh${S_RESET} ${S_DIM}--prep X.Y.Z [--no-push]${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./publish-image.sh${S_RESET} ${S_DIM}--publish X.Y.Z${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./publish-image.sh${S_RESET} ${S_DIM}--mode prep --tag X.Y.Z [options]${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./publish-image.sh${S_RESET} ${S_DIM}--mode publish --tag X.Y.Z [options]${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./publish-image.sh${S_RESET} ${S_DIM}--mode verify --tag X.Y.Z --image-name IMAGE [options]${S_RESET}"
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Modes:${S_RESET}"
-  printf '%b\n' "  ${S_YELLOW}--prep${S_RESET}     Require clean synced ${MAIN_BRANCH}, create release/${TAG_PREFIX}-vX.Y.Z, update ${CHANGELOG_FILE}, commit it, and push the release branch."
-  printf '%b\n' "  ${S_YELLOW}--publish${S_RESET}  Create and push tag ${TAG_PREFIX}-vX.Y.Z."
+  printf '%b\n' "  ${S_YELLOW}prep${S_RESET}      Require clean synced default branch, create release/<tag>, update the changelog, commit it, and push the release branch."
+  printf '%b\n' "  ${S_YELLOW}publish${S_RESET}   Create and push the annotated release tag."
+  printf '%b\n' "  ${S_YELLOW}verify${S_RESET}    Verify the published image tag with docker buildx imagetools."
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Options:${S_RESET}"
-  printf '%b\n' "  ${S_YELLOW}--no-push${S_RESET}          For --prep only: do not push the branch."
-  printf '%b\n' "  ${S_YELLOW}-h, --help${S_RESET}         Show help."
+  printf '%b\n' "  ${S_YELLOW}--tag TAG${S_RESET}             Version or full ${TAG_PREFIX}-vX.Y.Z tag."
+  printf '%b\n' "  ${S_YELLOW}--project-dir DIR${S_RESET}     Project directory, default this helper's directory."
+  printf '%b\n' "  ${S_YELLOW}--main-branch BRANCH${S_RESET}  Default branch, default ${MAIN_BRANCH}."
+  printf '%b\n' "  ${S_YELLOW}--tag-prefix PREFIX${S_RESET}   Release tag prefix, default ${TAG_PREFIX}."
+  printf '%b\n' "  ${S_YELLOW}--changelog FILE${S_RESET}      Changelog path, default ${CHANGELOG_FILE}."
+  printf '%b\n' "  ${S_YELLOW}--image-name IMAGE${S_RESET}    Verify mode: image repository without tag."
+  printf '%b\n' "  ${S_YELLOW}--no-push${S_RESET}             Prep only: do not push the branch."
+  printf '%b\n' "  ${S_YELLOW}-h, --help${S_RESET}            Show help."
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Examples:${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./publish-image.sh --prep 0.1.0${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./publish-image.sh --publish 0.1.0${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./publish-image.sh --mode prep --tag 0.1.0${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./publish-image.sh --mode publish --tag 0.1.0${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./publish-image.sh --mode verify --tag 0.1.0 --image-name registry.example.com/org/app${S_RESET}"
 }
 
 require_cmd() {
@@ -73,7 +83,7 @@ ensure_repo_ready() {
   require_cmd "git"
   require_cmd "python3"
   if [[ ! -f "${CHANGELOG_FILE}" ]]; then
-    log_error "Missing ${CHANGELOG_FILE} in ${SCRIPT_DIR}"
+    log_error "Missing changelog: ${CHANGELOG_FILE}"
     exit 1
   fi
 }
@@ -310,8 +320,8 @@ prep_release() {
   local branch="$3"
   local release_branch=""
 
-  ensure_release_source_ready "${branch}" "prep"
   ensure_tag_absent "${tag}"
+  ensure_release_source_ready "${branch}" "prep"
   release_branch="$(release_branch_name "${tag}")"
   ensure_release_branch_absent "${release_branch}"
   git switch -c "${release_branch}"
@@ -348,8 +358,9 @@ ensure_tag_absent() {
   fi
 }
 
-create_and_push_tag() {
+publish_tag() {
   local tag="$1"
+  ensure_clean_worktree
   ensure_release_section_ready "${tag}"
   ensure_tag_absent "${tag}"
   git tag -a "${tag}" -m "Release ${tag}"
@@ -358,26 +369,41 @@ create_and_push_tag() {
   log_success "Image workflow will run from this tag push."
 }
 
+verify_image() {
+  local image_name="$1"
+  local version="$2"
+  require_cmd "docker"
+  if [[ -z "${image_name}" ]]; then
+    log_error "--image-name is required for verify mode."
+    exit 1
+  fi
+  docker buildx imagetools inspect "${image_name}:${version}" >/dev/null
+  log_success "Verified image tag: ${image_name}:${version}"
+}
+
 main() {
   init_output_style
-  ensure_repo_ready
 
   local mode=""
-  local raw_version=""
+  local raw_tag=""
+  local tag_prefix="${TAG_PREFIX}"
+  local project_dir="${SCRIPT_DIR}"
+  local main_branch="${MAIN_BRANCH}"
+  local changelog="${CHANGELOG_FILE}"
+  local image_name="${IMAGE_NAME}"
   local no_push=0
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --prep|--publish)
-        if [[ -n "${mode}" ]]; then
-          log_error "Choose only one mode: --prep or --publish."
-          exit 1
-        fi
-        mode="${1#--}"
-        shift
-        ;;
+      --mode) mode="${2:-}"; shift 2 ;;
+      --tag) raw_tag="${2:-}"; shift 2 ;;
+      --tag-prefix) tag_prefix="${2:-}"; shift 2 ;;
+      --project-dir) project_dir="${2:-}"; shift 2 ;;
+      --main-branch) main_branch="${2:-}"; shift 2 ;;
+      --changelog) changelog="${2:-}"; shift 2 ;;
+      --image-name) image_name="${2:-}"; shift 2 ;;
       --allow-non-main)
-        log_error "--allow-non-main is not supported; publish must run from the clean synced ${MAIN_BRANCH} branch."
+        log_error "--allow-non-main is not supported; image publish must run from the clean synced default branch."
         exit 1
         ;;
       --no-push)
@@ -398,29 +424,54 @@ main() {
         exit 1
         ;;
       *)
-        if [[ -n "${raw_version}" ]]; then
-          log_error "Unexpected extra argument: $1"
-          show_usage >&2
-          exit 1
-        fi
-        raw_version="$1"
-        shift
+        log_error "Unexpected argument: $1"
+        show_usage >&2
+        exit 1
         ;;
     esac
   done
 
-  if [[ -z "${mode}" || -z "${raw_version}" ]]; then
+  local missing_required=()
+  [[ -n "${mode}" ]] || missing_required+=("--mode")
+  [[ -n "${raw_tag}" ]] || missing_required+=("--tag")
+  if ((${#missing_required[@]} > 0)); then
+    log_error "Missing required option(s): ${missing_required[*]}"
+    if [[ " ${missing_required[*]} " == *" --tag "* ]]; then
+      log_note "Provide an explicit release version/tag; do not infer it from latest tags, branch names, or changelog text."
+    fi
     show_usage >&2
     exit 1
   fi
 
+  case "${mode}" in
+    prep|publish|verify) ;;
+    *)
+      log_error "--mode must be prep, publish, or verify."
+      show_usage >&2
+      exit 1
+      ;;
+  esac
+
   if [[ "${mode}" != "prep" && "${no_push}" -eq 1 ]]; then
-    log_error "--no-push is only valid with --prep."
+    log_error "--no-push is only valid with --mode prep."
     exit 1
   fi
 
+  TAG_PREFIX="${tag_prefix}"
+  MAIN_BRANCH="${main_branch}"
+  CHANGELOG_FILE="${changelog#./}"
+  IMAGE_NAME="${image_name}"
+
   local tag=""
-  tag="$(normalize_tag "${raw_version}")"
+  tag="$(normalize_tag "${raw_tag}")"
+
+  if [[ "${mode}" == "verify" ]]; then
+    verify_image "${IMAGE_NAME}" "${tag##*-v}"
+    return 0
+  fi
+
+  cd "${project_dir}"
+  ensure_repo_ready
 
   local branch=""
   branch="$(git rev-parse --abbrev-ref HEAD)"
@@ -430,8 +481,12 @@ main() {
       prep_release "${tag}" "$(( 1 - no_push ))" "${branch}"
       ;;
     publish)
+      ensure_tag_absent "${tag}"
       ensure_release_source_ready "${branch}" "publish"
-      create_and_push_tag "${tag}"
+      publish_tag "${tag}"
+      ;;
+    verify)
+      verify_image "${IMAGE_NAME}" "${tag##*-v}"
       ;;
     *)
       log_error "Invalid mode: ${mode}"

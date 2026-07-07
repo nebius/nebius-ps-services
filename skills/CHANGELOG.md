@@ -6,6 +6,11 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Added
 
+- Added hook file provenance to `install-skills.sh` hook payload sync so
+  source-owned unmodified hook files can auto-upgrade safely, plus
+  `--overwrite-hook-files <name[,name...]>` for intentional basename-scoped
+  hook payload replacement with backups under
+  `$CODEX_HOME/.install-hooks-state/backups/`.
 - Added the `agent-nebius-auth` setup-only skill for bootstrapping and
   repairing Codex Agent Nebius service-account authentication, including an
   idempotent setup script and a `PreToolUse` hook that injects short-lived
@@ -140,6 +145,12 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Aligned `publish-helm`, `publish-image`, and `publish-release` project-local
+  shell helper templates with their canonical doer scripts: generated helpers
+  now use `--mode prep|publish|verify`, require explicit `--tag`, reject the
+  old `--prep`/`--publish` interface, keep setup defaults overridable by flags,
+  include artifact-specific verify modes, and check duplicate release tags before
+  the branch-sync fetch can alter local tag refs.
 - Hardened `publish-release`, `publish-image`, and `publish-helm` so release
   prep and publish phases must start from a clean, synced default branch; prep
   now creates and pushes `release/<tag>` from that branch, and the old

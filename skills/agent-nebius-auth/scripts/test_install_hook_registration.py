@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -63,6 +64,35 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
     def installed_hook_path(self) -> Path:
         return self.codex_home / "hooks" / "pre_tool_use_nebius_auth.py"
 
+    def installed_hook_target(self, relative_path: str) -> Path:
+        return self.codex_home / "hooks" / relative_path
+
+    def hook_provenance_path(self) -> Path:
+        return self.codex_home / ".install-hooks-state" / "hook-files.tsv"
+
+    def hook_provenance(self) -> dict[str, dict[str, str]]:
+        entries: dict[str, dict[str, str]] = {}
+        for line in self.hook_provenance_path().read_text(encoding="utf-8").splitlines():
+            dest_rel, source_id, source_rel, source_sha, target_sha = line.split("\t")
+            entries[dest_rel] = {
+                "source_id": source_id,
+                "source_rel": source_rel,
+                "source_sha": source_sha,
+                "target_sha": target_sha,
+            }
+        return entries
+
+    def file_sha256(self, path: Path) -> str:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def make_hook_source(self, files: dict[str, str]) -> Path:
+        hook_source = self.root / f"hook-source-{len(list(self.root.glob('hook-source-*')))}"
+        for relative_path, content in files.items():
+            target = hook_source / relative_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+        return hook_source
+
     def hook_registrations(self) -> list[dict[str, str]]:
         hooks = json.loads((self.codex_home / "hooks.json").read_text(encoding="utf-8"))
         return [
@@ -95,6 +125,26 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
                 str(self.installer),
                 "--install-hooks",
                 HOOK_SOURCE,
+            ],
+            cwd=str(self.repo_root),
+            env=self.env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    def run_custom_hook_installer(
+        self,
+        hook_source: Path,
+        *extra_args: str,
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                "bash",
+                str(self.installer),
+                "--install-hooks",
+                str(hook_source),
+                *extra_args,
             ],
             cwd=str(self.repo_root),
             env=self.env,
@@ -267,6 +317,128 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         self.assertFalse((self.codex_home / "hooks.json").exists())
         self.assertIn("refusing to replace existing customized hook file", result.stderr)
         self.assertIn("pre_tool_use_nebius_auth.py", result.stderr)
+
+    def test_hook_install_records_file_provenance(self) -> None:
+        result = self.run_installer_copy_only()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        source_hook = self.repo_root / HOOK_SOURCE / "pre_tool_use_nebius_auth.py"
+        entries = self.hook_provenance()
+        self.assertIn("pre_tool_use_nebius_auth.py", entries)
+        entry = entries["pre_tool_use_nebius_auth.py"]
+        self.assertEqual(entry["source_id"], f"local:{(self.repo_root / HOOK_SOURCE).resolve()}")
+        self.assertEqual(entry["source_rel"], "pre_tool_use_nebius_auth.py")
+        self.assertEqual(entry["source_sha"], self.file_sha256(source_hook))
+        self.assertEqual(entry["target_sha"], self.file_sha256(self.installed_hook_path()))
+
+    def test_source_changed_unmodified_hook_auto_upgrades_from_provenance(self) -> None:
+        hook_source = self.make_hook_source({"demo.py": "print('v1')\n"})
+        first = self.run_custom_hook_installer(hook_source)
+        (hook_source / "demo.py").write_text("print('v2')\n", encoding="utf-8")
+
+        second = self.run_custom_hook_installer(hook_source)
+
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        target = self.installed_hook_target("demo.py")
+        self.assertEqual(target.read_text(encoding="utf-8"), "print('v2')\n")
+        entry = self.hook_provenance()["demo.py"]
+        self.assertEqual(entry["source_sha"], self.file_sha256(hook_source / "demo.py"))
+        self.assertEqual(entry["target_sha"], self.file_sha256(target))
+        self.assertIn("files: updated 1", second.stdout)
+
+    def test_local_hook_edit_still_refuses_after_provenance(self) -> None:
+        hook_source = self.make_hook_source({"demo.py": "print('v1')\n"})
+        first = self.run_custom_hook_installer(hook_source)
+        target = self.installed_hook_target("demo.py")
+        custom_hook = "print('local edit')\n"
+        target.write_text(custom_hook, encoding="utf-8")
+
+        second = self.run_custom_hook_installer(hook_source)
+
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.assertNotEqual(second.returncode, 0, second.stdout + second.stderr)
+        self.assertEqual(target.read_text(encoding="utf-8"), custom_hook)
+        self.assertIn("refusing to replace existing customized hook file", second.stderr)
+        self.assertIn("--overwrite-hook-files demo.py", second.stderr)
+
+    def test_overwrite_hook_files_replaces_custom_hook_with_backup(self) -> None:
+        hook_source = self.make_hook_source({"demo.py": "print('v1')\n"})
+        first = self.run_custom_hook_installer(hook_source)
+        target = self.installed_hook_target("demo.py")
+        custom_hook = "print('local edit')\n"
+        target.write_text(custom_hook, encoding="utf-8")
+        (hook_source / "demo.py").write_text("print('v2')\n", encoding="utf-8")
+
+        second = self.run_custom_hook_installer(
+            hook_source,
+            "--overwrite-hook-files",
+            "demo.py",
+        )
+
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        self.assertEqual(target.read_text(encoding="utf-8"), "print('v2')\n")
+        backups = list((self.codex_home / ".install-hooks-state" / "backups").glob("*/demo.py"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].read_text(encoding="utf-8"), custom_hook)
+        entry = self.hook_provenance()["demo.py"]
+        self.assertEqual(entry["source_sha"], self.file_sha256(hook_source / "demo.py"))
+        self.assertEqual(entry["target_sha"], self.file_sha256(target))
+
+    def test_overwrite_hook_files_unknown_basename_fails_before_mutation(self) -> None:
+        hook_source = self.make_hook_source({"demo.py": "print('v1')\n"})
+
+        result = self.run_custom_hook_installer(
+            hook_source,
+            "--overwrite-hook-files",
+            "missing.py",
+        )
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(self.installed_hook_target("demo.py").exists())
+        self.assertFalse(self.hook_provenance_path().exists())
+        self.assertIn("not present in selected source: missing.py", result.stderr)
+
+    def test_overwrite_hook_files_duplicate_basename_fails_before_mutation(self) -> None:
+        hook_source = self.make_hook_source(
+            {
+                "one/duplicate.py": "print('same')\n",
+                "two/duplicate.py": "print('same')\n",
+            }
+        )
+
+        result = self.run_custom_hook_installer(
+            hook_source,
+            "--overwrite-hook-files",
+            "duplicate.py",
+        )
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(self.installed_hook_target("one/duplicate.py").exists())
+        self.assertFalse(self.installed_hook_target("two/duplicate.py").exists())
+        self.assertIn("duplicate basename: duplicate.py", result.stderr)
+
+    def test_overwrite_hook_files_requires_hook_install_mode(self) -> None:
+        result = subprocess.run(
+            [
+                "bash",
+                str(self.installer),
+                "--overwrite-hook-files",
+                "demo.py",
+            ],
+            cwd=str(self.repo_root),
+            env=self.env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(
+            "--overwrite-hook-files must be combined with --install-hooks or --install-all-hooks",
+            result.stderr,
+        )
 
     def test_repeated_install_all_hooks_reports_unchanged_by_source(self) -> None:
         first = self.run_all_hooks_installer()

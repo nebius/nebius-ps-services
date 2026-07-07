@@ -109,8 +109,10 @@ Use setup mode when the chart does not already have a release flow:
 - `assets/CHANGELOG.md.template`
 - `assets/publish-helm.sh.template`
 
-The project-local helper script is optional after this refactor. The skill-owned
-`scripts/publish-helm-doer.sh` remains the canonical doer path.
+The project-local helper script is optional, but it is a maintained runnable
+helper template, not a documentation stub. Keep it behaviorally aligned with
+the skill-owned `scripts/publish-helm-doer.sh`, which remains the canonical
+doer path.
 
 ## Guardrails
 

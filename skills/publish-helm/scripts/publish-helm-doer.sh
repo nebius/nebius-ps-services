@@ -435,8 +435,8 @@ prep_release() {
   local charts_staged=""
   local release_branch=""
   local staged_paths=("${changelog}" "${chart_file}")
-  ensure_release_source_ready "${branch}" "${main_branch}" "prep"
   ensure_tag_absent "${tag}"
+  ensure_release_source_ready "${branch}" "${main_branch}" "prep"
   release_branch="$(release_branch_name "${tag}")"
   ensure_release_branch_absent "${release_branch}"
   git switch -c "${release_branch}"
@@ -588,6 +588,7 @@ main() {
       prep_release "${tag}" "${version}" "${chart_dir}" "${chart_name}" "${changelog}" "$((1 - no_push))" "${branch}" "${main_branch}"
       ;;
     publish)
+      ensure_tag_absent "${tag}"
       ensure_release_source_ready "${branch}" "${main_branch}" "publish"
       publish_tag "${tag}" "${version}" "${chart_dir}/Chart.yaml" "${changelog}"
       ;;

@@ -8,6 +8,7 @@ TAG_PREFIX="__PROJECT_TAG_PREFIX__"
 PACKAGE_IMPORT_NAME="__PACKAGE_IMPORT_NAME__"
 MAIN_BRANCH="__MAIN_BRANCH__"
 CHANGELOG_FILE="CHANGELOG.md"
+ASSET_GLOB="__ASSET_GLOB__"
 
 S_RESET=""
 S_BOLD=""
@@ -43,24 +44,34 @@ log_success() {
 
 show_usage() {
   printf '%b\n' "${S_BOLD}Usage:${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./publish-release.sh${S_RESET} ${S_DIM}--prep X.Y.Z [--no-push]${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./publish-release.sh${S_RESET} ${S_DIM}--publish X.Y.Z${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./publish-release.sh${S_RESET} ${S_DIM}--mode prep --tag X.Y.Z [options]${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./publish-release.sh${S_RESET} ${S_DIM}--mode publish --tag X.Y.Z [options]${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./publish-release.sh${S_RESET} ${S_DIM}--mode verify --tag X.Y.Z --asset-glob 'dist/*.whl' [options]${S_RESET}"
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Modes:${S_RESET}"
-  printf '%b\n' "  ${S_YELLOW}--prep${S_RESET}     Require clean synced ${MAIN_BRANCH}, create release/${TAG_PREFIX}-vX.Y.Z, update ${CHANGELOG_FILE}, commit it, and push the release branch."
-  printf '%b\n' "                 Fails if tag ${TAG_PREFIX}-vX.Y.Z already exists locally or on origin."
-  printf '%b\n' "  ${S_YELLOW}--publish${S_RESET}  Create and push tag ${TAG_PREFIX}-vX.Y.Z."
+  printf '%b\n' "  ${S_YELLOW}prep${S_RESET}      Require clean synced default branch, create release/<tag>, update the changelog, commit it, and push the release branch."
+  printf '%b\n' "                 Fails if the tag already exists locally or on origin."
+  printf '%b\n' "  ${S_YELLOW}publish${S_RESET}   Verify runtime version when configured, then create and push the annotated release tag."
+  printf '%b\n' "  ${S_YELLOW}verify${S_RESET}    Verify a built wheel artifact version with --asset-glob."
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Options:${S_RESET}"
-  printf '%b\n' "  ${S_YELLOW}--no-push${S_RESET}          For --prep only: do not push the branch."
-  printf '%b\n' "  ${S_YELLOW}-h, --help${S_RESET}         Show help."
+  printf '%b\n' "  ${S_YELLOW}--tag TAG${S_RESET}                  Version or full ${TAG_PREFIX}-vX.Y.Z tag."
+  printf '%b\n' "  ${S_YELLOW}--project-dir DIR${S_RESET}          Project directory, default this helper's directory."
+  printf '%b\n' "  ${S_YELLOW}--main-branch BRANCH${S_RESET}       Default branch, default ${MAIN_BRANCH}."
+  printf '%b\n' "  ${S_YELLOW}--tag-prefix PREFIX${S_RESET}        Release tag prefix, default ${TAG_PREFIX}."
+  printf '%b\n' "  ${S_YELLOW}--changelog FILE${S_RESET}           Changelog path, default ${CHANGELOG_FILE}."
+  printf '%b\n' "  ${S_YELLOW}--package-import-name NAME${S_RESET} Publish mode: import and verify NAME.__version__."
+  printf '%b\n' "  ${S_YELLOW}--asset-glob GLOB${S_RESET}          Verify mode: wheel glob to verify against release version."
+  printf '%b\n' "  ${S_YELLOW}--no-push${S_RESET}                  Prep only: do not push the branch."
+  printf '%b\n' "  ${S_YELLOW}-h, --help${S_RESET}                 Show help."
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Examples:${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./publish-release.sh --prep 0.1.0${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./publish-release.sh --publish 0.1.0${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./publish-release.sh --mode prep --tag 0.1.0${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./publish-release.sh --mode publish --tag 0.1.0${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./publish-release.sh --mode verify --tag 0.1.0 --asset-glob 'dist/*.whl'${S_RESET}"
 }
 
 require_cmd() {
@@ -75,7 +86,7 @@ ensure_repo_ready() {
   require_cmd "git"
   require_cmd "python3"
   if [[ ! -f "${CHANGELOG_FILE}" ]]; then
-    log_error "Missing ${CHANGELOG_FILE} in ${SCRIPT_DIR}"
+    log_error "Missing changelog: ${CHANGELOG_FILE}"
     exit 1
   fi
 }
@@ -183,7 +194,7 @@ ensure_branch_synced() {
   fi
 }
 
-ensure_release_heading_present() {
+ensure_release_section_ready() {
   local tag="$1"
 
   python3 - "${tag}" "${CHANGELOG_FILE}" <<'PY'
@@ -313,8 +324,8 @@ prep_release() {
   local branch="$3"
   local release_branch=""
 
-  ensure_release_source_ready "${branch}" "prep"
   ensure_tag_absent "${tag}"
+  ensure_release_source_ready "${branch}" "prep"
   release_branch="$(release_branch_name "${tag}")"
   ensure_release_branch_absent "${release_branch}"
   git switch -c "${release_branch}"
@@ -350,14 +361,15 @@ ensure_tag_absent() {
   fi
 }
 
-verify_runtime_version_matches_tag() {
-  local tag="$1"
-  local expected_version="${tag##*-v}"
+verify_runtime_version() {
+  local package_import_name="$1"
+  local expected_version="$2"
   local resolved_version=""
+  [[ -n "${package_import_name}" ]] || return 0
 
-  log_note "Verifying runtime version resolves to ${expected_version} on the local tag..."
+  log_note "Verifying runtime version resolves to ${expected_version} before tagging..."
   if ! resolved_version="$(
-    PYTHONPATH="${SCRIPT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}" python3 - "${expected_version}" "${PACKAGE_IMPORT_NAME}" <<'PY'
+    PYTHONPATH="src${PYTHONPATH:+:${PYTHONPATH}}" python3 - "${expected_version}" "${package_import_name}" <<'PY'
 import importlib
 import sys
 
@@ -374,18 +386,56 @@ print(resolved, end="")
 PY
   )"; then
     log_error \
-      "Runtime version mismatch after tagging. Source checkout resolved to '${resolved_version:-unknown}' instead of '${expected_version}'."
+      "Runtime version mismatch before tagging. Source checkout resolved to '${resolved_version:-unknown}' instead of '${expected_version}'."
     exit 1
   fi
   log_success "Runtime version resolved to ${resolved_version}."
 }
 
-create_and_push_tag() {
+verify_artifact_version() {
+  local asset_glob="$1"
+  local expected_version="$2"
+  [[ -n "${asset_glob}" ]] || return 0
+  require_cmd "python3"
+  local asset=""
+  local assets=()
+
+  while IFS= read -r asset; do
+    assets+=("${asset}")
+  done < <(compgen -G "${asset_glob}" | sort)
+
+  if [[ "${#assets[@]}" -eq 0 ]]; then
+    log_error "No release asset found with glob ${asset_glob}"
+    exit 1
+  fi
+
+  asset="${assets[0]}"
+  python3 - "${asset}" "${expected_version}" <<'PY'
+import sys
+import zipfile
+from email import message_from_bytes
+
+asset, expected = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(asset) as zf:
+    metadata_names = [name for name in zf.namelist() if name.endswith("METADATA")]
+    if not metadata_names:
+        raise SystemExit(f"No METADATA found in {asset}")
+    metadata = message_from_bytes(zf.read(metadata_names[0]))
+    actual = metadata.get("Version", "")
+if actual != expected:
+    raise SystemExit(f"Artifact {asset} has version {actual!r}, expected {expected!r}")
+PY
+  log_success "Verified artifact version for ${asset}."
+}
+
+publish_tag() {
   local tag="$1"
-  ensure_release_heading_present "${tag}"
+  local version="${tag##*-v}"
+  ensure_clean_worktree
+  ensure_release_section_ready "${tag}"
   ensure_tag_absent "${tag}"
+  verify_runtime_version "${PACKAGE_IMPORT_NAME}" "${version}"
   git tag -a "${tag}" -m "Release ${tag}"
-  verify_runtime_version_matches_tag "${tag}"
   git push origin "refs/tags/${tag}"
   log_success "Tag pushed: ${tag}"
   log_success "Release workflow will run from this tag push."
@@ -393,24 +443,29 @@ create_and_push_tag() {
 
 main() {
   init_output_style
-  ensure_repo_ready
 
   local mode=""
-  local raw_version=""
+  local raw_tag=""
+  local tag_prefix="${TAG_PREFIX}"
+  local project_dir="${SCRIPT_DIR}"
+  local main_branch="${MAIN_BRANCH}"
+  local changelog="${CHANGELOG_FILE}"
+  local package_import_name="${PACKAGE_IMPORT_NAME}"
+  local asset_glob="${ASSET_GLOB}"
   local no_push=0
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --prep|--publish)
-        if [[ -n "${mode}" ]]; then
-          log_error "Choose only one mode: --prep or --publish."
-          exit 1
-        fi
-        mode="${1#--}"
-        shift
-        ;;
+      --mode) mode="${2:-}"; shift 2 ;;
+      --tag) raw_tag="${2:-}"; shift 2 ;;
+      --tag-prefix) tag_prefix="${2:-}"; shift 2 ;;
+      --project-dir) project_dir="${2:-}"; shift 2 ;;
+      --main-branch) main_branch="${2:-}"; shift 2 ;;
+      --changelog) changelog="${2:-}"; shift 2 ;;
+      --package-import-name) package_import_name="${2:-}"; shift 2 ;;
+      --asset-glob) asset_glob="${2:-}"; shift 2 ;;
       --allow-non-main)
-        log_error "--allow-non-main is not supported; publish must run from the clean synced ${MAIN_BRANCH} branch."
+        log_error "--allow-non-main is not supported; release publish must run from the clean synced default branch."
         exit 1
         ;;
       --no-push)
@@ -431,29 +486,56 @@ main() {
         exit 1
         ;;
       *)
-        if [[ -n "${raw_version}" ]]; then
-          log_error "Unexpected extra argument: $1"
-          show_usage >&2
-          exit 1
-        fi
-        raw_version="$1"
-        shift
+        log_error "Unexpected argument: $1"
+        show_usage >&2
+        exit 1
         ;;
     esac
   done
 
-  if [[ -z "${mode}" || -z "${raw_version}" ]]; then
+  local missing_required=()
+  [[ -n "${mode}" ]] || missing_required+=("--mode")
+  [[ -n "${raw_tag}" ]] || missing_required+=("--tag")
+  if ((${#missing_required[@]} > 0)); then
+    log_error "Missing required option(s): ${missing_required[*]}"
+    if [[ " ${missing_required[*]} " == *" --tag "* ]]; then
+      log_note "Provide an explicit release version/tag; do not infer it from latest tags, branch names, or changelog text."
+    fi
     show_usage >&2
     exit 1
   fi
 
+  case "${mode}" in
+    prep|publish|verify) ;;
+    *)
+      log_error "--mode must be prep, publish, or verify."
+      show_usage >&2
+      exit 1
+      ;;
+  esac
+
   if [[ "${mode}" != "prep" && "${no_push}" -eq 1 ]]; then
-    log_error "--no-push is only valid with --prep."
+    log_error "--no-push is only valid with --mode prep."
     exit 1
   fi
 
+  TAG_PREFIX="${tag_prefix}"
+  MAIN_BRANCH="${main_branch}"
+  CHANGELOG_FILE="${changelog#./}"
+  PACKAGE_IMPORT_NAME="${package_import_name}"
+  ASSET_GLOB="${asset_glob}"
+
   local tag=""
-  tag="$(normalize_tag "${raw_version}")"
+  tag="$(normalize_tag "${raw_tag}")"
+
+  cd "${project_dir}"
+
+  if [[ "${mode}" == "verify" ]]; then
+    verify_artifact_version "${ASSET_GLOB}" "${tag##*-v}"
+    return 0
+  fi
+
+  ensure_repo_ready
 
   local branch=""
   branch="$(git rev-parse --abbrev-ref HEAD)"
@@ -463,8 +545,12 @@ main() {
       prep_release "${tag}" "$(( 1 - no_push ))" "${branch}"
       ;;
     publish)
+      ensure_tag_absent "${tag}"
       ensure_release_source_ready "${branch}" "publish"
-      create_and_push_tag "${tag}"
+      publish_tag "${tag}"
+      ;;
+    verify)
+      verify_artifact_version "${ASSET_GLOB}" "${tag##*-v}"
       ;;
     *)
       log_error "Invalid mode: ${mode}"

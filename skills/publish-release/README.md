@@ -42,7 +42,9 @@ GitHub Release with assets
 
 ## Core Concepts
 
-- Doer mode does not depend on a project-local `publish-release.sh`.
+- Doer mode does not depend on a project-local `publish-release.sh`, but the
+  setup template is a maintained runnable helper and should keep the same
+  `--mode prep|publish|verify` contract as the skill-owned doer.
 - The default branch is the release source of truth. If work is still on a
   feature branch, merge that branch to the default branch before prep or
   publish.

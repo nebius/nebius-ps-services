@@ -355,8 +355,8 @@ prep_release() {
   local branch="$4"
   local main_branch="$5"
   local release_branch=""
-  ensure_release_source_ready "${branch}" "${main_branch}" "prep"
   ensure_tag_absent "${tag}"
+  ensure_release_source_ready "${branch}" "${main_branch}" "prep"
   release_branch="$(release_branch_name "${tag}")"
   ensure_release_branch_absent "${release_branch}"
   git switch -c "${release_branch}"
@@ -437,6 +437,7 @@ main() {
       prep_release "${tag}" "${changelog}" "$((1 - no_push))" "${branch}" "${main_branch}"
       ;;
     publish)
+      ensure_tag_absent "${tag}"
       ensure_release_source_ready "${branch}" "${main_branch}" "publish"
       publish_tag "${tag}" "${changelog}" "${package_import_name}" "${version}"
       ;;

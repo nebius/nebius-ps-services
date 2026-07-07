@@ -82,8 +82,10 @@ Use setup mode when the project does not already have a release flow:
 - `assets/publish-image.sh.template`
 - `assets/project-name-image-publish.yml.template`
 
-The project-local helper script is optional after this refactor. The skill-owned
-`scripts/publish-image-doer.sh` remains the canonical doer path.
+The project-local helper script is optional, but it is a maintained runnable
+helper template, not a documentation stub. Keep it behaviorally aligned with
+the skill-owned `scripts/publish-image-doer.sh`, which remains the canonical
+doer path.
 
 ## Guardrails
 
