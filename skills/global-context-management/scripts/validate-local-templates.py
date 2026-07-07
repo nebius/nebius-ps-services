@@ -23,7 +23,7 @@ import tomllib
 ROOT_MARKERS = ("SKILL.md", "assets", "references")
 SENTINEL_MARKER = "PROMPT_CONTENT_SENTINEL_DO_NOT_PERSIST"
 STATE_REUSE_MARKER = "TASK_STATE_REUSE_SENTINEL_KEEP_FOR_AGENT_READ"
-RELATED_STATE_SECRET_MARKER = "RELATED_STATE_SECRET_SENTINEL_DO_NOT_INJECT"
+RELATED_STATE_CONTENT_MARKER = "RELATED_STATE_CONTENT_SENTINEL_DO_NOT_INJECT"
 
 
 def skill_dir() -> Path:
@@ -615,7 +615,7 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
             "# Current Codex task state\n\n"
             "## Objective\n\n"
             "- Review hooks and task-state discovery.\n"
-            f"- Private detail: {RELATED_STATE_SECRET_MARKER}\n"
+            f"- Related content marker: {RELATED_STATE_CONTENT_MARKER}\n"
         ),
         encoding="utf-8",
     )
@@ -717,7 +717,7 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
     for unrelated_state in (unrelated_same_workspace, unrelated_workspace):
         if str(unrelated_state) in context:
             raise AssertionError(f"unrelated task-state path leaked: {unrelated_state}")
-    if RELATED_STATE_SECRET_MARKER in context:
+    if RELATED_STATE_CONTENT_MARKER in context:
         raise AssertionError("hook injected related task-state contents")
     if len(context) > 1300:
         raise AssertionError("non-delegated UserPromptSubmit context is too large")
@@ -839,7 +839,7 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
     assert_agent_delegation_context(delegated_context)
     if SENTINEL_MARKER in delegated_context:
         raise AssertionError("hook echoed prompt content into delegated model context")
-    if RELATED_STATE_SECRET_MARKER in delegated_context:
+    if RELATED_STATE_CONTENT_MARKER in delegated_context:
         raise AssertionError("hook injected related task-state contents with delegation")
     assert_no_prompt_leak(state_file)
 

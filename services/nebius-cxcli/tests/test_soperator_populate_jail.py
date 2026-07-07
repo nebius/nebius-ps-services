@@ -84,12 +84,15 @@ class _PopulateJailRunner:
                 0,
                 json.dumps(
                     {
-                            "metadata": {"name": command[-3], "uid": "new-job"},
+                        "metadata": {"name": command[-3], "uid": "new-job"},
                         "spec": {
                             "template": {
                                 "spec": {
                                     "containers": [
-                                        {"name": "populate-jail", "image": "repo/populate-jail:target"}
+                                        {
+                                            "name": "populate-jail",
+                                            "image": "repo/populate-jail:target",
+                                        }
                                     ]
                                 }
                             }
@@ -133,7 +136,15 @@ class _PopulateJailRunner:
                     }
                 ),
             )
-        if "endpointslices.discovery.k8s.io" in command:
+        endpoint_slice_command = (
+            "get",
+            "endpointslices.discovery.k8s.io",
+            "-l",
+            "kubernetes.io/service-name=login",
+            "-o",
+            "json",
+        )
+        if command[-len(endpoint_slice_command) :] == endpoint_slice_command:
             return _CommandResult(
                 0,
                 json.dumps(
@@ -266,9 +277,7 @@ def test_active_passive_slot_selection_and_switch_values() -> None:
                 "name": "worker",
                 "slurmd": {
                     "volumes": {
-                        "jail": {
-                            "persistentVolumeClaim": {"claimName": "jail-rootfs-slot-a-pvc"}
-                        }
+                        "jail": {"persistentVolumeClaim": {"claimName": "jail-rootfs-slot-a-pvc"}}
                     }
                 },
             }
@@ -294,9 +303,10 @@ def test_active_passive_slot_selection_and_switch_values() -> None:
     assert switched["slurmNodes"]["login"]["volumes"]["jail"]["volumeSourceName"] == (
         "jail-rootfs-slot-b"
     )
-    assert switched["nodesets"][0]["slurmd"]["volumes"]["jail"]["persistentVolumeClaim"][
-        "claimName"
-    ] == "jail-rootfs-slot-b-pvc"
+    assert (
+        switched["nodesets"][0]["slurmd"]["volumes"]["jail"]["persistentVolumeClaim"]["claimName"]
+        == "jail-rootfs-slot-b-pvc"
+    )
     volume_sources = {item["name"]: item for item in switched["volumeSources"]}
     assert set(volume_sources) == {"controller-spool", "jail"}
     assert volume_sources["controller-spool"]["persistentVolumeClaim"]["claimName"] == (
@@ -454,8 +464,7 @@ def test_login_service_rollout_guard_returns_ready_statefulset() -> None:
 
     assert result == {"service_names": ["login"], "ready_endpoints": 1}
     assert any(
-        call[-4:] == ("statefulsets.apps.kruise.io", "login", "-o", "json")
-        for call in runner.calls
+        call[-4:] == ("statefulsets.apps.kruise.io", "login", "-o", "json") for call in runner.calls
     )
     assert not any(call[-4:] == ("statefulset", "login", "-o", "json") for call in runner.calls)
 
