@@ -142,6 +142,25 @@ def test_apply_managed_persistent_mount_values_uses_same_store_home() -> None:
     assert values["jailPersistentMounts"] == [
         {"mountPath": "/home", "localPath": "/mnt/jail-store/shared/home"}
     ]
+    assert values["volume"]["jail"]["localPath"] == "/mnt/jail-store"
+
+
+def test_apply_managed_first_adoption_adds_customer_shared_paths() -> None:
+    values = apply_jail_persistent_mount_values(
+        {},
+        target_ref="cxcli-slurm",
+        layout="managed",
+        include_default_shared_mounts=True,
+        legacy_active_source=True,
+    )
+
+    assert values["jailPersistentMounts"] == [
+        {"mountPath": "/home", "localPath": "/mnt/jail-store/shared/home"},
+        {"mountPath": "/data", "localPath": "/mnt/jail-store/shared/data"},
+        {"mountPath": "/scripts", "localPath": "/mnt/jail-store/shared/scripts"},
+        {"mountPath": "/models", "localPath": "/mnt/jail-store/shared/models"},
+    ]
+    assert values["jailRootfs"]["adoption"]["activeSource"] == "legacy-rootfs"
 
 
 def test_parse_explicit_persistent_mount_spec() -> None:

@@ -205,10 +205,12 @@ documents.
 `global-context-management` defines the task workflow after hooks inject the
 state path. It tells Codex when to read and update task state, how to avoid
 parent-thread noise, when to use read-only subagents if delegation is
-authorized by the prompt or a user-enabled local hook policy and the current
-runtime permits it, and how to validate and review risk. Once delegation is
-authorized, Codex should dynamically choose and spawn targeted helper roles
-when useful; the prompt does not need to name a specific role.
+authorized by the current prompt or a user-enabled local hook policy request
+and the current runtime permits it, and how to validate and review risk. Once
+delegation is authorized, Codex should dynamically choose and spawn targeted
+helper roles when useful; the prompt does not need to name a specific role, and
+the parent agent should not ask for another user prompt only because the
+original prompt did not mention subagents.
 
 ### Custom Agents Are Read-Only Helpers
 
@@ -250,14 +252,16 @@ Custom agents require the `multi_agent` feature, the configured `[agents.*]`
 roles, a restarted Codex session, and a surface that exposes subagent tools.
 They may not appear as separate user-visible controls in every surface. In
 current Codex surfaces, this setup makes subagent tools available but does not
-make hooks call subagent tools directly. Prompts that need subagents can
-explicitly say to use or spawn subagents, use delegation, or run parallel
-agents. For automatic behavior from the user's perspective, the private local
-hook policy injects that explicit bounded delegation request for each complex
-prompt. After either source authorizes delegation, Codex should dynamically
-choose and spawn the useful targeted role instead of waiting for the prompt to
-name one. The policy file keeps that opt-in local without hardcoding agent
-names in the public repo:
+make hooks call subagent tools directly. Prompts that need subagents can ask
+Codex to use or spawn subagents, use delegation, or run parallel agents. For
+automatic behavior from the user's perspective, the private local hook policy
+injects a bounded read-only delegation request for each complex prompt. Treat
+that policy request as sufficient authorization when the active runtime and
+instructions accept hook context. After either source authorizes delegation,
+Codex should dynamically choose and spawn the useful targeted role instead of
+waiting for the prompt to name one or asking for another user prompt. The
+policy file keeps that opt-in local without hardcoding agent names in the
+public repo:
 
 When delegation is authorized and useful but subagent controls are not visible,
 and `tool_search` is available, Codex should search for multi-agent/subagent

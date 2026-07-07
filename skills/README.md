@@ -42,7 +42,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `brainstorm` | Implicit allowed | Explore ideas in chat with source-ranked project, repo, skill, internal, vendor, and advisory design-skill context before implementation. |
 | `code-review` | Implicit allowed | Neutral findings-first review of local diffs, local branches, changed files, modules, repository areas, or patches for bugs, tests, reliability, maintainability, and structural simplification. |
 | `create-learning-course` | Explicit only | Create public-safe learning courses, course workspaces, syllabi, lessons, exercises, glossaries, and publication review checkpoints. |
-| `global-context-management` | Implicit allowed | Keep complex Codex tasks focused with durable task state, concise parent-thread context, targeted read-only subagents when authorized, focused validation, and final risk review. |
+| `global-context-management` | Implicit allowed | Keep complex Codex tasks focused with durable task state, concise parent-thread context, targeted read-only subagents when the prompt or local hook policy request authorizes delegation, focused validation, and final risk review. |
 | `research` | Implicit allowed | Senior-engineer technical due diligence with internal Slack/Confluence context first where relevant, MCP fallback for internal systems, vendor verification, alternatives, and recommendations. |
 
 ### Local Setup and Information
@@ -554,12 +554,13 @@ monorepo-friendly workflow structure.
 
 `global-context-management` keeps complex Codex sessions focused and
 recoverable by using durable task-state files, limiting noisy parent-thread
-exploration, delegating bounded read-only investigation when the user
-explicitly authorizes delegation or enables a local hook delegation policy and
-the runtime permits it, choosing targeted helper roles after authorization
-instead of requiring the prompt to name them, closing every spawned subagent
-handle that is completed or no longer needed before finalizing when close
-controls are available, reporting any unavailable or failed cleanup,
+exploration, delegating bounded read-only investigation when the current prompt
+or a user-enabled local hook policy request authorizes delegation and the
+runtime permits it, choosing targeted helper roles after authorization instead
+of requiring the prompt to name them or asking for another user prompt, closing
+every spawned subagent handle that is completed or no longer needed before
+finalizing when close controls are available, reporting any unavailable or
+failed cleanup,
 and reviewing risk before final answers. Its public skill files stay generic;
 local hooks, custom agent config, and task-state files belong under
 `$CODEX_HOME`. The hook setup advertises session-scoped task-state paths

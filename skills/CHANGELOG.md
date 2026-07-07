@@ -145,6 +145,16 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Deduped and shortened `global-context-management/SKILL.md` so the runtime
+  skill load keeps one canonical task-state section and one canonical
+  delegation/lifecycle section while preserving the existing validators and
+  subagent authorization contract.
+- Relaxed `global-context-management` read-only subagent delegation wording so
+  a user-enabled local hook policy request is treated as sufficient current-turn
+  authorization when the runtime and active instructions permit delegation. The
+  parent agent should dynamically spawn useful targeted read-only helpers
+  without asking for another user prompt only because the original prompt did
+  not mention subagents.
 - Made `install-skills.sh --overwrite-hook-files` accept shell-split
   comma-and-space basename lists, for example
   `--overwrite-hook-files stop_sdlc_continue.py, test_sdlc_hooks.py`, and
@@ -574,9 +584,9 @@ All notable changes to the reusable Codex skills are tracked here.
   contracts now state the same installer-versus-runtime split.
 - Clarified that `multi_agent`, configured `[agents.*]` roles, hooks, and skill
   activation make subagent delegation possible but do not directly spawn
-  helpers. Current runtime probes must explicitly ask Codex to use or spawn
-  subagents, use delegation, or run parallel agents, or rely on a user-enabled
-  local hook policy that injects that explicit request; the `codex exec`
+  helpers. Current runtime probes can ask Codex to use or spawn subagents, use
+  delegation, or run parallel agents, or rely on a user-enabled local hook
+  policy that injects a bounded read-only delegation request; the `codex exec`
   examples now use the current `--sandbox read-only` flag instead of the
   obsolete `--ask-for-approval` option.
 - Added opt-in hook-assisted read-only subagent delegation for

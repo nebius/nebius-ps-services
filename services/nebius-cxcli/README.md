@@ -3272,14 +3272,17 @@ Important external upgrade flags:
   the refresh and prints passive-slot instructions. The refresh populates the
   passive slot, switches consumers to that slot, and keeps the previous slot for
   rollback until postflight passes.
-- `--jail-persistent-mount <mountPath>=<localPath>`: external upgrade input for
-  additional customer-owned paths that must remain outside rootfs generation
-  slots and be mounted back into every new rootfs. `/home`, `/data`, `/scripts`,
-  and `/models` are added automatically unless an existing external/customer
-  mount already owns the path. The local path must be on the same physical jail
-  SFS and outside the rootfs slots. During first adoption from a legacy rootfs,
-  approved execution migrates existing in-rootfs data for those persistent paths
-  into the shared local paths before passive rootfs population.
+- `--jail-persistent-mount <mountPath>=<localPath>`: managed and external
+  upgrade input for additional customer-owned paths that must remain outside
+  rootfs generation slots and be mounted back into every new rootfs. `/home`,
+  `/data`, `/scripts`, and `/models` are added automatically during managed or
+  external first adoption unless an existing customer-owned mount already owns
+  the path. Managed shared paths live under `/mnt/jail-store/shared/...`;
+  external shared paths live under `/mnt/jail/shared/...`. The local path must
+  be on the same physical jail SFS and outside the rootfs slots. During first
+  adoption from a legacy rootfs, approved execution migrates existing in-rootfs
+  data for those persistent paths into the shared local paths before passive
+  rootfs population.
 - `--jail-sfs-resize-policy fail|prompt|apply`: capacity-shortage behavior for
   active/passive jail rootfs refresh. The default is `prompt` for interactive
   TTY runs and `fail` for non-interactive runs. For managed `soperator upgrade`,
@@ -3346,18 +3349,19 @@ Important external upgrade flags:
   affected-job dashboard every second, locally counting down known Slurm
   `Remaining` values from `squeue`; unknown remaining time stays `unknown`, and
   cxcli polls `squeue` again on `--job-refresh-interval`.
-- `--login-session-policy target-ready|wait-active|grace-period`: external
-  upgrade login-continuity policy. `target-ready` is the default and keeps
-  source login retirement gated until the target login StatefulSet and the
-  preserved login Service have ready SSH endpoints. `wait-active` also waits for
-  active SSH sessions on old login pods to drain, and `grace-period` waits the
-  configured drain timeout after target readiness. Existing TCP SSH sessions
-  cannot be guaranteed if their backing pod or node is restarted; these policies
-  prevent premature source retirement. During first-adoption persistent mount
-  migration, cxcli must temporarily stop login writers before copying legacy
-  rootfs paths; the default `target-ready` policy stops before that login writer
-  hold, and the operator must choose `wait-active` or `grace-period` for an
-  approved maintenance window.
+- `--login-session-policy target-ready|wait-active|grace-period`: managed and
+  external upgrade login-continuity policy. `target-ready` is the default and
+  keeps ordinary active/passive slot switches gated on ready login endpoints.
+  For external source retirement, it also gates retirement until the target
+  login StatefulSet and preserved login Service have ready SSH endpoints.
+  `wait-active` also waits for active SSH sessions on old login pods to drain,
+  and `grace-period` waits the configured drain timeout after target readiness.
+  Existing TCP SSH sessions cannot be guaranteed if their backing pod or node is
+  restarted; these policies prevent premature source retirement. During
+  first-adoption persistent mount migration, cxcli must temporarily stop login
+  writers before copying legacy rootfs paths; the default `target-ready` policy
+  stops before that login writer hold, and the operator must choose
+  `wait-active` or `grace-period` for an approved maintenance window.
 - `--login-session-drain-timeout <duration>`: maximum active-session drain or
   grace wait for `wait-active` and `grace-period`. The default is `30m`.
 
@@ -3740,20 +3744,21 @@ The Jail Upgrade rootfs-refresh process is:
    compatibility cannot be proven. `force` always refreshes. `manual` stops and
    prints passive-slot instructions.
 2. cxcli verifies persistent jail mounts before any destructive overwrite.
-   External adoption automatically models `/home`, `/data`, `/scripts`, and
-   `/models` as persistent jail mounts. Other customer-owned paths, such as
-   `/checkpoints`, must be declared with `--jail-persistent-mount
-   <mountPath>=<localPath>` because cxcli does not infer arbitrary root-level
-   folders as customer data.
+   Managed and external first adoption automatically models `/home`, `/data`,
+   `/scripts`, and `/models` as persistent jail mounts. Managed targets place
+   them under `/mnt/jail-store/shared/...`; external targets place them under
+   `/mnt/jail/shared/...`. Other customer-owned paths, such as `/checkpoints`,
+   must be declared with `--jail-persistent-mount <mountPath>=<localPath>`
+   because cxcli does not infer arbitrary root-level folders as customer data.
 3. cxcli probes each known and explicit persistent source path in the old rootfs
    and records the decision as `present`, `absent`, `existing-submount`, or
-   `explicit`. It then runs a passive-slot capacity preflight. For external
-   adoption it excludes `.cxcli` and configured persistent-mount source paths
-   from the active rootfs estimate, measures present persistent-mount data
-   separately, skips absent paths cleanly, and requires enough space on the same
-   physical jail SFS for both the passive rootfs slot and the one-time
-   shared-data copy. If capacity is short, the existing jail SFS resize handler
-   runs before any copy or rootfs mutation.
+   `explicit`. It then runs a passive-slot capacity preflight. For managed and
+   external first adoption it excludes cxcli system paths and configured
+   persistent-mount source paths from the active rootfs estimate, measures
+   present persistent-mount data separately, skips absent paths cleanly, and
+   requires enough space on the same physical jail SFS for both the passive
+   rootfs slot and the one-time shared-data copy. If capacity is short, the
+   existing jail SFS resize handler runs before any copy or rootfs mutation.
 4. During first adoption from a legacy rootfs, cxcli drains Slurm with the
    selected `--job-policy`, holds worker consumers, and holds login consumers
    only after an explicit `wait-active` or `grace-period` login-session policy
@@ -3765,7 +3770,9 @@ The Jail Upgrade rootfs-refresh process is:
    explicit paths such as `/store/home`, `/store/data`, and `/store/scripts`
    into `/store/shared/home`, `/store/shared/data`, and
    `/store/shared/scripts`, and preserves ownership, permissions, symlinks,
-   ACLs, and xattrs where the runtime supports them. Completion markers live under
+   ACLs, and xattrs where the runtime supports them. On managed clusters those
+   store paths correspond to `/mnt/jail-store/...`; on external clusters they
+   correspond to `/mnt/jail/...`. Completion markers live under
    `/store/.cxcli/persistent-migrations/`; reruns skip only marked completed
    paths and fail closed on source/target overlap, top-level source symlinks,
    target symlinks, or unmarked non-empty targets.

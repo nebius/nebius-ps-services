@@ -222,9 +222,10 @@ probe shows the injected task-state path, read/update guidance, and bounded
 related prior task-state candidate hints when matching prior summaries exist.
 
 Do not claim subagent activation is proven until a fresh Codex session receives
-a prompt request or local hook policy request to use subagents and can spawn a
-read-only helper and close that helper before finalizing, or reports that
-delegation or close controls are unavailable or not permitted in that surface.
+a prompt request or a user-enabled local hook policy request to use subagents
+and can spawn a read-only helper and close that helper before finalizing, or
+reports that delegation or close controls are unavailable or not permitted in
+that surface.
 If delegation is authorized and useful but subagent controls are not visible,
 and `tool_search` is available, the fresh session should first search for
 multi-agent/subagent tools before reporting delegation unavailable. If a local
@@ -232,11 +233,13 @@ hook policy is enabled, verify it in a fresh trusted-hook session before
 claiming hook-assisted delegation works. Do not claim that hooks, skills,
 `multi_agent`, or `[agents.*]` config directly spawn or close subagents. They
 make delegation possible when the runtime policy allows it. After a prompt or
-local hook policy request authorizes delegation, the fresh session should
-dynamically choose and spawn targeted read-only helper roles itself when useful;
-before the final response, it should close every spawned helper handle that is
-completed or no longer needed when close controls are available, and report any
-unavailable or failed cleanup. The prompt does not need to name the exact role.
+user-enabled local hook policy request authorizes delegation, the fresh session
+should dynamically choose and spawn targeted read-only helper roles itself when
+useful; before the final response, it should close every spawned helper handle
+that is completed or no longer needed when close controls are available, and
+report any unavailable or failed cleanup. The prompt does not need to name the
+exact role, and the parent agent should not ask for another user prompt only
+because the original prompt did not mention subagents.
 
 ## References
 

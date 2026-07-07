@@ -9849,6 +9849,46 @@ def test_prepare_jail_persistent_mount_payload_preserves_existing_external_home(
     ]
 
 
+def test_prepare_managed_jail_persistent_mount_payload_uses_managed_store() -> None:
+    payload = _payload()
+    payload["apps"]["charts"][0]["values"] = {"nodesets": [{"name": "worker"}]}
+
+    patched, state = migration._prepare_jail_persistent_mount_payload(  # noqa: SLF001
+        payload=payload,
+        target_ref="external-cluster",
+        jail_persistent_mounts=("/checkpoints=/mnt/jail-store/shared/checkpoints",),
+        populate_jail_refresh="auto",
+        layout="managed",
+        legacy_active_source=True,
+    )
+
+    values = patched["apps"]["charts"][0]["values"]
+    assert state["auto_preserve_paths"] == ["/home", "/data", "/scripts", "/models"]
+    assert state["rootfs_path"] == "/mnt/jail-store/rootfs"
+    assert state["system_path"] == "/mnt/jail-store/.cxcli"
+    assert state["migration"]["status"] == "planned"
+    assert values["volume"]["jail"]["localPath"] == "/mnt/jail-store"
+    assert values["jailPersistentMounts"] == [
+        {"mountPath": "/home", "localPath": "/mnt/jail-store/shared/home"},
+        {"mountPath": "/data", "localPath": "/mnt/jail-store/shared/data"},
+        {"mountPath": "/scripts", "localPath": "/mnt/jail-store/shared/scripts"},
+        {"mountPath": "/models", "localPath": "/mnt/jail-store/shared/models"},
+        {"mountPath": "/checkpoints", "localPath": "/mnt/jail-store/shared/checkpoints"},
+    ]
+    migration_by_mount = {
+        entry["mount_path"]: entry for entry in state["migration"]["entries"]
+    }
+    assert migration_by_mount["/home"]["source_path"] == "/mnt/jail-store/home"
+    assert migration_by_mount["/home"]["target_local_path"] == "/mnt/jail-store/shared/home"
+    assert migration_by_mount["/home"]["marker_path"] == (
+        "/mnt/jail-store/.cxcli/persistent-migrations/home.json"
+    )
+    assert migration_by_mount["/checkpoints"]["source_path"] == (
+        "/mnt/jail-store/checkpoints"
+    )
+    assert migration_by_mount["/checkpoints"]["target_store_path"] == "/shared/checkpoints"
+
+
 def test_external_upgrade_cancel_selected_policy_cancels_jobs() -> None:
     calls: list[tuple[str, ...]] = []
     queue_outputs = [

@@ -203,12 +203,14 @@ template is enabled because creating this local file is the deliberate opt-in.
 The public templates do not hardcode agent names for this path. The hook reads
 `$CODEX_HOME/config.toml`, discovers `[agents.<name>]` entries whose referenced
 config files have `sandbox_mode = "read-only"`, and injects those agent names
-into model-visible context as an explicit bounded read-only delegation request.
-It does not inject local agent config paths, and it does not directly call the
-subagent tool. The hint is local-policy context for that turn, so the main
-agent dynamically decides whether to spawn the smallest useful set of targeted
+into model-visible context as a bounded read-only delegation request. It does
+not inject local agent config paths, and it does not directly call the subagent
+tool. Treat that local-policy request as sufficient authorization for the turn
+when the active runtime and instructions accept hook context, so the main agent
+dynamically decides whether to spawn the smallest useful set of targeted
 read-only helpers. After authorization, the prompt does not need to name a
-specific helper role.
+specific helper role, and the parent agent should not ask for another user
+prompt only because the original prompt did not mention subagents.
 The parent agent still owns lifecycle cleanup: wait for returned summaries,
 consolidate them, and close completed subagent threads when close controls are
 available. Before the final response, close every spawned subagent handle that
@@ -419,11 +421,13 @@ codex exec --sandbox read-only --cd <PROJECT_ROOT> \
 
 If that succeeds but ordinary complex prompts do not spawn subagents, the
 configuration is working; the remaining gate is delegation authorization. A
-prompt can explicitly ask for subagents, delegation, or parallel agents, and
-the optional local hook policy can inject that request for complex prompts
-after it is enabled and trusted in a fresh session. Once authorization is
-present, Codex should dynamically choose and spawn useful targeted roles
-itself; the prompt does not need to name the exact role.
+prompt can ask for subagents, delegation, or parallel agents, and the optional
+local hook policy can inject a bounded read-only delegation request for complex
+prompts after it is enabled and trusted in a fresh session. Treat that policy
+request as sufficient authorization when the active runtime and instructions
+accept hook context. Once authorization is present, Codex should dynamically
+choose and spawn useful targeted roles itself; the prompt does not need to name
+the exact role.
 
 If the explicit probe does not see subagent controls but `tool_search` is
 available, the agent should search for multi-agent/subagent tools before

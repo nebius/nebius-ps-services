@@ -515,9 +515,9 @@ creating a manual fallback path or repo-local state file.
 
 {task_state_context}
 {related_task_state_context(root, payload, prompt, home)}
-Keep raw exploration output out of the parent context. Use configured read-only
-subagents when delegation is authorized by the user prompt or local hook policy,
-the runtime exposes subagent tools, and active instructions permit it.
+Keep raw exploration output out of parent context. Use read-only subagents when
+the prompt or local policy request authorizes delegation, tools are exposed,
+and active instructions permit it.
 Keep current.md summarized; replace stale details instead of appending logs.
 This hook does not route SDLC, select workflow skills, create run state, or
 inject large documents.

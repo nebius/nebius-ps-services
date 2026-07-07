@@ -79,13 +79,15 @@ global file.
 - Keep raw logs, broad file listings, abandoned attempts, secrets, customer
   data, broad environment dumps, and large copied documentation blocks out of
   the parent thread.
-- Use bounded read-only subagents for noisy exploration when the user
-  explicitly requests delegation, or when a user-enabled local hook policy
-  injects that request, and subagents are useful, available, and permitted.
-  After authorization, dynamically choose and spawn targeted helper roles
-  yourself instead of waiting for the user to name an exact role. Use a
-  read-only risk review before finalizing non-trivial changes only when
-  delegation is authorized, useful, available, and permitted.
+- Use bounded read-only subagents for noisy exploration when the current prompt
+  asks for delegation, or when a user-enabled local hook policy injects a
+  current-turn bounded read-only delegation request, and subagents are useful,
+  available, and permitted. Treat that policy request as sufficient
+  authorization; do not ask for another user prompt only because the original
+  prompt did not name subagents. After authorization, dynamically choose and
+  spawn targeted helper roles yourself instead of waiting for the user to name
+  an exact role. Use a read-only risk review before finalizing non-trivial
+  changes only when delegation is authorized, useful, available, and permitted.
 - When subagents are used, ask them for concise final summaries, wait for the
   result, consolidate it in the parent thread, and close completed subagent
   threads when close controls are available. Before the final response, close
@@ -134,14 +136,14 @@ to an environment variable and configure the server to use `env_vars`.
 
 The `multi_agent` feature and `[agents.*]` roles make subagent delegation
 available to Codex. They do not force every complex task to spawn a subagent,
-they do not count as authorization, and they do not guarantee a separate
-user-visible control in every Codex surface. Current public Codex docs say
-Codex only spawns subagents when explicitly asked. In this workflow, that
-explicit request can come from the prompt, or from the optional local hook
-policy below when active runtime instructions accept the hook context. Once
-delegation is authorized, Codex should dynamically choose and spawn targeted
-helper roles when they are useful; the prompt does not need to name a specific
-role.
+they do not count as authorization by themselves, and they do not guarantee a
+separate user-visible control in every Codex surface. In this workflow,
+authorization can come from the prompt, or from the optional local hook policy
+below when active runtime instructions accept the hook context. Treat the
+enabled policy's current-turn delegation request as sufficient authorization:
+the parent agent should dynamically choose and spawn targeted helper roles when
+they are useful, and should not ask for another user prompt only because the
+original prompt did not name subagents.
 When delegation is authorized and useful but the active tool list does not show
 subagent controls, and `tool_search` is available, Codex should search for
 multi-agent/subagent tools before reporting delegation unavailable.
@@ -270,9 +272,9 @@ If the probe does not spawn a subagent, check:
 - The current Codex surface exposes multi-agent tools.
 - If multi-agent tools are not exposed directly, `tool_search` is available and
   can discover deferred multi-agent/subagent tools.
-- The user prompt explicitly asks Codex to use or spawn subagents, use
-  delegation, or run parallel agents, or the enabled local hook policy adds a
-  bounded read-only delegation request for the prompt.
+- The current prompt asks Codex to use or spawn subagents, use delegation, or
+  run parallel agents, or the enabled local hook policy adds a bounded
+  read-only delegation request for the prompt.
 - The current user or developer instructions permit delegation for the task.
 
 If `$CODEX_HOME/hooks/global_context_policy.json` is enabled, also run a

@@ -34,6 +34,8 @@ REQUIRED_MANAGED_CONTEXT_SNIPPETS = (
     ),
     "Update it with concise checkpoints",
     "Use bounded read-only subagents",
+    "Treat that policy request as sufficient",
+    "do not ask for another user prompt only because the original",
     (
         "After code, config, or documentation changes in a turn, before the "
         "final response, explicitly use `$align` for the changed surfaces"
