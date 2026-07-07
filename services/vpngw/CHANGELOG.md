@@ -19,6 +19,8 @@ All notable changes to this project are tracked here. This changelog follows
   Ubuntu Dirty Frag module-block mitigations.
 - Added a project mypy check and fixed current static typing errors in the
   VPN gateway source tree.
+- Fixed local and release wheel builds by declaring the `vcs-versioning`
+  provider required for the configured `semver-pep440` version scheme.
 - Fixed route command SSH handling so `add-routes-local` BGP route discovery and
   `list-routes-remote` gateway queries honor configured SSH user and private key
   settings.
