@@ -14,6 +14,8 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [nebius-vpngw-v0.5.9] - 2026-07-07
+
 - Added an ESP4 readiness preflight for new gateway VMs and a
   `misc/fix-vpngw-esp4.sh` repair helper for existing gateways affected by
   Ubuntu Dirty Frag module-block mitigations.
