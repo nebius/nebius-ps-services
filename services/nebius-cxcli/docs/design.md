@@ -682,7 +682,7 @@ and chart source-family changes.
   postflight restores Slurm and
   ActiveChecks, compares protected customer state, runs required Soperator/Slurm
   smoke plus the shared fast safety verifier, and writes
-  `generated/reports/soperator-upgrade-report.md` and JSON. Kubernetes minor
+  `generated/reports/soperator-clusters/<cluster-key>/soperator-upgrade/report.md` and JSON. Kubernetes minor
   upgrades must follow provider-supported hops, so a managed `1.32` to `1.34`
   maintenance path is modeled as a `1.33` run followed by a `1.34` run.
   Managed upgrades do not persist a locked multi-run path because `config.yaml`
@@ -701,15 +701,15 @@ and chart source-family changes.
   `values.soperator-activechecks.enabled` or
   `values.soperator-activechecks.waitForChecks.enabled` is true in the
   cxcli-owned Soperator row, it snapshots the original values, writes a local
-  `.nebius-cxcli/soperator-upgrades/<target>/checkpoint.json` upgrade
+  `.nebius-cxcli/soperator-clusters/<cluster-key>/soperator-upgrade/checkpoint.json` upgrade
   checkpoint, renders/applies a temporary ActiveChecks suspension, patches
   matching live ActiveCheck CRs to suspend launch-on-create checks, removes
   matching already-launched check CronJobs/jobs/pods, and restores the original
   values after postflight validation. If live ActiveChecks cannot be inspected,
   the cxcli-managed upgrade fails closed before the chart upgrade so the report
   does not claim an ambiguous live suspension. The flow writes
-  `generated/reports/soperator-upgrade-report.md` and
-  `generated/reports/soperator-upgrade-report.json` with before/after protected
+  `generated/reports/soperator-clusters/<cluster-key>/soperator-upgrade/report.md` and
+  `generated/reports/soperator-clusters/<cluster-key>/soperator-upgrade/report.json` with before/after protected
   customer-state hashes, deltas, fast safety results, zero-downtime eligibility,
   backup evidence, manual heavy follow-ups, the final `current_phase`, the
   operator-facing top-level stage (`MK8s Node Upgrades`, `Soperator Upgrade`, or `Jail Upgrade`),
@@ -1042,7 +1042,7 @@ inventory smoke uses the same scheduler-visible node readiness and allocatable
 GPU signal as a fast all-node Kubernetes gate before sampled workload
 validations. The full
 source-cluster discovery snapshot is written under
-`generated/reports/soperator-discovery/<target>/` with `manifest.json` and
+`generated/reports/soperator-clusters/<cluster-key>/discovery/` with `manifest.json` and
 section files; the config keeps only
 stable onboarding decisions and fingerprints. The same discovery writer is
 available directly as `nebius-cxcli ext-soperator discover`: it can read an
@@ -1055,7 +1055,7 @@ selects a specific runtime-auth cache profile when needed; otherwise cxcli
 infers the unique cached client name when one exists and continues through the
 normal Nebius SDK auth order when no cache is selected. The default bundle root
 is the current working directory; `--output-dir` selects a different root while
-still preserving `generated/reports/soperator-discovery/<target>/` below that
+still preserving `generated/reports/soperator-clusters/<cluster-key>/discovery/` below that
 root. Managed and external discovery share the same status and upgrade guidance
 formatter: the console footer and `summary.md` show the discovered Kubernetes
 version, Soperator install status, detected app version, detected chart package
@@ -1222,7 +1222,7 @@ values do not override the current target chart defaults. Use upgrade for
 reruns/resume while those actions remain selected. After a segment completes
 with `Pending phase: none`, cxcli keeps accepted onboarding in place while any
 locked path segments remain and prints the next same-command invocation. After
-the final locked segment completes, `generated/reports/ext-soperator-upgrade-report.md`
+the final locked segment completes, `generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/report.md`
 shows `Pending phase: none` and cxcli refreshes the source config from live
 post-upgrade discovery when it can, so external-upgrade-owned actions are no
 longer selected and future normal reconciliation can use render/deploy. If the
@@ -1282,11 +1282,11 @@ explicit `acceptance-test smoke --suite slurm` runs, while NCCL/performance work
 stays under explicit `acceptance-test benchmark` runs. `ext-soperator upgrade`
 is the separate execution surface for live orchestration. `--execute --approve`
 refreshes discovery, validates the accepted onboarding analysis, reads
-`generated/reports/soperator-discovery/<target>/manifest.json`, rechecks the live source
+`generated/reports/soperator-clusters/<cluster-key>/discovery/manifest.json`, rechecks the live source
 release and full discovery fingerprint, creates a restore-capable backup before
 the first mutation for new/replacement-cluster restore only, rejects sparse
 reused backup metadata before mutation, writes a local
-`.nebius-cxcli/ext-soperator-upgrades/` timeout-guarded checkpoint, and
+`.nebius-cxcli/soperator-clusters/<cluster-key>/ext-soperator-upgrade/` timeout-guarded checkpoint, and
 advances the selected accepted external MK8s control-plane/node-template hop,
 target GPU stack reconciliation phase when paired with external upgrade work,
 storage, copy, compute, cutover, Jail Upgrade, validation, and
@@ -1370,12 +1370,12 @@ target-scoped `deploy.targets[].deployment_testing.mk8s_gpu.*` checks configured
   CLI, `srun`, all-node hostname, all-node GPU allocation, backend metrics/log
   ingestion, Terraform drift review, and NCCL/performance work to explicit
   manual or `acceptance-test` commands, writes
-  `generated/reports/ext-soperator-upgrade-report.md` and
-  `generated/reports/ext-soperator-upgrade-report.json` with MK8s GPU,
+  `generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/report.md` and
+  `generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/report.json` with MK8s GPU,
   Soperator/Slurm validation rollups, protected-state hashes and deltas,
   locked-path progress, backup metadata, Slurm decisions, phase state, and
   recovery notes, writes segment snapshots under
-  `generated/reports/ext-soperator-upgrades/<target>/<segment-id>/`, refreshes
+  `generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/segments/<segment-id>/`, refreshes
   `generated/reports/deploy-report.md` as a secondary deploy-compatible MK8s GPU
   summary only after protected comparison passes, and checkpoints pending gates
   instead of retiring old resources early. During chart takeover it suspends legacy Flux HelmReleases
@@ -1387,8 +1387,8 @@ applied. That checkpoint is local operational state and is ignored by
 cxcli-managed deployments `.gitignore` files. Operators should finish
 `ext-soperator upgrade` and checkpointed `soperator upgrade` runs from the same
 laptop, workdir, and operator account that started them, because the resume
-checkpoints are local under `.nebius-cxcli/ext-soperator-upgrades/<target>/` and
-`.nebius-cxcli/soperator-upgrades/<target>/`. After those flows complete and
+checkpoints are local under `.nebius-cxcli/soperator-clusters/<cluster-key>/ext-soperator-upgrade/` and
+`.nebius-cxcli/soperator-clusters/<cluster-key>/soperator-upgrade/`. After those flows complete and
 source config plus generated reports are refreshed, normal `validate`, `render`,
 and `deploy` can run from any workstation with the repo state and required
 Nebius/Kubernetes access. `ext-soperator onboard` is therefore
@@ -3078,14 +3078,14 @@ The Soperator lifecycle surface is split by ownership:
   `soperator upgrade` owns the managed maintenance window for Soperator chart
   changes, optional MK8s node-template changes, Slurm job policy, protected-state
   comparison, Jail Upgrade, and local
-  `.nebius-cxcli/soperator-upgrades/<target>/checkpoint.json` resume state.
+  `.nebius-cxcli/soperator-clusters/<cluster-key>/soperator-upgrade/checkpoint.json` resume state.
 - External Nebius MK8s clusters start with `ext-soperator onboard`. Onboarding
   is live read-only and writes local target, inventory, discovery, placement,
   and accepted-action state without taking Terraform ownership of the cluster.
 - External upgrade-owned work stays under `ext-soperator upgrade`. The accepted
   onboarding state locks the full upgrade path; each approved run executes one
   locked segment, writes local
-  `.nebius-cxcli/ext-soperator-upgrades/<target>/checkpoint.json` progress, and
+  `.nebius-cxcli/soperator-clusters/<cluster-key>/ext-soperator-upgrade/checkpoint.json` progress, and
   keeps the target on the same command until all locked segments complete.
 - After a completed external upgrade refreshes the target into the deploy-owned
   shape, normal day-2 changes return to `validate`, `render`, `deploy`, and,
@@ -3513,7 +3513,7 @@ The command boundary is intentional:
   Live `--execute`
   validates the accepted onboarding analysis, rechecks that the live source
   discovery fingerprint still matches the saved report before the first
-  mutation, writes a local `.nebius-cxcli/ext-soperator-upgrades/` checkpoint,
+  mutation, writes a local `.nebius-cxcli/soperator-clusters/<cluster-key>/ext-soperator-upgrade/` checkpoint,
   records approval with `--approve`, auto-detects source worker node groups
   from live Nebius node-group names and Slurm worker labels, and advances
   supported target GPU stack, storage, copy, compute, cutover, validation, and
@@ -4344,7 +4344,7 @@ Flux render:
 - Runtime inventory/report artifacts are written only by deployment/apply paths.
 - `generated/reports/deploy-report.md` is the deploy-time human-readable customer handoff report and the body used by the `email` command after a deployment/apply command has created it.
 - The generated Markdown should stay lint-clean, including no trailing duplicate blank lines at EOF.
-- `create` and `render` do not create the Markdown report; `deploy`, `terraform apply`, `flux apply`, and `flux bootstrap` refresh it for the active project. All lifecycle reports stay under `generated/reports/`, and command-specific reports use deterministic latest filenames rather than timestamped session directories. The render-time `generated/` replacement preserves command-owned runtime reports such as `deploy-report.md`, the Soperator `soperator-discovery/` bundle directory including `soperator-discovery/<target>/manifest.json`, `ext-soperator-upgrade-report.md`, the external Soperator segment snapshot directory `ext-soperator-upgrades/`, `upgrade-node-template-report.md`, `upgrade-node-template-report.json`, `upgrade-node-group-report.md`, `upgrade-node-group-report.json`, `soperator-upgrade-report.md`, `soperator-upgrade-report.json`, and JSON detail files referenced from those Markdown reports, but still removes unrelated stale report files with the replaced bundle. Existing lifecycle reports alone do not trigger the render overwrite prompt because they are carried forward rather than replaced.
+- `create` and `render` do not create the Markdown report; `deploy`, `terraform apply`, `flux apply`, and `flux bootstrap` refresh it for the active project. All lifecycle reports stay under `generated/reports/`, and command-specific reports use deterministic latest filenames rather than timestamped session directories. The render-time `generated/` replacement preserves command-owned runtime reports such as `deploy-report.md`, `generated/reports/soperator-clusters/**`, `upgrade-node-template-report.md`, `upgrade-node-template-report.json`, `upgrade-node-group-report.md`, `upgrade-node-group-report.json`, and JSON detail files referenced from those Markdown reports, but still removes unrelated stale report files with the replaced bundle. Existing lifecycle reports alone do not trigger the render overwrite prompt because they are carried forward rather than replaced.
 - Explicit Namespace docs for chart target namespaces.
 - Generic HelmRelease docs from enabled app releases.
 - Deterministic flat output under the rendered Flux tree:

@@ -15,13 +15,18 @@ import pytest
 
 from nebius_cxcli import soperator_migration as migration
 from nebius_cxcli.quota_checks import QuotaCheck, QuotaReport, QuotaRequirement
+from nebius_cxcli.soperator_artifacts import (
+    soperator_cluster_artifact_identity_from_payload,
+)
 from nebius_cxcli.soperator_jail_capacity import GIB, evaluate_jail_capacity
 from nebius_cxcli.soperator_migration import (
     SoperatorMigrationCommandResult,
-    soperator_migration_checkpoint_path,
 )
 from nebius_cxcli.soperator_migration import (
     execute_soperator_migration as _execute_soperator_migration,
+)
+from nebius_cxcli.soperator_migration import (
+    soperator_migration_checkpoint_path as _soperator_migration_checkpoint_path,
 )
 from nebius_cxcli.soperator_onboarding import (
     SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA,
@@ -58,6 +63,51 @@ def _snapshot(version: str = "3.0.5") -> dict[str, Any]:
         "pvcs": [],
         "collection_errors": [],
     }
+
+
+def soperator_migration_checkpoint_path(
+    config_path: Path,
+    target_ref: str,
+    **kwargs: Any,
+) -> Path:
+    kwargs.setdefault("payload_or_config", _payload())
+    return _soperator_migration_checkpoint_path(config_path, target_ref, **kwargs)
+
+
+def _external_upgrade_report_dir(
+    project_dir: Path,
+    *,
+    payload: Mapping[str, Any] | None = None,
+) -> Path:
+    active_payload = _payload() if payload is None else payload
+    identity = soperator_cluster_artifact_identity_from_payload(
+        active_payload,
+        target_ref="external-cluster",
+    )
+    return (
+        project_dir
+        / "generated"
+        / "reports"
+        / "soperator-clusters"
+        / identity.cluster_key
+        / "ext-soperator-upgrade"
+    )
+
+
+def _external_upgrade_report_path(
+    project_dir: Path,
+    *,
+    payload: Mapping[str, Any] | None = None,
+) -> Path:
+    return _external_upgrade_report_dir(project_dir, payload=payload) / "report.md"
+
+
+def _external_upgrade_report_json_path(
+    project_dir: Path,
+    *,
+    payload: Mapping[str, Any] | None = None,
+) -> Path:
+    return _external_upgrade_report_dir(project_dir, payload=payload) / "report.json"
 
 
 @pytest.mark.parametrize(
@@ -3060,6 +3110,7 @@ def test_resume_backup_metadata_rejects_archive_sha_mismatch(tmp_path: Path) -> 
         migration.external_soperator_upgrade_resume_backup_metadata(
             config_path,
             "external-cluster",
+            payload_or_config=_payload(),
         )
 
 
@@ -3105,6 +3156,7 @@ def test_resume_backup_metadata_uses_size_fast_path(
     metadata = migration.external_soperator_upgrade_resume_backup_metadata(
         config_path,
         "external-cluster",
+        payload_or_config=_payload(),
     )
 
     assert metadata is not None
@@ -3145,6 +3197,7 @@ def test_resume_backup_metadata_rejects_archive_size_mismatch(tmp_path: Path) ->
         migration.external_soperator_upgrade_resume_backup_metadata(
             config_path,
             "external-cluster",
+            payload_or_config=_payload(),
         )
 
 
@@ -3238,7 +3291,7 @@ def test_write_migrate_report_uses_default_text_file_mode_for_new_file(tmp_path:
 
 def test_write_migrate_report_preserves_existing_file_mode(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
-    report_path = tmp_path / "generated" / "reports" / "ext-soperator-upgrade-report.md"
+    report_path = _external_upgrade_report_path(tmp_path, payload={})
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text("# Existing Migration Report\n", encoding="utf-8")
     report_path.chmod(0o640)
@@ -3254,7 +3307,7 @@ def test_write_migrate_report_preserves_existing_file_when_replace_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    report_path = tmp_path / "generated" / "reports" / "ext-soperator-upgrade-report.md"
+    report_path = _external_upgrade_report_path(tmp_path, payload={})
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text("# Existing Migration Report\n", encoding="utf-8")
     before = report_path.read_text(encoding="utf-8")
@@ -3268,7 +3321,7 @@ def test_write_migrate_report_preserves_existing_file_when_replace_fails(
         _write_minimal_migrate_report(config_path)
 
     assert report_path.read_text(encoding="utf-8") == before
-    assert not list(report_path.parent.glob(".ext-soperator-upgrade-report.md.*.tmp"))
+    assert not list(report_path.parent.glob(".report.md.*.tmp"))
 
 
 def test_execute_quota_preflight_blocks_before_mutation(
@@ -3959,10 +4012,9 @@ def test_execute_records_approval_and_runs_checkpointed_mutators(tmp_path: Path)
     assert "execute-phase-fast-verification-passed" in {
         event["event"] for event in checkpoint["events"]
     }
-    reports_dir = tmp_path / "generated" / "reports"
-    migrate_report = (reports_dir / "ext-soperator-upgrade-report.md").read_text(encoding="utf-8")
+    migrate_report = _external_upgrade_report_path(tmp_path).read_text(encoding="utf-8")
     upgrade_json_report = json.loads(
-        (reports_dir / "ext-soperator-upgrade-report.json").read_text(encoding="utf-8")
+        _external_upgrade_report_json_path(tmp_path).read_text(encoding="utf-8")
     )
     assert "## Stage Fast Verification" in migrate_report
     assert "`target-gpu-stack-remediation`: `PASS`" in migrate_report
@@ -4118,10 +4170,9 @@ def test_execute_fast_verification_failure_keeps_same_phase_pending(
     assert "execute-phase-fast-verification-failed" in {
         event["event"] for event in checkpoint["events"]
     }
-    reports_dir = tmp_path / "generated" / "reports"
-    migrate_report = (reports_dir / "ext-soperator-upgrade-report.md").read_text(encoding="utf-8")
+    migrate_report = _external_upgrade_report_path(tmp_path).read_text(encoding="utf-8")
     upgrade_json_report = json.loads(
-        (reports_dir / "ext-soperator-upgrade-report.json").read_text(encoding="utf-8")
+        _external_upgrade_report_json_path(tmp_path).read_text(encoding="utf-8")
     )
     assert "`target-gpu-stack-remediation`: `FAIL`" in migrate_report
     assert upgrade_json_report["pending_phase"] == "target-gpu-stack-remediation"
@@ -4198,12 +4249,9 @@ def test_execute_phase_fast_verification_failure_keeps_same_phase_pending(
     result_text = "\n".join(result.lines)
     assert f"Phase validation {phase_id}: FAIL - {summary}" in result_text
 
-    reports_dir = tmp_path / "generated" / "reports"
-    migrate_report = (reports_dir / "ext-soperator-upgrade-report.md").read_text(
-        encoding="utf-8"
-    )
+    migrate_report = _external_upgrade_report_path(tmp_path).read_text(encoding="utf-8")
     upgrade_json_report = json.loads(
-        (reports_dir / "ext-soperator-upgrade-report.json").read_text(encoding="utf-8")
+        _external_upgrade_report_json_path(tmp_path).read_text(encoding="utf-8")
     )
     assert upgrade_json_report["pending_phase"] == phase_id
     assert phase_id in upgrade_json_report["pending_reason"]
@@ -4283,7 +4331,7 @@ def test_execute_runtime_error_keeps_current_phase_pending_and_resumes_same_phas
         "attempt_recorded_before_failure"
     ] is True
     assert "execute-phase-failed" in {event["event"] for event in checkpoint["events"]}
-    assert (tmp_path / "generated" / "reports" / "ext-soperator-upgrade-report.md").exists()
+    assert _external_upgrade_report_path(tmp_path).exists()
 
     runner.calls.clear()
     resumed = execute_soperator_migration(
@@ -4387,9 +4435,7 @@ def test_execute_populate_jail_failure_keeps_checkpointed_phase_pending(
         for event in checkpoint["events"]
     )
     upgrade_json_report = json.loads(
-        (
-            tmp_path / "generated" / "reports" / "ext-soperator-upgrade-report.json"
-        ).read_text(encoding="utf-8")
+        _external_upgrade_report_json_path(tmp_path).read_text(encoding="utf-8")
     )
     assert upgrade_json_report["pending_phase"] == migration.POPULATE_JAIL_REFRESH_PHASE_ID
 
@@ -4550,9 +4596,8 @@ def test_execute_final_helm_check_failure_writes_pending_report(
     assert "execute-phase-fast-verification-failed" in {
         event["event"] for event in checkpoint["events"]
     }
-    reports_dir = tmp_path / "generated" / "reports"
     upgrade_json_report = json.loads(
-        (reports_dir / "ext-soperator-upgrade-report.json").read_text(encoding="utf-8")
+        _external_upgrade_report_json_path(tmp_path).read_text(encoding="utf-8")
     )
     stage_verification = {
         item["phase_id"]: item for item in upgrade_json_report["stage_verification"]
@@ -4560,7 +4605,7 @@ def test_execute_final_helm_check_failure_writes_pending_report(
     assert stage_verification["post-upgrade-mk8s-check"]["status"] == "passed"
     assert stage_verification["post-upgrade-helm-check"]["status"] == "failed"
     assert upgrade_json_report["pending_phase"] == "post-upgrade-helm-check"
-    migrate_report = (reports_dir / "ext-soperator-upgrade-report.md").read_text(encoding="utf-8")
+    migrate_report = _external_upgrade_report_path(tmp_path).read_text(encoding="utf-8")
     assert "`post-upgrade-helm-check`: `FAIL`" in migrate_report
 
 
@@ -4687,9 +4732,8 @@ def test_execute_final_helm_check_keyboard_interrupt_writes_pending_report(
     assert checkpoint["pending_reason"] == "interrupted by user"
     assert "post-upgrade-helm-check" not in checkpoint["completed_phases"]
     assert "execute-interrupted" in {event["event"] for event in checkpoint["events"]}
-    reports_dir = tmp_path / "generated" / "reports"
     upgrade_json_report = json.loads(
-        (reports_dir / "ext-soperator-upgrade-report.json").read_text(encoding="utf-8")
+        _external_upgrade_report_json_path(tmp_path).read_text(encoding="utf-8")
     )
     assert upgrade_json_report["pending_phase"] == "post-upgrade-helm-check"
     assert upgrade_json_report["pending_reason"] == "interrupted by user"
@@ -4756,9 +4800,8 @@ def test_execute_final_mk8s_check_failure_writes_pending_report(
     assert mk8s_verification["status"] == "failed"
     assert mk8s_verification["passed"] is False
     assert "post-upgrade-helm-check" not in checkpoint["phase_state"]
-    reports_dir = tmp_path / "generated" / "reports"
     upgrade_json_report = json.loads(
-        (reports_dir / "ext-soperator-upgrade-report.json").read_text(encoding="utf-8")
+        _external_upgrade_report_json_path(tmp_path).read_text(encoding="utf-8")
     )
     stage_verification = {
         item["phase_id"]: item for item in upgrade_json_report["stage_verification"]
@@ -4766,7 +4809,7 @@ def test_execute_final_mk8s_check_failure_writes_pending_report(
     assert stage_verification["post-upgrade-mk8s-check"]["status"] == "failed"
     assert stage_verification["post-upgrade-helm-check"]["status"] == "not_run"
     assert upgrade_json_report["pending_phase"] == "post-upgrade-mk8s-check"
-    migrate_report = (reports_dir / "ext-soperator-upgrade-report.md").read_text(encoding="utf-8")
+    migrate_report = _external_upgrade_report_path(tmp_path).read_text(encoding="utf-8")
     assert "`post-upgrade-mk8s-check`: `FAIL`" in migrate_report
     assert "`post-upgrade-helm-check`: `PENDING`" in migrate_report
 
@@ -4807,9 +4850,7 @@ def test_execute_preserves_original_backup_metadata_after_mutating_resume(
     assert checkpoint["backup"] == original_backup
     assert any(event["event"] == "backup-metadata-preserved" for event in checkpoint["events"])
     upgrade_json_report = json.loads(
-        (tmp_path / "generated" / "reports" / "ext-soperator-upgrade-report.json").read_text(
-            encoding="utf-8"
-        )
+        _external_upgrade_report_json_path(tmp_path).read_text(encoding="utf-8")
     )
     assert upgrade_json_report["backup"] == original_backup
 
@@ -5996,14 +6037,17 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
     reports_dir = tmp_path / "generated" / "reports"
     assert not (reports_dir / "acceptance-benchmark-report-external-cluster.json").exists()
     assert "## Validations" in (reports_dir / "deploy-report.md").read_text(encoding="utf-8")
-    migrate_report = (reports_dir / "ext-soperator-upgrade-report.md").read_text(encoding="utf-8")
+    migrate_report = _external_upgrade_report_path(tmp_path).read_text(encoding="utf-8")
     upgrade_json_report = json.loads(
-        (reports_dir / "ext-soperator-upgrade-report.json").read_text(encoding="utf-8")
+        _external_upgrade_report_json_path(tmp_path).read_text(encoding="utf-8")
     )
     assert "## Upgrade Steps" in migrate_report
     assert "## Locked Upgrade Path" in migrate_report
     assert "Kubernetes 1.31 -> 1.32 plus Soperator" in migrate_report
-    assert "ext-soperator-upgrades/external-cluster/segment-1-kubernetes-1-31-1-32-soperator/report.md" in migrate_report
+    assert (
+        "soperator-clusters/external-context/ext-soperator-upgrade/segments/"
+        "segment-1-kubernetes-1-31-1-32-soperator/report.md"
+    ) in migrate_report
     assert "## Stage Fast Verification" in migrate_report
     assert "- Upgrade performed: `yes`" in migrate_report
     assert "`validation-and-rollback-hold`: `PASS`" in migrate_report
@@ -6016,7 +6060,8 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
     assert "`deploy-gpu-visibility-report-external-cluster.json`: `PASS`" in migrate_report
     assert "acceptance-benchmark-report-external-cluster.json" not in migrate_report
     soperator_report = json.loads(
-        (reports_dir / "deploy-smoke-report-external-cluster.json").read_text(encoding="utf-8")
+        (_external_upgrade_report_dir(tmp_path) / "deploy-smoke-report-external-cluster.json")
+        .read_text(encoding="utf-8")
     )
     assert soperator_report["status"] == "passed"
     assert soperator_report["scope"] == "soperator-deployment-snapshot"
@@ -6035,11 +6080,15 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
     assert len(validation_state["mk8s_gpu_validation_reports"]) == 2
     assert len(validation_state["soperator_cluster_validation_reports"]) == 1
     assert checkpoint["upgrade_report"].endswith(
-        "generated/reports/ext-soperator-upgrade-report.md"
+        "generated/reports/soperator-clusters/external-context/ext-soperator-upgrade/report.md"
     )
     assert checkpoint["upgrade_report_json"].endswith(
-        "generated/reports/ext-soperator-upgrade-report.json"
+        "generated/reports/soperator-clusters/external-context/ext-soperator-upgrade/report.json"
     )
+    assert checkpoint["cluster_key"] == "external-context"
+    assert checkpoint["cluster_id"] == ""
+    assert checkpoint["cluster_name"] == ""
+    assert checkpoint["kube_context"] == "external-context"
     assert checkpoint["locked_upgrade_path"] == locked_upgrade_path
     assert checkpoint["upgrade_path_fingerprint"] == "locked-path-fingerprint"
     assert checkpoint["current_segment_id"] == segment_id
@@ -6047,7 +6096,7 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
     expected_backup = _backup_metadata_with_archive(tmp_path / "config.yaml", "test-pre-upgrade")
     segment_state = checkpoint["segment_state"][segment_id]
     assert segment_state["segment_report_path"].endswith(
-        "generated/reports/ext-soperator-upgrades/external-cluster/"
+        "generated/reports/soperator-clusters/external-context/ext-soperator-upgrade/segments/"
         "segment-1-kubernetes-1-31-1-32-soperator/report.md"
     )
     assert segment_state["backup_path"] == expected_backup["path"]
@@ -6056,10 +6105,14 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
     assert checkpoint["upgrade_safety"]["protected_customer_state"]["after_hash"]
     assert upgrade_json_report["schema"] == migration.SOPERATOR_MIGRATION_REPORT_SCHEMA
     assert upgrade_json_report["target_ref"] == "external-cluster"
+    assert upgrade_json_report["cluster_key"] == "external-context"
+    assert upgrade_json_report["cluster_id"] == ""
+    assert upgrade_json_report["cluster_name"] == ""
+    assert upgrade_json_report["kube_context"] == "external-context"
     assert upgrade_json_report["upgrade_performed"] is True
     assert upgrade_json_report["pending_phase"] == "none"
     assert upgrade_json_report["checkpoint_path"].endswith(
-        ".nebius-cxcli/ext-soperator-upgrades/external-cluster/checkpoint.json"
+        ".nebius-cxcli/soperator-clusters/external-context/ext-soperator-upgrade/checkpoint.json"
     )
     assert upgrade_json_report["backup"]["path"] == expected_backup["path"]
     assert upgrade_json_report["backup"]["sha256"] == expected_backup["sha256"]
@@ -6076,6 +6129,7 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
             tmp_path / "config.yaml",
             "external-cluster",
             segment_id,
+            payload_or_config=_payload(),
         )
     )
     assert segment_report_path.exists()
@@ -6083,8 +6137,10 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
     segment_markdown_report = segment_report_path.read_text(encoding="utf-8")
     segment_json_report = json.loads(segment_json_report_path.read_text(encoding="utf-8"))
     assert segment_json_report["latest_markdown_report"].endswith(
-        "generated/reports/ext-soperator-upgrade-report.md"
+        "generated/reports/soperator-clusters/external-context/ext-soperator-upgrade/report.md"
     )
+    assert segment_json_report["cluster_key"] == "external-context"
+    assert segment_json_report["target_ref"] == "external-cluster"
     assert segment_json_report["markdown_report"] == str(segment_report_path)
     assert "### populate-jail-refresh" in segment_markdown_report
     assert "Jail Upgrade" in segment_markdown_report
@@ -6440,6 +6496,7 @@ def test_external_node_template_quiesces_zero_surge_service_roles(
         soperator_migration_checkpoint_path(
             tmp_path / "config.yaml",
             "external-cluster",
+            payload_or_config=payload,
         ).read_text(encoding="utf-8")
     )
     assert (
@@ -11097,6 +11154,7 @@ def test_execute_auto_selects_console_worker_node_group_names_from_live_inventor
         soperator_migration_checkpoint_path(
             tmp_path / "config.yaml",
             "external-cluster",
+            payload_or_config=payload,
         ).read_text(encoding="utf-8")
     )
     assert checkpoint["worker_node_groups"] == ["worker-gpu-0", "worker-cpu-0"]
@@ -14915,6 +14973,7 @@ def test_external_upgrade_resume_backup_metadata_rejects_mutating_checkpoint_wit
         migration.external_soperator_upgrade_resume_backup_metadata(
             config_path,
             "external-cluster",
+            payload_or_config=_payload(),
         )
 
 
@@ -14953,6 +15012,7 @@ def test_external_upgrade_resume_backup_metadata_ignores_completed_checkpoint(
         migration.external_soperator_upgrade_resume_backup_metadata(
             config_path,
             "external-cluster",
+            payload_or_config=_payload(),
         )
         is None
     )
@@ -15106,6 +15166,7 @@ def test_external_upgrade_reports_checkpoint_planned_populate_jail_when_current_
     locked_path["segments"][0]["title"] = "Segment 1 with Jail Upgrade"
     checkpoint = {
         "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+        "kube_context": "external-context",
         "target_ref": "external-cluster",
         "source_report_fingerprint": "fingerprint",
         "source_version": "1.22.3",
@@ -15147,18 +15208,15 @@ def test_external_upgrade_reports_checkpoint_planned_populate_jail_when_current_
         mutation_performed=True,
     )
 
-    latest_markdown = (
-        tmp_path / "generated" / "reports" / "ext-soperator-upgrade-report.md"
-    ).read_text(encoding="utf-8")
+    latest_markdown = _external_upgrade_report_path(tmp_path).read_text(encoding="utf-8")
     latest_json = json.loads(
-        (tmp_path / "generated" / "reports" / "ext-soperator-upgrade-report.json").read_text(
-            encoding="utf-8"
-        )
+        _external_upgrade_report_json_path(tmp_path).read_text(encoding="utf-8")
     )
     segment_report_path, segment_json_report_path = migration.ext_soperator_upgrade_segment_report_paths(
         config_path,
         "external-cluster",
         segment_id,
+        kube_context="external-context",
     )
     segment_markdown = segment_report_path.read_text(encoding="utf-8")
     segment_json = json.loads(segment_json_report_path.read_text(encoding="utf-8"))

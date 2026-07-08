@@ -35,7 +35,11 @@ from nebius_cxcli.mk8s_gpu import ensure_mk8s_gpu_app_rows, materialize_mk8s_gpu
 from nebius_cxcli.mysterybox_eso import materialize_mysterybox_eso_app_values
 from nebius_cxcli.nfs_csi import ensure_nfs_csi_app_rows
 from nebius_cxcli.paths import resolve_project_paths, validate_path_alignment
-from nebius_cxcli.render import render_project
+from nebius_cxcli.render import (
+    promote_staged_generated_paths,
+    render_project,
+    staged_generated_paths,
+)
 from nebius_cxcli.runtime_introspection import ModuleVariable, reset_runtime_introspection_cache
 from nebius_cxcli.terraform_provider import build_provider_module_name
 
@@ -3857,13 +3861,18 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     stale_report = paths.reports_dir / "old.json"
     deploy_report = paths.reports_dir / "deploy-report.md"
     deploy_detail_report = paths.reports_dir / "deploy-gpu-visibility-report-mk8s.json"
-    onboard_report = paths.reports_dir / "soperator-discovery" / "external-cluster"
-    migrate_report = paths.reports_dir / "ext-soperator-upgrade-report.md"
-    migration_detail_report = paths.reports_dir / "deploy-smoke-report-external.json"
+    soperator_cluster_report_dir = paths.reports_dir / "soperator-clusters" / "external-context"
+    onboard_report = soperator_cluster_report_dir / "discovery"
+    migrate_report = soperator_cluster_report_dir / "ext-soperator-upgrade" / "report.md"
+    migration_detail_report = (
+        soperator_cluster_report_dir
+        / "ext-soperator-upgrade"
+        / "deploy-smoke-report-external.json"
+    )
     segment_report_dir = (
-        paths.reports_dir
-        / "ext-soperator-upgrades"
-        / "external-cluster"
+        soperator_cluster_report_dir
+        / "ext-soperator-upgrade"
+        / "segments"
         / "segment-1-kubernetes-1-31-1-32-soperator"
     )
     segment_report = segment_report_dir / "report.md"
@@ -3873,8 +3882,8 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     node_template_report_json = paths.reports_dir / "upgrade-node-template-report.json"
     node_group_report = paths.reports_dir / "upgrade-node-group-report.md"
     node_group_report_json = paths.reports_dir / "upgrade-node-group-report.json"
-    upgrade_report = paths.reports_dir / "soperator-upgrade-report.md"
-    upgrade_report_json = paths.reports_dir / "soperator-upgrade-report.json"
+    upgrade_report = soperator_cluster_report_dir / "soperator-upgrade" / "report.md"
+    upgrade_report_json = soperator_cluster_report_dir / "soperator-upgrade" / "report.json"
     stale_top_level = paths.generated_dir / "obsolete.txt"
     stale_tf.parent.mkdir(parents=True, exist_ok=True)
     bootstrap_flux_dir.mkdir(parents=True, exist_ok=True)
@@ -3895,6 +3904,7 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     deploy_detail_report.write_text('{"status": "passed"}\n', encoding="utf-8")
     onboard_report.mkdir(parents=True)
     (onboard_report / "manifest.json").write_text('{"schema": "discovery"}\n', encoding="utf-8")
+    migrate_report.parent.mkdir(parents=True)
     migrate_report.write_text(
         "# External Soperator Upgrade Report\n\n- `deploy-smoke-report-external.json`: `PASS` - ok\n",
         encoding="utf-8",
@@ -3908,6 +3918,7 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     node_template_report_json.write_text('{"status": "passed"}\n', encoding="utf-8")
     node_group_report.write_text("# MK8s Node-Group Upgrade Report\n", encoding="utf-8")
     node_group_report_json.write_text('{"status": "approved-pre-mutation"}\n', encoding="utf-8")
+    upgrade_report.parent.mkdir(parents=True)
     upgrade_report.write_text("# Soperator Upgrade Report\n", encoding="utf-8")
     upgrade_report_json.write_text('{"status": "completed"}\n', encoding="utf-8")
     stale_top_level.write_text("obsolete\n", encoding="utf-8")
@@ -3949,6 +3960,45 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     )
     assert "./flux-system" not in kustomization_doc["resources"]
     assert (paths.reports_dir / "deploy-report.md").exists()
+
+
+def test_promote_staged_generated_paths_merges_cluster_lifecycle_reports(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "deployments" / "tenant" / "project" / "config.yaml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text("client_info: {}\n", encoding="utf-8")
+    paths = resolve_project_paths(config_path)
+    staged_paths = staged_generated_paths(paths)
+
+    cluster_reports = paths.reports_dir / "soperator-clusters" / "mk8scluster-existing"
+    staged_cluster_reports = (
+        staged_paths.reports_dir / "soperator-clusters" / "mk8scluster-existing"
+    )
+    existing_discovery = cluster_reports / "discovery" / "manifest.json"
+    existing_upgrade = cluster_reports / "ext-soperator-upgrade" / "report.md"
+    existing_onboarding = cluster_reports / "onboarding" / "report.json"
+    staged_onboarding = staged_cluster_reports / "onboarding" / "report.json"
+    staged_render_file = staged_paths.infra_dir / "main.tf"
+
+    existing_discovery.parent.mkdir(parents=True)
+    existing_upgrade.parent.mkdir(parents=True)
+    existing_onboarding.parent.mkdir(parents=True)
+    staged_onboarding.parent.mkdir(parents=True)
+    staged_render_file.parent.mkdir(parents=True)
+    existing_discovery.write_text('{"schema": "discovery"}\n', encoding="utf-8")
+    existing_upgrade.write_text("# Existing Upgrade Report\n", encoding="utf-8")
+    existing_onboarding.write_text('{"source": "existing"}\n', encoding="utf-8")
+    staged_onboarding.write_text('{"source": "staged"}\n', encoding="utf-8")
+    staged_render_file.write_text('resource "null_resource" "main" {}\n', encoding="utf-8")
+
+    promote_staged_generated_paths(staged_paths, paths)
+
+    assert existing_discovery.read_text(encoding="utf-8") == '{"schema": "discovery"}\n'
+    assert existing_upgrade.read_text(encoding="utf-8") == "# Existing Upgrade Report\n"
+    assert existing_onboarding.read_text(encoding="utf-8") == '{"source": "staged"}\n'
+    assert (paths.infra_dir / "main.tf").read_text(encoding="utf-8").startswith("resource")
+    assert not staged_paths.generated_dir.exists()
 
 
 def test_render_instance_preserves_existing_generated_bundle_when_rerender_fails(

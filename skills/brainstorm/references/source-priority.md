@@ -18,6 +18,25 @@ Summarize the user's topic into a compact search brief:
 Use that brief to guide searches. Do not turn brainstorming into broad
 repository indexing.
 
+## Relevance Gate
+
+Before opening a source class, decide what it can resolve:
+
+- the exact user question it can answer
+- the stated challenge or problem statement it can clarify
+- the missing fact, conflict, or owner decision it can close
+- the risk or tradeoff that could materially change the recommendation
+
+Skip the source when none of those apply. Source priority ranks where to look
+first; it does not require reading every source class. Prefer the smallest
+specific snippet, file range, page section, ticket, thread, or doc fragment that
+settles the point. Stop expanding context once the evidence is sufficient for
+the current brainstorm answer.
+
+Treat adjacent context as out of scope unless it changes the answer. Background
+material, similar files, historical discussion, or vendor details are useful
+only when they resolve a named gap from the search brief.
+
 ## Source Order
 
 ### 1. Current Project Folder
@@ -36,8 +55,9 @@ rg --files
 rg -n "keyword|synonym|symbol"
 ```
 
-Open small ranges around hits. Prefer exact local evidence over assumptions or
-older memory.
+Open small ranges around hits that match the search brief. Prefer exact local
+evidence over assumptions or older memory. Stop after local evidence answers
+the question unless a named gap remains.
 
 ### 2. Sibling Project Folders
 
@@ -49,7 +69,8 @@ Escalate to sibling folders in the same repository when:
 - the user asks for consistency with the rest of the repo
 
 Search by topic keywords plus nearby naming conventions. Compare patterns
-without proposing repo-wide changes during the brainstorm.
+without proposing repo-wide changes during the brainstorm. Skip sibling scans
+when they are only likely to provide background rather than resolve the topic.
 
 ### 3. Related Skills
 
@@ -89,14 +110,15 @@ Search order:
 3. User-provided links or pasted excerpts.
 
 Keep internal searches targeted. Prefer source titles, page names, ticket IDs,
-channel names, dates, and concise paraphrases over copied blocks. Do not write
-internal findings into public reusable skill source materials.
+channel names, dates, and concise paraphrases over copied blocks. Search only
+for unresolved ownership, rationale, customer-impact, or incident-context gaps.
+Do not write internal findings into public reusable skill source materials.
 
 ### 5. Official Vendor Documentation
 
 Use current official vendor docs for products, clouds, APIs, SDKs, CLIs,
 package managers, frameworks, standards, security controls, and service
-limits.
+limits when vendor behavior can change the recommendation or risk assessment.
 
 Rules:
 
@@ -125,7 +147,7 @@ When sources disagree:
 A useful brainstorm answer usually contains:
 
 - a one-paragraph topic restatement
-- a compact source map: checked, relevant, missing
+- a compact source map: checked, why relevant, missing
 - facts separated from interpretations
 - assumptions and hypotheses labeled
 - 2-4 options with tradeoffs

@@ -656,8 +656,14 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
         in soperator_flat
     )
     assert "same laptop, workdir, and operator account that started it" in soperator_flat
-    assert ".nebius-cxcli/ext-soperator-upgrades/<target>/checkpoint.json" in soperator
-    assert ".nebius-cxcli/soperator-upgrades/<target>/checkpoint.json" in soperator
+    assert (
+        ".nebius-cxcli/soperator-clusters/<cluster-key>/ext-soperator-upgrade/checkpoint.json"
+        in soperator
+    )
+    assert (
+        ".nebius-cxcli/soperator-clusters/<cluster-key>/soperator-upgrade/checkpoint.json"
+        in soperator
+    )
     assert "these checkpoints stay local" in soperator_flat
     assert "After the final locked segment completes" in soperator_flat
     assert "`nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>`" in soperator
@@ -763,7 +769,10 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     )
     assert "checkpointed maintenance-window lifecycle" in soperator_flat
     assert "cxcli-managed upgrade fails closed before the chart upgrade" in soperator_flat
-    assert "generated/reports/soperator-upgrade-report.md" in soperator_flat
+    assert (
+        "generated/reports/soperator-clusters/<cluster-key>/soperator-upgrade/report.md"
+        in soperator_flat
+    )
     assert "does not silently disable arbitrary live external ActiveChecks" in (soperator_flat)
     assert (
         "Use `ext-soperator onboard` plus `ext-soperator upgrade` when the source cluster is not"
@@ -789,10 +798,10 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "Validation hold: verify external MK8s control-plane and node-group readiness" in (
         soperator_flat
     )
-    assert "Segment completion: write the latest `ext-soperator-upgrade-report.md` / `.json`" in (
+    assert "Segment completion: write the latest `ext-soperator-upgrade/report.md` / `report.json`" in (
         soperator_flat
     )
-    assert "write the segment snapshot under `generated/reports/ext-soperator-upgrades/<target>/<segment-id>/`" in (
+    assert "write the segment snapshot under `generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/segments/<segment-id>/`" in (
         soperator_flat
     )
     assert "Final handoff: after the last locked segment reports `Pending phase: none`" in (
@@ -1559,12 +1568,12 @@ def test_docs_define_component_selector_contract() -> None:
     assert "leaves that same phase pending" in readme_flat
     assert "After the final locked segment completes" in readme_flat
     assert (
-        "`generated/reports/ext-soperator-upgrade-report.md` reports `Pending phase: none`"
+        "`generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/report.md` reports `Pending phase: none`"
         in readme_flat
     )
     assert "Rerendering preserves command-owned runtime reports" in readme_flat
     assert "All lifecycle reports stay in the single `generated/reports/` folder" in readme_flat
-    assert "Each command owns a deterministic latest artifact" in readme_flat
+    assert "Soperator lifecycle output is grouped by cluster identity" in readme_flat
     assert "`nebius-cxcli soperator discover <config.yaml> --target <target>`" in readme_flat
     assert (
         "`nebius-cxcli ext-soperator discover [<config.yaml-or-deployments-root>] --target <target>`"
@@ -1580,14 +1589,14 @@ def test_docs_define_component_selector_contract() -> None:
     )
     assert "project-scoped Nebius authentication" in design_flat
     for report_name in (
-        "`soperator-discovery/<target>/manifest.json`",
-        "`ext-soperator-upgrade-report.md`",
+        "`generated/reports/soperator-clusters/<cluster-key>/discovery/manifest.json`",
+        "`generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/report.md`",
         "`upgrade-node-template-report.md`",
         "`upgrade-node-template-report.json`",
         "`upgrade-node-group-report.md`",
         "`upgrade-node-group-report.json`",
-        "`soperator-upgrade-report.md`",
-        "`soperator-upgrade-report.json`",
+        "`generated/reports/soperator-clusters/<cluster-key>/soperator-upgrade/report.md`",
+        "`generated/reports/soperator-clusters/<cluster-key>/soperator-upgrade/report.json`",
     ):
         assert report_name in readme_flat
     assert "JSON detail reports referenced from those Markdown reports" in readme_flat
@@ -1621,11 +1630,11 @@ def test_docs_define_component_selector_contract() -> None:
     )
     assert "keeps onboarding in place and prints the next same-command invocation" in readme_flat
     assert (
-        "`generated/reports/ext-soperator-upgrade-report.md` shows `Pending phase: none`"
+        "`generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/report.md` shows `Pending phase: none`"
         in readme_flat
     )
     assert (
-        "`config.yaml` and the `generated/reports/soperator-discovery/<target>/` bundle into the deploy-owned onboarding shape"
+        "`config.yaml` and the `generated/reports/soperator-clusters/<cluster-key>/discovery/` bundle into the deploy-owned onboarding shape"
         in readme_flat
     )
     assert "edit `config.yaml`, run `render`, then run `deploy`" in readme_flat
@@ -1710,7 +1719,10 @@ def test_docs_define_component_selector_contract() -> None:
     assert "stores only Soperator-like releases" in readme_flat
     assert "known Soperator release name in a non-standard namespace" in readme_flat
     assert "matched migration profile instead of requiring source-version input" in readme_flat
-    assert "local `.nebius-cxcli/ext-soperator-upgrades/` timeout-guarded checkpoint" in readme_flat
+    assert (
+        "local `.nebius-cxcli/soperator-clusters/<cluster-key>/ext-soperator-upgrade/` timeout-guarded checkpoint"
+        in readme_flat
+    )
     assert "`--approve` / `--no-approve`: record customer approval" in readme_flat
     assert "auto-detects source worker node groups" in readme_flat
     assert "`slurm.nebius.ai/nodeset` worker labels" in readme_flat
@@ -1833,7 +1845,7 @@ def test_docs_define_component_selector_contract() -> None:
     assert "Explicit `acceptance-test smoke --suite slurm` runs the Slurm CLI" in readme_flat
     assert "Slurm nodes reported as `inval` remain unhealthy there" in readme_flat
     assert "same catalog-owned post-render patches that Flux would apply" in readme_flat
-    assert "`generated/reports/ext-soperator-upgrade-report.md`" in readme
+    assert "`generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/report.md`" in readme
     assert (
         "Phases complete only when their live prerequisites are absent or satisfied" in readme_flat
     )
@@ -1921,7 +1933,7 @@ def test_docs_define_component_selector_contract() -> None:
     assert "skip normal deploy and continue with" in design_flat
     assert "After the final locked segment completes" in design_flat
     assert (
-        "`generated/reports/ext-soperator-upgrade-report.md` shows `Pending phase: none`"
+        "`generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/report.md` shows `Pending phase: none`"
         in design_flat
     )
     assert (
@@ -1933,14 +1945,14 @@ def test_docs_define_component_selector_contract() -> None:
         in design_flat
     )
     for report_name in (
-        "`soperator-discovery/<target>/manifest.json`",
-        "`ext-soperator-upgrade-report.md`",
+        "`generated/reports/soperator-clusters/<cluster-key>/discovery/manifest.json`",
+        "`generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/report.md`",
         "`upgrade-node-template-report.md`",
         "`upgrade-node-template-report.json`",
         "`upgrade-node-group-report.md`",
         "`upgrade-node-group-report.json`",
-        "`soperator-upgrade-report.md`",
-        "`soperator-upgrade-report.json`",
+        "`generated/reports/soperator-clusters/<cluster-key>/soperator-upgrade/report.md`",
+        "`generated/reports/soperator-clusters/<cluster-key>/soperator-upgrade/report.json`",
     ):
         assert report_name in design_flat
     assert "JSON `stage_verification` details" in design_flat
@@ -2036,14 +2048,20 @@ def test_docs_define_component_selector_contract() -> None:
     assert "reports known Soperator release names from non-standard namespaces" in design_flat
     assert "`helm-release-detected`" in design
     assert "`soperator_migration_profiles.yaml`" in design
-    assert "local `.nebius-cxcli/ext-soperator-upgrades/` timeout-guarded checkpoint" in design_flat
-    assert ".nebius-cxcli/soperator-upgrades/<target>/checkpoint.json" in design
+    assert (
+        "local `.nebius-cxcli/soperator-clusters/<cluster-key>/ext-soperator-upgrade/` timeout-guarded checkpoint"
+        in design_flat
+    )
+    assert (
+        ".nebius-cxcli/soperator-clusters/<cluster-key>/soperator-upgrade/checkpoint.json"
+        in design
+    )
     assert (
         "finish `ext-soperator upgrade` and checkpointed `soperator upgrade` runs from the same laptop"
         in design_flat
     )
     assert (
-        "resume checkpoints are local under `.nebius-cxcli/ext-soperator-upgrades/<target>/`"
+        "resume checkpoints are local under `.nebius-cxcli/soperator-clusters/<cluster-key>/ext-soperator-upgrade/`"
         in design_flat
     )
     assert (
@@ -2079,7 +2097,10 @@ def test_docs_define_component_selector_contract() -> None:
         design_flat
     )
     assert "Slurm rejects the scoped node filter" in design_flat
-    assert "`generated/reports/ext-soperator-upgrade-report.json`" in design_flat
+    assert (
+        "`generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/report.json`"
+        in design_flat
+    )
     assert "auto-detects source worker node groups" in design_flat
     assert "`slurm.nebius.ai/nodeset` worker labels" in design_flat
     assert "runs a strict net-new quota preflight before the first mutation" in design_flat
@@ -2180,7 +2201,7 @@ def test_docs_define_component_selector_contract() -> None:
     assert "Explicit `acceptance-test smoke --suite slurm` runs the Slurm CLI" in readme_flat
     assert "Slurm nodes reported as `inval` remain unhealthy there" in readme_flat
     assert "same catalog-owned post-render patches that Flux would apply" in design_flat
-    assert "`generated/reports/ext-soperator-upgrade-report.md`" in design
+    assert "`generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/report.md`" in design
     assert "resume relies on phase checkpoints" in design_flat
     assert "interactive spinner backed by phase-aware status snapshots" in design_flat
     assert (

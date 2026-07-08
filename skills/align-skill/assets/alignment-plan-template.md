@@ -29,6 +29,7 @@
 - External services:
 - Production or unknown environments:
 - Vendor-specific claims:
+- `SKILL.md` overloading or excessive runtime instructions:
 
 ## Vendor Docs To Check
 
@@ -53,6 +54,8 @@
 
 ## Validation Plan
 
+- Mandatory `code-review` lane:
+- Mandatory `apply-security` lane:
 - Static checks:
 - Local lint/schema/render checks:
 - Unit tests:
@@ -63,3 +66,6 @@
 ## Stop Conditions
 
 - TBD
+- Missing or incomplete `code-review` lane:
+- Missing or incomplete `apply-security` lane:
+- Blocking review-lane findings:

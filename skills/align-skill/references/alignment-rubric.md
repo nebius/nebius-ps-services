@@ -23,7 +23,9 @@ Source basis:
 | Trigger quality | Description includes realistic user intent terms and avoids over-broad claims. |
 | Authoring helper fit | For scaffolded skill folders or draft skill content, guidance defers initial scaffolding to `skill-creator` and then hardens trigger, structure, safety, speed, and validation. |
 | Scope and non-goals | Skill has a clear job and boundaries from adjacent skills. |
-| Progressive disclosure | `SKILL.md` stays focused; long material moves to `references/` or `assets/`. |
+| Progressive disclosure | `SKILL.md` carries only trigger, scope, required workflow, guardrails, validation, and output contract; long material moves to `references/` or `assets/`. |
+| Code-review lane | `code-review` reviews the target skill scope for instruction quality, support scripts, validation gaps, maintainability, over-complexity, and bloated `SKILL.md` content. |
+| Security-review lane | `apply-security` reviews the target skill scope for secrets, private URLs, unsafe live actions, credential handling, external writes, dangerous scripts, and supply-chain risk. |
 | Official vendor evidence | Product-specific commands and claims are checked against official docs. |
 | Safety and guardrails | Destructive, credential, publishing, production, and external-service risks are guarded. |
 | Environment assumptions | Required tools, access, credentials, and test-environment assumptions are explicit. |
@@ -74,10 +76,16 @@ Source basis:
    GitHub Actions, databases, and CI/CD behavior.
 8. Verify vendor-specific details against official docs.
 9. Apply only evidence-backed changes.
-10. Capture newly learned durable patterns, decisions, best practices, or
-   relevant findings in the target skill's local sources when they are
-   reusable, public-safe, and in scope.
-11. Run safe validation and record remaining uncertainty.
+10. Apply the mandatory `code-review` and `apply-security` lanes to every target
+   skill in scope. Keep both lanes scoped to target skill files and directly
+   referenced resources, and keep them report-only when the user requested
+   report-only work.
+11. Capture newly learned durable patterns, decisions, best practices, or
+   relevant findings, including reusable review-lane findings, in the target
+   skill's local sources when they are reusable, public-safe, and in scope.
+12. Run safe validation and record remaining uncertainty. Do not claim full
+    alignment when either mandatory review lane is incomplete or has unresolved
+    blocking findings.
 
 Do not capture raw logs, secrets, customer data, private URLs, transient local
 state, or one-off environment details. If a useful learning is not safe or

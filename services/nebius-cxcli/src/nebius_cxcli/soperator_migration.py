@@ -85,6 +85,12 @@ from .slurm_jobs import (
     parse_squeue_jobs,
     selected_display_job_ids,
 )
+from .soperator_artifacts import (
+    soperator_cluster_artifact_identity,
+    soperator_cluster_artifact_identity_from_payload,
+    soperator_cluster_checkpoint_path,
+    soperator_cluster_report_dir,
+)
 from .soperator_gpu_driver_jail import (
     SOPERATOR_GPU_DRIVER_JAIL_INIT_CONTAINER_NAME,
     ensure_soperator_gpu_driver_jail_values,
@@ -168,11 +174,12 @@ from .soperator_validation import (
 
 SOPERATOR_MIGRATION_EXECUTION_SCHEMA = "nebius-cxcli-ext-soperator-upgrade-execution/v2"
 SOPERATOR_MIGRATION_REPORT_SCHEMA = "nebius-cxcli-ext-soperator-upgrade-report/v2"
-SOPERATOR_MIGRATION_CHECKPOINT_DIR = ".nebius-cxcli/ext-soperator-upgrades"
+SOPERATOR_MIGRATION_CHECKPOINT_COMMAND_DIR = "ext-soperator-upgrade"
+OLD_SOPERATOR_MIGRATION_CHECKPOINT_DIR = ".nebius-cxcli/ext-soperator-upgrades"
 LEGACY_SOPERATOR_MIGRATION_CHECKPOINT_DIR = ".nebius-cxcli/soperator-migrations"
-MIGRATE_REPORT_FILENAME = "ext-soperator-upgrade-report.md"
-UPGRADE_REPORT_JSON_FILENAME = "ext-soperator-upgrade-report.json"
-EXT_SOPERATOR_UPGRADE_SEGMENT_REPORT_DIRNAME = "ext-soperator-upgrades"
+MIGRATE_REPORT_FILENAME = "report.md"
+UPGRADE_REPORT_JSON_FILENAME = "report.json"
+EXT_SOPERATOR_UPGRADE_SEGMENT_REPORT_DIRNAME = "segments"
 _MUTATING_PHASE_IDS = frozenset(
     {
         "external-node-template-upgrade",
@@ -1189,9 +1196,27 @@ class SoperatorMigrationStatusSnapshot:
     summary: str
 
 
-def soperator_migration_checkpoint_path(config_path: Path, target_ref: str) -> Path:
-    normalized = normalize_component_token(target_ref) or "mk8s"
-    return config_path.parent / SOPERATOR_MIGRATION_CHECKPOINT_DIR / normalized / "checkpoint.json"
+def soperator_migration_checkpoint_path(
+    config_path: Path,
+    target_ref: str,
+    *,
+    payload_or_config: Any = None,
+    cluster_id: str = "",
+    cluster_name: str = "",
+    kube_context: str = "",
+) -> Path:
+    identity = soperator_cluster_artifact_identity_from_payload(
+        payload_or_config,
+        target_ref=target_ref,
+        cluster_id=cluster_id,
+        cluster_name=cluster_name,
+        kube_context=kube_context,
+    )
+    return soperator_cluster_checkpoint_path(
+        config_path.parent,
+        identity,
+        SOPERATOR_MIGRATION_CHECKPOINT_COMMAND_DIR,
+    )
 
 
 def _unsupported_checkpoint_schema_message(path: Path) -> str:
@@ -1278,15 +1303,27 @@ def ext_soperator_upgrade_segment_report_paths(
     config_path: Path,
     target_ref: str,
     segment_id: str,
+    *,
+    payload_or_config: Any = None,
+    cluster_id: str = "",
+    cluster_name: str = "",
+    kube_context: str = "",
 ) -> tuple[Path, Path]:
-    normalized_target = normalize_component_token(target_ref) or "target"
     normalized_segment = normalize_component_token(segment_id) or "segment"
+    identity = soperator_cluster_artifact_identity_from_payload(
+        payload_or_config,
+        target_ref=target_ref,
+        cluster_id=cluster_id,
+        cluster_name=cluster_name,
+        kube_context=kube_context,
+    )
     report_dir = (
-        config_path.parent
-        / "generated"
-        / "reports"
+        soperator_cluster_report_dir(
+            config_path.parent,
+            identity,
+            SOPERATOR_MIGRATION_CHECKPOINT_COMMAND_DIR,
+        )
         / EXT_SOPERATOR_UPGRADE_SEGMENT_REPORT_DIRNAME
-        / normalized_target
         / normalized_segment
     )
     return report_dir / "report.md", report_dir / "report.json"
@@ -1323,6 +1360,9 @@ def _locked_upgrade_path_segment_history(
             config_path,
             target_ref,
             segment_id,
+            cluster_id=str(checkpoint.get("cluster_id", "") or ""),
+            cluster_name=str(checkpoint.get("cluster_name", "") or ""),
+            kube_context=str(checkpoint.get("kube_context", "") or ""),
         )
         if segment_id in completed:
             status = "completed"
@@ -1363,8 +1403,27 @@ def legacy_soperator_migration_checkpoint_path(config_path: Path, target_ref: st
     )
 
 
-def soperator_migration_lock_path(config_path: Path, target_ref: str) -> Path:
-    return soperator_migration_checkpoint_path(config_path, target_ref).with_suffix(".lock")
+def old_soperator_migration_checkpoint_path(config_path: Path, target_ref: str) -> Path:
+    normalized = normalize_component_token(target_ref) or "mk8s"
+    return (
+        config_path.parent
+        / OLD_SOPERATOR_MIGRATION_CHECKPOINT_DIR
+        / normalized
+        / "checkpoint.json"
+    )
+
+
+def soperator_migration_lock_path(
+    config_path: Path,
+    target_ref: str,
+    *,
+    payload_or_config: Any = None,
+) -> Path:
+    return soperator_migration_checkpoint_path(
+        config_path,
+        target_ref,
+        payload_or_config=payload_or_config,
+    ).with_suffix(".lock")
 
 
 class SoperatorMigrationExecutionLock:
@@ -16174,16 +16233,82 @@ def _target_mk8s_gpu_validation_specs(
     ]
 
 
-def _migration_validation_reports_dir(config_path: Path) -> Path:
-    return config_path.resolve().parent / "generated" / "reports"
+def _external_upgrade_artifact_identity(
+    *,
+    target_ref: str,
+    payload_or_config: Any = None,
+    checkpoint: Mapping[str, Any] | None = None,
+) -> Any:
+    checkpoint_map = checkpoint if isinstance(checkpoint, Mapping) else {}
+    cluster_id = str(checkpoint_map.get("cluster_id", "") or "").strip()
+    cluster_name = str(checkpoint_map.get("cluster_name", "") or "").strip()
+    kube_context = str(checkpoint_map.get("kube_context", "") or "").strip()
+    if cluster_id or cluster_name or kube_context:
+        return soperator_cluster_artifact_identity(
+            cluster_id=cluster_id,
+            cluster_name=cluster_name,
+            target_ref=target_ref,
+            kube_context=kube_context,
+        )
+    return soperator_cluster_artifact_identity_from_payload(
+        payload_or_config,
+        target_ref=target_ref,
+    )
 
 
-def _migrate_report_path(config_path: Path) -> Path:
-    return _migration_validation_reports_dir(config_path) / MIGRATE_REPORT_FILENAME
+def _migration_validation_reports_dir(
+    config_path: Path,
+    *,
+    target_ref: str,
+    payload_or_config: Any = None,
+    checkpoint: Mapping[str, Any] | None = None,
+) -> Path:
+    identity = _external_upgrade_artifact_identity(
+        target_ref=target_ref,
+        payload_or_config=payload_or_config,
+        checkpoint=checkpoint,
+    )
+    return soperator_cluster_report_dir(
+        config_path.resolve().parent,
+        identity,
+        SOPERATOR_MIGRATION_CHECKPOINT_COMMAND_DIR,
+    )
 
 
-def _upgrade_report_json_path(config_path: Path) -> Path:
-    return _migration_validation_reports_dir(config_path) / UPGRADE_REPORT_JSON_FILENAME
+def _migrate_report_path(
+    config_path: Path,
+    *,
+    target_ref: str,
+    payload_or_config: Any = None,
+    checkpoint: Mapping[str, Any] | None = None,
+) -> Path:
+    return (
+        _migration_validation_reports_dir(
+            config_path,
+            target_ref=target_ref,
+            payload_or_config=payload_or_config,
+            checkpoint=checkpoint,
+        )
+        / MIGRATE_REPORT_FILENAME
+    )
+
+
+def _upgrade_report_json_path(
+    config_path: Path,
+    *,
+    target_ref: str,
+    payload_or_config: Any = None,
+    checkpoint: Mapping[str, Any] | None = None,
+) -> Path:
+    return (
+        _migration_validation_reports_dir(
+            config_path,
+            target_ref=target_ref,
+            payload_or_config=payload_or_config,
+            checkpoint=checkpoint,
+        )
+        / UPGRADE_REPORT_JSON_FILENAME
+    )
 
 
 def _target_soperator_cluster_validation_specs(
@@ -16293,8 +16418,15 @@ def external_soperator_upgrade_protected_comparison_passed(
     *,
     config_path: Path,
     target_ref: str,
+    payload_or_config: Any = None,
 ) -> bool:
-    checkpoint = _load_checkpoint(soperator_migration_checkpoint_path(config_path, target_ref))
+    checkpoint = _load_checkpoint(
+        soperator_migration_checkpoint_path(
+            config_path,
+            target_ref,
+            payload_or_config=payload_or_config,
+        )
+    )
     if checkpoint is None:
         return False
     return _checkpoint_protected_comparison_passed(checkpoint)
@@ -16394,7 +16526,11 @@ def _run_migration_soperator_cluster_validation(
         return [
             "Soperator cluster smoke validation skipped: no Soperator app row is configured for this target."
         ]
-    reports_dir = _migration_validation_reports_dir(config_path)
+    reports_dir = _migration_validation_reports_dir(
+        config_path,
+        target_ref=target_ref,
+        payload_or_config=payload,
+    )
     reports_dir.mkdir(parents=True, exist_ok=True)
     messages: list[str] = []
     try:
@@ -16498,7 +16634,11 @@ def _run_migration_mk8s_gpu_validations(
     if not validations:
         phase["mk8s_gpu_validations"] = []
         return ["MK8s GPU validations skipped: no enabled target-scoped checks were configured."]
-    reports_dir = _migration_validation_reports_dir(config_path)
+    reports_dir = _migration_validation_reports_dir(
+        config_path,
+        target_ref=target_ref,
+        payload_or_config=payload,
+    )
     reports_dir.mkdir(parents=True, exist_ok=True)
     clear_deploy_validation_artifacts(validations, reports_dir=reports_dir)
     messages: list[str] = []
@@ -16974,8 +17114,16 @@ def _write_soperator_migrate_report(
     pending_reason: str,
     mutation_performed: bool,
 ) -> Path:
-    report_path = _migrate_report_path(config_path)
-    json_report_path = _upgrade_report_json_path(config_path)
+    report_path = _migrate_report_path(
+        config_path,
+        target_ref=target_ref,
+        checkpoint=checkpoint,
+    )
+    json_report_path = _upgrade_report_json_path(
+        config_path,
+        target_ref=target_ref,
+        checkpoint=checkpoint,
+    )
     report_path.parent.mkdir(parents=True, exist_ok=True)
     phase_state = _mapping(checkpoint.get("phase_state"))
     report_phase_ids = _external_upgrade_report_phase_ids(
@@ -17174,8 +17322,13 @@ def _write_soperator_migrate_report(
         lines.append("- No checkpoint events recorded.")
     lines.append("")
     upgrade_safety = _mapping(checkpoint.get("upgrade_safety"))
+    artifact_identity = _external_upgrade_artifact_identity(
+        target_ref=target_ref,
+        checkpoint=checkpoint,
+    )
     json_report = {
         "schema": SOPERATOR_MIGRATION_REPORT_SCHEMA,
+        **artifact_identity.as_metadata(),
         "target_ref": target_ref,
         "source_version": source_version or "",
         "target_version": target_version or "",
@@ -17233,6 +17386,9 @@ def _write_soperator_migrate_report(
             config_path,
             target_ref,
             current_segment_id,
+            cluster_id=str(checkpoint.get("cluster_id", "") or ""),
+            cluster_name=str(checkpoint.get("cluster_name", "") or ""),
+            kube_context=str(checkpoint.get("kube_context", "") or ""),
         )
         snapshot_json_report = dict(json_report)
         snapshot_json_report["markdown_report"] = str(segment_report_path)
@@ -17497,8 +17653,16 @@ def _checkpoint_mutating_progress_started(checkpoint: Mapping[str, Any] | None) 
 def external_soperator_upgrade_resume_backup_metadata(
     config_path: Path,
     target_ref: str,
+    *,
+    payload_or_config: Any = None,
 ) -> dict[str, Any] | None:
-    checkpoint = _load_checkpoint(soperator_migration_checkpoint_path(config_path, target_ref))
+    checkpoint = _load_checkpoint(
+        soperator_migration_checkpoint_path(
+            config_path,
+            target_ref,
+            payload_or_config=payload_or_config,
+        )
+    )
     if (
         checkpoint is None
         or _checkpoint_run_complete(checkpoint)
@@ -19790,9 +19954,23 @@ def execute_soperator_migration(
             f"{legacy_checkpoint_path}. Remove the old checkpoint after reviewing it; "
             "`nebius-cxcli ext-soperator upgrade` does not resume retired checkpoints."
         )
-    with SoperatorMigrationExecutionLock(
-        soperator_migration_lock_path(config_path, normalized_target)
-    ):
+    checkpoint_path = soperator_migration_checkpoint_path(
+        config_path,
+        normalized_target,
+        payload_or_config=payload,
+        cluster_id=str(source_report.get("cluster_id", "") or ""),
+        cluster_name=str(source_report.get("cluster_name", "") or ""),
+        kube_context=str(source_report.get("kube_context", "") or ""),
+    )
+    old_checkpoint_path = old_soperator_migration_checkpoint_path(config_path, normalized_target)
+    if old_checkpoint_path != checkpoint_path and old_checkpoint_path.exists():
+        raise RuntimeError(
+            "Old target-scoped external Soperator checkpoint found: "
+            f"{old_checkpoint_path}. This cxcli version writes cluster-scoped checkpoints "
+            f"under {checkpoint_path.parent}. Review or remove the old checkpoint before "
+            "rerunning ext-soperator upgrade; it is not resumed automatically."
+        )
+    with SoperatorMigrationExecutionLock(checkpoint_path.with_suffix(".lock")):
         active_command_runner = command_runner or _default_command_runner
         attached_nebius_api = getattr(active_command_runner, "nebius_api", None)
         owned_nebius_api: SoperatorMigrationNebiusApi | None = None
@@ -19972,7 +20150,14 @@ def _execute_soperator_migration_unlocked(
         target_ref=normalized_target,
     )
 
-    checkpoint_path = soperator_migration_checkpoint_path(config_path, normalized_target)
+    checkpoint_path = soperator_migration_checkpoint_path(
+        config_path,
+        normalized_target,
+        payload_or_config=payload,
+        cluster_id=str(source_report.get("cluster_id", "") or ""),
+        cluster_name=str(source_report.get("cluster_name", "") or ""),
+        kube_context=str(source_report.get("kube_context", "") or ""),
+    )
     existing_checkpoint = _load_checkpoint(checkpoint_path)
     completed_prior_run = (
         existing_checkpoint is not None
@@ -20067,6 +20252,14 @@ def _execute_soperator_migration_unlocked(
         upgrade_path_segment_id=upgrade_path_segment_id,
         locked_upgrade_path=locked_upgrade_path,
     )
+    artifact_identity = soperator_cluster_artifact_identity_from_payload(
+        payload,
+        target_ref=normalized_target,
+        cluster_id=str(source_report.get("cluster_id", "") or ""),
+        cluster_name=str(source_report.get("cluster_name", "") or ""),
+        kube_context=str(source_report.get("kube_context", "") or ""),
+    )
+    checkpoint.update(artifact_identity.as_metadata())
     checkpoint_phase_ids = _checkpoint_planned_phase_ids(checkpoint)
     if checkpoint_phase_ids:
         phase_ids = checkpoint_phase_ids
@@ -20366,8 +20559,16 @@ def _execute_soperator_migration_unlocked(
             phase=phase_id,
             error=pending_reason,
         )
-        report_path = _migrate_report_path(config_path)
-        json_report_path = _upgrade_report_json_path(config_path)
+        report_path = _migrate_report_path(
+            config_path,
+            target_ref=normalized_target,
+            checkpoint=checkpoint,
+        )
+        json_report_path = _upgrade_report_json_path(
+            config_path,
+            target_ref=normalized_target,
+            checkpoint=checkpoint,
+        )
         checkpoint["upgrade_report"] = str(report_path)
         checkpoint["upgrade_report_json"] = str(json_report_path)
         _write_soperator_migrate_report(
@@ -20883,8 +21084,16 @@ def _execute_soperator_migration_unlocked(
         checkpoint["pending_phase"] = "none"
         checkpoint["pending_reason"] = ""
         _append_event(checkpoint, "execute-completed")
-    report_path = _migrate_report_path(config_path)
-    json_report_path = _upgrade_report_json_path(config_path)
+    report_path = _migrate_report_path(
+        config_path,
+        target_ref=normalized_target,
+        checkpoint=checkpoint,
+    )
+    json_report_path = _upgrade_report_json_path(
+        config_path,
+        target_ref=normalized_target,
+        checkpoint=checkpoint,
+    )
     checkpoint["upgrade_report"] = str(report_path)
     checkpoint["upgrade_report_json"] = str(json_report_path)
     if upgrade_path_fingerprint and upgrade_path_segment_id:
@@ -20905,6 +21114,9 @@ def _execute_soperator_migration_unlocked(
                 config_path,
                 normalized_target,
                 upgrade_path_segment_id,
+                cluster_id=str(checkpoint.get("cluster_id", "") or ""),
+                cluster_name=str(checkpoint.get("cluster_name", "") or ""),
+                kube_context=str(checkpoint.get("kube_context", "") or ""),
             )
             segment_entry["live_source_version"] = live_source_version
             segment_entry["target_version"] = target_version

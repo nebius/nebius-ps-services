@@ -21,6 +21,11 @@ import yaml
 
 from .component_instances import normalize_component_token
 from .runtime_config import to_plain_data
+from .soperator_artifacts import (
+    SoperatorClusterArtifactIdentity,
+    soperator_cluster_artifact_identity_from_payload,
+    soperator_cluster_report_dir,
+)
 from .soperator_discovery import (
     SOPERATOR_DISCOVERY_DIR_NAME,
     load_soperator_discovery_bundle,
@@ -322,16 +327,28 @@ def soperator_onboarding_fingerprint(
 
 
 def soperator_onboarding_report_path(target_ref: str) -> str:
-    normalized = normalize_component_token(target_ref) or "mk8s"
-    return f"generated/{ONBOARDING_REPORT_DIR}/soperator-onboarding-{normalized}.json"
+    identity = soperator_cluster_artifact_identity_from_payload({}, target_ref=target_ref)
+    return (
+        "generated/"
+        f"{ONBOARDING_REPORT_DIR}/soperator-clusters/{identity.cluster_key}/onboarding/report.json"
+    )
 
 
 def source_soperator_discovery_report_path(
     project_dir: Path,
     target_ref: str | None = None,
+    payload_or_config: Any = None,
 ) -> Path:
     if target_ref:
-        return soperator_discovery_manifest_path(project_dir, target_ref)
+        identity = soperator_cluster_artifact_identity_from_payload(
+            payload_or_config,
+            target_ref=target_ref,
+        )
+        return soperator_discovery_manifest_path(
+            project_dir,
+            target_ref,
+            artifact_identity=identity,
+        )
     return project_dir / "generated" / ONBOARDING_REPORT_DIR / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
 
 
@@ -3599,8 +3616,11 @@ def write_soperator_onboarding_reports(
     approved_target_chart_version: str = "",
 ) -> list[Path]:
     written: list[Path] = []
-    reports_dir = generated_dir / ONBOARDING_REPORT_DIR
     for target_ref in soperator_onboarding_target_refs(payload_or_config):
+        identity = soperator_cluster_artifact_identity_from_payload(
+            payload_or_config,
+            target_ref=target_ref,
+        )
         report = build_soperator_onboarding_report_from_config(
             payload_or_config,
             target_ref=target_ref,
@@ -3610,9 +3630,18 @@ def write_soperator_onboarding_reports(
             source_report_path=source_soperator_discovery_report_path(
                 generated_dir.parent,
                 target_ref,
+                payload_or_config=payload_or_config,
             ),
         )
-        path = reports_dir / f"soperator-onboarding-{target_ref}.json"
+        report.update(identity.as_metadata())
+        path = (
+            soperator_cluster_report_dir(
+                generated_dir.parent,
+                identity,
+                "onboarding",
+            )
+            / "report.json"
+        )
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path: Path | None = None
         try:
@@ -3641,6 +3670,7 @@ def write_source_soperator_discovery_report(
     target_ref: str,
     snapshot: Mapping[str, Any],
     report: SoperatorOnboardingReport | Mapping[str, Any],
+    artifact_identity: SoperatorClusterArtifactIdentity | None = None,
     cluster_id: str = "",
     cluster_name: str = "",
     source_kind: str = "external",
@@ -3663,6 +3693,7 @@ def write_source_soperator_discovery_report(
         report=report,
         source_kind=source_kind,
         command=command,
+        artifact_identity=artifact_identity,
         cluster_id=cluster_id,
         cluster_name=cluster_name,
         namespace=namespace,

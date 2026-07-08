@@ -43,7 +43,9 @@ _LIFECYCLE_REPORT_FILENAMES = frozenset(
         "upgrade-node-template-report.json",
     }
 )
-_LIFECYCLE_REPORT_DIRNAMES = frozenset({"ext-soperator-upgrades", "soperator-discovery"})
+_LIFECYCLE_REPORT_DIRNAMES = frozenset(
+    {"ext-soperator-upgrades", "soperator-clusters", "soperator-discovery"}
+)
 _REPORT_JSON_REF_RE = re.compile(r"`([^`/\\]+\.json)`")
 
 
@@ -131,9 +133,23 @@ def _preserve_lifecycle_report_artifacts(
     for name in dirnames:
         source = final_paths.reports_dir / name
         target = staged_paths.reports_dir / name
-        if not source.is_dir() or target.exists():
+        if not source.is_dir():
             continue
-        shutil.copytree(source, target)
+        _copy_missing_lifecycle_report_tree(source, target)
+
+
+def _copy_missing_lifecycle_report_tree(source: Path, target: Path) -> None:
+    if source.is_file():
+        if target.exists():
+            return
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        return
+    if not source.is_dir() or (target.exists() and not target.is_dir()):
+        return
+    target.mkdir(parents=True, exist_ok=True)
+    for child in source.iterdir():
+        _copy_missing_lifecycle_report_tree(child, target / child.name)
 
 
 def promote_staged_generated_paths(

@@ -140,8 +140,9 @@ description: Use this skill when...
 ## References
 ```
 
-For larger skills, keep only core routing and workflow instructions in
-`SKILL.md`; move long checklists and examples into `references/` or `assets/`.
+For larger skills, keep only trigger, scope, required workflow, guardrails,
+validation, and output contract in `SKILL.md`; move long checklists, examples,
+policy, troubleshooting, and templates into `references/` or `assets/`.
 For scaffolded skill folders, draft skill content, or update work, read
 `references/skill-authoring-best-practices.md` after target scope is known.
 

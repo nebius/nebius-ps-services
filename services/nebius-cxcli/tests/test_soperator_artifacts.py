@@ -1,0 +1,71 @@
+from __future__ import annotations
+
+from nebius_cxcli.soperator_artifacts import (
+    soperator_cluster_artifact_identity,
+    soperator_cluster_artifact_identity_from_payload,
+)
+
+
+def test_soperator_cluster_key_prefers_cluster_id() -> None:
+    identity = soperator_cluster_artifact_identity(
+        cluster_id="mk8scluster-e00sy1jv52q5vrqrxy",
+        cluster_name="prod cluster",
+        kube_context="ctx",
+        target_ref="mk8s",
+    )
+
+    assert identity.cluster_key == "mk8scluster-e00sy1jv52q5vrqrxy"
+    assert identity.cluster_id == "mk8scluster-e00sy1jv52q5vrqrxy"
+    assert identity.cluster_name == "prod cluster"
+    assert identity.target_ref == "mk8s"
+    assert identity.kube_context == "ctx"
+
+
+def test_soperator_cluster_key_uses_name_when_id_missing() -> None:
+    identity = soperator_cluster_artifact_identity(
+        cluster_name="External Soperator Prod",
+        kube_context="ctx",
+        target_ref="external",
+    )
+
+    assert identity.cluster_key == "external-soperator-prod"
+
+
+def test_soperator_cluster_key_uses_kube_context_when_identity_missing() -> None:
+    identity = soperator_cluster_artifact_identity(
+        kube_context="kind/soperator:prod",
+        target_ref="external",
+    )
+
+    assert identity.cluster_key == "kind-soperator-prod"
+
+
+def test_soperator_cluster_key_falls_back_to_target() -> None:
+    identity = soperator_cluster_artifact_identity(target_ref="External Soperator")
+
+    assert identity.cluster_key == "external-soperator"
+
+
+def test_soperator_cluster_identity_from_payload_uses_target_cluster_id() -> None:
+    payload = {
+        "deploy": {
+            "targets": [
+                {
+                    "instance_id": "external-soperator",
+                    "cluster_id": "mk8scluster-e00sy1jv52q5vrqrxy",
+                    "cluster_name": "External Prod",
+                    "kube_context": "ctx",
+                }
+            ]
+        }
+    }
+
+    identity = soperator_cluster_artifact_identity_from_payload(
+        payload,
+        target_ref="external-soperator",
+    )
+
+    assert identity.cluster_key == "mk8scluster-e00sy1jv52q5vrqrxy"
+    assert identity.cluster_id == "mk8scluster-e00sy1jv52q5vrqrxy"
+    assert identity.cluster_name == "External Prod"
+    assert identity.kube_context == "ctx"

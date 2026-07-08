@@ -414,6 +414,13 @@ from .slurm_jobs import (
     parse_squeue_jobs,
     selected_display_job_ids,
 )
+from .soperator_artifacts import (
+    SoperatorClusterArtifactIdentity,
+    soperator_cluster_artifact_identity_from_payload,
+    soperator_cluster_backup_dir,
+    soperator_cluster_checkpoint_path,
+    soperator_cluster_report_dir,
+)
 from .soperator_backup_runtime import (
     ensure_soperator_backup_runtime_secrets,
     soperator_backup_enabled_for_target,
@@ -473,6 +480,7 @@ from .soperator_migration import (
     external_soperator_upgrade_top_level_stage,
     legacy_soperator_migration_checkpoint_path,
     normalize_external_login_session_policy,
+    old_soperator_migration_checkpoint_path,
     resolve_external_node_template_rollout,
     soperator_migration_checkpoint_path,
     stabilize_soperator_login_load_balancer_allocations,
@@ -2530,6 +2538,7 @@ class _SoperatorUpgradeBackupResult:
     secret_material_included: bool
     accounting_db_included: bool
     manifest_sha256: str
+    artifact_identity: SoperatorClusterArtifactIdentity | None = None
 
 
 @dataclass(frozen=True)
@@ -2659,12 +2668,13 @@ class _SdkExternalJailSfsApi:
 
 SOPERATOR_UPGRADE_CHECKPOINT_SCHEMA = "nebius-cxcli-soperator-cluster-upgrade/v1"
 SOPERATOR_UPGRADE_CHECKPOINT_DIR = ".nebius-cxcli/soperator-upgrades"
+SOPERATOR_UPGRADE_CHECKPOINT_COMMAND_DIR = "soperator-upgrade"
 UPGRADE_NODE_TEMPLATE_REPORT_FILENAME = "upgrade-node-template-report.md"
 UPGRADE_NODE_TEMPLATE_REPORT_JSON_FILENAME = "upgrade-node-template-report.json"
 UPGRADE_NODE_GROUP_REPORT_FILENAME = "upgrade-node-group-report.md"
 UPGRADE_NODE_GROUP_REPORT_JSON_FILENAME = "upgrade-node-group-report.json"
-SOPERATOR_UPGRADE_REPORT_FILENAME = "soperator-upgrade-report.md"
-SOPERATOR_UPGRADE_REPORT_JSON_FILENAME = "soperator-upgrade-report.json"
+SOPERATOR_UPGRADE_REPORT_FILENAME = "report.md"
+SOPERATOR_UPGRADE_REPORT_JSON_FILENAME = "report.json"
 _SOPERATOR_ACTIVECHECKS_UPGRADE_PATHS = (
     "values.soperator-activechecks.enabled",
     "values.soperator-activechecks.waitForChecks.enabled",
@@ -4584,9 +4594,104 @@ def _soperator_upgrade_restore_activechecks_values(
     return row != before
 
 
-def _soperator_upgrade_checkpoint_path(config_path: Path, target_ref: str) -> Path:
+def _soperator_upgrade_artifact_identity(
+    source_payload: Mapping[str, Any] | None,
+    *,
+    target_ref: str,
+    cluster_id: str = "",
+    cluster_name: str = "",
+    kube_context: str = "",
+) -> SoperatorClusterArtifactIdentity:
+    return soperator_cluster_artifact_identity_from_payload(
+        source_payload or {},
+        target_ref=target_ref,
+        cluster_id=cluster_id,
+        cluster_name=cluster_name,
+        kube_context=kube_context,
+    )
+
+
+def _soperator_upgrade_artifact_identity_from_checkpoint(
+    checkpoint: Mapping[str, Any],
+    *,
+    source_payload: Mapping[str, Any] | None = None,
+    target_ref: str = "",
+) -> SoperatorClusterArtifactIdentity:
+    return _soperator_upgrade_artifact_identity(
+        source_payload,
+        target_ref=_non_empty_text(checkpoint.get("target_ref")) or target_ref,
+        cluster_id=_non_empty_text(checkpoint.get("cluster_id")),
+        cluster_name=_non_empty_text(checkpoint.get("cluster_name")),
+        kube_context=_non_empty_text(checkpoint.get("kube_context")),
+    )
+
+
+def _soperator_upgrade_report_paths(
+    paths: ProjectPaths,
+    identity: SoperatorClusterArtifactIdentity,
+) -> tuple[Path, Path]:
+    report_dir = soperator_cluster_report_dir(
+        paths.project_dir,
+        identity,
+        SOPERATOR_UPGRADE_CHECKPOINT_COMMAND_DIR,
+    )
+    return (
+        report_dir / SOPERATOR_UPGRADE_REPORT_FILENAME,
+        report_dir / SOPERATOR_UPGRADE_REPORT_JSON_FILENAME,
+    )
+
+
+def _soperator_upgrade_report_metadata(
+    *,
+    paths: ProjectPaths,
+    identity: SoperatorClusterArtifactIdentity,
+) -> dict[str, str]:
+    markdown_path, json_path = _soperator_upgrade_report_paths(paths, identity)
+    return {
+        "upgrade": _soperator_upgrade_relative_path(markdown_path, root=paths.project_dir),
+        "upgrade_json": _soperator_upgrade_relative_path(json_path, root=paths.project_dir),
+    }
+
+
+def _soperator_upgrade_checkpoint_path(
+    config_path: Path,
+    target_ref: str,
+    *,
+    source_payload: Mapping[str, Any] | None = None,
+) -> Path:
+    identity = _soperator_upgrade_artifact_identity(source_payload, target_ref=target_ref)
+    return soperator_cluster_checkpoint_path(
+        config_path.parent,
+        identity,
+        SOPERATOR_UPGRADE_CHECKPOINT_COMMAND_DIR,
+    )
+
+
+def _old_soperator_upgrade_checkpoint_path(config_path: Path, target_ref: str) -> Path:
     normalized = normalize_component_token(target_ref) or "mk8s"
     return config_path.parent / SOPERATOR_UPGRADE_CHECKPOINT_DIR / normalized / "checkpoint.json"
+
+
+def _raise_if_old_soperator_upgrade_checkpoint_exists(
+    *,
+    config_path: Path,
+    target_ref: str,
+    source_payload: Mapping[str, Any],
+) -> None:
+    checkpoint_path = _soperator_upgrade_checkpoint_path(
+        config_path,
+        target_ref,
+        source_payload=source_payload,
+    )
+    old_checkpoint_path = _old_soperator_upgrade_checkpoint_path(config_path, target_ref)
+    if old_checkpoint_path == checkpoint_path or not old_checkpoint_path.exists():
+        return
+    raise RuntimeError(
+        "Old target-scoped Soperator upgrade checkpoint found: "
+        f"{old_checkpoint_path}. This cxcli version writes cluster-scoped checkpoints "
+        f"under {checkpoint_path.parent}. Review or remove the old checkpoint before "
+        "rerunning soperator upgrade; it is not resumed automatically."
+    )
 
 
 def _soperator_upgrade_relative_path(path: Path, *, root: Path) -> str:
@@ -4687,13 +4792,16 @@ def _soperator_upgrade_archive_token(value: str | None, *, fallback: str) -> str
     return re.sub(r"[^A-Za-z0-9_.-]+", "-", raw).strip("-") or fallback
 
 
-def _soperator_upgrade_backup_root(config_path: Path, backup_dir: Path | None) -> Path:
-    return backup_dir if backup_dir is not None else config_path.parent / "backups"
+def _soperator_upgrade_backup_root(
+    config_path: Path,
+    backup_dir: Path | None,
+    identity: SoperatorClusterArtifactIdentity,
+) -> Path:
+    return soperator_cluster_backup_dir(config_path.parent, backup_dir, identity)
 
 
 def _soperator_upgrade_backup_filename(
     *,
-    target_ref: str,
     chart_from: str | None,
     chart_to: str | None,
     k8s_from: str | None,
@@ -4704,7 +4812,6 @@ def _soperator_upgrade_backup_filename(
 ) -> str:
     timestamp = generated_at.strftime("%Y%m%dT%H%M%SZ")
     archive_prefix = _soperator_upgrade_archive_token(prefix, fallback="soperator-backup")
-    target = _soperator_upgrade_archive_token(target_ref, fallback="target")
     chart_from_text = _soperator_upgrade_archive_token(chart_from, fallback="unset")
     chart_to_text = _soperator_upgrade_archive_token(chart_to, fallback=chart_from_text)
     k8s_from_text = _soperator_upgrade_archive_token(k8s_from, fallback="unknown")
@@ -4715,9 +4822,9 @@ def _soperator_upgrade_backup_filename(
             suffix += (
                 f"-k8s-{_soperator_upgrade_archive_token(k8s_to or k8s_from, fallback='unknown')}"
             )
-        return f"{archive_prefix}-{target}-{timestamp}-{suffix}.tar.gz"
+        return f"{archive_prefix}-{timestamp}-{suffix}.tar.gz"
     return (
-        f"{archive_prefix}-{target}-{timestamp}-chart-{chart_from_text}-to-{chart_to_text}"
+        f"{archive_prefix}-{timestamp}-chart-{chart_from_text}-to-{chart_to_text}"
         f"-k8s-{k8s_from_text}-to-{k8s_to_text}.tar.gz"
     )
 
@@ -6215,6 +6322,7 @@ def _soperator_upgrade_manifest_payload(
     *,
     target: _HelmChartUpgradeTarget,
     plan: _HelmChartUpgradePlan,
+    artifact_identity: SoperatorClusterArtifactIdentity,
     checkpoint_id: str,
     config_path: Path,
     namespace: str,
@@ -6233,6 +6341,7 @@ def _soperator_upgrade_manifest_payload(
         "generated_at": generated_at.isoformat(timespec="seconds").replace("+00:00", "Z"),
         "checkpoint_id": checkpoint_id,
         "source_kind": source_kind,
+        **artifact_identity.as_metadata(),
         "target_ref": target.target_ref,
         "selector": target.selector,
         "namespace": namespace,
@@ -6301,12 +6410,16 @@ def _create_restore_capable_soperator_upgrade_backup(
             "external DB backup support before mutation."
         )
     namespace = plan.namespace or "default"
-    backup_root = _soperator_upgrade_backup_root(config_path, backup_dir)
+    artifact_identity = _soperator_upgrade_artifact_identity(
+        source_payload,
+        target_ref=target.target_ref,
+        kube_context=kube_context or "",
+    )
+    backup_root = _soperator_upgrade_backup_root(config_path, backup_dir, artifact_identity)
     backup_root.mkdir(parents=True, exist_ok=True)
     os.chmod(backup_root, 0o700)
     generated_at = datetime.now(UTC)
     archive_path = backup_root / _soperator_upgrade_backup_filename(
-        target_ref=target.target_ref,
         chart_from=plan.current_version,
         chart_to=plan.target_version,
         k8s_from=source_k8s_version,
@@ -6460,6 +6573,7 @@ def _create_restore_capable_soperator_upgrade_backup(
             manifest_payload = _soperator_upgrade_manifest_payload(
                 target=target,
                 plan=plan,
+                artifact_identity=artifact_identity,
                 checkpoint_id=checkpoint_id,
                 config_path=config_path,
                 namespace=namespace,
@@ -6501,6 +6615,7 @@ def _create_restore_capable_soperator_upgrade_backup(
             ]
             restore_plan = {
                 "schema": "nebius-cxcli-soperator-restore-plan/v1",
+                **artifact_identity.as_metadata(),
                 "target_ref": target.target_ref,
                 "namespace": namespace,
                 "requires_empty_compatible_soperator_cluster": True,
@@ -6564,6 +6679,7 @@ def _create_restore_capable_soperator_upgrade_backup(
         os.chmod(archive_path, 0o600)
         return _SoperatorUpgradeBackupResult(
             path=archive_path,
+            artifact_identity=artifact_identity,
             size_bytes=archive_path.stat().st_size,
             sha256=_soperator_upgrade_file_sha256(archive_path),
             included_categories=tuple(sorted(set(item.split("/", 1)[0] for item in included))),
@@ -9105,14 +9221,20 @@ def _new_soperator_upgrade_checkpoint(
     lifecycle: _SoperatorActiveChecksLifecycle,
     checkpoint_path: Path,
     paths: ProjectPaths,
+    source_payload: Mapping[str, Any],
 ) -> dict[str, Any]:
     planned_phase = _soperator_upgrade_phase_payload(
         "planned",
         "Upgrade planned; no live mutation has started.",
     )
+    identity = _soperator_upgrade_artifact_identity(
+        source_payload,
+        target_ref=plan.target.target_ref,
+    )
     return {
         "schema": SOPERATOR_UPGRADE_CHECKPOINT_SCHEMA,
         "status": "planned",
+        **identity.as_metadata(),
         "current_phase": planned_phase,
         "phase_history": [planned_phase],
         "planned_phases": list(_SOPERATOR_UPGRADE_PLANNED_PHASE_IDS),
@@ -9166,14 +9288,7 @@ def _new_soperator_upgrade_checkpoint(
             root=paths.project_dir,
         ),
         "reports": {
-            "upgrade": _soperator_upgrade_relative_path(
-                paths.reports_dir / SOPERATOR_UPGRADE_REPORT_FILENAME,
-                root=paths.project_dir,
-            ),
-            "upgrade_json": _soperator_upgrade_relative_path(
-                paths.reports_dir / SOPERATOR_UPGRADE_REPORT_JSON_FILENAME,
-                root=paths.project_dir,
-            ),
+            **_soperator_upgrade_report_metadata(paths=paths, identity=identity),
         },
         "activechecks": {
             "required": lifecycle.required,
@@ -9455,6 +9570,7 @@ def _soperator_upgrade_resume_checkpoint(
     checkpoint_path: Path,
     plan: _HelmChartUpgradePlan,
     paths: ProjectPaths,
+    source_payload: Mapping[str, Any],
 ) -> tuple[dict[str, Any] | None, _SoperatorActiveChecksLifecycle | None]:
     checkpoint = _load_soperator_upgrade_checkpoint(checkpoint_path)
     if checkpoint is None:
@@ -9520,19 +9636,18 @@ def _soperator_upgrade_resume_checkpoint(
     checkpoint["release_name"] = plan.release_name
     checkpoint["current_version"] = plan.current_version
     checkpoint["target_version"] = plan.target_version
+    identity = _soperator_upgrade_artifact_identity_from_checkpoint(
+        checkpoint,
+        source_payload=source_payload,
+        target_ref=plan.target.target_ref,
+    )
+    checkpoint.update(identity.as_metadata())
     checkpoint["checkpoint_path"] = _soperator_upgrade_relative_path(
         checkpoint_path,
         root=paths.project_dir,
     )
     checkpoint["reports"] = {
-        "upgrade": _soperator_upgrade_relative_path(
-            paths.reports_dir / SOPERATOR_UPGRADE_REPORT_FILENAME,
-            root=paths.project_dir,
-        ),
-        "upgrade_json": _soperator_upgrade_relative_path(
-            paths.reports_dir / SOPERATOR_UPGRADE_REPORT_JSON_FILENAME,
-            root=paths.project_dir,
-        ),
+        **_soperator_upgrade_report_metadata(paths=paths, identity=identity),
     }
     _append_soperator_upgrade_event(
         checkpoint,
@@ -9641,9 +9756,12 @@ def _write_soperator_upgrade_report(
     paths: ProjectPaths,
     checkpoint: Mapping[str, Any],
 ) -> tuple[Path, Path]:
-    paths.reports_dir.mkdir(parents=True, exist_ok=True)
-    json_path = paths.reports_dir / SOPERATOR_UPGRADE_REPORT_JSON_FILENAME
-    markdown_path = paths.reports_dir / SOPERATOR_UPGRADE_REPORT_FILENAME
+    identity = _soperator_upgrade_artifact_identity_from_checkpoint(
+        checkpoint,
+        target_ref=_non_empty_text(checkpoint.get("target_ref")),
+    )
+    markdown_path, json_path = _soperator_upgrade_report_paths(paths, identity)
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
     safety = checkpoint.get("upgrade_safety")
     safety_map = safety if isinstance(safety, Mapping) else {}
     stage_verification_reports = _soperator_upgrade_stage_verification_reports(checkpoint)
@@ -9680,6 +9798,11 @@ def _write_soperator_upgrade_report(
         or "populate-jail image evidence is incomplete",
     }
     json_payload = dict(checkpoint)
+    json_payload.update(identity.as_metadata())
+    json_payload["reports"] = _soperator_upgrade_report_metadata(
+        paths=paths,
+        identity=identity,
+    )
     json_payload["stage_verification"] = stage_verification_reports
     json_payload["soperator_app"] = soperator_app_record
     json_payload["soperator_chart"] = soperator_chart_record
@@ -9869,6 +9992,9 @@ def _write_soperator_upgrade_report(
         [
             "# Soperator Upgrade Report",
             "",
+            f"- Cluster key: `{identity.cluster_key}`",
+            f"- Cluster id: `{identity.cluster_id or 'unknown'}`",
+            f"- Cluster name: `{identity.cluster_name or 'unknown'}`",
             f"- Target: `{checkpoint.get('target_ref', '')}`",
             f"- Release: `{checkpoint.get('namespace', 'default')}/{checkpoint.get('release_name', '')}`",
             f"- Chart version: `{checkpoint.get('current_version') or 'unset'}` -> `{checkpoint.get('target_version') or 'unset'}`",
@@ -10110,7 +10236,7 @@ def _format_soperator_upgrade_plan(
             (
                 "  - postflight verifies the static Soperator chart version, reruns "
                 "the required Soperator/Slurm smoke validation, and writes "
-                "soperator-upgrade-report.md and soperator-upgrade-report.json."
+                "soperator-clusters/<cluster-key>/soperator-upgrade/report.md and report.json."
             ),
         ]
     )
@@ -11946,15 +12072,21 @@ def _soperator_backup_plan_from_payload(
 def _format_soperator_backup_plan_lines(
     *,
     config_path: Path,
+    source_payload: Mapping[str, Any],
     plan: _HelmChartUpgradePlan,
     backup_dir: Path | None,
     dry_run: bool,
     source_kind: str,
 ) -> tuple[str, ...]:
-    backup_root = _soperator_upgrade_backup_root(config_path, backup_dir)
+    identity = _soperator_upgrade_artifact_identity(
+        source_payload,
+        target_ref=plan.target.target_ref,
+    )
+    backup_root = _soperator_upgrade_backup_root(config_path, backup_dir, identity)
     lines = [
         "Soperator backup plan",
         f"- source kind: `{source_kind}`",
+        f"- cluster key: `{identity.cluster_key}`",
         f"- target: `{plan.target.target_ref}`",
         f"- release: `{plan.namespace or 'default'}/{plan.release_name}`",
         f"- chart version: `{plan.current_version or 'unversioned'}`",
@@ -12205,9 +12337,15 @@ def _create_external_soperator_upgrade_backup(
     console.print(f"External Soperator upgrade backup archive: {backup.path}", soft_wrap=True)
     console.print(f"Archive SHA256: {backup.sha256}", soft_wrap=True)
     console.print(_soperator_backup_sensitive_material_message(backup))
+    backup_identity = backup.artifact_identity or _soperator_upgrade_artifact_identity(
+        source_payload,
+        target_ref=target.target_ref,
+        kube_context=kube_context or "",
+    )
     return {
         "required": True,
         "path": str(backup.path),
+        **backup_identity.as_metadata(),
         "size_bytes": backup.size_bytes,
         "sha256": backup.sha256,
         "manifest_sha256": backup.manifest_sha256,
@@ -12264,6 +12402,7 @@ def _run_standalone_soperator_backup(
     _print_upgrade_plan_lines(
         _format_soperator_backup_plan_lines(
             config_path=config_path,
+            source_payload=source_payload,
             plan=plan,
             backup_dir=backup_dir,
             dry_run=dry_run,
@@ -12994,6 +13133,11 @@ def _run_managed_soperator_discovery_command(
         release_name=release_name,
         interactive=interactive,
     )
+    artifact_identity = _soperator_upgrade_artifact_identity(
+        source_payload,
+        target_ref=target.target_ref,
+        kube_context=kube_context or "",
+    )
     generated_config, paths, manifest = _load_deploy_context_readonly(config_path)
     explicit_context = _non_empty_text(kube_context)
     snapshot: dict[str, Any]
@@ -13038,6 +13182,8 @@ def _run_managed_soperator_discovery_command(
                     namespace=plan.namespace,
                     release_name=plan.release_name,
                     kube_context=collection_context,
+                    cluster_id=artifact_identity.cluster_id,
+                    cluster_name=artifact_identity.cluster_name,
                     to_chart_version=to_chart_version,
                     to_k8s_version=to_k8s_version,
                     to_os=to_os,
@@ -13054,6 +13200,8 @@ def _run_managed_soperator_discovery_command(
         namespace=plan.namespace,
         release_name=plan.release_name,
         kube_context=collection_context,
+        cluster_id=artifact_identity.cluster_id,
+        cluster_name=artifact_identity.cluster_name,
         to_chart_version=to_chart_version,
         to_k8s_version=to_k8s_version,
         to_os=to_os,
@@ -13206,7 +13354,7 @@ def _run_external_soperator_discovery_command(
             kube_context=collection_context,
             cluster_id=resolved_cluster_id,
             access=resolved_access,
-            cluster_name=resolved_target_ref,
+            cluster_name="",
             to_chart_version=to_chart_version,
             to_k8s_version=to_k8s_version,
             to_os=to_os,
@@ -13235,7 +13383,7 @@ def _run_external_soperator_discovery_command(
         kube_context=explicit_context,
         cluster_id=resolved_cluster_id,
         access=resolved_access,
-        cluster_name=resolved_target_ref,
+        cluster_name="",
         to_chart_version=to_chart_version,
         to_k8s_version=to_k8s_version,
         to_os=to_os,
@@ -13294,7 +13442,7 @@ def _print_soperator_discovery_result(path: Path) -> None:
         "--output-dir ./support-bundles --redaction support; "
         "nebius-cxcli soperator discover <config.yaml> --target mk8s "
         "--to-chart-version <chart-version> --to-k8s-version 1.33. "
-        "Discovery writes generated/reports/soperator-discovery/<target>/manifest.json "
+        "Discovery writes generated/reports/soperator-clusters/<cluster-key>/discovery/manifest.json "
         "and section files for support review. Use target-version flags to preview "
         "upgrade findings without changing config or the cluster. If the preview includes "
         "Soperator chart/rootfs changes, Upgrade Guidance names the Jail Upgrade "
@@ -13316,7 +13464,7 @@ def soperator_discover_command(
         typer.Option(
             "--output-dir",
             help=(
-                "Output root for generated/reports/soperator-discovery/<target>. "
+                "Output root for generated/reports/soperator-clusters/<cluster-key>/discovery. "
                 "Default root: config.yaml parent."
             ),
         ),
@@ -13398,8 +13546,8 @@ def soperator_discover_command(
     epilog=(
         "Examples: nebius-cxcli soperator backup <config.yaml> --target mk8s --dry-run; "
         "nebius-cxcli soperator backup <config.yaml> --target mk8s "
-        "--backup-dir ./backups/soperator. "
-        "The archive includes raw Kubernetes Secrets, retained controller/accounting "
+        "--backup-dir ./backups. Cluster-scoped archives are written under "
+        "<backup-dir>/soperator-clusters/<cluster-key>/. The archive includes raw Kubernetes Secrets, retained controller/accounting "
         "PV/PVC restore material, and the chart-managed MariaDB accounting DB dump, "
         "so store it as sensitive material."
     ),
@@ -13475,9 +13623,10 @@ def soperator_backup_command(
     "restore",
     short_help="DR restore a Soperator archive onto a new empty compatible cluster only.",
     epilog=(
-        "Examples: nebius-cxcli soperator restore ./backups/soperator-backup-...tar.gz "
-        "--kube-context replacement-cluster; "
-        "nebius-cxcli soperator restore ./backups/soperator-backup-...tar.gz "
+        "Examples: nebius-cxcli soperator restore "
+        "./backups/soperator-clusters/mk8s/soperator-backup-...tar.gz "
+        "--kube-context replacement-cluster; nebius-cxcli soperator restore "
+        "./backups/soperator-clusters/mk8s/soperator-backup-...tar.gz "
         "--kube-context replacement-cluster --execute --approve. "
         "Restore is dry-run by default. Use it only for DR restore "
         "to a new empty compatible target cluster. This is not an in-place rollback; "
@@ -14786,11 +14935,21 @@ def _run_managed_soperator_cluster_upgrade(
         command_name="soperator upgrade",
     )
 
-    checkpoint_path = _soperator_upgrade_checkpoint_path(config_path, target.target_ref)
+    _raise_if_old_soperator_upgrade_checkpoint_exists(
+        config_path=config_path,
+        target_ref=target.target_ref,
+        source_payload=source_payload,
+    )
+    checkpoint_path = _soperator_upgrade_checkpoint_path(
+        config_path,
+        target.target_ref,
+        source_payload=source_payload,
+    )
     resume_checkpoint, resume_lifecycle = _soperator_upgrade_resume_checkpoint(
         checkpoint_path=checkpoint_path,
         plan=plan,
         paths=paths,
+        source_payload=source_payload,
     )
     lifecycle = resume_lifecycle or _soperator_upgrade_activechecks_lifecycle(
         source_payload,
@@ -14801,6 +14960,7 @@ def _run_managed_soperator_cluster_upgrade(
         lifecycle=lifecycle,
         checkpoint_path=checkpoint_path,
         paths=paths,
+        source_payload=source_payload,
     )
     checkpoint_id = _soperator_upgrade_sha256_text(
         f"{target.target_ref}:{to_chart_version}:{to_k8s_version}:{checkpoint_path}"
@@ -15431,9 +15591,14 @@ def _run_managed_soperator_cluster_upgrade(
                 command=checkpoint.get("command", []),
                 checkpoint_event=_checkpoint_backup_event,
             )
+            backup_identity = backup.artifact_identity or _soperator_upgrade_artifact_identity(
+                source_payload,
+                target_ref=target.target_ref,
+            )
             checkpoint["backup"] = {
                 "required": True,
                 "path": str(backup.path),
+                **backup_identity.as_metadata(),
                 "size_bytes": backup.size_bytes,
                 "sha256": backup.sha256,
                 "manifest_sha256": backup.manifest_sha256,
@@ -16858,11 +17023,21 @@ def _run_helm_chart_upgrade_command(
     resume_checkpoint: dict[str, Any] | None = None
     resume_lifecycle: _SoperatorActiveChecksLifecycle | None = None
     if soperator_aware:
-        checkpoint_path = _soperator_upgrade_checkpoint_path(config_path, target.target_ref)
+        _raise_if_old_soperator_upgrade_checkpoint_exists(
+            config_path=config_path,
+            target_ref=target.target_ref,
+            source_payload=source_payload,
+        )
+        checkpoint_path = _soperator_upgrade_checkpoint_path(
+            config_path,
+            target.target_ref,
+            source_payload=source_payload,
+        )
         resume_checkpoint, resume_lifecycle = _soperator_upgrade_resume_checkpoint(
             checkpoint_path=checkpoint_path,
             plan=plan,
             paths=paths,
+            source_payload=source_payload,
         )
     if not plan.mutates and resume_checkpoint is None:
         if soperator_aware:
@@ -16876,12 +17051,17 @@ def _run_helm_chart_upgrade_command(
                 persist_reports=True,
             )
             lifecycle = _soperator_upgrade_activechecks_lifecycle(source_payload, target)
-            checkpoint_path = _soperator_upgrade_checkpoint_path(config_path, target.target_ref)
+            checkpoint_path = _soperator_upgrade_checkpoint_path(
+                config_path,
+                target.target_ref,
+                source_payload=source_payload,
+            )
             checkpoint = _new_soperator_upgrade_checkpoint(
                 plan=plan,
                 lifecycle=lifecycle,
                 checkpoint_path=checkpoint_path,
                 paths=paths,
+                source_payload=source_payload,
             )
             _append_soperator_upgrade_event(
                 checkpoint,
@@ -16911,12 +17091,17 @@ def _run_helm_chart_upgrade_command(
             target,
         )
         if checkpoint_path is None:
-            checkpoint_path = _soperator_upgrade_checkpoint_path(config_path, target.target_ref)
+            checkpoint_path = _soperator_upgrade_checkpoint_path(
+                config_path,
+                target.target_ref,
+                source_payload=source_payload,
+            )
         checkpoint = resume_checkpoint or _new_soperator_upgrade_checkpoint(
             plan=plan,
             lifecycle=lifecycle,
             checkpoint_path=checkpoint_path,
             paths=paths,
+            source_payload=source_payload,
         )
         restore_required = bool(resume_checkpoint is not None and lifecycle.required)
 
@@ -22527,14 +22712,21 @@ def _write_soperator_source_discovery_report_from_target_row(
         if isinstance(upgrade_path, Mapping):
             report["upgrade_path"] = copy.deepcopy(to_plain_data(upgrade_path))
     cluster_id = _non_empty_text(target_row.get("cluster_id"))
-    cluster_name = component_instance_id(target_row)
-    if isinstance(onboarding, Mapping):
-        cluster_name = cluster_name or _non_empty_text(onboarding.get("target_ref"))
+    cluster_name = _non_empty_text(target_row.get("cluster_name") or target_row.get("name"))
+    target_ref = component_instance_id(target_row) or "mk8s"
+    artifact_identity = soperator_cluster_artifact_identity_from_payload(
+        {"deploy": {"targets": [target_row]}},
+        target_ref=target_ref,
+        cluster_id=cluster_id,
+        cluster_name=cluster_name,
+        kube_context=_non_empty_text(target_row.get("kube_context")),
+    )
     return write_source_soperator_discovery_report(
         config_path.parent,
-        target_ref=component_instance_id(target_row) or "mk8s",
+        target_ref=target_ref,
         snapshot=snapshot,
         report=report,
+        artifact_identity=artifact_identity,
         cluster_id=cluster_id,
         cluster_name=cluster_name,
         source_kind="external",
@@ -53970,16 +54162,17 @@ def component_add_command(
         "Examples: nebius-cxcli ext-soperator backup <config.yaml> "
         "--target external-cluster --dry-run; "
         "nebius-cxcli ext-soperator backup <config.yaml> --target external-cluster "
-        "--backup-dir ./backups/external-soperator; "
+        "--backup-dir ./backups; "
         "nebius-cxcli ext-soperator backup --project-id PROJECT --cluster-id MK8SCLUSTER "
         "--access internal --dry-run; "
         "nebius-cxcli ext-soperator backup --project-id PROJECT --cluster-id MK8SCLUSTER "
-        "--access internal --backup-dir ./backups/external-soperator. "
+        "--access internal --backup-dir ./backups. "
         "Use the config form for an onboarded and accepted target, or the standalone "
         "--project-id plus --cluster-id/--kube-context form before onboarding. For standalone "
         "--cluster-id backup, --access external selects the public control-plane endpoint and "
         "--access internal selects the private endpoint; cxcli assumes this machine already has "
-        "private network reachability for internal access. The archive name starts with "
+        "private network reachability for internal access. Cluster-scoped archives are written "
+        "under <backup-dir>/soperator-clusters/<cluster-key>/. The archive name starts with "
         "external-soperator-backup- and includes raw Secrets, retained "
         "controller/accounting PV/PVC restore material, and the chart-managed MariaDB "
         "accounting DB dump when live accounting exists."
@@ -54181,8 +54374,9 @@ def ext_soperator_backup_command(
     short_help="DR restore a Soperator archive onto a new empty external cluster only.",
     epilog=(
         "Examples: nebius-cxcli ext-soperator restore "
-        "./backups/external-soperator-backup-...tar.gz --kube-context new-cluster; "
-        "nebius-cxcli ext-soperator restore ./backups/external-soperator-backup-...tar.gz "
+        "./backups/soperator-clusters/mk8scluster-example/external-soperator-backup-...tar.gz "
+        "--kube-context new-cluster; nebius-cxcli ext-soperator restore "
+        "./backups/soperator-clusters/mk8scluster-example/external-soperator-backup-...tar.gz "
         "--kube-context new-cluster --execute --approve. Restore is dry-run by default. "
         "Use it only for DR restore to a new empty external target cluster. This is "
         "not an in-place rollback; do not target the original/source cluster or an "
@@ -54268,7 +54462,7 @@ def ext_soperator_restore_command(
         "access. --tenant-id is optional for standalone discovery because cluster handoff "
         "uses project-scoped Nebius auth; pass --client-name only when you need a specific "
         "runtime-auth cache profile. Discovery writes "
-        "generated/reports/soperator-discovery/<target>/manifest.json and does not back up "
+        "generated/reports/soperator-clusters/<cluster-key>/discovery/manifest.json and does not back up "
         "raw restore material. Target-version flags preview upgrade findings and name the "
         "Jail Upgrade rootfs-refresh boundary only when image/action evidence requires it."
     ),
@@ -54332,7 +54526,7 @@ def ext_soperator_discover_command(
         typer.Option(
             "--output-dir",
             help=(
-                "Output root for generated/reports/soperator-discovery/<target>. "
+                "Output root for generated/reports/soperator-clusters/<cluster-key>/discovery. "
                 "Default root: config.yaml parent, or current working directory in standalone mode."
             ),
         ),
@@ -55262,8 +55456,16 @@ def _load_soperator_source_discovery_report(
     *,
     config_path: Path,
     target_ref: str,
+    payload_or_config: Any = None,
 ) -> dict[str, Any]:
-    report_path = source_soperator_discovery_report_path(config_path.parent, target_ref)
+    lookup_payload = payload_or_config
+    if lookup_payload is None:
+        lookup_payload = _load_source_payload(config_path)
+    report_path = source_soperator_discovery_report_path(
+        config_path.parent,
+        target_ref,
+        payload_or_config=lookup_payload,
+    )
     if not report_path.exists():
         raise RuntimeError(
             f"Soperator source discovery bundle not found: {report_path}. Rerun "
@@ -55717,8 +55919,13 @@ def _locked_upgrade_checkpoint_payload(
     *,
     config_path: Path,
     target_ref: str,
+    payload_or_config: Any = None,
 ) -> Mapping[str, Any] | None:
-    checkpoint_path = soperator_migration_checkpoint_path(config_path, target_ref)
+    checkpoint_path = soperator_migration_checkpoint_path(
+        config_path,
+        target_ref,
+        payload_or_config=payload_or_config,
+    )
     if not checkpoint_path.exists():
         return None
     try:
@@ -55749,10 +55956,12 @@ def _locked_upgrade_path_from_checkpoint(
     *,
     config_path: Path,
     target_ref: str,
+    payload_or_config: Any = None,
 ) -> dict[str, Any]:
     checkpoint = _locked_upgrade_checkpoint_payload(
         config_path=config_path,
         target_ref=target_ref,
+        payload_or_config=payload_or_config,
     )
     if checkpoint is None:
         return {}
@@ -55774,9 +55983,14 @@ def _locked_upgrade_path_progress(
     config_path: Path,
     target_ref: str,
     upgrade_path: Mapping[str, Any],
+    payload_or_config: Any = None,
 ) -> dict[str, Any]:
     fingerprint = _locked_upgrade_path_fingerprint(upgrade_path)
-    checkpoint_path = soperator_migration_checkpoint_path(config_path, target_ref)
+    checkpoint_path = soperator_migration_checkpoint_path(
+        config_path,
+        target_ref,
+        payload_or_config=payload_or_config,
+    )
     progress: dict[str, Any] = {
         "fingerprint": fingerprint,
         "completed_segment_ids": [],
@@ -55787,6 +56001,7 @@ def _locked_upgrade_path_progress(
     checkpoint = _locked_upgrade_checkpoint_payload(
         config_path=config_path,
         target_ref=target_ref,
+        payload_or_config=payload_or_config,
     )
     if checkpoint is None:
         return progress
@@ -56201,7 +56416,11 @@ def _format_soperator_migration_plan_lines(
         populate_jail_refresh=populate_jail_refresh,
     )
     current_k8s_version, target_k8s_version = soperator_discovery_report_k8s_versions(report)
-    report_path = source_soperator_discovery_report_path(config_path.parent, target_ref)
+    report_path = source_soperator_discovery_report_path(
+        config_path.parent,
+        target_ref,
+        payload_or_config=payload,
+    )
     source_version = str(
         onboarding.get("source_version", "") or report.get("source_version", "") or "not detected"
     )
@@ -56534,6 +56753,7 @@ def _refresh_soperator_onboarding_after_completed_migration(
             config_path=config_path,
             target_ref=target_ref,
             upgrade_path=upgrade_path,
+            payload_or_config=execution_payload,
         )
         next_segment = _locked_upgrade_path_current_segment(
             upgrade_path=upgrade_path,
@@ -57201,9 +57421,23 @@ def soperator_external_upgrade_command(
                 f"{legacy_checkpoint}. Remove it after review; ext-soperator upgrade "
                 "does not resume retired checkpoints."
             )
+        old_checkpoint = old_soperator_migration_checkpoint_path(config_path, target_ref)
+        if old_checkpoint.exists():
+            checkpoint_path = soperator_migration_checkpoint_path(
+                config_path,
+                target_ref,
+                payload_or_config=payload,
+            )
+            raise RuntimeError(
+                "Old target-scoped external Soperator checkpoint found at "
+                f"{old_checkpoint}. This cxcli version writes cluster-scoped checkpoints "
+                f"under {checkpoint_path.parent}. Review or remove the old checkpoint before "
+                "rerunning ext-soperator upgrade; it is not resumed automatically."
+            )
         checkpoint_locked_upgrade_path = _locked_upgrade_path_from_checkpoint(
             config_path=config_path,
             target_ref=target_ref,
+            payload_or_config=payload,
         )
         try:
             validate_soperator_onboarding_acceptance(payload, target_ref=target_ref)
@@ -57239,7 +57473,11 @@ def soperator_external_upgrade_command(
             not locked_upgrade_path
             and _soperator_migration_action_flags(onboarding)["migration_required"]
         ):
-            checkpoint_path = soperator_migration_checkpoint_path(config_path, target_ref)
+            checkpoint_path = soperator_migration_checkpoint_path(
+                config_path,
+                target_ref,
+                payload_or_config=payload,
+            )
             raise RuntimeError(
                 "External Soperator upgrade requires a full locked upgrade path, but none "
                 "exists in deploy.targets[].soperator_onboarding.upgrade_path or the "
@@ -57255,6 +57493,7 @@ def soperator_external_upgrade_command(
                 config_path=config_path,
                 target_ref=target_ref,
                 upgrade_path=locked_upgrade_path,
+                payload_or_config=payload,
             )
             current_segment = _locked_upgrade_path_current_segment(
                 upgrade_path=locked_upgrade_path,
@@ -57325,6 +57564,7 @@ def soperator_external_upgrade_command(
         source_report = _load_soperator_source_discovery_report(
             config_path=config_path,
             target_ref=target_ref,
+            payload_or_config=effective_payload,
         )
         if locked_upgrade_path and current_segment is not None:
             source_report = _source_report_for_locked_upgrade_segment(
@@ -57498,6 +57738,7 @@ def soperator_external_upgrade_command(
                     backup_metadata = external_soperator_upgrade_resume_backup_metadata(
                         config_path,
                         target_ref,
+                        payload_or_config=execution_payload,
                     )
                     if backup_metadata is not None:
                         emit_status(
@@ -57582,11 +57823,12 @@ def soperator_external_upgrade_command(
                     if not external_soperator_upgrade_protected_comparison_passed(
                         config_path=config_path,
                         target_ref=target_ref,
+                        payload_or_config=execution_payload,
                     ):
                         raise RuntimeError(
                             "Post-upgrade config refresh is blocked because shared protected-state "
                             "verification did not complete successfully. Review "
-                            "ext-soperator-upgrade-report.json before accepting the new live state."
+                            "ext-soperator-upgrade/report.json before accepting the new live state."
                         )
                     post_migration_config_lines = (
                         _refresh_soperator_onboarding_after_completed_migration(

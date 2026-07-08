@@ -136,6 +136,29 @@ def _config_with_enabled_mk8s(*, charts: list[dict[str, Any]] | None = None) -> 
     }
 
 
+def _soperator_upgrade_report_dir(paths: cli.ProjectPaths) -> Path:
+    return paths.reports_dir / "soperator-clusters" / "mk8s" / "soperator-upgrade"
+
+
+def _soperator_upgrade_report_path(paths: cli.ProjectPaths) -> Path:
+    return _soperator_upgrade_report_dir(paths) / "report.md"
+
+
+def _soperator_upgrade_report_json_path(paths: cli.ProjectPaths) -> Path:
+    return _soperator_upgrade_report_dir(paths) / "report.json"
+
+
+def _soperator_upgrade_checkpoint_path(paths: cli.ProjectPaths) -> Path:
+    return (
+        paths.project_dir
+        / ".nebius-cxcli"
+        / "soperator-clusters"
+        / "mk8s"
+        / "soperator-upgrade"
+        / "checkpoint.json"
+    )
+
+
 @pytest.mark.parametrize(
     ("phase_id", "expected_stage"),
     [
@@ -273,7 +296,7 @@ def _stub_soperator_upgrade_runtime(
     )
 
     def _discover(**_kwargs: object) -> Path:
-        path = paths.reports_dir / "soperator-discovery" / "mk8s" / "manifest.json"
+        path = paths.reports_dir / "soperator-clusters" / "mk8s" / "discovery" / "manifest.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text('{"schema": "discovery"}\n', encoding="utf-8")
         return path
@@ -3631,7 +3654,7 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
         assert applied_jobs[component]["metadata"]["namespace"] == "soperator-prod"
 
     report = json.loads(
-        (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_JSON_FILENAME).read_text(encoding="utf-8")
+        _soperator_upgrade_report_json_path(paths).read_text(encoding="utf-8")
     )
     assert report["upgrade_safety"]["post_upgrade_verification"]["status"] == "passed"
     assert report["protected_customer_state"]["before_hash"]
@@ -3677,7 +3700,7 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
         for item in report["phase_history"]
     )
     assert any(item["id"] == "shared-safety-verification" for item in report["phase_history"])
-    markdown_report = (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_FILENAME).read_text(
+    markdown_report = _soperator_upgrade_report_path(paths).read_text(
         encoding="utf-8"
     )
     assert "- Current phase: `completed`" in markdown_report
@@ -3855,9 +3878,7 @@ def test_soperator_upgrade_fast_stage_failure_blocks_next_stage(
         )
 
     assert ("soperator-validation", "Postflight") not in calls
-    checkpoint_path = (
-        paths.project_dir / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR / "mk8s" / "checkpoint.json"
-    )
+    checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     chart_verification = checkpoint["stage_verification"]["soperator-chart"]["fast_verification"]
     assert chart_verification["status"] == "failed"
@@ -3866,7 +3887,7 @@ def test_soperator_upgrade_fast_stage_failure_blocks_next_stage(
     assert checkpoint["pending_phase"] == "soperator-chart"
 
     report = json.loads(
-        (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_JSON_FILENAME).read_text(encoding="utf-8")
+        _soperator_upgrade_report_json_path(paths).read_text(encoding="utf-8")
     )
     stage_verification = {item["phase_id"]: item for item in report["stage_verification"]}
     assert stage_verification["soperator-chart"]["status"] == "failed"
@@ -3972,9 +3993,7 @@ def test_soperator_upgrade_runtime_error_keeps_current_phase_pending_and_resumes
             to_chart_version="0.26.0",
         )
 
-    checkpoint_path = (
-        paths.project_dir / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR / "mk8s" / "checkpoint.json"
-    )
+    checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert checkpoint["pending_phase"] == "soperator-chart"
     assert checkpoint["pending_reason"] == "chart apply failed mid-phase"
@@ -3991,7 +4010,7 @@ def test_soperator_upgrade_runtime_error_keeps_current_phase_pending_and_resumes
     ]
     assert "soperator-chart" not in checkpoint["completed_phases"]
     assert checkpoint["status"] == "failed"
-    assert (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_JSON_FILENAME).exists()
+    assert _soperator_upgrade_report_json_path(paths).exists()
 
     calls.clear()
     _run_soperator_upgrade_for_test(
@@ -4103,9 +4122,7 @@ def test_soperator_upgrade_keyboard_interrupt_keeps_current_phase_pending_and_re
         )
     assert exc_info.value.exit_code == 130
 
-    checkpoint_path = (
-        paths.project_dir / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR / "mk8s" / "checkpoint.json"
-    )
+    checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert checkpoint["pending_phase"] == "soperator-chart"
     assert checkpoint["pending_reason"] == "interrupted by user"
@@ -4256,9 +4273,7 @@ def test_soperator_upgrade_mk8s_only_runs_node_template_phase_without_raw_kubect
     assert mk8s_calls[0][1]["to_k8s_version"] == "1.33"
     assert mk8s_calls[0][1]["node_group"] == "worker"
     assert any(isinstance(call, tuple) and call[0] == "slurm-restore" for call in calls)
-    checkpoint_path = (
-        paths.project_dir / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR / "mk8s" / "checkpoint.json"
-    )
+    checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert any(
         item["id"] == "mk8s-node-template" and item["top_level_stage"] == "MK8s Node Upgrades"
@@ -4278,13 +4293,13 @@ def test_soperator_upgrade_mk8s_only_runs_node_template_phase_without_raw_kubect
         == "passed"
     )
     report = json.loads(
-        (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_JSON_FILENAME).read_text(encoding="utf-8")
+        _soperator_upgrade_report_json_path(paths).read_text(encoding="utf-8")
     )
     report_stage_verification = {item["phase_id"]: item for item in report["stage_verification"]}
     assert report_stage_verification["mk8s-node-template"]["status"] == "passed"
     assert report_stage_verification["post-mk8s-validation"]["status"] == "passed"
     assert report_stage_verification["soperator-chart"]["status"] == "passed"
-    markdown_report = (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_FILENAME).read_text(
+    markdown_report = _soperator_upgrade_report_path(paths).read_text(
         encoding="utf-8"
     )
     assert "`mk8s-node-template` (top-level stage: `MK8s Node Upgrades`)" in markdown_report
@@ -4405,9 +4420,7 @@ def test_soperator_upgrade_shared_safety_failure_after_slurm_restore_does_not_le
         )
 
     assert any(isinstance(call, tuple) and call[0] == "slurm-restore" for call in calls)
-    checkpoint_path = (
-        paths.project_dir / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR / "mk8s" / "checkpoint.json"
-    )
+    checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert checkpoint["pending_phase"] == "shared-safety-verification"
     assert checkpoint["failure"]["slurm_restore"] == "not-required"
@@ -4552,9 +4565,7 @@ def test_soperator_upgrade_execute_blocks_skipped_k8s_minor_before_checkpoint(
         )
 
     assert calls == ["migration-guard"]
-    checkpoint_path = (
-        paths.project_dir / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR / "mk8s" / "checkpoint.json"
-    )
+    checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
     assert not checkpoint_path.exists()
 
 
@@ -4702,9 +4713,7 @@ def test_soperator_upgrade_execute_blocks_k8s_boundary_before_chart_upgrade(
         )
 
     assert calls == ["migration-guard"]
-    checkpoint_path = (
-        paths.project_dir / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR / "mk8s" / "checkpoint.json"
-    )
+    checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
     assert not checkpoint_path.exists()
 
 
@@ -6212,9 +6221,7 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
         ),
         "soperator-static-ready",
     ]
-    checkpoint_path = (
-        paths.project_dir / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR / "mk8s" / "checkpoint.json"
-    )
+    checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert checkpoint["status"] == "completed"
     assert checkpoint["activechecks"]["required"] is True
@@ -6244,14 +6251,14 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
         stage_verification["shared-safety-verification"]["fast_verification"]["status"] == "passed"
     )
     upgrade_json = json.loads(
-        (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_JSON_FILENAME).read_text(encoding="utf-8")
+        _soperator_upgrade_report_json_path(paths).read_text(encoding="utf-8")
     )
     report_stage_verification = {
         item["phase_id"]: item for item in upgrade_json["stage_verification"]
     }
     assert report_stage_verification["activechecks-suspend"]["status"] == "passed"
     assert report_stage_verification["activechecks-restore"]["status"] == "passed"
-    upgrade_report = (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_FILENAME).read_text(
+    upgrade_report = _soperator_upgrade_report_path(paths).read_text(
         encoding="utf-8"
     )
     assert "checkpointed suspend/restore was required" in upgrade_report
@@ -6387,9 +6394,7 @@ def test_soperator_upgrade_resume_late_pending_phase_skips_completed_late_phases
 
     _run_soperator_upgrade_for_test(config_path=paths.config_path)
 
-    checkpoint_path = (
-        paths.project_dir / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR / "mk8s" / "checkpoint.json"
-    )
+    checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     checkpoint["completed_phases"] = [
         phase
@@ -6525,9 +6530,7 @@ def test_soperator_upgrade_resume_demotes_completed_phase_missing_fast_verificat
 
     _run_soperator_upgrade_for_test(config_path=paths.config_path)
 
-    checkpoint_path = (
-        paths.project_dir / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR / "mk8s" / "checkpoint.json"
-    )
+    checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     phase_state = checkpoint["phase_state"]["shared-safety-verification"]
     phase_state.pop("fast_verification", None)
@@ -6689,9 +6692,7 @@ def test_soperator_upgrade_restores_activechecks_after_failed_upgrade(
         ),
         "soperator-static-ready",
     ]
-    checkpoint_path = (
-        paths.project_dir / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR / "mk8s" / "checkpoint.json"
-    )
+    checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert checkpoint["status"] == "failed"
     assert checkpoint["failure"] == {
@@ -6704,7 +6705,7 @@ def test_soperator_upgrade_restores_activechecks_after_failed_upgrade(
     assert "activechecks-restored-after-failure" in [
         event["event"] for event in checkpoint["events"]
     ]
-    upgrade_report = (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_FILENAME).read_text(
+    upgrade_report = _soperator_upgrade_report_path(paths).read_text(
         encoding="utf-8"
     )
     assert "- Status: `failed`" in upgrade_report
@@ -6813,9 +6814,7 @@ def test_soperator_upgrade_restores_activechecks_after_suspend_validation_failur
         ),
         "soperator-static-ready",
     ]
-    checkpoint_path = (
-        paths.project_dir / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR / "mk8s" / "checkpoint.json"
-    )
+    checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert checkpoint["status"] == "failed"
     assert checkpoint["failure"] == {
@@ -6892,14 +6891,13 @@ def test_soperator_upgrade_resumes_pending_activechecks_restore_from_checkpoint(
             ),
         ),
     )
-    checkpoint_path = (
-        paths.project_dir / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR / "mk8s" / "checkpoint.json"
-    )
+    checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
     checkpoint = cli._new_soperator_upgrade_checkpoint(
         plan=checkpoint_plan,
         lifecycle=lifecycle,
         checkpoint_path=checkpoint_path,
         paths=paths,
+        source_payload=yaml.safe_load(paths.config_path.read_text(encoding="utf-8")),
     )
     cli._append_soperator_upgrade_event(checkpoint, "activechecks-suspend-started")
     cli._append_soperator_upgrade_event(checkpoint, "activechecks-suspended")
@@ -7062,14 +7060,13 @@ def test_soperator_upgrade_resumed_activechecks_restore_survives_preflight_failu
             ),
         ),
     )
-    checkpoint_path = (
-        paths.project_dir / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR / "mk8s" / "checkpoint.json"
-    )
+    checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
     checkpoint = cli._new_soperator_upgrade_checkpoint(
         plan=checkpoint_plan,
         lifecycle=lifecycle,
         checkpoint_path=checkpoint_path,
         paths=paths,
+        source_payload=yaml.safe_load(paths.config_path.read_text(encoding="utf-8")),
     )
     cli._append_soperator_upgrade_event(checkpoint, "activechecks-suspend-started")
     cli._append_soperator_upgrade_event(checkpoint, "activechecks-suspended")
@@ -7159,7 +7156,7 @@ def test_soperator_upgrade_resumed_activechecks_restore_survives_preflight_failu
     event_names = [event["event"] for event in checkpoint["events"]]
     assert "resumed" in event_names
     assert "activechecks-restored-after-failure" in event_names
-    upgrade_report = (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_FILENAME).read_text(
+    upgrade_report = _soperator_upgrade_report_path(paths).read_text(
         encoding="utf-8"
     )
     assert "- Status: `failed`" in upgrade_report
@@ -8025,7 +8022,9 @@ def test_render_overwrite_warning_ignores_preserved_lifecycle_reports(
         "# Deploy Report\n\nGenerated by `nebius-cxcli deploy`.\n",
         encoding="utf-8",
     )
-    discovery_report = fake_paths.reports_dir / "soperator-discovery" / "external-cluster"
+    discovery_report = (
+        fake_paths.reports_dir / "soperator-clusters" / "external-context" / "discovery"
+    )
     discovery_report.mkdir(parents=True, exist_ok=True)
     (discovery_report / "manifest.json").write_text('{"schema": "discovery"}\n', encoding="utf-8")
 
@@ -11449,15 +11448,22 @@ def test_render_command_force_allows_noninteractive_overwrite(
     fake_paths.reports_dir.mkdir(parents=True, exist_ok=True)
     deploy_report = fake_paths.reports_dir / "deploy-report.md"
     deploy_detail_report = fake_paths.reports_dir / "deploy-gpu-visibility-report-mk8s.json"
-    onboard_report = fake_paths.reports_dir / "soperator-discovery" / "external-cluster"
-    ext_upgrade_report = fake_paths.reports_dir / "ext-soperator-upgrade-report.md"
-    ext_upgrade_detail_report = fake_paths.reports_dir / "deploy-smoke-report-external.json"
+    soperator_cluster_report_dir = (
+        fake_paths.reports_dir / "soperator-clusters" / "external-context"
+    )
+    onboard_report = soperator_cluster_report_dir / "discovery"
+    ext_upgrade_report = soperator_cluster_report_dir / "ext-soperator-upgrade" / "report.md"
+    ext_upgrade_detail_report = (
+        soperator_cluster_report_dir
+        / "ext-soperator-upgrade"
+        / "deploy-smoke-report-external.json"
+    )
     node_template_report = fake_paths.reports_dir / "upgrade-node-template-report.md"
     node_template_report_json = fake_paths.reports_dir / "upgrade-node-template-report.json"
     node_group_report = fake_paths.reports_dir / "upgrade-node-group-report.md"
     node_group_report_json = fake_paths.reports_dir / "upgrade-node-group-report.json"
-    upgrade_report = fake_paths.reports_dir / "soperator-upgrade-report.md"
-    upgrade_report_json = fake_paths.reports_dir / "soperator-upgrade-report.json"
+    upgrade_report = soperator_cluster_report_dir / "soperator-upgrade" / "report.md"
+    upgrade_report_json = soperator_cluster_report_dir / "soperator-upgrade" / "report.json"
     stale_report = fake_paths.reports_dir / "old.json"
     deploy_report.write_text(
         "# Deploy Report\n\n- Detail report: `deploy-gpu-visibility-report-mk8s.json`\n",
@@ -11466,6 +11472,7 @@ def test_render_command_force_allows_noninteractive_overwrite(
     deploy_detail_report.write_text('{"status": "passed"}\n', encoding="utf-8")
     onboard_report.mkdir(parents=True)
     (onboard_report / "manifest.json").write_text('{"schema": "discovery"}\n', encoding="utf-8")
+    ext_upgrade_report.parent.mkdir(parents=True)
     ext_upgrade_report.write_text(
         "# External Soperator Upgrade Report\n\n- `deploy-smoke-report-external.json`: `PASS` - ok\n",
         encoding="utf-8",
@@ -11475,6 +11482,7 @@ def test_render_command_force_allows_noninteractive_overwrite(
     node_template_report_json.write_text('{"status": "passed"}\n', encoding="utf-8")
     node_group_report.write_text("# MK8s Node-Group Upgrade Report\n", encoding="utf-8")
     node_group_report_json.write_text('{"status": "approved-pre-mutation"}\n', encoding="utf-8")
+    upgrade_report.parent.mkdir(parents=True)
     upgrade_report.write_text("# Soperator Upgrade Report\n", encoding="utf-8")
     upgrade_report_json.write_text('{"status": "completed"}\n', encoding="utf-8")
     stale_report.write_text("{}\n", encoding="utf-8")
@@ -23640,7 +23648,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     )
     assert "--output-dir" in normalized_managed_soperator_discover_help
     assert "--redaction" in normalized_managed_soperator_discover_help
-    assert "soperator-discovery/<target>/manifest.json" in (
+    assert "soperator-clusters/<cluster-key>/discovery/manifest.json" in (
         normalized_managed_soperator_discover_help
     )
     assert "--output-dir ./support-bundles --redaction support" in (
@@ -23669,7 +23677,13 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         normalized_managed_soperator_restore_help
     )
     assert "--target mk8s --dry-run" in normalized_managed_soperator_backup_help
-    assert "--backup-dir ./backups/soperator" in normalized_managed_soperator_backup_help
+    assert "--backup-dir ./backups" in normalized_managed_soperator_backup_help
+    assert "<backup-dir>/soperator-clusters/<cluster-key>/" in (
+        normalized_managed_soperator_backup_help
+    )
+    assert "backups/soperator-clusters/mk8s/soperator-backup-" in (
+        normalized_managed_soperator_restore_help
+    )
     assert "DR restore to a new empty compatible target cluster" in (
         normalized_managed_soperator_restore_help
     )
@@ -23800,7 +23814,10 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     )
     assert "--access internal" in normalized_ext_soperator_backup_help
     assert "--target external-cluster --dry-run" in normalized_ext_soperator_backup_help
-    assert "--backup-dir ./backups/external-soperator" in normalized_ext_soperator_backup_help
+    assert "--backup-dir ./backups" in normalized_ext_soperator_backup_help
+    assert "<backup-dir>/soperator-clusters/<cluster-key>/" in (
+        normalized_ext_soperator_backup_help
+    )
     assert "--access internal --dry-run" in normalized_ext_soperator_backup_help
     assert "external uses the public control-plane endpoint" in normalized_ext_soperator_backup_help
     assert "internal uses the private endpoint" in normalized_ext_soperator_backup_help
@@ -23840,7 +23857,10 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         normalized_ext_soperator_discover_help
     )
     assert "onboard resolves or creates" not in normalized_ext_soperator_discover_help
-    assert "soperator-discovery/<target>/manifest.json" in normalized_ext_soperator_discover_help
+    assert (
+        "soperator-clusters/<cluster-key>/discovery/manifest.json"
+        in normalized_ext_soperator_discover_help
+    )
     assert "Jail Upgrade rootfs-refresh boundary" in normalized_ext_soperator_discover_help
     assert "--execute" in normalized_ext_soperator_restore_help
     assert "--approve" in normalized_ext_soperator_restore_help
@@ -23849,6 +23869,9 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         normalized_ext_soperator_restore_help
     )
     assert "external-soperator-backup-" in normalized_ext_soperator_restore_help
+    assert "backups/soperator-clusters/mk8scluster-example/external-soperator-backup-" in (
+        normalized_ext_soperator_restore_help
+    )
     assert "DR restore to a new empty external target cluster" in (
         normalized_ext_soperator_restore_help
     )

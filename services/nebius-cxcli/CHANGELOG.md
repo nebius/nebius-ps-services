@@ -6,6 +6,13 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Changed Soperator and ext-Soperator backup, discovery, onboarding, upgrade,
+  segment, and checkpoint artifacts to use cluster-scoped paths under
+  `backups/soperator-clusters/<cluster-key>/`,
+  `generated/reports/soperator-clusters/<cluster-key>/...`, and
+  `.nebius-cxcli/soperator-clusters/<cluster-key>/...`. `cluster_id` is
+  preferred over display name, kube context, and cxcli target id, and old
+  target-scoped checkpoints are rejected instead of resumed.
 - Aligned managed `soperator upgrade` with the external Jail Upgrade pattern.
   Managed upgrades now expose `--jail-persistent-mount`,
   `--login-session-policy`, and `--login-session-drain-timeout`, automatically
@@ -81,7 +88,8 @@ All notable changes to this project are tracked here. This changelog follows
   node-template-only locked segments still schedule and display the
   `populate-jail-refresh` phase.
 - Fixed external Soperator upgrade Markdown/JSON reports, including segment
-  snapshots under `generated/reports/ext-soperator-upgrades/<target>/<segment-id>/`,
+  snapshots under
+  `generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/segments/<segment-id>/`,
   so checkpoint-planned `populate-jail-refresh` remains visible even when a
   resume/report-refresh invocation uses a shorter active phase list.
 - Fixed external Soperator upgrade checkpoint refresh so compatible reruns
@@ -102,7 +110,7 @@ All notable changes to this project are tracked here. This changelog follows
   fail fast on old progress-only checkpoints. The latest external upgrade
   Markdown/JSON reports now include locked-path progress and each segment also
   writes a snapshot under
-  `generated/reports/ext-soperator-upgrades/<target>/<segment-id>/`.
+  `generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/segments/<segment-id>/`.
 - Clarified `ext-soperator upgrade` help and README wording so operators repeat
   the same `--execute --approve` command until all accepted locked-path segments
   are complete; `ext-soperator onboard` is only for a new later path or an
@@ -249,7 +257,8 @@ All notable changes to this project are tracked here. This changelog follows
   rationale before the next-step commands.
 - Fixed `render` overwrite confirmation so first render does not warn or require
   `--force` when the only existing generated files are command-owned lifecycle
-  reports such as `generated/reports/soperator-discovery/<target>/manifest.json`;
+  reports such as
+  `generated/reports/soperator-clusters/<cluster-key>/discovery/manifest.json`;
   rerenders over render-owned artifacts still prompt or require `--force`.
 - Added public Soperator Slurm upgrade smoke job examples with a configurable
   submitter for repeated CPU/GPU `sbatch` submissions, array mode, optional
@@ -319,7 +328,7 @@ All notable changes to this project are tracked here. This changelog follows
 - Added read-only Soperator discovery commands: `soperator discover` for
   cxcli-managed clusters and `ext-soperator discover` for external clusters.
   Both write the canonical support-safe
-  `generated/reports/soperator-discovery/<target>/` bundle with manifest,
+  `generated/reports/soperator-clusters/<cluster-key>/discovery/` bundle with manifest,
   identity, Kubernetes, Slurm, accounting, customizations, fingerprints,
   findings, and summary files; discovery is not a backup and omits raw Secret
   values, SQL, DB dumps, tokens, and cert material. External discovery can now
@@ -332,7 +341,7 @@ All notable changes to this project are tracked here. This changelog follows
   Soperator `1.22.3 -> 4.0.2-ps.3`, then Kubernetes `1.32 -> 1.33 -> 1.34`
   for older external sources targeting the cxcli-pinned chart. `--output-dir`
   now selects the bundle root while preserving
-  `generated/reports/soperator-discovery/<target>/` below it, and discovery
+  `generated/reports/soperator-clusters/<cluster-key>/discovery/` below it, and discovery
   output now prints Soperator install status plus the detected Soperator version
   when Helm release metadata or live Soperator resource labels provide one.
 - Added standalone restore-capable Soperator backup/restore commands:
@@ -398,23 +407,27 @@ All notable changes to this project are tracked here. This changelog follows
   no longer registered; external upgrades now require prior accepted
   `ext-soperator onboard` data, refresh discovery before planning or mutation,
   create a restore-capable backup before mutation, use
-  `.nebius-cxcli/ext-soperator-upgrades/<target>/checkpoint.json`, write
-  `generated/reports/ext-soperator-upgrade-report.md` and `.json`, and handle
-  affected Slurm jobs with `--job-policy` before MK8s rollout work.
+  `.nebius-cxcli/soperator-clusters/<cluster-key>/ext-soperator-upgrade/checkpoint.json`,
+  write `generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/report.md`
+  and `report.json`, and handle affected Slurm jobs with `--job-policy` before
+  MK8s rollout work.
 - Added fast stage-scoped verification after every executed
   `ext-soperator upgrade --execute` stage, including the final post-upgrade
   MK8s and Helm readiness checks. Failed stage verification keeps the same
   phase pending instead of advancing, records
   `phase_state[<stage>].fast_verification` in the checkpoint, and writes the
   Markdown `Stage Fast Verification` rollup plus JSON `stage_verification`
-  details into `generated/reports/ext-soperator-upgrade-report.md` and `.json`.
+  details into
+  `generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/report.md`
+  and `report.json`.
 - Added the same fast stage-scoped verification gate to managed
   `soperator upgrade` runs. Managed upgrades now record per-stage
   `fast_verification` results in the checkpoint, including the MK8s
   post-validation boundary, stop before the next stage when a stage gate fails,
   and write the Markdown `Stage Fast Verification` rollup plus JSON
   `stage_verification` details into
-  `generated/reports/soperator-upgrade-report.md` and `.json`. Shared
+  `generated/reports/soperator-clusters/<cluster-key>/soperator-upgrade/report.md`
+  and `report.json`. Shared
   stage-verification payload/report helpers are reused by both managed and
   external Soperator upgrade paths.
 - Improved managed and external Soperator upgrade visibility so runtime phase
@@ -753,10 +766,11 @@ All notable changes to this project are tracked here. This changelog follows
   `upgrade node-group --execute --approve` writes
   `upgrade-node-group-report.md` / `.json` at the approved pre-mutation gate,
   external Soperator source discovery is now
-  `soperator-discovery/<target>/manifest.json`, external upgrade uses
-  `ext-soperator-upgrade-report.md`, and cxcli-managed Soperator chart upgrades
-  use `soperator-upgrade-report.md` / `soperator-upgrade-report.json`; the old
-  generic report names are not kept as aliases.
+  `soperator-clusters/<cluster-key>/discovery/manifest.json`, external upgrade
+  uses `soperator-clusters/<cluster-key>/ext-soperator-upgrade/report.md` /
+  `report.json`, and cxcli-managed Soperator chart upgrades use
+  `soperator-clusters/<cluster-key>/soperator-upgrade/report.md` / `report.json`;
+  the old generic report names are not kept as aliases.
 - Clarified `soperator upgrade` dry-run output: the wizard shows the current
   Soperator chart version while prompting for `--to-version`, defaults that
   prompt to the active `component_sources.yaml` Soperator chart pin, keeps the
@@ -927,8 +941,8 @@ All notable changes to this project are tracked here. This changelog follows
 - Hardened cxcli safety paths: managed Terraform/Flux downloads now verify
   published SHA256 manifests, use bounded reads, atomically install cached
   binaries, and reject corrupted cache entries; local SMTP settings and
-  external Soperator upgrade checkpoints and `ext-soperator-upgrade-report.md` are written
-  atomically; Nebius SDK pagination loops fail fast on repeated page tokens;
+  external Soperator upgrade checkpoints and cluster-scoped upgrade reports are
+  written atomically; Nebius SDK pagination loops fail fast on repeated page tokens;
   and CLI-sourced IAM tokens are no longer written into process-global
   environment variables.
 - Added `nebius-cxcli soperator upgrade <config.yaml>` as the canonical
@@ -947,8 +961,8 @@ All notable changes to this project are tracked here. This changelog follows
   Soperator service. The README now also calls out that `ext-soperator upgrade`
   and checkpointed `soperator upgrade` runs should finish from the same
   laptop/workdir/operator account because their resume checkpoints are local
-  under `.nebius-cxcli/ext-soperator-upgrades/` and
-  `.nebius-cxcli/soperator-upgrades/`.
+  under `.nebius-cxcli/soperator-clusters/<cluster-key>/ext-soperator-upgrade/`
+  and `.nebius-cxcli/soperator-clusters/<cluster-key>/soperator-upgrade/`.
 - Changed the `ext-soperator upgrade` no-upgrade-actions route from a red
   generic error paragraph to a note-style handoff with copy-paste
   `validate`, `render`, and `deploy` commands on separate first-column lines.
@@ -965,11 +979,11 @@ All notable changes to this project are tracked here. This changelog follows
   easier to recognize.
 - Fixed `render` so the transactional `generated/` replacement preserves
   command-owned runtime reports such as `deploy-report.md`, external Soperator
-  `soperator-discovery/<target>/manifest.json`,
-  `ext-soperator-upgrade-report.md`, `upgrade-node-template-report.md` /
-  `.json`, `upgrade-node-group-report.md` / `.json`,
-  `soperator-upgrade-report.md` / `soperator-upgrade-report.json`, and JSON
-  detail reports referenced by those Markdown reports, while still removing
+  `soperator-clusters/<cluster-key>/discovery/manifest.json`,
+  `soperator-clusters/<cluster-key>/ext-soperator-upgrade/report.md`,
+  `upgrade-node-template-report.md` / `.json`, `upgrade-node-group-report.md` /
+  `.json`, `soperator-clusters/<cluster-key>/soperator-upgrade/report.md`, and
+  JSON detail reports referenced by those Markdown reports, while still removing
   unrelated stale report files from the generated bundle.
 - Reorganized the README navigation to group common user tasks near the table
   of contents, keep command examples under `Commands`, and move Soperator
@@ -987,10 +1001,11 @@ All notable changes to this project are tracked here. This changelog follows
   window, patches matching live ActiveCheck CRs, deletes matching
   already-launched check workloads, fails closed when live ActiveChecks cannot
   be inspected, restores the original values after postflight validation, and
-  writes `soperator-upgrade-report.md` / `soperator-upgrade-report.json` restore
-  evidence. Reruns now reuse an unfinished upgrade checkpoint to restore the original
-  ActiveChecks values even if a previous interruption left `config.yaml`
-  temporarily suspended, and write the upgrade checkpoint/report atomically.
+  writes `soperator-clusters/<cluster-key>/soperator-upgrade/report.md` /
+  `report.json` restore evidence. Reruns now reuse an unfinished upgrade
+  checkpoint to restore the original ActiveChecks values even if a previous
+  interruption left `config.yaml` temporarily suspended, and write the upgrade
+  checkpoint/report atomically.
 - Documented when operators should use the structured `upgrade` command instead
   of direct `config.yaml` edits, including covered MK8s, VM OS image, and
   target-scoped Helm chart upgrade layers.
@@ -1070,10 +1085,12 @@ All notable changes to this project are tracked here. This changelog follows
 - Improved external Soperator upgrade completion handoff. After a fully
   completed `ext-soperator upgrade --execute`, cxcli now performs a live
   post-upgrade discovery refresh and rewrites `config.yaml` plus
-  `generated/reports/soperator-discovery/<target>/manifest.json` into
-  the same deploy-owned onboarding shape that a rerun of `ext-soperator onboard` would produce, while
-  leaving pending or still-external-upgrade-owned plans blocked from normal deploy. The
-  README and design guide now call out `generated/reports/ext-soperator-upgrade-report.md`
+  `generated/reports/soperator-clusters/<cluster-key>/discovery/manifest.json`
+  into the same deploy-owned onboarding shape that a rerun of
+  `ext-soperator onboard` would produce, while leaving pending or
+  still-external-upgrade-owned plans blocked from normal deploy. The README and
+  design guide now call out
+  `generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/report.md`
   `Pending phase: none` as the upgrade resume-complete marker before normal
   render/deploy reconciliation.
 - Improved external Soperator onboarding rollout wizard guidance. The worker
@@ -1315,14 +1332,16 @@ All notable changes to this project are tracked here. This changelog follows
   onboarded external target, including operator readiness and bounded GPU
   visibility when enabled. NCCL/performance work remains an explicit
   `acceptance-test benchmark` run. The MK8s GPU rollup is written to
-  `generated/reports/ext-soperator-upgrade-report.md`; `generated/reports/deploy-report.md`
-  is refreshed as a secondary deploy-compatible summary.
+  `generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/report.md`;
+  `generated/reports/deploy-report.md` is refreshed as a secondary
+  deploy-compatible summary.
 - Added required Soperator/Slurm smoke validation for enabled Soperator
   targets. `deploy` now records a `soperator_cluster_smoke` JSON report and
   includes it in `deploy-report.md`; `ext-soperator upgrade --execute` runs
   the same smoke validation during validation hold and writes
-  `generated/reports/ext-soperator-upgrade-report.md` with migration phase, remediation,
-  upgrade, layout, validation, and event summaries.
+  `generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/report.md`
+  with migration phase, remediation, upgrade, layout, validation, and event
+  summaries.
 - Clarified the successful `ext-soperator onboard` config-only note so
   external-upgrade-required targets point to the Soperator-specific next steps instead
   of the generic deploy/destroy follow-up wording.
@@ -1385,7 +1404,8 @@ All notable changes to this project are tracked here. This changelog follows
 - Added `nebius-cxcli ext-soperator upgrade <config.yaml>` as the explicit
   external Soperator upgrade command surface. It validates the accepted onboarding
   analysis, reads
-  `generated/reports/soperator-discovery/<target>/manifest.json`, prints
+  `generated/reports/soperator-clusters/<cluster-key>/discovery/manifest.json`,
+  prints
   the target remediation and compute/storage migration plan in dry-run mode, and
   runs checkpointed live phases in `--execute` mode. The executor rechecks the
   live source release and discovery fingerprint before the first mutation,

@@ -76,8 +76,11 @@ this reference:
 - Keep each skill focused on one coherent job.
 - Treat `SKILL.md` as the only required portable runtime file. It should carry
   the core workflow that must be available after trigger.
-- Keep `SKILL.md` lean; move long checklists, examples, vendor notes, and
-  detailed policy into `references/`.
+- Keep `SKILL.md` lean and specific. It should contain trigger, scope,
+  required workflow, guardrails, validation, and output contract, not broad
+  methodology or background prose.
+- Move long checklists, examples, vendor notes, troubleshooting, detailed
+  policy, and reusable templates into `references/` or `assets/`.
 - Tell the agent exactly when to load each reference. Avoid vague "see
   references/" instructions.
 - Keep references one level deep from `SKILL.md` and focused by task, provider,
@@ -179,5 +182,9 @@ For these skills:
   ```
 
 - Use Markdown linting for changed docs when available.
+- Before claiming a target skill is aligned, run or apply `code-review` in
+  review-only mode and `apply-security` in advisory or scan mode against the
+  target skill scope. Record fixed, deferred, skipped, incomplete, or blocking
+  findings.
 - Report runtime trigger readiness from metadata inspection only unless you
   actually observe the target Codex surface loading the skill.

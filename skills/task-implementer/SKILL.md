@@ -30,7 +30,7 @@ This is a lightweight implementation loop, not the Agentic SDLC state machine.
 - Do not use for the Agentic SDLC workflow; use `$sdlc-start` and `sdlc-*`
   phase skills.
 - Do not use for chat-only ideation; use `brainstorm`.
-- Do not use for design review without implementation; use `design` or
+- Do not use for design review without implementation; use `design` and
   `system-design-rules` when available and appropriate.
 - Do not use for review-only work; use `code-review`, `review-pr`, or `align`.
 - Do not use for standalone commits, pushes, PR creation, PR review, or merge.

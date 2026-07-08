@@ -176,6 +176,14 @@ All notable changes to the reusable Codex skills are tracked here.
   updating the OpenAI metadata template. The repo standard preserves
   `agents/openai.yaml` for every source-owned skill so invocation policy and
   interface metadata stay reviewable.
+- Updated `align-skill` so every target skill alignment must apply
+  `code-review` in review-only mode and `apply-security` in advisory or scan
+  mode before claiming the target is aligned, with report templates recording
+  fixed, deferred, skipped, incomplete, or blocking review-lane findings.
+- Tightened `brainstorm` source gathering so source-ranked context must be
+  relevant to the exact topic, question, or problem statement and limited to
+  information that can answer the question, resolve the challenge, close a
+  named gap, or change the recommendation.
 - Hardened `config-codex` laptop setup so existing `AGENTS.md` and
   `config.toml` are treated as merge targets by default, exact template checks
   are explicit audit modes, default validation rejects empty or stale managed

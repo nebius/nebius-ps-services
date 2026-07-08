@@ -272,7 +272,6 @@ def _chart_named_required_recreation_pvs() -> list[dict[str, Any]]:
 
 def test_soperator_backup_filename_uses_external_prefix_without_upgrade_transitions() -> None:
     filename = cli._soperator_upgrade_backup_filename(
-        target_ref="mk8scluster-e00wrz1h8fhxgbdf8j",
         chart_from="1.22.3",
         chart_to="1.22.3",
         k8s_from=None,
@@ -284,14 +283,12 @@ def test_soperator_backup_filename_uses_external_prefix_without_upgrade_transiti
 
     assert (
         filename
-        == "external-soperator-backup-mk8scluster-e00wrz1h8fhxgbdf8j-"
-        "20260629T203459Z-chart-1.22.3.tar.gz"
+        == "external-soperator-backup-20260629T203459Z-chart-1.22.3.tar.gz"
     )
 
 
 def test_ext_soperator_upgrade_backup_filename_includes_source_transitions() -> None:
     filename = cli._soperator_upgrade_backup_filename(
-        target_ref="external-cluster",
         chart_from="1.22.3",
         chart_to="4.0.2-ps.3",
         k8s_from="1.31",
@@ -302,8 +299,8 @@ def test_ext_soperator_upgrade_backup_filename_includes_source_transitions() -> 
 
     assert (
         filename
-        == "ext-soperator-upgrade-external-cluster-"
-        "20260702T225335Z-chart-1.22.3-to-4.0.2-ps.3-k8s-1.31-to-1.32.tar.gz"
+        == "ext-soperator-upgrade-20260702T225335Z-chart-1.22.3-to-4.0.2-ps.3-"
+        "k8s-1.31-to-1.32.tar.gz"
     )
     assert "unknown" not in filename
 
@@ -520,6 +517,7 @@ def test_soperator_backup_archive_contains_restore_material(
 
     assert os.stat(backup.path.parent).st_mode & 0o777 == 0o700
     assert os.stat(backup.path).st_mode & 0o777 == 0o600
+    assert backup.path.parent == tmp_path / "backups" / "soperator-clusters" / "mk8s"
     assert "-chart-0.26.0.tar.gz" in backup.path.name
     assert "-to-" not in backup.path.name
     assert "unknown" not in backup.path.name
@@ -566,6 +564,12 @@ def test_soperator_backup_archive_contains_restore_material(
 
     assert manifest["schema"] == "nebius-cxcli-soperator-backup/v1"
     assert manifest["source_kind"] == "managed-backup"
+    assert manifest["cluster_key"] == "mk8s"
+    assert manifest["cluster_id"] == ""
+    assert manifest["cluster_name"] == ""
+    assert manifest["target_ref"] == "mk8s"
+    assert restore_plan["cluster_key"] == "mk8s"
+    assert restore_plan["target_ref"] == "mk8s"
     assert manifest["kubernetes_restore_material"]["resource_counts"]["deployments"] == 1
     assert manifest["recreation_runbook_material"]["coverage_path"] == (
         "recreation/recreation-coverage.json"

@@ -75,7 +75,7 @@ When trigger precision matters, test these prompts in a fresh Codex thread
 where the source skill is installed or discoverable:
 
 - Should-trigger prompts should load `brainstorm` or produce a response that
-  follows its chat-only, source-ranked context workflow.
+  follows its chat-only, relevance-filtered source-ranked context workflow.
 - Should-not-trigger prompts should route to the implementation, Agentic SDLC,
   PR review, communication, or commit skill named by the request.
 - If `brainstorm` steals implementation, SDLC, or review tasks, narrow the

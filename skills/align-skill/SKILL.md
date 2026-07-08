@@ -33,6 +33,8 @@ alignment.
 - Checking skill guidance, commands, scripts, examples, and vendor-specific
   claims against current official documentation.
 - Adding or hardening safety guardrails before validation or live tests.
+- Applying `code-review` and `apply-security` review lanes to every target
+  skill before claiming the target is aligned.
 - Applying the optional stateful-workflow skill profile for skills that manage
   local state, locked plans, evidence, continuation, retries, or failure
   routing.
@@ -120,6 +122,9 @@ For expanded CLI, VS Code-compatible IDE, and Codex app guidance, read
   progressive disclosure.
 - Move large checklists, templates, policies, and long examples into
   `references/` or `assets/`.
+- Keep target `SKILL.md` content limited to trigger, scope, required workflow,
+  guardrails, validation, and output contract. Put detailed rubrics, examples,
+  policy, troubleshooting, and templates in supporting files.
 - Scripts should be self-contained where possible, have helpful errors, avoid
   network calls unless explicitly needed, and fail safely.
 - Do not persist secrets, private URLs, customer data, raw logs, or one-off
@@ -166,8 +171,9 @@ newly scaffolded skill folder:
    `Idempotency`, `Failure Handling`, `Must Not`, and `Completion Criteria`
    sections. Keep private execution state out of committed project files and
    keep hooks as invariant guardrails rather than workflow orchestrators.
-9. Validate locally with the narrowest relevant checks, then broaden only when
-   the contract or shared validator changed.
+9. Run the mandatory review lanes for the target skill scope, then validate
+   locally with the narrowest relevant checks. Broaden only when the contract or
+   shared validator changed.
 
 ## Learning Loop Enforcement
 
@@ -205,6 +211,30 @@ skipped source update instead.
 Do not capture secrets, private URLs, customer data, raw logs, one-off local
 state, or unverified/vendor-specific claims. If a useful learning is not safe,
 not evidence-backed, or outside this skill's scope, report that it was skipped.
+
+## Mandatory Review Lanes
+
+Before reporting a target skill as aligned, apply these lanes to every target
+skill selected by a single-skill path, multi-skill parent folder, GitHub
+repository URL, or GitHub tree URL:
+
+- `code-review` in review-only mode for instruction quality, support scripts,
+  validation gaps, maintainability, over-complexity, and bloated `SKILL.md`
+  content.
+- `apply-security` in advisory or scan mode for secrets, private URLs, unsafe
+  live actions, credential handling, external writes, dangerous scripts, and
+  supply-chain risk.
+
+These lanes do not broaden `align-skill` into project-wide `align`. Keep them
+scoped to the target skill folders and their directly referenced resources. In
+report-only mode, both lanes stay report-only. If edits are allowed, apply only
+focused, low-risk fixes already permitted by the active task and by each child
+skill's stricter safety rules.
+
+If either lane cannot be resolved, loaded, or completed, report the lane as
+incomplete with the paths or skills checked. Do not claim full alignment until
+blocking `code-review` or `apply-security` findings are fixed, explicitly
+deferred by the user, or reported as owner-review required.
 
 ## Safety Guardrails
 
@@ -303,13 +333,17 @@ not be forced onto simple instruction-only skills.
 7. Apply focused, evidence-backed improvements across `SKILL.md`, references,
    assets, scripts, metadata, README entries, and changelog entries when those
    surfaces exist and are in scope.
-8. Capture newly learned durable knowledge back into the target skill's local
-   source materials. Prefer the narrowest appropriate surface: `SKILL.md` for
-   runtime rules, `references/` for detailed guidance, `assets/` for reusable
-   templates, `scripts/` for deterministic checks, and README or changelog
-   entries for human-facing or release-note updates.
-9. Re-run relevant static validation after source-material updates, then report
-   what was changed, captured, skipped, or remains uncertain.
+8. Run the mandatory `code-review` and `apply-security` lanes against the
+   target skill scope. Resolve safe blocking findings when edits are allowed;
+   otherwise report them as blockers, explicit deferrals, or owner-review needs.
+9. Capture newly learned durable knowledge, including reusable review-lane
+   findings, back into the target skill's local source materials. Prefer the
+   narrowest appropriate surface: `SKILL.md` for runtime rules, `references/`
+   for detailed guidance, `assets/` for reusable templates, `scripts/` for
+   deterministic checks, and README or changelog entries for human-facing or
+   release-note updates.
+10. Re-run relevant static validation after source-material updates, then report
+    what was changed, captured, skipped, or remains uncertain.
 
 ## Live Validation Workflow
 
@@ -341,6 +375,9 @@ Return:
 - Changes made.
 - Evidence used and vendor docs checked.
 - Validation run.
+- `code-review` lane result.
+- `apply-security` lane result.
+- Review-lane findings fixed, deferred, skipped, incomplete, or blocking.
 - Live tests run or skipped.
 - Safety decisions.
 - Learning-loop coverage for target skills.
@@ -365,6 +402,10 @@ Stop before writing learned material into reusable skill sources when the
 learning is confidential, environment-specific, not evidence-backed, outside
 the target skill's scope, or the user requested report-only work. In that case,
 report the skipped source update and the reason.
+
+Stop before claiming full alignment when mandatory `code-review` or
+`apply-security` evidence is missing or incomplete. Report the incomplete lane
+and remaining blocker instead.
 
 ## Remaining Uncertainty
 

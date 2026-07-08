@@ -1321,6 +1321,7 @@ def _write_old_soperator_migration_config(
     payload = {
         "client_info": {
             "client_name": "client-a",
+            "notifications": {"email_enabled": False, "email": None},
             "nebius": {
                 "tenant_id": "tenant-123",
                 "project_id": "project-456",
@@ -1418,6 +1419,17 @@ def _locked_upgrade_path_from_config(config_path: Path) -> dict[str, object]:
     return payload["deploy"]["targets"][0]["soperator_onboarding"]["upgrade_path"]
 
 
+def _ext_soperator_checkpoint_path(
+    config_path: Path,
+    target_ref: str = "external-cluster",
+) -> Path:
+    return soperator_migration_module.soperator_migration_checkpoint_path(
+        config_path,
+        target_ref,
+        payload_or_config=yaml.safe_load(config_path.read_text(encoding="utf-8")),
+    )
+
+
 def _write_locked_ext_soperator_checkpoint(
     *,
     config_path: Path,
@@ -1427,9 +1439,11 @@ def _write_locked_ext_soperator_checkpoint(
     completed_segment_ids: list[str],
     pending_phase: str = "none",
 ) -> Path:
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     checkpoint_path = soperator_migration_module.soperator_migration_checkpoint_path(
         config_path,
         target_ref,
+        payload_or_config=payload,
     )
     segment_state = {
         segment_id: {
@@ -1438,6 +1452,7 @@ def _write_locked_ext_soperator_checkpoint(
                     config_path,
                     target_ref,
                     segment_id,
+                    payload_or_config=payload,
                 )[0]
             ),
             "segment_json_report_path": str(
@@ -1445,6 +1460,7 @@ def _write_locked_ext_soperator_checkpoint(
                     config_path,
                     target_ref,
                     segment_id,
+                    payload_or_config=payload,
                 )[1]
             ),
         }
@@ -1830,14 +1846,17 @@ def _soperator_discovery_manifest_path(
     config_path: Path,
     target_ref: str = "external-cluster",
 ) -> Path:
-    return (
-        config_path.parent
-        / "generated"
-        / "reports"
-        / "soperator-discovery"
-        / target_ref
-        / "manifest.json"
-    )
+    reports_root = config_path.parent / "generated" / "reports" / "soperator-clusters"
+    normalized_target = cli_module.normalize_component_token(target_ref)
+    if reports_root.exists():
+        for manifest_path in sorted(reports_root.glob("*/discovery/manifest.json")):
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if cli_module.normalize_component_token(manifest.get("target_ref")) == normalized_target:
+                return manifest_path
+    return reports_root / (normalized_target or "mk8s") / "discovery" / "manifest.json"
 
 
 def _soperator_discovery_section_path(
@@ -4916,8 +4935,9 @@ def test_first_render_with_only_lifecycle_reports_does_not_require_force(tmp_pat
         config_path.parent
         / "generated"
         / "reports"
-        / "soperator-discovery"
+        / "soperator-clusters"
         / "external-cluster"
+        / "discovery"
         / "manifest.json"
     )
     discovery_manifest.parent.mkdir(parents=True, exist_ok=True)
@@ -8860,7 +8880,7 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "Target and discovery:" in result.output
     assert "External Soperator upgrade target: external-cluster" in result.output
     assert "Source discovery bundle:" in result.output
-    assert "soperator-discovery/external-cluster/manifest.json" in result.output
+    assert "soperator-clusters/external-context/discovery/manifest.json" in result.output
     assert "Onboarding state: existing-soperator-supported" in result.output
     assert "Versions:" not in result.output
     assert (
@@ -9157,10 +9177,7 @@ def test_ext_soperator_upgrade_rejects_progress_only_locked_checkpoint(
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     payload["deploy"]["targets"][0]["soperator_onboarding"].pop("upgrade_path", None)
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-    checkpoint_path = soperator_migration_module.soperator_migration_checkpoint_path(
-        config_path,
-        "external-cluster",
-    )
+    checkpoint_path = _ext_soperator_checkpoint_path(config_path)
     checkpoint_path.parent.mkdir(parents=True)
     checkpoint_path.write_text(
         json.dumps(
@@ -9197,10 +9214,7 @@ def test_ext_soperator_upgrade_execute_advances_locked_path_segments(
         target_k8s_version="1.34",
     )
     upgrade_path = _locked_upgrade_path_from_config(config_path)
-    checkpoint_path = soperator_migration_module.soperator_migration_checkpoint_path(
-        config_path,
-        "external-cluster",
-    )
+    checkpoint_path = _ext_soperator_checkpoint_path(config_path)
     current_snapshot = {
         "value": _old_soperator_snapshot_with_provider(
             soperator_version="1.22.3",
@@ -10026,13 +10040,7 @@ def test_ext_soperator_upgrade_execute_runs_checkpointed_preflight(
     assert "Live source version verified: 3.0.5" in result.output
     assert "Pending phase: customer-approval" in result.output
     assert "Upgrade performed: no." in result.output
-    checkpoint_path = (
-        config_path.parent
-        / ".nebius-cxcli"
-        / "ext-soperator-upgrades"
-        / "external-cluster"
-        / "checkpoint.json"
-    )
+    checkpoint_path = _ext_soperator_checkpoint_path(config_path)
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert checkpoint["completed_phases"] == ["discovery-and-plan"]
     assert checkpoint["pending_phase"] == "customer-approval"
@@ -10146,10 +10154,7 @@ def test_ext_soperator_upgrade_execute_reuses_checkpoint_backup_after_mutation_s
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config_path = _write_old_soperator_migration_config(tmp_path)
-    checkpoint_path = soperator_migration_module.soperator_migration_checkpoint_path(
-        config_path,
-        "external-cluster",
-    )
+    checkpoint_path = _ext_soperator_checkpoint_path(config_path)
     archive_bytes = b"original checkpoint backup archive\n"
     archive_path = tmp_path / "backups/original-pre-upgrade.tar.gz"
     archive_path.parent.mkdir(parents=True, exist_ok=True)
@@ -10377,20 +10382,20 @@ def test_ext_soperator_upgrade_execute_records_approval_and_worker_groups(
     assert "Pending phase: none" in result.output
     assert "Upgrade performed: yes." in result.output
     upgrade_report_path = (
-        config_path.parent / "generated" / "reports" / "ext-soperator-upgrade-report.md"
+        config_path.parent
+        / "generated"
+        / "reports"
+        / "soperator-clusters"
+        / "external-context"
+        / "ext-soperator-upgrade"
+        / "report.md"
     )
     assert f"Upgrade report: {upgrade_report_path}" in result.output
     assert upgrade_report_path.exists()
     upgrade_report = upgrade_report_path.read_text(encoding="utf-8")
     assert "- Upgrade performed: `yes`" in upgrade_report
     assert "Soperator and Slurm smoke" in upgrade_report
-    checkpoint_path = (
-        config_path.parent
-        / ".nebius-cxcli"
-        / "ext-soperator-upgrades"
-        / "external-cluster"
-        / "checkpoint.json"
-    )
+    checkpoint_path = _ext_soperator_checkpoint_path(config_path)
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert checkpoint["worker_node_groups"] == ["gpu-pool"]
     assert checkpoint["pending_phase"] == "none"
@@ -10402,10 +10407,7 @@ def test_ext_soperator_upgrade_execute_refreshes_config_after_completed_upgrade(
 ) -> None:
     config_path = _write_old_soperator_migration_config(tmp_path)
     upgrade_path = _locked_upgrade_path_from_config(config_path)
-    checkpoint_path = soperator_migration_module.soperator_migration_checkpoint_path(
-        config_path,
-        "external-cluster",
-    )
+    checkpoint_path = _ext_soperator_checkpoint_path(config_path)
     _stub_external_soperator_upgrade_backup(monkeypatch)
 
     def _execute(**kwargs):
@@ -10561,7 +10563,13 @@ def test_soperator_discover_command_routes_to_shared_bundle(
     config_path = tmp_path / "config.yaml"
     config_path.write_text("{}\n", encoding="utf-8")
     bundle_path = (
-        tmp_path / "generated" / "reports" / "soperator-discovery" / "mk8s" / "manifest.json"
+        tmp_path
+        / "generated"
+        / "reports"
+        / "soperator-clusters"
+        / "mk8s"
+        / "discovery"
+        / "manifest.json"
     )
     bundle_path.parent.mkdir(parents=True)
     bundle_path.write_text("{}\n", encoding="utf-8")
@@ -10635,7 +10643,13 @@ def test_soperator_discover_command_uses_terminal_spinner(
     config_path = tmp_path / "config.yaml"
     config_path.write_text("{}\n", encoding="utf-8")
     bundle_path = (
-        tmp_path / "generated" / "reports" / "soperator-discovery" / "mk8s" / "manifest.json"
+        tmp_path
+        / "generated"
+        / "reports"
+        / "soperator-clusters"
+        / "mk8s"
+        / "discovery"
+        / "manifest.json"
     )
     bundle_path.parent.mkdir(parents=True)
     bundle_path.write_text("{}\n", encoding="utf-8")
@@ -11058,8 +11072,9 @@ def test_ext_soperator_discover_command_routes_to_shared_bundle(
         tmp_path
         / "generated"
         / "reports"
-        / "soperator-discovery"
-        / "external-cluster"
+        / "soperator-clusters"
+        / "mk8scluster-123"
+        / "discovery"
         / "manifest.json"
     )
     bundle_path.parent.mkdir(parents=True)
@@ -11109,8 +11124,9 @@ def test_ext_soperator_discover_command_accepts_standalone_project_cluster(
         tmp_path
         / "generated"
         / "reports"
-        / "soperator-discovery"
+        / "soperator-clusters"
         / "mk8scluster-123"
+        / "discovery"
         / "manifest.json"
     )
     bundle_path.parent.mkdir(parents=True)
@@ -11208,8 +11224,9 @@ def test_ext_soperator_discover_command_uses_terminal_spinner(
         tmp_path
         / "generated"
         / "reports"
-        / "soperator-discovery"
+        / "soperator-clusters"
         / "mk8scluster-123"
+        / "discovery"
         / "manifest.json"
     )
     bundle_path.parent.mkdir(parents=True)
@@ -11672,8 +11689,9 @@ def test_external_soperator_discovery_without_onboarding_writes_cluster_bundle(
         tmp_path
         / "generated"
         / "reports"
-        / "soperator-discovery"
+        / "soperator-clusters"
         / "mk8scluster-123"
+        / "discovery"
         / "manifest.json"
     )
     bundle = cli_module.load_soperator_discovery_bundle(path)
@@ -11737,8 +11755,9 @@ def test_external_soperator_discovery_output_dir_is_bundle_root(
         output_root
         / "generated"
         / "reports"
-        / "soperator-discovery"
+        / "soperator-clusters"
         / "mk8scluster-123"
+        / "discovery"
         / "manifest.json"
     )
     assert not (output_root / "manifest.json").exists()
@@ -12300,14 +12319,7 @@ def test_soperator_onboard_prints_target_compatible_layout_decisions(
     assert "plan-soperator-compute-migration" not in onboarding["actions"]
     assert "upgrade-external-node-template" not in onboarding["actions"]
 
-    manifest_path = (
-        config_path.parent
-        / "generated"
-        / "reports"
-        / "soperator-discovery"
-        / "training-cluster"
-        / "manifest.json"
-    )
+    manifest_path = _soperator_discovery_manifest_path(config_path, "training-cluster")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["command"][:3] == ["nebius-cxcli", "ext-soperator", "onboard"]
     command = manifest["command"]

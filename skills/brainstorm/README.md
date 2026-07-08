@@ -1,11 +1,12 @@
 # Brainstorm
 
 `brainstorm` is an implicit, chat-only skill for exploring ideas before
-implementation. It gathers source-ranked context, challenges assumptions, and
-keeps facts, hypotheses, tradeoffs, and open questions separated. For major
-design or architecture decisions, it consults `design` and
-`system-design-rules` as advisory context when those skills are installed and
-accessible, then stays in chat unless the user asks to switch workflows.
+implementation. It gathers only source-ranked context that is relevant to the
+topic, question, or problem statement, challenges assumptions, and keeps facts,
+hypotheses, tradeoffs, and open questions separated. For major design or
+architecture decisions, it consults `design` and `system-design-rules` as
+advisory context when those skills are installed and accessible, then stays in
+chat unless the user asks to switch workflows.
 
 The skill is intentionally read-only during the brainstorming conversation. If
 the user decides to implement, document, ticket, message, commit, or publish

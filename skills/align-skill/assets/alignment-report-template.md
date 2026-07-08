@@ -27,6 +27,7 @@
 - Scaffolded skill, draft skill, or update task:
 - Best-practice reference used:
 - Trigger quality changes:
+- `SKILL.md` concision and progressive-disclosure result:
 - Safe/secure/fast hardening guidance applied:
 
 ## Evidence Used
@@ -41,6 +42,9 @@
 
 ## Validation Run
 
+- `code-review` lane result:
+- `apply-security` lane result:
+- Review-lane findings fixed, deferred, skipped, incomplete, or blocking:
 - Static checks:
 - Lint/schema/render checks:
 - Unit tests:

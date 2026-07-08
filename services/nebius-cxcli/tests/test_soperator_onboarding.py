@@ -31,7 +31,6 @@ from nebius_cxcli.soperator_onboarding import (
     SOPERATOR_UPGRADE_SUPPORT_STATUS_NOT_VALIDATED,
     SOPERATOR_UPGRADE_SUPPORT_STATUS_SUPPORTED,
     SOPERATOR_UPGRADE_SUPPORT_STATUS_UNSUPPORTED,
-    SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME,
     analyze_soperator_onboarding_snapshot,
     build_soperator_onboarding_report_from_config,
     collect_kubectl_soperator_snapshot,
@@ -1214,6 +1213,7 @@ def test_onboarding_report_writer_prefers_matching_source_discovery_report(tmp_p
         target_ref="cluster1",
         snapshot=_snapshot(),
         report=source_report["report"],
+        kube_context="nebius-cluster1-mk8scluster-123-external",
     )
 
     written = write_soperator_onboarding_reports(payload, tmp_path / "generated")
@@ -2655,7 +2655,15 @@ def test_onboarding_report_writer_persists_target_report(tmp_path) -> None:
 
     assert len(written) == 1
     report_path = written[0]
-    assert report_path == tmp_path / "generated" / "reports" / "soperator-onboarding-cluster1.json"
+    assert report_path == (
+        tmp_path
+        / "generated"
+        / "reports"
+        / "soperator-clusters"
+        / "nebius-cluster1-mk8scluster-123-external"
+        / "onboarding"
+        / "report.json"
+    )
     report = report_path.read_text(encoding="utf-8")
     assert '"target_ref": "cluster1"' in report
     assert soperator_onboarding_fingerprint(payload, target_ref="cluster1") in report
@@ -2689,8 +2697,9 @@ def test_source_discovery_report_writer_persists_full_snapshot(tmp_path) -> None
         tmp_path
         / "generated"
         / "reports"
-        / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
-        / "cluster1"
+        / "soperator-clusters"
+        / "mk8scluster-123"
+        / "discovery"
         / "manifest.json"
     )
     payload = load_soperator_discovery_bundle(path)
@@ -2773,8 +2782,9 @@ def test_source_discovery_report_writer_treats_output_dir_as_root(tmp_path) -> N
         output_root
         / "generated"
         / "reports"
-        / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
+        / "soperator-clusters"
         / "cluster1"
+        / "discovery"
         / "manifest.json"
     )
     assert not (output_root / "manifest.json").exists()

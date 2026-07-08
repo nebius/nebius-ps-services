@@ -15,6 +15,12 @@ from typing import Any
 
 from .component_instances import normalize_component_token
 from .runtime_config import to_plain_data
+from .soperator_artifacts import (
+    SoperatorClusterArtifactIdentity,
+    soperator_cluster_artifact_identity,
+    soperator_cluster_artifact_identity_from_snapshot,
+    soperator_cluster_report_dir,
+)
 
 SOPERATOR_DISCOVERY_SCHEMA = "nebius-cxcli-soperator-discovery/v1"
 SOPERATOR_DISCOVERY_DIR_NAME = "soperator-discovery"
@@ -1042,10 +1048,19 @@ def soperator_discovery_bundle_dir(
     target_ref: str,
     *,
     output_dir: Path | None = None,
+    cluster_id: str = "",
+    cluster_name: str = "",
+    kube_context: str = "",
+    artifact_identity: SoperatorClusterArtifactIdentity | None = None,
 ) -> Path:
-    normalized = _normalized_token(target_ref, "mk8s")
     root = output_dir if output_dir is not None else project_dir
-    return root / "generated" / "reports" / SOPERATOR_DISCOVERY_DIR_NAME / normalized
+    identity = artifact_identity or soperator_cluster_artifact_identity(
+        cluster_id=cluster_id,
+        cluster_name=cluster_name,
+        target_ref=target_ref,
+        kube_context=kube_context,
+    )
+    return soperator_cluster_report_dir(root, identity, "discovery")
 
 
 def soperator_discovery_manifest_path(
@@ -1053,11 +1068,19 @@ def soperator_discovery_manifest_path(
     target_ref: str,
     *,
     output_dir: Path | None = None,
+    cluster_id: str = "",
+    cluster_name: str = "",
+    kube_context: str = "",
+    artifact_identity: SoperatorClusterArtifactIdentity | None = None,
 ) -> Path:
     return soperator_discovery_bundle_dir(
         project_dir,
         target_ref,
         output_dir=output_dir,
+        cluster_id=cluster_id,
+        cluster_name=cluster_name,
+        kube_context=kube_context,
+        artifact_identity=artifact_identity,
     ) / SOPERATOR_DISCOVERY_MANIFEST_NAME
 
 
@@ -1071,6 +1094,7 @@ def write_soperator_discovery_bundle(
     command: Sequence[str] | None = None,
     cluster_id: str = "",
     cluster_name: str = "",
+    artifact_identity: SoperatorClusterArtifactIdentity | None = None,
     namespace: str = "",
     release_name: str = "",
     kube_context: str = "",
@@ -1083,10 +1107,18 @@ def write_soperator_discovery_bundle(
     redaction: str = "support",
 ) -> Path:
     normalized_target = _normalized_token(target_ref, "mk8s")
+    cluster_identity = artifact_identity or soperator_cluster_artifact_identity_from_snapshot(
+        target_ref=normalized_target,
+        snapshot=snapshot,
+        cluster_id=cluster_id,
+        cluster_name=cluster_name,
+        kube_context=kube_context,
+    )
     bundle_dir = soperator_discovery_bundle_dir(
         project_dir,
         normalized_target,
         output_dir=output_dir,
+        artifact_identity=cluster_identity,
     )
     bundle_dir.mkdir(parents=True, exist_ok=True)
     report_payload = report.to_dict() if hasattr(report, "to_dict") else dict(report)
@@ -1159,6 +1191,7 @@ def write_soperator_discovery_bundle(
         "schema": SOPERATOR_DISCOVERY_SCHEMA,
         "generated_at": _now_z(),
         "target_ref": normalized_target,
+        **cluster_identity.as_metadata(),
         "source_kind": source_kind,
         "command": [str(item) for item in command or ()],
         "redaction": redaction,
