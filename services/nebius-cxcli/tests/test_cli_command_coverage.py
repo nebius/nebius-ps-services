@@ -567,6 +567,7 @@ def test_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path) -> 
         requeue_job=("42", "43"),
         job_wait_timeout="45m",
         job_refresh_interval="10s",
+        slurm_scheduling_quiesce=True,
         login_session_policy="wait-active",
         login_session_drain_timeout="20m",
         dry_run=False,
@@ -583,6 +584,7 @@ def test_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path) -> 
     assert "--home-sfs-size-multiplier" not in args
     assert "--home-sfs-size-gib" not in args
     assert "--confirm-jail-rootfs-overwrite" not in args
+    assert "--slurm-scheduling-quiesce" in args
     assert args[args.index("--cancel-job") + 1] == "17"
     assert args[args.index("--login-session-policy") + 1] == "wait-active"
     assert args[args.index("--login-session-drain-timeout") + 1] == "20m"
@@ -780,6 +782,7 @@ def test_ext_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path)
         requeue_job=("42", "43"),
         job_wait_timeout="45m",
         job_refresh_interval="10s",
+        slurm_scheduling_quiesce=False,
         login_session_policy="wait-active",
         login_session_drain_timeout="20m",
         worker_rollout_strategy="safe-surge",
@@ -809,6 +812,7 @@ def test_ext_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path)
     assert args[args.index("--jail-persistent-mount") + 1] == "/data=/mnt/jail/shared/data"
     assert args[args.index("--jail-sfs-resize-policy") + 1] == "apply"
     assert args[args.index("--jail-sfs-resize-to-gib") + 1] == "2304"
+    assert "--no-slurm-scheduling-quiesce" in args
     assert "--home-sfs-size-multiplier" not in args
     assert "--home-sfs-size-gib" not in args
     assert "--confirm-jail-rootfs-overwrite" not in args
@@ -838,6 +842,7 @@ def _run_soperator_upgrade_for_test(
     jail_persistent_mounts: Sequence[str] = (),
     login_session_policy: str = "wait-active",
     login_session_drain_timeout: str = "30m",
+    slurm_scheduling_quiesce: bool = True,
     dry_run: bool = False,
     allow_unsupported_soperator_upgrade_path: bool = False,
     interactive: bool = False,
@@ -863,6 +868,7 @@ def _run_soperator_upgrade_for_test(
         requeue_job=(),
         job_wait_timeout=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
         job_refresh_interval=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
+        slurm_scheduling_quiesce=slurm_scheduling_quiesce,
         login_session_policy=login_session_policy,
         login_session_drain_timeout=login_session_drain_timeout,
         dry_run=dry_run,
@@ -5189,6 +5195,8 @@ def test_soperator_upgrade_prompt_selector_includes_pending_jobs(
         ),
     )
     assert captured["kwargs"]["is_tty"] is True
+    assert captured["kwargs"]["jobs_provider"] is None
+    assert captured["kwargs"]["action_handler"] is None
 
 
 def test_soperator_upgrade_fail_policy_does_not_drain_when_jobs_exist(
@@ -5267,6 +5275,103 @@ def test_soperator_upgrade_pending_job_blocks_fail_policy_without_drain(
         )
 
     assert drained == []
+
+
+def test_soperator_upgrade_quiesce_treats_pending_jobs_as_queued(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    include_pending_values: list[bool] = []
+    decisions: list[Mapping[str, Any]] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_slurm_nodes_for_rollout",
+        lambda **_kwargs: ("worker-0",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_quiesce_slurm_partitions",
+        lambda **_kwargs: (
+            cli.SlurmPartitionQuiesceRecord(
+                partition="main",
+                previous_state="UP",
+                applied_state="DOWN",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_drain_slurm_nodes",
+        lambda **_kwargs: ("worker-0",),
+    )
+
+    def _affected_jobs(**kwargs: Any) -> tuple[Any, ...]:
+        include_pending_values.append(bool(kwargs["include_pending"]))
+        return ()
+
+    monkeypatch.setattr(cli, "_soperator_upgrade_affected_jobs", _affected_jobs)
+
+    restored = cli._handle_soperator_upgrade_running_jobs(
+        namespace="soperator",
+        node_group="",
+        policy="fail",
+        cancel_job_ids=(),
+        requeue_job_ids=(),
+        wait_timeout_seconds=0,
+        refresh_interval_seconds=1,
+        checkpoint_id="checkpoint",
+        slurm_scheduling_quiesce=True,
+        decision_recorder=decisions.append,
+    )
+
+    assert restored == ("worker-0",)
+    assert include_pending_values == [False, False]
+    assert decisions[0]["action"] == "scheduling-quiesce-applied"
+    assert decisions[0]["pending_jobs"] == "queued-not-blocking"
+
+
+def test_soperator_upgrade_quiesce_restores_partial_partition_on_apply_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[str] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_affected_partitions",
+        lambda **_kwargs: ("main", "gpu"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_partition_state_snapshot",
+        lambda **_kwargs: (
+            cli.SlurmPartitionState(name="main", state="UP"),
+            cli.SlurmPartitionState(name="gpu", state="UP"),
+        ),
+    )
+
+    def _login_command(
+        _namespace: str,
+        command: str,
+        **_kwargs: Any,
+    ) -> SimpleNamespace:
+        commands.append(command)
+        if "PartitionName=gpu State=DOWN" in command:
+            raise RuntimeError("scontrol update failed")
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_login_command", _login_command)
+
+    with pytest.raises(RuntimeError, match="scontrol update failed"):
+        cli._soperator_upgrade_quiesce_slurm_partitions(
+            namespace="soperator",
+            node_names=("worker-0",),
+        )
+
+    assert commands == [
+        "scontrol update PartitionName=main State=DOWN",
+        "scontrol update PartitionName=gpu State=DOWN",
+        "scontrol update PartitionName=main State=UP",
+    ]
 
 
 def test_soperator_upgrade_affected_jobs_include_scoped_pending_jobs(
@@ -5421,6 +5526,56 @@ def test_soperator_upgrade_cancel_selected_policy_cancels_jobs(
 
     assert restored == ("worker-gpu-0-0",)
     assert commands == ["scancel 42"]
+
+
+def test_soperator_upgrade_cancel_selected_waits_for_completing_job_to_clear(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[str] = []
+    running_job = _soperator_slurm_job(job_id="42", state="RUNNING")
+    completing_job = _soperator_slurm_job(job_id="42", state="COMPLETING")
+    queue_results = [(running_job,), (completing_job,), (), ()]
+    sleeps: list[int] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_slurm_nodes_for_rollout",
+        lambda **_kwargs: ("worker-gpu-0-0",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_drain_slurm_nodes",
+        lambda **_kwargs: ("worker-gpu-0-0",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_affected_jobs",
+        lambda **_kwargs: queue_results.pop(0),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_soperator_upgrade_login_command",
+        lambda _namespace, command, **_kwargs: (
+            commands.append(command) or SimpleNamespace(stdout="", stderr="", returncode=0)
+        ),
+    )
+    monkeypatch.setattr(cli.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    restored = cli._handle_soperator_upgrade_running_jobs(
+        namespace="soperator",
+        node_group="",
+        policy="cancel-selected",
+        cancel_job_ids=("42",),
+        requeue_job_ids=(),
+        wait_timeout_seconds=30,
+        refresh_interval_seconds=1,
+        checkpoint_id="checkpoint",
+    )
+
+    assert restored == ("worker-gpu-0-0",)
+    assert commands == ["scancel 42"]
+    assert sleeps == [1]
+    assert queue_results == []
 
 
 def test_soperator_upgrade_cancel_selected_policy_cancels_pending_jobs(
@@ -5733,6 +5888,166 @@ def test_soperator_upgrade_interactive_wait_timeout_raises_without_drain(
         )
 
     assert drained == []
+
+
+def test_soperator_upgrade_interactive_callback_cancels_in_tui_without_reprompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[str] = []
+    job = _soperator_slurm_job(job_id="42")
+    queue_results = [(job,), (), ()]
+
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_slurm_nodes_for_rollout",
+        lambda **_kwargs: ("worker-gpu-0-0",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_drain_slurm_nodes",
+        lambda **_kwargs: ("worker-gpu-0-0",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_affected_jobs",
+        lambda **_kwargs: queue_results.pop(0),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_soperator_upgrade_login_command",
+        lambda _namespace, command, **_kwargs: (
+            commands.append(command) or SimpleNamespace(stdout="", stderr="", returncode=0)
+        ),
+    )
+
+    def _prompt(
+        jobs: Sequence[cli.AffectedSlurmJob],
+        **kwargs: object,
+    ) -> tuple[str, tuple[str, ...]]:
+        action_handler = cast(Callable[..., tuple[cli.AffectedSlurmJob, ...]], kwargs["action_handler"])
+        assert action_handler("cancel-selected", ("42",), tuple(jobs)) == ()
+        return cli.SLURM_JOB_CONTROL_JOBS_CLEARED, ()
+
+    monkeypatch.setattr(cli, "_prompt_soperator_upgrade_job_control", _prompt)
+
+    restored = cli._handle_soperator_upgrade_running_jobs(
+        namespace="soperator",
+        node_group="",
+        policy="interactive",
+        cancel_job_ids=(),
+        requeue_job_ids=(),
+        wait_timeout_seconds=30,
+        refresh_interval_seconds=1,
+        checkpoint_id="checkpoint",
+    )
+
+    assert restored == ("worker-gpu-0-0",)
+    assert commands == ["scancel 42"]
+    assert queue_results == []
+
+
+def test_soperator_upgrade_interactive_callback_requeue_holds_in_tui(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[str] = []
+    job = _soperator_slurm_job(job_id="42")
+    queue_results = [(job,), (), (), ()]
+
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_slurm_nodes_for_rollout",
+        lambda **_kwargs: ("worker-gpu-0-0",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_drain_slurm_nodes",
+        lambda **_kwargs: ("worker-gpu-0-0",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_affected_jobs",
+        lambda **_kwargs: queue_results.pop(0),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_soperator_upgrade_login_command",
+        lambda _namespace, command, **_kwargs: (
+            commands.append(command) or SimpleNamespace(stdout="", stderr="", returncode=0)
+        ),
+    )
+
+    def _prompt(
+        jobs: Sequence[cli.AffectedSlurmJob],
+        **kwargs: object,
+    ) -> tuple[str, tuple[str, ...]]:
+        action_handler = cast(Callable[..., tuple[cli.AffectedSlurmJob, ...]], kwargs["action_handler"])
+        assert action_handler("requeue-hold-selected", ("42",), tuple(jobs)) == ()
+        return cli.SLURM_JOB_CONTROL_JOBS_CLEARED, ()
+
+    monkeypatch.setattr(cli, "_prompt_soperator_upgrade_job_control", _prompt)
+
+    restored = cli._handle_soperator_upgrade_running_jobs(
+        namespace="soperator",
+        node_group="",
+        policy="interactive",
+        cancel_job_ids=(),
+        requeue_job_ids=(),
+        wait_timeout_seconds=30,
+        refresh_interval_seconds=1,
+        checkpoint_id="checkpoint",
+    )
+
+    assert restored == ("worker-gpu-0-0",)
+    assert commands == ["scontrol requeuehold 42"]
+    assert queue_results == []
+
+
+def test_soperator_upgrade_interactive_background_wait_uses_wait_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _soperator_slurm_job(job_id="42")
+    queue_results = [(job,), (job,), (), ()]
+    sleeps: list[int] = []
+
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_slurm_nodes_for_rollout",
+        lambda **_kwargs: ("worker-gpu-0-0",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_drain_slurm_nodes",
+        lambda **_kwargs: ("worker-gpu-0-0",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_affected_jobs",
+        lambda **_kwargs: queue_results.pop(0),
+    )
+    monkeypatch.setattr(cli.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(
+        cli,
+        "_prompt_soperator_upgrade_job_control",
+        lambda _jobs, **_kwargs: (cli.SLURM_JOB_CONTROL_BACKGROUND_WAIT, ("42",)),
+    )
+
+    restored = cli._handle_soperator_upgrade_running_jobs(
+        namespace="soperator",
+        node_group="",
+        policy="interactive",
+        cancel_job_ids=(),
+        requeue_job_ids=(),
+        wait_timeout_seconds=30,
+        refresh_interval_seconds=1,
+        checkpoint_id="checkpoint",
+    )
+
+    assert restored == ("worker-gpu-0-0",)
+    assert sleeps == [1]
+    assert queue_results == []
 
 
 def test_soperator_upgrade_wait_then_cancel_waits_then_cancels_displayed_jobs(
@@ -6163,6 +6478,7 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
         requeue_job=(),
         job_wait_timeout=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
         job_refresh_interval=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
+        slurm_scheduling_quiesce=True,
         login_session_policy="wait-active",
         login_session_drain_timeout="30m",
         dry_run=False,
@@ -23917,6 +24233,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--to-os" in normalized_managed_soperator_upgrade_help
     assert "--to-gpu-stack-preset" in normalized_managed_soperator_upgrade_help
     assert "--job-policy" in normalized_managed_soperator_upgrade_help
+    assert "--slurm-scheduling-quiesce" in normalized_managed_soperator_upgrade_help
     assert "--requeue-job" in normalized_managed_soperator_upgrade_help
     assert "--backup-dir" in normalized_managed_soperator_upgrade_help
     assert "--jail-persistent-mount" in normalized_managed_soperator_upgrade_help
@@ -24270,6 +24587,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--target" in normalized_ext_soperator_upgrade_help
     assert "--backup-dir" in normalized_ext_soperator_upgrade_help
     assert "--job-policy" in normalized_ext_soperator_upgrade_help
+    assert "--slurm-scheduling-quiesce" in normalized_ext_soperator_upgrade_help
     assert "--cancel-job" in normalized_ext_soperator_upgrade_help
     assert "--requeue-job" in normalized_ext_soperator_upgrade_help
     assert "--job-wait-timeout" in normalized_ext_soperator_upgrade_help

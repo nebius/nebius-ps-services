@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 
 _EMPTY_SLURM_VALUES = {"", "-", "(null)", "N/A", "NONE", "NOT_SET", "UNLIMITED"}
 _PENDING_STATES = {"PD", "PENDING"}
+_TERMINATING_STATES = {"CG", "COMPLETING"}
 _ACTIVE_STATES = {
     "BF",
     "BOOT_FAIL",
@@ -39,6 +40,27 @@ class AffectedSlurmJob:
     remaining: str
     name: str
     impact_scope: str
+
+
+@dataclass(frozen=True)
+class SlurmPartitionState:
+    name: str
+    state: str
+    nodes: str = ""
+
+
+@dataclass(frozen=True)
+class SlurmPartitionQuiesceRecord:
+    partition: str
+    previous_state: str
+    applied_state: str = "DOWN"
+
+    def as_payload(self) -> dict[str, str]:
+        return {
+            "partition": self.partition,
+            "previous_state": self.previous_state,
+            "applied_state": self.applied_state,
+        }
 
 
 def clean_slurm_value(value: str) -> str:
@@ -112,8 +134,19 @@ def state_token(state: str) -> str:
     return str(state or "").strip().upper().replace(" ", "_")
 
 
+def slurm_partition_state_token(state: str) -> str:
+    text = state_token(state)
+    if not text:
+        return ""
+    return re.split(r"[^A-Z_]+", text, maxsplit=1)[0]
+
+
 def slurm_job_is_pending(job: AffectedSlurmJob) -> bool:
     return state_token(job.state) in _PENDING_STATES
+
+
+def slurm_job_is_terminating(job: AffectedSlurmJob) -> bool:
+    return state_token(job.state) in _TERMINATING_STATES
 
 
 def slurm_job_is_active(job: AffectedSlurmJob) -> bool:
@@ -145,6 +178,60 @@ def affected_slurm_partitions_from_scontrol_show_node(output: str) -> tuple[str,
                 seen.add(partition)
                 partitions.append(partition)
     return tuple(partitions)
+
+
+def parse_scontrol_show_partition_states(output: str) -> tuple[SlurmPartitionState, ...]:
+    states: list[SlurmPartitionState] = []
+    seen: set[str] = set()
+    for raw_line in output.splitlines():
+        tokens: dict[str, str] = {}
+        for token in str(raw_line or "").strip().split():
+            if "=" not in token:
+                continue
+            key, value = token.split("=", 1)
+            tokens[key.strip()] = value.strip()
+        name = clean_slurm_value(tokens.get("PartitionName", ""))
+        state = clean_slurm_value(tokens.get("State", ""))
+        if not name or not state or name in seen:
+            continue
+        seen.add(name)
+        states.append(
+            SlurmPartitionState(
+                name=name,
+                state=state,
+                nodes=clean_slurm_value(tokens.get("Nodes", "")),
+            )
+        )
+    return tuple(states)
+
+
+def slurm_partition_quiesce_records(
+    *,
+    partitions: Sequence[str],
+    states: Sequence[SlurmPartitionState],
+    applied_state: str = "DOWN",
+) -> tuple[SlurmPartitionQuiesceRecord, ...]:
+    by_name = {state.name: state for state in states}
+    records: list[SlurmPartitionQuiesceRecord] = []
+    for raw_partition in partitions:
+        partition = clean_slurm_value(raw_partition)
+        if not partition:
+            continue
+        current = by_name.get(partition)
+        if current is None:
+            raise RuntimeError(
+                f"Could not inspect Slurm partition `{partition}` before scheduling quiesce."
+            )
+        if slurm_partition_state_token(current.state) != "UP":
+            continue
+        records.append(
+            SlurmPartitionQuiesceRecord(
+                partition=partition,
+                previous_state=current.state,
+                applied_state=applied_state,
+            )
+        )
+    return tuple(records)
 
 
 def _split_hostlist_items(value: str) -> list[str]:

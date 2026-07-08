@@ -86,7 +86,13 @@ _SOPERATOR_ONBOARDING_KEYS = frozenset(
     }
 )
 _SOPERATOR_ONBOARDING_NODE_TEMPLATE_KEYS = frozenset(
-    {"target_k8s_version", "target_os", "target_gpu_stack_preset", "rollout"}
+    {
+        "target_k8s_version",
+        "target_os",
+        "target_gpu_stack_preset",
+        "slurm_scheduling_quiesce",
+        "rollout",
+    }
 )
 _SOPERATOR_LOCKED_UPGRADE_PATH_KEYS = frozenset(
     {
@@ -286,6 +292,11 @@ def _validate_soperator_onboarding_node_template(
         node_template.get("target_gpu_stack_preset"),
         f"{field_label}.target_gpu_stack_preset",
     )
+    if "slurm_scheduling_quiesce" in node_template and not isinstance(
+        node_template.get("slurm_scheduling_quiesce"),
+        bool,
+    ):
+        raise ValueError(f"{field_label}.slurm_scheduling_quiesce must be true or false")
 
 
 def _validate_locked_version_record(record: Any, field_label: str) -> None:

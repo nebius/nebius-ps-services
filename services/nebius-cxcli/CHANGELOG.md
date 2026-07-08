@@ -160,6 +160,36 @@ All notable changes to this project are tracked here. This changelog follows
   a high-contrast marker, remaining times tick while the selector is open, and
   pressing `w` waits in the same screen instead of switching to a separate wait
   dashboard.
+- Improved the interactive Soperator Slurm job-control screen so cancel,
+  requeue, and requeue-hold actions refresh the same table in place, idle
+  polling exits automatically when affected jobs clear, `?` opens a scrollable
+  help overlay, and `b` hides the full-screen table while cxcli keeps waiting
+  at the same Slurm gate.
+- Added default-enabled Soperator worker-upgrade Slurm scheduling quiesce.
+  Managed `soperator upgrade` and external `ext-soperator upgrade` now expose
+  `--slurm-scheduling-quiesce / --no-slurm-scheduling-quiesce`, onboarding
+  persists `node_template_upgrade.slurm_scheduling_quiesce: true`, cxcli sets
+  only affected `UP` Slurm partitions to `DOWN` during worker gates, treats
+  pending jobs as queued information while quiesce is active, and restores
+  cxcli-owned partition state on success, failure, abort, or rerun cleanup.
+- Fixed explicit Soperator Slurm cancel actions so managed and external upgrade
+  paths wait for selected `scancel`ed jobs to leave the affected node scope
+  before continuing. The job-control screen now highlights `COMPLETING` jobs
+  and explains that Slurm may keep cancelled jobs in cleanup while nodes return
+  to service.
+- Clarified external Soperator upgrade live status during MK8s work: the
+  external node-template phase label now names both control-plane and
+  node-template work, active control-plane hops emit a separate `MK8s Control
+  Plane` status signal, and node totals are labeled `Registered nodes` because
+  they come from the current Kubernetes Node list and may temporarily drop
+  during zero-surge replacement.
+- Improved external Soperator upgrade live-status readability by adding
+  Nebius node-group display names in parentheses when available and coloring
+  terminal `x/y Ready` markers plus node-group display names by readiness.
+- Fixed external Soperator upgrade live-status spinners so stray Enter/key
+  presses while no prompt is active do not echo new lines that duplicate the
+  current status row. cxcli restores normal terminal input before prompts and
+  full-screen Slurm job controls.
 - Fixed external Soperator upgrade operator output so backup phase comments and
   live status lines no longer repeat the top-level stage label, backup
   checkpoint reuse validates the recorded archive size before mutation resumes
@@ -1213,7 +1243,8 @@ All notable changes to this project are tracked here. This changelog follows
 - Hardened upgrade resume behavior for long MK8s rollouts. Accepted
   `ext-soperator upgrade --execute` node-group update timeouts now reconcile
   live state, checkpoint still-rolling external node-template updates as
-  pending, and resume without duplicate Nebius update calls; Terraform-managed
+  pending even when the requested template fields are not visible yet, and
+  resume without duplicate Nebius update calls; Terraform-managed
   MK8s `upgrade` reruns that only wait for an already-requested rollout now
   still perform the final rendered apply needed to restore temporary
   `zero-surge`, `safe-surge`, or `force-delete` node-group strategies.

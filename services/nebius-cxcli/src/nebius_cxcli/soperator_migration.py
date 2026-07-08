@@ -70,6 +70,8 @@ from .quota_checks import (
 from .runtime_config import to_plain_data
 from .sdk_auth import init_nebius_sdk, suppress_expected_refresh_logs
 from .slurm_job_control import (
+    SLURM_JOB_CONTROL_BACKGROUND_WAIT,
+    SLURM_JOB_CONTROL_JOBS_CLEARED,
     SLURM_JOB_CONTROL_WAIT_COMPLETED,
     SLURM_JOB_CONTROL_WAIT_TIMEOUT,
     build_slurm_jobs_table,
@@ -78,12 +80,16 @@ from .slurm_job_control import (
 )
 from .slurm_jobs import (
     AffectedSlurmJob,
+    SlurmPartitionQuiesceRecord,
+    SlurmPartitionState,
     affected_slurm_partitions_from_scontrol_show_node,
     dedupe_slurm_jobs,
     ensure_requeueable_slurm_jobs,
     filter_affected_pending_slurm_jobs,
+    parse_scontrol_show_partition_states,
     parse_squeue_jobs,
     selected_display_job_ids,
+    slurm_partition_quiesce_records,
 )
 from .soperator_artifacts import (
     soperator_cluster_artifact_identity,
@@ -288,7 +294,7 @@ _EXTERNAL_UPGRADE_BACKUP_REQUIRED_FIELDS = (
 _STATUS_PHASE_LABELS = {
     "discovery-and-plan": "Discovery and upgrade plan",
     "customer-approval": "Customer approval gate",
-    _EXTERNAL_NODE_TEMPLATE_PHASE_ID: "External node-template upgrade",
+    _EXTERNAL_NODE_TEMPLATE_PHASE_ID: "MK8s control-plane/node-template upgrade",
     _TARGET_GPU_STACK_PHASE_ID: "Target GPU stack reconciliation",
     "create-aligned-sfs": "Aligned SFS creation",
     "online-bulk-data-sync": "Online bulk data sync",
@@ -4080,11 +4086,10 @@ def _node_group_template_filesystems_match(
     return _stable_json(_node_group_template_filesystems(node_group)) == _stable_json(desired)
 
 
-def _node_group_update_request_satisfied(
+def _node_group_template_update_request_satisfied(
     node_group: Mapping[str, Any],
     *,
     update_args: Sequence[str],
-    strategy_args: Sequence[str],
     clear_template_gpu_settings: bool,
 ) -> bool:
     command = tuple(str(item) for item in update_args)
@@ -4107,9 +4112,51 @@ def _node_group_update_request_satisfied(
         expected_preset = command[command.index("--template-gpu-settings-drivers-preset") + 1]
         if _node_group_template_gpu_drivers_preset(node_group) != expected_preset:
             return False
-    if clear_template_gpu_settings and _node_group_template_gpu_drivers_preset(node_group):
-        return False
-    return _node_group_strategy_matches_args(node_group, strategy_args)
+    return not (
+        clear_template_gpu_settings and _node_group_template_gpu_drivers_preset(node_group)
+    )
+
+
+def _node_group_update_request_satisfied(
+    node_group: Mapping[str, Any],
+    *,
+    update_args: Sequence[str],
+    strategy_args: Sequence[str],
+    clear_template_gpu_settings: bool,
+) -> bool:
+    return _node_group_template_update_request_satisfied(
+        node_group,
+        update_args=update_args,
+        clear_template_gpu_settings=clear_template_gpu_settings,
+    ) and _node_group_strategy_matches_args(node_group, strategy_args)
+
+
+def _node_group_template_update_current_summary(node_group: Mapping[str, Any]) -> str:
+    return (
+        "current Kubernetes "
+        + (_minor_version_text_or_empty(_node_group_version(node_group)) or "unknown")
+        + ", OS "
+        + (_node_group_template_os(node_group) or "unknown")
+        + ", GPU stack "
+        + (_node_group_template_gpu_drivers_preset(node_group) or "driverless")
+    )
+
+
+def _node_group_update_visibility_pending_message(
+    *,
+    node_group_id: str,
+    action: str,
+    node_group: Mapping[str, Any],
+) -> str:
+    return (
+        f"Nebius node-group update for {node_group_id} timed out after the {action} "
+        "was accepted, but the live node group has not yet reported the requested "
+        "node-template fields ("
+        + _node_group_template_update_current_summary(node_group)
+        + "). Rerun the same `nebius-cxcli ext-soperator upgrade ... --execute --approve` "
+        "command; cxcli will re-read live state from the checkpoint and will not submit "
+        "a duplicate node-group update while the accepted update is still settling."
+    )
 
 
 def _node_group_update_timeout_message(
@@ -4141,12 +4188,20 @@ def _reconcile_node_group_update_timeout(
         nebius_api=nebius_api,
         node_group_id=node_group_id,
     )
-    if not _node_group_update_request_satisfied(
+    template_satisfied = _node_group_template_update_request_satisfied(
         live_node_group,
         update_args=update_args,
-        strategy_args=strategy_args,
         clear_template_gpu_settings=clear_template_gpu_settings,
-    ):
+    )
+    if not template_satisfied:
+        if action == "node-template update":
+            raise SoperatorMigrationPhasePending(
+                _node_group_update_visibility_pending_message(
+                    node_group_id=node_group_id,
+                    action=action,
+                    node_group=live_node_group,
+                )
+            ) from timeout
         raise RuntimeError(
             f"Nebius node-group update for {node_group_id} timed out before the live "
             f"node group reported the requested {action}. Rerun the same "
@@ -6735,6 +6790,7 @@ def _run_soperator_worker_rollout_live_preflight(
     slurm_decision_recorder: Callable[[Mapping[str, Any]], None] | None = None,
     interactive_prompt_pause: Callable[[], Any] | None = None,
     allow_resolved_interactive_job_policy: bool = False,
+    include_pending: bool = True,
 ) -> list[str]:
     unavailable_budget = 0
     budget_label = f"{rollout.strategy} requires selected worker groups to start healthy"
@@ -6810,6 +6866,7 @@ def _run_soperator_worker_rollout_live_preflight(
                 decision_recorder=slurm_decision_recorder,
                 interactive_prompt_pause=interactive_prompt_pause,
                 allow_resolved_interactive_job_policy=allow_resolved_interactive_job_policy,
+                include_pending=include_pending,
             )
         )
     return lines
@@ -8102,7 +8159,8 @@ _STATUS_PHASES_WITH_MK8S_ONLY = frozenset(
 _STATUS_STATE_RANK = {
     "serving": 0,
     "draining": 1,
-    "degraded": 2,
+    "upgrading": 2,
+    "degraded": 3,
     "unknown": 3,
     "pending": 4,
     "down": 5,
@@ -8389,6 +8447,7 @@ def _external_upgrade_slurm_jobs(
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
     node_names: Sequence[str],
+    include_pending: bool = True,
 ) -> tuple[AffectedSlurmJob, ...]:
     selected_nodes = _external_upgrade_slurm_node_filter(
         command_runner=command_runner,
@@ -8448,6 +8507,8 @@ def _external_upgrade_slurm_jobs(
         result.stdout,
         impact_scope="allocated-node",
     )
+    if not include_pending:
+        return dedupe_slurm_jobs(active_jobs)
     partitions = _external_upgrade_affected_partitions(
         command_runner=command_runner,
         kube_context=kube_context,
@@ -8533,6 +8594,7 @@ def _wait_for_external_upgrade_requeued_jobs_to_leave_nodes(
     job_ids: Sequence[str],
     timeout_seconds: int,
     refresh_interval_seconds: int,
+    include_pending: bool = True,
 ) -> tuple[AffectedSlurmJob, ...]:
     selected = frozenset(
         str(job_id or "").strip() for job_id in job_ids if str(job_id or "").strip()
@@ -8542,6 +8604,7 @@ def _wait_for_external_upgrade_requeued_jobs_to_leave_nodes(
             command_runner=command_runner,
             kube_context=kube_context,
             node_names=node_names,
+            include_pending=include_pending,
         )
     transition_timeout = min(timeout_seconds if timeout_seconds > 0 else 300, 300)
     deadline = time.monotonic() + max(transition_timeout, 1)
@@ -8550,6 +8613,7 @@ def _wait_for_external_upgrade_requeued_jobs_to_leave_nodes(
             command_runner=command_runner,
             kube_context=kube_context,
             node_names=node_names,
+            include_pending=include_pending,
         )
         selected_remaining = [job for job in jobs if job.job_id in selected]
         if not selected_remaining:
@@ -8558,6 +8622,53 @@ def _wait_for_external_upgrade_requeued_jobs_to_leave_nodes(
             raise SoperatorMigrationPhasePending(
                 f"{len(selected_remaining)} affected Slurm job(s) remain after requeue/requeuehold. "
                 "Rerun after they finish or cancel them explicitly."
+            )
+        time.sleep(max(refresh_interval_seconds, 1))
+
+
+def _wait_for_external_upgrade_cancelled_jobs_to_leave_nodes(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    node_names: Sequence[str],
+    job_ids: Sequence[str],
+    timeout_seconds: int,
+    refresh_interval_seconds: int,
+    include_pending: bool = True,
+) -> tuple[AffectedSlurmJob, ...]:
+    selected = frozenset(
+        str(job_id or "").strip() for job_id in job_ids if str(job_id or "").strip()
+    )
+    if not selected:
+        return _external_upgrade_slurm_jobs(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            node_names=node_names,
+            include_pending=include_pending,
+        )
+    transition_timeout = min(
+        timeout_seconds if timeout_seconds > 0 else _EXTERNAL_UPGRADE_CANCEL_CLEAR_TIMEOUT_SECONDS,
+        _EXTERNAL_UPGRADE_CANCEL_CLEAR_TIMEOUT_SECONDS,
+    )
+    deadline = time.monotonic() + max(transition_timeout, 1)
+    while True:
+        jobs = _external_upgrade_slurm_jobs(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            node_names=node_names,
+            include_pending=include_pending,
+        )
+        selected_remaining = [job for job in jobs if job.job_id in selected]
+        if not selected_remaining:
+            return jobs
+        if time.monotonic() >= deadline:
+            remaining_ids = ", ".join(job.job_id for job in selected_remaining)
+            raise SoperatorMigrationPhasePending(
+                "Affected Slurm job(s) remain after scancel: "
+                + remaining_ids
+                + ". Slurm may still show them as COMPLETING while nodes return to service; "
+                "rerun after they clear or ask a Slurm administrator to inspect stuck "
+                "COMPLETING jobs."
             )
         time.sleep(max(refresh_interval_seconds, 1))
 
@@ -8623,6 +8734,11 @@ def _prompt_external_upgrade_slurm_job_control(
     *,
     prompt_pause: Callable[[], Any] | None,
     jobs_provider: Callable[[], Sequence[AffectedSlurmJob]] | None = None,
+    action_handler: Callable[
+        [str, tuple[str, ...], tuple[AffectedSlurmJob, ...]],
+        Sequence[AffectedSlurmJob],
+    ]
+    | None = None,
     wait_timeout_seconds: int = 0,
     refresh_interval_seconds: int = 30,
 ) -> tuple[str, tuple[str, ...]]:
@@ -8634,6 +8750,7 @@ def _prompt_external_upgrade_slurm_job_control(
             is_tty=_external_upgrade_is_tty_session(),
             text_prompt=_external_upgrade_text_prompt,
             jobs_provider=jobs_provider,
+            action_handler=action_handler,
             wait_timeout_seconds=wait_timeout_seconds,
             poll_interval_seconds=refresh_interval_seconds,
         )
@@ -8659,6 +8776,7 @@ def _wait_for_external_upgrade_slurm_jobs_until_timeout(
     node_names: Sequence[str],
     timeout_seconds: int,
     refresh_interval_seconds: int,
+    include_pending: bool = True,
 ) -> tuple[AffectedSlurmJob, ...]:
     deadline = time.monotonic() + timeout_seconds if timeout_seconds > 0 else None
     poll_interval = max(refresh_interval_seconds, 1)
@@ -8668,6 +8786,7 @@ def _wait_for_external_upgrade_slurm_jobs_until_timeout(
             command_runner=command_runner,
             kube_context=kube_context,
             node_names=node_names,
+            include_pending=include_pending,
         )
 
     def _timed_out() -> bool:
@@ -8771,6 +8890,7 @@ def _wait_for_external_upgrade_slurm_jobs(
     node_names: Sequence[str],
     timeout_seconds: int,
     refresh_interval_seconds: int,
+    include_pending: bool = True,
 ) -> None:
     remaining = _wait_for_external_upgrade_slurm_jobs_until_timeout(
         command_runner=command_runner,
@@ -8778,6 +8898,7 @@ def _wait_for_external_upgrade_slurm_jobs(
         node_names=node_names,
         timeout_seconds=timeout_seconds,
         refresh_interval_seconds=refresh_interval_seconds,
+        include_pending=include_pending,
     )
     if remaining:
         raise RuntimeError(
@@ -8800,6 +8921,7 @@ def _handle_external_upgrade_slurm_jobs(
     decision_recorder: Callable[[Mapping[str, Any]], None] | None = None,
     interactive_prompt_pause: Callable[[], Any] | None = None,
     allow_resolved_interactive_job_policy: bool = False,
+    include_pending: bool = True,
 ) -> list[str]:
     def _record(action: str, **details: Any) -> None:
         if decision_recorder is None:
@@ -8833,6 +8955,7 @@ def _handle_external_upgrade_slurm_jobs(
                 node_names=selected_nodes,
                 timeout_seconds=timeout_seconds,
                 refresh_interval_seconds=refresh_interval_seconds,
+                include_pending=include_pending,
             )
 
     def _wait_then_cancel() -> list[str]:
@@ -8849,6 +8972,7 @@ def _handle_external_upgrade_slurm_jobs(
             command_runner=command_runner,
             kube_context=kube_context,
             node_names=selected_nodes,
+            include_pending=include_pending,
         )
         if not remaining:
             _record("wait-then-cancel-cleared-after-timeout-refresh")
@@ -8891,10 +9015,65 @@ def _handle_external_upgrade_slurm_jobs(
         _record("wait-then-cancel-cleared", job_ids=selected)
         return ["Slurm job preflight: waited, cancelled timed-out affected jobs, and cleared."]
 
+    def _wait_for_cancelled(job_ids: Sequence[str]) -> tuple[AffectedSlurmJob, ...]:
+        return _wait_for_external_upgrade_cancelled_jobs_to_leave_nodes(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            node_names=selected_nodes,
+            job_ids=job_ids,
+            timeout_seconds=wait_timeout_seconds,
+            refresh_interval_seconds=refresh_interval_seconds,
+            include_pending=include_pending,
+        )
+
+    def _interactive_action_handler(
+        action: str,
+        selected_ids: tuple[str, ...],
+        displayed_jobs: tuple[AffectedSlurmJob, ...],
+    ) -> tuple[AffectedSlurmJob, ...]:
+        if action in {"cancel-selected", "cancel-all"}:
+            selected = selected_display_job_ids(displayed_jobs, selected_ids, action=action)
+            if not selected:
+                raise RuntimeError("Select at least one displayed job to cancel.")
+            _record(action, job_ids=selected)
+            _external_upgrade_cancel_slurm_jobs(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                job_ids=selected,
+            )
+            return _wait_for_cancelled(selected)
+        if action in {
+            "requeue-selected",
+            "requeue-all",
+            "requeue-hold-selected",
+            "requeue-hold-all",
+        }:
+            selected = ensure_requeueable_slurm_jobs(displayed_jobs, selected_ids, action=action)
+            if not selected:
+                raise RuntimeError("Select at least one displayed active job to requeue.")
+            _record(action, job_ids=selected)
+            _external_upgrade_requeue_slurm_jobs(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                job_ids=selected,
+                hold=action in {"requeue-hold-selected", "requeue-hold-all"},
+            )
+            return _wait_for_external_upgrade_requeued_jobs_to_leave_nodes(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                node_names=selected_nodes,
+                job_ids=selected,
+                timeout_seconds=wait_timeout_seconds,
+                refresh_interval_seconds=refresh_interval_seconds,
+                include_pending=include_pending,
+            )
+        raise RuntimeError(f"Unsupported Slurm job-control action: {action}")
+
     jobs = _external_upgrade_slurm_jobs(
         command_runner=command_runner,
         kube_context=kube_context,
         node_names=selected_nodes,
+        include_pending=include_pending,
     )
     if not jobs:
         _record("no-blocking-jobs", policy=resolved_policy, node_names=selected_nodes)
@@ -8914,7 +9093,9 @@ def _handle_external_upgrade_slurm_jobs(
                     command_runner=command_runner,
                     kube_context=kube_context,
                     node_names=selected_nodes,
+                    include_pending=include_pending,
                 ),
+                action_handler=_interactive_action_handler,
                 wait_timeout_seconds=wait_timeout_seconds,
                 refresh_interval_seconds=refresh_interval_seconds,
             )
@@ -8924,11 +9105,15 @@ def _handle_external_upgrade_slurm_jobs(
                     command_runner=command_runner,
                     kube_context=kube_context,
                     node_names=selected_nodes,
+                    include_pending=include_pending,
                 )
                 if not jobs:
                     _record("no-blocking-jobs-after-refresh", policy=resolved_policy)
                     return ["Slurm job preflight: no affected jobs remain after refresh."]
                 continue
+            if action == SLURM_JOB_CONTROL_JOBS_CLEARED:
+                _record("jobs-cleared-in-tui", policy=resolved_policy)
+                return ["Slurm job preflight: no affected jobs remain after refresh."]
             if action == SLURM_JOB_CONTROL_WAIT_COMPLETED:
                 _record(
                     "wait-started",
@@ -8948,6 +9133,23 @@ def _handle_external_upgrade_slurm_jobs(
                     "--job-wait-timeout, cancel, requeue, or requeue-hold selected jobs, "
                     "or use --job-policy wait-then-cancel."
                 )
+            if action == SLURM_JOB_CONTROL_BACKGROUND_WAIT:
+                _record(
+                    "background-wait-started",
+                    timeout_seconds=wait_timeout_seconds,
+                    refresh_interval_seconds=refresh_interval_seconds,
+                )
+                with _external_upgrade_slurm_prompt_paused(interactive_prompt_pause):
+                    _wait_for_external_upgrade_slurm_jobs(
+                        command_runner=command_runner,
+                        kube_context=kube_context,
+                        node_names=selected_nodes,
+                        timeout_seconds=wait_timeout_seconds,
+                        refresh_interval_seconds=refresh_interval_seconds,
+                        include_pending=include_pending,
+                    )
+                _record("background-wait-completed")
+                return ["Slurm job preflight: waited for affected jobs to finish."]
             if action == "wait-to-finish":
                 _record(
                     "wait-started",
@@ -8961,6 +9163,7 @@ def _handle_external_upgrade_slurm_jobs(
                         node_names=selected_nodes,
                         timeout_seconds=wait_timeout_seconds,
                         refresh_interval_seconds=refresh_interval_seconds,
+                        include_pending=include_pending,
                     )
                 _record("wait-completed")
                 return ["Slurm job preflight: waited for affected jobs to finish."]
@@ -8975,11 +9178,7 @@ def _handle_external_upgrade_slurm_jobs(
                     kube_context=kube_context,
                     job_ids=selected,
                 )
-                jobs = _external_upgrade_slurm_jobs(
-                    command_runner=command_runner,
-                    kube_context=kube_context,
-                    node_names=selected_nodes,
-                )
+                jobs = _wait_for_cancelled(selected)
                 if not jobs:
                     return ["Slurm job preflight: selected jobs cancelled."]
                 continue
@@ -8991,11 +9190,7 @@ def _handle_external_upgrade_slurm_jobs(
                     kube_context=kube_context,
                     job_ids=selected,
                 )
-                jobs = _external_upgrade_slurm_jobs(
-                    command_runner=command_runner,
-                    kube_context=kube_context,
-                    node_names=selected_nodes,
-                )
+                jobs = _wait_for_cancelled(selected)
                 if not jobs:
                     return ["Slurm job preflight: all affected jobs cancelled."]
                 continue
@@ -9021,6 +9216,7 @@ def _handle_external_upgrade_slurm_jobs(
                     job_ids=selected,
                     timeout_seconds=wait_timeout_seconds,
                     refresh_interval_seconds=refresh_interval_seconds,
+                    include_pending=include_pending,
                 )
                 if not jobs:
                     return ["Slurm job preflight: selected jobs requeued."]
@@ -9045,6 +9241,7 @@ def _handle_external_upgrade_slurm_jobs(
                     job_ids=selected,
                     timeout_seconds=wait_timeout_seconds,
                     refresh_interval_seconds=refresh_interval_seconds,
+                    include_pending=include_pending,
                 )
                 if not jobs:
                     return ["Slurm job preflight: all affected active jobs requeued."]
@@ -9074,6 +9271,7 @@ def _handle_external_upgrade_slurm_jobs(
                     job_ids=selected,
                     timeout_seconds=wait_timeout_seconds,
                     refresh_interval_seconds=refresh_interval_seconds,
+                    include_pending=include_pending,
                 )
                 if not jobs:
                     return ["Slurm job preflight: selected jobs requeued and held."]
@@ -9099,6 +9297,7 @@ def _handle_external_upgrade_slurm_jobs(
                     job_ids=selected,
                     timeout_seconds=wait_timeout_seconds,
                     refresh_interval_seconds=refresh_interval_seconds,
+                    include_pending=include_pending,
                 )
                 if not jobs:
                     return ["Slurm job preflight: all affected active jobs requeued and held."]
@@ -9139,6 +9338,7 @@ def _handle_external_upgrade_slurm_jobs(
                 node_names=selected_nodes,
                 timeout_seconds=wait_timeout_seconds,
                 refresh_interval_seconds=refresh_interval_seconds,
+                include_pending=include_pending,
             )
         _record("wait-completed")
         return ["Slurm job preflight: waited for affected jobs to finish."]
@@ -9153,6 +9353,7 @@ def _handle_external_upgrade_slurm_jobs(
             kube_context=kube_context,
             job_ids=selected,
         )
+        remaining = _wait_for_cancelled(selected)
     elif resolved_policy == "cancel-all":
         selected = tuple(job.job_id for job in jobs)
         _record("cancel-all", job_ids=selected)
@@ -9161,6 +9362,7 @@ def _handle_external_upgrade_slurm_jobs(
             kube_context=kube_context,
             job_ids=selected,
         )
+        remaining = _wait_for_cancelled(selected)
     elif resolved_policy == "requeue-selected":
         selected = ensure_requeueable_slurm_jobs(jobs, requeue_job_ids, action=resolved_policy)
         if not selected:
@@ -9178,6 +9380,7 @@ def _handle_external_upgrade_slurm_jobs(
             job_ids=selected,
             timeout_seconds=wait_timeout_seconds,
             refresh_interval_seconds=refresh_interval_seconds,
+            include_pending=include_pending,
         )
     elif resolved_policy == "requeue-all":
         selected = tuple(job.job_id for job in jobs)
@@ -9195,6 +9398,7 @@ def _handle_external_upgrade_slurm_jobs(
             job_ids=selected,
             timeout_seconds=wait_timeout_seconds,
             refresh_interval_seconds=refresh_interval_seconds,
+            include_pending=include_pending,
         )
     elif resolved_policy == "requeue-hold-selected":
         selected = ensure_requeueable_slurm_jobs(jobs, requeue_job_ids, action=resolved_policy)
@@ -9216,6 +9420,7 @@ def _handle_external_upgrade_slurm_jobs(
             job_ids=selected,
             timeout_seconds=wait_timeout_seconds,
             refresh_interval_seconds=refresh_interval_seconds,
+            include_pending=include_pending,
         )
     elif resolved_policy == "requeue-hold-all":
         selected = tuple(job.job_id for job in jobs)
@@ -9234,12 +9439,14 @@ def _handle_external_upgrade_slurm_jobs(
             job_ids=selected,
             timeout_seconds=wait_timeout_seconds,
             refresh_interval_seconds=refresh_interval_seconds,
+            include_pending=include_pending,
         )
     if remaining is None:
         remaining = _external_upgrade_slurm_jobs(
             command_runner=command_runner,
             kube_context=kube_context,
             node_names=selected_nodes,
+            include_pending=include_pending,
         )
     if remaining:
         _record("blocking-jobs-remain", job_count=len(remaining))
@@ -9249,6 +9456,130 @@ def _handle_external_upgrade_slurm_jobs(
         )
     _record("blocking-jobs-cleared", policy=resolved_policy)
     return [f"Slurm job preflight: cleared affected jobs with policy {resolved_policy}."]
+
+
+def _external_upgrade_partition_state_snapshot(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+) -> tuple[SlurmPartitionState, ...]:
+    result = _kubectl_exec_login(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        args=("scontrol", "show", "partition", "-o"),
+        check=False,
+        timeout_seconds=120,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "External Soperator upgrade could not inspect Slurm partition states before "
+            "scheduling quiesce: " + _command_detail(result)
+        )
+    return parse_scontrol_show_partition_states(result.stdout)
+
+
+def _external_upgrade_quiesce_slurm_partitions(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    node_names: Sequence[str],
+) -> tuple[SlurmPartitionQuiesceRecord, ...]:
+    selected_nodes = _external_upgrade_slurm_node_filter(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        node_names=node_names,
+    )
+    if not selected_nodes:
+        return ()
+    partitions = _external_upgrade_affected_partitions(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        node_names=selected_nodes,
+    )
+    records = slurm_partition_quiesce_records(
+        partitions=partitions,
+        states=_external_upgrade_partition_state_snapshot(
+            command_runner=command_runner,
+            kube_context=kube_context,
+        ),
+    )
+    applied: list[SlurmPartitionQuiesceRecord] = []
+    for record in records:
+        result = _kubectl_exec_login(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            args=(
+                "scontrol",
+                "update",
+                f"PartitionName={record.partition}",
+                f"State={record.applied_state}",
+            ),
+            check=False,
+            timeout_seconds=120,
+        )
+        if result.returncode != 0:
+            if applied:
+                try:
+                    _restore_external_upgrade_slurm_partitions(
+                        command_runner=command_runner,
+                        kube_context=kube_context,
+                        records=applied,
+                    )
+                except Exception as restore_exc:
+                    raise RuntimeError(
+                        "External Soperator upgrade could not restore partially quiesced "
+                        "Slurm partition scheduling after quiesce failed. Run: "
+                        + _external_upgrade_slurm_partition_restore_command(applied)
+                    ) from restore_exc
+            raise RuntimeError(
+                "External Soperator upgrade could not pause Slurm scheduling for "
+                f"partition {record.partition}: " + _command_detail(result)
+            )
+        applied.append(record)
+    return records
+
+
+def _restore_external_upgrade_slurm_partitions(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    records: Sequence[SlurmPartitionQuiesceRecord],
+) -> None:
+    for record in records:
+        partition = str(record.partition or "").strip()
+        previous_state = str(record.previous_state or "").strip()
+        if not partition or not previous_state:
+            continue
+        result = _kubectl_exec_login(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            args=(
+                "scontrol",
+                "update",
+                f"PartitionName={partition}",
+                f"State={previous_state}",
+            ),
+            check=False,
+            timeout_seconds=120,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                "External Soperator upgrade could not restore Slurm scheduling for "
+                f"partition {partition}: " + _command_detail(result)
+            )
+
+
+def _external_upgrade_slurm_partition_restore_command(
+    records: Sequence[SlurmPartitionQuiesceRecord],
+) -> str:
+    return "; ".join(
+        "scontrol update PartitionName="
+        + shlex.quote(record.partition)
+        + " State="
+        + shlex.quote(record.previous_state)
+        for record in records
+        if str(record.partition or "").strip() and str(record.previous_state or "").strip()
+    )
 
 
 def _node_ready(item: Mapping[str, Any]) -> bool:
@@ -9305,7 +9636,10 @@ def _updating_external_node_template_groups(
     labels: set[str] = set()
     for source_group, raw_state in node_groups.items():
         state = _mapping(raw_state)
-        if str(state.get("status", "") or "").strip().lower() != "updating":
+        if str(state.get("status", "") or "").strip().lower() not in {
+            "updating",
+            "waiting-rollout",
+        }:
             continue
         for value in (
             source_group,
@@ -9334,7 +9668,8 @@ def _active_external_node_template_rollout_statuses(
     rollout_active = False
     for source_group, raw_state in node_groups.items():
         state = _mapping(raw_state)
-        if str(state.get("status", "") or "").strip().lower() != "updating":
+        checkpoint_status = str(state.get("status", "") or "").strip().lower()
+        if checkpoint_status not in {"updating", "waiting-rollout"}:
             continue
         node_group_id = str(state.get("node_group_id", "") or "").strip()
         label = (
@@ -9377,8 +9712,10 @@ def _active_external_node_template_rollout_statuses(
             parts.append(f"outdated={outdated}")
         if reconciling:
             parts.append("reconciling")
+        if checkpoint_status == "waiting-rollout":
+            parts.append("checkpoint=waiting-rollout")
         ready_rollout, _readiness_summary = _node_group_readiness_summary(node_group)
-        if not ready_rollout:
+        if checkpoint_status == "waiting-rollout" or not ready_rollout:
             rollout_active = True
         details.append(f"{label}:" + (",".join(parts) if parts else "status present"))
     return tuple(details), rollout_active
@@ -9411,6 +9748,68 @@ def _format_problem_node_details(
     visible = list(details[:max_items])
     suffix = f", +{len(details) - max_items} more" if len(details) > max_items else ""
     return ", ".join(visible) + suffix
+
+
+def _active_external_control_plane_status_signal(
+    *,
+    checkpoint: Mapping[str, Any],
+    phase_id: str,
+) -> SoperatorMigrationStatusSignal | None:
+    if phase_id != _EXTERNAL_NODE_TEMPLATE_PHASE_ID:
+        return None
+    phase = _mapping(_mapping(checkpoint.get("phase_state")).get(phase_id))
+    control_plane = _mapping(phase.get("control_plane"))
+    hops = _mapping(control_plane.get("hops"))
+    for target_version, raw_state in sorted(hops.items()):
+        state = _mapping(raw_state)
+        if str(state.get("status", "") or "").strip().lower() != "updating":
+            continue
+        from_version = str(state.get("from_version", "") or "").strip()
+        target = str(state.get("target_version", "") or target_version).strip()
+        if from_version and target:
+            summary = f"control-plane hop {from_version} -> {target} in progress"
+        elif target:
+            summary = f"control-plane hop to {target} in progress"
+        else:
+            summary = "control-plane upgrade in progress"
+        return SoperatorMigrationStatusSignal("MK8s Control Plane", "upgrading", summary)
+    return None
+
+
+def _external_status_node_group_display_names(
+    *,
+    nebius_api: SoperatorMigrationNebiusApi,
+    checkpoint: Mapping[str, Any],
+    phase_id: str,
+) -> Mapping[str, str]:
+    if phase_id != _EXTERNAL_NODE_TEMPLATE_PHASE_ID:
+        return {}
+    phase = _mapping(_mapping(checkpoint.get("phase_state")).get(phase_id))
+    cluster_id = str(phase.get("cluster_id", "") or "").strip()
+    if not cluster_id:
+        return {}
+    try:
+        node_groups = _list_node_groups(nebius_api=nebius_api, cluster_id=cluster_id)
+    except Exception:
+        return {}
+    display_names: dict[str, str] = {}
+    for node_group in node_groups:
+        node_group_id = _node_group_id(node_group)
+        node_group_name = _node_group_name(node_group)
+        if not node_group_id or not node_group_name:
+            continue
+        display_names[node_group_id] = node_group_name
+        normalized_id = normalize_component_token(node_group_id)
+        if normalized_id:
+            display_names[normalized_id] = node_group_name
+    return display_names
+
+
+def _format_status_node_group_label(label: str, display_names: Mapping[str, str]) -> str:
+    display = display_names.get(label) or display_names.get(normalize_component_token(label) or "")
+    if not display or normalize_component_token(display) == normalize_component_token(label):
+        return label
+    return f"{label} ({display})"
 
 
 def _collect_mk8s_status(
@@ -9462,11 +9861,16 @@ def _collect_mk8s_status(
         return SoperatorMigrationStatusSignal(
             "MK8s Node Groups",
             "down",
-            "Node groups: 0 group(s) || Nodes: 0/0 Ready",
+            "Node groups: 0 group(s) || Registered nodes: 0/0 Ready",
         )
     total = len(nodes)
     ready = sum(1 for item in nodes if _node_ready(item))
     cordoned = sum(1 for item in nodes if _mapping(item.get("spec")).get("unschedulable") is True)
+    display_names = _external_status_node_group_display_names(
+        nebius_api=nebius_api,
+        checkpoint=checkpoint,
+        phase_id=phase_id,
+    )
     updating_groups = _updating_external_node_template_groups(
         checkpoint=checkpoint,
         phase_id=phase_id,
@@ -9493,7 +9897,7 @@ def _collect_mk8s_status(
         else:
             problem_nodes.append(f"{node_name}:NotReady (down)")
     group_summary = ", ".join(
-        f"{name}:{counts[0]}/{counts[1]} Ready"
+        f"{_format_status_node_group_label(name, display_names)}:{counts[0]}/{counts[1]} Ready"
         for name, counts in sorted(groups.items())[:_STATUS_MAX_NODE_GROUP_DETAILS]
     )
     if len(groups) > _STATUS_MAX_NODE_GROUP_DETAILS:
@@ -9526,7 +9930,9 @@ def _collect_mk8s_status(
         state = "down"
     elif ready < total or cordoned or rollout_active:
         state = "degraded"
-    summary = "Node groups: " + "; ".join(group_parts) + " || Nodes: " + "; ".join(node_parts)
+    summary = (
+        "Node groups: " + "; ".join(group_parts) + " || Registered nodes: " + "; ".join(node_parts)
+    )
     return SoperatorMigrationStatusSignal("MK8s Node Groups", state, summary)
 
 
@@ -9998,6 +10404,12 @@ class SoperatorMigrationStatusReporter:
                     )
                 )
             if scope.get("mk8s"):
+                control_plane_signal = _active_external_control_plane_status_signal(
+                    checkpoint=self._checkpoint,
+                    phase_id=phase_id,
+                )
+                if control_plane_signal is not None:
+                    signals.append(control_plane_signal)
                 signals.append(
                     _collect_mk8s_status(
                         nebius_api=self._nebius_api,
@@ -10092,8 +10504,65 @@ def _ensure_slurm_quiet(
     allow_missing_login_recovery: bool = False,
     interactive_prompt_pause: Callable[[], Any] | None = None,
     allow_resolved_interactive_job_policy: bool = False,
-) -> list[str]:
+    slurm_scheduling_quiesce: bool = True,
+) -> tuple[list[str], tuple[SlurmPartitionQuiesceRecord, ...]]:
+    quiesced_partitions: tuple[SlurmPartitionQuiesceRecord, ...] = ()
+
+    def _record(action: str, **details: Any) -> None:
+        if slurm_decision_recorder is None:
+            return
+        slurm_decision_recorder(
+            {
+                "at": _utc_now(),
+                "action": action,
+                **to_plain_data(details),
+            }
+        )
+
+    def _restore_after_quiet_failure() -> None:
+        if not quiesced_partitions:
+            return
+        try:
+            _restore_external_upgrade_slurm_partitions(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                records=quiesced_partitions,
+            )
+        except Exception as restore_exc:
+            restore_error = RuntimeError(
+                "External Soperator upgrade could not restore Slurm partition "
+                "scheduling after the job gate failed. Run: "
+                + _external_upgrade_slurm_partition_restore_command(quiesced_partitions)
+                + ". Restore error: "
+                + str(restore_exc)
+            )
+            raise restore_error from restore_exc
+        _record(
+            "scheduling-quiesce-restored",
+            partitions=[record.as_payload() for record in quiesced_partitions],
+        )
+
     try:
+        if slurm_scheduling_quiesce:
+            quiesced_partitions = _external_upgrade_quiesce_slurm_partitions(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                node_names=node_names,
+            )
+            if quiesced_partitions:
+                _record(
+                    "scheduling-quiesce-applied",
+                    node_names=list(node_names),
+                    partitions=[record.as_payload() for record in quiesced_partitions],
+                    pending_jobs="queued-not-blocking",
+                )
+            else:
+                _record(
+                    "scheduling-quiesce-skipped",
+                    node_names=list(node_names),
+                    reason="no affected UP partitions required cxcli changes",
+                    pending_jobs="queued-not-blocking",
+                )
         job_lines = _handle_external_upgrade_slurm_jobs(
             command_runner=command_runner,
             kube_context=kube_context,
@@ -10106,50 +10575,49 @@ def _ensure_slurm_quiet(
             decision_recorder=slurm_decision_recorder,
             interactive_prompt_pause=interactive_prompt_pause,
             allow_resolved_interactive_job_policy=allow_resolved_interactive_job_policy,
+            include_pending=not slurm_scheduling_quiesce,
         )
     except RuntimeError as exc:
         detail = str(exc)
         if allow_missing_login_recovery and "login pod not found" in detail.lower():
-            return [
-                "Slurm quiet window check skipped for partial cutover recovery: "
-                "no live SlurmCluster/login pod remains to inspect before target "
-                "chart reconciliation."
-            ]
+            _restore_after_quiet_failure()
+            return (
+                [
+                    "Slurm quiet window check skipped for partial cutover recovery: "
+                    "no live SlurmCluster/login pod remains to inspect before target "
+                    "chart reconciliation."
+                ],
+                (),
+            )
+        _restore_after_quiet_failure()
         raise
-    drain = _kubectl_exec_login(
-        command_runner=command_runner,
-        kube_context=kube_context,
-        args=("scontrol", "update", "PartitionName=ALL", "State=DRAIN"),
-        check=False,
-        timeout_seconds=120,
-    )
-    if drain.returncode != 0:
-        return [
-            *job_lines,
-            "Slurm partition drain command was not supported by the source release.",
-        ]
+    except (Exception, KeyboardInterrupt):
+        _restore_after_quiet_failure()
+        raise
     try:
         remaining = _external_upgrade_slurm_jobs(
             command_runner=command_runner,
             kube_context=kube_context,
             node_names=node_names,
+            include_pending=not slurm_scheduling_quiesce,
         )
-    except Exception:
-        _resume_slurm_partitions(
-            command_runner=command_runner,
-            kube_context=kube_context,
-        )
+    except (Exception, KeyboardInterrupt):
+        _restore_after_quiet_failure()
         raise
     if remaining:
-        _resume_slurm_partitions(
-            command_runner=command_runner,
-            kube_context=kube_context,
-        )
+        _restore_after_quiet_failure()
         raise SoperatorMigrationPhasePending(
             f"{len(remaining)} affected Slurm job(s) started or remained after "
-            "Slurm partition drain. Rerun after they finish or cancel them explicitly."
+            "Slurm scheduling quiesce. Rerun after they finish or cancel them explicitly."
         )
-    return [*job_lines, "Slurm partitions set to DRAIN for compute cutover."]
+    quiet_line = (
+        "Slurm affected partitions set to DOWN for worker upgrade scheduling quiesce."
+        if quiesced_partitions
+        else "Slurm scheduling quiesce active; no affected UP partitions needed changes."
+        if slurm_scheduling_quiesce
+        else "Slurm scheduling quiesce disabled; pending affected jobs remained blocking."
+    )
+    return [*job_lines, quiet_line], quiesced_partitions
 
 
 def _uncordon_or_drain_nodes(
@@ -13467,16 +13935,23 @@ def _resume_slurm_after_cutover(
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
     target_ref: str,
+    slurm_quiesce_records: Sequence[SlurmPartitionQuiesceRecord] = (),
 ) -> list[str]:
-    _resume_slurm_partitions(
-        command_runner=command_runner,
-        kube_context=kube_context,
-    )
+    if slurm_quiesce_records:
+        _restore_external_upgrade_slurm_partitions(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            records=slurm_quiesce_records,
+        )
     resumed_nodes = _resume_drained_slurm_nodes(
         command_runner=command_runner,
         kube_context=kube_context,
     )
-    lines = ["Slurm partitions resumed after target Soperator cutover."]
+    lines = [
+        "Slurm quiesced partitions restored after target Soperator cutover."
+        if slurm_quiesce_records
+        else "Slurm partition restore after target Soperator cutover was not required."
+    ]
     if resumed_nodes:
         lines.append(
             "Slurm nodes resumed after target Soperator cutover: " + ", ".join(resumed_nodes) + "."
@@ -13565,6 +14040,7 @@ def _execute_external_node_template_upgrade_phase(
     slurm_decision_recorder: Callable[[Mapping[str, Any]], None] | None = None,
     interactive_prompt_pause: Callable[[], Any] | None = None,
     allow_resolved_interactive_job_policy: bool = False,
+    slurm_scheduling_quiesce: bool = True,
 ) -> tuple[bool, list[str]]:
     phase = _phase_state(checkpoint, _EXTERNAL_NODE_TEMPLATE_PHASE_ID)
     onboarding = _target_onboarding(payload, target_ref)
@@ -13817,6 +14293,15 @@ def _execute_external_node_template_upgrade_phase(
             return True
 
         resume_waiting_rollout = group_state.get("status") == "waiting-rollout"
+        if resume_waiting_rollout and (update_args or clear_template_gpu_settings):
+            group_state["pending_reason"] = _node_group_update_visibility_pending_message(
+                node_group_id=node_group_id,
+                action="node-template update",
+                node_group=node_group,
+            )
+            if checkpoint_writer is not None:
+                checkpoint_writer()
+            raise SoperatorMigrationPhasePending(str(group_state["pending_reason"]))
         if resume_waiting_rollout and not update_args and not clear_template_gpu_settings:
             ready, readiness_summary = _node_group_readiness_summary(node_group)
             if not ready:
@@ -13918,6 +14403,7 @@ def _execute_external_node_template_upgrade_phase(
         allow_service_quiesce: bool,
         write_progress: bool,
     ) -> tuple[bool, list[str]]:
+        nonlocal mutation_performed
         group_name = str(work["group_name"])
         raw_group = _mapping(work["raw_group"])
         group_state = work["group_state"]
@@ -13997,6 +14483,9 @@ def _execute_external_node_template_upgrade_phase(
                 timeout_seconds=int(work["timeout_seconds"]),
             )
         except SoperatorMigrationPhasePending as exc:
+            mutation_performed = True
+            phase["mutation_performed"] = True
+            group_state["mutation_performed"] = True
             group_state["status"] = "waiting-rollout"
             group_state["pending_reason"] = str(exc)
             if service_quiesce_state is not None:
@@ -14108,88 +14597,176 @@ def _execute_external_node_template_upgrade_phase(
         for index in range(0, len(worker_work), max(1, worker_budget))
     )
     phase["worker_waves"] = [[str(work["group_name"]) for work in wave] for wave in worker_waves]
-    for wave_index, wave in enumerate(worker_waves, start=1):
-        phase["active_worker_wave"] = wave_index
-        fresh_wave = any(
-            str(work.get("previous_status", "") or "") not in {"updating", "waiting-rollout"}
-            for work in wave
+    worker_slurm_quiesce_records: tuple[SlurmPartitionQuiesceRecord, ...] = ()
+    if worker_work and slurm_scheduling_quiesce:
+        worker_group_names = tuple(str(work["group_name"]) for work in worker_work)
+        worker_quiet_nodes = _nodes_for_worker_groups(
+            source_report=source_report,
+            worker_node_groups=worker_group_names,
         )
-        if fresh_wave:
-            wave_worker_groups = tuple(str(work["group_name"]) for work in wave)
-            lines.extend(
-                _run_soperator_worker_rollout_live_preflight(
-                    source_report=source_report,
-                    worker_node_groups=wave_worker_groups,
-                    command_runner=command_runner,
-                    kube_context=kube_context,
-                    rollout=rollout,
-                    job_policy=job_policy,
-                    cancel_job_ids=cancel_job_ids,
-                    requeue_job_ids=requeue_job_ids,
-                    job_wait_timeout_seconds=job_wait_timeout_seconds,
-                    job_refresh_interval_seconds=job_refresh_interval_seconds,
-                    slurm_decision_recorder=slurm_decision_recorder,
-                    interactive_prompt_pause=interactive_prompt_pause,
-                    allow_resolved_interactive_job_policy=allow_resolved_interactive_job_policy,
-                )
+        worker_slurm_quiesce_records = _external_upgrade_quiesce_slurm_partitions(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            node_names=worker_quiet_nodes,
+        )
+        phase["slurm_quiesced_partitions"] = [
+            record.as_payload() for record in worker_slurm_quiesce_records
+        ]
+        phase["slurm_partition_restore_manual_command"] = (
+            _external_upgrade_slurm_partition_restore_command(worker_slurm_quiesce_records)
+            if worker_slurm_quiesce_records
+            else None
+        )
+        if slurm_decision_recorder is not None:
+            slurm_decision_recorder(
+                {
+                    "at": _utc_now(),
+                    "action": "scheduling-quiesce-applied"
+                    if worker_slurm_quiesce_records
+                    else "scheduling-quiesce-skipped",
+                    "node_names": list(worker_quiet_nodes),
+                    "partitions": [
+                        record.as_payload() for record in worker_slurm_quiesce_records
+                    ],
+                    "pending_jobs": "queued-not-blocking",
+                    "reason": ""
+                    if worker_slurm_quiesce_records
+                    else "no affected UP partitions required cxcli changes",
+                }
             )
-        for work in wave:
-            group_state = work["group_state"]
-            if isinstance(group_state, dict):
-                group_state["status"] = "updating"
-                group_state["worker_wave"] = wave_index
-                group_state["started_at"] = group_state.get("started_at") or _utc_now()
         if checkpoint_writer is not None:
             checkpoint_writer()
-        lines.append(
-            f"External worker node-template wave {wave_index}: "
-            + ", ".join(str(work["group_name"]) for work in wave)
-            + "."
+
+    def _restore_worker_slurm_quiesce() -> None:
+        if not worker_slurm_quiesce_records:
+            return
+        _restore_external_upgrade_slurm_partitions(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            records=worker_slurm_quiesce_records,
         )
-        results: list[tuple[bool, list[str]]] = []
-        if rollout.strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE and len(wave) > 1:
-            worker_exception: BaseException | None = None
-            with ThreadPoolExecutor(max_workers=len(wave)) as executor:
-                future_by_group = {
-                    executor.submit(
-                        _run_prepared_group,
-                        work,
-                        allow_service_quiesce=False,
-                        write_progress=False,
-                    ): str(work["group_name"])
-                    for work in wave
+        phase["slurm_partition_restore_manual_command"] = None
+        if slurm_decision_recorder is not None:
+            slurm_decision_recorder(
+                {
+                    "at": _utc_now(),
+                    "action": "scheduling-quiesce-restored",
+                    "partitions": [
+                        record.as_payload() for record in worker_slurm_quiesce_records
+                    ],
                 }
-                for future in as_completed(future_by_group):
-                    try:
-                        results.append(future.result())
-                    except Exception as exc:
-                        worker_exception = exc
-                        for pending in future_by_group:
-                            pending.cancel()
-                        break
-            if worker_exception is not None:
-                if checkpoint_writer is not None:
-                    checkpoint_writer()
-                raise worker_exception
-        else:
+            )
+
+    try:
+        for wave_index, wave in enumerate(worker_waves, start=1):
+            phase["active_worker_wave"] = wave_index
+            fresh_wave = any(
+                str(work.get("previous_status", "") or "")
+                not in {"updating", "waiting-rollout"}
+                for work in wave
+            )
+            if fresh_wave:
+                wave_worker_groups = tuple(str(work["group_name"]) for work in wave)
+                lines.extend(
+                    _run_soperator_worker_rollout_live_preflight(
+                        source_report=source_report,
+                        worker_node_groups=wave_worker_groups,
+                        command_runner=command_runner,
+                        kube_context=kube_context,
+                        rollout=rollout,
+                        job_policy=job_policy,
+                        cancel_job_ids=cancel_job_ids,
+                        requeue_job_ids=requeue_job_ids,
+                        job_wait_timeout_seconds=job_wait_timeout_seconds,
+                        job_refresh_interval_seconds=job_refresh_interval_seconds,
+                        slurm_decision_recorder=slurm_decision_recorder,
+                        interactive_prompt_pause=interactive_prompt_pause,
+                        allow_resolved_interactive_job_policy=(
+                            allow_resolved_interactive_job_policy
+                        ),
+                        include_pending=not slurm_scheduling_quiesce,
+                    )
+                )
             for work in wave:
-                try:
-                    results.append(
-                        _run_prepared_group(
+                group_state = work["group_state"]
+                if isinstance(group_state, dict):
+                    group_state["status"] = "updating"
+                    group_state["worker_wave"] = wave_index
+                    group_state["started_at"] = group_state.get("started_at") or _utc_now()
+            if checkpoint_writer is not None:
+                checkpoint_writer()
+            lines.append(
+                f"External worker node-template wave {wave_index}: "
+                + ", ".join(str(work["group_name"]) for work in wave)
+                + "."
+            )
+            results: list[tuple[bool, list[str]]] = []
+            if (
+                rollout.strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE
+                and len(wave) > 1
+            ):
+                worker_exception: BaseException | None = None
+                with ThreadPoolExecutor(max_workers=len(wave)) as executor:
+                    future_by_group = {
+                        executor.submit(
+                            _run_prepared_group,
                             work,
                             allow_service_quiesce=False,
                             write_progress=False,
-                        )
-                    )
-                except Exception:
+                        ): str(work["group_name"])
+                        for work in wave
+                    }
+                    for future in as_completed(future_by_group):
+                        try:
+                            results.append(future.result())
+                        except Exception as exc:
+                            worker_exception = exc
+                            for pending in future_by_group:
+                                pending.cancel()
+                            break
+                if worker_exception is not None:
                     if checkpoint_writer is not None:
                         checkpoint_writer()
-                    raise
-        for phase_mutation, work_lines in results:
-            mutation_performed = mutation_performed or phase_mutation
-            lines.extend(work_lines)
-        if checkpoint_writer is not None:
-            checkpoint_writer()
+                    raise worker_exception
+            else:
+                for work in wave:
+                    try:
+                        results.append(
+                            _run_prepared_group(
+                                work,
+                                allow_service_quiesce=False,
+                                write_progress=False,
+                            )
+                        )
+                    except Exception:
+                        if checkpoint_writer is not None:
+                            checkpoint_writer()
+                        raise
+            for phase_mutation, work_lines in results:
+                mutation_performed = mutation_performed or phase_mutation
+                lines.extend(work_lines)
+            if checkpoint_writer is not None:
+                checkpoint_writer()
+    except (Exception, KeyboardInterrupt) as exc:
+        try:
+            _restore_worker_slurm_quiesce()
+        except Exception as restore_exc:
+            phase["slurm_partition_restore_error"] = str(restore_exc)
+            if checkpoint_writer is not None:
+                checkpoint_writer()
+            raise RuntimeError(
+                "External worker node-template rollout failed, and cxcli could not restore "
+                "Slurm partition scheduling. Run: "
+                + _external_upgrade_slurm_partition_restore_command(
+                    worker_slurm_quiesce_records
+                )
+                + ". Restore error: "
+                + str(restore_exc)
+            ) from exc
+        raise
+    _restore_worker_slurm_quiesce()
+    if checkpoint_writer is not None:
+        checkpoint_writer()
     service_strategy = (
         "safe-surge"
         if rollout.service_role_strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE
@@ -14481,6 +15058,7 @@ def _execute_rolling_compute_migration_phase(
     requeue_job_ids: Sequence[str] = (),
     job_wait_timeout_seconds: int = _EXTERNAL_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT_SECONDS,
     job_refresh_interval_seconds: int = _EXTERNAL_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL_SECONDS,
+    slurm_scheduling_quiesce: bool = True,
     login_session_policy: str = EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
     login_session_drain_timeout_seconds: int = EXTERNAL_LOGIN_SESSION_DRAIN_TIMEOUT_SECONDS,
     slurm_decision_recorder: Callable[[Mapping[str, Any]], None] | None = None,
@@ -14528,7 +15106,7 @@ def _execute_rolling_compute_migration_phase(
     phase["slurm_job_scope"] = (
         "live-worker-nodesets" if live_worker_slurm_nodes else "source-worker-node-groups"
     )
-    quiet_lines = _ensure_slurm_quiet(
+    quiet_lines, slurm_quiesce_records = _ensure_slurm_quiet(
         command_runner=command_runner,
         kube_context=kube_context,
         node_names=quiet_nodes,
@@ -14541,7 +15119,15 @@ def _execute_rolling_compute_migration_phase(
         allow_missing_login_recovery=not live_source_slurmcluster_present,
         interactive_prompt_pause=interactive_prompt_pause,
         allow_resolved_interactive_job_policy=allow_resolved_interactive_job_policy,
+        slurm_scheduling_quiesce=slurm_scheduling_quiesce,
     )
+    phase["slurm_quiesced_partitions"] = [
+        record.as_payload() for record in slurm_quiesce_records
+    ]
+    if slurm_quiesce_records:
+        phase["slurm_partition_restore_manual_command"] = (
+            _external_upgrade_slurm_partition_restore_command(slurm_quiesce_records)
+        )
     try:
         lines.extend(
             _ensure_worker_nodeset_topology_checkpoint(
@@ -14674,11 +15260,24 @@ def _execute_rolling_compute_migration_phase(
             values=values,
             timeout_seconds=1800,
         )
-    except Exception:
-        _resume_slurm_partitions(
-            command_runner=command_runner,
-            kube_context=kube_context,
-        )
+    except (Exception, KeyboardInterrupt) as exc:
+        try:
+            _restore_external_upgrade_slurm_partitions(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                records=slurm_quiesce_records,
+            )
+        except Exception as restore_exc:
+            phase["slurm_partition_restore_error"] = str(restore_exc)
+            if checkpoint_writer is not None:
+                checkpoint_writer()
+            raise RuntimeError(
+                "External rolling compute migration failed, and cxcli could not restore "
+                "Slurm partition scheduling. Run: "
+                + _external_upgrade_slurm_partition_restore_command(slurm_quiesce_records)
+                + ". Restore error: "
+                + str(restore_exc)
+            ) from exc
         raise
     _kubectl_rollout_status(
         command_runner=command_runner,
@@ -14692,7 +15291,17 @@ def _execute_rolling_compute_migration_phase(
         command_runner=command_runner,
         kube_context=kube_context,
         target_ref=target_ref,
+        slurm_quiesce_records=slurm_quiesce_records,
     )
+    if slurm_quiesce_records and slurm_decision_recorder is not None:
+        slurm_decision_recorder(
+            {
+                "at": _utc_now(),
+                "action": "scheduling-quiesce-restored",
+                "partitions": [record.as_payload() for record in slurm_quiesce_records],
+            }
+        )
+    phase["slurm_partition_restore_manual_command"] = None
     mutation_performed = True
     phase["target_values_revision"] = _ROLLING_COMPUTE_VALUES_REVISION
     phase["target_values_applied_at"] = _utc_now()
@@ -15997,7 +16606,7 @@ def _execute_populate_jail_refresh_phase(
     phase["slurm_job_scope"] = (
         "live-worker-nodesets" if live_worker_slurm_nodes else "source-worker-node-groups"
     )
-    quiet_lines = _ensure_slurm_quiet(
+    quiet_lines, slurm_quiesce_records = _ensure_slurm_quiet(
         command_runner=command_runner,
         kube_context=kube_context,
         node_names=quiet_nodes,
@@ -16010,9 +16619,13 @@ def _execute_populate_jail_refresh_phase(
         allow_missing_login_recovery=not live_source_slurmcluster_present,
         interactive_prompt_pause=interactive_prompt_pause,
         allow_resolved_interactive_job_policy=allow_resolved_interactive_job_policy,
+        slurm_scheduling_quiesce=False,
     )
     phase["slurm_quiet_at"] = _utc_now()
     phase["slurm_quiet_lines"] = list(quiet_lines)
+    phase["slurm_quiesced_partitions"] = [
+        record.as_payload() for record in slurm_quiesce_records
+    ]
     if checkpoint_writer is not None:
         checkpoint_writer()
     mutation_performed = False
@@ -16059,7 +16672,11 @@ def _execute_populate_jail_refresh_phase(
                 phase["persistent_migration_writer_hold"] = dict(writer_hold_state)
             except Exception as exc:  # pragma: no cover - best-effort operational cleanup
                 cleanup_errors.append(f"persistent writer restore failed: {exc}")
-        if phase.get("slurm_quiet_at") and not phase.get("slurm_resumed_at"):
+        if (
+            slurm_quiesce_records
+            and phase.get("slurm_quiet_at")
+            and not phase.get("slurm_resumed_at")
+        ):
             if keep_writers_held:
                 phase["slurm_resume_after_failure"] = {
                     "status": "skipped",
@@ -16070,9 +16687,10 @@ def _execute_populate_jail_refresh_phase(
                 }
             else:
                 try:
-                    _resume_slurm_partitions(
+                    _restore_external_upgrade_slurm_partitions(
                         command_runner=command_runner,
                         kube_context=kube_context,
+                        records=slurm_quiesce_records,
                     )
                     phase["slurm_resumed_after_failure_at"] = _utc_now()
                 except Exception as exc:  # pragma: no cover - best-effort operational cleanup
@@ -16249,11 +16867,13 @@ def _execute_populate_jail_refresh_phase(
             resource="deployment/soperator-manager",
             timeout="15m",
         )
-        _resume_slurm_partitions(
-            command_runner=command_runner,
-            kube_context=kube_context,
-        )
-        phase["slurm_resumed_at"] = _utc_now()
+        if slurm_quiesce_records:
+            _restore_external_upgrade_slurm_partitions(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                records=slurm_quiesce_records,
+            )
+            phase["slurm_resumed_at"] = _utc_now()
     except Exception:
         _restore_after_refresh_failure()
         raise
@@ -19983,6 +20603,7 @@ def execute_soperator_migration(
     requeue_job_ids: Sequence[str] = (),
     job_wait_timeout_seconds: int = _EXTERNAL_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT_SECONDS,
     job_refresh_interval_seconds: int = _EXTERNAL_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL_SECONDS,
+    slurm_scheduling_quiesce: bool = True,
     login_session_policy: str = EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
     login_session_drain_timeout_seconds: int = EXTERNAL_LOGIN_SESSION_DRAIN_TIMEOUT_SECONDS,
     jail_sfs_resize_handler: JailSfsResizeHandler | None = None,
@@ -20060,6 +20681,7 @@ def execute_soperator_migration(
                 requeue_job_ids=requeue_job_ids,
                 job_wait_timeout_seconds=job_wait_timeout_seconds,
                 job_refresh_interval_seconds=job_refresh_interval_seconds,
+                slurm_scheduling_quiesce=slurm_scheduling_quiesce,
                 login_session_policy=login_session_policy,
                 login_session_drain_timeout_seconds=login_session_drain_timeout_seconds,
                 jail_sfs_resize_handler=jail_sfs_resize_handler,
@@ -20101,6 +20723,7 @@ def _execute_soperator_migration_unlocked(
     requeue_job_ids: Sequence[str] = (),
     job_wait_timeout_seconds: int = _EXTERNAL_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT_SECONDS,
     job_refresh_interval_seconds: int = _EXTERNAL_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL_SECONDS,
+    slurm_scheduling_quiesce: bool = True,
     login_session_policy: str = EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
     login_session_drain_timeout_seconds: int = EXTERNAL_LOGIN_SESSION_DRAIN_TIMEOUT_SECONDS,
     jail_sfs_resize_handler: JailSfsResizeHandler | None = None,
@@ -20381,6 +21004,7 @@ def _execute_soperator_migration_unlocked(
             "requeue_job_ids": list(selected_requeue_job_ids),
             "wait_timeout_seconds": job_wait_timeout_seconds,
             "refresh_interval_seconds": job_refresh_interval_seconds,
+            "scheduling_quiesce": slurm_scheduling_quiesce,
         }
     )
     checkpoint["slurm"] = slurm_state
@@ -20413,6 +21037,45 @@ def _execute_soperator_migration_unlocked(
             decisions = []
             slurm["decisions"] = decisions
         decisions.append(to_plain_data(decision))
+        action = str(decision.get("action", "") or "")
+        if action == "scheduling-quiesce-applied":
+            raw_partitions = decision.get("partitions")
+            records: list[SlurmPartitionQuiesceRecord] = []
+            if isinstance(raw_partitions, Sequence) and not isinstance(
+                raw_partitions, (str, bytes, bytearray)
+            ):
+                for item in raw_partitions:
+                    if not isinstance(item, Mapping):
+                        continue
+                    partition = str(item.get("partition", "") or "").strip()
+                    previous_state = str(item.get("previous_state", "") or "").strip()
+                    applied_state = str(item.get("applied_state", "DOWN") or "DOWN").strip()
+                    if partition and previous_state:
+                        records.append(
+                            SlurmPartitionQuiesceRecord(
+                                partition=partition,
+                                previous_state=previous_state,
+                                applied_state=applied_state,
+                            )
+                        )
+            if records:
+                existing = [
+                    item
+                    for item in slurm.get("quiesced_partitions", [])
+                    if isinstance(item, Mapping)
+                ]
+                seen = {str(item.get("partition", "") or "") for item in existing}
+                for record in records:
+                    if record.partition not in seen:
+                        existing.append(record.as_payload())
+                        seen.add(record.partition)
+                slurm["quiesced_partitions"] = list(existing)
+                slurm["partition_restore_manual_command"] = (
+                    _external_upgrade_slurm_partition_restore_command(records)
+                )
+        elif action == "scheduling-quiesce-restored":
+            slurm["quiesced_partitions"] = []
+            slurm["partition_restore_manual_command"] = None
         _append_event(
             checkpoint,
             "slurm-job-policy",
@@ -20757,6 +21420,7 @@ def _execute_soperator_migration_unlocked(
                 slurm_decision_recorder=_record_slurm_decision,
                 interactive_prompt_pause=status_prompt_pause,
                 allow_resolved_interactive_job_policy=allow_resolved_interactive_job_policy,
+                slurm_scheduling_quiesce=slurm_scheduling_quiesce,
             ),
             _TARGET_GPU_STACK_PHASE_ID: lambda: _execute_target_gpu_stack_remediation_phase(
                 checkpoint=checkpoint,
@@ -20803,6 +21467,7 @@ def _execute_soperator_migration_unlocked(
                 slurm_decision_recorder=_record_slurm_decision,
                 interactive_prompt_pause=status_prompt_pause,
                 allow_resolved_interactive_job_policy=allow_resolved_interactive_job_policy,
+                slurm_scheduling_quiesce=slurm_scheduling_quiesce,
             ),
             "final-control-plane-cutover": lambda: _execute_final_cutover_phase(
                 checkpoint=checkpoint,
@@ -20901,6 +21566,12 @@ def _execute_soperator_migration_unlocked(
                 pending_reason = str(exc)
                 checkpoint["pending_phase"] = pending_phase
                 checkpoint["pending_reason"] = pending_reason
+                phase_mutation = bool(
+                    _mapping(_mapping(checkpoint.get("phase_state")).get(phase_id)).get(
+                        "mutation_performed"
+                    )
+                )
+                mutation_performed = mutation_performed or phase_mutation
                 verification = stage_fast_verification_report(
                     phase_id,
                     _mapping(_mapping(checkpoint.get("phase_state")).get(phase_id)),

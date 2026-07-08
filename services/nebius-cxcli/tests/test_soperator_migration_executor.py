@@ -9,7 +9,7 @@ import types
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -2809,6 +2809,13 @@ spec:
                     command,
                     0,
                     "\n".join(f"NodeName={node} Partitions=main State=IDLE" for node in nodes),
+                    "",
+                )
+            if command[8:] == ("scontrol", "show", "partition", "-o"):
+                return SoperatorMigrationCommandResult(
+                    command,
+                    0,
+                    "PartitionName=main State=UP Nodes=worker-gpu-[0-1],worker-cpu-[0-1]\n",
                     "",
                 )
             if command[8:10] == ("squeue", "-h"):
@@ -6325,7 +6332,7 @@ def test_external_node_template_quiesces_zero_surge_service_roles(
         },
         "login": {
             "gpu": False,
-            "node_count": 2,
+            "node_count": 1,
             "labels": {
                 "nebius.com/node-group": "login",
                 "nebius.com/node-group-id": "nodegroup-login",
@@ -6818,7 +6825,7 @@ def test_execute_external_node_template_parallel_worker_failure_checkpoints_afte
                 "slurm.nebius.ai/nodeset": name,
             },
             "allocatable": {"nvidia.com/gpu": "8"},
-            "nodes": [f"{name}-a", f"{name}-b"],
+            "nodes": [f"{name}-node-a"],
         }
 
     def _live_worker_group(name: str, node_group_id: str) -> dict[str, Any]:
@@ -7199,23 +7206,22 @@ def test_execute_external_node_template_resume_waiting_rollout_without_duplicate
     assert group_state["strategy_restored"] is True
 
 
-def test_execute_external_node_template_resumes_failed_timeout_from_live_state(
+def test_execute_external_node_template_waits_after_accepted_timeout_before_template_visible(
     tmp_path: Path,
 ) -> None:
     config_path = tmp_path / "config.yaml"
     runner = _TimeoutBeforeLiveNodeTemplateVisibleRunner()
 
-    with pytest.raises(RuntimeError, match="timed out before the live node group reported"):
-        execute_soperator_migration(
-            config_path=config_path,
-            target_ref="external-cluster",
-            payload=_payload(target_k8s_version="1.33"),
-            source_report=_source_report(target_k8s_version="1.33"),
-            backup_metadata=_backup_metadata("failed-timeout"),
-            snapshot_collector=lambda *, kube_context: _snapshot(),
-            approved=True,
-            command_runner=runner,
-        )
+    result = execute_soperator_migration(
+        config_path=config_path,
+        target_ref="external-cluster",
+        payload=_payload(target_k8s_version="1.33"),
+        source_report=_source_report(target_k8s_version="1.33"),
+        backup_metadata=_backup_metadata("waiting-rollout"),
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        approved=True,
+        command_runner=runner,
+    )
 
     checkpoint = json.loads(
         soperator_migration_checkpoint_path(config_path, "external-cluster").read_text(
@@ -7225,7 +7231,33 @@ def test_execute_external_node_template_resumes_failed_timeout_from_live_state(
     group_state = checkpoint["phase_state"]["external-node-template-upgrade"]["node_groups"][
         "gpu-pool"
     ]
-    assert group_state["status"] == "failed"
+    assert result.pending_phase == "external-node-template-upgrade"
+    assert result.mutation_performed is True
+    assert group_state["status"] == "waiting-rollout"
+    assert "was accepted" in group_state["pending_reason"]
+    assert "has not yet reported the requested node-template fields" in group_state[
+        "pending_reason"
+    ]
+
+    still_not_visible = execute_soperator_migration(
+        config_path=config_path,
+        target_ref="external-cluster",
+        payload=_payload(target_k8s_version="1.33"),
+        source_report=_source_report(target_k8s_version="1.33"),
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        approved=True,
+        command_runner=runner,
+    )
+    assert still_not_visible.pending_phase == "external-node-template-upgrade"
+    assert still_not_visible.mutation_performed is True
+    node_template_updates = [
+        call[0]
+        for call in runner.calls
+        if call[0][:4] == ("nebius", "mk8s", "node-group", "update")
+        and call[0][4] == "nodegroup-gpu-pool"
+        and "--version" in call[0]
+    ]
+    assert len(node_template_updates) == 1
 
     for node_group in runner.existing_node_groups:
         metadata = node_group.get("metadata")
@@ -7285,7 +7317,7 @@ def test_execute_external_node_template_resumes_failed_timeout_from_live_state(
     )
     assert resumed.pending_phase == "none"
     assert any(
-        "External node-template rollout completed after live-state reconciliation: "
+        "External node-template rollout completed after resume: "
         "gpu-pool; original strategy restored." in line
         for line in resumed.lines
     )
@@ -7713,6 +7745,13 @@ def _external_upgrade_slurm_runner(
                     command,
                     0,
                     f"NodeName={command[11]} Partitions=gpu State=IDLE",
+                    "",
+                )
+            if command[8:] == ("scontrol", "show", "partition", "-o"):
+                return SoperatorMigrationCommandResult(
+                    command,
+                    0,
+                    "PartitionName=gpu State=UP Nodes=worker-gpu-0-0\n",
                     "",
                 )
             if command[8:10] == ("squeue", "-h"):
@@ -8889,6 +8928,8 @@ def test_external_upgrade_prompt_selector_includes_pending_jobs(
     assert selected == ("12",)
     assert captured["args"][0] == (pending_job,)
     assert captured["kwargs"]["is_tty"] is True
+    assert captured["kwargs"]["jobs_provider"] is None
+    assert captured["kwargs"]["action_handler"] is None
 
 
 def test_external_upgrade_slurm_jobs_fail_closed_when_partition_lookup_fails() -> None:
@@ -9099,12 +9140,12 @@ def test_external_upgrade_wait_then_cancel_requires_positive_timeout() -> None:
     assert calls == []
 
 
-def test_external_upgrade_slurm_quiet_rechecks_after_partition_drain() -> None:
+def test_external_upgrade_slurm_quiet_rechecks_after_partition_quiesce() -> None:
     calls: list[tuple[str, ...]] = []
 
     with pytest.raises(
         migration.SoperatorMigrationPhasePending,
-        match="started or remained after Slurm partition drain",
+        match="started or remained after Slurm scheduling quiesce",
     ):
         migration._ensure_slurm_quiet(
             command_runner=_external_upgrade_slurm_runner(
@@ -9123,10 +9164,10 @@ def test_external_upgrade_slurm_quiet_rechecks_after_partition_drain() -> None:
             job_refresh_interval_seconds=1,
         )
 
-    drain_index = next(
+    quiesce_index = next(
         index
         for index, call in enumerate(calls)
-        if call[8:] == ("scontrol", "update", "PartitionName=ALL", "State=DRAIN")
+        if call[8:] == ("scontrol", "update", "PartitionName=gpu", "State=DOWN")
     )
     active_squeue_indices = [
         index
@@ -9137,10 +9178,130 @@ def test_external_upgrade_slurm_quiet_rechecks_after_partition_drain() -> None:
         )
     ]
     assert len(active_squeue_indices) == 2
-    assert active_squeue_indices[-1] > drain_index
+    assert active_squeue_indices[-1] > quiesce_index
     assert any(
-        call[8:] == ("scontrol", "update", "PartitionName=ALL", "State=UP") for call in calls
+        call[8:] == ("scontrol", "update", "PartitionName=gpu", "State=UP")
+        for call in calls
     )
+
+
+def test_external_upgrade_quiesce_restores_partial_partition_on_apply_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    monkeypatch.setattr(
+        migration,
+        "_external_upgrade_slurm_node_filter",
+        lambda **_kwargs: ("worker-gpu-0-0",),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_external_upgrade_affected_partitions",
+        lambda **_kwargs: ("gpu", "debug"),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_external_upgrade_partition_state_snapshot",
+        lambda **_kwargs: (
+            migration.SlurmPartitionState(name="gpu", state="UP"),
+            migration.SlurmPartitionState(name="debug", state="UP"),
+        ),
+    )
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "login-0"},
+                                "status": {"phase": "Running"},
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[8:] == ("scontrol", "update", "PartitionName=debug", "State=DOWN"):
+            return SoperatorMigrationCommandResult(command, 1, "", "update failed")
+        return SoperatorMigrationCommandResult(command, 0, "", "")
+
+    with pytest.raises(RuntimeError, match="partition debug"):
+        migration._external_upgrade_quiesce_slurm_partitions(
+            command_runner=runner,
+            kube_context="external-context",
+            node_names=("worker-gpu-0-0",),
+        )
+
+    update_calls = [call for call in calls if call[8:10] == ("scontrol", "update")]
+    assert update_calls == [
+        (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "exec",
+            "login-0",
+            "--",
+            "scontrol",
+            "update",
+            "PartitionName=gpu",
+            "State=DOWN",
+        ),
+        (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "exec",
+            "login-0",
+            "--",
+            "scontrol",
+            "update",
+            "PartitionName=debug",
+            "State=DOWN",
+        ),
+        (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "exec",
+            "login-0",
+            "--",
+            "scontrol",
+            "update",
+            "PartitionName=gpu",
+            "State=UP",
+        ),
+    ]
 
 
 def test_populate_jail_refresh_phase_job_policy_fail_blocks_before_helm_overwrite(
@@ -10148,6 +10309,38 @@ def test_external_upgrade_cancel_selected_policy_cancels_jobs() -> None:
     assert any(call[8:] == ("scancel", "42") for call in calls)
 
 
+def test_external_upgrade_cancel_selected_waits_for_completing_job_to_clear(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+    queue_outputs = [
+        "42|alice|RUNNING|gpu|worker-gpu-0-0|00:05|30:00|25:00|restartable-train\n",
+        "42|alice|COMPLETING|gpu|worker-gpu-0-0|00:05|30:00|25:00|restartable-train\n",
+        "",
+    ]
+    sleeps: list[int] = []
+    monkeypatch.setattr(migration.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    lines = migration._handle_external_upgrade_slurm_jobs(
+        command_runner=_external_upgrade_slurm_runner(
+            queue_outputs=queue_outputs,
+            calls=calls,
+        ),
+        kube_context="external-context",
+        node_names=("worker-gpu-0-0",),
+        policy="cancel-selected",
+        cancel_job_ids=("42",),
+        requeue_job_ids=(),
+        wait_timeout_seconds=30,
+        refresh_interval_seconds=1,
+    )
+
+    assert lines == ["Slurm job preflight: cleared affected jobs with policy cancel-selected."]
+    assert any(call[8:] == ("scancel", "42") for call in calls)
+    assert sleeps == [1]
+    assert queue_outputs == []
+
+
 def test_external_upgrade_cancel_selected_policy_cancels_pending_jobs() -> None:
     calls: list[tuple[str, ...]] = []
     pending_outputs = [
@@ -10334,6 +10527,136 @@ def test_external_upgrade_interactive_wait_timeout_raises_without_cancel(
         )
 
     assert not any(call[8:9] == ("scancel",) for call in calls)
+
+
+def test_external_upgrade_interactive_callback_cancels_in_tui_without_reprompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+    queue_outputs = [
+        "42|alice|RUNNING|gpu|worker-gpu-0-0|00:05|30:00|25:00|restartable-train\n",
+        "",
+    ]
+
+    def _prompt(
+        jobs: Sequence[migration.AffectedSlurmJob],
+        **kwargs: object,
+    ) -> tuple[str, tuple[str, ...]]:
+        action_handler = cast(
+            Callable[..., tuple[migration.AffectedSlurmJob, ...]],
+            kwargs["action_handler"],
+        )
+        assert action_handler("cancel-selected", ("42",), tuple(jobs)) == ()
+        return migration.SLURM_JOB_CONTROL_JOBS_CLEARED, ()
+
+    monkeypatch.setattr(
+        migration,
+        "_prompt_external_upgrade_slurm_job_control",
+        _prompt,
+    )
+
+    lines = migration._handle_external_upgrade_slurm_jobs(
+        command_runner=_external_upgrade_slurm_runner(
+            queue_outputs=queue_outputs,
+            calls=calls,
+        ),
+        kube_context="external-context",
+        node_names=("worker-gpu-0-0",),
+        policy="interactive",
+        cancel_job_ids=(),
+        requeue_job_ids=(),
+        wait_timeout_seconds=30,
+        refresh_interval_seconds=1,
+        allow_resolved_interactive_job_policy=True,
+    )
+
+    assert lines == ["Slurm job preflight: no affected jobs remain after refresh."]
+    assert any(call[8:] == ("scancel", "42") for call in calls)
+    assert queue_outputs == []
+
+
+def test_external_upgrade_interactive_callback_requeue_holds_in_tui(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+    queue_outputs = [
+        "42|alice|RUNNING|gpu|worker-gpu-0-0|00:05|30:00|25:00|restartable-train\n",
+        "",
+    ]
+
+    def _prompt(
+        jobs: Sequence[migration.AffectedSlurmJob],
+        **kwargs: object,
+    ) -> tuple[str, tuple[str, ...]]:
+        action_handler = cast(
+            Callable[..., tuple[migration.AffectedSlurmJob, ...]],
+            kwargs["action_handler"],
+        )
+        assert action_handler("requeue-hold-selected", ("42",), tuple(jobs)) == ()
+        return migration.SLURM_JOB_CONTROL_JOBS_CLEARED, ()
+
+    monkeypatch.setattr(
+        migration,
+        "_prompt_external_upgrade_slurm_job_control",
+        _prompt,
+    )
+
+    lines = migration._handle_external_upgrade_slurm_jobs(
+        command_runner=_external_upgrade_slurm_runner(
+            queue_outputs=queue_outputs,
+            calls=calls,
+        ),
+        kube_context="external-context",
+        node_names=("worker-gpu-0-0",),
+        policy="interactive",
+        cancel_job_ids=(),
+        requeue_job_ids=(),
+        wait_timeout_seconds=30,
+        refresh_interval_seconds=1,
+        allow_resolved_interactive_job_policy=True,
+    )
+
+    assert lines == ["Slurm job preflight: no affected jobs remain after refresh."]
+    assert any(call[8:] == ("scontrol", "requeuehold", "42") for call in calls)
+    assert queue_outputs == []
+
+
+def test_external_upgrade_interactive_background_wait_uses_wait_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+    queue_outputs = [
+        "42|alice|RUNNING|gpu|worker-gpu-0-0|00:05|30:00|25:00|restartable-train\n",
+        "42|alice|RUNNING|gpu|worker-gpu-0-0|00:05|30:00|25:00|restartable-train\n",
+        "",
+    ]
+    sleeps: list[int] = []
+
+    monkeypatch.setattr(migration.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(
+        migration,
+        "_prompt_external_upgrade_slurm_job_control",
+        lambda _jobs, **_kwargs: (migration.SLURM_JOB_CONTROL_BACKGROUND_WAIT, ("42",)),
+    )
+
+    lines = migration._handle_external_upgrade_slurm_jobs(
+        command_runner=_external_upgrade_slurm_runner(
+            queue_outputs=queue_outputs,
+            calls=calls,
+        ),
+        kube_context="external-context",
+        node_names=("worker-gpu-0-0",),
+        policy="interactive",
+        cancel_job_ids=(),
+        requeue_job_ids=(),
+        wait_timeout_seconds=30,
+        refresh_interval_seconds=1,
+        allow_resolved_interactive_job_policy=True,
+    )
+
+    assert lines == ["Slurm job preflight: waited for affected jobs to finish."]
+    assert sleeps == [1]
+    assert queue_outputs == []
 
 
 def test_external_upgrade_wait_then_cancel_waits_then_cancels_displayed_jobs(
@@ -12455,13 +12778,77 @@ def test_execute_emits_phase_aware_status_for_storage_and_compute(tmp_path: Path
     }
 
 
-def test_mk8s_status_reports_node_groups_and_replacing_nodes() -> None:
+def test_external_node_template_status_reports_control_plane_hop() -> None:
     runner = _FakeCommandRunner(
         live_nodes=[
             {
                 "metadata": {
+                    "name": "system-node-a",
+                    "labels": {"nebius.com/node-group-id": "nodegroup-system"},
+                },
+                "spec": {},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            }
+        ]
+    )
+    checkpoint = {
+        "phase_state": {
+            "external-node-template-upgrade": {
+                "control_plane": {
+                    "hops": {
+                        "1.32": {
+                            "status": "updating",
+                            "from_version": "1.31",
+                            "target_version": "1.32",
+                        }
+                    }
+                }
+            }
+        }
+    }
+    messages: list[str] = []
+    reporter = migration.SoperatorMigrationStatusReporter(
+        emit=messages.append,
+        nebius_api=runner.nebius_api,
+        command_runner=runner,
+        kube_context="external-context",
+        checkpoint=checkpoint,
+        payload=_payload(),
+        source_report=_source_report(),
+        target_ref="external-cluster",
+        phase_ids=("external-node-template-upgrade",),
+        poll_interval_seconds=0,
+    )
+
+    snapshot = reporter.set_phase("external-node-template-upgrade")
+
+    assert snapshot is not None
+    assert snapshot.state == "upgrading"
+    assert (
+        "phase external-node-template-upgrade "
+        "[MK8s control-plane/node-template upgrade] (upgrading)"
+    ) in snapshot.summary
+    assert "MK8s Control Plane upgrading: control-plane hop 1.31 -> 1.32 in progress" in (
+        snapshot.summary
+    )
+    assert "MK8s Node Groups serving:" in snapshot.summary
+    assert "Registered nodes: 1/1 Ready" in snapshot.summary
+    assert messages == [snapshot.summary]
+
+
+def test_mk8s_status_reports_node_groups_and_replacing_nodes() -> None:
+    runner = _FakeCommandRunner(
+        existing_node_groups=[
+            {
+                "metadata": {"id": "nodegroup-gpu-pool", "name": "gpu-pool"},
+                "status": _ready_node_group_status(nodes=2),
+            }
+        ],
+        live_nodes=[
+            {
+                "metadata": {
                     "name": "gpu-node-a",
-                    "labels": {"nebius.com/node-group": "gpu-pool"},
+                    "labels": {"nebius.com/node-group-id": "nodegroup-gpu-pool"},
                 },
                 "spec": {},
                 "status": {"conditions": [{"type": "Ready", "status": "False"}]},
@@ -12469,7 +12856,7 @@ def test_mk8s_status_reports_node_groups_and_replacing_nodes() -> None:
             {
                 "metadata": {
                     "name": "gpu-node-b",
-                    "labels": {"nebius.com/node-group": "gpu-pool"},
+                    "labels": {"nebius.com/node-group-id": "nodegroup-gpu-pool"},
                 },
                 "spec": {"unschedulable": True},
                 "status": {"conditions": [{"type": "Ready", "status": "True"}]},
@@ -12487,6 +12874,7 @@ def test_mk8s_status_reports_node_groups_and_replacing_nodes() -> None:
     checkpoint = {
         "phase_state": {
             "external-node-template-upgrade": {
+                "cluster_id": "cluster-123",
                 "node_groups": {
                     "gpu-pool": {
                         "status": "updating",
@@ -12509,8 +12897,9 @@ def test_mk8s_status_reports_node_groups_and_replacing_nodes() -> None:
     assert signal.name == "MK8s Node Groups"
     assert signal.state == "degraded"
     assert signal.summary.startswith("Node groups: 2 group(s); ")
-    assert "gpu-pool:1/2 Ready, login-pool:1/1 Ready" in signal.summary
-    assert " || Nodes: 2/3 Ready; 1 cordoned; " in signal.summary
+    assert "nodegroup-gpu-pool (gpu-pool):1/2 Ready" in signal.summary
+    assert "login-pool:1/1 Ready" in signal.summary
+    assert " || Registered nodes: 2/3 Ready; 1 cordoned; " in signal.summary
     assert (
         "in transition gpu-node-a:replacing (down), gpu-node-b:replacing (cordoned)"
     ) in signal.summary
@@ -12570,6 +12959,7 @@ def test_mk8s_status_reports_reconciling_node_group_when_nodes_ready() -> None:
     checkpoint = {
         "phase_state": {
             "external-node-template-upgrade": {
+                "cluster_id": "cluster-123",
                 "node_groups": {
                     "system": {
                         "status": "updating",
@@ -12591,11 +12981,62 @@ def test_mk8s_status_reports_reconciling_node_group_when_nodes_ready() -> None:
 
     assert signal.name == "MK8s Node Groups"
     assert signal.state == "degraded"
-    assert "nodegroup-system:3/3 Ready" in signal.summary
+    assert "nodegroup-system (system):3/3 Ready" in signal.summary
     assert (
         "updating system:PROVISIONING,ready=3/3,event=Draining,outdated=3,reconciling"
     ) in signal.summary
-    assert "Nodes: 3/3 Ready" in signal.summary
+    assert "Registered nodes: 3/3 Ready" in signal.summary
+
+
+def test_mk8s_status_reports_checkpointed_waiting_rollout_when_nodes_ready() -> None:
+    runner = _FakeCommandRunner(
+        live_nodes=[
+            {
+                "metadata": {
+                    "name": "worker-node-a",
+                    "labels": {"nebius.com/node-group-id": "nodegroup-worker"},
+                },
+                "spec": {},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            }
+        ],
+        existing_node_groups=[
+            {
+                "metadata": {"id": "nodegroup-worker", "name": "worker"},
+                "spec": {"version": "1.32"},
+                "status": _ready_node_group_status(nodes=1),
+            }
+        ],
+    )
+    checkpoint = {
+        "phase_state": {
+            "external-node-template-upgrade": {
+                "cluster_id": "cluster-123",
+                "node_groups": {
+                    "worker": {
+                        "status": "waiting-rollout",
+                        "node_group_name": "worker",
+                        "node_group_id": "nodegroup-worker",
+                    }
+                },
+            }
+        }
+    }
+
+    signal = migration._collect_mk8s_status(
+        nebius_api=runner.nebius_api,
+        command_runner=runner,
+        kube_context="external-context",
+        checkpoint=checkpoint,
+        phase_id="external-node-template-upgrade",
+    )
+
+    assert signal.name == "MK8s Node Groups"
+    assert signal.state == "degraded"
+    assert "nodegroup-worker (worker):1/1 Ready" in signal.summary
+    assert "updating worker:ready=1/1" in signal.summary
+    assert "checkpoint=waiting-rollout" in signal.summary
+    assert "Registered nodes: 1/1 Ready" in signal.summary
 
 
 def test_mk8s_status_keeps_problem_label_for_non_upgrading_notready_nodes() -> None:
@@ -12633,7 +13074,7 @@ def test_mk8s_status_keeps_problem_label_for_non_upgrading_notready_nodes() -> N
     assert signal.summary.startswith(
         "Node groups: 2 group(s); gpu-pool:0/1 Ready, login-pool:1/1 Ready"
     )
-    assert " || Nodes: 1/2 Ready; " in signal.summary
+    assert " || Registered nodes: 1/2 Ready; " in signal.summary
     assert "problem nodes gpu-node-a:NotReady (down)" in signal.summary
     assert "in transition" not in signal.summary
 
@@ -12691,7 +13132,7 @@ def test_mk8s_status_bounds_many_groups_and_transition_nodes() -> None:
     assert "worker-05:100/100 Ready" in signal.summary
     assert "worker-06:100/100 Ready" not in signal.summary
     assert "+34 more groups" in signal.summary
-    assert " || Nodes: 4000/4000 Ready; 80 cordoned; " in signal.summary
+    assert " || Registered nodes: 4000/4000 Ready; 80 cordoned; " in signal.summary
     assert "in transition worker-00-old-00:replacing (cordoned)" in signal.summary
     assert "worker-03-old-01:replacing (cordoned)" in signal.summary
     assert "worker-04-old-00:replacing (cordoned)" not in signal.summary
@@ -12713,7 +13154,7 @@ def test_mk8s_status_sections_empty_node_inventory() -> None:
 
     assert signal.name == "MK8s Node Groups"
     assert signal.state == "down"
-    assert signal.summary == "Node groups: 0 group(s) || Nodes: 0/0 Ready"
+    assert signal.summary == "Node groups: 0 group(s) || Registered nodes: 0/0 Ready"
 
 
 def test_slurm_status_reports_named_worker_states() -> None:
@@ -13965,7 +14406,12 @@ def test_execute_recovers_partial_cutover_without_login_pod(tmp_path: Path) -> N
 def test_rolling_compute_migration_resumes_slurm_after_post_drain_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    resumed: list[str] = []
+    restored: list[tuple[str, ...]] = []
+    quiesce_record = migration.SlurmPartitionQuiesceRecord(
+        partition="gpu",
+        previous_state="UP",
+        applied_state="DOWN",
+    )
 
     monkeypatch.setattr(
         migration,
@@ -13980,7 +14426,11 @@ def test_rolling_compute_migration_resumes_slurm_after_post_drain_failure(
     )
     monkeypatch.setattr(migration, "_has_soperator_custom_resources", lambda _snapshot: True)
     monkeypatch.setattr(migration, "_live_source_slurmcluster_present", lambda **_kwargs: True)
-    monkeypatch.setattr(migration, "_ensure_slurm_quiet", lambda **_kwargs: ["quiet"])
+    monkeypatch.setattr(
+        migration,
+        "_ensure_slurm_quiet",
+        lambda **_kwargs: (["quiet"], (quiesce_record,)),
+    )
     monkeypatch.setattr(
         migration,
         "_ensure_worker_nodeset_topology_checkpoint",
@@ -13993,8 +14443,10 @@ def test_rolling_compute_migration_resumes_slurm_after_post_drain_failure(
     monkeypatch.setattr(migration, "_delete_conflicting_source_slurm_resources", fail_delete)
     monkeypatch.setattr(
         migration,
-        "_resume_slurm_partitions",
-        lambda **_kwargs: resumed.append("resumed"),
+        "_restore_external_upgrade_slurm_partitions",
+        lambda **kwargs: restored.append(
+            tuple(record.partition for record in kwargs["records"])
+        ),
     )
 
     with pytest.raises(RuntimeError, match="simulated post-drain failure"):
@@ -14011,7 +14463,7 @@ def test_rolling_compute_migration_resumes_slurm_after_post_drain_failure(
             command_runner=runner,
         )
 
-    assert resumed == ["resumed"]
+    assert restored == [("gpu",)]
 
 
 def test_rolling_compute_migration_guards_login_before_source_retirement(

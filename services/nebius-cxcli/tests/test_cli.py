@@ -39,7 +39,10 @@ from nebius_cxcli.email_settings import EmailSettings
 from nebius_cxcli.provider_options import ProviderOptionLookup
 from nebius_cxcli.quota_checks import QuotaCheck, QuotaReport
 from nebius_cxcli.runtime_config import to_plain_data, wrap_runtime_config
-from nebius_cxcli.runtime_validation import validate_dynamic_payload_structure
+from nebius_cxcli.runtime_validation import (
+    validate_dynamic_payload_structure,
+    validate_runtime_payload,
+)
 from nebius_cxcli.soperator_migration import (
     SoperatorMigrationCommandResult,
     SoperatorMigrationExecutionResult,
@@ -9823,21 +9826,30 @@ def test_soperator_migration_phase_display_title_is_path_aware(
 def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.MonkeyPatch) -> None:
     styled = cli_module._style_soperator_migration_status_message(
         "External Soperator upgrade status [4s] phase external-node-template-upgrade "
-        "[External node-template upgrade] (degraded): MK8s Node Groups degraded: "
-        "Node groups: 4 group(s); gpu-pool:3/4 Ready || "
-        "Nodes: 7/8 Ready; in transition gpu-node-a:replacing (down) | "
+        "[MK8s control-plane/node-template upgrade] (degraded): MK8s Node Groups degraded: "
+        "Node groups: 4 group(s); nodegroup-gpu-pool (gpu-pool):3/4 Ready, "
+        "nodegroup-login (login):2/2 Ready, nodegroup-system (system):2/2 Ready; updating "
+        "system:PROVISIONING,ready=2/3,event=WaitingForNodeRef,outdated=1,reconciling || "
+        "Registered nodes: 7/8 Ready; in transition gpu-node-a:replacing (down) | "
         "Slurm Workers draining: workers drained=1"
     )
 
     assert "[bold cyan]External Soperator upgrade status[/bold cyan]" in styled
     assert "phase external-node-template-upgrade" in styled
     assert "top-level stage:" not in styled
-    assert "External node-template upgrade" in styled
+    assert "MK8s control-plane/node-template upgrade" in styled
     assert "([bold yellow]degraded[/bold yellow]):" in styled
     assert "[bold white]MK8s Node Groups[/bold white]" in styled
     assert "[bold cyan]Node groups:[/bold cyan]" in styled
     assert "[dim] || [/dim]" in styled
-    assert "[bold magenta]Nodes:[/bold magenta]" in styled
+    assert "[bold magenta]Registered nodes:[/bold magenta]" in styled
+    assert "nodegroup-gpu-pool [bold red](gpu-pool)[/bold red]:3/4 " in styled
+    assert "3/4 [bold red]Ready[/bold red]" in styled
+    assert "nodegroup-login [bold blue](login)[/bold blue]:2/2 " in styled
+    assert "2/2 [green]Ready[/green]" in styled
+    assert "nodegroup-system [bold red](system)[/bold red]:2/2 " in styled
+    assert "[bold red]system[/bold red]:PROVISIONING" in styled
+    assert "7/8 [bold red]Ready[/bold red]" in styled
     assert "[bold yellow]replacing (down)[/bold yellow]" in styled
     assert "[bold white]Slurm Workers[/bold white]" in styled
 
@@ -9869,8 +9881,9 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
     with cli_module._soperator_migration_status_emitter() as emit:
         emit(
             "External Soperator upgrade status [4s] phase external-node-template-upgrade "
-            "[External node-template upgrade] (degraded): MK8s Node Groups degraded: "
-            "Node groups: 4 group(s); gpu-pool:3/4 Ready || Nodes: 7/8 Ready"
+            "[MK8s control-plane/node-template upgrade] (degraded): MK8s Node Groups degraded: "
+            "Node groups: 4 group(s); nodegroup-gpu-pool (gpu-pool):3/4 Ready || "
+            "Registered nodes: 7/8 Ready"
         )
 
     assert initial_messages
@@ -9879,10 +9892,98 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
     assert "[bold cyan]External Soperator upgrade status[/bold cyan] [4s] phase " in updates[0]
     assert "external-node-template-upgrade" in updates[0]
     assert "top-level stage:" not in updates[0]
-    assert "External node-template upgrade" in updates[0]
+    assert "MK8s control-plane/node-template upgrade" in updates[0]
     assert "[bold white]MK8s Node Groups[/bold white]" in updates[0]
     assert "[bold cyan]Node groups:[/bold cyan]" in updates[0]
-    assert "[bold magenta]Nodes:[/bold magenta]" in updates[0]
+    assert "[bold magenta]Registered nodes:[/bold magenta]" in updates[0]
+    assert "nodegroup-gpu-pool [bold red](gpu-pool)[/bold red]:3/4 " in updates[0]
+    assert "3/4 [bold red]Ready[/bold red]" in updates[0]
+
+
+def test_soperator_migration_status_spinner_suppresses_stray_enter_echo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[tuple[object, ...]] = []
+
+    class FakeTermios:
+        ECHO = 0b001
+        ECHONL = 0b010
+        ICANON = 0b100
+        VMIN = 0
+        VTIME = 1
+        TCSADRAIN = 77
+        TCIFLUSH = 88
+
+        @staticmethod
+        def tcgetattr(fd: int) -> list[object]:
+            events.append(("get", fd))
+            return [0, 0, 0, FakeTermios.ECHO | FakeTermios.ECHONL | FakeTermios.ICANON, 0, 0, [1, 1]]
+
+        @staticmethod
+        def tcsetattr(fd: int, when: int, attrs: Sequence[object]) -> None:
+            events.append(("set", fd, when, attrs[3], tuple(attrs[6])))
+
+        @staticmethod
+        def tcflush(fd: int, queue: int) -> None:
+            events.append(("flush", fd, queue))
+
+    class FakeStream:
+        def isatty(self) -> bool:
+            return True
+
+        def fileno(self) -> int:
+            return 9
+
+    class FakeStatus:
+        def __enter__(self) -> FakeStatus:
+            events.append(("status-enter",))
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            events.append(("status-exit",))
+
+        def update(self, message: str) -> None:
+            events.append(("update", message))
+
+        def stop(self) -> None:
+            events.append(("stop",))
+
+        def start(self) -> None:
+            events.append(("start",))
+
+    class FakeConsole:
+        is_terminal = True
+
+        def status(self, message: str, *, spinner: str) -> FakeStatus:
+            events.append(("status", message, spinner))
+            return FakeStatus()
+
+        def print(self, *_args: object, **_kwargs: object) -> None:
+            raise AssertionError("interactive status emitter should update the spinner")
+
+    monkeypatch.setattr(cli_module, "_termios", FakeTermios)
+    monkeypatch.setattr(cli_module.sys, "stdin", FakeStream())
+    monkeypatch.setattr(cli_module.sys, "stdout", FakeStream())
+    monkeypatch.setattr(cli_module, "console", FakeConsole())
+
+    with cli_module._soperator_migration_status_emitter() as emit:
+        emit("External Soperator upgrade status [4s] phase backup [Backup] (serving): ok")
+        with emit.pause():
+            events.append(("prompt-open",))
+
+    set_events = [event for event in events if event[0] == "set"]
+    assert set_events[0] == ("set", 9, FakeTermios.TCSADRAIN, 0, (0, 0))
+    assert ("stop",) in events
+    assert ("prompt-open",) in events
+    assert ("start",) in events
+    assert ("flush", 9, FakeTermios.TCIFLUSH) in events
+    assert set_events[-1] == (
+        "set",
+        9,
+        FakeTermios.TCSADRAIN,
+        FakeTermios.ECHO | FakeTermios.ECHONL | FakeTermios.ICANON,
+        (1, 1),
+    )
 
 
 def test_soperator_upgrade_phase_display_omits_top_level_stage() -> None:
@@ -15365,7 +15466,7 @@ def test_runtime_validation_rejects_mismatched_scalar_name_and_instance_id() -> 
         ValueError,
         match=r"instance_id 'vm-2' must match normalized inputs\.name 'worker-vm'",
     ):
-        validate_dynamic_payload_structure(payload)
+        validate_runtime_payload(payload)
 
 
 def test_runtime_validation_rejects_duplicate_scalar_names_for_same_infra_type() -> None:
@@ -15391,6 +15492,49 @@ def test_runtime_validation_rejects_duplicate_scalar_names_for_same_infra_type()
 
     with pytest.raises(ValueError, match=r"inputs\.name 'worker-vm' duplicates"):
         validate_dynamic_payload_structure(payload)
+
+
+def test_runtime_validation_rejects_non_boolean_slurm_scheduling_quiesce() -> None:
+    payload = {
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "project_id": "project-1",
+                "region_id": "eu-north1",
+            },
+            "notifications": {
+                "email_enabled": False,
+                "email": None,
+            },
+        },
+        "deploy": {
+            "targets": [
+                {
+                    "instance_id": "external-cluster",
+                    "kind": "external-mk8s",
+                    "ownership": "external",
+                    "kube_context": "external-context",
+                    "soperator_onboarding": {
+                        "actions": [],
+                        "node_template_upgrade": {
+                            "slurm_scheduling_quiesce": "true",
+                        },
+                    },
+                }
+            ]
+        },
+        "infra": {"components": []},
+        "apps": {"charts": []},
+    }
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"deploy\.targets\[0\]\.soperator_onboarding\.node_template_upgrade"
+            r"\.slurm_scheduling_quiesce must be true or false"
+        ),
+    ):
+        validate_runtime_payload(payload)
 
 
 def test_runtime_validation_does_not_force_collection_identity_to_scalar_name() -> None:

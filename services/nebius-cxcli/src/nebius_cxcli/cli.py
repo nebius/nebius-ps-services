@@ -36,6 +36,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Annotated, Any, Protocol, cast
 
+try:
+    import termios as _termios
+except ImportError:  # pragma: no cover - non-POSIX runtime fallback
+    _termios = None
+
 import typer
 import yaml
 from rich.console import Console
@@ -399,6 +404,8 @@ from .slack_notifier_runtime import (
     soperator_notifier_enabled_for_target,
 )
 from .slurm_job_control import (
+    SLURM_JOB_CONTROL_BACKGROUND_WAIT,
+    SLURM_JOB_CONTROL_JOBS_CLEARED,
     SLURM_JOB_CONTROL_WAIT_COMPLETED,
     SLURM_JOB_CONTROL_WAIT_TIMEOUT,
     build_slurm_jobs_table,
@@ -407,12 +414,16 @@ from .slurm_job_control import (
 )
 from .slurm_jobs import (
     AffectedSlurmJob,
+    SlurmPartitionQuiesceRecord,
+    SlurmPartitionState,
     affected_slurm_partitions_from_scontrol_show_node,
     dedupe_slurm_jobs,
     ensure_requeueable_slurm_jobs,
     filter_affected_pending_slurm_jobs,
+    parse_scontrol_show_partition_states,
     parse_squeue_jobs,
     selected_display_job_ids,
+    slurm_partition_quiesce_records,
 )
 from .soperator_artifacts import (
     SoperatorClusterArtifactIdentity,
@@ -7765,24 +7776,30 @@ def _soperator_upgrade_affected_jobs(
     node_names: Sequence[str],
     kube_context: str | None = None,
     extra_env: Mapping[str, str] | None = None,
+    include_pending: bool = True,
 ) -> tuple[AffectedSlurmJob, ...]:
     selected_nodes = tuple(_non_empty_text(node) for node in node_names if _non_empty_text(node))
     if not selected_nodes:
         return ()
-    partitions = _soperator_upgrade_affected_partitions(
+    partitions: tuple[str, ...] = ()
+    if include_pending:
+        partitions = _soperator_upgrade_affected_partitions(
+            namespace=namespace,
+            node_names=selected_nodes,
+            kube_context=kube_context,
+            extra_env=extra_env,
+        )
+    running_jobs = _soperator_upgrade_running_jobs(
         namespace=namespace,
         node_names=selected_nodes,
         kube_context=kube_context,
         extra_env=extra_env,
     )
+    if not include_pending:
+        return dedupe_slurm_jobs(running_jobs)
     return dedupe_slurm_jobs(
         (
-            *_soperator_upgrade_running_jobs(
-                namespace=namespace,
-                node_names=selected_nodes,
-                kube_context=kube_context,
-                extra_env=extra_env,
-            ),
+            *running_jobs,
             *_soperator_upgrade_pending_jobs(
                 namespace=namespace,
                 node_names=selected_nodes,
@@ -7815,6 +7832,11 @@ def _prompt_soperator_upgrade_job_control(
     jobs: Sequence[AffectedSlurmJob],
     *,
     jobs_provider: Callable[[], Sequence[AffectedSlurmJob]] | None = None,
+    action_handler: Callable[
+        [str, tuple[str, ...], tuple[AffectedSlurmJob, ...]],
+        Sequence[AffectedSlurmJob],
+    ]
+    | None = None,
     wait_timeout_seconds: int = 0,
     refresh_interval_seconds: int = 30,
 ) -> tuple[str, tuple[str, ...]]:
@@ -7828,6 +7850,7 @@ def _prompt_soperator_upgrade_job_control(
                 typer.prompt(message, default=default, show_default=show_default)
             ),
             jobs_provider=jobs_provider,
+            action_handler=action_handler,
             wait_timeout_seconds=wait_timeout_seconds,
             poll_interval_seconds=refresh_interval_seconds,
         )
@@ -7882,6 +7905,7 @@ def _soperator_upgrade_wait_for_requeued_jobs_to_leave_nodes(
     refresh_interval_seconds: int,
     kube_context: str | None = None,
     extra_env: Mapping[str, str] | None = None,
+    include_pending: bool = True,
 ) -> tuple[AffectedSlurmJob, ...]:
     selected = frozenset(_non_empty_text(job_id) for job_id in job_ids if _non_empty_text(job_id))
     if not selected:
@@ -7896,6 +7920,7 @@ def _soperator_upgrade_wait_for_requeued_jobs_to_leave_nodes(
                 node_names=node_names,
                 kube_context=kube_context,
                 extra_env=extra_env,
+                include_pending=include_pending,
             )
             if job.job_id in selected
         ]
@@ -7905,6 +7930,54 @@ def _soperator_upgrade_wait_for_requeued_jobs_to_leave_nodes(
             raise RuntimeError(
                 f"{len(remaining)} affected Slurm job(s) remain after requeue/requeuehold. "
                 "Rerun after they finish or cancel them explicitly."
+            )
+        time.sleep(max(refresh_interval_seconds, 1))
+
+
+def _soperator_upgrade_wait_for_cancelled_jobs_to_leave_nodes(
+    *,
+    namespace: str,
+    node_names: Sequence[str],
+    job_ids: Sequence[str],
+    timeout_seconds: int,
+    refresh_interval_seconds: int,
+    kube_context: str | None = None,
+    extra_env: Mapping[str, str] | None = None,
+    include_pending: bool = True,
+) -> tuple[AffectedSlurmJob, ...]:
+    selected = frozenset(_non_empty_text(job_id) for job_id in job_ids if _non_empty_text(job_id))
+    if not selected:
+        return _soperator_upgrade_affected_jobs(
+            namespace=namespace,
+            node_names=node_names,
+            kube_context=kube_context,
+            extra_env=extra_env,
+            include_pending=include_pending,
+        )
+    transition_timeout = min(
+        timeout_seconds if timeout_seconds > 0 else _SOPERATOR_UPGRADE_CANCEL_CLEAR_TIMEOUT_SECONDS,
+        _SOPERATOR_UPGRADE_CANCEL_CLEAR_TIMEOUT_SECONDS,
+    )
+    deadline = time.monotonic() + max(transition_timeout, 1)
+    while True:
+        jobs = _soperator_upgrade_affected_jobs(
+            namespace=namespace,
+            node_names=node_names,
+            kube_context=kube_context,
+            extra_env=extra_env,
+            include_pending=include_pending,
+        )
+        selected_remaining = [job for job in jobs if job.job_id in selected]
+        if not selected_remaining:
+            return jobs
+        if time.monotonic() >= deadline:
+            remaining_ids = ", ".join(job.job_id for job in selected_remaining)
+            raise RuntimeError(
+                "Affected Slurm job(s) remain after scancel: "
+                + remaining_ids
+                + ". Slurm may still show them as COMPLETING while nodes return to service; "
+                "rerun after they clear or ask a Slurm administrator to inspect stuck "
+                "COMPLETING jobs."
             )
         time.sleep(max(refresh_interval_seconds, 1))
 
@@ -7930,6 +8003,7 @@ def _soperator_upgrade_wait_for_jobs_until_timeout(
     refresh_interval_seconds: int,
     kube_context: str | None = None,
     extra_env: Mapping[str, str] | None = None,
+    include_pending: bool = True,
 ) -> None:
     deadline = time.monotonic() + timeout_seconds if timeout_seconds > 0 else None
     poll_interval = max(refresh_interval_seconds, 1)
@@ -7940,6 +8014,7 @@ def _soperator_upgrade_wait_for_jobs_until_timeout(
             node_names=node_names,
             kube_context=kube_context,
             extra_env=extra_env,
+            include_pending=include_pending,
         )
 
     def _timed_out() -> bool:
@@ -7998,6 +8073,7 @@ def _soperator_upgrade_wait_for_jobs(
     refresh_interval_seconds: int,
     kube_context: str | None = None,
     extra_env: Mapping[str, str] | None = None,
+    include_pending: bool = True,
 ) -> None:
     remaining = _soperator_upgrade_wait_for_jobs_until_timeout(
         namespace=namespace,
@@ -8006,6 +8082,7 @@ def _soperator_upgrade_wait_for_jobs(
         refresh_interval_seconds=refresh_interval_seconds,
         kube_context=kube_context,
         extra_env=extra_env,
+        include_pending=include_pending,
     )
     if remaining:
         raise RuntimeError(
@@ -8142,6 +8219,121 @@ def _soperator_upgrade_restore_slurm_nodes(
     )
 
 
+def _soperator_upgrade_partition_state_snapshot(
+    *,
+    namespace: str,
+    kube_context: str | None = None,
+    extra_env: Mapping[str, str] | None = None,
+) -> tuple[SlurmPartitionState, ...]:
+    result = _run_soperator_upgrade_login_command(
+        namespace,
+        "scontrol show partition -o",
+        kube_context=kube_context,
+        extra_env=extra_env,
+        timeout_seconds=120,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Could not inspect Slurm partition states before scheduling quiesce: "
+            + (result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}")
+        )
+    return parse_scontrol_show_partition_states(result.stdout)
+
+
+def _soperator_upgrade_quiesce_slurm_partitions(
+    *,
+    namespace: str,
+    node_names: Sequence[str],
+    kube_context: str | None = None,
+    extra_env: Mapping[str, str] | None = None,
+) -> tuple[SlurmPartitionQuiesceRecord, ...]:
+    selected_nodes = tuple(_non_empty_text(node) for node in node_names if _non_empty_text(node))
+    if not selected_nodes:
+        return ()
+    partitions = _soperator_upgrade_affected_partitions(
+        namespace=namespace,
+        node_names=selected_nodes,
+        kube_context=kube_context,
+        extra_env=extra_env,
+    )
+    snapshot = _soperator_upgrade_partition_state_snapshot(
+        namespace=namespace,
+        kube_context=kube_context,
+        extra_env=extra_env,
+    )
+    records = slurm_partition_quiesce_records(partitions=partitions, states=snapshot)
+    applied: list[SlurmPartitionQuiesceRecord] = []
+    for record in records:
+        try:
+            _run_soperator_upgrade_login_command(
+                namespace,
+                "scontrol update PartitionName="
+                + shlex.quote(record.partition)
+                + " State="
+                + shlex.quote(record.applied_state),
+                kube_context=kube_context,
+                extra_env=extra_env,
+                timeout_seconds=120,
+            )
+            applied.append(record)
+        except Exception:
+            if applied:
+                try:
+                    _soperator_upgrade_restore_slurm_partitions(
+                        namespace=namespace,
+                        records=applied,
+                        kube_context=kube_context,
+                        extra_env=extra_env,
+                    )
+                except Exception as restore_exc:
+                    raise RuntimeError(
+                        "Could not restore partially quiesced Slurm partitions after "
+                        "scheduling quiesce failed. Run: "
+                        + _soperator_upgrade_slurm_partition_restore_command(applied)
+                    ) from restore_exc
+            raise
+    return records
+
+
+def _soperator_upgrade_restore_slurm_partitions(
+    *,
+    namespace: str,
+    records: Sequence[SlurmPartitionQuiesceRecord],
+    kube_context: str | None = None,
+    extra_env: Mapping[str, str] | None = None,
+) -> None:
+    for record in records:
+        partition = _non_empty_text(record.partition)
+        previous_state = _non_empty_text(record.previous_state)
+        if not partition or not previous_state:
+            continue
+        _run_soperator_upgrade_login_command(
+            namespace,
+            "scontrol update PartitionName="
+            + shlex.quote(partition)
+            + " State="
+            + shlex.quote(previous_state),
+            kube_context=kube_context,
+            extra_env=extra_env,
+            timeout_seconds=120,
+        )
+
+
+def _soperator_upgrade_slurm_partition_restore_command(
+    records: Sequence[SlurmPartitionQuiesceRecord],
+) -> str:
+    commands = [
+        "scontrol update PartitionName="
+        + shlex.quote(record.partition)
+        + " State="
+        + shlex.quote(record.previous_state)
+        for record in records
+        if _non_empty_text(record.partition) and _non_empty_text(record.previous_state)
+    ]
+    return "; ".join(commands)
+
+
 def _handle_soperator_upgrade_running_jobs(
     *,
     namespace: str,
@@ -8156,6 +8348,7 @@ def _handle_soperator_upgrade_running_jobs(
     kube_context: str | None = None,
     extra_env: Mapping[str, str] | None = None,
     drain_nodes: bool = True,
+    slurm_scheduling_quiesce: bool = False,
     decision_recorder: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> tuple[str, ...]:
     if policy == "interactive" and not _is_tty_session():
@@ -8195,12 +8388,36 @@ def _handle_soperator_upgrade_running_jobs(
     if not selected_node_names:
         return ()
 
+    include_pending = not slurm_scheduling_quiesce
+    if slurm_scheduling_quiesce:
+        quiesced_partitions = _soperator_upgrade_quiesce_slurm_partitions(
+            namespace=namespace,
+            node_names=selected_node_names,
+            kube_context=kube_context,
+            extra_env=extra_env,
+        )
+        if quiesced_partitions:
+            _record(
+                "scheduling-quiesce-applied",
+                node_names=selected_node_names,
+                partitions=[record.as_payload() for record in quiesced_partitions],
+                pending_jobs="queued-not-blocking",
+            )
+        else:
+            _record(
+                "scheduling-quiesce-skipped",
+                node_names=selected_node_names,
+                reason="no affected UP partitions required cxcli changes",
+                pending_jobs="queued-not-blocking",
+            )
+
     def _jobs() -> tuple[AffectedSlurmJob, ...]:
         return _soperator_upgrade_affected_jobs(
             namespace=namespace,
             node_names=selected_node_names,
             kube_context=kube_context,
             extra_env=extra_env,
+            include_pending=include_pending,
         )
 
     def _cancel(job_ids: Sequence[str]) -> None:
@@ -8229,6 +8446,19 @@ def _handle_soperator_upgrade_running_jobs(
             refresh_interval_seconds=refresh_interval_seconds,
             kube_context=kube_context,
             extra_env=extra_env,
+            include_pending=include_pending,
+        )
+
+    def _wait_for_cancelled(job_ids: Sequence[str]) -> tuple[AffectedSlurmJob, ...]:
+        return _soperator_upgrade_wait_for_cancelled_jobs_to_leave_nodes(
+            namespace=namespace,
+            node_names=selected_node_names,
+            job_ids=job_ids,
+            timeout_seconds=wait_timeout_seconds,
+            refresh_interval_seconds=refresh_interval_seconds,
+            kube_context=kube_context,
+            extra_env=extra_env,
+            include_pending=include_pending,
         )
 
     def _wait_for_all() -> None:
@@ -8240,6 +8470,7 @@ def _handle_soperator_upgrade_running_jobs(
                 refresh_interval_seconds=refresh_interval_seconds,
                 kube_context=kube_context,
                 extra_env=extra_env,
+                include_pending=include_pending,
             )
 
     def _wait_until_timeout(timeout_seconds: int) -> tuple[AffectedSlurmJob, ...]:
@@ -8251,6 +8482,7 @@ def _handle_soperator_upgrade_running_jobs(
                 refresh_interval_seconds=refresh_interval_seconds,
                 kube_context=kube_context,
                 extra_env=extra_env,
+                include_pending=include_pending,
             )
 
     def _wait_then_cancel() -> None:
@@ -8335,6 +8567,33 @@ def _handle_soperator_upgrade_running_jobs(
             )
         return drained_nodes
 
+    def _interactive_action_handler(
+        action: str,
+        selected_ids: tuple[str, ...],
+        displayed_jobs: tuple[AffectedSlurmJob, ...],
+    ) -> tuple[AffectedSlurmJob, ...]:
+        if action in {"cancel-selected", "cancel-all"}:
+            selected = selected_display_job_ids(displayed_jobs, selected_ids, action=action)
+            if not selected:
+                raise RuntimeError("Select at least one displayed job to cancel.")
+            _record(action, job_ids=selected)
+            _cancel(selected)
+            return _wait_for_cancelled(selected)
+        if action in {
+            "requeue-selected",
+            "requeue-all",
+            "requeue-hold-selected",
+            "requeue-hold-all",
+        }:
+            selected = ensure_requeueable_slurm_jobs(displayed_jobs, selected_ids, action=action)
+            if not selected:
+                raise RuntimeError("Select at least one displayed active job to requeue.")
+            _record(action, job_ids=selected)
+            _requeue(selected, hold=action in {"requeue-hold-selected", "requeue-hold-all"})
+            _wait_for_requeued(selected)
+            return _jobs()
+        raise RuntimeError(f"Unsupported Slurm job-control action: {action}")
+
     jobs = _jobs()
     if not jobs:
         _record("no-blocking-jobs", policy=policy, node_names=selected_node_names)
@@ -8350,6 +8609,7 @@ def _handle_soperator_upgrade_running_jobs(
             action, selected_ids = _prompt_soperator_upgrade_job_control(
                 jobs,
                 jobs_provider=_jobs,
+                action_handler=_interactive_action_handler,
                 wait_timeout_seconds=wait_timeout_seconds,
                 refresh_interval_seconds=refresh_interval_seconds,
             )
@@ -8360,6 +8620,9 @@ def _handle_soperator_upgrade_running_jobs(
                     _record("no-blocking-jobs-after-refresh", policy=policy)
                     return _drain_after_jobs_clear()
                 continue
+            if action == SLURM_JOB_CONTROL_JOBS_CLEARED:
+                _record("jobs-cleared-in-tui", policy=policy)
+                return _drain_after_jobs_clear()
             if action == SLURM_JOB_CONTROL_WAIT_COMPLETED:
                 _record(
                     "wait-started",
@@ -8379,6 +8642,15 @@ def _handle_soperator_upgrade_running_jobs(
                     "--job-wait-timeout, cancel, requeue, or requeue-hold selected jobs, "
                     "or use --job-policy wait-then-cancel."
                 )
+            if action == SLURM_JOB_CONTROL_BACKGROUND_WAIT:
+                _record(
+                    "background-wait-started",
+                    timeout_seconds=wait_timeout_seconds,
+                    refresh_interval_seconds=refresh_interval_seconds,
+                )
+                _wait_for_all()
+                _record("background-wait-completed")
+                return _drain_after_jobs_clear()
             if action == "wait-to-finish":
                 _record(
                     "wait-started",
@@ -8395,14 +8667,15 @@ def _handle_soperator_upgrade_running_jobs(
                     continue
                 _record("cancel-selected", job_ids=selected)
                 _cancel(selected)
-                jobs = _jobs()
+                jobs = _wait_for_cancelled(selected)
                 if not jobs:
                     return _drain_after_jobs_clear()
                 continue
             if action == "cancel-all":
-                _record("cancel-all", job_ids=tuple(job.job_id for job in jobs))
-                _cancel(tuple(job.job_id for job in jobs))
-                jobs = _jobs()
+                selected = tuple(job.job_id for job in jobs)
+                _record("cancel-all", job_ids=selected)
+                _cancel(selected)
+                jobs = _wait_for_cancelled(selected)
                 if not jobs:
                     return _drain_after_jobs_clear()
                 continue
@@ -8493,15 +8766,19 @@ def _handle_soperator_upgrade_running_jobs(
     if policy == "wait-then-cancel":
         _wait_then_cancel()
         return _drain_after_jobs_clear()
+    remaining: tuple[AffectedSlurmJob, ...] | None = None
     if policy == "cancel-selected":
         selected = selected_display_job_ids(jobs, cancel_job_ids, action=policy)
         if not selected:
             raise RuntimeError("--job-policy cancel-selected requires at least one --cancel-job.")
         _record("cancel-selected", job_ids=selected)
         _cancel(selected)
+        remaining = _wait_for_cancelled(selected)
     elif policy == "cancel-all":
-        _record("cancel-all", job_ids=tuple(job.job_id for job in jobs))
-        _cancel(tuple(job.job_id for job in jobs))
+        selected = tuple(job.job_id for job in jobs)
+        _record("cancel-all", job_ids=selected)
+        _cancel(selected)
+        remaining = _wait_for_cancelled(selected)
     elif policy == "requeue-selected":
         selected = ensure_requeueable_slurm_jobs(jobs, requeue_job_ids, action=policy)
         if not selected:
@@ -8539,7 +8816,7 @@ def _handle_soperator_upgrade_running_jobs(
         _wait_for_all()
         _record("wait-completed")
         return _drain_after_jobs_clear()
-    remaining = _jobs()
+    remaining = remaining if remaining is not None else _jobs()
     if remaining:
         _record(
             "policy-completed-with-remaining-jobs",
@@ -9274,8 +9551,11 @@ def _new_soperator_upgrade_checkpoint(
         },
         "slurm": {
             "drained_nodes": [],
+            "quiesced_partitions": [],
             "restore_manual_command": None,
+            "partition_restore_manual_command": None,
             "job_policy": None,
+            "scheduling_quiesce": True,
         },
         "config_comparison": {
             "pre_upgrade": None,
@@ -9949,18 +10229,37 @@ def _write_soperator_upgrade_report(
     slurm = checkpoint.get("slurm")
     slurm_map = slurm if isinstance(slurm, Mapping) else {}
     drained_nodes = slurm_map.get("drained_nodes")
+    quiesced_partitions = slurm_map.get("quiesced_partitions")
     slurm_lines = [
         f"- Job policy: `{slurm_map.get('job_policy') or 'not-run'}`",
+        f"- Scheduling quiesce: `{bool(slurm_map.get('scheduling_quiesce'))}`",
         "- cxcli-owned drained nodes: "
         + (
             ", ".join(f"`{node}`" for node in drained_nodes)
             if isinstance(drained_nodes, list) and drained_nodes
             else "none"
         ),
+        "- cxcli-owned quiesced partitions: "
+        + (
+            ", ".join(
+                f"`{item.get('partition')}` ({item.get('previous_state')} -> {item.get('applied_state')})"
+                for item in quiesced_partitions
+                if isinstance(item, Mapping)
+            )
+            if isinstance(quiesced_partitions, list) and quiesced_partitions
+            else "none"
+        ),
     ]
     manual_command = _non_empty_text(slurm_map.get("restore_manual_command"))
     if manual_command:
         slurm_lines.append(f"- Manual recovery command: `{manual_command}`")
+    partition_manual_command = _non_empty_text(
+        slurm_map.get("partition_restore_manual_command")
+    )
+    if partition_manual_command:
+        slurm_lines.append(
+            f"- Manual partition recovery command: `{partition_manual_command}`"
+        )
 
     populate_jail = checkpoint.get("populate_jail_refresh")
     populate_jail_map = populate_jail if isinstance(populate_jail, Mapping) else {}
@@ -12172,6 +12471,7 @@ def _external_soperator_upgrade_command_args(
     requeue_job: Sequence[str],
     job_wait_timeout: str,
     job_refresh_interval: str,
+    slurm_scheduling_quiesce: bool,
     login_session_policy: str,
     login_session_drain_timeout: str,
     worker_rollout_strategy: str | None,
@@ -12204,6 +12504,11 @@ def _external_soperator_upgrade_command_args(
         args.extend(["--requeue-job", str(job_id)])
     args.extend(["--job-wait-timeout", job_wait_timeout])
     args.extend(["--job-refresh-interval", job_refresh_interval])
+    args.append(
+        "--slurm-scheduling-quiesce"
+        if slurm_scheduling_quiesce
+        else "--no-slurm-scheduling-quiesce"
+    )
     args.extend(["--login-session-policy", login_session_policy])
     args.extend(["--login-session-drain-timeout", login_session_drain_timeout])
     if _non_empty_text(worker_rollout_strategy):
@@ -12247,6 +12552,26 @@ def _external_soperator_upgrade_target_k8s_version(
         _non_empty_text(configured.get("target_k8s_version"))
         or _non_empty_text(configured.get("k8s_version"))
         or _non_empty_text(configured.get("version"))
+    )
+
+
+def _soperator_onboarding_slurm_scheduling_quiesce(
+    onboarding: Mapping[str, Any],
+) -> bool:
+    configured = onboarding.get("node_template_upgrade")
+    if not isinstance(configured, Mapping):
+        return True
+    raw_value = configured.get("slurm_scheduling_quiesce", True)
+    if isinstance(raw_value, bool):
+        return raw_value
+    normalized = str(raw_value or "").strip().lower()
+    if normalized in {"false", "0", "no", "off"}:
+        return False
+    if normalized in {"true", "1", "yes", "on", ""}:
+        return True
+    raise RuntimeError(
+        "deploy.targets[].soperator_onboarding.node_template_upgrade."
+        "slurm_scheduling_quiesce must be true or false."
     )
 
 
@@ -14067,6 +14392,16 @@ def soperator_upgrade_command(
             "--job-refresh-interval", help="Refresh interval while waiting for Slurm jobs."
         ),
     ] = _SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
+    slurm_scheduling_quiesce: Annotated[
+        bool,
+        typer.Option(
+            "--slurm-scheduling-quiesce/--no-slurm-scheduling-quiesce",
+            help=(
+                "During MK8s worker node-template phases, set affected Slurm partitions "
+                "DOWN so newly submitted jobs queue until cxcli restores scheduling."
+            ),
+        ),
+    ] = True,
     login_session_policy: Annotated[
         str,
         typer.Option(
@@ -14149,6 +14484,7 @@ def soperator_upgrade_command(
             requeue_job=tuple(requeue_job or ()),
             job_wait_timeout=job_wait_timeout,
             job_refresh_interval=job_refresh_interval,
+            slurm_scheduling_quiesce=slurm_scheduling_quiesce,
             login_session_policy=login_session_policy,
             login_session_drain_timeout=login_session_drain_timeout,
             dry_run=dry_run,
@@ -14184,6 +14520,7 @@ def _run_soperator_upgrade_command(
     requeue_job: Sequence[str],
     job_wait_timeout: str,
     job_refresh_interval: str,
+    slurm_scheduling_quiesce: bool,
     login_session_policy: str,
     login_session_drain_timeout: str,
     dry_run: bool,
@@ -14254,6 +14591,7 @@ def _run_soperator_upgrade_command(
         requeue_job=requeue_job,
         job_wait_timeout=job_wait_timeout,
         job_refresh_interval=job_refresh_interval,
+        slurm_scheduling_quiesce=slurm_scheduling_quiesce,
         login_session_policy=_external_login_session_policy(login_session_policy),
         login_session_drain_timeout=login_session_drain_timeout,
         dry_run=dry_run,
@@ -14285,6 +14623,7 @@ def _soperator_upgrade_command_args(
     requeue_job: Sequence[str],
     job_wait_timeout: str,
     job_refresh_interval: str,
+    slurm_scheduling_quiesce: bool,
     dry_run: bool,
     login_session_policy: str = EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
     login_session_drain_timeout: str = "30m",
@@ -14329,6 +14668,11 @@ def _soperator_upgrade_command_args(
         args.extend(["--requeue-job", str(job_id)])
     args.extend(["--job-wait-timeout", job_wait_timeout])
     args.extend(["--job-refresh-interval", job_refresh_interval])
+    args.append(
+        "--slurm-scheduling-quiesce"
+        if slurm_scheduling_quiesce
+        else "--no-slurm-scheduling-quiesce"
+    )
     args.extend(["--login-session-policy", login_session_policy])
     args.extend(["--login-session-drain-timeout", login_session_drain_timeout])
     args.append("--approve-remediation" if approve_remediation else "--no-approve-remediation")
@@ -14493,6 +14837,7 @@ def _managed_soperator_upgrade_order_issue(
     requeue_job: Sequence[str],
     job_wait_timeout: str,
     job_refresh_interval: str,
+    slurm_scheduling_quiesce: bool,
     login_session_policy: str,
     login_session_drain_timeout: str,
     approve_remediation: bool,
@@ -14544,6 +14889,7 @@ def _managed_soperator_upgrade_order_issue(
             requeue_job=requeue_job,
             job_wait_timeout=job_wait_timeout,
             job_refresh_interval=job_refresh_interval,
+            slurm_scheduling_quiesce=slurm_scheduling_quiesce,
             login_session_policy=login_session_policy,
             login_session_drain_timeout=login_session_drain_timeout,
             dry_run=False,
@@ -14573,6 +14919,7 @@ def _managed_soperator_upgrade_order_issue(
             requeue_job=requeue_job,
             job_wait_timeout=job_wait_timeout,
             job_refresh_interval=job_refresh_interval,
+            slurm_scheduling_quiesce=slurm_scheduling_quiesce,
             login_session_policy=login_session_policy,
             login_session_drain_timeout=login_session_drain_timeout,
             dry_run=False,
@@ -14700,6 +15047,7 @@ def _format_managed_soperator_cluster_upgrade_plan(
     to_gpu_stack_preset: str | None,
     node_group: str,
     job_policy: str,
+    slurm_scheduling_quiesce: bool,
     populate_jail_refresh: str,
     jail_persistent_mounts: Sequence[str],
     login_session_policy: str,
@@ -14730,6 +15078,12 @@ def _format_managed_soperator_cluster_upgrade_plan(
             f"`{_non_empty_text(to_gpu_stack_preset) or 'unchanged/operator-managed'}`",
             f"  - node group: `{_non_empty_text(node_group) or 'all selected by plan'}`",
             f"- Slurm job policy: `{job_policy}`",
+            "- Slurm scheduling quiesce: "
+            + (
+                "enabled for worker node-template gates; new submissions queue until restore"
+                if slurm_scheduling_quiesce
+                else "disabled; pending affected jobs remain blocking"
+            ),
             f"- Jail Upgrade refresh mode: `{populate_jail_refresh}`",
             (
                 "- Jail Upgrade persistent mounts: `/home`, `/data`, `/scripts`, "
@@ -14818,6 +15172,7 @@ def _run_managed_soperator_cluster_upgrade(
     requeue_job: Sequence[str],
     job_wait_timeout: str,
     job_refresh_interval: str,
+    slurm_scheduling_quiesce: bool,
     login_session_policy: str,
     login_session_drain_timeout: str,
     dry_run: bool,
@@ -14873,6 +15228,7 @@ def _run_managed_soperator_cluster_upgrade(
         requeue_job=requeue_job,
         job_wait_timeout=job_wait_timeout,
         job_refresh_interval=job_refresh_interval,
+        slurm_scheduling_quiesce=slurm_scheduling_quiesce,
         login_session_policy=login_session_policy,
         login_session_drain_timeout=login_session_drain_timeout,
         approve_remediation=approve_remediation,
@@ -14899,6 +15255,7 @@ def _run_managed_soperator_cluster_upgrade(
         requeue_job=requeue_job,
         job_wait_timeout=job_wait_timeout,
         job_refresh_interval=job_refresh_interval,
+        slurm_scheduling_quiesce=slurm_scheduling_quiesce,
         login_session_policy=login_session_policy,
         login_session_drain_timeout=login_session_drain_timeout,
         dry_run=True,
@@ -14916,6 +15273,7 @@ def _run_managed_soperator_cluster_upgrade(
             to_gpu_stack_preset=to_gpu_stack_preset,
             node_group=node_group,
             job_policy=job_policy,
+            slurm_scheduling_quiesce=slurm_scheduling_quiesce,
             populate_jail_refresh=populate_jail_refresh,
             jail_persistent_mounts=jail_persistent_mounts,
             login_session_policy=login_session_policy,
@@ -14992,6 +15350,7 @@ def _run_managed_soperator_cluster_upgrade(
             requeue_job=requeue_job,
             job_wait_timeout=job_wait_timeout,
             job_refresh_interval=job_refresh_interval,
+            slurm_scheduling_quiesce=slurm_scheduling_quiesce,
             login_session_policy=login_session_policy,
             login_session_drain_timeout=login_session_drain_timeout,
             dry_run=False,
@@ -15021,7 +15380,10 @@ def _run_managed_soperator_cluster_upgrade(
     slurm_state = _state_mapping(checkpoint.get("slurm"))
     slurm_state.setdefault("drained_nodes", [])
     slurm_state.setdefault("restore_manual_command", None)
+    slurm_state.setdefault("quiesced_partitions", [])
+    slurm_state.setdefault("partition_restore_manual_command", None)
     slurm_state["job_policy"] = job_policy
+    slurm_state["scheduling_quiesce"] = slurm_scheduling_quiesce
     checkpoint["slurm"] = slurm_state
     checkpoint["populate_jail_refresh"] = {
         **_state_mapping(checkpoint.get("populate_jail_refresh")),
@@ -15042,6 +15404,24 @@ def _run_managed_soperator_cluster_upgrade(
         str(node or "").strip()
         for node in (existing_slurm_nodes if isinstance(existing_slurm_nodes, list) else [])
         if str(node or "").strip()
+    )
+    existing_quiesced_partitions = _state_mapping(checkpoint.get("slurm")).get(
+        "quiesced_partitions"
+    )
+    slurm_quiesce_records: tuple[SlurmPartitionQuiesceRecord, ...] = tuple(
+        SlurmPartitionQuiesceRecord(
+            partition=str(item.get("partition", "") or "").strip(),
+            previous_state=str(item.get("previous_state", "") or "").strip(),
+            applied_state=str(item.get("applied_state", "DOWN") or "DOWN").strip(),
+        )
+        for item in (
+            existing_quiesced_partitions
+            if isinstance(existing_quiesced_partitions, list)
+            else []
+        )
+        if isinstance(item, Mapping)
+        and str(item.get("partition", "") or "").strip()
+        and str(item.get("previous_state", "") or "").strip()
     )
     protected_state_before = _managed_soperator_upgrade_baseline_from_checkpoint(checkpoint)
     component_label = f"{target.selector} ({plan.namespace or 'default'}/{plan.release_name})"
@@ -15406,6 +15786,7 @@ def _run_managed_soperator_cluster_upgrade(
             )
 
     def _record_slurm_decision(decision: Mapping[str, Any]) -> None:
+        nonlocal slurm_quiesce_records
         slurm_state = checkpoint.setdefault("slurm", {})
         if not isinstance(slurm_state, dict):
             slurm_state = {}
@@ -15413,6 +15794,45 @@ def _run_managed_soperator_cluster_upgrade(
         decisions = slurm_state.setdefault("decisions", [])
         if isinstance(decisions, list):
             decisions.append(copy.deepcopy(to_plain_data(decision)))
+        action = str(decision.get("action", "") or "")
+        if action == "scheduling-quiesce-applied":
+            raw_partitions = decision.get("partitions")
+            records: list[SlurmPartitionQuiesceRecord] = []
+            if isinstance(raw_partitions, Sequence) and not isinstance(
+                raw_partitions, (str, bytes, bytearray)
+            ):
+                for item in raw_partitions:
+                    if not isinstance(item, Mapping):
+                        continue
+                    partition = _non_empty_text(item.get("partition"))
+                    previous_state = _non_empty_text(item.get("previous_state"))
+                    applied_state = _non_empty_text(item.get("applied_state")) or "DOWN"
+                    if partition and previous_state:
+                        records.append(
+                            SlurmPartitionQuiesceRecord(
+                                partition=partition,
+                                previous_state=previous_state,
+                                applied_state=applied_state,
+                            )
+                        )
+            if records:
+                merged: list[SlurmPartitionQuiesceRecord] = list(slurm_quiesce_records)
+                seen = {record.partition for record in merged}
+                for record in records:
+                    if record.partition not in seen:
+                        merged.append(record)
+                        seen.add(record.partition)
+                slurm_quiesce_records = tuple(merged)
+                slurm_state["quiesced_partitions"] = [
+                    record.as_payload() for record in slurm_quiesce_records
+                ]
+                slurm_state["partition_restore_manual_command"] = (
+                    _soperator_upgrade_slurm_partition_restore_command(slurm_quiesce_records)
+                )
+        elif action == "scheduling-quiesce-restored":
+            slurm_quiesce_records = ()
+            slurm_state["quiesced_partitions"] = []
+            slurm_state["partition_restore_manual_command"] = None
         _write_soperator_upgrade_checkpoint(checkpoint_path, checkpoint)
 
     soperator_worker_job_policy_checked = False
@@ -15767,6 +16187,7 @@ def _run_managed_soperator_cluster_upgrade(
                     wait_timeout_seconds=job_wait_timeout_seconds,
                     refresh_interval_seconds=job_refresh_interval_seconds,
                     checkpoint_id=checkpoint_id,
+                    slurm_scheduling_quiesce=slurm_scheduling_quiesce,
                     decision_recorder=_record_slurm_decision,
                 )
                 _record_slurm_restore_nodes(slurm_restore_nodes, scope="mk8s-node-template")
@@ -15788,6 +16209,16 @@ def _run_managed_soperator_cluster_upgrade(
                             if isinstance(slurm_map.get("drained_nodes"), list)
                             else "failed",
                             f"drained_nodes={len(slurm_map.get('drained_nodes') or [])}",
+                        ),
+                        stage_fast_verification_check(
+                            "Slurm scheduling quiesce",
+                            "passed"
+                            if bool(slurm_map.get("scheduling_quiesce"))
+                            == bool(slurm_scheduling_quiesce)
+                            else "failed",
+                            "enabled"
+                            if slurm_scheduling_quiesce
+                            else "disabled",
                         ),
                     ],
                 )
@@ -16747,8 +17178,25 @@ def _run_managed_soperator_cluster_upgrade(
 
         if _start_checkpoint_phase(
             "slurm-restore",
-            "Resuming nodes that cxcli drained for the managed rollout.",
+            "Restoring Slurm scheduling and nodes that cxcli changed for the managed rollout.",
         ):
+            if slurm_quiesce_records:
+                with _phase_spinner("slurm-restore", "Restoring checkpointed Slurm partitions."):
+                    _soperator_upgrade_restore_slurm_partitions(
+                        namespace=plan.namespace or "default",
+                        records=slurm_quiesce_records,
+                    )
+                _record_slurm_decision(
+                    {
+                        "at": datetime.now(UTC)
+                        .isoformat(timespec="seconds")
+                        .replace("+00:00", "Z"),
+                        "action": "scheduling-quiesce-restored",
+                        "partitions": [
+                            record.as_payload() for record in slurm_quiesce_records
+                        ],
+                    }
+                )
             if slurm_restore_nodes:
                 with _phase_spinner("slurm-restore", "Resuming checkpointed Slurm nodes."):
                     _soperator_upgrade_restore_slurm_nodes(
@@ -16758,6 +17206,7 @@ def _run_managed_soperator_cluster_upgrade(
             slurm_state = checkpoint.setdefault("slurm", {})
             if isinstance(slurm_state, dict):
                 slurm_state["restore_manual_command"] = None
+                slurm_state["partition_restore_manual_command"] = None
             _checkpoint("slurm-restored")
             slurm_map = slurm_state if isinstance(slurm_state, Mapping) else {}
             _run_stage_fast_verification(
@@ -16774,20 +17223,41 @@ def _run_managed_soperator_cluster_upgrade(
                         else "manual restore command is still recorded",
                     ),
                     stage_fast_verification_check(
+                        "Slurm partition restore command",
+                        "passed"
+                        if not _non_empty_text(
+                            slurm_map.get("partition_restore_manual_command")
+                        )
+                        else "failed",
+                        "manual partition restore command cleared"
+                        if not _non_empty_text(
+                            slurm_map.get("partition_restore_manual_command")
+                        )
+                        else "manual partition restore command is still recorded",
+                    ),
+                    stage_fast_verification_check(
                         "Slurm restored nodes",
                         "passed" if slurm_restore_nodes else "skipped",
                         f"nodes={len(slurm_restore_nodes)}",
+                    ),
+                    stage_fast_verification_check(
+                        "Slurm restored partitions",
+                        "passed" if slurm_quiesce_records else "skipped",
+                        f"partitions={len(slurm_quiesce_records)}",
                     ),
                 ],
                 report_paths=staged_paths,
             )
             _complete_checkpoint_phase("slurm-restore")
             slurm_restore_nodes = ()
+            slurm_quiesce_records = ()
         else:
             slurm_state = checkpoint.get("slurm")
             slurm_map = slurm_state if isinstance(slurm_state, Mapping) else {}
             if not _non_empty_text(slurm_map.get("restore_manual_command")):
                 slurm_restore_nodes = ()
+            if not _non_empty_text(slurm_map.get("partition_restore_manual_command")):
+                slurm_quiesce_records = ()
         if _start_checkpoint_phase(
             "shared-safety-verification",
             "Running the shared protected-state and fast smoke verification.",
@@ -16907,6 +17377,40 @@ def _run_managed_soperator_cluster_upgrade(
                 console.print(
                     "[yellow]Could not restore Soperator ActiveChecks after the failed "
                     f"upgrade attempt:[/yellow] {restore_exc}",
+                        soft_wrap=True,
+                    )
+        if slurm_quiesce_records:
+            try:
+                with _phase_spinner(
+                    "slurm-partition-restore-after-failure",
+                    "Restoring Slurm partition scheduling after the failed upgrade attempt.",
+                ):
+                    _soperator_upgrade_restore_slurm_partitions(
+                        namespace=plan.namespace or "default",
+                        records=slurm_quiesce_records,
+                    )
+                _record_slurm_decision(
+                    {
+                        "at": datetime.now(UTC)
+                        .isoformat(timespec="seconds")
+                        .replace("+00:00", "Z"),
+                        "action": "scheduling-quiesce-restored",
+                        "partitions": [
+                            record.as_payload() for record in slurm_quiesce_records
+                        ],
+                        "reason": "managed upgrade failed before normal Slurm restore phase",
+                    }
+                )
+                _checkpoint("slurm-partitions-restored-after-failure")
+                slurm_quiesce_records = ()
+            except Exception as restore_exc:
+                _checkpoint(
+                    "slurm-partition-restore-after-failure-failed",
+                    error=str(restore_exc),
+                )
+                console.print(
+                    "[yellow]Could not restore Slurm partition scheduling after the failed "
+                    f"upgrade attempt:[/yellow] {restore_exc}",
                     soft_wrap=True,
                 )
         if slurm_restore_nodes:
@@ -16915,13 +17419,26 @@ def _run_managed_soperator_cluster_upgrade(
                 slurm_state["restore_manual_command"] = (
                     "scontrol update NodeName=" + ",".join(slurm_restore_nodes) + " State=RESUME"
                 )
+        if slurm_quiesce_records:
+            slurm_state = checkpoint.setdefault("slurm", {})
+            if isinstance(slurm_state, dict):
+                slurm_state["quiesced_partitions"] = [
+                    record.as_payload() for record in slurm_quiesce_records
+                ]
+                slurm_state["partition_restore_manual_command"] = (
+                    _soperator_upgrade_slurm_partition_restore_command(slurm_quiesce_records)
+                )
         checkpoint["status"] = "failed"
         checkpoint["failure"] = {
             "error": failure_reason,
             "interrupted": interrupted,
             "pending_phase": checkpoint.get("pending_phase") or "none",
             "activechecks_restore": activechecks_restore_status,
-            "slurm_restore": "left-drained" if slurm_restore_nodes else "not-required",
+            "slurm_restore": (
+                "left-changed"
+                if (slurm_restore_nodes or slurm_quiesce_records)
+                else "not-required"
+            ),
         }
         _write_soperator_upgrade_checkpoint(checkpoint_path, checkpoint)
         _write_soperator_upgrade_report(paths, checkpoint)
@@ -22340,6 +22857,36 @@ def _apply_soperator_rollout_manifest_to_target_row(
     node_template["rollout"] = copy.deepcopy(dict(rollout_manifest))
 
 
+def _apply_soperator_slurm_scheduling_quiesce_prompt_to_target_row(
+    target_row: dict[str, Any],
+) -> None:
+    onboarding = target_row.get("soperator_onboarding")
+    if not isinstance(onboarding, dict):
+        return
+    node_template = onboarding.setdefault("node_template_upgrade", {})
+    if not isinstance(node_template, dict):
+        return
+    current = bool(node_template.get("slurm_scheduling_quiesce", True))
+    value, should_stop = _prompt_scalar_override(
+        "deploy.targets[].soperator_onboarding.node_template_upgrade.slurm_scheduling_quiesce",
+        "true" if current else "false",
+        choices=[
+            OptionChoice(value="true", label="true  (pause scheduling during worker upgrades)"),
+            OptionChoice(value="false", label="false  (leave scheduling active)"),
+        ],
+        type_hint="boolean",
+        required=True,
+        prompt_hint=(
+            "Pause Slurm scheduling during worker upgrades so newly submitted jobs "
+            "queue until the upgrade finishes?"
+        ),
+    )
+    if should_stop:
+        raise _WizardQuitRequested
+    normalized = str(value or "").strip().lower()
+    node_template["slurm_scheduling_quiesce"] = normalized in {"true", "yes", "1", "on"}
+
+
 def _soperator_rollout_options_provided(
     *,
     worker_rollout_strategy: str | None = None,
@@ -22479,6 +23026,7 @@ def _soperator_onboarding_target_defaults(
             ),
             "target_os": ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS,
             "target_gpu_stack_preset": ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_GPU_STACK_PRESET,
+            "slurm_scheduling_quiesce": True,
             "rollout": copy.deepcopy(
                 dict(rollout_manifest)
                 if rollout_manifest is not None
@@ -23817,6 +24365,8 @@ def _prompt_soperator_onboarding_target_row(
             target_row,
             _prompt_soperator_onboarding_rollout_manifest(target_row),
         )
+    if _soperator_target_row_requires_external_node_template_rollout(target_row):
+        _apply_soperator_slurm_scheduling_quiesce_prompt_to_target_row(target_row)
     _apply_soperator_support_policy_to_target_row(
         target_row,
         allow_unsupported_soperator_upgrade_path=allow_unsupported_soperator_upgrade_path,
@@ -24087,6 +24637,8 @@ def _soperator_onboarding_target_row_from_options(
             target_row,
             _prompt_soperator_onboarding_rollout_manifest(target_row),
         )
+    if interactive and _soperator_target_row_requires_external_node_template_rollout(target_row):
+        _apply_soperator_slurm_scheduling_quiesce_prompt_to_target_row(target_row)
     _apply_soperator_support_policy_to_target_row(
         target_row,
         allow_unsupported_soperator_upgrade_path=allow_unsupported_soperator_upgrade_path,
@@ -55407,8 +55959,66 @@ def _soperator_migration_compute_mode_label(mode: str) -> str:
     return mode
 
 
+_SOPERATOR_MIGRATION_STATUS_GROUP_READY_RE = re.compile(
+    r"(?P<label>\b[A-Za-z0-9_.-]+)(?: (?P<display>\([^)]*\))):"
+    r"(?P<ready>[0-9]+)/(?P<total>[0-9]+) Ready"
+)
+_SOPERATOR_MIGRATION_STATUS_READY_RE = re.compile(
+    r"(?P<count>\b(?P<ready>[0-9]+)/(?P<total>[0-9]+)\s+)Ready\b"
+)
+_SOPERATOR_MIGRATION_STATUS_ROLLOUT_GROUP_RE = re.compile(
+    r"\b(?P<name>[A-Za-z0-9_.-]+):(?=(?:[A-Z][A-Za-z0-9_-]*|status unavailable))"
+)
+
+
+def _soperator_migration_ready_style(ready: str, total: str) -> str:
+    try:
+        ready_count = int(ready)
+        total_count = int(total)
+    except ValueError:
+        return "bold red"
+    return "green" if total_count > 0 and ready_count == total_count else "bold red"
+
+
+def _style_soperator_migration_group_display_names(message: str) -> str:
+    degraded_rollout_names = {
+        normalize_component_token(match.group("name"))
+        for match in _SOPERATOR_MIGRATION_STATUS_ROLLOUT_GROUP_RE.finditer(message)
+    }
+
+    def _replace(match: re.Match[str]) -> str:
+        ready_style = _soperator_migration_ready_style(match.group("ready"), match.group("total"))
+        display_name = match.group("display").strip("()")
+        display_degraded = (normalize_component_token(display_name) or "") in degraded_rollout_names
+        display_style = "bold blue" if ready_style == "green" and not display_degraded else "bold red"
+        return (
+            f"{match.group('label')} [{display_style}]{match.group('display')}[/{display_style}]:"
+            f"{match.group('ready')}/{match.group('total')} Ready"
+        )
+
+    return _SOPERATOR_MIGRATION_STATUS_GROUP_READY_RE.sub(_replace, message)
+
+
+def _style_soperator_migration_ready_words(message: str) -> str:
+    def _replace(match: re.Match[str]) -> str:
+        style = _soperator_migration_ready_style(match.group("ready"), match.group("total"))
+        return f"{match.group('count')}[{style}]Ready[/{style}]"
+
+    return _SOPERATOR_MIGRATION_STATUS_READY_RE.sub(_replace, message)
+
+
+def _style_soperator_migration_rollout_group_names(message: str) -> str:
+    def _replace(match: re.Match[str]) -> str:
+        return f"[bold red]{match.group('name')}[/bold red]:"
+
+    return _SOPERATOR_MIGRATION_STATUS_ROLLOUT_GROUP_RE.sub(_replace, message)
+
+
 def _style_soperator_migration_status_message(message: str) -> str:
     styled = escape(message)
+    styled = _style_soperator_migration_group_display_names(styled)
+    styled = _style_soperator_migration_rollout_group_names(styled)
+    styled = _style_soperator_migration_ready_words(styled)
     replacements = (
         (
             "External Soperator upgrade status",
@@ -55421,9 +56031,11 @@ def _style_soperator_migration_status_message(message: str) -> str:
         ("MK8s Node Upgrades", "[bold white]MK8s Node Upgrades[/bold white]"),
         ("Soperator Upgrade", "[bold white]Soperator Upgrade[/bold white]"),
         ("Jail Upgrade", "[bold white]Jail Upgrade[/bold white]"),
+        ("MK8s Control Plane", "[bold white]MK8s Control Plane[/bold white]"),
         ("MK8s Node Groups", "[bold white]MK8s Node Groups[/bold white]"),
         ("Slurm Workers", "[bold white]Slurm Workers[/bold white]"),
         ("Node groups:", "[bold cyan]Node groups:[/bold cyan]"),
+        ("Registered nodes:", "[bold magenta]Registered nodes:[/bold magenta]"),
         ("Nodes:", "[bold magenta]Nodes:[/bold magenta]"),
         (" || ", "[dim] || [/dim]"),
         ("Soperator degraded", "Soperator [bold yellow]degraded[/bold yellow]"),
@@ -55431,6 +56043,7 @@ def _style_soperator_migration_status_message(message: str) -> str:
         ("(degraded):", "([bold yellow]degraded[/bold yellow]):"),
         ("(down):", "([bold red]down[/bold red]):"),
         ("(draining):", "([bold yellow]draining[/bold yellow]):"),
+        ("(upgrading):", "([bold yellow]upgrading[/bold yellow]):"),
         ("(unknown):", "([yellow]unknown[/yellow]):"),
         ("(serving):", "([green]serving[/green]):"),
         ("replacing (down)", "[bold yellow]replacing (down)[/bold yellow]"),
@@ -55444,12 +56057,76 @@ def _style_soperator_migration_status_message(message: str) -> str:
         ("degraded:", "[bold yellow]degraded:[/bold yellow]"),
         ("down:", "[bold red]down:[/bold red]"),
         ("draining:", "[bold yellow]draining:[/bold yellow]"),
+        ("upgrading:", "[bold yellow]upgrading:[/bold yellow]"),
         ("unknown:", "[yellow]unknown:[/yellow]"),
         ("serving:", "[green]serving:[/green]"),
     )
     for old, new in replacements:
         styled = styled.replace(old, new)
     return styled
+
+
+class _SoperatorMigrationStatusInputGuard:
+    """Suppress stray terminal input while Rich owns the status line."""
+
+    def __init__(self) -> None:
+        self._fd: int | None = None
+        self._original: list[Any] | None = None
+        self._guarded: list[Any] | None = None
+
+    def __enter__(self) -> _SoperatorMigrationStatusInputGuard:
+        if _termios is None:
+            return self
+        try:
+            if not (sys.stdin.isatty() and sys.stdout.isatty()):
+                return self
+            fd = sys.stdin.fileno()
+            original = _termios.tcgetattr(fd)
+            guarded = list(original)
+            guarded[6] = list(guarded[6])
+            guarded[3] = int(guarded[3]) & ~int(getattr(_termios, "ECHO", 0))
+            guarded[3] = int(guarded[3]) & ~int(getattr(_termios, "ECHONL", 0))
+            guarded[3] = int(guarded[3]) & ~int(getattr(_termios, "ICANON", 0))
+            for control_name in ("VMIN", "VTIME"):
+                control_index = getattr(_termios, control_name, None)
+                if isinstance(control_index, int) and control_index < len(guarded[6]):
+                    guarded[6][control_index] = 0
+            self._fd = fd
+            self._original = list(original)
+            self._original[6] = list(original[6])
+            self._guarded = guarded
+            self._apply_guarded()
+        except Exception:
+            self._fd = None
+            self._original = None
+            self._guarded = None
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        self._restore(flush=True)
+
+    def _apply_guarded(self) -> None:
+        if _termios is None or self._fd is None or self._guarded is None:
+            return
+        with suppress(Exception):
+            _termios.tcsetattr(self._fd, _termios.TCSADRAIN, self._guarded)
+
+    def _restore(self, *, flush: bool) -> None:
+        if _termios is None or self._fd is None or self._original is None:
+            return
+        if flush:
+            with suppress(Exception):
+                _termios.tcflush(self._fd, _termios.TCIFLUSH)
+        with suppress(Exception):
+            _termios.tcsetattr(self._fd, _termios.TCSADRAIN, self._original)
+
+    @contextmanager
+    def pause(self) -> Iterator[None]:
+        self._restore(flush=True)
+        try:
+            yield
+        finally:
+            self._apply_guarded()
 
 
 @contextmanager
@@ -55459,7 +56136,10 @@ def _soperator_migration_status_emitter() -> Iterator[Callable[[str], None]]:
         "checkpoint, quota, and upgrade plan...[/cyan]"
     )
     if getattr(console, "is_terminal", False) and hasattr(console, "status"):
-        with console.status(initial_message, spinner="dots") as status:
+        with (
+            _SoperatorMigrationStatusInputGuard() as input_guard,
+            console.status(initial_message, spinner="dots") as status,
+        ):
 
             class _InteractiveStatusEmitter:
                 def __call__(self, message: str) -> None:
@@ -55468,10 +56148,11 @@ def _soperator_migration_status_emitter() -> Iterator[Callable[[str], None]]:
                 @contextmanager
                 def pause(self) -> Iterator[None]:
                     status.stop()
-                    try:
-                        yield
-                    finally:
-                        status.start()
+                    with input_guard.pause():
+                        try:
+                            yield
+                        finally:
+                            status.start()
 
             yield _InteractiveStatusEmitter()
         return
@@ -56456,6 +57137,7 @@ def _format_soperator_migration_plan_lines(
     strategy_max_unavailable_count: int | None = None,
     strategy_drain_timeout: str | None = None,
     job_policy: str | None = None,
+    slurm_scheduling_quiesce: bool = True,
     login_session_policy: str = EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
     login_session_drain_timeout: str = "30m",
     populate_jail_refresh: str = "auto",
@@ -56603,6 +57285,14 @@ def _format_soperator_migration_plan_lines(
             _external_node_template_rollout_plan_lines(
                 rollout=rollout,
                 source_report=source_report,
+            )
+        )
+        lines.append(
+            "Slurm scheduling quiesce: "
+            + (
+                "enabled; affected worker partitions are set DOWN so new jobs queue"
+                if slurm_scheduling_quiesce
+                else "disabled; pending affected jobs remain blocking"
             )
         )
     if phases:
@@ -57314,6 +58004,17 @@ def soperator_external_upgrade_command(
             "--job-refresh-interval", help="Refresh interval while waiting for Slurm jobs."
         ),
     ] = _SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
+    slurm_scheduling_quiesce: Annotated[
+        bool | None,
+        typer.Option(
+            "--slurm-scheduling-quiesce/--no-slurm-scheduling-quiesce",
+            help=(
+                "During external worker node-template phases, set affected Slurm "
+                "partitions DOWN so newly submitted jobs queue until cxcli restores "
+                "scheduling. Omit to use onboarding config, default enabled."
+            ),
+        ),
+    ] = None,
     login_session_policy: Annotated[
         str,
         typer.Option(
@@ -57604,6 +58305,11 @@ def soperator_external_upgrade_command(
         node_template_target = effective_onboarding.get("node_template_upgrade")
         if not isinstance(node_template_target, Mapping):
             node_template_target = {}
+        resolved_slurm_scheduling_quiesce = (
+            _soperator_onboarding_slurm_scheduling_quiesce(effective_onboarding)
+            if slurm_scheduling_quiesce is None
+            else bool(slurm_scheduling_quiesce)
+        )
         with _command_status(
             "[cyan]Refreshing external Soperator discovery and Nebius provider "
             f"inventory for {target_ref}...[/cyan]"
@@ -57724,6 +58430,7 @@ def soperator_external_upgrade_command(
             strategy_max_unavailable_count=strategy_max_unavailable_count,
             strategy_drain_timeout=strategy_drain_timeout,
             job_policy=resolved_job_policy,
+            slurm_scheduling_quiesce=resolved_slurm_scheduling_quiesce,
             login_session_policy=resolved_login_session_policy,
             login_session_drain_timeout=login_session_drain_timeout,
             populate_jail_refresh=resolved_populate_jail_refresh,
@@ -57784,6 +58491,7 @@ def soperator_external_upgrade_command(
                     jail_sfs_resize_policy=resolved_jail_sfs_resize_policy,
                     jail_sfs_resize_to_gib=resolved_jail_sfs_resize_to_gib,
                     job_policy=resolved_job_policy,
+                    slurm_scheduling_quiesce=resolved_slurm_scheduling_quiesce,
                     cancel_job=selected_cancel_jobs,
                     requeue_job=selected_requeue_jobs,
                     job_wait_timeout=job_wait_timeout,
@@ -57874,6 +58582,7 @@ def soperator_external_upgrade_command(
                     requeue_job_ids=selected_requeue_jobs,
                     job_wait_timeout_seconds=job_wait_timeout_seconds,
                     job_refresh_interval_seconds=job_refresh_interval_seconds,
+                    slurm_scheduling_quiesce=resolved_slurm_scheduling_quiesce,
                     login_session_policy=resolved_login_session_policy,
                     login_session_drain_timeout_seconds=login_session_drain_timeout_seconds,
                     approve_remediation=approve_remediation,

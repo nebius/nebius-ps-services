@@ -1736,10 +1736,9 @@ def test_docs_define_component_selector_contract() -> None:
     assert "checks the required spare quota and GPU capacity before mutation" in readme_flat
     assert "requires all selected worker nodes to start Ready and schedulable" in readme_flat
     assert "checks affected Slurm jobs on external node-template workers" in readme_flat
-    assert (
-        "pending jobs in affected partitions or requested/scheduled on affected nodes"
-        in readme_flat
-    )
+    assert "queued information rather than blockers" in readme_flat
+    assert "`--slurm-scheduling-quiesce / --no-slurm-scheduling-quiesce`" in readme_flat
+    assert "This does not use `scontrol hold all`" in readme_flat
     assert "each affected running job" not in readme_flat
     assert "each displayed affected job" in readme_flat
     assert "managed `soperator upgrade` and external `ext-soperator upgrade` runs default" in (
@@ -1760,6 +1759,8 @@ def test_docs_define_component_selector_contract() -> None:
     ) in readme_flat
     assert "Slurm rejects the scoped node filter" in readme_flat
     assert "unfiltered cluster-wide job list" in readme_flat
+    assert "Slurm can show a cancelled job as `COMPLETING`" in readme_flat
+    assert "waits for the selected jobs to leave the affected node list" in readme_flat
     assert (
         "The selected `deploy.targets[].soperator_onboarding.actions` list is the desired external upgrade contract"
         in readme_flat
@@ -1781,10 +1782,7 @@ def test_docs_define_component_selector_contract() -> None:
     assert (
         "missing, partial, or errored provider inventory keeps that action selected" in readme_flat
     )
-    assert (
-        "still-rolling state is checkpointed as a pending external-node-template phase"
-        in readme_flat
-    )
+    assert "still-rolling or not-yet-visible template state is checkpointed" in readme_flat
     assert "does not create duplicate worker groups or require 2x worker quota" in readme_flat
     assert (
         "External Soperator upgrade owns external Kubernetes minor, node OS image, and Nebius-image GPU-stack upgrades selected by onboarding"
@@ -1796,6 +1794,12 @@ def test_docs_define_component_selector_contract() -> None:
         in readme_flat
     )
     assert "service-role groups and worker groups both default to zero-surge" in readme_flat
+    assert "service-role groups use safe-surge by default" not in readme_flat
+    stale_login_service_role_safe_surge_default = (
+        "login/service-role groups use `max_surge=1`, `max_unavailable=0`, "
+        "and `drain_timeout=30m` by default"
+    )
+    assert stale_login_service_role_safe_surge_default not in readme_flat
     assert (
         "selecting service-role safe-surge preserves service capacity with one temporary replacement node per active service group"
         in readme_flat
@@ -2077,16 +2081,20 @@ def test_docs_define_component_selector_contract() -> None:
         in design_flat
     )
     assert "normal `validate`, `render`, and `deploy` can run from any workstation" in design_flat
-    assert (
-        "handles affected Slurm jobs on external node-template workers and all live "
-        "worker NodeSets before target chart reconciliation through the `--job-policy` "
-        "interactive, wait-to-finish, wait-then-cancel, fail, cancel-selected, "
-        "cancel-all, requeue-selected, requeue-all, requeue-hold-selected, or "
-        "requeue-hold-all decision state, including pending jobs"
-    ) in design_flat
+    assert "quiesces affected Slurm scheduling partitions" in design_flat
+    assert "setting cxcli-owned `UP` partitions to `DOWN` during worker gates" in design_flat
+    assert "pending jobs in affected partitions or requested/scheduled on affected nodes" in (
+        design_flat
+    )
+    assert "are queued information while partition quiesce is active" in design_flat
     assert "TTY managed and external upgrade runs default to `interactive`" in design_flat
     assert "non-TTY and `--no-interactive` upgrade runs default to `fail`" in design_flat
     assert "explicit policy such as `--job-policy wait-to-finish`" in design_flat
+    assert "The `?` key opens a scrollable help overlay" in design_flat
+    assert "waits in normal terminal output for the current Slurm gate" in design_flat
+    assert "cancel action keys call `scancel`" in design_flat
+    assert "Slurm may report cancelled jobs as `COMPLETING`" in design_flat
+    assert "action keys refresh the same table in place after Slurm updates" in design_flat
     assert "populates the passive rootfs slot with the target populate-jail image" in design_flat
     assert "login Service has ready EndpointSlice endpoints" in design_flat
     assert "Nebius LoadBalancer public or internal address" in design_flat
@@ -2136,6 +2144,9 @@ def test_docs_define_component_selector_contract() -> None:
     )
     assert "Missing, partial, or errored provider evidence remains conservative" in design_flat
     assert "`waiting-rollout` on the external-node-template checkpoint" in design_flat
+    assert "requested template fields are not visible yet" in design_flat
+    assert "external-node-template group as `waiting-rollout`" in readme_flat
+    assert "instead of submitting a duplicate node-group update" in readme_flat
     assert "Before completion, cxcli verifies the external MK8s control plane" in design_flat
     assert "discovered Nebius node-group provider readiness" in design_flat
     assert "before validation-and-rollback hold" in readme_flat
@@ -2156,6 +2167,15 @@ def test_docs_define_component_selector_contract() -> None:
     assert "does not create parallel worker node groups" in design_flat
     assert "worker groups default to zero-surge" in design_flat
     assert "Service-role groups are serial zero-surge by default" in design_flat
+    assert (
+        "requires spare surge capacity for active service groups by default"
+        not in design_flat
+    )
+    stale_service_role_safe_surge_default = (
+        "uses safe-surge (`max_surge=1`, `max_unavailable=0`, "
+        "`drain_timeout=30m`) by default"
+    )
+    assert stale_service_role_safe_surge_default not in design_flat
     assert "worker_wave_percent: 1" in readme
     assert "worker_group_strategy:" in readme
     assert "worker_wave_percent: 1" in design
@@ -2225,10 +2245,29 @@ def test_docs_define_component_selector_contract() -> None:
         "canonical phase id, human-readable phase label, and overall phase health before component details"
         in design_flat
     )
+    assert "suppresses stray key echo so pressing Enter does not leave duplicate status rows" in (
+        readme_flat
+    )
+    assert "suppresses stray key echo while no prompt is active" in design_flat
     assert "Storage phases show aligned SFS/PVC copy progress" in readme_flat
-    assert "separate `Node groups:` and `Nodes:` sections" in readme_flat
+    assert "separate `Node groups:` and `Registered nodes:` sections" in readme_flat
+    assert "registered-node count comes from current Kubernetes Node objects" in readme_flat
+    assert "separate `MK8s Control Plane` signal" in readme_flat
+    assert "separate `Node groups:` and `Registered nodes:` sections" in design_flat
+    assert "registered-node count comes from current Kubernetes Node objects" in design_flat
+    assert "separate `MK8s Control Plane` signal" in design_flat
+    assert "show it in parentheses after the node-group id" in readme_flat
+    assert "colors that display name blue for ready groups and red for degraded groups" in (
+        readme_flat
+    )
+    assert "colors `Ready` green for `x/y Ready` counts" in readme_flat
+    assert "show it in parentheses after the node-group id" in design_flat
+    assert "colors that display name blue for ready groups and red for degraded groups" in (
+        design_flat
+    )
+    assert "colors `Ready` green for `x/y Ready` counts" in design_flat
     assert "node-group readiness stays in the first section" in readme_flat
-    assert "node-level rollout transitions such as `replacing (cordoned)`" in readme_flat
+    assert "Node-level rollout transitions such as `replacing (cordoned)`" in readme_flat
     assert "real problem-node details such as `NotReady (down)`" in readme_flat
     assert "Transition nodes and down states are highlighted" in readme_flat
     assert "Slurm worker names/states" in readme_flat

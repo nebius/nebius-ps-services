@@ -2884,10 +2884,11 @@ Important onboarding flags:
   `deploy.targets[].soperator_onboarding.node_template_upgrade.rollout` during
   non-interactive onboarding. They use the same semantics as the upgrade flags:
   worker `zero-surge` is the default and avoids worker surge quota but can
-  temporarily reduce worker capacity, service-role groups use safe-surge by
-  default, and worker `safe-surge` uses temporary nodes for worker waves and
-  verifies the needed quota and capacity during `--execute` preflight before
-  mutation.
+  temporarily reduce worker capacity, service-role `zero-surge` is also the
+  default and avoids service-role surge quota but can temporarily reduce active
+  service capacity by one node per group, and safe-surge uses temporary nodes
+  for selected worker waves or service-role groups and verifies the needed
+  quota and capacity during `--execute` preflight before mutation.
   `--worker-wave-groups` is the exact fixed worker-group count per safe-surge
   wave; `--worker-wave-percent` scales from the discovered worker-group count;
   `--max-parallel-worker-groups` is only an optional upper cap for percent-based
@@ -3296,10 +3297,12 @@ Important external upgrade flags:
   current size plus shortage plus 10%, rounded up to a 256 GiB boundary.
 - `--job-policy interactive|wait-to-finish|wait-then-cancel|fail|cancel-selected|cancel-all|requeue-selected|requeue-all|requeue-hold-selected|requeue-hold-all`:
   decide how to handle affected Slurm jobs before cxcli mutates Soperator
-  worker pods. Affected jobs include active allocations on affected nodes and
-  pending jobs in affected partitions or explicitly requested/scheduled on
-  affected nodes; cxcli does not show or act on unrelated cluster-wide pending
-  jobs.
+  worker pods. Running or `COMPLETING` allocations on affected nodes always
+  block the worker gate. Pending jobs in affected partitions or explicitly
+  requested/scheduled on affected nodes are included when Slurm scheduling
+  quiesce is disabled; when quiesce is active, those pending jobs are queued
+  information rather than blockers. cxcli does not show or act on unrelated
+  cluster-wide pending jobs.
   Managed `soperator upgrade` checks selected underlying MK8s nodes before
   node-template rollouts and checks all live worker NodeSets before Soperator
   chart reconciliation, including chart-only upgrades. External
@@ -3323,18 +3326,38 @@ Important external upgrade flags:
   the selection, `r` refreshes, `w` waits, `c` cancels selected jobs, uppercase
   `C` cancels all displayed jobs, `q` requeues selected active jobs, uppercase
   `Q` requeues all displayed active jobs, `h` requeues and holds selected active
-  jobs, uppercase `H` requeues and holds all displayed active jobs, and `x`
-  aborts. `wait-to-finish` polls until affected jobs finish or clear,
+  jobs, uppercase `H` requeues and holds all displayed active jobs, `?` opens a
+  scrollable help overlay, `b` hides the full-screen table and waits in normal
+  terminal output for the current Slurm gate, and `x` aborts. Interactive
+  cancel, requeue, and requeue-hold actions refresh the same table in place
+  instead of closing and reopening the screen. The table also polls while idle
+  and exits automatically when no affected jobs remain. `wait-to-finish` polls
+  until affected jobs finish or clear,
   `wait-then-cancel` waits through `--job-wait-timeout`, cancels only the still
   displayed affected jobs, then continues only after they clear, `fail` stops
-  before mutation, the cancel policies call `scancel`, the requeue policies call
-  `scontrol requeue`, and the requeue-hold policies call `scontrol
-  requeuehold`. Requeue and requeue-hold policies only accept displayed active
-  jobs; if the selected set includes pending jobs, cxcli stops with guidance to
-  cancel, wait, choose another job, or abort. If cxcli cannot map the affected
+  before mutation, the cancel policies call `scancel` and wait for selected jobs
+  to leave the affected Slurm scope, the requeue policies call `scontrol
+  requeue`, and the requeue-hold policies call `scontrol requeuehold`. Slurm can
+  show a cancelled job as `COMPLETING` while the job processes stop and the
+  allocated nodes return to service; cxcli keeps that job visible and blocking
+  until Slurm clears it from the affected node list. Requeue and requeue-hold
+  policies only accept displayed active jobs; if the selected set includes
+  pending jobs, cxcli stops with guidance to cancel, wait, choose another job, or
+  abort. If cxcli cannot map the affected
   Kubernetes nodes to Slurm node names, or Slurm rejects the scoped node
   filter, the upgrade fails before any job action instead of querying or
   mutating an unfiltered cluster-wide job list.
+- `--slurm-scheduling-quiesce / --no-slurm-scheduling-quiesce`: worker-upgrade
+  scheduling guard for managed and external Soperator upgrades. It defaults to
+  enabled. Before a worker node-template gate, cxcli discovers the affected
+  Slurm partitions, records only cxcli-owned `UP -> DOWN` changes, sets those
+  partitions to `DOWN`, and restores their original state when the upgrade
+  succeeds, fails, aborts, or resumes cleanup. This does not use `scontrol hold
+  all`: newly submitted jobs can queue, but cannot start on the quiesced
+  partitions until cxcli restores them. Running and `COMPLETING` jobs on affected
+  workers still block mutation until they finish, are cancelled, or are requeued
+  away from the affected scope. Clearing jobs does not bypass the configured
+  Nebius/MK8s rollout budget.
 - `--cancel-job`: job id to cancel when `--job-policy cancel-selected` is used.
   Repeat the flag for multiple jobs.
 - `--requeue-job`: job id to requeue when `--job-policy requeue-selected` or
@@ -3369,13 +3392,18 @@ Interactive Slurm job actions map to these Slurm commands:
 
 - Cancel one job: `scancel <jobid>`.
 - Cancel all displayed affected jobs: `scancel <jobid>...` for the job ids
-  shown in the affected-job table.
+  shown in the affected-job table. After `scancel`, cxcli waits for the selected
+  jobs to leave the affected node list before the upgrade can continue.
 - Requeue one job: `scontrol requeue <jobid>`.
 - Requeue all displayed active jobs: `scontrol requeue <jobid>...` for displayed
-  jobs that Slurm can requeue.
+  jobs that Slurm can requeue. Requeue stops the current execution and places
+  the job back into the scheduler queue so it can receive another scheduling
+  opportunity.
 - Requeue and hold one job: `scontrol requeuehold <jobid>`.
 - Requeue and hold all displayed active jobs:
   `scontrol requeuehold <jobid>...` for displayed jobs that Slurm can requeue.
+  Requeue-hold also places the job on hold at priority zero, so the scheduler
+  will not run it until an operator releases it.
 - Release one held job after the upgrade: `scontrol release <jobid>`.
 - Release all admin-held pending jobs after review:
   `squeue --states=PD -h -o '%A|%r' | awk -F'|' '$2 == "JobHeldAdmin" { print $1 }' | xargs -r scontrol release`.
@@ -3400,9 +3428,11 @@ Interactive Slurm job actions map to these Slurm commands:
 - `--strategy-max-surge-count`, `--strategy-max-unavailable-count`, and
   `--strategy-drain-timeout`: configure the Nebius node-group strategy inside
   each active worker group. zero-surge defaults are `0`, `1`, and `30m`;
-  safe-surge defaults are `1`, `0`, and `30m`. Login/service-role groups use
-  `max_surge=1`, `max_unavailable=0`, and `drain_timeout=30m` by default. Use
-  `--strategy-drain-timeout none` to wait indefinitely for drain completion;
+  safe-surge defaults are `1`, `0`, and `30m`. Service-role groups have their
+  own rollout strategy: zero-surge defaults are `max_surge=0`,
+  `max_unavailable=1`, and `drain_timeout=30m`, while explicit service-role
+  safe-surge uses `max_surge=1`, `max_unavailable=0`, and `drain_timeout=30m`.
+  Use `--strategy-drain-timeout none` to wait indefinitely for drain completion;
   a finite timeout can let Nebius delete the node after that timeout when drain
   is still blocked.
 
@@ -3414,6 +3444,7 @@ deploy:
     - instance_id: external-cluster
       soperator_onboarding:
         node_template_upgrade:
+          slurm_scheduling_quiesce: true
           rollout:
             strategy: zero-surge
             worker_group_strategy:
@@ -3528,6 +3559,11 @@ errors stop upgrade before mutation. The local `.nebius-cxcli/soperator-clusters
 timeout-guarded checkpoint records the resolved source worker groups and quota
 preflight result for resume and is ignored by cxcli-managed deployments
 `.gitignore` files.
+If an accepted Nebius node-group update times out while provider readback is
+still catching up, cxcli stores the external-node-template group as
+`waiting-rollout` even when requested template fields are not visible yet; the
+next identical execute command re-reads live state from the checkpoint instead
+of submitting a duplicate node-group update.
 
 The planned phases depend on the accepted storage and compute modes:
 
@@ -3679,11 +3715,11 @@ provider readiness before the Helm checks; when onboarding selected external
 MK8s node-template changes, that MK8s check also verifies the requested
 Kubernetes version, OS image, and GPU driver preset. If a Nebius node-group
 update command times out after the request is accepted, cxcli re-reads the live
-node group: ready matching state continues, still-rolling state is checkpointed
-as a pending external-node-template phase, and the same execute command resumes
-without starting a duplicate update. Data-copy and old
-infrastructure retirement phases remain guarded by their explicit checkpoints
-because rerunning them can have customer-data or teardown impact.
+node group: ready matching state continues, still-rolling or not-yet-visible
+template state is checkpointed as a pending external-node-template phase, and
+the same execute command resumes without starting a duplicate update. Data-copy
+and old infrastructure retirement phases remain guarded by their explicit
+checkpoints because rerunning them can have customer-data or teardown impact.
 
 Approved `--execute` runs show an interactive spinner while live preflight and
 mutating phases are active, emit concise `External Soperator upgrade phase ...`
@@ -3693,15 +3729,28 @@ report writing, and log phase-aware `External Soperator upgrade status` lines
 in non-interactive output. Every status line starts with the elapsed time,
 canonical phase id, human-readable phase label, and overall phase health before
 component details, so a single copied line is enough to identify the active
-phase.
+phase. While the interactive status spinner owns the terminal line, cxcli
+suppresses stray key echo so pressing Enter does not leave duplicate status
+rows; normal terminal input is restored before prompts and full-screen Slurm job
+controls.
 Storage phases show aligned
 SFS/PVC copy progress plus MK8s and Slurm serving/degradation signals. Compute
-and cutover phases show MK8s status as separate `Node groups:` and `Nodes:`
-sections: node-group readiness stays in the first section, while node-level
-rollout transitions such as
+and cutover phases show MK8s status as separate `Node groups:` and
+`Registered nodes:` sections: Nebius node-group readiness stays in the first
+section, while the registered-node count comes from current Kubernetes Node
+objects and can temporarily drop during zero-surge replacement before the new
+node joins. Node-level rollout transitions such as
 `replacing (cordoned)` and real problem-node details such as `NotReady (down)`
-stay in the second section. Transition nodes and down states are highlighted in
-terminal output, while large clusters stay summarized with `+N more` suffixes.
+stay in the second section. The external node-template phase label covers both
+the MK8s control-plane hop and node-template rollout, and live status reports a
+separate `MK8s Control Plane` signal while a control-plane hop is active.
+When the Nebius node-group display name is available, status lines show it in
+parentheses after the node-group id; terminal output colors that display name
+blue for ready groups and red for degraded groups. Terminal output also colors
+`Ready` green for `x/y Ready` counts where all listed nodes are ready and red
+when the ready count is lower than the total. Transition nodes and down states
+are highlighted in terminal output, while large clusters stay summarized with
+`+N more` suffixes.
 Slurm worker names/states, queue health, and Soperator SlurmCluster
 reconciliation stay adjacent component details. These signals are best-effort
 progress and degradation indicators, not a no-downtime guarantee.

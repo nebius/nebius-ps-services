@@ -601,9 +601,11 @@ and chart source-family changes.
   snapshots, and a chart-managed MariaDB accounting DB dump before mutation
   when live accounting exists.
   `externalDB.enabled=true` fails fast in v1 because external DB backup support is not implemented. For MK8s
-  target changes, the command drains cxcli-owned Slurm worker nodes, applies the
-  selected affected-job policy for running, completing, and pending Slurm jobs,
-  and lets the Terraform/Nebius node-group rollout
+  target changes, the command quiesces affected Slurm scheduling partitions by
+  default, drains cxcli-owned Slurm worker nodes, applies the selected
+  affected-job policy for running and completing Slurm jobs, treats pending jobs
+  as queued information while quiesce is active, and lets the Terraform/Nebius
+  node-group rollout
   own Kubernetes drain/cordon behavior rather than running raw `kubectl drain`.
   The MK8s node-template stage waits for stable node-group readiness before
   advancing, and the protected config comparison excludes cxcli-owned temporary
@@ -669,9 +671,10 @@ and chart source-family changes.
   The managed stage model is explicit: planning/dry-run resolves chart and MK8s
   target intent; preflight validates the generated bundle, live Soperator/Slurm
   state, backup, protected-state capture, and ActiveChecks checkpoint; MK8s
-  rollout drains cxcli-owned Slurm nodes, applies `--job-policy` to displayed
-  affected Slurm jobs, including pending jobs in affected partitions or
-  requested/scheduled on affected nodes, and waits for
+  rollout records cxcli-owned affected partition state, sets eligible `UP`
+  partitions to `DOWN` by default, drains cxcli-owned Slurm nodes, applies
+  `--job-policy` to displayed affected running and `COMPLETING` Slurm jobs while
+  showing pending jobs as queued information, and waits for
   Terraform-managed control-plane/node-group readiness; chart apply updates the
   Soperator app row, rerenders, validates, applies Flux/static manifests, and
   verifies live chart identity; Jail Upgrade populates the passive
@@ -1306,14 +1309,18 @@ executor upgrades the external MK8s control plane first to the accepted
 Kubernetes target for this run, updates service-role node groups serially with
 the selected temporary strategy and original-strategy
 restore, updates worker node groups with zero-surge by default or safe-surge
-waves when selected, using an
-exact fixed worker-group count or a percent-based wave with an optional cap,
-handles affected Slurm jobs on external node-template workers and all live
-worker NodeSets before target chart reconciliation through the `--job-policy`
+waves when selected, using an exact fixed worker-group count or a percent-based
+wave with an optional cap, quiesces affected Slurm scheduling partitions by
+setting cxcli-owned `UP` partitions to `DOWN` during worker gates, and handles
+affected Slurm jobs on external node-template workers and all live worker
+NodeSets before target chart reconciliation through the `--job-policy`
 interactive, wait-to-finish, wait-then-cancel, fail, cancel-selected,
 cancel-all, requeue-selected, requeue-all, requeue-hold-selected, or
-requeue-hold-all decision state, including pending jobs in affected partitions
-or requested/scheduled on affected nodes. TTY managed and external upgrade runs default to `interactive`;
+requeue-hold-all decision state. Running and `COMPLETING` jobs remain blockers;
+pending jobs in affected partitions or requested/scheduled on affected nodes
+are queued information while partition quiesce is active and remain blocking
+when quiesce is explicitly disabled. TTY managed and external upgrade runs
+default to `interactive`;
 non-TTY and `--no-interactive` upgrade runs default to `fail`, so automation
 should pass an explicit policy such as `--job-policy wait-to-finish` and
 destructive cancel/requeue or wait-then-cancel policies remain deliberate.
@@ -1321,7 +1328,14 @@ Prompt-capable interactive runs render the affected jobs in an aligned Textual
 table with persistent controls: `a` selects or clears all rows, `i` inverts the
 selection, lowercase selected-action keys such as `c`/`q`/`h` operate on the
 selected rows, and uppercase `C`/`Q`/`H` operate on all displayed or all active
-displayed jobs as appropriate. When the target populate-jail image changed or
+displayed jobs as appropriate. The `?` key opens a scrollable help overlay, `b`
+hides the full-screen table and waits in normal terminal output for the current
+Slurm gate, cancel action keys call `scancel` and then wait for the selected
+job ids to leave the affected Slurm scope, action keys refresh the same table in
+place after Slurm updates, and idle polling exits automatically when no affected
+jobs remain. Slurm may report cancelled jobs as `COMPLETING` while processes
+exit and nodes return to service; cxcli keeps those jobs visible and blocking
+until Slurm clears them from the affected node list. When the target populate-jail image changed or
 selected chart/rootfs evidence requires refresh, the Jail Upgrade phase first
 verifies persistent jail mounts, then applies the same job-policy gate to
 affected worker NodeSets, populates the passive rootfs slot with the target
@@ -1453,8 +1467,9 @@ affect customer data or teardown.
 If an accepted Nebius node-group update times out while the provider rollout is
 still settling, the executor re-reads the node group, stores
 `waiting-rollout` on the external-node-template checkpoint when readiness is
-not complete, and resumes from live state on the next identical execute
-command instead of submitting a duplicate update.
+not complete or the requested template fields are not visible yet, and resumes
+from live state on the next identical execute command instead of submitting a
+duplicate update.
 The executor-owned live status surface uses concise
 `External Soperator upgrade phase ...` comments for preflight, backup metadata
 lookup/reuse, backup archive creation, Slurm job preflight, protected-state
@@ -1462,18 +1477,29 @@ capture, final post-upgrade checks, and report writing, plus an
 interactive spinner backed by phase-aware status snapshots. Storage phases emit
 `External Soperator upgrade status` with the elapsed time, canonical phase id,
 human-readable phase label, and overall phase health before component details.
-Storage phases then show aligned SFS/PVC copy progress plus MK8s and Slurm
-continuity signals, while compute and cutover phases emit MK8s status as
-separate `Node groups:` and `Nodes:` sections. Node-group readiness stays in
-the first section, while node-level external-upgrade rollout transitions such
-as `replacing (cordoned)` and problem-node details like `NotReady (down)` stay
-in the second section.
-Transition nodes and down states are highlighted in
-terminal output, and large clusters stay compact with `+N more` suffixes. Slurm
-worker names/states, queue health, and Soperator SlurmCluster reconciliation
-remain adjacent component details. The checkpoint records compact status
-snapshots at phase start, phase end, and pending gates. These status lines
-describe best-effort service continuity and degradation
+The interactive terminal renderer keeps those status updates in one spinner
+line, suppresses stray key echo while no prompt is active, and restores normal
+terminal input before prompts or full-screen Slurm job controls. Storage phases
+then show aligned SFS/PVC copy progress plus MK8s and Slurm continuity signals,
+while compute and cutover phases emit MK8s status as separate `Node groups:`
+and `Registered nodes:` sections. Nebius node-group readiness stays in the
+first section, while the registered-node count comes from current Kubernetes
+Node objects and can temporarily drop during zero-surge replacement before the
+new node joins. Node-level external-upgrade rollout transitions such as
+`replacing (cordoned)` and problem-node details like `NotReady (down)` stay in
+the second section. The external node-template phase label covers both the MK8s
+control-plane hop and node-template rollout, and live status reports a separate
+`MK8s Control Plane` signal while a control-plane hop is active.
+When the Nebius node-group display name is available, status lines show it in
+parentheses after the node-group id; terminal output colors that display name
+blue for ready groups and red for degraded groups. Terminal output also colors
+`Ready` green for `x/y Ready` counts where all listed nodes are ready and red
+when the ready count is lower than the total. Transition nodes and down states
+are highlighted in terminal output, and large clusters stay compact with `+N
+more` suffixes. Slurm worker names/states, queue health, and Soperator
+SlurmCluster reconciliation remain adjacent component details. The checkpoint
+records compact status snapshots at phase start, phase end, and pending gates.
+These status lines describe best-effort service continuity and degradation
 during external upgrade; they do not promise that downtime cannot occur. Existing
 projects can pass `config.yaml`
 or the project directory containing it. Deployments-root onboarding resolves
@@ -1591,12 +1617,12 @@ worker capacity source, and apply external-upgrade-owned external node-group tem
 changes, including Kubernetes version, node OS image, Nebius-image GPU stack,
 and aligned SFS filesystem attachments, through direct Nebius node-group
 updates. cxcli snapshots each node group's original strategy, keeps
-service-role groups serial, uses safe-surge
-(`max_surge=1`, `max_unavailable=0`, `drain_timeout=30m`) by default, and
+service-role groups serial, uses zero-surge
+(`max_surge=0`, `max_unavailable=1`, `drain_timeout=30m`) by default, and
 updates worker groups with zero-surge by default. Operators can select bounded
-worker safe-surge waves when spare quota/capacity is available, or the explicit
-lower-continuity zero-surge service-role override when service-role surge
-capacity is unavailable.
+worker safe-surge waves or service-role safe-surge when spare quota/capacity is
+available and preserving active service-role capacity is more important than
+avoiding surge quota.
 The rollout config exposes worker-wave
 parallelism across worker groups plus the per-group Nebius strategy
 (`max_surge_count`, `max_unavailable_count`, and `drain_timeout`). Users can set
@@ -1605,13 +1631,14 @@ fallback after a finite timeout. It clears invalid GPU driver presets from CPU
 templates when legacy groups carry them, quiesces and restores login workloads,
 one-node controller/accounting workloads, and known drain-blocking webhook
 replicas only for lower-continuity zero-surge service-role rollouts, and
-requires spare surge capacity for active service groups by default and worker
-waves only when the operator explicitly chooses worker safe-surge.
+requires spare surge capacity for active service groups or worker waves only
+when the operator explicitly chooses safe-surge for that role.
 
 The persisted rollout shape is:
 
 ```yaml
 node_template_upgrade:
+  slurm_scheduling_quiesce: true
   rollout:
     strategy: zero-surge
     worker_group_strategy:
