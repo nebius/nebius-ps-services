@@ -4,6 +4,8 @@ All notable changes to this chart are tracked here.
 
 ## [Unreleased]
 
+## [soperator-chart-v4.0.2-ps.4] - 2026-07-07
+
 - Added the active/passive jail rootfs storage contract. The chart now renders
   `jail-rootfs-slot-a`, `jail-rootfs-slot-b`, and generated
   `jailPersistentMounts` PVC-backed volume sources, defaults login replicas to

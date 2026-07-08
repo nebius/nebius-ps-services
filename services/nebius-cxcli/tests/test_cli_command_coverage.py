@@ -4628,7 +4628,7 @@ def test_soperator_upgrade_dry_run_blocks_k8s_boundary_before_chart_upgrade(
     assert "Managed upgrade order (execution blocked)" in rendered
     assert "Current Kubernetes version: `1.32`" in rendered
     assert "Requested Kubernetes target: `1.33`" in rendered
-    assert "Soperator chart: `1.22.3` -> `4.0.2-ps.3`" in rendered
+    assert f"Soperator chart: `1.22.3` -> `{target_chart_version}`" in rendered
     assert (
         f"nebius-cxcli soperator upgrade {paths.config_path} --target mk8s "
         f"--to-chart-version {target_chart_version}"
