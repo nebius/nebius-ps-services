@@ -12324,7 +12324,7 @@ def test_soperator_onboard_prints_target_compatible_layout_decisions(
     assert "## Upgrade Guidance" in summary
     assert "- Upgrade path evaluation:" in summary
     assert "  - Kubernetes: 1.34" in summary
-    assert "  - Soperator chart: 1.23.3 -> 4.0.2-ps.3" in summary
+    assert f"  - Soperator chart: 1.23.3 -> {_soperator_test_chart_version()}" in summary
     assert "Soperator upgrade path: status=supported" in summary
 
 
