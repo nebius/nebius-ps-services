@@ -340,7 +340,7 @@ _SOURCE_WORKER_NODESET_PREFIX = "worker"
 SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE = "safe-surge"
 SOPERATOR_WORKER_ROLLOUT_STRATEGY_ZERO_SURGE = "zero-surge"
 SOPERATOR_WORKER_ROLLOUT_DEFAULT_STRATEGY = SOPERATOR_WORKER_ROLLOUT_STRATEGY_ZERO_SURGE
-SOPERATOR_SERVICE_ROLE_ROLLOUT_DEFAULT_STRATEGY = SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE
+SOPERATOR_SERVICE_ROLE_ROLLOUT_DEFAULT_STRATEGY = SOPERATOR_WORKER_ROLLOUT_STRATEGY_ZERO_SURGE
 SOPERATOR_WORKER_ROLLOUT_STRATEGIES = frozenset(
     {
         SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE,
@@ -673,10 +673,10 @@ class SoperatorExternalNodeTemplateRollout:
     worker_wave_percent: int | None = None
     max_parallel_worker_groups: int | None = None
     service_role_max_surge_count: int = (
-        SOPERATOR_SAFE_SURGE_WORKER_GROUP_STRATEGY_DEFAULT_MAX_SURGE_COUNT
+        SOPERATOR_ZERO_SURGE_WORKER_GROUP_STRATEGY_DEFAULT_MAX_SURGE_COUNT
     )
     service_role_max_unavailable_count: int = (
-        SOPERATOR_SAFE_SURGE_WORKER_GROUP_STRATEGY_DEFAULT_MAX_UNAVAILABLE_COUNT
+        SOPERATOR_ZERO_SURGE_WORKER_GROUP_STRATEGY_DEFAULT_MAX_UNAVAILABLE_COUNT
     )
     service_role_drain_timeout: str = SOPERATOR_WORKER_GROUP_STRATEGY_DEFAULT_DRAIN_TIMEOUT
     strategy_max_surge_count: int = (
@@ -1891,6 +1891,7 @@ def resolve_external_node_template_rollout(
     onboarding: Mapping[str, Any],
     *,
     strategy: str | None = None,
+    service_role_strategy: str | None = None,
     worker_wave_groups: int | None = None,
     worker_wave_percent: int | None = None,
     max_parallel_worker_groups: int | None = None,
@@ -1898,7 +1899,7 @@ def resolve_external_node_template_rollout(
     strategy_max_unavailable_count: int | None = None,
     strategy_drain_timeout: str | None = None,
 ) -> SoperatorExternalNodeTemplateRollout:
-    """Resolve external worker rollout settings from config plus CLI overrides."""
+    """Resolve external node-template rollout settings from config plus CLI overrides."""
 
     config = _external_node_template_rollout_config(onboarding)
     config_strategy = normalize_component_token(str(config.get("strategy", "") or ""))
@@ -1924,13 +1925,24 @@ def resolve_external_node_template_rollout(
             "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout."
             f"service_role_strategy must be one of: {available}."
         )
+    cli_service_role_strategy = (
+        normalize_component_token(service_role_strategy or "")
+        if service_role_strategy is not None
+        else ""
+    )
+    if cli_service_role_strategy and cli_service_role_strategy not in (
+        SOPERATOR_WORKER_ROLLOUT_STRATEGIES
+    ):
+        available = ", ".join(sorted(SOPERATOR_WORKER_ROLLOUT_STRATEGIES))
+        raise ValueError(f"--service-role-rollout-strategy must be one of: {available}.")
+    explicit_cli_service_role_strategy = (
+        service_role_strategy is not None
+        and cli_service_role_strategy in SOPERATOR_WORKER_ROLLOUT_STRATEGIES
+    )
     resolved_service_role_strategy = (
-        config_service_role_strategy
-        or (
-            cli_strategy
-            if strategy is not None and cli_strategy in SOPERATOR_WORKER_ROLLOUT_STRATEGIES
-            else SOPERATOR_SERVICE_ROLE_ROLLOUT_DEFAULT_STRATEGY
-        )
+        cli_service_role_strategy
+        if explicit_cli_service_role_strategy
+        else config_service_role_strategy or SOPERATOR_SERVICE_ROLE_ROLLOUT_DEFAULT_STRATEGY
     )
     for legacy_key in (
         "max_global_unavailable_worker_nodes",
@@ -2041,7 +2053,15 @@ def resolve_external_node_template_rollout(
     default_max_surge, default_max_unavailable = _default_worker_group_strategy_values(
         resolved_strategy
     )
-    service_role_group_strategy = _mapping(config.get("service_role_group_strategy"))
+    use_config_service_role_group_strategy = (
+        not explicit_cli_service_role_strategy
+        or cli_service_role_strategy == config_service_role_strategy
+    )
+    service_role_group_strategy = (
+        _mapping(config.get("service_role_group_strategy"))
+        if use_config_service_role_group_strategy
+        else {}
+    )
     (
         default_service_role_max_surge,
         default_service_role_max_unavailable,
@@ -2257,6 +2277,41 @@ def _external_node_template_worker_waves(
     )
 
 
+def _zero_surge_service_role_capacity_warning_lines(
+    service_groups: Sequence[tuple[str, Mapping[str, Any]]],
+    *,
+    rollout: SoperatorExternalNodeTemplateRollout,
+) -> list[str]:
+    if rollout.service_role_strategy != SOPERATOR_WORKER_ROLLOUT_STRATEGY_ZERO_SURGE:
+        return []
+    if rollout.service_role_max_unavailable_count <= 0:
+        return []
+    at_risk_groups: list[str] = []
+    unknown_size_groups: list[str] = []
+    for group_name, raw_group in service_groups:
+        raw_count = raw_group.get("node_count")
+        if raw_count is None or str(raw_count).strip() == "":
+            unknown_size_groups.append(group_name)
+            at_risk_groups.append(group_name)
+            continue
+        if (
+            _positive_int(raw_count, fallback=rollout.service_role_max_unavailable_count)
+            <= rollout.service_role_max_unavailable_count
+        ):
+            at_risk_groups.append(group_name)
+    if not at_risk_groups:
+        return []
+    detail = ", ".join(dict.fromkeys(at_risk_groups))
+    if unknown_size_groups:
+        detail += " (missing discovered node_count is treated as at risk)"
+    return [
+        "Zero-surge service-role warning: discovered service-role capacity for "
+        f"{detail} is less than or equal to max_unavailable="
+        f"{rollout.service_role_max_unavailable_count}; rollout can temporarily remove "
+        "all capacity for those groups."
+    ]
+
+
 def _external_node_template_rollout_plan_lines(
     *,
     rollout: SoperatorExternalNodeTemplateRollout,
@@ -2270,7 +2325,7 @@ def _external_node_template_rollout_plan_lines(
     waves = _external_node_template_worker_waves(worker_groups, rollout=rollout)
     worker_names = [name for name, _raw_group in worker_groups]
     lines = [
-        f"Node-template rollout strategy: {rollout.strategy}",
+        f"Worker rollout strategy: {rollout.strategy}",
         "Worker wave parallelism: "
         + _worker_rollout_budget_label(rollout, worker_group_count=len(worker_groups)),
         "Service-role per-group strategy: " + _effective_service_role_strategy_label(rollout),
@@ -2331,6 +2386,9 @@ def _external_node_template_rollout_plan_lines(
             f"Service-role rollout: serial {rollout.service_role_strategy} for "
             + ", ".join(name for name, _raw_group in service_groups)
             + "."
+        )
+        lines.extend(
+            _zero_surge_service_role_capacity_warning_lines(service_groups, rollout=rollout)
         )
     if worker_names:
         wave_text = "; ".join(
@@ -19929,6 +19987,7 @@ def execute_soperator_migration(
     login_session_drain_timeout_seconds: int = EXTERNAL_LOGIN_SESSION_DRAIN_TIMEOUT_SECONDS,
     jail_sfs_resize_handler: JailSfsResizeHandler | None = None,
     worker_rollout_strategy: str | None = None,
+    service_role_rollout_strategy: str | None = None,
     worker_wave_groups: int | None = None,
     worker_wave_percent: int | None = None,
     max_parallel_worker_groups: int | None = None,
@@ -20005,6 +20064,7 @@ def execute_soperator_migration(
                 login_session_drain_timeout_seconds=login_session_drain_timeout_seconds,
                 jail_sfs_resize_handler=jail_sfs_resize_handler,
                 worker_rollout_strategy=worker_rollout_strategy,
+                service_role_rollout_strategy=service_role_rollout_strategy,
                 worker_wave_groups=worker_wave_groups,
                 worker_wave_percent=worker_wave_percent,
                 max_parallel_worker_groups=max_parallel_worker_groups,
@@ -20045,6 +20105,7 @@ def _execute_soperator_migration_unlocked(
     login_session_drain_timeout_seconds: int = EXTERNAL_LOGIN_SESSION_DRAIN_TIMEOUT_SECONDS,
     jail_sfs_resize_handler: JailSfsResizeHandler | None = None,
     worker_rollout_strategy: str | None = None,
+    service_role_rollout_strategy: str | None = None,
     worker_wave_groups: int | None = None,
     worker_wave_percent: int | None = None,
     max_parallel_worker_groups: int | None = None,
@@ -20087,6 +20148,7 @@ def _execute_soperator_migration_unlocked(
     rollout = resolve_external_node_template_rollout(
         onboarding,
         strategy=worker_rollout_strategy,
+        service_role_strategy=service_role_rollout_strategy,
         worker_wave_groups=worker_wave_groups,
         worker_wave_percent=worker_wave_percent,
         max_parallel_worker_groups=max_parallel_worker_groups,
@@ -20368,9 +20430,9 @@ def _execute_soperator_migration_unlocked(
     if saved_rollout and dict(saved_rollout) != rollout_manifest:
         raise RuntimeError(
             "External Soperator upgrade checkpoint was started with different external "
-            "node-template rollout settings. Resume with the same worker rollout "
-            "strategy and budget, or remove the checkpoint only after deciding to "
-            "restart the upgrade."
+            "node-template rollout settings. Resume with the same worker and service-role "
+            "rollout strategies and worker budget, or remove the checkpoint only after "
+            "deciding to restart the upgrade."
         )
     checkpoint["external_node_template_rollout"] = rollout_manifest
     completed_phases = set(

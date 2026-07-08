@@ -6714,6 +6714,8 @@ def test_soperator_onboard_prompts_source_version_when_discovery_has_crds_only(
             "create-aligned-node-groups",
             "--worker-rollout-strategy",
             "safe-surge",
+            "--service-role-rollout-strategy",
+            "safe-surge",
             "--worker-wave-percent",
             "1",
             "--strategy-max-surge-count",
@@ -6905,6 +6907,8 @@ def test_soperator_onboard_detects_legacy_controller_release_without_prompt(
             "--compute-mode",
             "create-aligned-node-groups",
             "--worker-rollout-strategy",
+            "safe-surge",
+            "--service-role-rollout-strategy",
             "safe-surge",
             "--worker-wave-percent",
             "1",
@@ -8962,7 +8966,7 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "Live executor contract:" in result.output
     assert "External node-template contract:" in result.output
     assert "Node-template quota contract:" in result.output
-    assert "Node-template rollout strategy: zero-surge" in result.output
+    assert "Worker rollout strategy: zero-surge" in result.output
     assert "Worker wave parallelism: 1 worker group at a time (zero-surge fallback)" in (
         result.output
     )
@@ -8971,13 +8975,13 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
         in result.output
     )
     assert (
-        "Service-role per-group strategy: max_surge=1, max_unavailable=0, drain_timeout=30m"
+        "Service-role per-group strategy: max_surge=0, max_unavailable=1, drain_timeout=30m"
         in result.output
     )
-    assert "Safe-surge spare capacity required:" in result.output
-    assert "configured surge nodes for active groups" in result.output
-    assert "Zero-surge worker capacity: no worker surge quota" in result.output
-    assert "active worker group capacity may be reduced by 1 node" in result.output
+    assert "Safe-surge spare capacity required:" not in result.output
+    assert "configured surge nodes for active groups" not in result.output
+    assert "Zero-surge spare capacity required: no surge quota" in result.output
+    assert "active service or worker group capacity may be reduced by 1 node" in result.output
     assert "Planned worker waves: wave 1: gpu-pool." in result.output
     assert "one accepted Kubernetes minor hop per upgrade run" in result.output
     assert "safe-surge needs temporary surge quota/capacity" in result.output
@@ -9006,7 +9010,7 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     )
 
     assert custom_zero_surge.exit_code == 0, custom_zero_surge.output
-    assert "active worker group capacity may be reduced by 3 nodes" in (
+    assert "active service or worker group capacity may be reduced by 3 nodes" in (
         custom_zero_surge.output
     )
 
@@ -9528,10 +9532,27 @@ def test_ext_soperator_upgrade_dry_run_validates_worker_rollout_cli_overrides(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config_path = _write_old_soperator_migration_config(tmp_path)
+
+    def _snapshot_with_service_role_group() -> dict[str, object]:
+        snapshot = _old_soperator_snapshot()
+        node_groups = snapshot["node_groups"]
+        assert isinstance(node_groups, dict)
+        node_groups["login"] = {
+            "gpu": False,
+            "node_count": 2,
+            "labels": {
+                "nebius.com/node-group": "login",
+                "nebius.com/node-group-id": "nodegroup-login",
+                "slurm.nebius.ai/nodeset": "login",
+            },
+            "nodes": ["login-node-a", "login-node-b"],
+        }
+        return snapshot
+
     monkeypatch.setattr(
         cli_module,
         "collect_kubectl_soperator_snapshot",
-        lambda **_kwargs: _old_soperator_snapshot(),
+        lambda **_kwargs: _snapshot_with_service_role_group(),
     )
 
     result = runner.invoke(
@@ -9567,6 +9588,46 @@ def test_ext_soperator_upgrade_dry_run_validates_worker_rollout_cli_overrides(
     assert "Worker wave parallelism: 1 concurrent worker group(s) from 2 worker group(s)" in (
         safe_surge.output
     )
+    assert (
+        "Service-role per-group strategy: max_surge=0, max_unavailable=1, drain_timeout=30m"
+        in safe_surge.output
+    )
+    assert "1 surge node(s) per active worker group" in safe_surge.output
+    assert "surge node(s) per active service group" not in safe_surge.output
+
+    service_safe_surge = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "upgrade",
+            str(config_path),
+            "--dry-run",
+            "--service-role-rollout-strategy",
+            "safe-surge",
+        ],
+    )
+
+    assert service_safe_surge.exit_code == 0, service_safe_surge.output
+    assert (
+        "Service-role per-group strategy: max_surge=1, max_unavailable=0, drain_timeout=30m"
+        in service_safe_surge.output
+    )
+    assert "1 surge node(s) per active service group" in service_safe_surge.output
+
+    invalid_service_strategy = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "upgrade",
+            str(config_path),
+            "--dry-run",
+            "--service-role-rollout-strategy",
+            "unsupported",
+        ],
+    )
+
+    assert invalid_service_strategy.exit_code != 0
+    assert "--service-role-rollout-strategy must be one of" in invalid_service_strategy.output
 
     conflict = runner.invoke(
         app,
@@ -11985,6 +12046,8 @@ def test_soperator_onboard_interactive_cluster_id_prompts_rollout_settings(
         prompt_labels.append(field_label)
         if field_label.endswith(".rollout.strategy"):
             return "safe-surge", False
+        if field_label.endswith(".rollout.service_role_strategy"):
+            return "safe-surge", False
         if field_label.endswith(".rollout.wave_budget"):
             return "percent", False
         if field_label.endswith(".rollout.worker_wave_percent"):
@@ -12033,6 +12096,10 @@ def test_soperator_onboard_interactive_cluster_id_prompts_rollout_settings(
         in prompt_labels
     )
     assert (
+        "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.service_role_strategy"
+        in prompt_labels
+    )
+    assert (
         "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout."
         "worker_group_strategy.max_surge_count"
     ) in prompt_labels
@@ -12070,11 +12137,90 @@ def test_soperator_onboard_interactive_cluster_id_prompts_rollout_settings(
     assert command[command.index("--storage-mode") + 1] == "keep-existing-storage"
     assert command[command.index("--compute-mode") + 1] == "keep-existing-compute"
     assert command[command.index("--worker-rollout-strategy") + 1] == "safe-surge"
+    assert command[command.index("--service-role-rollout-strategy") + 1] == "safe-surge"
     assert command[command.index("--worker-wave-percent") + 1] == "50"
     assert command[command.index("--max-parallel-worker-groups") + 1] == "2"
     assert command[command.index("--strategy-max-surge-count") + 1] == "2"
     assert command[command.index("--strategy-max-unavailable-count") + 1] == "0"
     assert command[command.index("--strategy-drain-timeout") + 1] == "45m"
+
+
+def test_soperator_rollout_command_options_keep_worker_and_service_roles_separate() -> None:
+    def _target_row(rollout: dict[str, object]) -> dict[str, object]:
+        return {
+            "instance_id": "external-cluster",
+            "soperator_onboarding": {
+                "actions": [cli_module.ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE],
+                "node_template_upgrade": {"rollout": rollout},
+            },
+        }
+
+    default_zero_surge = cli_module._soperator_rollout_command_options_from_target_row(
+        _target_row(
+            {
+                "strategy": "zero-surge",
+                "service_role_strategy": "zero-surge",
+                "service_role_group_strategy": {
+                    "max_surge_count": 0,
+                    "max_unavailable_count": 1,
+                    "drain_timeout": "30m",
+                },
+                "worker_group_strategy": {
+                    "max_surge_count": 0,
+                    "max_unavailable_count": 1,
+                    "drain_timeout": "30m",
+                },
+            }
+        )
+    )
+    assert "worker_rollout_strategy" not in default_zero_surge
+    assert "service_role_rollout_strategy" not in default_zero_surge
+    assert default_zero_surge["strategy_max_surge_count"] == 0
+    assert default_zero_surge["strategy_max_unavailable_count"] == 1
+
+    service_role_safe_surge = cli_module._soperator_rollout_command_options_from_target_row(
+        _target_row(
+            {
+                "strategy": "zero-surge",
+                "service_role_strategy": "safe-surge",
+                "service_role_group_strategy": {
+                    "max_surge_count": 1,
+                    "max_unavailable_count": 0,
+                    "drain_timeout": "30m",
+                },
+                "worker_group_strategy": {
+                    "max_surge_count": 0,
+                    "max_unavailable_count": 1,
+                    "drain_timeout": "30m",
+                },
+            }
+        )
+    )
+    assert "worker_rollout_strategy" not in service_role_safe_surge
+    assert service_role_safe_surge["service_role_rollout_strategy"] == "safe-surge"
+
+    worker_safe_surge = cli_module._soperator_rollout_command_options_from_target_row(
+        _target_row(
+            {
+                "strategy": "safe-surge",
+                "service_role_strategy": "zero-surge",
+                "worker_wave_groups": 1,
+                "service_role_group_strategy": {
+                    "max_surge_count": 0,
+                    "max_unavailable_count": 1,
+                    "drain_timeout": "30m",
+                },
+                "worker_group_strategy": {
+                    "max_surge_count": 1,
+                    "max_unavailable_count": 0,
+                    "drain_timeout": "30m",
+                },
+            }
+        )
+    )
+    assert worker_safe_surge["worker_rollout_strategy"] == "safe-surge"
+    assert "service_role_rollout_strategy" not in worker_safe_surge
+    assert worker_safe_surge["worker_wave_groups"] == 1
 
 
 def test_soperator_onboard_target_match_hides_stale_source_release_from_summary(

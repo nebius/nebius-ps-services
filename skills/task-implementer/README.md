@@ -1,15 +1,19 @@
 # Task Implementer
 
 `task-implementer` is a narrow brownfield implementation coordinator for
-sequential task loops.
-It turns a user request into `task-1` through `task-n`, orders the tasks by
-dependencies and priority, and implements one task at a time with a markdown
-handoff between fresh Codex sessions.
+explicit sequential task loops.
+It turns a complex user request that is bigger than one coherent task into
+`task-1` through `task-n`, orders the tasks by dependencies and priority, and
+implements one task at a time with a markdown handoff between fresh Codex
+sessions.
 
 It is intentionally smaller than Agentic SDLC. It does not create committed
 requirements/design docs, private SDLC JSON state, hooks, PRs, or merge
-actions. Each completed task is reviewed with `code-review`, fixed as needed,
-and locally committed through `$commit` before the next fresh session starts.
+actions. Each task gathers the context it needs, uses `brainstorm` when
+source-ranked context or assumption checks are useful, routes non-trivial
+design or contract choices through `design`, records a short plan, validates,
+is reviewed with `code-review`, is fixed as needed, and is locally committed
+through `$commit` before the next fresh session starts.
 
 ## Files
 
@@ -17,16 +21,25 @@ and locally committed through `$commit` before the next fresh session starts.
   contract, failure handling, and output shape.
 - `agents/openai.yaml`: UI metadata and implicit invocation policy.
 - `references/implementation-loop.md`: queue construction, design routing,
-  handoff discipline, fresh-session patterns, and final alignment guidance.
+  per-task context/design/plan gates, handoff discipline, fresh-session
+  patterns, and final alignment guidance.
 - `assets/handoff-template.md`: markdown checkpoint template copied into
   `$CODEX_HOME/task-implementer/<project-id>/<run-id>/handoff.md`.
 - `evals/trigger-prompts.md`: should-trigger and should-not-trigger examples.
+- `scripts/test-task-implementer-contract.py`: local static smoke test for the
+  workflow, handoff, metadata, and trigger-example contract.
 
 ## Boundaries
 
 - Use this skill when the user asks for a sequential task implementation loop
   or continuation from an existing handoff. It is explicit-only because it
   mutates code, invokes commit checkpoints, and may launch follow-on sessions.
+- Do not make `global-context-management` always call this skill. Use
+  `global-context-management` for context hygiene around complex work; use
+  `$task-implementer` only when the explicit sequential implementation,
+  per-task commit, and fresh-session handoff loop is the requested workflow.
+- Use `brainstorm` as a read-only context source before a task's design pass
+  when useful; do not let it own implementation.
 - Use `design` as a supporting skill for unresolved architecture, component,
   contract, or technology choices before implementation.
 - Use `code-review` and `$commit` as required per-task gates after validation

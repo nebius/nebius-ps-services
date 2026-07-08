@@ -10,7 +10,9 @@ loop. Keep the workflow small; do not recreate the Agentic SDLC state machine.
 3. Current code, tests, docs, changelog, generated artifacts, and local
    command output.
 4. Related skills. Use `design` for architecture, contracts, missing code, or
-   ambiguous boundaries when available. Let `design` decide when it needs
+   ambiguous boundaries when available. Use `brainstorm` first when the active
+   task needs source-ranked context, option framing, or assumption checks before
+   design; keep that pass read-only. Let `design` decide when it needs
    `research`. Use `code-review` as the per-task review gate after
    implementation, and use `$commit` as the per-task local checkpoint gate
    after review findings are fixed.
@@ -30,24 +32,51 @@ Each task should have one coherent output. A task may include code, tests, docs,
 and validation when those changes belong to the same behavioral surface.
 
 Avoid splitting into ceremony-only tasks such as "inspect code" or "run tests"
-unless the user explicitly wants planning-only output. Inspection and
-validation are part of every implementation task.
+unless the user explicitly wants planning-only output. Inspection,
+brainstorm/context gathering, design, planning, and validation are gates inside
+every implementation task that needs them.
+
+Do not split a request only because it touches several files. Split when the
+work has separate deliverables, dependency edges, review risks, or validation
+gates that benefit from independent commits. If the request is truly one
+coherent change, implement it directly unless the user explicitly insists on
+the task-implementer loop.
+
+## Per-Task Context, Design, And Plan
+
+Before editing the active task:
+
+1. Gather task-specific context with targeted repo reads. Use `brainstorm` when
+   the task needs source-ranked context, tradeoff framing, or assumption
+   challenges before design. Keep `brainstorm` read-only and summarize only the
+   findings that affect this task.
+2. Route to `design` when the task is non-trivial, changes contracts, crosses
+   module boundaries, has missing code, has ambiguous behavior, or has multiple
+   plausible implementations. If `design` is unavailable but needed, record a
+   compact local design note and mark it `design_skill_unavailable`.
+3. Create a short implementation plan in the handoff: exact steps, likely
+   files, docs/changelog impact, validation commands, stop conditions, rollback
+   notes, and the review/commit gates.
+4. Implement only after the context, design, and plan fields are populated or
+   explicitly marked not needed.
 
 ## Per-Task Completion Gate
 
 Each task session must finish the active task completely before handing off:
 
-1. Implement only the active task.
-2. Run focused validation for that task.
-3. Inspect the diff and remove unrelated cleanup.
-4. Use `code-review` on the active task's code changes.
-5. Fix safe, scoped review findings and re-run focused validation.
-6. Re-run or refresh the review when review fixes changed code materially.
-7. Use `$commit` to create the local task checkpoint.
-8. Update the handoff with validation, review, fixes, commit hash/message or
-   commit blocker, residual risks, and the exact next-session prompt.
-9. Stop the current session so the next task starts from the handoff in fresh
-   context.
+1. Complete the per-task context, design, and plan gate.
+2. Implement only the active task.
+3. Run focused validation for that task.
+4. Inspect the diff and remove unrelated cleanup.
+5. Use `code-review` on the active task's code changes.
+6. Fix safe, scoped review findings and re-run focused validation.
+7. Re-run or refresh the review when review fixes changed code materially.
+8. Use `$commit` to create the local task checkpoint.
+9. Update the handoff with context, design, plan, validation, review, fixes,
+   commit hash/message or commit blocker, residual risks, and the exact
+   next-session prompt.
+10. Stop the current session so the next task starts from the handoff in fresh
+    context.
 
 If `code-review` finds a blocking issue that cannot be fixed inside the active
 task boundary, mark the task `blocked` with `REVIEW_BLOCKER`. If `$commit`

@@ -25,6 +25,8 @@ private material.
 - Relevant docs/config:
 - Important repo instructions:
 - Current assumptions:
+- Source context:
+- Brainstorm/context result:
 
 ## Task Queue
 
@@ -35,8 +37,11 @@ private material.
 - Depends on:
 - Goal:
 - Rationale:
+- Brainstorm/context needed: yes | no
+- Brainstorm/context result:
 - Design needed: yes | no
 - Design notes:
+- Plan:
 - Likely files:
 - Implementation steps:
 - Validation:
@@ -56,8 +61,11 @@ private material.
 - Depends on:
 - Goal:
 - Rationale:
+- Brainstorm/context needed: yes | no
+- Brainstorm/context result:
 - Design needed: yes | no
 - Design notes:
+- Plan:
 - Likely files:
 - Implementation steps:
 - Validation:
@@ -76,6 +84,9 @@ private material.
 
 - Completed task:
 - Summary:
+- Brainstorm/context result:
+- Design result:
+- Plan followed:
 - Files changed:
 - Validation:
 - Code-review:
@@ -109,9 +120,11 @@ Use $task-implementer to continue from this handoff file:
 <handoff-path>
 
 Read the handoff first, verify the current git status and relevant source files,
-then implement only <task-id>. Do not run parallel write agents. Run focused
-validation, use code-review, fix scoped findings, commit through $commit, and
-update the handoff with changed files, validation, review result, fixes, commit
-hash/message or blocker, residual risks, and the next-session prompt before
-stopping.
+then implement only <task-id>. Do not run parallel write agents. Gather the
+task-specific context, use brainstorm when source-ranked context or assumption
+checks are useful, route non-trivial design or contract choices through design,
+write the per-task plan, run focused validation, use code-review, fix scoped
+findings, commit through $commit, and update the handoff with context, design,
+plan, changed files, validation, review result, fixes, commit hash/message or
+blocker, residual risks, and the next-session prompt before stopping.
 ```

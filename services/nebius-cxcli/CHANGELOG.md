@@ -53,12 +53,24 @@ All notable changes to this project are tracked here. This changelog follows
   now refuses its temporary login writer hold under the default `target-ready`
   policy; operators must choose `wait-active` or `grace-period` for that
   maintenance window.
-- Changed external service-role node-template rollout to use serial safe-surge
-  by default, with `max_surge=1` and `max_unavailable=0`, while worker groups
-  keep the existing zero-surge default unless worker safe-surge is selected.
+- Changed external service-role node-template rollout to default to serial
+  zero-surge, with `max_surge=0`, `max_unavailable=1`, and `drain_timeout=30m`.
+  `ext-soperator onboard` and `ext-soperator upgrade` now expose
+  `--service-role-rollout-strategy zero-surge|safe-surge`; explicit
+  `service_role_strategy: safe-surge` configs still preserve service-role
+  capacity with one temporary surge node per active service group.
+- Fixed approved `ext-soperator upgrade --execute` terminal output so the live
+  phase spinner is closed before final checkpoint, report, and post-upgrade
+  config-refresh lines are printed.
+- Changed external Soperator worker rollout flags so `--worker-rollout-strategy`
+  is worker-only. Service-role rollout is controlled by
+  `service_role_strategy` or `--service-role-rollout-strategy`, and generated
+  onboarding replay commands include the service-role flag only when needed to
+  preserve non-default safe-surge.
 - Documented the Soperator jail upgrade process, active/passive rootfs
   switch-over semantics, same-SFS shared persistent mounts, the one-time
-  rootfs-to-shared migration flow, and checked-in workflow infographic in the
+  rootfs-to-shared migration flow, absent-source persistent mount behavior for
+  future writes such as `/models`, and checked-in workflow infographic in the
   README and design guide.
 - Added a pre-populate active/passive jail capacity gate and expansion workflow.
   Managed production Soperator defaults now size the cxcli-owned jail SFS
@@ -1183,12 +1195,10 @@ All notable changes to this project are tracked here. This changelog follows
   degraded/down states; every status line now includes the phase id,
   human-readable phase label, and overall phase health before component
   details.
-- Changed external Soperator worker node-template rollout to default to
-  `zero-surge`: service-role groups now use serial safe-surge by default with
-  `max_surge_count=1`, `max_unavailable_count=0`, and `drain_timeout=30m`,
-  while worker groups avoid surge quota by default with
-  `max_surge_count=0`, `max_unavailable_count=1`, and `drain_timeout=30m`.
-  Operators can still select bounded `safe-surge` waves with configurable
+- Changed external Soperator node-template rollout to default both service-role
+  groups and worker groups to `zero-surge` with `max_surge_count=0`,
+  `max_unavailable_count=1`, and `drain_timeout=30m`. Operators can still
+  select bounded worker `safe-surge` waves with configurable
   `max_surge_count`, `max_unavailable_count`, and `drain_timeout` per active
   worker group after quota/capacity, worker-node health, and Slurm queue
   preflights pass. `ext-soperator onboard` and `ext-soperator upgrade` accept
@@ -1283,15 +1293,14 @@ All notable changes to this project are tracked here. This changelog follows
   checkpoint said the phase had completed.
 - Changed `ext-soperator upgrade --execute` to own onboarded external MK8s
   control-plane and node-template upgrades through direct Nebius updates:
-  control plane first, service-role node groups one at a time with safe-surge by
-  default, worker node groups with zero-surge by default or safe-surge waves when
-  selected, original strategy restore, and spare-worker quota preflight for the
-  active safe-surge wave.
+  control plane first, service-role and worker node groups with zero-surge by
+  default or safe-surge when selected, original strategy restore, and surge
+  quota preflight only for active safe-surge service groups or worker waves.
 - Fixed external node-template upgrade execution for legacy layouts by clearing
   stale GPU driver presets from CPU node groups before Kubernetes/OS rollout
   and by checkpointing temporary quiesce/restore of login, one-node
-  controller/accounting, and known drain-blocking webhook workloads during the
-  explicit lower-continuity zero-surge service-role override.
+  controller/accounting, and known drain-blocking webhook workloads during
+  service-role zero-surge rollout.
 - Hardened external Soperator chart takeover by suspending legacy Flux
   HelmReleases before applying the cxcli target chart, forcing server-side CRD
   conflict resolution, retrying transient target webhook startup failures, and

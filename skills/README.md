@@ -84,7 +84,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `python-project` | Implicit allowed | Scaffold or harden Python projects with modern packaging, `src/` layout, Ruff, pytest, Typer, Pydantic, services, APIs, and CI. |
 | `shell-scripting` | Implicit allowed | Create, refactor, or review Bash automation with strict mode, safe argument parsing, idempotency, and readable CLI output. |
 | `system-design-rules` | Implicit allowed | Evaluate system designs, ADRs, architecture options, APIs, data ownership, reliability, security, observability, scale, cost, and team boundaries with a practical design checklist. |
-| `task-implementer` | Explicit only | Break brownfield implementation-loop requests into ordered `task-1`..`task-n` work items and run them sequentially with validation, `code-review`, `$commit`, and markdown handoff checkpoints between fresh Codex sessions. |
+| `task-implementer` | Explicit only | Break complex brownfield implementation-loop requests into ordered `task-1`..`task-n` work items and run them sequentially with per-task context gathering, design, planning, validation, `code-review`, `$commit`, and markdown handoff checkpoints between fresh Codex sessions. |
 | `terraform` | Implicit allowed | Scaffold, standardize, or improve Terraform repositories and modules with state guidance, validation, security controls, examples, and CI. |
 
 ### Agentic SDLC Workflow
@@ -175,7 +175,7 @@ $code-review Review the current local branch for bugs, regressions, test gaps, r
 
 $system-design-rules Review this ADR against the system design checklist, compare the trade-offs, and identify missing reliability, data, security, observability, cost, and ownership decisions.
 
-$task-implementer Break this brownfield change into ordered task-1..task-n work items, implement them sequentially with validation, code-review, fixes, a $commit checkpoint, and a markdown handoff, then use a fresh Codex session for each task.
+$task-implementer Break this complex brownfield change into ordered task-1..task-n work items, gather context, design and plan each task before editing, implement sequentially with validation, code-review, fixes, a $commit checkpoint, and a markdown handoff, then use a fresh Codex session for each task.
 
 $apply-security Scan this repository for infrastructure, CI/CD, shell, and application security issues, then produce a prioritized remediation plan with safe patch candidates.
 
@@ -337,17 +337,20 @@ needs, and open questions instead of treating principles as universal laws.
 
 ### `task-implementer`
 
-`task-implementer` coordinates small and medium brownfield implementation
-requests that need ordered execution across fresh Codex contexts. It inspects
-the target code before ordering work, records a `task-1` through `task-n` queue
-in a private markdown handoff under `$CODEX_HOME/task-implementer/`, implements
-one task at a time, runs focused validation, uses `code-review`, fixes scoped
-findings, commits the completed task through `$commit`, and updates the handoff
-with changed files, validation, review result, fixes, commit evidence,
-blockers, and the next-session prompt. Because it mutates code, invokes local
-commit checkpoints, and may launch follow-on implementation sessions, it is
-explicit-only. Use `$sdlc-start` for Agentic SDLC and `align` for final
-changed-surface alignment.
+`task-implementer` coordinates complex brownfield implementation requests that
+are bigger than one coherent task and need ordered execution across fresh Codex
+contexts. It inspects the target code before ordering work, records a `task-1`
+through `task-n` queue in a private markdown handoff under
+`$CODEX_HOME/task-implementer/`, gathers per-task context with `brainstorm`
+when useful, routes non-trivial design or contract choices through `design`,
+records a short plan, implements one task at a time, runs focused validation,
+uses `code-review`, fixes scoped findings, commits the completed task through
+`$commit`, and updates the handoff with context, design, plan, changed files,
+validation, review result, fixes, commit evidence, blockers, and the
+next-session prompt. Because it mutates code, invokes local commit checkpoints,
+and may launch follow-on implementation sessions, it is explicit-only. Use
+`global-context-management` for general context hygiene, `$sdlc-start` for
+Agentic SDLC, and `align` for final changed-surface alignment.
 
 ### `agentic-sdlc-test`
 

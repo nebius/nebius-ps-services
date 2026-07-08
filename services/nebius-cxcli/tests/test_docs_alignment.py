@@ -482,7 +482,8 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
         "`--kube-context`, `--access`, `--storage-mode`, `--compute-mode`, "
         "`--to-chart-version`, `--to-k8s-version`, `--source-version`, "
         "`--allow-unsupported-soperator-upgrade-path`, `--worker-rollout-strategy`, "
-        "`--worker-wave-groups`, `--worker-wave-percent`, `--max-parallel-worker-groups`, "
+        "`--service-role-rollout-strategy`, `--worker-wave-groups`, "
+        "`--worker-wave-percent`, `--max-parallel-worker-groups`, "
         "`--strategy-max-surge-count`, `--strategy-max-unavailable-count`, "
         "`--strategy-drain-timeout`, `--validate-sources/--no-validate-sources`, "
         "`--no-interactive`"
@@ -497,7 +498,7 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
         "`--approve-remediation/--no-approve-remediation`, "
         "`--allow-unsupported-soperator-upgrade-path`, "
         "`--interactive/--no-interactive`, `--worker-rollout-strategy`, "
-        "`--worker-wave-groups`, `--worker-wave-percent`, "
+        "`--service-role-rollout-strategy`, `--worker-wave-groups`, `--worker-wave-percent`, "
         "`--max-parallel-worker-groups`, `--strategy-max-surge-count`, "
         "`--strategy-max-unavailable-count`, `--strategy-drain-timeout`"
     ) in common_flags_flat
@@ -724,7 +725,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
         soperator.index("### Soperator Rules and Safety Checks")
     )
     assert "Read-only against live cluster state" in soperator
-    assert "`--worker-rollout-strategy`, `--worker-wave-groups`" in soperator
+    assert "`--worker-rollout-strategy`, `--service-role-rollout-strategy`" in soperator
     assert "non-interactive onboarding" in soperator
     assert "verifies the needed quota and capacity during `--execute` preflight" in (soperator_flat)
     assert "prints a color-highlighted sectioned plan covering target discovery" in (soperator_flat)
@@ -1035,6 +1036,9 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
         unreleased_flat
     )
     assert "Focused Soperator README and design navigation" in unreleased_flat
+    assert "absent-source persistent mount behavior for future writes such as `/models`" in (
+        unreleased_flat
+    )
 
 
 def test_docs_define_discover_and_bootstrap_ci_boundaries() -> None:
@@ -1791,10 +1795,9 @@ def test_docs_define_component_selector_contract() -> None:
         "external node-template and target GPU stack reconciliation as their own required actions"
         in readme_flat
     )
-    assert "worker groups default to zero-surge" in readme_flat
-    assert "service-role groups use safe-surge by default" in readme_flat
+    assert "service-role groups and worker groups both default to zero-surge" in readme_flat
     assert (
-        "one temporary replacement node for each active service-role group"
+        "selecting service-role safe-surge preserves service capacity with one temporary replacement node per active service group"
         in readme_flat
     )
     assert "cxcli fails fast rather than assuming a vanilla cluster is safe to adopt" in readme_flat
@@ -1805,6 +1808,11 @@ def test_docs_define_component_selector_contract() -> None:
         "automatically models `/home`, `/data`, `/scripts`, and `/models` "
         "as persistent jail mounts"
     ) in readme_flat
+    assert "if `/models` did not exist before first adoption" in readme_flat
+    assert (
+        "future files written under `/models` land in `/mnt/jail/shared/models`"
+        in readme_flat
+    )
     assert "First adoption migrates data out of legacy in-rootfs directories" in readme_flat
     assert (
         "Quota must cover spare target storage for non-jail storage while source storage remains mounted"
@@ -2090,6 +2098,13 @@ def test_docs_define_component_selector_contract() -> None:
         "models `/home`, `/data`, `/scripts`, `/models`, plus explicitly declared "
         "additional customer paths as persistent jail mounts"
     ) in design_flat
+    assert (
+        "missing `/models` is recorded with a `source_missing` marker" in design_flat
+    )
+    assert (
+        "later user writes under `/models` land in `/mnt/jail/shared/models`"
+        in design_flat
+    )
     assert "provides ad hoc `ext-soperator scale-up` and `ext-soperator scale-down`" in (
         design_flat
     )
@@ -2139,12 +2154,8 @@ def test_docs_define_component_selector_contract() -> None:
         in design_flat
     )
     assert "does not create parallel worker node groups" in design_flat
-    assert (
-        "lower-continuity zero-surge override quiesces login workloads, one-node "
-        "service workloads, and known drain-blocking webhook replicas"
-    ) in design_flat
     assert "worker groups default to zero-surge" in design_flat
-    assert "Service-role groups are serial safe-surge by default" in design_flat
+    assert "Service-role groups are serial zero-surge by default" in design_flat
     assert "worker_wave_percent: 1" in readme
     assert "worker_group_strategy:" in readme
     assert "worker_wave_percent: 1" in design
@@ -2152,7 +2163,9 @@ def test_docs_define_component_selector_contract() -> None:
     assert "one temporary replacement node per active service group" in design_flat
     assert "`max_surge_count` temporary surge node(s) per worker group" in design_flat
     assert "worker-health, and Slurm queue preflights pass" in design_flat
-    assert "With worker safe-surge, remediation also counts `max_surge_count`" in design_flat
+    assert "With service-role or worker safe-surge, remediation counts one temporary" in (
+        design_flat
+    )
     assert "requires the Slurm queue to be empty before mutation" in design_flat
     assert "the MK8s control plane first, then updates service-role node groups" in design_flat
     assert "phase end, and pending gates" in design_flat

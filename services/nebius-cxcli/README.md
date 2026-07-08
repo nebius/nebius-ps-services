@@ -2729,19 +2729,22 @@ Underlying MK8s upgrade ownership is different for managed and external targets:
   Nebius-image GPU-stack upgrades selected by onboarding. It uses direct Nebius
   SDK/API cluster and node-group update calls, upgrades the
   control plane first, then updates service-role node groups serially with
-  safe-surge by default and worker node groups with zero-surge by default, or
-  safe-surge when selected. Service groups run serially; worker safe-surge runs
+  zero-surge by default, or safe-surge when selected, and worker node groups
+  with zero-surge by default, or safe-surge when selected. Service groups run
+  serially; worker safe-surge runs
   in bounded waves. It does
   not report completion until the live control plane and selected node groups
   match the requested Kubernetes version, OS image, and Nebius `drivers_preset`
   / CUDA stack.
 - For external node-group template updates, upgrade snapshots each original
   node-group strategy and restores it after that group finishes. Service-role
-  groups use safe-surge (`max_surge=1`, `max_unavailable=0`,
-  `drain_timeout=30m`) one group at a time by default. The explicit
-  lower-continuity zero-surge override sets `max_surge=0`,
-  `max_unavailable=1`, `drain_timeout=30m` and quiesces login workloads,
-  one-node service workloads, and known drain-blocking webhook replicas. Worker
+  groups use zero-surge (`max_surge=0`, `max_unavailable=1`,
+  `drain_timeout=30m`) one group at a time by default. If a discovered
+  service-role group has at most `max_unavailable` nodes, cxcli warns that the
+  rollout can temporarily remove all capacity for that group. Explicit
+  `service_role_strategy: safe-surge` or `--service-role-rollout-strategy
+  safe-surge` uses `max_surge=1`, `max_unavailable=0`, `drain_timeout=30m`
+  and requires one temporary replacement node per active service group. Worker
   groups default to zero-surge; worker safe-surge runs in bounded waves only
   when selected, after
   quota/capacity, worker-node health, and Slurm queue preflights pass. Set
@@ -2873,8 +2876,8 @@ Important onboarding flags:
   release name in a non-standard namespace is reported with its release name,
   namespace, chart, detected version, and matched migration profile instead of
   requiring source-version input.
-- `--worker-rollout-strategy`, `--worker-wave-groups`,
-  `--worker-wave-percent`, `--max-parallel-worker-groups`,
+- `--worker-rollout-strategy`, `--service-role-rollout-strategy`,
+  `--worker-wave-groups`, `--worker-wave-percent`, `--max-parallel-worker-groups`,
   `--strategy-max-surge-count`, `--strategy-max-unavailable-count`, and
   `--strategy-drain-timeout`: optional external node-template rollout defaults
   to persist under
@@ -3211,8 +3214,9 @@ External upgrade follows these stages:
    `--job-policy` decision before any affected worker rollout.
 3. External infrastructure remediation: upgrade the external MK8s control plane
    first to the accepted Kubernetes target for this run when selected, then
-   service-role node groups serially with safe-surge by default, worker node
-   groups with zero-surge or safe-surge waves, target GPU stack reconciliation
+   service-role node groups serially with zero-surge by default or safe-surge
+   when selected, worker node groups with zero-surge or safe-surge waves,
+   target GPU stack reconciliation
    when it is paired with upgrade work, aligned SFS creation/attachment, and
    guarded PVC data-copy phases. External node-template work is one Kubernetes
    minor hop per accepted
@@ -3376,14 +3380,16 @@ Interactive Slurm job actions map to these Slurm commands:
 - Release all admin-held pending jobs after review:
   `squeue --states=PD -h -o '%A|%r' | awk -F'|' '$2 == "JobHeldAdmin" { print $1 }' | xargs -r scontrol release`.
 - `--worker-rollout-strategy zero-surge|safe-surge`: select the external worker
-  node-template rollout strategy and the explicit lower-continuity service-role
-  override. `zero-surge` is the worker default and avoids worker surge quota, but
-  can reduce active worker capacity during the rollout. Login and other
-  service-role groups use serial safe-surge by default and require one temporary
-  replacement node before mutation; passing `--worker-rollout-strategy
-  zero-surge` explicitly also selects the lower-continuity service-role rollout.
+  node-template rollout strategy. `zero-surge` is the worker default and avoids
+  worker surge quota, but can reduce active worker capacity during the rollout.
   `safe-surge` uses temporary nodes for active worker waves and checks the
   required quota and capacity before mutation.
+- `--service-role-rollout-strategy zero-surge|safe-surge`: select the external
+  service-role node-template rollout strategy. `zero-surge` is the service-role
+  default and avoids temporary service-role quota, but can reduce active
+  service capacity by one node per active service group. `safe-surge` preserves
+  service capacity with one temporary replacement node per active service group
+  and checks the required quota and capacity before mutation.
 - `--worker-wave-groups`: exact fixed number of worker groups to update per
   safe-surge wave.
 - `--worker-wave-percent` and `--max-parallel-worker-groups`: percent-based
@@ -3505,11 +3511,13 @@ aligned SFS filesystems that do not already exist are counted as spare storage
 required during data copy, and target service-role node groups that do not
 already exist are counted as net-new compute capacity. Existing worker node
 groups are preserved in place. For external node-template work, service-role
-groups use safe-surge by default and worker groups default to zero-surge. cxcli
-counts one temporary replacement node for each active service-role group before
-mutation; when operators choose worker safe-surge, it also counts
-`max_surge_count` temporary surge node(s) for each worker group in the active
-wave. It checks the required spare quota and GPU capacity before mutation,
+groups and worker groups both default to zero-surge, which avoids temporary
+surge quota but can reduce active capacity by one node per active group. cxcli
+warns when a discovered service-role group has at most the configured
+`max_unavailable_count`. When operators choose service-role or worker
+safe-surge, it counts the temporary surge nodes required for each active
+service group or worker wave. It checks the required spare quota and GPU
+capacity before mutation,
 requires all selected worker nodes to start Ready and schedulable, checks
 affected Slurm jobs on external node-template workers,
 including pending jobs in affected partitions or requested/scheduled on affected
@@ -3567,11 +3575,13 @@ The planned phases depend on the accepted storage and compute modes:
   create duplicate worker groups or require 2x worker quota. Upgrade-owned
   external node-group template changes, including Kubernetes version, node OS
   image, Nebius-image GPU stack, and aligned SFS filesystem attachments, use
-  direct Nebius node-group updates: service-role groups are serial safe-surge by
-  default, requiring one temporary replacement node per active service group and
-  failing before mutation if quota/capacity is unavailable. The explicit
-  lower-continuity zero-surge override quiesces login workloads, one-node service
-  workloads, and known drain-blocking webhook replicas. During login node-group
+  direct Nebius node-group updates: service-role groups are serial zero-surge by
+  default, requiring no temporary service-role surge quota but potentially
+  reducing active service capacity by one node per active service group. cxcli
+  warns when discovered service-role capacity is less than or equal to
+  `max_unavailable_count`; selecting service-role safe-surge preserves service
+  capacity with one temporary replacement node per active service group and
+  fails before mutation if quota/capacity is unavailable. During login node-group
   updates, cxcli verifies ready login Service endpoints before and after the
   node-template change. Worker
   groups default to zero-surge and can use bounded safe-surge waves. cxcli
@@ -3719,19 +3729,20 @@ contains two logical rootfs slots plus one shared persistent-mount area:
   worker consumers.
 - the passive slot: the inactive slot that cxcli can safely repopulate with the
   target populate-jail image.
-- the shared area: customer-owned paths such as `/home`, `/data`, or `/scripts`
-  that must survive rootfs replacement.
+- the shared area: customer-owned paths such as `/home`, `/data`, `/scripts`, or
+  `/models` that must survive rootfs replacement.
 
 For cxcli-managed clusters, the default store is
 `/mnt/jail-store/rootfs/slot-a` and `/mnt/jail-store/rootfs/slot-b`, with
 persistent mounts under the same physical SFS, for example
-`/mnt/jail-store/shared/home`, `/mnt/jail-store/shared/data`, and
-`/mnt/jail-store/shared/scripts`. Those directories are not additional rootfs
-slots and do not need separate physical SFS filesystems; the chart models each
-one as a stable persistent mount and attaches it back into whichever rootfs slot
-is active. For external single-SFS adoption, cxcli keeps the existing physical
-jail SFS, creates logical slots under `/mnt/jail/.cxcli/rootfs`, and treats the
-legacy `/mnt/jail` root as the active rootfs until the first switch succeeds.
+`/mnt/jail-store/shared/home`, `/mnt/jail-store/shared/data`,
+`/mnt/jail-store/shared/scripts`, and `/mnt/jail-store/shared/models`. Those
+directories are not additional rootfs slots and do not need separate physical
+SFS filesystems; the chart models each one as a stable persistent mount and
+attaches it back into whichever rootfs slot is active. For external single-SFS
+adoption, cxcli keeps the existing physical jail SFS, creates logical slots
+under `/mnt/jail/.cxcli/rootfs`, and treats the legacy `/mnt/jail` root as the
+active rootfs until the first switch succeeds.
 
 The Jail Upgrade rootfs-refresh process is:
 
@@ -3746,6 +3757,11 @@ The Jail Upgrade rootfs-refresh process is:
    `/mnt/jail/shared/...`. Other customer-owned paths, such as `/checkpoints`,
    must be declared with `--jail-persistent-mount <mountPath>=<localPath>`
    because cxcli does not infer arbitrary root-level folders as customer data.
+   The automatic mount is persistent even when the legacy source path was absent:
+   for example, if `/models` did not exist before first adoption, cxcli records a
+   `source_missing` marker, still wires `/models` to the shared persistent target,
+   and future files written under `/models` land in `/mnt/jail/shared/models` on
+   external clusters or `/mnt/jail-store/shared/models` on managed clusters.
 3. cxcli probes each known and explicit persistent source path in the old rootfs
    and records the decision as `present`, `absent`, `existing-submount`, or
    `explicit`. It then runs a passive-slot capacity preflight. For managed and
@@ -3763,15 +3779,15 @@ The Jail Upgrade rootfs-refresh process is:
    writer hold. After the gate, cxcli runs a Kubernetes migration Job before
    passive-slot population. The Job
    mounts the existing jail PVC once at `/store`, copies only present known or
-   explicit paths such as `/store/home`, `/store/data`, and `/store/scripts`
-   into `/store/shared/home`, `/store/shared/data`, and
-   `/store/shared/scripts`, and preserves ownership, permissions, symlinks,
-   ACLs, and xattrs where the runtime supports them. On managed clusters those
-   store paths correspond to `/mnt/jail-store/...`; on external clusters they
-   correspond to `/mnt/jail/...`. Completion markers live under
-   `/store/.cxcli/persistent-migrations/`; reruns skip only marked completed
-   paths and fail closed on source/target overlap, top-level source symlinks,
-   target symlinks, or unmarked non-empty targets.
+   explicit paths such as `/store/home`, `/store/data`, `/store/scripts`, and
+   `/store/models` into `/store/shared/home`, `/store/shared/data`,
+   `/store/shared/scripts`, and `/store/shared/models`, and preserves ownership,
+   permissions, symlinks, ACLs, and xattrs where the runtime supports them. On
+   managed clusters those store paths correspond to `/mnt/jail-store/...`; on
+   external clusters they correspond to `/mnt/jail/...`. Completion markers live
+   under `/store/.cxcli/persistent-migrations/`; reruns skip only marked
+   completed paths and fail closed on source/target overlap, top-level source
+   symlinks, target symlinks, or unmarked non-empty targets.
    If a later refresh step fails after the copy is marked complete, cxcli keeps
    login/worker writers held and Slurm quiet instead of reopening legacy-rootfs
    writes that would make the shared copy stale.
@@ -3806,9 +3822,9 @@ pods still use the old active slot. During the consumer rollout, the cluster can
 briefly contain old pods using the old slot and replacement pods using the new
 slot. A single login or worker pod is not expected to run with both slot-a and
 slot-b mounted as two active root filesystems. Each consumer has one main jail
-rootfs mount; persistent submounts such as `/home`, `/data`, and `/scripts`
-are separate overlays from the shared area and are preserved across both rootfs
-generations.
+rootfs mount; persistent submounts such as `/home`, `/data`, `/scripts`, and
+`/models` are separate overlays from the shared area and are preserved across
+both rootfs generations.
 
 The one-time migration happens only while
 `jailRootfs.adoption.activeSource == "legacy-rootfs"`. After cxcli has copied
@@ -3817,8 +3833,10 @@ switched consumers to a slot-backed rootfs, those paths are external to the
 rootfs lifecycle. Later Jail Upgrade runs repopulate only the passive rootfs slot
 and keep mounting the same shared paths into each newly active slot; they do not
 copy `/home`, `/data`, `/scripts`, `/models`, or explicit persistent paths
-again. The old legacy rootfs and old in-rootfs data remain untouched for rollback
-until an explicit cleanup policy is added.
+again. If an automatic path was absent during first adoption, it remains an empty
+shared persistent mount until users write data there. The old legacy rootfs and
+old in-rootfs data remain untouched for rollback until an explicit cleanup policy
+is added.
 
 ![Soperator jail upgrade workflow](docs/jail-upgrade-workflow.png)
 
@@ -5233,7 +5251,8 @@ Common command flags:
   `--kube-context`, `--access`, `--storage-mode`, `--compute-mode`,
   `--to-chart-version`, `--to-k8s-version`, `--source-version`,
   `--allow-unsupported-soperator-upgrade-path`, `--worker-rollout-strategy`,
-  `--worker-wave-groups`, `--worker-wave-percent`, `--max-parallel-worker-groups`,
+  `--service-role-rollout-strategy`, `--worker-wave-groups`,
+  `--worker-wave-percent`, `--max-parallel-worker-groups`,
   `--strategy-max-surge-count`, `--strategy-max-unavailable-count`,
   `--strategy-drain-timeout`, `--validate-sources/--no-validate-sources`,
   `--no-interactive`
@@ -5246,7 +5265,7 @@ Common command flags:
   `--approve-remediation/--no-approve-remediation`,
   `--allow-unsupported-soperator-upgrade-path`,
   `--interactive/--no-interactive`, `--worker-rollout-strategy`,
-  `--worker-wave-groups`, `--worker-wave-percent`,
+  `--service-role-rollout-strategy`, `--worker-wave-groups`, `--worker-wave-percent`,
   `--max-parallel-worker-groups`, `--strategy-max-surge-count`,
   `--strategy-max-unavailable-count`, `--strategy-drain-timeout`
 - `upgrade helm-chart`: `--to-version`, `--dry-run`,

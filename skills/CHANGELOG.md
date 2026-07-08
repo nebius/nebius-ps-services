@@ -144,6 +144,11 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Hardened `task-implementer` so complex sequential loops explicitly require
+  per-task context gathering, `design` routing for non-trivial choices, a short
+  implementation plan before edits, and handoff fields for context, design,
+  plan, validation, review, fixes, and `$commit` evidence; added a local static
+  smoke test for the workflow contract.
 - Deduped and shortened `global-context-management/SKILL.md` so the runtime
   skill load keeps one canonical task-state section and one canonical
   delegation/lifecycle section while preserving the existing validators and

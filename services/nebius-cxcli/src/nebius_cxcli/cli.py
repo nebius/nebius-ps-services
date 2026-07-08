@@ -461,6 +461,7 @@ from .soperator_migration import (
     SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE,
     SOPERATOR_WORKER_ROLLOUT_STRATEGY_ZERO_SURGE,
     SoperatorMigrationCommandResult,
+    SoperatorMigrationExecutionResult,
     SoperatorMigrationPhasePending,
     _ensure_persistent_migration_login_hold_allowed,
     _execute_legacy_persistent_mount_migration,
@@ -12174,6 +12175,7 @@ def _external_soperator_upgrade_command_args(
     login_session_policy: str,
     login_session_drain_timeout: str,
     worker_rollout_strategy: str | None,
+    service_role_rollout_strategy: str | None,
     worker_wave_groups: int | None,
     worker_wave_percent: int | None,
     max_parallel_worker_groups: int | None,
@@ -12206,6 +12208,8 @@ def _external_soperator_upgrade_command_args(
     args.extend(["--login-session-drain-timeout", login_session_drain_timeout])
     if _non_empty_text(worker_rollout_strategy):
         args.extend(["--worker-rollout-strategy", str(worker_rollout_strategy)])
+    if _non_empty_text(service_role_rollout_strategy):
+        args.extend(["--service-role-rollout-strategy", str(service_role_rollout_strategy)])
     if worker_wave_groups is not None:
         args.extend(["--worker-wave-groups", str(worker_wave_groups)])
     if worker_wave_percent is not None:
@@ -21963,10 +21967,15 @@ def _soperator_rollout_wave_mode_choices(default: str) -> list[OptionChoice]:
 
 _SOPERATOR_ROLLOUT_FIELD_GUIDANCE = {
     "strategy": (
-        "Strategy: worker zero-surge is the default and avoids spare worker quota by "
-        "allowing one unavailable worker node per group; service-role groups use "
-        "safe-surge by default, and worker safe-surge preserves worker capacity with "
-        "temporary surge nodes and requires quota/capacity preflight."
+        "Worker strategy: zero-surge is the default and avoids spare worker quota by "
+        "allowing one unavailable worker node per group; worker safe-surge preserves "
+        "worker capacity with temporary surge nodes and requires quota/capacity preflight."
+    ),
+    "service_role_strategy": (
+        "Service-role strategy: zero-surge is the default and avoids service-role "
+        "surge quota by allowing one unavailable service-role node per group; "
+        "safe-surge preserves service-role capacity with temporary surge nodes and "
+        "requires quota/capacity preflight."
     ),
     "wave_budget": (
         "Safe-surge wave budget: choose groups for a fixed batch size, or percent to "
@@ -22072,9 +22081,25 @@ def _prompt_soperator_onboarding_rollout_manifest(
             required=True,
         )
     )
+    _print_soperator_rollout_field_guidance("service_role_strategy")
+    service_role_strategy = str(
+        _prompt_soperator_rollout_value(
+            "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.service_role_strategy",
+            current.service_role_strategy,
+            validator=lambda value: _soperator_rollout_manifest_from_options(
+                onboarding,
+                worker_rollout_strategy=strategy,
+                service_role_rollout_strategy=str(value or ""),
+            ),
+            choices=_soperator_rollout_strategy_choices(current.service_role_strategy),
+            type_hint="string",
+            required=True,
+        )
+    )
     selected_current = resolve_external_node_template_rollout(
         onboarding,
         strategy=strategy,
+        service_role_strategy=service_role_strategy,
         strategy_max_surge_count=_strategy_defaults(strategy)[0],
         strategy_max_unavailable_count=_strategy_defaults(strategy)[1],
     )
@@ -22110,6 +22135,7 @@ def _prompt_soperator_onboarding_rollout_manifest(
                     validator=lambda value: _soperator_rollout_manifest_from_options(
                         onboarding,
                         worker_rollout_strategy=strategy,
+                        service_role_rollout_strategy=service_role_strategy,
                         worker_wave_groups=int(value),
                         worker_wave_percent=None,
                     ),
@@ -22130,6 +22156,7 @@ def _prompt_soperator_onboarding_rollout_manifest(
                     validator=lambda value: _soperator_rollout_manifest_from_options(
                         onboarding,
                         worker_rollout_strategy=strategy,
+                        service_role_rollout_strategy=service_role_strategy,
                         worker_wave_groups=None,
                         worker_wave_percent=int(value),
                     ),
@@ -22144,6 +22171,7 @@ def _prompt_soperator_onboarding_rollout_manifest(
                 validator=lambda value: _soperator_rollout_manifest_from_options(
                     onboarding,
                     worker_rollout_strategy=strategy,
+                    service_role_rollout_strategy=service_role_strategy,
                     worker_wave_groups=worker_wave_groups,
                     worker_wave_percent=worker_wave_percent,
                     max_parallel_worker_groups=None if value in {None, ""} else int(value),
@@ -22161,6 +22189,7 @@ def _prompt_soperator_onboarding_rollout_manifest(
             validator=lambda value: _soperator_rollout_manifest_from_options(
                 onboarding,
                 worker_rollout_strategy=strategy,
+                service_role_rollout_strategy=service_role_strategy,
                 worker_wave_groups=worker_wave_groups,
                 worker_wave_percent=worker_wave_percent,
                 max_parallel_worker_groups=max_parallel,
@@ -22178,6 +22207,7 @@ def _prompt_soperator_onboarding_rollout_manifest(
             validator=lambda value: _soperator_rollout_manifest_from_options(
                 onboarding,
                 worker_rollout_strategy=strategy,
+                service_role_rollout_strategy=service_role_strategy,
                 worker_wave_groups=worker_wave_groups,
                 worker_wave_percent=worker_wave_percent,
                 max_parallel_worker_groups=max_parallel,
@@ -22196,6 +22226,7 @@ def _prompt_soperator_onboarding_rollout_manifest(
             validator=lambda value: _soperator_rollout_manifest_from_options(
                 onboarding,
                 worker_rollout_strategy=strategy,
+                service_role_rollout_strategy=service_role_strategy,
                 worker_wave_groups=worker_wave_groups,
                 worker_wave_percent=worker_wave_percent,
                 max_parallel_worker_groups=max_parallel,
@@ -22210,6 +22241,7 @@ def _prompt_soperator_onboarding_rollout_manifest(
     return _soperator_rollout_manifest_from_options(
         onboarding,
         worker_rollout_strategy=strategy,
+        service_role_rollout_strategy=service_role_strategy,
         worker_wave_groups=worker_wave_groups,
         worker_wave_percent=worker_wave_percent,
         max_parallel_worker_groups=max_parallel,
@@ -22260,6 +22292,7 @@ def _soperator_rollout_manifest_from_options(
     onboarding: Mapping[str, Any] | None = None,
     *,
     worker_rollout_strategy: str | None = None,
+    service_role_rollout_strategy: str | None = None,
     worker_wave_groups: int | None = None,
     worker_wave_percent: int | None = None,
     max_parallel_worker_groups: int | None = None,
@@ -22270,6 +22303,7 @@ def _soperator_rollout_manifest_from_options(
     return resolve_external_node_template_rollout(
         onboarding or {},
         strategy=worker_rollout_strategy,
+        service_role_strategy=service_role_rollout_strategy,
         worker_wave_groups=worker_wave_groups,
         worker_wave_percent=worker_wave_percent,
         max_parallel_worker_groups=max_parallel_worker_groups,
@@ -22309,6 +22343,7 @@ def _apply_soperator_rollout_manifest_to_target_row(
 def _soperator_rollout_options_provided(
     *,
     worker_rollout_strategy: str | None = None,
+    service_role_rollout_strategy: str | None = None,
     worker_wave_groups: int | None = None,
     worker_wave_percent: int | None = None,
     max_parallel_worker_groups: int | None = None,
@@ -22320,6 +22355,7 @@ def _soperator_rollout_options_provided(
         value is not None
         for value in (
             worker_rollout_strategy,
+            service_role_rollout_strategy,
             worker_wave_groups,
             worker_wave_percent,
             max_parallel_worker_groups,
@@ -22340,11 +22376,14 @@ def _soperator_rollout_command_options_from_target_row(
         return {}
     rollout = resolve_external_node_template_rollout(onboarding)
     options: dict[str, object] = {
-        "worker_rollout_strategy": rollout.strategy,
         "strategy_max_surge_count": rollout.strategy_max_surge_count,
         "strategy_max_unavailable_count": rollout.strategy_max_unavailable_count,
         "strategy_drain_timeout": rollout.strategy_drain_timeout,
     }
+    if rollout.strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE:
+        options["worker_rollout_strategy"] = rollout.strategy
+    if rollout.service_role_strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE:
+        options["service_role_rollout_strategy"] = rollout.service_role_strategy
     if rollout.strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE:
         if rollout.worker_wave_groups is not None:
             options["worker_wave_groups"] = rollout.worker_wave_groups
@@ -22499,6 +22538,7 @@ def _soperator_onboard_bundle_command_args(
     to_k8s_version: str | None = None,
     allow_unsupported_soperator_upgrade_path: bool | None = None,
     worker_rollout_strategy: str | None = None,
+    service_role_rollout_strategy: str | None = None,
     worker_wave_groups: int | None = None,
     worker_wave_percent: int | None = None,
     max_parallel_worker_groups: int | None = None,
@@ -22568,6 +22608,7 @@ def _soperator_onboard_bundle_command_args(
     if allow_unsupported_soperator_upgrade_path is True:
         args.append("--allow-unsupported-soperator-upgrade-path")
     _append_text_option("--worker-rollout-strategy", worker_rollout_strategy)
+    _append_text_option("--service-role-rollout-strategy", service_role_rollout_strategy)
     if worker_wave_groups is not None:
         args.extend(["--worker-wave-groups", str(worker_wave_groups)])
     if worker_wave_percent is not None:
@@ -23603,6 +23644,7 @@ def _prompt_soperator_onboarding_target_row(
     allow_unsupported_soperator_upgrade_path: bool = False,
     validate_sources: bool = True,
     worker_rollout_strategy: str | None = None,
+    service_role_rollout_strategy: str | None = None,
     worker_wave_groups: int | None = None,
     worker_wave_percent: int | None = None,
     max_parallel_worker_groups: int | None = None,
@@ -23614,6 +23656,7 @@ def _prompt_soperator_onboarding_target_row(
     explicit_compute_mode = compute_mode is not None
     explicit_rollout_options = _soperator_rollout_options_provided(
         worker_rollout_strategy=worker_rollout_strategy,
+        service_role_rollout_strategy=service_role_rollout_strategy,
         worker_wave_groups=worker_wave_groups,
         worker_wave_percent=worker_wave_percent,
         max_parallel_worker_groups=max_parallel_worker_groups,
@@ -23757,6 +23800,7 @@ def _prompt_soperator_onboarding_target_row(
         target_k8s_version=target_k8s_version,
         rollout_manifest=_soperator_rollout_manifest_from_options(
             worker_rollout_strategy=worker_rollout_strategy,
+            service_role_rollout_strategy=service_role_rollout_strategy,
             worker_wave_groups=worker_wave_groups,
             worker_wave_percent=worker_wave_percent,
             max_parallel_worker_groups=max_parallel_worker_groups,
@@ -23856,6 +23900,7 @@ def _soperator_onboarding_target_row_from_options(
     interactive: bool = False,
     validate_sources: bool = True,
     worker_rollout_strategy: str | None = None,
+    service_role_rollout_strategy: str | None = None,
     worker_wave_groups: int | None = None,
     worker_wave_percent: int | None = None,
     max_parallel_worker_groups: int | None = None,
@@ -23867,6 +23912,7 @@ def _soperator_onboarding_target_row_from_options(
     explicit_compute_mode = compute_mode is not None
     explicit_rollout_options = _soperator_rollout_options_provided(
         worker_rollout_strategy=worker_rollout_strategy,
+        service_role_rollout_strategy=service_role_rollout_strategy,
         worker_wave_groups=worker_wave_groups,
         worker_wave_percent=worker_wave_percent,
         max_parallel_worker_groups=max_parallel_worker_groups,
@@ -24023,6 +24069,7 @@ def _soperator_onboarding_target_row_from_options(
         target_k8s_version=target_k8s_version,
         rollout_manifest=_soperator_rollout_manifest_from_options(
             worker_rollout_strategy=worker_rollout_strategy,
+            service_role_rollout_strategy=service_role_rollout_strategy,
             worker_wave_groups=worker_wave_groups,
             worker_wave_percent=worker_wave_percent,
             max_parallel_worker_groups=max_parallel_worker_groups,
@@ -54859,6 +54906,16 @@ def soperator_onboard_command(
             ),
         ),
     ] = None,
+    service_role_rollout_strategy: Annotated[
+        str | None,
+        typer.Option(
+            "--service-role-rollout-strategy",
+            help=(
+                "External service-role node-template rollout strategy to persist in "
+                "config.yaml: zero-surge or safe-surge. Default: zero-surge."
+            ),
+        ),
+    ] = None,
     worker_wave_groups: Annotated[
         int | None,
         typer.Option(
@@ -54986,6 +55043,7 @@ def soperator_onboard_command(
                     validate_sources=validate_sources,
                     compute_mode=compute_mode_opt,
                     worker_rollout_strategy=worker_rollout_strategy,
+                    service_role_rollout_strategy=service_role_rollout_strategy,
                     worker_wave_groups=worker_wave_groups,
                     worker_wave_percent=worker_wave_percent,
                     max_parallel_worker_groups=max_parallel_worker_groups,
@@ -55008,6 +55066,7 @@ def soperator_onboard_command(
                     ),
                     validate_sources=validate_sources,
                     worker_rollout_strategy=worker_rollout_strategy,
+                    service_role_rollout_strategy=service_role_rollout_strategy,
                     worker_wave_groups=worker_wave_groups,
                     worker_wave_percent=worker_wave_percent,
                     max_parallel_worker_groups=max_parallel_worker_groups,
@@ -55031,6 +55090,7 @@ def soperator_onboard_command(
                 interactive=interactive_mode,
                 validate_sources=validate_sources,
                 worker_rollout_strategy=worker_rollout_strategy,
+                service_role_rollout_strategy=service_role_rollout_strategy,
                 worker_wave_groups=worker_wave_groups,
                 worker_wave_percent=worker_wave_percent,
                 max_parallel_worker_groups=max_parallel_worker_groups,
@@ -55070,6 +55130,9 @@ def soperator_onboard_command(
             worker_rollout_strategy=worker_rollout_strategy
             if worker_rollout_strategy is not None
             else cast(str | None, accepted_rollout_options.get("worker_rollout_strategy")),
+            service_role_rollout_strategy=service_role_rollout_strategy
+            if service_role_rollout_strategy is not None
+            else cast(str | None, accepted_rollout_options.get("service_role_rollout_strategy")),
             worker_wave_groups=worker_wave_groups
             if worker_wave_groups is not None
             else cast(int | None, accepted_rollout_options.get("worker_wave_groups")),
@@ -55236,7 +55299,7 @@ _SOPERATOR_MIGRATION_PLAN_TOPIC_STYLES = {
     "External node-template upgrade required": "yellow",
     "Target GPU stack reconciliation required": "yellow",
     "External node-template rollout": "bold cyan",
-    "Node-template rollout strategy": "bold cyan",
+    "Worker rollout strategy": "bold cyan",
     "Worker wave parallelism": "bold cyan",
     "Node-group per-group strategy": "bold cyan",
     "Safe-surge spare capacity required": "bold yellow",
@@ -56385,6 +56448,7 @@ def _format_soperator_migration_plan_lines(
     source_report: Mapping[str, Any],
     dry_run: bool,
     worker_rollout_strategy: str | None = None,
+    service_role_rollout_strategy: str | None = None,
     worker_wave_groups: int | None = None,
     worker_wave_percent: int | None = None,
     max_parallel_worker_groups: int | None = None,
@@ -56526,6 +56590,7 @@ def _format_soperator_migration_plan_lines(
         rollout = resolve_external_node_template_rollout(
             onboarding,
             strategy=worker_rollout_strategy,
+            service_role_strategy=service_role_rollout_strategy,
             worker_wave_groups=worker_wave_groups,
             worker_wave_percent=worker_wave_percent,
             max_parallel_worker_groups=max_parallel_worker_groups,
@@ -57334,10 +57399,19 @@ def soperator_external_upgrade_command(
             help=(
                 "External worker node-template rollout strategy. zero-surge is the "
                 "worker default and requires no spare worker quota but can reduce "
-                "worker capacity; safe-surge uses temporary worker surge capacity. "
-                "Login/service-role node groups use safe-surge by default and use "
-                "zero-surge only when this flag explicitly selects the lower-continuity "
-                "zero-surge rollout."
+                "worker capacity; safe-surge uses temporary worker surge capacity."
+            ),
+        ),
+    ] = None,
+    service_role_rollout_strategy: Annotated[
+        str | None,
+        typer.Option(
+            "--service-role-rollout-strategy",
+            help=(
+                "External service-role node-template rollout strategy. zero-surge is "
+                "the service-role default and requires no spare service-role quota but "
+                "can reduce service-role capacity; safe-surge uses temporary "
+                "service-role surge capacity."
             ),
         ),
     ] = None,
@@ -57642,6 +57716,7 @@ def soperator_external_upgrade_command(
             source_report=source_report,
             dry_run=dry_run,
             worker_rollout_strategy=worker_rollout_strategy,
+            service_role_rollout_strategy=service_role_rollout_strategy,
             worker_wave_groups=worker_wave_groups,
             worker_wave_percent=worker_wave_percent,
             max_parallel_worker_groups=max_parallel_worker_groups,
@@ -57661,6 +57736,7 @@ def soperator_external_upgrade_command(
             console.print(_style_soperator_migration_plan_line(line), soft_wrap=True)
         if not dry_run:
             post_migration_config_lines: tuple[str, ...] = ()
+            execution_result: SoperatorMigrationExecutionResult | None = None
             with (
                 _soperator_migration_status_emitter() as emit_status,
                 _soperator_migration_execute_payload(
@@ -57715,6 +57791,7 @@ def soperator_external_upgrade_command(
                     login_session_policy=resolved_login_session_policy,
                     login_session_drain_timeout=login_session_drain_timeout,
                     worker_rollout_strategy=worker_rollout_strategy,
+                    service_role_rollout_strategy=service_role_rollout_strategy,
                     worker_wave_groups=worker_wave_groups,
                     worker_wave_percent=worker_wave_percent,
                     max_parallel_worker_groups=max_parallel_worker_groups,
@@ -57801,6 +57878,7 @@ def soperator_external_upgrade_command(
                     login_session_drain_timeout_seconds=login_session_drain_timeout_seconds,
                     approve_remediation=approve_remediation,
                     worker_rollout_strategy=worker_rollout_strategy,
+                    service_role_rollout_strategy=service_role_rollout_strategy,
                     worker_wave_groups=worker_wave_groups,
                     worker_wave_percent=worker_wave_percent,
                     max_parallel_worker_groups=max_parallel_worker_groups,
@@ -57840,6 +57918,8 @@ def soperator_external_upgrade_command(
                             upgrade_path=locked_upgrade_path or None,
                         )
                     )
+            if execution_result is None:
+                raise RuntimeError("External Soperator upgrade execution did not return a result.")
             for line in execution_result.lines:
                 console.print(line, soft_wrap=True)
             for line in post_migration_config_lines:

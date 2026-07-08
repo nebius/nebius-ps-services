@@ -501,7 +501,7 @@ def _validate_soperator_onboarding_rollout(onboarding: Mapping[str, Any], field_
             + ", ".join(sorted(_SOPERATOR_WORKER_ROLLOUT_STRATEGIES))
         )
     service_role_strategy = (
-        normalize_component_token(rollout.get("service_role_strategy")) or "safe-surge"
+        normalize_component_token(rollout.get("service_role_strategy")) or "zero-surge"
     )
     if service_role_strategy not in _SOPERATOR_WORKER_ROLLOUT_STRATEGIES:
         raise ValueError(

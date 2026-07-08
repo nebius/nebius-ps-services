@@ -3736,11 +3736,12 @@ def test_soperator_rollout_prompt_guidance_includes_concise_field_comments(
         {
             "soperator_onboarding": {
                 "node_template_upgrade": {
-                    "rollout": {
-                        "strategy": "safe-surge",
-                        "worker_wave_groups": 1,
-                        "worker_group_strategy": {
-                            "max_surge_count": 1,
+                        "rollout": {
+                            "strategy": "safe-surge",
+                            "service_role_strategy": "zero-surge",
+                            "worker_wave_groups": 1,
+                            "worker_group_strategy": {
+                                "max_surge_count": 1,
                             "max_unavailable_count": 0,
                             "drain_timeout": "30m",
                         },
@@ -3752,11 +3753,11 @@ def test_soperator_rollout_prompt_guidance_includes_concise_field_comments(
 
     assert manifest == {
         "strategy": "safe-surge",
-        "service_role_strategy": "safe-surge",
+        "service_role_strategy": "zero-surge",
         "worker_wave_groups": 2,
         "service_role_group_strategy": {
-            "max_surge_count": 1,
-            "max_unavailable_count": 0,
+            "max_surge_count": 0,
+            "max_unavailable_count": 1,
             "drain_timeout": "30m",
         },
         "worker_group_strategy": {
@@ -3766,8 +3767,8 @@ def test_soperator_rollout_prompt_guidance_includes_concise_field_comments(
         },
     }
     joined = "\n".join(captured)
-    assert "Strategy: worker zero-surge is the default" in joined
-    assert "service-role groups use safe-surge by default" in joined
+    assert "Worker strategy: zero-surge is the default" in joined
+    assert "Service-role strategy: zero-surge is the default" in joined
     assert "worker safe-surge preserves worker capacity with temporary surge nodes" in joined
     assert "Safe-surge wave budget: choose groups for a fixed batch size" in joined
     assert "Safe-surge worker wave groups: fixed number of worker groups" in joined
@@ -3817,11 +3818,12 @@ def test_soperator_rollout_prompt_keeps_parallel_cap_for_percent_waves(
         {
             "soperator_onboarding": {
                 "node_template_upgrade": {
-                    "rollout": {
-                        "strategy": "safe-surge",
-                        "worker_wave_percent": 1,
-                        "worker_group_strategy": {
-                            "max_surge_count": 1,
+                        "rollout": {
+                            "strategy": "safe-surge",
+                            "service_role_strategy": "safe-surge",
+                            "worker_wave_percent": 1,
+                            "worker_group_strategy": {
+                                "max_surge_count": 1,
                             "max_unavailable_count": 0,
                             "drain_timeout": "30m",
                         },

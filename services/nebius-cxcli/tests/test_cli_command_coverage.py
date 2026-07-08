@@ -6,7 +6,7 @@ import re
 import subprocess
 import sys
 import types
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -783,6 +783,7 @@ def test_ext_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path)
         login_session_policy="wait-active",
         login_session_drain_timeout="20m",
         worker_rollout_strategy="safe-surge",
+        service_role_rollout_strategy=None,
         worker_wave_groups=2,
         worker_wave_percent=None,
         max_parallel_worker_groups=None,
@@ -9885,6 +9886,196 @@ def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_by_terminal_m
     assert captured["login_session_policy"] == "target-ready"
     assert captured["login_session_drain_timeout_seconds"] == 1800
     assert events == ["backup", "execute"]
+
+
+def test_ext_soperator_upgrade_execute_prints_final_output_after_status_exits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("deploy: {}\n", encoding="utf-8")
+    locked_upgrade_path: dict[str, Any] = {
+        "schema": cli._SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA,
+        "locked": True,
+        "source_k8s_version": "1.32",
+        "target_k8s_version": "1.32",
+        "soperator_app": {
+            "current_version": "1.22.3",
+            "target_version": "4.0.2",
+            "upgrade_required": True,
+        },
+        "soperator_chart": {
+            "current_version": "1.22.3",
+            "target_version": "4.0.2-ps.3",
+            "upgrade_required": True,
+        },
+        "jail_rootfs": {"refresh_required": False},
+        "segments": [
+            {
+                "id": "segment-1-soperator-1-22-3-4-0-2-ps-3",
+                "kind": "soperator-upgrade",
+                "current_k8s_version": "1.32",
+                "target_k8s_version": "1.32",
+                "actions": ["upgrade-soperator"],
+                "soperator_upgrade_required": True,
+                "k8s_upgrade_required": False,
+                "soperator_app": {
+                    "current_version": "1.22.3",
+                    "target_version": "4.0.2",
+                    "upgrade_required": True,
+                },
+                "soperator_chart": {
+                    "current_version": "1.22.3",
+                    "target_version": "4.0.2-ps.3",
+                    "upgrade_required": True,
+                },
+                "jail_rootfs": {"refresh_required": False},
+            }
+        ],
+    }
+    payload: dict[str, Any] = {
+        "deploy": {
+            "targets": [
+                {
+                    "instance_id": "external-cluster",
+                    "kube_context": "external-context",
+                    "soperator_onboarding": {
+                        "accepted": True,
+                        "actions": ["upgrade-soperator"],
+                        "source_version": "1.22.3",
+                        "target_version": "4.0.2-ps.3",
+                        "upgrade_path": locked_upgrade_path,
+                    },
+                }
+            ]
+        }
+    }
+    status_active = False
+    printed: list[tuple[bool, str]] = []
+
+    class _RecordingConsole:
+        is_terminal = False
+
+        def print(self, *args: object, **_kwargs: object) -> None:
+            printed.append((status_active, " ".join(str(arg) for arg in args)))
+
+    @contextmanager
+    def _no_status(_message: str):
+        yield
+
+    @contextmanager
+    def _status_emitter():
+        nonlocal status_active
+        status_active = True
+
+        class _Emitter:
+            def __call__(self, _message: str) -> None:
+                return None
+
+            @contextmanager
+            def pause(self) -> Iterator[None]:
+                yield
+
+        try:
+            yield _Emitter()
+        finally:
+            status_active = False
+
+    def _target(payload_arg: Mapping[str, Any], *, target_ref: str) -> Mapping[str, Any]:
+        targets = payload_arg.get("deploy", {}).get("targets", [])
+        return next(row for row in targets if row.get("instance_id") == target_ref)
+
+    monkeypatch.setattr(cli, "console", _RecordingConsole())
+    monkeypatch.setattr(cli, "_load_source_payload", lambda _path: payload)
+    monkeypatch.setattr(
+        cli,
+        "_resolve_soperator_migration_target_ref",
+        lambda _payload, *, target_ref: target_ref or "external-cluster",
+    )
+    monkeypatch.setattr(
+        cli,
+        "legacy_soperator_migration_checkpoint_path",
+        lambda _config_path, _target_ref: tmp_path / "missing-checkpoint.json",
+    )
+    monkeypatch.setattr(
+        cli, "validate_soperator_onboarding_acceptance", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(cli, "soperator_onboarding_target", _target)
+    monkeypatch.setattr(cli, "_command_status", _no_status)
+    monkeypatch.setattr(cli, "_soperator_migration_status_emitter", _status_emitter)
+    monkeypatch.setattr(
+        cli,
+        "_run_external_soperator_discovery_command",
+        lambda **_kwargs: tmp_path / "manifest.json",
+    )
+    monkeypatch.setattr(
+        cli,
+        "_load_soperator_source_discovery_report",
+        lambda **_kwargs: {
+            "report": {"source_version": "1.22.3", "target_version": "4.0.2-ps.3"},
+            "snapshot": {},
+        },
+    )
+    monkeypatch.setattr(cli, "_require_soperator_migration_actions", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        cli,
+        "_format_soperator_migration_plan_lines",
+        lambda **_kwargs: ("External Soperator upgrade target: external-cluster",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "external_soperator_upgrade_resume_backup_metadata",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(cli, "_external_soperator_backup_kube_context", lambda *_args, **_kwargs: "ctx")
+    monkeypatch.setattr(
+        cli,
+        "_create_external_soperator_upgrade_backup",
+        lambda **_kwargs: {"path": str(tmp_path / "backup.tar.gz")},
+    )
+    monkeypatch.setattr(
+        cli,
+        "external_soperator_upgrade_protected_comparison_passed",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_refresh_soperator_onboarding_after_completed_migration",
+        lambda **_kwargs: ("refresh complete",),
+    )
+    monkeypatch.setattr(
+        cli,
+        "execute_soperator_migration",
+        lambda **_kwargs: SimpleNamespace(pending_phase="none", lines=("execute complete",)),
+    )
+
+    cli.soperator_external_upgrade_command(
+        config_path=config_path,
+        target_ref_opt="external-cluster",
+        backup_dir=None,
+        job_policy=None,
+        cancel_job=None,
+        requeue_job=None,
+        job_wait_timeout=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
+        job_refresh_interval=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
+        dry_run=False,
+        approve=True,
+        approve_remediation=False,
+        allow_unsupported_soperator_upgrade_path=False,
+        interactive=False,
+        worker_rollout_strategy=None,
+        worker_wave_groups=None,
+        worker_wave_percent=None,
+        max_parallel_worker_groups=None,
+        strategy_max_surge_count=None,
+        strategy_max_unavailable_count=None,
+        strategy_drain_timeout=None,
+    )
+
+    assert (False, "execute complete") in printed
+    assert (False, "refresh complete") in printed
+    assert (True, "execute complete") not in printed
+    assert (True, "refresh complete") not in printed
 
 
 def test_render_command_points_gpu_reconciliation_only_soperator_to_deploy(
@@ -24024,6 +24215,8 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     )
     assert "create a project config under the deployments root" in normalized_soperator_onboard_help
     assert "--worker-rollout-strategy" in normalized_soperator_onboard_help
+    assert "--service-role-rollout-strategy" in normalized_soperator_onboard_help
+    assert "Default: zero-surge" in normalized_soperator_onboard_help
     assert "--worker-wave-groups" in normalized_soperator_onboard_help
     assert "--worker-wave-percent" in normalized_soperator_onboard_help
     assert "--max-parallel-worker-groups" in normalized_soperator_onboard_help
@@ -24165,6 +24358,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         normalized_ext_soperator_upgrade_help
     )
     assert "--worker-rollout-strategy" in normalized_ext_soperator_upgrade_help
+    assert "--service-role-rollout-strategy" in normalized_ext_soperator_upgrade_help
     assert "--worker-wave-groups" in normalized_ext_soperator_upgrade_help
     assert "--worker-wave-percent" in normalized_ext_soperator_upgrade_help
     assert "--max-parallel-worker-groups" in normalized_ext_soperator_upgrade_help
@@ -24182,7 +24376,10 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "safe-surge uses temporary worker surge capacity" in (
         normalized_ext_soperator_upgrade_help
     )
-    assert "Login/service-role node groups use safe-surge by default" in (
+    assert "zero-surge is the service-role default" in (
+        normalized_ext_soperator_upgrade_help
+    )
+    assert "safe-surge uses temporary service-role surge capacity" in (
         normalized_ext_soperator_upgrade_help
     )
     assert "does not bypass Kubernetes minor-hop, backup, quota, protected-state" in (

@@ -1,25 +1,26 @@
 ---
 name: task-implementer
-description: "Use only when the user explicitly asks for sequential brownfield implementation loops: break work into ordered task-1..task-n items, inspect target code first, route architecture/contracts/missing-code/ambiguous boundaries through design when available, then implement one task per fresh Codex session with validation, code-review, fixes, $commit, and a markdown handoff checkpoint. Do not use for ordinary one-shot implementation, Agentic SDLC, chat-only brainstorming, standalone code review, standalone commits, PRs, or parallel multi-agent edits."
+description: "Use only when the user explicitly asks for a complex sequential brownfield implementation loop: split multi-task work into ordered task-1..task-n items, inspect target code first, gather per-task context with brainstorm when available, route architecture/contracts/missing-code/ambiguous boundaries through design, then plan and implement one task per fresh Codex session with validation, code-review, fixes, $commit, and a markdown handoff checkpoint. Do not use for ordinary one-shot implementation, Agentic SDLC, chat-only brainstorming, standalone code review, standalone commits, PRs, or parallel multi-agent edits."
 ---
 
 # Task Implementer
 
 ## Purpose
 
-Coordinate small to medium brownfield implementation work by turning the user
-request into an ordered task queue, then implementing that queue sequentially
-with a reviewed, committed checkpoint and markdown handoff between fresh Codex
-sessions.
+Coordinate complex brownfield implementation work by turning a user request
+that is bigger than one coherent task into an ordered task queue, then
+implementing that queue sequentially with a reviewed, committed checkpoint and
+markdown handoff between fresh Codex sessions.
 
 This is a lightweight implementation loop, not the Agentic SDLC state machine.
 
 ## When To Use
 
 - The user explicitly invokes `$task-implementer`.
-- The user asks for a sequential task implementation loop.
-- A brownfield request contains multiple dependent code, test, docs, config, or
-  validation tasks and would benefit from fresh context between tasks.
+- The user asks for a complex sequential task implementation loop.
+- A brownfield request is bigger than one coherent task and contains multiple
+  dependent code, test, docs, config, or validation tasks that would benefit
+  from fresh context between tasks.
 - The user wants task ordering, per-task review, per-task local commits,
   checkpoint handoff, and no concurrent write agents.
 
@@ -27,6 +28,10 @@ This is a lightweight implementation loop, not the Agentic SDLC state machine.
 
 - Do not use for a normal single-turn implementation that fits cleanly in the
   current context; implement directly with the applicable project skills.
+- Do not use automatically for every complex task. `global-context-management`
+  may wrap complex work for context hygiene, but this skill owns an explicit
+  per-task commit workflow and should run only when deliberately requested or
+  selected by a coordinator with the same explicit loop contract.
 - Do not use for the Agentic SDLC workflow; use `$sdlc-start` and `sdlc-*`
   phase skills.
 - Do not use for chat-only ideation; use `brainstorm`.
@@ -56,13 +61,14 @@ This is a lightweight implementation loop, not the Agentic SDLC state machine.
   follow-on sessions.
 - The `code-review` skill before reviewing the active task's code changes.
 - The `commit` skill before committing the active task checkpoint.
+- The `brainstorm` skill before the per-task design pass when installed and
+  relevant, to gather task-specific context without editing files.
 - The relevant `AGENTS.md`, README, design docs, changelog, tests, and source
   files for the target code.
 - `docs/agentic-sdlc-design.md` only when the boundary with Agentic SDLC is
   unclear.
-- The `design` skill when the task needs architecture, contracts, missing code,
-  or ambiguous implementation boundaries and that skill is available. Let
-  `design` use `research`; do not duplicate research orchestration here.
+- The `design` skill before implementing each non-trivial task when available.
+  Let `design` use `research`; do not duplicate research orchestration here.
 - Current official vendor documentation when product, cloud, API, CLI, SDK,
   framework, package manager, or version-sensitive behavior affects the change.
 
@@ -96,38 +102,49 @@ data, or broad copied documentation.
 5. Identify dependencies and order tasks as `task-1`, `task-2`, ..., `task-n`.
    Order by prerequisite relationships first, then user priority, user-visible
    risk, shared contracts, and validation value.
-6. For each task, record: goal, rationale, dependencies, likely files, design
-   need, implementation steps, validation commands, done criteria, and rollback
-   notes.
-7. If design is needed, invoke or explicitly route to `design` before editing
-   the task. If `design` is unavailable, do a compact local design pass and mark
-   the handoff assumption as `design_skill_unavailable`.
-8. Implement only the active task. Keep edits within its boundary; update docs,
+6. For each task, record: goal, rationale, dependencies, likely files,
+   brainstorm/context needs, design need, plan, implementation steps,
+   validation commands, done criteria, and rollback notes.
+7. For the active task, gather only the context needed for that task. Use
+   `brainstorm` when available and relevant for source-ranked context,
+   tradeoffs, and assumption checks; keep it read-only and summarize the useful
+   findings in the handoff. If `brainstorm` is unavailable or unnecessary, say
+   so in the handoff.
+8. Route the active task through `design` before editing when the task is
+   non-trivial, has architecture or contract implications, has missing code or
+   ambiguous boundaries, or presents multiple implementation paths. If `design`
+   is unavailable for a task that needs it, do a compact local design pass and
+   mark the handoff assumption as `design_skill_unavailable`.
+9. Create a short per-task implementation plan after context and design: exact
+   steps, likely files, validation commands, documentation/changelog updates,
+   rollback notes, and stop conditions.
+10. Implement only the active task. Keep edits within its boundary; update docs,
    README, and changelog only when they are in scope for that task.
-9. Run the narrowest relevant validation for the active task. Broaden only when
+11. Run the narrowest relevant validation for the active task. Broaden only when
    the changed surface requires it.
-10. Inspect the diff after each task. Do not hide failures, weaken tests, or
+12. Inspect the diff after each task. Do not hide failures, weaken tests, or
     leave unrelated cleanup mixed into the task.
-11. Invoke `code-review` on the active task's code changes. Treat review
+13. Invoke `code-review` on the active task's code changes. Treat review
     findings as a required gate before handoff.
-12. Fix the review findings that are safe, scoped to the active task, and
+14. Fix the review findings that are safe, scoped to the active task, and
     supported by evidence. Re-run focused validation and, when code changed as
     part of the fix, re-run or refresh the review until no blocking finding
     remains or a blocker is recorded.
-13. Invoke `$commit` to commit the completed active task only after validation
+15. Invoke `$commit` to commit the completed active task only after validation
     and review/fix gates pass. Let the `commit` skill own repo-root
     `git add -A`, staged validation, commit hooks, message generation, and
     no-push behavior. If unrelated or unsafe dirty changes would make the
     whole-repo commit unsafe, classify `WORKTREE_CONFLICT`, update the
     handoff, and stop before committing.
-14. Update the handoff with status, changed files, validation, code-review
-    result, fixes applied, commit hash/message or commit blocker, residual
-    risks, and the exact next-session prompt.
-15. End the current task session after the handoff is saved. Start the next
+16. Update the handoff with status, brainstorm/context result, design result,
+    plan, changed files, validation, code-review result, fixes applied, commit
+    hash/message or commit blocker, residual risks, and the exact next-session
+    prompt.
+17. End the current task session after the handoff is saved. Start the next
     task only in a fresh agent session that receives the handoff markdown as
     context material.
-16. Repeat until every task is `done` or a task is `blocked`.
-17. After all tasks are done, run changed-surface alignment with `$align` when
+18. Repeat until every task is `done` or a task is `blocked`.
+19. After all tasks are done, run changed-surface alignment with `$align` when
     available, or perform the equivalent local checklist across code, tests,
     docs, changelog, CLI/help, config, and generated artifacts.
 
@@ -173,7 +190,11 @@ the intended context boundary.
   shared change is a prerequisite.
 - Prefer smaller tasks that can be validated and checkpointed independently.
 - Do not create artificial tasks for ceremony. If the request is truly one
-  coherent change, record one task and implement it.
+  coherent change, implement it directly unless the user explicitly insists on
+  this loop.
+- Do not split a request only because it touches several files. Split when the
+  work has separate deliverables, dependency edges, review risks, or validation
+  gates that benefit from independent commits.
 
 ## Idempotency
 
@@ -290,3 +311,5 @@ Return:
   fresh sessions.
 - Use `assets/handoff-template.md` when creating a new handoff.
 - Use `evals/trigger-prompts.md` when tuning or reviewing invocation behavior.
+- Run `python3 -B scripts/test-task-implementer-contract.py` as the local
+  smoke test after workflow, handoff, metadata, or trigger-example changes.

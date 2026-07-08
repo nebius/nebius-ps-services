@@ -3434,6 +3434,7 @@ def test_safe_surge_quota_preflight_counts_service_and_worker_active_groups(
     rollout = migration.resolve_external_node_template_rollout(
         onboarding,
         strategy="safe-surge",
+        service_role_strategy="safe-surge",
     )
     recorded_inputs: list[dict[str, Any]] = []
 
@@ -3469,6 +3470,57 @@ def test_safe_surge_quota_preflight_counts_service_and_worker_active_groups(
     assert any("safe-surge service group cpu-pool" in line for line in lines)
     assert any("safe-surge worker wave 1" in line for line in lines)
     assert any("requires 1 temporary surge node(s) per group" in line for line in lines)
+
+
+def test_zero_surge_override_disables_service_role_safe_surge_quota(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = _snapshot_with_compute_source()
+    payload = _payload(include_placements=True)
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]  # type: ignore[index]
+    assert isinstance(onboarding, dict)
+    onboarding["node_template_upgrade"] = {
+        "rollout": {
+            "strategy": "zero-surge",
+            "service_role_strategy": "safe-surge",
+            "service_role_group_strategy": {
+                "max_surge_count": 1,
+                "max_unavailable_count": 0,
+                "drain_timeout": "30m",
+            },
+            "worker_group_strategy": {
+                "max_surge_count": 0,
+                "max_unavailable_count": 1,
+                "drain_timeout": "30m",
+            },
+        }
+    }
+    rollout = migration.resolve_external_node_template_rollout(
+        onboarding,
+        service_role_strategy="zero-surge",
+    )
+
+    def _unexpected_quota_inputs(**_kwargs: object):
+        raise AssertionError("zero-surge override should not estimate safe-surge quota")
+
+    monkeypatch.setattr(migration, "estimate_mk8s_quota_requirements", _unexpected_quota_inputs)
+
+    runner = _FakeCommandRunner()
+    requirements, gaps, lines = migration._safe_surge_node_group_quota_requirements(
+        payload=payload,
+        target_ref="external-cluster",
+        source_report=_source_report(snapshot),
+        worker_node_groups=("gpu-pool",),
+        nebius_api=runner.nebius_api,
+        rollout=rollout,
+    )
+
+    assert requirements == []
+    assert gaps == []
+    assert lines == [
+        "Quota preflight safe-surge: disabled by zero-surge service-role and worker "
+        "rollout strategy; no surge quota required."
+    ]
 
 
 def test_execute_worker_safe_surge_quota_shortage_blocks_before_mutation(
@@ -3581,10 +3633,65 @@ def test_external_node_template_rollout_config_validation_and_cli_precedence() -
     default_rollout = migration.resolve_external_node_template_rollout(onboarding)
     assert default_rollout.to_manifest_dict() == {
         "strategy": "zero-surge",
+        "service_role_strategy": "zero-surge",
+        "service_role_group_strategy": {
+            "max_surge_count": 0,
+            "max_unavailable_count": 1,
+            "drain_timeout": "30m",
+        },
+        "worker_group_strategy": {
+            "max_surge_count": 0,
+            "max_unavailable_count": 1,
+            "drain_timeout": "30m",
+        },
+    }
+
+    override_onboarding = _payload()["deploy"]["targets"][0]["soperator_onboarding"]  # type: ignore[index]
+    assert isinstance(override_onboarding, dict)
+    override_onboarding["node_template_upgrade"] = {
+        "rollout": {
+            "strategy": "zero-surge",
+            "service_role_strategy": "safe-surge",
+            "service_role_group_strategy": {
+                "max_surge_count": 1,
+                "max_unavailable_count": 0,
+                "drain_timeout": "30m",
+            },
+            "worker_group_strategy": {
+                "max_surge_count": 0,
+                "max_unavailable_count": 1,
+                "drain_timeout": "30m",
+            },
+        }
+    }
+    worker_only_override = migration.resolve_external_node_template_rollout(
+        override_onboarding,
+        strategy="zero-surge",
+    )
+    assert worker_only_override.to_manifest_dict() == {
+        "strategy": "zero-surge",
         "service_role_strategy": "safe-surge",
         "service_role_group_strategy": {
             "max_surge_count": 1,
             "max_unavailable_count": 0,
+            "drain_timeout": "30m",
+        },
+        "worker_group_strategy": {
+            "max_surge_count": 0,
+            "max_unavailable_count": 1,
+            "drain_timeout": "30m",
+        },
+    }
+    zero_surge_service_override = migration.resolve_external_node_template_rollout(
+        override_onboarding,
+        service_role_strategy="zero-surge",
+    )
+    assert zero_surge_service_override.to_manifest_dict() == {
+        "strategy": "zero-surge",
+        "service_role_strategy": "zero-surge",
+        "service_role_group_strategy": {
+            "max_surge_count": 0,
+            "max_unavailable_count": 1,
             "drain_timeout": "30m",
         },
         "worker_group_strategy": {
@@ -3614,12 +3721,12 @@ def test_external_node_template_rollout_config_validation_and_cli_precedence() -
     )
     assert override.to_manifest_dict() == {
         "strategy": "safe-surge",
-        "service_role_strategy": "safe-surge",
+        "service_role_strategy": "zero-surge",
         "worker_wave_percent": 5,
         "max_parallel_worker_groups": 3,
         "service_role_group_strategy": {
-            "max_surge_count": 1,
-            "max_unavailable_count": 0,
+            "max_surge_count": 0,
+            "max_unavailable_count": 1,
             "drain_timeout": "30m",
         },
         "worker_group_strategy": {
@@ -3628,6 +3735,21 @@ def test_external_node_template_rollout_config_validation_and_cli_precedence() -
             "drain_timeout": "45m",
         },
     }
+    service_safe_surge_override = migration.resolve_external_node_template_rollout(
+        onboarding,
+        strategy="safe-surge",
+        service_role_strategy="safe-surge",
+        worker_wave_percent=5,
+    )
+    assert service_safe_surge_override.service_role_strategy == "safe-surge"
+    assert service_safe_surge_override.service_role_max_surge_count == 1
+    assert service_safe_surge_override.service_role_max_unavailable_count == 0
+
+    with pytest.raises(ValueError, match="--service-role-rollout-strategy"):
+        migration.resolve_external_node_template_rollout(
+            onboarding,
+            service_role_strategy="unsupported",
+        )
 
     with pytest.raises(ValueError, match="mutually exclusive"):
         migration.resolve_external_node_template_rollout(
@@ -3657,11 +3779,11 @@ def test_external_node_template_rollout_config_validation_and_cli_precedence() -
     )
     assert fixed_override.to_manifest_dict() == {
         "strategy": "safe-surge",
-        "service_role_strategy": "safe-surge",
+        "service_role_strategy": "zero-surge",
         "worker_wave_groups": 1,
         "service_role_group_strategy": {
-            "max_surge_count": 1,
-            "max_unavailable_count": 0,
+            "max_surge_count": 0,
+            "max_unavailable_count": 1,
             "drain_timeout": "30m",
         },
         "worker_group_strategy": {
@@ -3716,6 +3838,33 @@ def test_external_node_template_rollout_config_validation_and_cli_precedence() -
     }
     with pytest.raises(ValueError, match="explicit Go-style duration"):
         migration.resolve_external_node_template_rollout(onboarding)
+
+
+def test_zero_surge_service_role_plan_warns_for_one_node_groups() -> None:
+    snapshot = _snapshot()
+    snapshot["node_groups"]["login"] = {
+        "gpu": False,
+        "node_count": 1,
+        "labels": {
+            "nebius.com/node-group": "login",
+            "nebius.com/node-group-id": "nodegroup-login",
+            "slurm.nebius.ai/nodeset": "login",
+        },
+        "nodes": ["login-node-a"],
+    }
+    rollout = migration.resolve_external_node_template_rollout(
+        {"node_template_upgrade": {"rollout": {}}}
+    )
+
+    lines = migration._external_node_template_rollout_plan_lines(  # noqa: SLF001
+        rollout=rollout,
+        source_report=_source_report(snapshot),
+    )
+
+    assert any(
+        "Zero-surge service-role warning: discovered service-role capacity for login" in line
+        for line in lines
+    )
 
 
 def test_external_node_template_completion_recheck_rejects_k8s_downgrade_target() -> None:
@@ -4656,6 +4805,7 @@ def test_execute_skips_target_helm_readiness_for_adopted_external_node_upgrade(
         approved=True,
         command_runner=runner,
         worker_rollout_strategy="safe-surge",
+        service_role_rollout_strategy="safe-surge",
     )
 
     assert result.pending_phase == "none"
@@ -5046,6 +5196,7 @@ def test_execute_clears_stale_pending_phase_after_successful_resume(
         approved=True,
         command_runner=runner,
         worker_rollout_strategy="safe-surge",
+        service_role_rollout_strategy="safe-surge",
     )
 
     assert first.pending_phase == "validation-and-rollback-hold"
@@ -5066,6 +5217,7 @@ def test_execute_clears_stale_pending_phase_after_successful_resume(
         approved=True,
         command_runner=runner,
         worker_rollout_strategy="safe-surge",
+        service_role_rollout_strategy="safe-surge",
     )
 
     assert resumed.pending_phase == "none"
@@ -6536,6 +6688,7 @@ def test_execute_upgrades_external_node_template_with_safe_surge_strategy(
         approved=True,
         command_runner=runner,
         worker_rollout_strategy="safe-surge",
+        service_role_rollout_strategy="safe-surge",
     )
 
     assert result.pending_phase == "none"
@@ -7229,6 +7382,30 @@ def test_execute_rejects_changed_worker_rollout_settings_after_checkpoint(
             approved=True,
             command_runner=_FakeCommandRunner(),
             worker_rollout_strategy="safe-surge",
+        )
+
+    service_config_path = tmp_path / "service-config.yaml"
+    execute_soperator_migration(
+        config_path=service_config_path,
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=_source_report(),
+        backup_metadata=_backup_metadata("service-rollout-settings"),
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        approved=True,
+        command_runner=_FakeCommandRunner(),
+    )
+
+    with pytest.raises(RuntimeError, match="different external node-template rollout settings"):
+        execute_soperator_migration(
+            config_path=service_config_path,
+            target_ref="external-cluster",
+            payload=_payload(),
+            source_report=_source_report(),
+            snapshot_collector=lambda *, kube_context: _snapshot(),
+            approved=True,
+            command_runner=_FakeCommandRunner(),
+            service_role_rollout_strategy="safe-surge",
         )
 
 
