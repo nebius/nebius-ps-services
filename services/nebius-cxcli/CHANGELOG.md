@@ -6,6 +6,13 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Clarified the external Soperator access boundary: core onboarding, backup,
+  and upgrade operations use Nebius API plus Kubernetes API/kubeconfig access,
+  run Slurm commands through `kubectl exec`, and do not SSH from the operator
+  workstation into login or worker nodes.
+- Fixed `ext-soperator upgrade` execution-mode selection so omitting both
+  `--dry-run` and `--execute` fails fast instead of silently running the
+  read-only dry-run plan.
 - Hardened Soperator upgrade UX and resume behavior. Soperator onboarding
   prompts now reject invalid domain/type values in place and re-prompt with the
   rejected value visible as the next default. Managed `soperator upgrade` and

@@ -689,6 +689,11 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
         "`nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run`"
         in soperator
     )
+    assert (
+        "The command has no implicit execution mode: pass `--dry-run` to inspect the "
+        "plan, or pass `--execute --approve` for an approved mutating run."
+        in soperator_flat
+    )
     assert "`nebius-cxcli soperator backup <config.yaml> --target <target>`" in soperator
     assert "`nebius-cxcli soperator restore <backup.tar.gz> --execute --approve`" in (soperator)
     assert "nebius-cxcli soperator scale-down <config.yaml> --target <target>" in soperator
@@ -703,6 +708,26 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "nebius-cxcli ext-soperator scale-down --project-id <project-id>" in soperator
     assert "`--kube-context` is still required for Kubernetes and Slurm access" in (soperator_flat)
     assert "replace worker node groups externally, scale back up" in soperator_flat
+    assert (
+        "Core external Soperator operations stay SSH-free from the operator workstation"
+        in soperator_flat
+    )
+    assert (
+        "`ext-soperator onboard`, `ext-soperator backup`, and `ext-soperator upgrade` "
+        "use project-scoped Nebius API access for cloud resources and Kubernetes "
+        "API/kubeconfig access for cluster, Soperator, and Slurm work"
+        in soperator_flat
+    )
+    assert (
+        "Slurm commands such as `scontrol`, `squeue`, and `sacctmgr` run through "
+        "`kubectl exec` into the Soperator login or controller pods"
+        in soperator_flat
+    )
+    assert (
+        "Login-node SSH keys remain a separate human access contract for operator "
+        "sessions and manual smoke checks"
+        in soperator_flat
+    )
     assert (
         "nebius-cxcli ext-soperator backup \\ --project-id <project-id> \\ "
         "--cluster-id <mk8scluster-id> \\ --access internal"
@@ -2002,6 +2027,11 @@ def test_docs_define_component_selector_contract() -> None:
         "`nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run`" in design
     )
     assert (
+        "`ext-soperator upgrade` requires an explicit mode flag; omitting both "
+        "`--dry-run` and `--execute` fails before discovery or mutation."
+        in design_flat
+    )
+    assert (
         "dry-run plan groups target discovery, versions, the full locked path, completed/current/remaining segments"
     ) in design_flat
     assert (
@@ -2034,6 +2064,21 @@ def test_docs_define_component_selector_contract() -> None:
     assert "leaves live reconciliation to the managed deploy/apply path" in design_flat
     assert "does not bypass Terraform/Flux ownership for the live NodeSet" in design_flat
     assert "controller-safe `reserveOrdinals` path" in design_flat
+    assert (
+        "keeps the core external onboarding/backup/upgrade path SSH-free from the "
+        "operator workstation"
+        in design_flat
+    )
+    assert (
+        "using Nebius SDK/API calls for cloud resources and Kubernetes API/kubeconfig "
+        "access for cluster, Soperator, and Slurm operations"
+        in design_flat
+    )
+    assert (
+        "Slurm CLI probes and decisions run through `kubectl exec` into the login or "
+        "controller pods"
+        in design_flat
+    )
     assert "The managed stage model is explicit" in design_flat
     assert "planning/dry-run resolves chart and MK8s target intent" in design_flat
     assert "Kubernetes minor upgrades must follow provider-supported hops" in design_flat

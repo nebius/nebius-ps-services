@@ -2290,6 +2290,13 @@ External onboarding is not a Terraform import. The MK8s cluster and its node
 groups remain outside Terraform ownership. cxcli records enough target
 metadata, Soperator analysis, placements, and accepted remediation decisions
 to render/apply the Soperator app and to run guarded external upgrade phases.
+Core external Soperator operations stay SSH-free from the operator workstation:
+`ext-soperator onboard`, `ext-soperator backup`, and `ext-soperator upgrade`
+use project-scoped Nebius API access for cloud resources and Kubernetes
+API/kubeconfig access for cluster, Soperator, and Slurm work. Slurm commands
+such as `scontrol`, `squeue`, and `sacctmgr` run through `kubectl exec` into
+the Soperator login or controller pods. Login-node SSH keys remain a separate
+human access contract for operator sessions and manual smoke checks.
 
 ### Soperator Command Map
 
@@ -3182,7 +3189,9 @@ nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run
 The command reads `generated/reports/soperator-clusters/<cluster-key>/discovery/manifest.json`,
 validates the accepted onboarding analysis, and prints the target remediation,
 layout migration, and selected upgrade plan.
-`--dry-run` is the default and makes no cluster changes.
+The command has no implicit execution mode: pass `--dry-run` to inspect the
+plan, or pass `--execute --approve` for an approved mutating run. `--dry-run`
+makes no cluster changes.
 The selected `deploy.targets[].soperator_onboarding.actions` list is the
 desired external upgrade contract. If an action is absent, for example no
 `create-aligned-sfs` or `plan-soperator-compute-migration` action after the

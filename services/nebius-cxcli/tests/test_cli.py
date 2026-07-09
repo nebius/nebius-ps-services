@@ -9158,6 +9158,30 @@ def test_soperator_upgrade_slurm_node_filter_skips_deleted_computeinstances(
     assert cluster_calls == [("get", "nodes", "-o", "json", "--request-timeout=20s")]
 
 
+def test_ext_soperator_upgrade_requires_explicit_execution_mode(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "upgrade",
+            str(config_path),
+            "--target",
+            "external-cluster",
+        ],
+    )
+
+    assert result.exit_code == 1
+    normalized_output = " ".join(result.output.split())
+    assert "requires an explicit execution mode" in normalized_output
+    assert "--dry-run" in normalized_output
+    assert "--execute" in normalized_output
+    assert "--execute --approve" in normalized_output
+    assert "No such file" not in normalized_output
+    assert "Execution mode: dry-run" not in normalized_output
+
+
 def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

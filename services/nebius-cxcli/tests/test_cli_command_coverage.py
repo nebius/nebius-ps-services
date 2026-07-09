@@ -24577,6 +24577,13 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "choose one existing Nebius MK8s cluster from the project" in (
         normalized_soperator_onboard_help
     )
+    assert (
+        "Core external Soperator operations use Nebius API and Kubernetes API/kubeconfig "
+        "access" in normalized_soperator_onboard_help
+    )
+    assert "they do not SSH from the operator workstation into login or worker nodes" in (
+        normalized_soperator_onboard_help
+    )
     assert "Optional kubectl context override for discovery" in normalized_soperator_onboard_help
     assert "By default cxcli uses --cluster-id" in normalized_soperator_onboard_help
     assert "--access" in normalized_soperator_onboard_help
@@ -24709,6 +24716,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         normalized_ext_soperator_upgrade_help
     )
     assert "Not the Nebius cluster_id or display name" in normalized_ext_soperator_upgrade_help
+    assert "Required execution mode" in normalized_ext_soperator_upgrade_help
     assert "Use --dry-run for discovery refresh and the read-only plan" in (
         normalized_ext_soperator_upgrade_help
     )
@@ -24747,6 +24755,14 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     )
     assert (
         "Dry-run refreshes discovery and prints the plan" in normalized_ext_soperator_upgrade_help
+    )
+    assert (
+        "Core external Soperator execution uses Nebius API and Kubernetes API/kubectl "
+        "exec for cloud, cluster, and Slurm actions"
+        in normalized_ext_soperator_upgrade_help
+    )
+    assert "it does not SSH from the operator workstation into login or worker nodes" in (
+        normalized_ext_soperator_upgrade_help
     )
     assert (
         "--execute --approve refreshes discovery, creates a restore-capable backup"

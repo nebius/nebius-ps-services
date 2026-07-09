@@ -55495,6 +55495,9 @@ def ext_soperator_discover_command(
         "--cluster-id selects the Nebius MK8s cluster to adopt. --target-id is only "
         "the optional cxcli logical target id saved as deploy.targets[].instance_id; "
         "when omitted, cxcli derives it from the live cluster name. "
+        "Core external Soperator operations use Nebius API and Kubernetes "
+        "API/kubeconfig access; they do not SSH from the operator workstation "
+        "into login or worker nodes. "
         "The command updates config.yaml and writes "
         f"generated/reports/{SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME}/<target>/manifest.json; "
         "reruns refresh read-only source discovery and Nebius provider node-template "
@@ -58120,6 +58123,9 @@ def ext_soperator_scale_up_command(
         "id saved as deploy.targets[].instance_id, not the Nebius cluster_id or "
         "display name. The target must already be onboarded and accepted through "
         "ext-soperator onboard. Dry-run refreshes discovery and prints the plan. "
+        "Core external Soperator execution uses Nebius API and Kubernetes "
+        "API/kubectl exec for cloud, cluster, and Slurm actions; it does not SSH "
+        "from the operator workstation into login or worker nodes. "
         "--execute --approve refreshes discovery, creates a restore-capable backup, "
         "then runs exactly one locked upgrade-path segment: one external MK8s "
         "control-plane/node-template hop plus any Soperator/storage/compute/GPU-stack/"
@@ -58264,19 +58270,20 @@ def soperator_external_upgrade_command(
         ),
     ] = "30m",
     dry_run: Annotated[
-        bool,
+        bool | None,
         typer.Option(
             "--dry-run/--execute",
             help=(
-                "Use --dry-run for discovery refresh and the read-only plan. Use "
-                "--execute only after accepting that plan; it performs checkpointed live preflight and "
+                "Required execution mode. Use --dry-run for discovery refresh and "
+                "the read-only plan. Use --execute only after accepting that plan; "
+                "it performs checkpointed live preflight and "
                 "advances the accepted external MK8s control-plane/node-template hop, "
                 "target GPU stack, storage, copy, compute, cutover, Jail Upgrade, "
                 "validation, and retirement phases with guarded resume checkpoints. Kubernetes "
                 "node-template work is one minor hop per external upgrade run."
             ),
         ),
-    ] = True,
+    ] = None,
     approve: Annotated[
         bool,
         typer.Option(
@@ -58406,6 +58413,12 @@ def soperator_external_upgrade_command(
 ) -> None:
     """Plan or execute an accepted external Soperator upgrade."""
     try:
+        if dry_run is None:
+            raise RuntimeError(
+                "ext-soperator upgrade requires an explicit execution mode: pass "
+                "--dry-run to inspect the accepted plan, or pass --execute to enter "
+                "checkpointed execution. Use --execute --approve for approved mutation."
+            )
         payload = _load_source_payload(config_path)
         target_ref = _resolve_soperator_migration_target_ref(
             payload,

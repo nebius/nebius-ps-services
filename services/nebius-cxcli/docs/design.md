@@ -1188,7 +1188,9 @@ reconciles the generated desired state across every target; `deploy --target
 If the accepted onboarding report says external-upgrade-owned work is required, skip
 normal deploy and continue with
 `nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run` to
-inspect the explicit external-upgrade-owned actions. Onboarding locks the full
+inspect the explicit external-upgrade-owned actions. `ext-soperator upgrade`
+requires an explicit mode flag; omitting both `--dry-run` and `--execute` fails
+before discovery or mutation. Onboarding locks the full
 discovery-guided path under
 `deploy.targets[].soperator_onboarding.upgrade_path`; each
 `ext-soperator upgrade --execute --approve` run executes exactly one locked
@@ -1369,6 +1371,12 @@ provides ad hoc `ext-soperator scale-up` and `ext-soperator scale-down`
 commands for external maintenance without onboarding, requiring both Nebius
 `--project-id`/`--cluster-id` for node-group lookup and `--kube-context` for
 Kubernetes/Slurm access,
+keeps the core external onboarding/backup/upgrade path SSH-free from the
+operator workstation by using Nebius SDK/API calls for cloud resources and
+Kubernetes API/kubeconfig access for cluster, Soperator, and Slurm operations;
+Slurm CLI probes and decisions run through `kubectl exec` into the login or
+controller pods, while login-node SSH keys remain only the separate human access
+contract for operator sessions and manual smoke checks,
 clears stale GPU driver presets
 from CPU node groups, temporarily quiesces login workloads, one-node
 controller/accounting workloads, and known drain-blocking webhook replicas for
