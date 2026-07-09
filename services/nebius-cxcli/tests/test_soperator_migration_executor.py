@@ -8495,6 +8495,378 @@ def test_kubectl_exec_login_retries_slurm_with_legacy_conf_before_controller() -
     assert not any(call[6:11] == ("controller-0", "-c", "slurmctld", "--", "squeue") for call in calls)
 
 
+def test_kubectl_exec_login_uses_controller_for_slurm_when_login_pod_missing() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(command, 0, json.dumps({"items": []}), "")
+        if command[6:11] == ("controller-0", "-c", "slurmctld", "--", "scontrol"):
+            return SoperatorMigrationCommandResult(command, 0, "Slurmctld(primary) at ok\n", "")
+        return SoperatorMigrationCommandResult(command, 1, "", "unexpected command")
+
+    result = migration._kubectl_exec_login(  # noqa: SLF001
+        command_runner=runner,
+        kube_context="external-context",
+        args=("scontrol", "ping"),
+        check=False,
+        timeout_seconds=7,
+    )
+
+    assert result.returncode == 0
+    assert result.args[6:11] == ("controller-0", "-c", "slurmctld", "--", "scontrol")
+    assert not any(call[6:9] == ("login-0", "--", "scontrol") for call in calls)
+
+
+def test_kubectl_exec_login_reports_controller_failure_when_login_pod_missing() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(command, 0, json.dumps({"items": []}), "")
+        if command[6:11] == ("controller-0", "-c", "slurmctld", "--", "scontrol"):
+            return SoperatorMigrationCommandResult(command, 1, "", "controller unavailable")
+        return SoperatorMigrationCommandResult(command, 1, "", "unexpected command")
+
+    result = migration._kubectl_exec_login(  # noqa: SLF001
+        command_runner=runner,
+        kube_context="external-context",
+        args=("scontrol", "ping"),
+        check=False,
+        timeout_seconds=7,
+    )
+
+    assert result.returncode == 1
+    assert "login pod not found" in result.stderr
+    assert "controller fallback failed: controller unavailable" in result.stderr
+    assert any(call[6:11] == ("controller-0", "-c", "slurmctld", "--", "scontrol") for call in calls)
+
+
+def test_kubectl_exec_login_does_not_use_controller_for_non_slurm_login_probe() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(command, 0, json.dumps({"items": []}), "")
+        return SoperatorMigrationCommandResult(command, 1, "", "unexpected command")
+
+    result = migration._kubectl_exec_login(  # noqa: SLF001
+        command_runner=runner,
+        kube_context="external-context",
+        args=("sh", "-ceu", "mount"),
+        check=False,
+        timeout_seconds=7,
+    )
+
+    assert result.returncode == 1
+    assert result.stderr == "login pod not found"
+    assert not any(call[6:9] == ("controller-0", "-c", "slurmctld") for call in calls)
+
+
+def test_restore_slurm_partitions_uses_controller_when_login_pod_missing() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(command, 0, json.dumps({"items": []}), "")
+        if command[6:11] == ("controller-0", "-c", "slurmctld", "--", "scontrol"):
+            return SoperatorMigrationCommandResult(command, 0, "", "")
+        return SoperatorMigrationCommandResult(command, 1, "", "unexpected command")
+
+    migration._restore_external_upgrade_slurm_partitions(  # noqa: SLF001
+        command_runner=runner,
+        kube_context="external-context",
+        records=(
+            migration.SlurmPartitionQuiesceRecord(
+                partition="main",
+                previous_state="UP",
+                applied_state="DOWN",
+            ),
+        ),
+    )
+
+    assert any(
+        call[6:11] == ("controller-0", "-c", "slurmctld", "--", "scontrol")
+        and call[-4:] == ("scontrol", "update", "PartitionName=main", "State=UP")
+        for call in calls
+    )
+
+
+def test_rolling_login_continuity_defers_slurm_smoke_after_target_handoff_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    phase: dict[str, Any] = {}
+    service_identity = (
+        {
+            "name": "soperator-login",
+            "uid": "service-uid",
+            "cluster_ip": "10.0.0.10",
+        },
+    )
+
+    monkeypatch.setattr(
+        migration,
+        "wait_for_login_service_ready_endpoints",
+        lambda *_args, **_kwargs: {"ready_endpoints": 1},
+    )
+    monkeypatch.setattr(
+        migration,
+        "wait_for_login_statefulset_rollout_with_ready_endpoint_guard",
+        lambda *_args, **_kwargs: {"ready_replicas": 1},
+    )
+    monkeypatch.setattr(
+        migration,
+        "_login_service_identities",
+        lambda **_kwargs: service_identity,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_wait_for_preserved_login_service_ready_endpoints",
+        lambda **_kwargs: {"ready_endpoints": 1},
+    )
+    monkeypatch.setattr(
+        migration,
+        "_wait_for_login_session_policy",
+        lambda **_kwargs: ["Login continuity: source login session policy satisfied."],
+    )
+    monkeypatch.setattr(
+        migration,
+        "_kubectl_exec_login",
+        lambda **_kwargs: SoperatorMigrationCommandResult(
+            ("kubectl", "exec", "login-0", "--", "scontrol", "ping"),
+            1,
+            "",
+            "scontrol: error: _parse_next_key: Parsing error at unrecognized key: MetricsType\n"
+            "scontrol: fatal: Unable to process configuration file",
+        ),
+    )
+
+    lines = migration._ensure_rolling_login_continuity(  # noqa: SLF001
+        phase=phase,
+        command_runner=lambda *args, **kwargs: SoperatorMigrationCommandResult(
+            tuple(str(item) for item in args[0]),
+            0,
+            "",
+            "",
+        ),
+        kube_context="external-context",
+        target_ref="external-cluster",
+        service_identity_before=service_identity,
+        source_login_pod_names=("login-0",),
+        login_session_policy="target-ready",
+        login_session_drain_timeout_seconds=300,
+        allow_degraded_slurm_smoke=True,
+    )
+
+    continuity = phase["login_continuity"]
+    assert isinstance(continuity, dict)
+    assert continuity["slurm_smoke"]["status"] == "deferred"
+    assert "Slurm smoke deferred" in "\n".join(lines)
+
+
+def test_rolling_login_continuity_keeps_slurm_smoke_fail_closed_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    phase: dict[str, Any] = {}
+    service_identity = (
+        {
+            "name": "soperator-login",
+            "uid": "service-uid",
+            "cluster_ip": "10.0.0.10",
+        },
+    )
+
+    monkeypatch.setattr(
+        migration,
+        "wait_for_login_service_ready_endpoints",
+        lambda *_args, **_kwargs: {"ready_endpoints": 1},
+    )
+    monkeypatch.setattr(
+        migration,
+        "wait_for_login_statefulset_rollout_with_ready_endpoint_guard",
+        lambda *_args, **_kwargs: {"ready_replicas": 1},
+    )
+    monkeypatch.setattr(
+        migration,
+        "_login_service_identities",
+        lambda **_kwargs: service_identity,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_wait_for_preserved_login_service_ready_endpoints",
+        lambda **_kwargs: {"ready_endpoints": 1},
+    )
+    monkeypatch.setattr(
+        migration,
+        "_kubectl_exec_login",
+        lambda **_kwargs: SoperatorMigrationCommandResult(
+            ("kubectl", "exec", "login-0", "--", "scontrol", "ping"),
+            1,
+            "",
+            "scontrol: fatal: Unable to process configuration file",
+        ),
+    )
+
+    with pytest.raises(migration.SoperatorMigrationPhasePending, match="Slurm smoke check"):
+        migration._ensure_rolling_login_continuity(  # noqa: SLF001
+            phase=phase,
+            command_runner=lambda *args, **kwargs: SoperatorMigrationCommandResult(
+                tuple(str(item) for item in args[0]),
+                0,
+                "",
+                "",
+            ),
+            kube_context="external-context",
+            target_ref="external-cluster",
+            service_identity_before=service_identity,
+            source_login_pod_names=("login-0",),
+            login_session_policy="target-ready",
+            login_session_drain_timeout_seconds=300,
+        )
+
+
+def test_rolling_login_continuity_fails_closed_when_controller_fallback_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    phase: dict[str, Any] = {}
+    service_identity = (
+        {
+            "name": "soperator-login",
+            "uid": "service-uid",
+            "cluster_ip": "10.0.0.10",
+        },
+    )
+
+    monkeypatch.setattr(
+        migration,
+        "wait_for_login_service_ready_endpoints",
+        lambda *_args, **_kwargs: {"ready_endpoints": 1},
+    )
+    monkeypatch.setattr(
+        migration,
+        "wait_for_login_statefulset_rollout_with_ready_endpoint_guard",
+        lambda *_args, **_kwargs: {"ready_replicas": 1},
+    )
+    monkeypatch.setattr(
+        migration,
+        "_login_service_identities",
+        lambda **_kwargs: service_identity,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_wait_for_preserved_login_service_ready_endpoints",
+        lambda **_kwargs: {"ready_endpoints": 1},
+    )
+    monkeypatch.setattr(
+        migration,
+        "_kubectl_exec_login",
+        lambda **_kwargs: SoperatorMigrationCommandResult(
+            ("kubectl", "exec", "controller-0", "-c", "slurmctld", "--", "scontrol", "ping"),
+            1,
+            "",
+            "login pod not found; controller fallback failed: controller unavailable",
+        ),
+    )
+
+    with pytest.raises(migration.SoperatorMigrationPhasePending, match="Slurm smoke check"):
+        migration._ensure_rolling_login_continuity(  # noqa: SLF001
+            phase=phase,
+            command_runner=lambda *args, **kwargs: SoperatorMigrationCommandResult(
+                tuple(str(item) for item in args[0]),
+                0,
+                "",
+                "",
+            ),
+            kube_context="external-context",
+            target_ref="external-cluster",
+            service_identity_before=service_identity,
+            source_login_pod_names=(),
+            login_session_policy="target-ready",
+            login_session_drain_timeout_seconds=300,
+            allow_degraded_slurm_smoke=True,
+        )
+
+
 def test_kubectl_exec_login_falls_back_to_controller_after_timeout() -> None:
     calls: list[tuple[str, ...]] = []
     timeouts: list[int] = []
@@ -13034,7 +13406,8 @@ def test_execute_emits_phase_aware_status_for_storage_and_compute(tmp_path: Path
 
     assert result.pending_phase == "none"
     assert any("phase execute-preflight" in message for message in messages)
-    assert any("phase backup" in message for message in messages)
+    assert any("backup guard" in message for message in messages)
+    assert not any("phase backup" in message for message in messages)
     assert any("phase protected-state-capture" in message for message in messages)
     assert any("phase post-upgrade-mk8s-check" in message for message in messages)
     assert any("phase post-upgrade-helm-check" in message for message in messages)
@@ -13496,6 +13869,117 @@ def test_slurm_status_reports_named_worker_states() -> None:
     assert "workers drained=2, idle=2" in signal.summary
     assert "problem workers worker-gpu-0:drained, worker-gpu-1:drained" in signal.summary
     assert "queue empty" in signal.summary
+
+
+def test_slurm_status_defers_sinfo_during_target_handoff_resume() -> None:
+    calls: list[tuple[str, ...]] = []
+    checkpoint = {
+        "phase_state": {
+            "rolling-compute-migration": {
+                "slurm_quiesced_partitions": [
+                    {
+                        "partition": "main",
+                        "previous_state": "UP",
+                        "applied_state": "DOWN",
+                    }
+                ],
+                "target_values_apply_started_at": "2026-07-09T12:00:00Z",
+            }
+        }
+    }
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        return SoperatorMigrationCommandResult(command, 1, "", "unexpected sinfo call")
+
+    signal = migration._collect_slurm_status(  # noqa: SLF001
+        command_runner=runner,
+        kube_context="external-context",
+        checkpoint=checkpoint,
+        phase_id="rolling-compute-migration",
+    )
+
+    assert calls == []
+    assert signal.name == "Slurm Workers"
+    assert signal.state == "upgrading"
+    assert "status deferred during rolling compute handoff" in signal.summary
+
+
+def test_slurm_status_defers_sinfo_config_source_failure_with_checkpointed_quiesce() -> None:
+    calls: list[tuple[str, ...]] = []
+    checkpoint = {
+        "phase_state": {
+            "rolling-compute-migration": {
+                "slurm_quiesced_partitions": [
+                    {
+                        "partition": "main",
+                        "previous_state": "UP",
+                        "applied_state": "DOWN",
+                    }
+                ],
+            }
+        }
+    }
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {"items": [{"metadata": {"name": "login-0"}, "status": {"phase": "Running"}}]}
+                ),
+                "",
+            )
+        if command[6:9] == ("login-0", "--", "sinfo"):
+            return SoperatorMigrationCommandResult(
+                command,
+                1,
+                "",
+                "sinfo: error: resolve_ctls_from_dns_srv: res_nsearch error: Unknown host\n"
+                "sinfo: fatal: Could not establish a configuration source",
+            )
+        return SoperatorMigrationCommandResult(command, 1, "", "unexpected command")
+
+    signal = migration._collect_slurm_status(  # noqa: SLF001
+        command_runner=runner,
+        kube_context="external-context",
+        checkpoint=checkpoint,
+        phase_id="rolling-compute-migration",
+    )
+
+    assert any(call[6:9] == ("login-0", "--", "sinfo") for call in calls)
+    assert signal.name == "Slurm Workers"
+    assert signal.state == "upgrading"
+    assert "status deferred during rolling compute handoff" in signal.summary
 
 
 def test_status_scope_matches_planned_migration_layers() -> None:
@@ -14794,10 +15278,97 @@ def test_rolling_compute_migration_resumes_slurm_after_post_drain_failure(
     assert restored == [("gpu",)]
 
 
+def test_rolling_compute_migration_restores_slurm_via_controller_when_login_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    quiesce_record = migration.SlurmPartitionQuiesceRecord(
+        partition="gpu",
+        previous_state="UP",
+        applied_state="DOWN",
+    )
+
+    monkeypatch.setattr(
+        migration,
+        "_create_or_reuse_target_node_groups",
+        lambda **_kwargs: (False, []),
+    )
+    monkeypatch.setattr(migration, "_suspend_legacy_flux_helmreleases", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        migration,
+        "_scale_down_legacy_soperator_controllers",
+        lambda **_kwargs: (False, []),
+    )
+    monkeypatch.setattr(migration, "_has_soperator_custom_resources", lambda _snapshot: True)
+    monkeypatch.setattr(migration, "_live_source_slurmcluster_present", lambda **_kwargs: True)
+    monkeypatch.setattr(migration, "_external_upgrade_worker_nodeset_slurm_nodes", lambda **_kwargs: ())
+    monkeypatch.setattr(
+        migration,
+        "_ensure_slurm_quiet",
+        lambda **_kwargs: (["quiet"], (quiesce_record,)),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_ensure_worker_nodeset_topology_checkpoint",
+        lambda **_kwargs: [],
+    )
+    monkeypatch.setattr(migration, "_patch_target_values_for_compute", lambda **_kwargs: {})
+    monkeypatch.setattr(migration, "_delete_pending_accounting_pvcs", lambda **_kwargs: None)
+    monkeypatch.setattr(migration, "_reconcile_target_node_storage_labels", lambda **_kwargs: None)
+    monkeypatch.setattr(migration, "_login_pod_names", lambda **_kwargs: ())
+    monkeypatch.setattr(
+        migration,
+        "_login_service_identities",
+        lambda **_kwargs: (
+            {
+                "name": "login",
+                "uid": "svc-login",
+                "cluster_ip": "10.0.0.10",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        migration,
+        "stabilize_soperator_login_load_balancer_allocations",
+        lambda **_kwargs: (_kwargs["service_identities"], (), []),
+    )
+    monkeypatch.setattr(migration, "_helm_upgrade_target_soperator", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        migration,
+        "_ensure_rolling_login_continuity",
+        lambda **_kwargs: ["login ready"],
+    )
+
+    def fail_delete(**_kwargs: object) -> None:
+        raise RuntimeError("simulated post-drain failure")
+
+    monkeypatch.setattr(migration, "_delete_conflicting_source_slurm_resources", fail_delete)
+
+    runner = _FakeCommandRunner()
+    with pytest.raises(RuntimeError, match="simulated post-drain failure"):
+        migration._execute_rolling_compute_migration_phase(
+            checkpoint={},
+            payload=_payload(),
+            source_report=_source_report(),
+            live_snapshot=_snapshot(),
+            target_ref="external-cluster",
+            kube_context="external-context",
+            worker_node_groups=("gpu-pool",),
+            nebius_api=runner.nebius_api,
+            command_runner=runner,
+        )
+
+    assert any(
+        call[0][6:11] == ("controller-0", "-c", "slurmctld", "--", "scontrol")
+        and call[0][-4:] == ("scontrol", "update", "PartitionName=gpu", "State=UP")
+        for call in runner.calls
+    )
+
+
 def test_rolling_compute_migration_guards_login_before_source_retirement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
+    allow_degraded_slurm_smoke: list[bool] = []
 
     monkeypatch.setattr(
         migration,
@@ -14834,10 +15405,16 @@ def test_rolling_compute_migration_guards_login_before_source_retirement(
         "_helm_upgrade_target_soperator",
         lambda **_kwargs: events.append("helm"),
     )
+
+    def ensure_login(**kwargs: object) -> list[str]:
+        events.append("login")
+        allow_degraded_slurm_smoke.append(bool(kwargs["allow_degraded_slurm_smoke"]))
+        return ["login ready"]
+
     monkeypatch.setattr(
         migration,
         "_ensure_rolling_login_continuity",
-        lambda **_kwargs: events.append("login") or ["login ready"],
+        ensure_login,
     )
     monkeypatch.setattr(
         migration,
@@ -14883,6 +15460,327 @@ def test_rolling_compute_migration_guards_login_before_source_retirement(
 
     assert mutated is True
     assert events == ["helm", "login", "suspend", "scale", "delete"]
+    assert allow_degraded_slurm_smoke == [False]
+    assert "login ready" in lines
+
+
+def test_rolling_compute_target_handoff_requires_apply_start_marker() -> None:
+    phase = {
+        "slurm_quiesced_partitions": [
+            {
+                "partition": "main",
+                "previous_state": "UP",
+                "applied_state": "DOWN",
+            }
+        ],
+        "login_continuity": {
+            "status": "checking",
+            "service_identity_before_handoff": [
+                {
+                    "name": "login",
+                    "uid": "svc-login",
+                    "cluster_ip": "10.0.0.10",
+                }
+            ],
+        },
+    }
+
+    assert migration._rolling_compute_checkpoint_quiesce_records(phase)  # noqa: SLF001
+    assert not migration._rolling_compute_target_handoff_started(phase)  # noqa: SLF001
+
+    phase["target_values_apply_started_at"] = "2026-07-09T12:00:00Z"
+
+    assert migration._rolling_compute_target_handoff_started(phase)  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    ("quiet_mode", "expected_degraded_smoke", "expected_line"),
+    (
+        ("success", False, "quiet"),
+        ("handoff-mismatch", True, "markerless resume observed target-era Slurm config handoff"),
+    ),
+)
+def test_rolling_compute_migration_markerless_checkpoint_probes_before_reusing_quiesce(
+    monkeypatch: pytest.MonkeyPatch,
+    quiet_mode: str,
+    expected_degraded_smoke: bool,
+    expected_line: str,
+) -> None:
+    events: list[str] = []
+    allow_degraded_slurm_smoke: list[bool] = []
+    quiet_calls: list[str] = []
+    restored: list[tuple[str, ...]] = []
+    checkpoint = {
+        "phase_state": {
+            "rolling-compute-migration": {
+                "slurm_quiesced_partitions": [
+                    {
+                        "partition": "main",
+                        "previous_state": "UP",
+                        "applied_state": "DOWN",
+                    }
+                ],
+                "login_continuity": {
+                    "status": "checking",
+                    "service_identity_before_handoff": [
+                        {
+                            "name": "login",
+                            "uid": "svc-login",
+                            "cluster_ip": "10.0.0.10",
+                        }
+                    ],
+                },
+            }
+        }
+    }
+    quiesce_record = migration.SlurmPartitionQuiesceRecord(
+        partition="main",
+        previous_state="UP",
+        applied_state="DOWN",
+    )
+
+    monkeypatch.setattr(
+        migration,
+        "_create_or_reuse_target_node_groups",
+        lambda **_kwargs: (False, []),
+    )
+    monkeypatch.setattr(migration, "_has_soperator_custom_resources", lambda _snapshot: True)
+    monkeypatch.setattr(migration, "_live_source_slurmcluster_present", lambda **_kwargs: True)
+    monkeypatch.setattr(migration, "_external_upgrade_worker_nodeset_slurm_nodes", lambda **_kwargs: ())
+
+    def ensure_slurm_quiet(**_kwargs: object) -> tuple[list[str], tuple[object, ...]]:
+        quiet_calls.append(quiet_mode)
+        if quiet_mode == "handoff-mismatch":
+            raise RuntimeError(
+                "External Soperator upgrade could not inspect Slurm partition states before "
+                "scheduling quiesce: scontrol: fatal: Could not establish a configuration source"
+            )
+        return ["quiet"], (quiesce_record,)
+
+    monkeypatch.setattr(migration, "_ensure_slurm_quiet", ensure_slurm_quiet)
+    monkeypatch.setattr(
+        migration,
+        "_ensure_worker_nodeset_topology_checkpoint",
+        lambda **_kwargs: [],
+    )
+    monkeypatch.setattr(migration, "_patch_target_values_for_compute", lambda **_kwargs: {})
+    monkeypatch.setattr(migration, "_delete_pending_accounting_pvcs", lambda **_kwargs: None)
+    monkeypatch.setattr(migration, "_reconcile_target_node_storage_labels", lambda **_kwargs: None)
+    monkeypatch.setattr(migration, "_login_pod_names", lambda **_kwargs: ("login-0",))
+    monkeypatch.setattr(
+        migration,
+        "_login_service_identities",
+        lambda **_kwargs: (
+            {
+                "name": "login",
+                "uid": "svc-login",
+                "cluster_ip": "10.0.0.10",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        migration,
+        "stabilize_soperator_login_load_balancer_allocations",
+        lambda **_kwargs: (_kwargs["service_identities"], (), []),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_helm_upgrade_target_soperator",
+        lambda **_kwargs: events.append("helm"),
+    )
+
+    def ensure_login(**kwargs: object) -> list[str]:
+        events.append("login")
+        allow_degraded_slurm_smoke.append(bool(kwargs["allow_degraded_slurm_smoke"]))
+        return ["login ready"]
+
+    monkeypatch.setattr(migration, "_ensure_rolling_login_continuity", ensure_login)
+    monkeypatch.setattr(
+        migration,
+        "_suspend_legacy_flux_helmreleases",
+        lambda **_kwargs: events.append("suspend") or [],
+    )
+    monkeypatch.setattr(
+        migration,
+        "_scale_down_legacy_soperator_controllers",
+        lambda **_kwargs: events.append("scale") or (True, []),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_delete_conflicting_source_slurm_resources",
+        lambda **_kwargs: events.append("delete"),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_clear_worker_nodeset_ephemeral_storage_aliases",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(migration, "_recreate_target_worker_statefulsets", lambda **_kwargs: None)
+    monkeypatch.setattr(migration, "_wait_for_target_worker_nodesets_ready", lambda **_kwargs: None)
+    monkeypatch.setattr(migration, "_kubectl_rollout_status", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        migration,
+        "_resume_slurm_after_cutover",
+        lambda **kwargs: restored.append(
+            tuple(record.partition for record in kwargs["slurm_quiesce_records"])
+        )
+        or ["resumed"],
+    )
+
+    runner = _FakeCommandRunner()
+    mutated, lines = migration._execute_rolling_compute_migration_phase(  # noqa: SLF001
+        checkpoint=checkpoint,
+        payload=_payload(),
+        source_report=_source_report(),
+        live_snapshot=_snapshot(),
+        target_ref="external-cluster",
+        kube_context="external-context",
+        worker_node_groups=("gpu-pool",),
+        nebius_api=runner.nebius_api,
+        command_runner=runner,
+    )
+
+    assert mutated is True
+    assert quiet_calls == [quiet_mode]
+    assert events == ["helm", "login", "suspend", "scale", "delete"]
+    assert allow_degraded_slurm_smoke == [expected_degraded_smoke]
+    assert restored == [("main",)]
+    assert expected_line in "\n".join(lines)
+
+
+def test_rolling_compute_migration_resume_reuses_checkpointed_quiesce_after_target_handoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    allow_degraded_slurm_smoke: list[bool] = []
+    restored: list[tuple[str, ...]] = []
+    checkpoint = {
+        "phase_state": {
+            "rolling-compute-migration": {
+                "slurm_quiesced_partitions": [
+                    {
+                        "partition": "main",
+                        "previous_state": "UP",
+                        "applied_state": "DOWN",
+                    }
+                ],
+                "login_continuity": {
+                    "status": "checking",
+                    "service_identity_before_handoff": [
+                        {
+                            "name": "login",
+                            "uid": "svc-login",
+                            "cluster_ip": "10.0.0.10",
+                        }
+                    ],
+                },
+                "target_values_apply_started_at": "2026-07-09T12:00:00Z",
+            }
+        }
+    }
+
+    monkeypatch.setattr(
+        migration,
+        "_create_or_reuse_target_node_groups",
+        lambda **_kwargs: (False, []),
+    )
+    monkeypatch.setattr(migration, "_has_soperator_custom_resources", lambda _snapshot: True)
+    monkeypatch.setattr(migration, "_live_source_slurmcluster_present", lambda **_kwargs: True)
+    monkeypatch.setattr(migration, "_external_upgrade_worker_nodeset_slurm_nodes", lambda **_kwargs: ())
+
+    def fail_quiet(**_kwargs: object) -> tuple[list[str], tuple[object, ...]]:
+        raise AssertionError("source Slurm quiet check should be reused from checkpoint")
+
+    monkeypatch.setattr(migration, "_ensure_slurm_quiet", fail_quiet)
+    monkeypatch.setattr(
+        migration,
+        "_ensure_worker_nodeset_topology_checkpoint",
+        lambda **_kwargs: [],
+    )
+    monkeypatch.setattr(migration, "_patch_target_values_for_compute", lambda **_kwargs: {})
+    monkeypatch.setattr(migration, "_delete_pending_accounting_pvcs", lambda **_kwargs: None)
+    monkeypatch.setattr(migration, "_reconcile_target_node_storage_labels", lambda **_kwargs: None)
+    monkeypatch.setattr(migration, "_login_pod_names", lambda **_kwargs: ("login-0",))
+    monkeypatch.setattr(
+        migration,
+        "_login_service_identities",
+        lambda **_kwargs: (
+            {
+                "name": "login",
+                "uid": "svc-login",
+                "cluster_ip": "10.0.0.10",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        migration,
+        "stabilize_soperator_login_load_balancer_allocations",
+        lambda **_kwargs: (_kwargs["service_identities"], (), []),
+    )
+
+    def helm_upgrade(**_kwargs: object) -> None:
+        events.append("helm")
+        phase = checkpoint["phase_state"]["rolling-compute-migration"]
+        assert "target_values_apply_started_at" in phase
+
+    monkeypatch.setattr(migration, "_helm_upgrade_target_soperator", helm_upgrade)
+
+    def ensure_login(**kwargs: object) -> list[str]:
+        events.append("login")
+        allow_degraded_slurm_smoke.append(bool(kwargs["allow_degraded_slurm_smoke"]))
+        return ["login ready"]
+
+    monkeypatch.setattr(migration, "_ensure_rolling_login_continuity", ensure_login)
+    monkeypatch.setattr(
+        migration,
+        "_suspend_legacy_flux_helmreleases",
+        lambda **_kwargs: events.append("suspend") or [],
+    )
+    monkeypatch.setattr(
+        migration,
+        "_scale_down_legacy_soperator_controllers",
+        lambda **_kwargs: events.append("scale") or (True, []),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_delete_conflicting_source_slurm_resources",
+        lambda **_kwargs: events.append("delete"),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_clear_worker_nodeset_ephemeral_storage_aliases",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(migration, "_recreate_target_worker_statefulsets", lambda **_kwargs: None)
+    monkeypatch.setattr(migration, "_wait_for_target_worker_nodesets_ready", lambda **_kwargs: None)
+    monkeypatch.setattr(migration, "_kubectl_rollout_status", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        migration,
+        "_resume_slurm_after_cutover",
+        lambda **kwargs: restored.append(
+            tuple(record.partition for record in kwargs["slurm_quiesce_records"])
+        )
+        or ["resumed"],
+    )
+
+    runner = _FakeCommandRunner()
+    mutated, lines = migration._execute_rolling_compute_migration_phase(  # noqa: SLF001
+        checkpoint=checkpoint,
+        payload=_payload(),
+        source_report=_source_report(),
+        live_snapshot=_snapshot(),
+        target_ref="external-cluster",
+        kube_context="external-context",
+        worker_node_groups=("gpu-pool",),
+        nebius_api=runner.nebius_api,
+        command_runner=runner,
+    )
+
+    assert mutated is True
+    assert events == ["helm", "login", "suspend", "scale", "delete"]
+    assert allow_degraded_slurm_smoke == [True]
+    assert restored == [("main",)]
+    assert "target-applied rolling compute resume" in "\n".join(lines)
     assert "login ready" in lines
 
 

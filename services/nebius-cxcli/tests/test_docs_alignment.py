@@ -70,6 +70,23 @@ def test_design_architecture_summary_matches_upgrade_surface() -> None:
     assert "### Jail Upgrade" in design
     assert "active/passive rootfs slots" in design_flat
     assert "shared persistent-mount area on the same physical jail SFS" in design_flat
+    assert "backup is a restore precondition around mutation, not an upgrade phase" in (
+        design_flat
+    )
+    assert (
+        "a compatible rerun reuses the checkpointed `UP -> DOWN` partition records"
+        in design_flat
+    )
+    assert (
+        "Slurm worker status reports deferred/upgrading from checkpoint state"
+        in design_flat
+    )
+    assert "markerless checkpoints must probe Slurm first" in design_flat
+    assert "falls back to the controller `slurmctld` container" in design_flat
+    assert "replacement login and worker pod evidence" in design_flat
+    assert "Slurm configuration and accounting database state are protected customer state" in (
+        design_flat
+    )
     assert "/mnt/jail-store/shared/data" in design_flat
     assert "The one-time migration runs only while" in design_flat
     assert "permissions, symlinks, ACLs, and xattrs preserved where supported" in (

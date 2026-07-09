@@ -58680,7 +58680,7 @@ def soperator_external_upgrade_command(
                 backup_metadata: dict[str, Any] | None = None
                 if approve:
                     emit_status(
-                        "External Soperator upgrade phase backup: checking for reusable "
+                        "External Soperator upgrade backup guard: checking for reusable "
                         "restore-capable backup metadata."
                     )
                     backup_metadata = external_soperator_upgrade_resume_backup_metadata(
@@ -58690,7 +58690,7 @@ def soperator_external_upgrade_command(
                     )
                     if backup_metadata is not None:
                         emit_status(
-                            "External Soperator upgrade phase backup: reusing existing "
+                            "External Soperator upgrade backup guard: reusing existing "
                             "restore-capable backup metadata."
                         )
                         console.print(
@@ -58710,7 +58710,7 @@ def soperator_external_upgrade_command(
                             current_segment=current_segment,
                         )
                         emit_status(
-                            "External Soperator upgrade phase backup: creating "
+                            "External Soperator upgrade backup guard: creating "
                             "restore-capable backup archive before mutation."
                         )
                         backup_metadata = _create_external_soperator_upgrade_backup(

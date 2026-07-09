@@ -1480,9 +1480,12 @@ not complete or the requested template fields are not visible yet, and resumes
 from live state on the next identical execute command instead of submitting a
 duplicate update.
 The executor-owned live status surface uses concise
-`External Soperator upgrade phase ...` comments for preflight, backup metadata
-lookup/reuse, backup archive creation, Slurm job preflight, protected-state
-capture, final post-upgrade checks, and report writing, plus an
+`External Soperator upgrade phase ...` comments for preflight, Slurm job
+preflight, protected-state capture, final post-upgrade checks, and report
+writing. Backup validation, backup metadata lookup/reuse, and backup archive
+creation use `External Soperator upgrade backup guard ...` comments because the
+backup is a restore precondition around mutation, not an upgrade phase to repeat.
+Those comments run alongside an
 interactive spinner backed by phase-aware status snapshots. Storage phases emit
 `External Soperator upgrade status` with the elapsed time, canonical phase id,
 human-readable phase label, and overall phase health before component details.
@@ -1509,8 +1512,11 @@ more` suffixes. Slurm worker names/states, queue health, and Soperator
 SlurmCluster reconciliation remain adjacent component details. The checkpoint
 records compact status snapshots at phase start, phase end, and pending gates.
 These status lines describe best-effort service continuity and degradation
-during external upgrade; they do not promise that downtime cannot occur. Existing
-projects can pass `config.yaml`
+during external upgrade; they do not promise that downtime cannot occur. During
+checkpointed rolling-compute target handoff, Slurm worker status reports
+deferred/upgrading from checkpoint state instead of probing old Slurm clients
+with `sinfo` after target-era config has started applying.
+Existing projects can pass `config.yaml`
 or the project directory containing it. Deployments-root onboarding resolves
 the tenant/project folder from identity inputs; if that resolved project
 already has `config.yaml`, the interactive flow warns after tenant/project selection
@@ -1699,6 +1705,37 @@ mutation.
 Confirmed quota shortages, unresolved live limits, coverage gaps, or quota
 lookup failures stop the upgrade before SFS creation, service-role node-group
 creation, or Helm apply starts.
+The rootfs switch is a separate data-plane boundary from target Helm handoff.
+Target chart values may create or warm replacement Soperator resources, but the
+old controller, login, and worker pods must not be required to parse target-era
+`slurm.conf` before they are retired or replaced. When a previous run already
+quiesced Slurm partitions and reached target chart handoff, a compatible rerun
+reuses the checkpointed `UP -> DOWN` partition records and rolls forward through
+the target handoff instead of re-inspecting source partitions with old Slurm
+clients. The durable checkpoint records the handoff marker before Helm mutation
+starts so a Helm timeout or partial apply has an idempotent resume point.
+Generic login-continuity state does not prove target handoff by itself; older
+markerless checkpoints must probe Slurm first and observe a target-era
+config-source mismatch before cxcli reuses checkpointed quiesce records.
+Slurm partition restore and resume commands remain tied to Slurm control-plane
+authority rather than login availability: cxcli uses login-side Slurm clients
+when possible and falls back to the controller `slurmctld` container for Slurm
+CLI commands if login pods are temporarily unavailable during handoff.
+Jail-rootfs refresh remains active/passive: populate the passive rootfs slot,
+switch each consumer to exactly one active rootfs slot, then require replacement
+login and worker pod evidence that `/mnt/jail` resolves to the refreshed slot and
+that persistent mounts such as `/home`, `/data`, `/scripts`, `/models`, and any
+declared extra paths are mounted from the shared same-SFS area.
+Slurm configuration and accounting database state are protected customer state.
+Discovery and backup capture the old `slurm.conf` fingerprints, partition
+definitions, QOS/accounting policy inputs, accounting storage settings, and the
+chart-managed MariaDB accounting dump when live accounting exists. Target render
+must preserve those values through typed chart fields or explicit raw config
+escape hatches; profile defaults must not erase customer partitions,
+associations, QOS, or accounting enforcement. Post-cutover validation compares
+protected-state hashes and verifies live partitions, selected Slurm config keys,
+and SlurmDBD/accounting reachability before old rootfs/storage resources can be
+retired.
 Those overlays are data in `component_cli_settings.yaml`, are merged only for
 `onboard-existing-cluster`, and do not change the production-cluster defaults.
 The mapped `system` filter also feeds chart-owned helper deployments such as

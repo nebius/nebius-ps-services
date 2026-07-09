@@ -2595,8 +2595,10 @@ CXCLI-managed Soperator upgrade follows these stages:
    `--job-policy` to affected worker NodeSets, populate the passive
    active/passive jail rootfs slot with the target image, switch consumers to
    the refreshed slot only while the login Service has ready EndpointSlice
-   endpoints during the login StatefulSet rollout, and keep the previous rootfs
-   slot available for rollback until postflight validation passes.
+   endpoints during the login StatefulSet rollout, verify replacement login and
+   worker pods mount the refreshed rootfs plus persistent mounts, and keep the
+   previous rootfs slot available for rollback until postflight validation
+   passes.
 6. Fast stage verification gates: after ActiveChecks suspension and every
    completed runtime boundary, including post-MK8s validation, Soperator chart
    apply, Jail Upgrade, postflight validation, and shared safety verification,
@@ -3362,7 +3364,16 @@ Important external upgrade flags:
   Current Nebius node-template mutation is provider-unit scoped, so cxcli reports
   `provider-unit` mode and does not claim exact-node replacement inside a mixed
   busy/free node group. Reports and checkpoints record quiesced partitions,
-  restore commands, target mode, and cxcli-held Slurm job IDs.
+  restore commands, target mode, and cxcli-held Slurm job IDs. If a rerun starts
+  after target chart handoff has already written target Slurm configuration, the
+  rerun reuses checkpointed quiesce records instead of asking old Slurm clients
+  to inspect the target-era config again. The durable proof for that skip is
+  `target_values_apply_started_at`; older markerless checkpoints must first
+  probe Slurm and observe the target-era config-source mismatch before reusing
+  checkpointed quiesce records. The restore command remains recorded until cxcli
+  successfully resumes the partitions after cutover. Slurm restore/resume
+  commands use the login pod when available and fall back to the Slurm controller
+  container if login pods are temporarily unavailable during handoff.
 - `--cancel-job`: job id to cancel when `--job-policy cancel-selected` is used.
   Repeat the flag for multiple jobs.
 - `--requeue-job`: job id to requeue when `--job-policy requeue-selected` or
@@ -3871,7 +3882,10 @@ The Jail Upgrade rootfs-refresh process is:
    after the switch. New or restarted login and worker pods mount the refreshed
    rootfs, and persistent mounts such as `/home`, `/data`, `/scripts`, and
    `/models` are mounted back into the new rootfs so user data stays outside
-   the replaceable rootfs slots.
+   the replaceable rootfs slots. cxcli treats this as an evidence gate: at least
+   one replacement login pod and replacement worker pod must prove the active
+   rootfs marker and the expected persistent mount paths before the previous slot
+   is considered rollback-only.
 9. cxcli resumes Slurm partitions and runs postflight validation. The previous
    slot remains available for rollback until the guarded validation path has
    passed.
@@ -3886,6 +3900,17 @@ slot-b mounted as two active root filesystems. Each consumer has one main jail
 rootfs mount; persistent submounts such as `/home`, `/data`, `/scripts`, and
 `/models` are separate overlays from the shared area and are preserved across
 both rootfs generations.
+
+Slurm configuration and accounting are protected customer state, not throwaway
+rootfs content. The restore-capable backup captures the live `slurm.conf`
+fingerprints, rendered SlurmCluster values, partition definitions, QOS/accounting
+policy inputs, and chart-managed MariaDB accounting dump when live accounting
+exists. The target render must carry forward discovered customer partition,
+QOS/accounting, and accounting-storage settings through typed Helm values or
+explicit raw config escape hatches. Postflight validation compares protected
+state, checks partition visibility with `scontrol show partition`, verifies
+selected config keys with `scontrol show config`, and verifies SlurmDBD/accounting
+reachability with `sacctmgr`/`sacct` evidence when accounting is enabled.
 
 The one-time migration happens only while
 `jailRootfs.adoption.activeSource == "legacy-rootfs"`. After cxcli has copied

@@ -10408,8 +10408,8 @@ def test_ext_soperator_upgrade_execute_reuses_checkpoint_backup_after_mutation_s
     assert result.exit_code == 0, result.output
     assert backup_calls == []
     assert observed["backup_metadata"] == original_backup
-    assert "External Soperator upgrade phase backup: checking for reusable" in result.output
-    assert "External Soperator upgrade phase backup: reusing existing" in result.output
+    assert "External Soperator upgrade backup guard: checking for reusable" in result.output
+    assert "External Soperator upgrade backup guard: reusing existing" in result.output
     assert "External Soperator upgrade phase backup (top-level stage:" not in result.output
     assert "reusing restore-capable backup metadata" in result.output
 

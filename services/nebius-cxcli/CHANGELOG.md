@@ -62,6 +62,19 @@ All notable changes to this project are tracked here. This changelog follows
 - Fixed approved `ext-soperator upgrade --execute` terminal output so the live
   phase spinner is closed before final checkpoint, report, and post-upgrade
   config-refresh lines are printed.
+- Fixed external Soperator rolling-compute resume after target chart handoff.
+  Reused backup metadata is now reported as a backup guard instead of a repeated
+  phase, compatible reruns reuse checkpointed Slurm partition quiesce after
+  target values have started applying, and login Slurm smoke can be deferred on
+  that resume during the temporary old-client/target-config handoff while later
+  cutover validation remains responsible for Slurm, partition, and accounting
+  evidence. Generic login-continuity checkpoint state no longer proves target
+  handoff by itself; older markerless checkpoints must first observe the Slurm
+  config-source mismatch before reusing quiesce records. Live status now also
+  reports Slurm worker status as deferred during that handoff instead of running
+  old-client `sinfo` probes that can fail DNS SRV config discovery, and Slurm
+  partition restore/resume falls back to the controller container when login
+  pods are temporarily unavailable during handoff.
 - Changed external Soperator worker rollout flags so `--worker-rollout-strategy`
   is worker-only. Service-role rollout is controlled by
   `service_role_strategy` or `--service-role-rollout-strategy`, and generated

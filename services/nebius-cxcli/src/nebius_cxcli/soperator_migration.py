@@ -7932,6 +7932,7 @@ def _ensure_rolling_login_continuity(
     source_login_pod_names: Sequence[str],
     login_session_policy: str,
     login_session_drain_timeout_seconds: int,
+    allow_degraded_slurm_smoke: bool = False,
 ) -> list[str]:
     continuity = phase.setdefault("login_continuity", {})
     if not isinstance(continuity, dict):
@@ -7989,7 +7990,12 @@ def _ensure_rolling_login_continuity(
         check=False,
         timeout_seconds=120,
     )
-    if smoke.returncode != 0 and "login pod not found" in smoke.stderr.lower():
+    smoke_detail = _command_detail(smoke).lower()
+    if (
+        smoke.returncode != 0
+        and "login pod not found" in smoke_detail
+        and "controller fallback failed" not in smoke_detail
+    ):
         continuity["slurm_smoke"] = {
             "status": "skipped",
             "reason": "login pod not found",
@@ -7999,6 +8005,22 @@ def _ensure_rolling_login_continuity(
         }
         smoke_lines = [
             "Login continuity: Slurm smoke skipped because no login pod was available."
+        ]
+    elif (
+        smoke.returncode != 0
+        and allow_degraded_slurm_smoke
+        and _slurm_cli_handoff_mismatch(smoke)
+    ):
+        continuity["slurm_smoke"] = {
+            "status": "deferred",
+            "reason": "target handoff changed Slurm config before final cutover",
+            "returncode": smoke.returncode,
+            "stdout": smoke.stdout.strip(),
+            "stderr": smoke.stderr.strip(),
+        }
+        smoke_lines = [
+            "Login continuity: Slurm smoke deferred because target handoff changed "
+            "Slurm config before final cutover."
         ]
     else:
         continuity["slurm_smoke"] = {
@@ -8030,6 +8052,119 @@ def _ensure_rolling_login_continuity(
     ]
 
 
+_SLURM_HANDOFF_MISMATCH_MARKERS = (
+    "_parse_next_key",
+    "unable to process configuration file",
+    "unrecognized key",
+    "bad value",
+    "could not establish a configuration source",
+    "dns srv lookup failed",
+    "resolve_ctls_from_dns_srv",
+    "failed to fetch config",
+)
+
+
+def _slurm_handoff_mismatch_detail(detail: str) -> bool:
+    normalized = detail.lower()
+    return any(
+        marker in normalized
+        for marker in _SLURM_HANDOFF_MISMATCH_MARKERS
+    )
+
+
+def _slurm_cli_handoff_mismatch(result: SoperatorMigrationCommandResult) -> bool:
+    return _slurm_handoff_mismatch_detail(_command_detail(result))
+
+
+def _rolling_compute_checkpoint_quiesce_records(
+    phase: Mapping[str, Any],
+) -> tuple[SlurmPartitionQuiesceRecord, ...]:
+    raw_records = phase.get("slurm_quiesced_partitions")
+    if not isinstance(raw_records, Sequence) or isinstance(
+        raw_records, (str, bytes, bytearray)
+    ):
+        return ()
+    records: list[SlurmPartitionQuiesceRecord] = []
+    for item in raw_records:
+        if not isinstance(item, Mapping):
+            continue
+        partition = str(item.get("partition", "") or "").strip()
+        previous_state = str(item.get("previous_state", "") or "").strip()
+        applied_state = str(item.get("applied_state", "DOWN") or "DOWN").strip()
+        if partition and previous_state:
+            records.append(
+                SlurmPartitionQuiesceRecord(
+                    partition=partition,
+                    previous_state=previous_state,
+                    applied_state=applied_state,
+                )
+            )
+    return tuple(records)
+
+
+def _rolling_compute_target_handoff_started(phase: Mapping[str, Any]) -> bool:
+    return bool(str(phase.get("target_values_apply_started_at", "") or "").strip())
+
+
+def _slurm_cli_allows_controller_fallback(args: Sequence[str]) -> bool:
+    selected = tuple(str(item) for item in args)
+    if not selected:
+        return False
+    if selected[0] in _SOPERATOR_SLURM_CLI_NAMES:
+        return True
+    return (
+        len(selected) >= 3
+        and selected[:2] == ("env", f"SLURM_CONF={_SOPERATOR_LEGACY_SLURM_CONF}")
+        and selected[2] in _SOPERATOR_SLURM_CLI_NAMES
+    )
+
+
+def _kubectl_exec_slurm_controller(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    args: Sequence[str],
+    timeout_seconds: int,
+) -> SoperatorMigrationCommandResult:
+    controller_args = [
+        "kubectl",
+        "--context",
+        kube_context,
+        "-n",
+        _SOPERATOR_NAMESPACE,
+        "exec",
+        _SOPERATOR_CONTROLLER_POD,
+        "-c",
+        _SOPERATOR_CONTROLLER_CONTAINER,
+        "--",
+        *args,
+    ]
+    try:
+        return command_runner(
+            controller_args,
+            check=False,
+            timeout_seconds=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired:
+        return SoperatorMigrationCommandResult(
+            tuple(str(item) for item in controller_args),
+            124,
+            "",
+            f"kubectl exec controller pod timed out after {timeout_seconds}s",
+        )
+
+
+def _login_missing_controller_fallback_result(
+    result: SoperatorMigrationCommandResult,
+) -> SoperatorMigrationCommandResult:
+    detail = _command_detail(result)
+    return SoperatorMigrationCommandResult(
+        result.args,
+        result.returncode,
+        result.stdout,
+        "login pod not found; controller fallback failed: " + detail,
+    )
+
 
 def _kubectl_exec_login(
     *,
@@ -8041,7 +8176,18 @@ def _kubectl_exec_login(
 ) -> SoperatorMigrationCommandResult:
     pod = _login_pod_name(command_runner=command_runner, kube_context=kube_context)
     if not pod:
-        return SoperatorMigrationCommandResult(tuple(args), 1, "", "login pod not found")
+        result = SoperatorMigrationCommandResult(tuple(args), 1, "", "login pod not found")
+        if _slurm_cli_allows_controller_fallback(args):
+            controller_result = _kubectl_exec_slurm_controller(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                args=args,
+                timeout_seconds=timeout_seconds,
+            )
+            if controller_result.returncode == 0:
+                return controller_result
+            result = _login_missing_controller_fallback_result(controller_result)
+        return result
 
     def _login_exec_args(exec_args: Sequence[str]) -> list[str]:
         return [
@@ -8089,32 +8235,12 @@ def _kubectl_exec_login(
                 )
             if slurm_conf_result.returncode == 0:
                 return slurm_conf_result
-        controller_args = [
-            "kubectl",
-            "--context",
-            kube_context,
-            "-n",
-            _SOPERATOR_NAMESPACE,
-            "exec",
-            _SOPERATOR_CONTROLLER_POD,
-            "-c",
-            _SOPERATOR_CONTROLLER_CONTAINER,
-            "--",
-            *args,
-        ]
-        try:
-            controller_result = command_runner(
-                controller_args,
-                check=False,
-                timeout_seconds=timeout_seconds,
-            )
-        except subprocess.TimeoutExpired:
-            controller_result = SoperatorMigrationCommandResult(
-                tuple(str(item) for item in controller_args),
-                124,
-                "",
-                f"kubectl exec controller pod timed out after {timeout_seconds}s",
-            )
+        controller_result = _kubectl_exec_slurm_controller(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            args=args,
+            timeout_seconds=timeout_seconds,
+        )
         if controller_result.returncode == 0:
             return controller_result
     if check and result.returncode != 0:
@@ -10256,11 +10382,46 @@ def _slurm_problem_worker_details(nodes: Sequence[tuple[str, str]]) -> tuple[str
     return tuple(details)
 
 
+def _slurm_status_deferred_for_target_handoff(
+    checkpoint: Mapping[str, Any] | None,
+    phase_id: str,
+) -> bool:
+    if phase_id != "rolling-compute-migration" or checkpoint is None:
+        return False
+    phase = _mapping(_mapping(checkpoint.get("phase_state")).get("rolling-compute-migration"))
+    return bool(_rolling_compute_checkpoint_quiesce_records(phase)) and (
+        _rolling_compute_target_handoff_started(phase)
+    )
+
+
+def _slurm_status_has_checkpointed_quiesce(
+    checkpoint: Mapping[str, Any] | None,
+    phase_id: str,
+) -> bool:
+    if phase_id != "rolling-compute-migration" or checkpoint is None:
+        return False
+    phase = _mapping(_mapping(checkpoint.get("phase_state")).get("rolling-compute-migration"))
+    return bool(_rolling_compute_checkpoint_quiesce_records(phase))
+
+
+def _deferred_slurm_status_signal() -> SoperatorMigrationStatusSignal:
+    return SoperatorMigrationStatusSignal(
+        "Slurm Workers",
+        "upgrading",
+        "status deferred during rolling compute handoff; checkpointed partition "
+        "quiesce remains in effect until cutover validation resumes Slurm",
+    )
+
+
 def _collect_slurm_status(
     *,
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
+    checkpoint: Mapping[str, Any] | None = None,
+    phase_id: str = "",
 ) -> SoperatorMigrationStatusSignal:
+    if _slurm_status_deferred_for_target_handoff(checkpoint, phase_id):
+        return _deferred_slurm_status_signal()
     try:
         sinfo = _kubectl_exec_login(
             command_runner=command_runner,
@@ -10276,6 +10437,10 @@ def _collect_slurm_status(
             f"login or sinfo status failed: {exc}",
         )
     if sinfo.returncode != 0:
+        if _slurm_status_has_checkpointed_quiesce(
+            checkpoint, phase_id
+        ) and _slurm_cli_handoff_mismatch(sinfo):
+            return _deferred_slurm_status_signal()
         return SoperatorMigrationStatusSignal(
             "Slurm Workers",
             "down",
@@ -10576,12 +10741,14 @@ class SoperatorMigrationStatusReporter:
                         checkpoint=self._checkpoint,
                         phase_id=phase_id,
                     )
-                )
+            )
             if scope.get("slurm"):
                 signals.append(
                     _collect_slurm_status(
                         command_runner=self._command_runner,
                         kube_context=self._kube_context,
+                        checkpoint=self._checkpoint,
+                        phase_id=phase_id,
                     )
                 )
             if scope.get("soperator"):
@@ -15388,21 +15555,41 @@ def _execute_rolling_compute_migration_phase(
     phase["slurm_job_scope"] = (
         "live-worker-nodesets" if live_worker_slurm_nodes else "source-worker-node-groups"
     )
-    quiet_lines, slurm_quiesce_records = _ensure_slurm_quiet(
-        command_runner=command_runner,
-        kube_context=kube_context,
-        node_names=quiet_nodes,
-        job_policy=job_policy,
-        cancel_job_ids=cancel_job_ids,
-        requeue_job_ids=requeue_job_ids,
-        job_wait_timeout_seconds=job_wait_timeout_seconds,
-        job_refresh_interval_seconds=job_refresh_interval_seconds,
-        slurm_decision_recorder=slurm_decision_recorder,
-        allow_missing_login_recovery=not live_source_slurmcluster_present,
-        interactive_prompt_pause=interactive_prompt_pause,
-        allow_resolved_interactive_job_policy=allow_resolved_interactive_job_policy,
-        slurm_scheduling_quiesce=slurm_scheduling_quiesce,
-    )
+    slurm_quiesce_records = _rolling_compute_checkpoint_quiesce_records(phase)
+    target_handoff_resume = bool(
+        slurm_quiesce_records
+    ) and _rolling_compute_target_handoff_started(phase)
+    if target_handoff_resume:
+        quiet_lines = [
+            "Slurm quiet window check reused checkpointed partition quiesce from the "
+            "target-applied rolling compute resume."
+        ]
+    else:
+        try:
+            quiet_lines, slurm_quiesce_records = _ensure_slurm_quiet(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                node_names=quiet_nodes,
+                job_policy=job_policy,
+                cancel_job_ids=cancel_job_ids,
+                requeue_job_ids=requeue_job_ids,
+                job_wait_timeout_seconds=job_wait_timeout_seconds,
+                job_refresh_interval_seconds=job_refresh_interval_seconds,
+                slurm_decision_recorder=slurm_decision_recorder,
+                allow_missing_login_recovery=not live_source_slurmcluster_present,
+                interactive_prompt_pause=interactive_prompt_pause,
+                allow_resolved_interactive_job_policy=allow_resolved_interactive_job_policy,
+                slurm_scheduling_quiesce=slurm_scheduling_quiesce,
+            )
+        except RuntimeError as exc:
+            if not slurm_quiesce_records or not _slurm_handoff_mismatch_detail(str(exc)):
+                raise
+            phase["legacy_markerless_target_handoff_inferred_at"] = _utc_now()
+            target_handoff_resume = True
+            quiet_lines = [
+                "Slurm quiet window check reused checkpointed partition quiesce after "
+                "a markerless resume observed target-era Slurm config handoff."
+            ]
     phase["slurm_quiesced_partitions"] = [
         record.as_payload() for record in slurm_quiesce_records
     ]
@@ -15475,6 +15662,7 @@ def _execute_rolling_compute_migration_phase(
             "session_policy": login_session_policy,
             "session_drain_timeout_seconds": login_session_drain_timeout_seconds,
         }
+        phase.setdefault("target_values_apply_started_at", _utc_now())
         if checkpoint_writer is not None:
             checkpoint_writer()
         _helm_upgrade_target_soperator(
@@ -15496,6 +15684,7 @@ def _execute_rolling_compute_migration_phase(
                 source_login_pod_names=source_login_pod_names,
                 login_session_policy=login_session_policy,
                 login_session_drain_timeout_seconds=login_session_drain_timeout_seconds,
+                allow_degraded_slurm_smoke=target_handoff_resume,
             )
         )
         if checkpoint_writer is not None:
@@ -15621,6 +15810,7 @@ def _reapply_stale_rolling_compute_values(
     if _rolling_compute_values_revision(checkpoint) >= _ROLLING_COMPUTE_VALUES_REVISION:
         return False, []
     phase = _phase_state(checkpoint, "rolling-compute-migration")
+    slurm_quiesce_records = _rolling_compute_checkpoint_quiesce_records(phase)
     lines = _ensure_worker_nodeset_topology_checkpoint(
         checkpoint=checkpoint,
         source_report=source_report,
@@ -15681,11 +15871,17 @@ def _reapply_stale_rolling_compute_values(
         "session_policy": login_session_policy,
         "session_drain_timeout_seconds": login_session_drain_timeout_seconds,
     }
+    phase.setdefault("target_values_apply_started_at", _utc_now())
+    target_handoff_resume = bool(
+        slurm_quiesce_records
+    ) and _rolling_compute_target_handoff_started(phase)
     _helm_upgrade_target_soperator(
         command_runner=command_runner,
         kube_context=kube_context,
         values=values,
-        expected_version=str(_mapping(source_report.get("report")).get("target_version", "") or ""),
+        expected_version=str(
+            _mapping(source_report.get("report")).get("target_version", "") or ""
+        ),
         wait=False,
     )
     lines.extend(
@@ -15698,6 +15894,7 @@ def _reapply_stale_rolling_compute_values(
             source_login_pod_names=source_login_pod_names,
             login_session_policy=login_session_policy,
             login_session_drain_timeout_seconds=login_session_drain_timeout_seconds,
+            allow_degraded_slurm_smoke=target_handoff_resume,
         )
     )
     lines.extend(
@@ -21042,6 +21239,9 @@ def _execute_soperator_migration_unlocked(
     def _emit_phase_comment(phase_id: str, comment: str) -> None:
         if status_callback is None:
             return
+        if phase_id == "backup":
+            status_callback(f"External Soperator upgrade backup guard: {comment}")
+            return
         status_callback(
             f"External Soperator upgrade phase {phase_id}: {comment}"
         )
@@ -21507,7 +21707,7 @@ def _execute_soperator_migration_unlocked(
         if backup_state and (set(phase_ids) & _MUTATING_PHASE_IDS):
             _emit_phase_comment(
                 "backup",
-                "checking restore-capable backup metadata before approved mutation.",
+                "validating restore-capable backup metadata before approved mutation.",
             )
             _validate_external_upgrade_backup_metadata(
                 backup_state,
