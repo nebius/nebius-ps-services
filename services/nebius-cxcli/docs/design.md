@@ -1648,6 +1648,12 @@ one-node controller/accounting workloads, and known drain-blocking webhook
 replicas only for lower-continuity zero-surge service-role rollouts, and
 requires spare surge capacity for active service groups or worker waves only
 when the operator explicitly chooses safe-surge for that role.
+Interactive external onboarding asks `slurm_scheduling_quiesce` before rollout
+pacing. With the default `true`, cxcli skips normal worker wave and worker
+`max_unavailable_count` prompts because Slurm-clear workers dispatch as soon as
+active or `COMPLETING` jobs are gone, regardless of worker group wave pacing. If
+the operator chooses `false`, cxcli warns that scheduling remains active and then
+shows the advanced rollout controls.
 
 The persisted rollout shape is:
 
@@ -3397,7 +3403,10 @@ The refresh sequence is deliberately ordered:
    For first adoption, restore the recorded login and worker sizes after the
    switch. New or restarted consumers mount the refreshed rootfs, and
    persistent submounts such as `/home`, `/data`, `/scripts`, and `/models` are
-   attached back into that rootfs.
+   attached back into that rootfs. cxcli records `rootfs_handoff_verification`
+   with the active slot, rollback slot, target worker NodeSets, persistent mount
+   state, and live login/worker consumer checks, then waits for login and target
+   worker readiness before source retirement.
 9. Resume Slurm partitions and run postflight verification before considering
    the refresh complete.
 

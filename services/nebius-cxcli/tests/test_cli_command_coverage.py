@@ -594,6 +594,33 @@ def test_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path) -> 
     ]
 
 
+def test_soperator_upgrade_command_omitted_quiesce_flag_defaults_true(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def _run(**kwargs: Any) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_command", _run)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "soperator",
+            "upgrade",
+            str(tmp_path / "config.yaml"),
+            "--target",
+            "mk8s",
+            "--no-interactive",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["slurm_scheduling_quiesce"] is True
+
+
 def test_ext_soperator_scale_execute_requires_approve_before_discovery() -> None:
     result = runner.invoke(
         cli.app,
@@ -10261,6 +10288,7 @@ def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_by_terminal_m
     assert "Login SSH session policy: target-ready" in rendered
     assert "Login LoadBalancer allocation retention: cxcli automatically converts" in rendered
     assert captured["job_policy"] == expected_policy
+    assert captured["slurm_scheduling_quiesce"] is True
     assert captured["login_session_policy"] == "target-ready"
     assert captured["login_session_drain_timeout_seconds"] == 1800
     assert events == ["backup", "execute"]

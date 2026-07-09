@@ -1982,7 +1982,12 @@ def test_build_local_helm_chart_dependencies_reuses_packaged_archives(
                         "name": "child",
                         "version": "1.2.3",
                         "repository": "https://example.invalid/charts",
-                    }
+                    },
+                    {
+                        "name": "local-child",
+                        "version": "4.5.6",
+                        "repository": "file://../local-child",
+                    },
                 ],
             },
             sort_keys=False,
@@ -1997,7 +2002,12 @@ def test_build_local_helm_chart_dependencies_reuses_packaged_archives(
                         "name": "child",
                         "version": "1.2.3",
                         "repository": "https://example.invalid/charts",
-                    }
+                    },
+                    {
+                        "name": "local-child",
+                        "version": "4.5.6",
+                        "repository": "file://../local-child",
+                    },
                 ],
                 "digest": "sha256:test",
                 "generated": "2026-01-01T00:00:00Z",
@@ -2007,6 +2017,7 @@ def test_build_local_helm_chart_dependencies_reuses_packaged_archives(
         encoding="utf-8",
     )
     (charts_dir / "child-1.2.3.tgz").write_bytes(b"packaged")
+    (charts_dir / "local-child-4.5.6.tgz").write_bytes(b"packaged")
 
     def fail_run(*_args: object, **_kwargs: object) -> object:
         raise AssertionError("helm dependency build should not run when archives are packaged")
@@ -2016,7 +2027,76 @@ def test_build_local_helm_chart_dependencies_reuses_packaged_archives(
     _build_local_helm_chart_dependencies(str(chart_dir))
 
 
-def test_build_local_helm_chart_dependencies_rebuilds_file_dependencies(
+def test_render_local_helm_chart_reuses_packaged_file_dependency_without_source_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chart_dir = tmp_path / "chart"
+    charts_dir = chart_dir / "charts"
+    charts_dir.mkdir(parents=True)
+    dependency = {
+        "name": "local-child",
+        "version": "4.5.6",
+        "repository": "file://../local-child",
+    }
+    (chart_dir / "Chart.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "v2",
+                "name": "parent",
+                "version": "0.1.0",
+                "dependencies": [dependency],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (chart_dir / "Chart.lock").write_text(
+        yaml.safe_dump(
+            {
+                "dependencies": [dependency],
+                "digest": "sha256:test",
+                "generated": "2026-01-01T00:00:00Z",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (charts_dir / "local-child-4.5.6.tgz").write_bytes(b"packaged")
+    calls: list[list[str]] = []
+
+    class Result:
+        returncode = 0
+        stdout = """---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rendered
+data:
+  key: value
+"""
+        stderr = ""
+
+    def fake_run(command: list[str], **_kwargs: object) -> Result:
+        calls.append(command)
+        if command[:3] == ["helm", "dependency", "build"]:
+            raise AssertionError("helm dependency build should not run for packaged file dependency")
+        return Result()
+
+    monkeypatch.setattr("nebius_cxcli.flux_render.subprocess.run", fake_run)
+
+    rendered = flux_render_module._render_local_helm_chart(
+        release_name="release",
+        namespace="soperator",
+        chart_path=str(chart_dir),
+        values={},
+    )
+
+    assert "name: rendered" in rendered
+    assert [command[:2] for command in calls] == [["helm", "template"]]
+
+
+def test_build_local_helm_chart_dependencies_rebuilds_missing_file_dependencies(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2058,7 +2138,6 @@ def test_build_local_helm_chart_dependencies_rebuilds_file_dependencies(
         ),
         encoding="utf-8",
     )
-    (charts_dir / "child-1.2.3.tgz").write_bytes(b"stale")
     calls: list[list[str]] = []
 
     class Result:
@@ -2075,6 +2154,59 @@ def test_build_local_helm_chart_dependencies_rebuilds_file_dependencies(
     _build_local_helm_chart_dependencies(str(parent_dir))
 
     assert calls == [["helm", "dependency", "build", "--skip-refresh", str(parent_dir)]]
+
+
+def test_build_local_helm_chart_dependencies_reports_missing_packaged_dependency(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chart_dir = tmp_path / "chart"
+    chart_dir.mkdir()
+    dependency = {
+        "name": "child",
+        "version": "1.2.3",
+        "repository": "file://../child",
+    }
+    (chart_dir / "Chart.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "v2",
+                "name": "parent",
+                "version": "0.1.0",
+                "dependencies": [dependency],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (chart_dir / "Chart.lock").write_text(
+        yaml.safe_dump(
+            {
+                "dependencies": [dependency],
+                "digest": "sha256:test",
+                "generated": "2026-01-01T00:00:00Z",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    class Result:
+        returncode = 1
+        stdout = ""
+        stderr = "failed to build file dependency"
+
+    def fake_run(_command: list[str], **_kwargs: object) -> Result:
+        return Result()
+
+    monkeypatch.setattr("nebius_cxcli.flux_render.subprocess.run", fake_run)
+
+    with pytest.raises(ValueError) as excinfo:
+        _build_local_helm_chart_dependencies(str(chart_dir))
+
+    message = str(excinfo.value)
+    assert "Missing packaged chart dependencies: child-1.2.3" in message
+    assert "Package the pinned archives under charts/" in message
 
 
 def test_build_local_helm_chart_dependencies_adds_remote_repositories(

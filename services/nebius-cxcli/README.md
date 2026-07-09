@@ -3373,7 +3373,13 @@ Important external upgrade flags:
   checkpointed quiesce records. The restore command remains recorded until cxcli
   successfully resumes the partitions after cutover. Slurm restore/resume
   commands use the login pod when available and fall back to the Slurm controller
-  container if login pods are temporarily unavailable during handoff.
+  container if login pods are temporarily unavailable during handoff. Interactive
+  external onboarding asks this quiesce decision before rollout pacing knobs. When
+  quiesce remains enabled, the wizard keeps the normal worker wave and worker
+  `max_unavailable` prompts hidden because quiesced worker upgrades use
+  Slurm-clear fast dispatch. If the operator disables quiesce, cxcli warns that
+  scheduling stays active and the upgrade can take longer while new jobs continue
+  landing on affected workers, then shows the advanced rollout prompts.
 - `--cancel-job`: job id to cancel when `--job-policy cancel-selected` is used.
   Repeat the flag for multiple jobs.
 - `--requeue-job`: job id to requeue when `--job-policy requeue-selected` or
@@ -3442,7 +3448,9 @@ Interactive Slurm job actions map to these Slurm commands:
   service capacity with one temporary replacement node per active service group
   and checks the required quota and capacity before mutation.
 - `--worker-wave-groups`: exact fixed number of worker groups to update per
-  safe-surge wave.
+  safe-surge wave. This is an advanced/non-quiesced worker control; with the
+  default Slurm scheduling quiesce, clear worker provider units are dispatched
+  as soon as Slurm has no active or `COMPLETING` jobs on them.
 - `--worker-wave-percent` and `--max-parallel-worker-groups`: percent-based
   safe-surge wave sizing plus an optional upper cap. `--worker-wave-percent` is
   a percentage of worker groups, not worker nodes. Do not combine
@@ -3553,8 +3561,9 @@ deploy:
 ```
 
 Before the first mutation, `--execute --approve` refreshes live discovery,
-verifies the accepted onboarding fingerprint and source release, creates a
-restore-capable backup, captures shared protected customer state, and enriches
+verifies the accepted onboarding fingerprint and source release, creates or
+reuses the cluster-scoped restore-capable backup metadata recorded in the active
+checkpoint, captures shared protected customer state, and enriches
 the accepted inventory from live Nebius MK8s node-group names and Kubernetes
 node labels. cxcli then auto-detects
 source worker node groups from console-visible Nebius
@@ -3882,10 +3891,12 @@ The Jail Upgrade rootfs-refresh process is:
    after the switch. New or restarted login and worker pods mount the refreshed
    rootfs, and persistent mounts such as `/home`, `/data`, `/scripts`, and
    `/models` are mounted back into the new rootfs so user data stays outside
-   the replaceable rootfs slots. cxcli treats this as an evidence gate: at least
-   one replacement login pod and replacement worker pod must prove the active
-   rootfs marker and the expected persistent mount paths before the previous slot
-   is considered rollback-only.
+   the replaceable rootfs slots. cxcli treats this as an evidence gate: the live
+   replacement login and worker consumer specs must expose the active rootfs slot
+   reference and the expected persistent mount paths, and their rollout/readiness
+   must pass, before the previous slot is considered rollback-only. The checkpoint/report record
+   `rootfs_handoff_verification` with the active slot, rollback slot, target
+   worker NodeSets, and persistent mount state for resume and audit.
 9. cxcli resumes Slurm partitions and runs postflight validation. The previous
    slot remains available for rollback until the guarded validation path has
    passed.

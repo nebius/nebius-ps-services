@@ -2415,6 +2415,38 @@ spec:
         self._populate_jail_refresh_saved_pods: list[dict[str, object]] | None = None
         self.populate_jail_job_uid = "populate-jail-job-old"
 
+    @staticmethod
+    def _handoff_consumer_spec(replicas: int) -> dict[str, object]:
+        return {
+            "replicas": replicas,
+            "template": {
+                "spec": {
+                    "volumes": [
+                        {
+                            "name": "jail-rootfs-slot-b",
+                            "persistentVolumeClaim": {"claimName": "jail-rootfs-slot-b-pvc"},
+                        },
+                        {"name": "jail-persistent-home"},
+                        {"name": "jail-persistent-data"},
+                        {"name": "jail-persistent-scripts"},
+                        {"name": "jail-persistent-models"},
+                    ],
+                    "containers": [
+                        {
+                            "name": "slurm",
+                            "volumeMounts": [
+                                {"name": "jail-rootfs-slot-b", "mountPath": "/mnt/jail"},
+                                {"name": "jail-persistent-home", "mountPath": "/home"},
+                                {"name": "jail-persistent-data", "mountPath": "/data"},
+                                {"name": "jail-persistent-scripts", "mountPath": "/scripts"},
+                                {"name": "jail-persistent-models", "mountPath": "/models"},
+                            ],
+                        }
+                    ],
+                }
+            },
+        }
+
     def _hold_populate_jail_consumers(self, prefixes: tuple[str, ...]) -> None:
         if self._populate_jail_refresh_saved_pods is None:
             self._populate_jail_refresh_saved_pods = list(self.live_pods)
@@ -2843,7 +2875,7 @@ spec:
                                 "namespace": namespace,
                                 "generation": 1,
                             },
-                            "spec": {"replicas": 2},
+                            "spec": self._handoff_consumer_spec(2),
                             "status": {
                                 "observedGeneration": 1,
                                 "readyReplicas": 2,
@@ -3057,6 +3089,65 @@ spec:
                 ),
                 "",
             )
+        if command[:9] == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "statefulsets.apps.kruise.io",
+            "login",
+            "-o",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "metadata": {
+                            "name": "login",
+                            "namespace": "soperator",
+                            "generation": 1,
+                        },
+                        "spec": self._handoff_consumer_spec(1),
+                        "status": {
+                            "observedGeneration": 1,
+                            "readyReplicas": 1,
+                            "updatedReplicas": 1,
+                        },
+                    }
+                ),
+                "",
+            )
+        if command[:9] == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "nodeset",
+            "worker",
+            "-o",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "metadata": {"name": "worker", "namespace": "soperator"},
+                        "spec": self._handoff_consumer_spec(1),
+                        "status": {
+                            "phase": "Ready",
+                            "replicas": 1,
+                            "readyReplicas": 1,
+                            "conditions": [{"type": "PodsReady", "status": "True"}],
+                        },
+                    }
+                ),
+                "",
+            )
         if command[:8] == (
             "kubectl",
             "--context",
@@ -3115,7 +3206,7 @@ spec:
                         "items": [
                             {
                                 "metadata": {"name": "worker", "namespace": "soperator"},
-                                "spec": {"replicas": 1},
+                                "spec": self._handoff_consumer_spec(1),
                                 "status": {"phase": "Ready", "replicas": 1},
                             }
                         ]
@@ -3156,6 +3247,15 @@ spec:
                     "\n".join(f"NodeName={node} Partitions=main State=IDLE" for node in nodes),
                     "",
                 )
+            if command[8:] == ("scontrol", "show", "partition", "-o"):
+                return SoperatorMigrationCommandResult(
+                    command,
+                    0,
+                    "PartitionName=main State=UP Nodes=node-a,node-b,worker-0\n",
+                    "",
+                )
+            if command[8:10] == ("scontrol", "update"):
+                return SoperatorMigrationCommandResult(command, 0, "", "")
             if command[8:10] == ("squeue", "-h"):
                 return SoperatorMigrationCommandResult(command, 0, "", "")
             if command[8:10] == ("bash", "-lc") and "cxcli-soperator-smoke" in command[10]:
@@ -8390,17 +8490,23 @@ def test_soperator_onboard_interactive_defaults_node_template_target_to_next_min
         validate_sources=False,
     )
 
-    assert prompt_calls == [
-        (
-            "deploy.targets[].soperator_onboarding.node_template_upgrade.target_k8s_version",
-            "1.33",
-            {
-                "prompt_hint": "next supported minor",
-                "type_hint": "string",
-                "required": True,
-            },
-        )
-    ]
+    assert prompt_calls[0] == (
+        "deploy.targets[].soperator_onboarding.node_template_upgrade.target_k8s_version",
+        "1.33",
+        {
+            "choices": None,
+            "prompt_hint": "next supported minor",
+            "type_hint": "string",
+            "required": True,
+            "unset_on_skip": False,
+        },
+    )
+    assert prompt_calls[1][0] == (
+        "deploy.targets[].soperator_onboarding.node_template_upgrade.slurm_scheduling_quiesce"
+    )
+    assert prompt_calls[1][1] == "true"
+    assert prompt_calls[1][2]["type_hint"] == "boolean"
+    assert prompt_calls[1][2]["required"] is True
     onboarding = row["soperator_onboarding"]
     assert onboarding["node_template_upgrade"]["target_k8s_version"] == "1.33"
     assert "Detected Kubernetes version: 1.32" in "\n".join(printed)
@@ -8457,13 +8563,204 @@ def test_soperator_onboard_interactive_accepts_full_locked_k8s_path_at_prompt(
     )
 
     assert prompt_labels == [
-        "deploy.targets[].soperator_onboarding.node_template_upgrade.target_k8s_version"
+        "deploy.targets[].soperator_onboarding.node_template_upgrade.target_k8s_version",
+        "deploy.targets[].soperator_onboarding.node_template_upgrade.slurm_scheduling_quiesce",
     ]
     onboarding = row["soperator_onboarding"]
     assert onboarding["node_template_upgrade"]["target_k8s_version"] == "1.34"
     assert [
         segment["target_k8s_version"] for segment in onboarding["upgrade_path"]["segments"]
     ] == ["1.32", "1.33", "1.34"]
+
+
+def test_soperator_onboard_invalid_k8s_target_warns_and_reprompts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    printed: list[str] = []
+    prompt_calls: list[tuple[str, object]] = []
+    snapshot = _old_soperator_snapshot_with_provider(
+        soperator_version="1.23.3",
+        current_k8s_version="1.32",
+    )
+    target_label = (
+        "deploy.targets[].soperator_onboarding.node_template_upgrade.target_k8s_version"
+    )
+    responses = iter(["\\", "1.33"])
+
+    class FakeConsole:
+        is_terminal = False
+
+        def print(self, *args: object, **_kwargs: object) -> None:
+            printed.append(" ".join(str(arg) for arg in args))
+
+    monkeypatch.setattr(cli_module, "console", FakeConsole())
+    monkeypatch.setattr(
+        cli_module,
+        "_prompt_project_mk8s_cluster_choice",
+        lambda **_kwargs: cli_module.OptionChoice(
+            value="mk8scluster-external",
+            label="external-cluster  (mk8scluster-external)",
+            metadata={
+                "cluster_id": "mk8scluster-external",
+                "target_ref": "external-cluster",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_collect_soperator_snapshot_for_nebius_mk8s_cluster",
+        lambda *args, **kwargs: (snapshot, "external-context"),
+    )
+
+    def _prompt_scalar(
+        field_label: str,
+        current: object,
+        **_kwargs: object,
+    ) -> tuple[object, bool]:
+        prompt_calls.append((field_label, current))
+        if field_label == target_label:
+            return next(responses), False
+        return current, False
+
+    monkeypatch.setattr(cli_module, "_prompt_scalar_override", _prompt_scalar)
+
+    row = cli_module._prompt_soperator_onboarding_target_row(
+        payload={"client_info": {"nebius": {"project_id": "project-123"}}},
+        project_id="project-123",
+        storage_mode="keep-existing-storage",
+        compute_mode="keep-existing-compute",
+        to_chart_version=cli_module._soperator_upgrade_catalog_to_version_default(),
+        worker_rollout_strategy="zero-surge",
+        validate_sources=False,
+    )
+
+    assert [field for field, _current in prompt_calls].count(target_label) == 2
+    assert prompt_calls[1] == (target_label, "\\")
+    assert "Invalid value" in "\n".join(printed)
+    assert row["soperator_onboarding"]["node_template_upgrade"]["target_k8s_version"] == "1.33"
+
+
+def test_soperator_onboard_quiesce_default_skips_worker_rollout_prompts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prompt_labels: list[str] = []
+    snapshot = _old_soperator_snapshot_with_provider(
+        soperator_version="1.23.3",
+        current_k8s_version="1.32",
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "_prompt_project_mk8s_cluster_choice",
+        lambda **_kwargs: cli_module.OptionChoice(
+            value="mk8scluster-external",
+            label="external-cluster  (mk8scluster-external)",
+            metadata={
+                "cluster_id": "mk8scluster-external",
+                "target_ref": "external-cluster",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_collect_soperator_snapshot_for_nebius_mk8s_cluster",
+        lambda *args, **kwargs: (snapshot, "external-context"),
+    )
+
+    def _prompt_scalar(
+        field_label: str,
+        current: object,
+        **_kwargs: object,
+    ) -> tuple[object, bool]:
+        prompt_labels.append(field_label)
+        return current, False
+
+    monkeypatch.setattr(cli_module, "_prompt_scalar_override", _prompt_scalar)
+
+    row = cli_module._prompt_soperator_onboarding_target_row(
+        payload={"client_info": {"nebius": {"project_id": "project-123"}}},
+        project_id="project-123",
+        storage_mode="keep-existing-storage",
+        compute_mode="keep-existing-compute",
+        to_chart_version=cli_module._soperator_upgrade_catalog_to_version_default(),
+        validate_sources=False,
+    )
+
+    assert (
+        "deploy.targets[].soperator_onboarding.node_template_upgrade.slurm_scheduling_quiesce"
+        in prompt_labels
+    )
+    assert not any(".rollout." in label for label in prompt_labels)
+    assert row["soperator_onboarding"]["node_template_upgrade"]["slurm_scheduling_quiesce"] is True
+
+
+def test_soperator_onboard_non_quiesced_warns_and_prompts_rollout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    printed: list[str] = []
+    prompt_labels: list[str] = []
+    snapshot = _old_soperator_snapshot_with_provider(
+        soperator_version="1.23.3",
+        current_k8s_version="1.32",
+    )
+    quiesce_label = (
+        "deploy.targets[].soperator_onboarding.node_template_upgrade.slurm_scheduling_quiesce"
+    )
+    rollout_label = "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.strategy"
+
+    class FakeConsole:
+        is_terminal = False
+
+        def print(self, *args: object, **_kwargs: object) -> None:
+            printed.append(" ".join(str(arg) for arg in args))
+
+    monkeypatch.setattr(cli_module, "console", FakeConsole())
+    monkeypatch.setattr(
+        cli_module,
+        "_prompt_project_mk8s_cluster_choice",
+        lambda **_kwargs: cli_module.OptionChoice(
+            value="mk8scluster-external",
+            label="external-cluster  (mk8scluster-external)",
+            metadata={
+                "cluster_id": "mk8scluster-external",
+                "target_ref": "external-cluster",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_collect_soperator_snapshot_for_nebius_mk8s_cluster",
+        lambda *args, **kwargs: (snapshot, "external-context"),
+    )
+
+    def _prompt_scalar(
+        field_label: str,
+        current: object,
+        **_kwargs: object,
+    ) -> tuple[object, bool]:
+        prompt_labels.append(field_label)
+        if field_label == quiesce_label:
+            return "false", False
+        return current, False
+
+    monkeypatch.setattr(cli_module, "_prompt_scalar_override", _prompt_scalar)
+
+    row = cli_module._prompt_soperator_onboarding_target_row(
+        payload={"client_info": {"nebius": {"project_id": "project-123"}}},
+        project_id="project-123",
+        storage_mode="keep-existing-storage",
+        compute_mode="keep-existing-compute",
+        to_chart_version=cli_module._soperator_upgrade_catalog_to_version_default(),
+        validate_sources=False,
+    )
+
+    assert prompt_labels.index(quiesce_label) < prompt_labels.index(rollout_label)
+    assert (
+        "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout."
+        "worker_group_strategy.max_unavailable_count"
+    ) in prompt_labels
+    assert "Slurm scheduling will remain active" in "\n".join(printed)
+    assert row["soperator_onboarding"]["node_template_upgrade"]["slurm_scheduling_quiesce"] is False
 
 
 def test_soperator_onboard_rejects_discovered_k8s_newer_than_supported_target() -> None:
@@ -12145,6 +12442,8 @@ def test_soperator_onboard_interactive_cluster_id_prompts_rollout_settings(
         **_kwargs: object,
     ) -> tuple[object, bool]:
         prompt_labels.append(field_label)
+        if field_label.endswith(".slurm_scheduling_quiesce"):
+            return "false", False
         if field_label.endswith(".rollout.strategy"):
             return "safe-surge", False
         if field_label.endswith(".rollout.service_role_strategy"):
@@ -12190,6 +12489,10 @@ def test_soperator_onboard_interactive_cluster_id_prompts_rollout_settings(
         "deploy.targets[].soperator_onboarding.node_template_upgrade.target_k8s_version"
         in prompt_labels
     )
+    assert (
+        "deploy.targets[].soperator_onboarding.node_template_upgrade.slurm_scheduling_quiesce"
+        in prompt_labels
+    )
     assert "deploy.targets[].soperator_onboarding.storage_mode" in prompt_labels
     assert "deploy.targets[].soperator_onboarding.compute_mode" in prompt_labels
     assert (
@@ -12208,10 +12511,16 @@ def test_soperator_onboard_interactive_cluster_id_prompts_rollout_settings(
         "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout."
         "worker_group_strategy.max_unavailable_count"
     ) in prompt_labels
+    assert prompt_labels.index(
+        "deploy.targets[].soperator_onboarding.node_template_upgrade.slurm_scheduling_quiesce"
+    ) < prompt_labels.index(
+        "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.strategy"
+    )
 
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]
     assert "upgrade-external-node-template" in onboarding["actions"]
+    assert onboarding["node_template_upgrade"]["slurm_scheduling_quiesce"] is False
     assert onboarding["node_template_upgrade"]["rollout"] == {
         "strategy": "safe-surge",
         "service_role_strategy": "safe-surge",
@@ -15449,13 +15758,18 @@ def test_runtime_validation_rejects_duplicate_infra_instance_id() -> None:
 
 def test_runtime_validation_rejects_mismatched_scalar_name_and_instance_id() -> None:
     payload = {
+        "client_info": {
+            "client_name": "client",
+            "nebius": {"project_id": "project", "region_id": "eu-north1"},
+            "notifications": {"email_enabled": False},
+        },
         "infra": {
             "components": [
                 {
                     "id": "vm",
                     "instance_id": "vm-2",
                     "enabled": True,
-                    "inputs": {"name": "worker-vm"},
+                    "inputs": {"name": "worker-vm", "ssh_user_name": "ubuntu"},
                 }
             ]
         },
@@ -15466,7 +15780,7 @@ def test_runtime_validation_rejects_mismatched_scalar_name_and_instance_id() -> 
         ValueError,
         match=r"instance_id 'vm-2' must match normalized inputs\.name 'worker-vm'",
     ):
-        validate_runtime_payload(payload)
+        validate_dynamic_payload_structure(payload)
 
 
 def test_runtime_validation_rejects_duplicate_scalar_names_for_same_infra_type() -> None:

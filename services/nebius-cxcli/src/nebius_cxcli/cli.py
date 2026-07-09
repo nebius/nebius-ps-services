@@ -21102,15 +21102,19 @@ def _resolve_soperator_onboarding_target_chart_version(
         )
     raw_version = _non_empty_text(to_chart_version)
     if not raw_version and interactive:
-        raw_version, should_stop = _prompt_scalar_override(
-            "deploy.targets[].soperator_onboarding.target_version",
-            default_version,
-            prompt_hint="catalog default",
-            type_hint="string",
-            required=True,
+        raw_version = str(
+            _prompt_soperator_validated_value(
+                "deploy.targets[].soperator_onboarding.target_version",
+                default_version,
+                validator=lambda value: _validate_soperator_onboarding_target_chart_version(
+                    value,
+                    validate_sources=validate_sources,
+                ),
+                prompt_hint="catalog default",
+                type_hint="string",
+                required=True,
+            )
         )
-        if should_stop:
-            raise _WizardQuitRequested
         if _wizard_backtrack_requested(raw_version):
             raw_version = default_version
     selected_version = raw_version or default_version
@@ -21226,15 +21230,19 @@ def _resolve_soperator_onboarding_target_k8s_version(
     if not raw_version and interactive and required:
         current_version = _soperator_onboarding_snapshot_control_plane_k8s_version(snapshot)
         prompt_hint = "next supported minor" if current_version else "Nebius latest supported minor"
-        raw_version, should_stop = _prompt_scalar_override(
-            "deploy.targets[].soperator_onboarding.node_template_upgrade.target_k8s_version",
-            default_version,
-            prompt_hint=prompt_hint,
-            type_hint="string",
-            required=True,
+        raw_version = str(
+            _prompt_soperator_validated_value(
+                "deploy.targets[].soperator_onboarding.node_template_upgrade.target_k8s_version",
+                default_version,
+                validator=lambda value: _validate_soperator_onboarding_target_k8s_hop(
+                    snapshot=snapshot,
+                    target_k8s_version=str(value or ""),
+                ),
+                prompt_hint=prompt_hint,
+                type_hint="string",
+                required=True,
+            )
         )
-        if should_stop:
-            raise _WizardQuitRequested
         if _wizard_backtrack_requested(raw_version):
             raw_version = default_version
     if not raw_version and required:
@@ -22696,12 +22704,13 @@ def _print_soperator_rollout_field_guidance(field_key: str) -> None:
         console.print(f"[dim]{message}[/dim]")
 
 
-def _prompt_soperator_rollout_value(
+def _prompt_soperator_validated_value(
     path_label: str,
     current: object,
     *,
-    validator: Callable[[object], dict[str, Any]],
+    validator: Callable[[object], object],
     choices: list[OptionChoice] | None = None,
+    prompt_hint: str | None = None,
     type_hint: str | None = None,
     required: bool = True,
     unset_on_skip: bool = False,
@@ -22711,6 +22720,7 @@ def _prompt_soperator_rollout_value(
             path_label,
             current,
             choices=choices,
+            prompt_hint=prompt_hint,
             type_hint=type_hint,
             required=required,
             unset_on_skip=unset_on_skip,
@@ -22721,11 +22731,32 @@ def _prompt_soperator_rollout_value(
             return current
         try:
             validator(value)
-        except ValueError as exc:
+        except (RuntimeError, ValueError) as exc:
             console.print(f"{error_markup('Invalid value')}. {exc}")
             current = value
             continue
         return value
+
+
+def _prompt_soperator_rollout_value(
+    path_label: str,
+    current: object,
+    *,
+    validator: Callable[[object], dict[str, Any]],
+    choices: list[OptionChoice] | None = None,
+    type_hint: str | None = None,
+    required: bool = True,
+    unset_on_skip: bool = False,
+) -> object:
+    return _prompt_soperator_validated_value(
+        path_label,
+        current,
+        validator=validator,
+        choices=choices,
+        type_hint=type_hint,
+        required=required,
+        unset_on_skip=unset_on_skip,
+    )
 
 
 def _prompt_soperator_onboarding_rollout_manifest(
@@ -23029,10 +23060,11 @@ def _apply_soperator_slurm_scheduling_quiesce_prompt_to_target_row(
     node_template = onboarding.setdefault("node_template_upgrade", {})
     if not isinstance(node_template, dict):
         return
-    current = bool(node_template.get("slurm_scheduling_quiesce", True))
-    value, should_stop = _prompt_scalar_override(
+    current = _soperator_onboarding_slurm_scheduling_quiesce(onboarding)
+    value = _prompt_soperator_validated_value(
         "deploy.targets[].soperator_onboarding.node_template_upgrade.slurm_scheduling_quiesce",
         "true" if current else "false",
+        validator=lambda raw: _validate_soperator_onboarding_slurm_scheduling_quiesce_prompt(raw),
         choices=[
             OptionChoice(value="true", label="true  (pause scheduling during worker upgrades)"),
             OptionChoice(value="false", label="false  (leave scheduling active)"),
@@ -23044,10 +23076,33 @@ def _apply_soperator_slurm_scheduling_quiesce_prompt_to_target_row(
             "queue until the upgrade finishes?"
         ),
     )
-    if should_stop:
-        raise _WizardQuitRequested
     normalized = str(value or "").strip().lower()
     node_template["slurm_scheduling_quiesce"] = normalized in {"true", "yes", "1", "on"}
+
+
+def _validate_soperator_onboarding_slurm_scheduling_quiesce_prompt(value: object) -> bool:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"true", "yes", "1", "on"}:
+        return True
+    if normalized in {"false", "no", "0", "off"}:
+        return False
+    raise ValueError("choose true or false")
+
+
+def _soperator_target_row_slurm_scheduling_quiesce(target_row: Mapping[str, Any]) -> bool:
+    onboarding = target_row.get("soperator_onboarding")
+    if not isinstance(onboarding, Mapping):
+        return True
+    return _soperator_onboarding_slurm_scheduling_quiesce(onboarding)
+
+
+def _warn_soperator_rollout_with_active_slurm_scheduling() -> None:
+    console.print(
+        f"{warning_markup('WARNING:', bold=True)} Slurm scheduling will remain active; "
+        "new jobs can continue landing on affected workers, so the upgrade may take "
+        "longer while cxcli waits for jobs to finish, requeue, or cancel.",
+        soft_wrap=True,
+    )
 
 
 def _soperator_rollout_options_provided(
@@ -24520,16 +24575,18 @@ def _prompt_soperator_onboarding_target_row(
             strategy_drain_timeout=strategy_drain_timeout,
         ),
     )
+    if _soperator_target_row_requires_external_node_template_rollout(target_row):
+        _apply_soperator_slurm_scheduling_quiesce_prompt_to_target_row(target_row)
     if (
         _soperator_target_row_requires_external_node_template_rollout(target_row)
         and not explicit_rollout_options
+        and not _soperator_target_row_slurm_scheduling_quiesce(target_row)
     ):
+        _warn_soperator_rollout_with_active_slurm_scheduling()
         _apply_soperator_rollout_manifest_to_target_row(
             target_row,
             _prompt_soperator_onboarding_rollout_manifest(target_row),
         )
-    if _soperator_target_row_requires_external_node_template_rollout(target_row):
-        _apply_soperator_slurm_scheduling_quiesce_prompt_to_target_row(target_row)
     _apply_soperator_support_policy_to_target_row(
         target_row,
         allow_unsupported_soperator_upgrade_path=allow_unsupported_soperator_upgrade_path,
@@ -24791,17 +24848,19 @@ def _soperator_onboarding_target_row_from_options(
             strategy_drain_timeout=strategy_drain_timeout,
         ),
     )
+    if interactive and _soperator_target_row_requires_external_node_template_rollout(target_row):
+        _apply_soperator_slurm_scheduling_quiesce_prompt_to_target_row(target_row)
     if (
         interactive
         and _soperator_target_row_requires_external_node_template_rollout(target_row)
         and not explicit_rollout_options
+        and not _soperator_target_row_slurm_scheduling_quiesce(target_row)
     ):
+        _warn_soperator_rollout_with_active_slurm_scheduling()
         _apply_soperator_rollout_manifest_to_target_row(
             target_row,
             _prompt_soperator_onboarding_rollout_manifest(target_row),
         )
-    if interactive and _soperator_target_row_requires_external_node_template_rollout(target_row):
-        _apply_soperator_slurm_scheduling_quiesce_prompt_to_target_row(target_row)
     _apply_soperator_support_policy_to_target_row(
         target_row,
         allow_unsupported_soperator_upgrade_path=allow_unsupported_soperator_upgrade_path,

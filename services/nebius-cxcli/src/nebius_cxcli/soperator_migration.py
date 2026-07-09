@@ -13238,6 +13238,149 @@ def _target_worker_nodeset_names(values: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(names or ["worker"]))
 
 
+def _json_string_values(value: Any) -> tuple[str, ...]:
+    values: list[str] = []
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            values.append(str(key))
+            values.extend(_json_string_values(item))
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for item in value:
+            values.extend(_json_string_values(item))
+    elif value is not None:
+        values.append(str(value))
+    return tuple(values)
+
+
+def _object_contains_any_token(payload: Mapping[str, Any], tokens: Sequence[str]) -> bool:
+    if not tokens:
+        return True
+    values = _json_string_values(payload)
+    return any(token and token in values for token in tokens)
+
+
+def _rootfs_handoff_consumer_check(
+    *,
+    kind: str,
+    name: str,
+    payload: Mapping[str, Any],
+    rootfs_tokens: Sequence[str],
+    mount_tokens: Mapping[str, Sequence[str]],
+) -> dict[str, Any]:
+    metadata = _mapping(payload.get("metadata"))
+    observed = bool(metadata)
+    missing_mounts = [
+        mount_path
+        for mount_path, tokens in mount_tokens.items()
+        if not _object_contains_any_token(payload, tokens)
+    ]
+    rootfs_observed = _object_contains_any_token(payload, rootfs_tokens)
+    status = "verified" if observed and rootfs_observed and not missing_mounts else "pending"
+    check: dict[str, Any] = {
+        "kind": kind,
+        "name": name,
+        "status": status,
+        "rootfs_observed": rootfs_observed,
+        "missing_mounts": missing_mounts,
+    }
+    if not observed:
+        check["reason"] = "live object not found"
+    elif not rootfs_observed:
+        check["reason"] = "active rootfs slot reference not found in live object"
+    elif missing_mounts:
+        check["reason"] = "persistent mount reference not found in live object"
+    return check
+
+
+def _verify_target_rootfs_handoff_consumers(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    values: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    slots = active_passive_jail_rootfs_slots(values)
+    rootfs_tokens = tuple(
+        dict.fromkeys(
+            token
+            for token in (slots.active_volume_source, slots.active_pvc)
+            if token
+        )
+    )
+    mount_status = jail_persistent_mount_status(values)
+    mount_tokens = {
+        mount.mount_path: tuple(
+            dict.fromkeys(
+                token for token in (mount.mount_path, mount.name, mount.pvc_name) if token
+            )
+        )
+        for mount in mount_status.mounts
+    }
+    checks: list[dict[str, Any]] = []
+    login = _json_from_command(
+        command_runner,
+        [
+            "kubectl",
+            "--context",
+            kube_context,
+            "-n",
+            _SOPERATOR_NAMESPACE,
+            "get",
+            "statefulsets.apps.kruise.io",
+            "login",
+            "-o",
+            "json",
+        ],
+        timeout_seconds=120,
+        check=False,
+    )
+    checks.append(
+        _rootfs_handoff_consumer_check(
+            kind="login-statefulset",
+            name="login",
+            payload=login,
+            rootfs_tokens=rootfs_tokens,
+            mount_tokens=mount_tokens,
+        )
+    )
+    for name in _target_worker_nodeset_names(values):
+        nodeset = _json_from_command(
+            command_runner,
+            [
+                "kubectl",
+                "--context",
+                kube_context,
+                "-n",
+                _SOPERATOR_NAMESPACE,
+                "get",
+                "nodeset",
+                name,
+                "-o",
+                "json",
+            ],
+            timeout_seconds=120,
+            check=False,
+        )
+        checks.append(
+            _rootfs_handoff_consumer_check(
+                kind="worker-nodeset",
+                name=name,
+                payload=nodeset,
+                rootfs_tokens=rootfs_tokens,
+                mount_tokens=mount_tokens,
+            )
+        )
+    return checks
+
+
+def _rootfs_handoff_pending_reason(checks: Sequence[Mapping[str, Any]]) -> str:
+    pending = [check for check in checks if check.get("status") != "verified"]
+    details = "; ".join(
+        f"{check.get('kind')}/{check.get('name')}: {check.get('reason', 'pending')}"
+        for check in pending
+    )
+    return "target login/worker rootfs handoff verification did not pass: " + details
+
+
 def _target_worker_nodesets_by_name(values: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
     nodesets = values.get("nodesets")
     if not isinstance(nodesets, Sequence) or isinstance(nodesets, (str, bytes, bytearray)):
@@ -17338,6 +17481,51 @@ def _execute_populate_jail_refresh_phase(
                 kube_context=kube_context,
             )
         )
+        if checkpoint_writer is not None:
+            checkpoint_writer()
+        handoff_mount_status = jail_persistent_mount_status(switched_values)
+        handoff_slots = active_passive_jail_rootfs_slots(switched_values)
+        handoff_verification = {
+            "status": "checking",
+            "active_slot": handoff_slots.active_slot,
+            "active_volume_source": handoff_slots.active_volume_source,
+            "active_pvc": handoff_slots.active_pvc,
+            "rollback_slot": phase["rollback_slot"],
+            "worker_nodesets": list(_target_worker_nodeset_names(switched_values)),
+            "persistent_mounts": [mount.as_payload() for mount in handoff_mount_status.mounts],
+            "persistent_mount_status": handoff_mount_status.status,
+            "persistent_mount_reason": handoff_mount_status.reason,
+        }
+        phase["rootfs_handoff_verification"] = handoff_verification
+        if checkpoint_writer is not None:
+            checkpoint_writer()
+        try:
+            _wait_for_target_worker_nodesets_ready(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                values=switched_values,
+                timeout_seconds=1800,
+            )
+            consumer_checks = _verify_target_rootfs_handoff_consumers(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                values=switched_values,
+            )
+            handoff_verification["consumer_checks"] = consumer_checks
+            if any(check.get("status") != "verified" for check in consumer_checks):
+                raise SoperatorMigrationPhasePending(
+                    _rootfs_handoff_pending_reason(consumer_checks)
+                )
+        except SoperatorMigrationPhasePending as exc:
+            handoff_verification["status"] = "pending"
+            handoff_verification["reason"] = str(exc)
+            phase["rootfs_handoff_verification"] = handoff_verification
+            if checkpoint_writer is not None:
+                checkpoint_writer()
+            raise
+        handoff_verification["status"] = "verified"
+        handoff_verification["verified_at"] = _utc_now()
+        phase["rootfs_handoff_verification"] = handoff_verification
         if checkpoint_writer is not None:
             checkpoint_writer()
         _kubectl_rollout_status(

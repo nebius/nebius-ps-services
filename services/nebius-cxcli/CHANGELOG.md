@@ -6,6 +6,22 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Hardened Soperator upgrade UX and resume behavior. Soperator onboarding
+  prompts now reject invalid domain/type values in place and re-prompt with the
+  rejected value visible as the next default. Managed `soperator upgrade` and
+  external `ext-soperator upgrade` keep Slurm scheduling quiesce enabled by
+  default; external onboarding asks that decision before rollout pacing, hides
+  normal worker wave/worker `max_unavailable` prompts when quiesce is enabled,
+  and warns before showing those advanced controls when scheduling remains
+  active.
+- Hardened Soperator upgrade handoff and packaging gates. Existing
+  restore-capable external-upgrade backup metadata is reused from the active
+  cluster-scoped checkpoint instead of creating a fresh backup on resume. Jail
+  Upgrade now checkpoints rootfs handoff evidence for the active slot, rollback
+  slot, target worker NodeSets, and preserved mounts before source retirement.
+  Local Soperator render now skips Helm dependency builds when all pinned chart
+  archives are packaged, including `file://` child charts, and reports missing
+  packaged archives with an actionable packaging hint.
 - Changed Soperator and ext-Soperator backup, discovery, onboarding, upgrade,
   segment, and checkpoint artifacts to use cluster-scoped paths under
   `backups/soperator-clusters/<cluster-key>/`,

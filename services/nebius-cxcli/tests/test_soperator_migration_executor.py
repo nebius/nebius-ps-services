@@ -1539,7 +1539,7 @@ spec:
                     "login",
                 ): {
                     "metadata": {"generation": 1},
-                    "spec": {"replicas": 2},
+                    "spec": self._handoff_consumer_spec(2),
                     "status": {
                         "observedGeneration": 1,
                         "readyReplicas": 2,
@@ -1589,6 +1589,38 @@ spec:
         self.file_update_payloads: list[dict[str, Any]] = []
         self._populate_jail_refresh_saved_pods: list[dict[str, Any]] | None = None
         self.nebius_api = _FakeNebiusApi(self)
+
+    @staticmethod
+    def _handoff_consumer_spec(replicas: int) -> dict[str, Any]:
+        return {
+            "replicas": replicas,
+            "template": {
+                "spec": {
+                    "volumes": [
+                        {
+                            "name": "jail-rootfs-slot-b",
+                            "persistentVolumeClaim": {"claimName": "jail-rootfs-slot-b-pvc"},
+                        },
+                        {"name": "jail-persistent-home"},
+                        {"name": "jail-persistent-data"},
+                        {"name": "jail-persistent-scripts"},
+                        {"name": "jail-persistent-models"},
+                    ],
+                    "containers": [
+                        {
+                            "name": "slurm",
+                            "volumeMounts": [
+                                {"name": "jail-rootfs-slot-b", "mountPath": "/mnt/jail"},
+                                {"name": "jail-persistent-home", "mountPath": "/home"},
+                                {"name": "jail-persistent-data", "mountPath": "/data"},
+                                {"name": "jail-persistent-scripts", "mountPath": "/scripts"},
+                                {"name": "jail-persistent-models", "mountPath": "/models"},
+                            ],
+                        }
+                    ],
+                }
+            },
+        }
 
     def _upsert_helm_release(
         self,
@@ -2599,7 +2631,7 @@ spec:
             if self.live_nodesets is None:
                 payload = {
                     "metadata": {"name": name, "namespace": "soperator"},
-                    "spec": {"replicas": 2},
+                    "spec": self._handoff_consumer_spec(2),
                     "status": {"phase": "Ready", "replicas": 2},
                 }
                 return SoperatorMigrationCommandResult(command, 0, json.dumps(payload), "")
@@ -2844,6 +2876,36 @@ spec:
             if command[8:10] == ("sh", "-ceu") and "ss -Htn" in command[10]:
                 return SoperatorMigrationCommandResult(command, 0, "0\n", "")
             return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
+        if command[:10] == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "exec",
+            "controller-0",
+            "-c",
+            "slurmctld",
+            "--",
+        ):
+            if command[10:13] == ("scontrol", "show", "node") and command[-1] == "-o":
+                nodes = command[13].split(",") if len(command) > 13 else []
+                return SoperatorMigrationCommandResult(
+                    command,
+                    0,
+                    "\n".join(f"NodeName={node} Partitions=main State=IDLE" for node in nodes),
+                    "",
+                )
+            if command[10:] == ("scontrol", "show", "partition", "-o"):
+                return SoperatorMigrationCommandResult(
+                    command,
+                    0,
+                    "PartitionName=main State=UP Nodes=node-a,node-b,worker-0\n",
+                    "",
+                )
+            if command[10:12] == ("squeue", "-h"):
+                return SoperatorMigrationCommandResult(command, 0, "", "")
+            return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
         if command[:7] == (
             "kubectl",
             "--context",
@@ -2873,7 +2935,7 @@ spec:
                 items = [
                     {
                         "metadata": {"name": "worker", "namespace": "soperator"},
-                        "spec": {"replicas": 2},
+                        "spec": self._handoff_consumer_spec(2),
                         "status": {"phase": "Ready", "replicas": 2},
                     }
                 ]
@@ -10312,6 +10374,21 @@ def test_populate_jail_refresh_phase_migrates_legacy_persistent_mounts_before_po
     }
     assert populate_phase["persistent_migration_writer_hold"]["status"] == "restored"
     assert populate_phase["login_service_ready_before_switch"]["status"] == "skipped"
+    rootfs_handoff = populate_phase["rootfs_handoff_verification"]
+    assert rootfs_handoff["status"] == "verified"
+    assert rootfs_handoff["active_slot"] == "slot-b"
+    assert rootfs_handoff["rollback_slot"] == "legacy-rootfs"
+    assert rootfs_handoff["worker_nodesets"] == ["worker"]
+    assert rootfs_handoff["persistent_mount_status"] == "planned"
+    assert {
+        mount["mount_path"]: mount["local_path"]
+        for mount in rootfs_handoff["persistent_mounts"]
+    } == {
+        "/home": "/mnt/jail/shared/home",
+        "/data": "/mnt/jail/shared/data",
+        "/scripts": "/mnt/jail/shared/scripts",
+        "/models": "/mnt/jail/shared/models",
+    }
     assert checkpoint["populate_jail_refresh"]["legacy_persistent_mount_migration"][
         "status"
     ] == "completed"
@@ -10396,6 +10473,97 @@ def test_populate_jail_refresh_phase_migrates_legacy_persistent_mounts_before_po
             "persistentVolumeClaim": {"claimName": "jail-rootfs-slot-b-pvc"},
         }
     ]
+
+
+def test_populate_jail_refresh_phase_blocks_when_live_consumers_miss_rootfs_handoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _payload()
+    target_values = migration.apply_jail_persistent_mount_values(
+        {"nodesets": [{"name": "worker"}]},
+        target_ref="external-cluster",
+        layout="external",
+    )
+    payload["apps"]["charts"][0]["values"] = target_values
+    runner = _FakeCommandRunner(
+        live_workloads={
+            (
+                "Deployment",
+                "soperator",
+                "soperator-manager",
+            ): {
+                "metadata": {"generation": 1},
+                "spec": {"replicas": 1},
+                "status": {
+                    "observedGeneration": 1,
+                    "readyReplicas": 1,
+                    "availableReplicas": 1,
+                    "updatedReplicas": 1,
+                },
+            },
+            (
+                "StatefulSet",
+                "soperator",
+                "login",
+            ): {
+                "metadata": {"generation": 1},
+                "spec": {"replicas": 1},
+                "status": {
+                    "observedGeneration": 1,
+                    "readyReplicas": 1,
+                    "updatedReplicas": 1,
+                },
+            },
+        },
+        live_nodesets={
+            "worker": {
+                "metadata": {"name": "worker", "namespace": "soperator"},
+                "spec": {"replicas": 1},
+                "status": {
+                    "phase": "Ready",
+                    "replicas": 1,
+                    "readyReplicas": 1,
+                    "conditions": [{"type": "PodsReady", "status": "True"}],
+                },
+            }
+        },
+    )
+    monkeypatch.setattr(
+        migration,
+        "_patch_target_values_for_compute",
+        lambda **_kwargs: target_values,
+    )
+    checkpoint: dict[str, Any] = {
+        "phase_state": {},
+        "worker_node_groups": ["gpu-pool"],
+    }
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="rootfs handoff verification did not pass",
+    ):
+        migration._execute_populate_jail_refresh_phase(  # noqa: SLF001
+            checkpoint=checkpoint,
+            payload=payload,
+            source_report=_source_report(),
+            live_snapshot={},
+            target_ref="external-cluster",
+            kube_context="external-context",
+            command_runner=runner,
+            populate_jail_refresh="force",
+            job_policy="fail",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            job_wait_timeout_seconds=0,
+            job_refresh_interval_seconds=1,
+            login_session_policy=migration.EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE,
+            login_session_drain_timeout_seconds=0,
+        )
+
+    handoff = checkpoint["phase_state"]["populate-jail-refresh"]["rootfs_handoff_verification"]
+    assert handoff["status"] == "pending"
+    assert "login-statefulset/login" in handoff["reason"]
+    assert handoff["consumer_checks"][0]["rootfs_observed"] is False
 
 
 def test_populate_jail_refresh_target_ready_blocks_before_login_hold(
@@ -12302,6 +12470,7 @@ def test_execute_auto_selects_console_worker_node_group_names_from_live_inventor
                     "annotations": {"meta.helm.sh/release-name": "soperator-nodesets"},
                 },
                 "spec": {
+                    **_FakeCommandRunner._handoff_consumer_spec(2),
                     "replicas": 2,
                     "nodeConfig": {"dynamic": "", "static": "CPUs=15"},
                 },
@@ -12314,6 +12483,7 @@ def test_execute_auto_selects_console_worker_node_group_names_from_live_inventor
                     "annotations": {"meta.helm.sh/release-name": "soperator-nodesets"},
                 },
                 "spec": {
+                    **_FakeCommandRunner._handoff_consumer_spec(2),
                     "replicas": 2,
                     "nodeConfig": {
                         "dynamic": "",
@@ -15206,8 +15376,9 @@ def test_execute_recovers_partial_cutover_without_login_pod(tmp_path: Path) -> N
     )
 
     assert result.pending_phase == "none"
-    assert "Slurm quiet window check skipped for partial cutover recovery" in "\n".join(
-        result.lines
+    assert any(
+        call[0][6:11] == ("controller-0", "-c", "slurmctld", "--", "scontrol")
+        for call in runner.calls
     )
     assert any(
         call[0][0] == "helm" and "upgrade" in call[0] and call[0][5] == "soperator"
