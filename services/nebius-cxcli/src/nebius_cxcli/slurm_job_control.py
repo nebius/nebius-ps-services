@@ -50,13 +50,13 @@ SLURM_JOB_CONTROL_ACTION_ALIASES = {
     "abort": "abort",
 }
 SLURM_JOB_CONTROL_ACTION_PROMPT = (
-    "Action [r refresh, w wait-to-finish, b background wait, c cancel selected, "
+    "Action [r refresh, w wait-to-finish, b terminal wait, c cancel selected, "
     "C cancel all displayed, q requeue selected, Q requeue all active, "
     "h requeue-hold selected, H requeue-hold all active, x abort]"
 )
 SLURM_JOB_CONTROL_KEYS = (
     "Keys: space select | a all | i invert | r refresh | w wait | "
-    "b background | ? help | x abort"
+    "b terminal | c/C cancel | q/Q requeue | h/H hold | ? help | x abort upgrade"
 )
 SLURM_JOB_CONTROL_HELP = (
     "Slurm job controls\n\n"
@@ -67,7 +67,7 @@ SLURM_JOB_CONTROL_HELP = (
     "Actions\n"
     "r: refresh the displayed affected jobs.\n"
     "w: wait in this screen until all affected jobs finish or clear.\n"
-    "b: hide this screen and wait in the normal terminal output for this Slurm gate.\n"
+    "b: hide this screen and keep polling silently at this Slurm gate.\n"
     "c: cancel selected displayed jobs with scancel.\n"
     "C: cancel all displayed affected jobs with scancel.\n"
     "q: requeue selected active jobs with scontrol requeue.\n"
@@ -102,6 +102,8 @@ JobActionHandler = Callable[
 ]
 
 SLURM_JOB_CONTROL_BACKGROUND_WAIT = "background-wait"
+SLURM_JOB_CONTROL_ACTION_APPLIED = "action-applied"
+SLURM_JOB_CONTROL_JOBS_CHANGED = "jobs-changed"
 SLURM_JOB_CONTROL_JOBS_CLEARED = "jobs-cleared"
 SLURM_JOB_CONTROL_WAIT_COMPLETED = "wait-completed"
 SLURM_JOB_CONTROL_WAIT_TIMEOUT = "wait-timeout"
@@ -284,6 +286,7 @@ def prompt_slurm_job_control(
     action_handler: JobActionHandler | None = None,
     wait_timeout_seconds: int = 0,
     poll_interval_seconds: int = 30,
+    exit_after_action: bool = False,
 ) -> tuple[str, tuple[str, ...]]:
     if is_tty:
         try:
@@ -297,6 +300,7 @@ def prompt_slurm_job_control(
                     action_handler=action_handler,
                     wait_timeout_seconds=wait_timeout_seconds,
                     poll_interval_seconds=poll_interval_seconds,
+                    exit_after_action=exit_after_action,
                 )
             if result is not None:
                 return result
@@ -321,6 +325,7 @@ def create_slurm_job_control_app(
     action_handler: JobActionHandler | None = None,
     wait_timeout_seconds: int = 0,
     poll_interval_seconds: int = 30,
+    exit_after_action: bool = False,
 ) -> Any:
     from textual.app import App, ComposeResult
     from textual.binding import Binding
@@ -424,6 +429,7 @@ def create_slurm_job_control_app(
             self.action_handler = action_handler
             self.wait_timeout_seconds = max(0, int(wait_timeout_seconds))
             self.poll_interval_seconds = max(1, int(poll_interval_seconds))
+            self.exit_after_action = bool(exit_after_action)
             self.waiting = False
             self.wait_started_at: float | None = None
             self.refreshing = False
@@ -676,8 +682,27 @@ def create_slurm_job_control_app(
             if not jobs:
                 self._exit_jobs_cleared()
                 return
+            if worker_name == "slurm-job-control-poll" and self.exit_after_action:
+                previous_job_ids = tuple(job.job_id for job in self.affected_jobs)
+                current_job_ids = tuple(job.job_id for job in jobs)
+                if current_job_ids != previous_job_ids:
+                    self.exit(
+                        SlurmJobControlResult(
+                            action=SLURM_JOB_CONTROL_JOBS_CHANGED,
+                            selected_job_ids=(),
+                        )
+                    )
+                    return
             self._replace_jobs(jobs)
             if worker_name == "slurm-job-control-action":
+                if self.exit_after_action:
+                    self.exit(
+                        SlurmJobControlResult(
+                            action=SLURM_JOB_CONTROL_ACTION_APPLIED,
+                            selected_job_ids=self.running_action_job_ids,
+                        )
+                    )
+                    return
                 self._refresh_status("Action completed; affected jobs remain.")
 
         def _tick(self) -> None:
@@ -700,7 +725,7 @@ def create_slurm_job_control_app(
                 )
                 self._refresh_status(
                     f"Monitoring affected jobs; next squeue poll in {next_poll_seconds}s. "
-                    "Press ? for help, b for background wait, or x to abort."
+                    "Press ? for help, b for terminal wait, or x to abort."
                 )
                 if now - self.last_poll_at >= self.poll_interval_seconds:
                     self._schedule_poll(reason="monitor")
@@ -824,6 +849,7 @@ def run_slurm_job_control_tui(
     action_handler: JobActionHandler | None = None,
     wait_timeout_seconds: int = 0,
     poll_interval_seconds: int = 30,
+    exit_after_action: bool = False,
 ) -> tuple[str, tuple[str, ...]] | None:
     result = create_slurm_job_control_app(
         tuple(jobs),
@@ -832,6 +858,7 @@ def run_slurm_job_control_tui(
         action_handler=action_handler,
         wait_timeout_seconds=wait_timeout_seconds,
         poll_interval_seconds=poll_interval_seconds,
+        exit_after_action=exit_after_action,
     ).run()
     if result is None:
         return None

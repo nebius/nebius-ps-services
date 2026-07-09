@@ -3356,15 +3356,23 @@ Important external upgrade flags:
   all`: newly submitted jobs can queue, but cannot start on the quiesced
   partitions until cxcli restores them. Running and `COMPLETING` jobs on affected
   workers still block mutation until they finish, are cancelled, or are requeued
-  away from the affected scope. Clearing jobs does not bypass the configured
-  Nebius/MK8s rollout budget.
+  away from the affected scope. In external node-template worker phases, quiesce
+  enables Slurm-clear fast dispatch: cxcli starts every clear provider unit
+  immediately instead of pacing it through worker waves or `max_unavailable`.
+  Current Nebius node-template mutation is provider-unit scoped, so cxcli reports
+  `provider-unit` mode and does not claim exact-node replacement inside a mixed
+  busy/free node group. Reports and checkpoints record quiesced partitions,
+  restore commands, target mode, and cxcli-held Slurm job IDs.
 - `--cancel-job`: job id to cancel when `--job-policy cancel-selected` is used.
   Repeat the flag for multiple jobs.
 - `--requeue-job`: job id to requeue when `--job-policy requeue-selected` or
   `--job-policy requeue-hold-selected` is used. Repeat the flag for multiple
   jobs. Jobs must be requeueable by Slurm, and cxcli still stops if any selected
-  job remains in the affected upgrade scope. Held requeued jobs remain held
-  until an operator runs `scontrol release <jobid>`.
+  job remains in the affected upgrade scope. When cxcli requeue-holds jobs
+  during a successful upgrade, it releases only those recorded cxcli-held job IDs
+  before final completion. If release fails, the checkpoint/report keeps the
+  manual `scontrol release <jobid>` command; aborts and failures leave held jobs
+  untouched for operator review.
 - `--job-wait-timeout` and `--job-refresh-interval`: bound and refresh the
   `wait-to-finish` and `wait-then-cancel` policies. The default wait timeout is `1h`;
   `wait-then-cancel` requires a positive timeout, while `wait-to-finish --job-wait-timeout
@@ -3403,15 +3411,19 @@ Interactive Slurm job actions map to these Slurm commands:
 - Requeue and hold all displayed active jobs:
   `scontrol requeuehold <jobid>...` for displayed jobs that Slurm can requeue.
   Requeue-hold also places the job on hold at priority zero, so the scheduler
-  will not run it until an operator releases it.
-- Release one held job after the upgrade: `scontrol release <jobid>`.
-- Release all admin-held pending jobs after review:
+  will not run it until cxcli or an operator releases it. cxcli releases only
+  the job IDs it requeue-held after a successful upgrade.
+- Manually release one held job after an abort, failure, or operator review:
+  `scontrol release <jobid>`.
+- Manually release all admin-held pending jobs after review:
   `squeue --states=PD -h -o '%A|%r' | awk -F'|' '$2 == "JobHeldAdmin" { print $1 }' | xargs -r scontrol release`.
 - `--worker-rollout-strategy zero-surge|safe-surge`: select the external worker
   node-template rollout strategy. `zero-surge` is the worker default and avoids
   worker surge quota, but can reduce active worker capacity during the rollout.
-  `safe-surge` uses temporary nodes for active worker waves and checks the
-  required quota and capacity before mutation.
+  `safe-surge` uses temporary nodes for active worker provider units and checks
+  the required quota and capacity before mutation. When Slurm scheduling quiesce
+  is enabled, clear worker provider units are dispatched as soon as they have no
+  active or `COMPLETING` jobs instead of waiting for wave-budget pacing.
 - `--service-role-rollout-strategy zero-surge|safe-surge`: select the external
   service-role node-template rollout strategy. `zero-surge` is the service-role
   default and avoids temporary service-role quota, but can reduce active
@@ -3547,8 +3559,8 @@ surge quota but can reduce active capacity by one node per active group. cxcli
 warns when a discovered service-role group has at most the configured
 `max_unavailable_count`. When operators choose service-role or worker
 safe-surge, it counts the temporary surge nodes required for each active
-service group or worker wave. It checks the required spare quota and GPU
-capacity before mutation,
+service group or clear worker provider unit. It checks the required spare quota
+and GPU capacity before mutation,
 requires all selected worker nodes to start Ready and schedulable, checks
 affected Slurm jobs on external node-template workers,
 including pending jobs in affected partitions or requested/scheduled on affected

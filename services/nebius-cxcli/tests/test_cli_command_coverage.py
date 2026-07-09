@@ -5374,6 +5374,42 @@ def test_soperator_upgrade_quiesce_restores_partial_partition_on_apply_failure(
     ]
 
 
+def test_soperator_upgrade_restore_accepts_already_restored_partition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[str] = []
+
+    def _login_command(
+        _namespace: str,
+        command: str,
+        **_kwargs: Any,
+    ) -> SimpleNamespace:
+        commands.append(command)
+        if "PartitionName=main State=UP" in command:
+            raise RuntimeError("scontrol: fatal: Could not establish a configuration source")
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_login_command", _login_command)
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_partition_state_snapshot",
+        lambda **_kwargs: (cli.SlurmPartitionState(name="main", state="UP"),),
+    )
+
+    cli._soperator_upgrade_restore_slurm_partitions(
+        namespace="soperator",
+        records=(
+            cli.SlurmPartitionQuiesceRecord(
+                partition="main",
+                previous_state="UP",
+                applied_state="DOWN",
+            ),
+        ),
+    )
+
+    assert commands == ["scontrol update PartitionName=main State=UP"]
+
+
 def test_soperator_upgrade_affected_jobs_include_scoped_pending_jobs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -6004,7 +6040,7 @@ def test_soperator_upgrade_interactive_callback_requeue_holds_in_tui(
     assert queue_results == []
 
 
-def test_soperator_upgrade_interactive_background_wait_uses_wait_path(
+def test_soperator_upgrade_interactive_background_wait_uses_silent_poll(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     job = _soperator_slurm_job(job_id="42")
@@ -6028,6 +6064,11 @@ def test_soperator_upgrade_interactive_background_wait_uses_wait_path(
         lambda **_kwargs: queue_results.pop(0),
     )
     monkeypatch.setattr(cli.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_wait_for_jobs",
+        lambda **_kwargs: pytest.fail("background wait must not use the Rich wait path"),
+    )
     monkeypatch.setattr(
         cli,
         "_prompt_soperator_upgrade_job_control",
@@ -6310,6 +6351,27 @@ def test_soperator_upgrade_requeue_hold_all_policy_holds_all_jobs(
 
     assert restored == ("worker-gpu-0-0",)
     assert commands == ["scontrol requeuehold 42 43"]
+
+
+def test_soperator_upgrade_release_jobs_uses_scontrol_release(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[str] = []
+    monkeypatch.setattr(
+        cli,
+        "_run_soperator_upgrade_login_command",
+        lambda _namespace, command, **_kwargs: (
+            commands.append(command) or SimpleNamespace(stdout="", stderr="", returncode=0)
+        ),
+    )
+
+    cli._soperator_upgrade_release_jobs(  # noqa: SLF001
+        "soperator",
+        ("42", "43"),
+        kube_context="ctx",
+    )
+
+    assert commands == ["scontrol release 42 43"]
 
 
 def test_soperator_upgrade_requeue_policy_waits_for_slurm_transition(

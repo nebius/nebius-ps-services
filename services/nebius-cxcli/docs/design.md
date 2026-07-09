@@ -1309,9 +1309,8 @@ executor upgrades the external MK8s control plane first to the accepted
 Kubernetes target for this run, updates service-role node groups serially with
 the selected temporary strategy and original-strategy
 restore, updates worker node groups with zero-surge by default or safe-surge
-waves when selected, using an exact fixed worker-group count or a percent-based
-wave with an optional cap, quiesces affected Slurm scheduling partitions by
-setting cxcli-owned `UP` partitions to `DOWN` during worker gates, and handles
+strategy settings, quiesces affected Slurm scheduling partitions by setting
+cxcli-owned `UP` partitions to `DOWN` during worker gates, and handles
 affected Slurm jobs on external node-template workers and all live worker
 NodeSets before target chart reconciliation through the `--job-policy`
 interactive, wait-to-finish, wait-then-cancel, fail, cancel-selected,
@@ -1319,8 +1318,16 @@ cancel-all, requeue-selected, requeue-all, requeue-hold-selected, or
 requeue-hold-all decision state. Running and `COMPLETING` jobs remain blockers;
 pending jobs in affected partitions or requested/scheduled on affected nodes
 are queued information while partition quiesce is active and remain blocking
-when quiesce is explicitly disabled. TTY managed and external upgrade runs
-default to `interactive`;
+when quiesce is explicitly disabled. In the default quiesced external
+node-template worker path, cxcli uses Slurm-clear fast provider-unit dispatch:
+all worker provider units with no active or `COMPLETING` Slurm jobs start
+immediately instead of waiting for worker-wave or `max_unavailable` pacing.
+The current Nebius node-template executor is provider-unit scoped, so reports
+show `provider-unit` and do not claim exact-node replacement inside a mixed
+busy/free node group. Reports and checkpoints record quiesced partitions,
+restore verification, target mode, and cxcli-held Slurm job IDs; successful
+upgrades release only jobs that cxcli requeue-held, while aborts and failures
+leave held jobs for operator review. TTY managed and external upgrade runs default to `interactive`;
 non-TTY and `--no-interactive` upgrade runs default to `fail`, so automation
 should pass an explicit policy such as `--job-policy wait-to-finish` and
 destructive cancel/requeue or wait-then-cancel policies remain deliberate.
@@ -1329,11 +1336,13 @@ table with persistent controls: `a` selects or clears all rows, `i` inverts the
 selection, lowercase selected-action keys such as `c`/`q`/`h` operate on the
 selected rows, and uppercase `C`/`Q`/`H` operate on all displayed or all active
 displayed jobs as appropriate. The `?` key opens a scrollable help overlay, `b`
-hides the full-screen table and waits in normal terminal output for the current
-Slurm gate, cancel action keys call `scancel` and then wait for the selected
+hides the full-screen table and keeps polling silently at the current Slurm
+gate, cancel action keys call `scancel` and then wait for the selected
 job ids to leave the affected Slurm scope, action keys refresh the same table in
-place after Slurm updates, and idle polling exits automatically when no affected
-jobs remain. Slurm may report cancelled jobs as `COMPLETING` while processes
+place after Slurm updates. In Slurm-clear fast worker scheduling, a completed
+operator action can return control to the scheduler so newly clear provider
+units are dispatched before reopening the monitor for remaining blockers, and
+idle polling exits automatically when no affected jobs remain. Slurm may report cancelled jobs as `COMPLETING` while processes
 exit and nodes return to service; cxcli keeps those jobs visible and blocking
 until Slurm clears them from the affected node list. When the target populate-jail image changed or
 selected chart/rootfs evidence requires refresh, the Jail Upgrade phase first

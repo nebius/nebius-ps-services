@@ -163,15 +163,20 @@ All notable changes to this project are tracked here. This changelog follows
 - Improved the interactive Soperator Slurm job-control screen so cancel,
   requeue, and requeue-hold actions refresh the same table in place, idle
   polling exits automatically when affected jobs clear, `?` opens a scrollable
-  help overlay, and `b` hides the full-screen table while cxcli keeps waiting
-  at the same Slurm gate.
+  help overlay, the compact key strip includes cancel/requeue/requeue-hold
+  shortcuts, and `b` hides the full-screen table while cxcli keeps polling
+  silently at the same Slurm gate.
 - Added default-enabled Soperator worker-upgrade Slurm scheduling quiesce.
   Managed `soperator upgrade` and external `ext-soperator upgrade` now expose
   `--slurm-scheduling-quiesce / --no-slurm-scheduling-quiesce`, onboarding
   persists `node_template_upgrade.slurm_scheduling_quiesce: true`, cxcli sets
-  only affected `UP` Slurm partitions to `DOWN` during worker gates, treats
-  pending jobs as queued information while quiesce is active, and restores
-  cxcli-owned partition state on success, failure, abort, or rerun cleanup.
+  worker-overlap `UP` Slurm partitions to `DOWN` during worker gates, treats
+  pending jobs as queued information while quiesce is active, dispatches
+  Slurm-clear external node-template worker provider units without old
+  wave-budget pacing, verifies live partition state after restore-command
+  failures, restores cxcli-owned partition state on success, failure, abort, or
+  rerun cleanup, and releases only cxcli-recorded requeue-held job IDs after
+  successful upgrade completion.
 - Fixed explicit Soperator Slurm cancel actions so managed and external upgrade
   paths wait for selected `scancel`ed jobs to leave the affected node scope
   before continuing. The job-control screen now highlights `COMPLETING` jobs

@@ -70,7 +70,9 @@ from .quota_checks import (
 from .runtime_config import to_plain_data
 from .sdk_auth import init_nebius_sdk, suppress_expected_refresh_logs
 from .slurm_job_control import (
+    SLURM_JOB_CONTROL_ACTION_APPLIED,
     SLURM_JOB_CONTROL_BACKGROUND_WAIT,
+    SLURM_JOB_CONTROL_JOBS_CHANGED,
     SLURM_JOB_CONTROL_JOBS_CLEARED,
     SLURM_JOB_CONTROL_WAIT_COMPLETED,
     SLURM_JOB_CONTROL_WAIT_TIMEOUT,
@@ -89,7 +91,10 @@ from .slurm_jobs import (
     parse_scontrol_show_partition_states,
     parse_squeue_jobs,
     selected_display_job_ids,
+    slurm_job_nodes,
     slurm_partition_quiesce_records,
+    slurm_partition_state_token,
+    slurm_partitions_overlapping_nodes,
 )
 from .soperator_artifacts import (
     soperator_cluster_artifact_identity,
@@ -6791,6 +6796,8 @@ def _run_soperator_worker_rollout_live_preflight(
     interactive_prompt_pause: Callable[[], Any] | None = None,
     allow_resolved_interactive_job_policy: bool = False,
     include_pending: bool = True,
+    skip_slurm_jobs: bool = False,
+    return_after_operator_action: bool = False,
 ) -> list[str]:
     unavailable_budget = 0
     budget_label = f"{rollout.strategy} requires selected worker groups to start healthy"
@@ -6850,7 +6857,12 @@ def _run_soperator_worker_rollout_live_preflight(
         f"current unavailable {len(unavailable)}/{unavailable_budget} ({budget_label})."
     ]
     source_snapshot = _mapping(source_report.get("snapshot"))
-    if not _has_live_slurmcluster_resource(source_snapshot):
+    if skip_slurm_jobs:
+        lines.append(
+            "Slurm worker rollout preflight: affected Slurm job handling is deferred "
+            "to Slurm-clear fast provider-unit scheduling under partition quiesce."
+        )
+    elif not _has_live_slurmcluster_resource(source_snapshot):
         lines.append("Slurm worker rollout preflight: no live source SlurmCluster detected.")
     else:
         lines.extend(
@@ -6867,6 +6879,7 @@ def _run_soperator_worker_rollout_live_preflight(
                 interactive_prompt_pause=interactive_prompt_pause,
                 allow_resolved_interactive_job_policy=allow_resolved_interactive_job_policy,
                 include_pending=include_pending,
+                return_after_operator_action=return_after_operator_action,
             )
         )
     return lines
@@ -8586,6 +8599,29 @@ def _external_upgrade_requeue_slurm_jobs(
         )
 
 
+def _external_upgrade_release_slurm_jobs(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    job_ids: Sequence[str],
+) -> None:
+    selected = tuple(str(job_id or "").strip() for job_id in job_ids if str(job_id or "").strip())
+    if not selected:
+        return
+    result = _kubectl_exec_login(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        args=("scontrol", "release", *selected),
+        check=False,
+        timeout_seconds=120,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "External Soperator upgrade could not release cxcli-held Slurm jobs: "
+            + _command_detail(result)
+        )
+
+
 def _wait_for_external_upgrade_requeued_jobs_to_leave_nodes(
     *,
     command_runner: SoperatorMigrationCommandRunner,
@@ -8741,6 +8777,7 @@ def _prompt_external_upgrade_slurm_job_control(
     | None = None,
     wait_timeout_seconds: int = 0,
     refresh_interval_seconds: int = 30,
+    exit_after_action: bool = False,
 ) -> tuple[str, tuple[str, ...]]:
     with _external_upgrade_slurm_prompt_paused(prompt_pause):
         return prompt_slurm_job_control(
@@ -8753,6 +8790,7 @@ def _prompt_external_upgrade_slurm_job_control(
             action_handler=action_handler,
             wait_timeout_seconds=wait_timeout_seconds,
             poll_interval_seconds=refresh_interval_seconds,
+            exit_after_action=exit_after_action,
         )
 
 
@@ -8908,6 +8946,35 @@ def _wait_for_external_upgrade_slurm_jobs(
         )
 
 
+def _wait_for_external_upgrade_slurm_jobs_silently(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    node_names: Sequence[str],
+    timeout_seconds: int,
+    refresh_interval_seconds: int,
+    include_pending: bool = True,
+) -> None:
+    deadline = time.monotonic() + timeout_seconds if timeout_seconds > 0 else None
+    poll_interval = max(refresh_interval_seconds, 1)
+    while True:
+        remaining = _external_upgrade_slurm_jobs(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            node_names=node_names,
+            include_pending=include_pending,
+        )
+        if not remaining:
+            return
+        if deadline is not None and time.monotonic() >= deadline:
+            raise RuntimeError(
+                "Timed out waiting for Slurm jobs to finish. Rerun with a longer "
+                "--job-wait-timeout, cancel, requeue, or requeue-hold selected jobs, "
+                "or use --job-policy wait-then-cancel."
+            )
+        time.sleep(poll_interval)
+
+
 def _handle_external_upgrade_slurm_jobs(
     *,
     command_runner: SoperatorMigrationCommandRunner,
@@ -8922,6 +8989,7 @@ def _handle_external_upgrade_slurm_jobs(
     interactive_prompt_pause: Callable[[], Any] | None = None,
     allow_resolved_interactive_job_policy: bool = False,
     include_pending: bool = True,
+    return_after_operator_action: bool = False,
 ) -> list[str]:
     def _record(action: str, **details: Any) -> None:
         if decision_recorder is None:
@@ -9084,6 +9152,42 @@ def _handle_external_upgrade_slurm_jobs(
         node_names=selected_nodes,
         jobs=[job.__dict__ for job in jobs],
     )
+
+    def _wait_for_fast_scheduler_reclassification(
+        current_jobs: Sequence[AffectedSlurmJob],
+    ) -> bool:
+        baseline_job_ids = tuple(job.job_id for job in current_jobs)
+        deadline = (
+            time.monotonic() + wait_timeout_seconds if wait_timeout_seconds > 0 else None
+        )
+        poll_interval = max(refresh_interval_seconds, 1)
+        while True:
+            remaining = _external_upgrade_slurm_jobs(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                node_names=selected_nodes,
+                include_pending=include_pending,
+            )
+            if not remaining:
+                return False
+            current_job_ids = tuple(job.job_id for job in remaining)
+            if current_job_ids != baseline_job_ids:
+                _record("affected-jobs-changed", job_ids=current_job_ids)
+                return True
+            if deadline is not None and time.monotonic() >= deadline:
+                raise RuntimeError(
+                    "Timed out waiting for Slurm jobs to finish. Rerun with a longer "
+                    "--job-wait-timeout, cancel, requeue, or requeue-hold selected jobs, "
+                    "or use --job-policy wait-then-cancel."
+                )
+            time.sleep(poll_interval)
+
+    def _fast_scheduler_reclassification_line() -> list[str]:
+        return [
+            "Slurm job preflight: affected jobs changed; "
+            "remaining affected jobs will be reclassified by the worker scheduler."
+        ]
+
     if resolved_policy == "interactive":
         while True:
             action, selected_ids = _prompt_external_upgrade_slurm_job_control(
@@ -9098,8 +9202,22 @@ def _handle_external_upgrade_slurm_jobs(
                 action_handler=_interactive_action_handler,
                 wait_timeout_seconds=wait_timeout_seconds,
                 refresh_interval_seconds=refresh_interval_seconds,
+                exit_after_action=return_after_operator_action,
             )
             _record("operator-selected", selection=action, job_ids=selected_ids)
+            if action in {SLURM_JOB_CONTROL_ACTION_APPLIED, SLURM_JOB_CONTROL_JOBS_CHANGED}:
+                _record(
+                    "operator-action-applied"
+                    if action == SLURM_JOB_CONTROL_ACTION_APPLIED
+                    else "affected-jobs-changed",
+                    job_ids=selected_ids,
+                )
+                if action == SLURM_JOB_CONTROL_ACTION_APPLIED:
+                    return [
+                        "Slurm job preflight: operator action completed; "
+                        "remaining affected jobs will be reclassified by the worker scheduler."
+                    ]
+                return _fast_scheduler_reclassification_line()
             if action == "refresh":
                 jobs = _external_upgrade_slurm_jobs(
                     command_runner=command_runner,
@@ -9140,7 +9258,11 @@ def _handle_external_upgrade_slurm_jobs(
                     refresh_interval_seconds=refresh_interval_seconds,
                 )
                 with _external_upgrade_slurm_prompt_paused(interactive_prompt_pause):
-                    _wait_for_external_upgrade_slurm_jobs(
+                    if return_after_operator_action and _wait_for_fast_scheduler_reclassification(
+                        jobs
+                    ):
+                        return _fast_scheduler_reclassification_line()
+                    _wait_for_external_upgrade_slurm_jobs_silently(
                         command_runner=command_runner,
                         kube_context=kube_context,
                         node_names=selected_nodes,
@@ -9157,6 +9279,10 @@ def _handle_external_upgrade_slurm_jobs(
                     refresh_interval_seconds=refresh_interval_seconds,
                 )
                 with _external_upgrade_slurm_prompt_paused(interactive_prompt_pause):
+                    if return_after_operator_action and _wait_for_fast_scheduler_reclassification(
+                        jobs
+                    ):
+                        return _fast_scheduler_reclassification_line()
                     _wait_for_external_upgrade_slurm_jobs(
                         command_runner=command_runner,
                         kube_context=kube_context,
@@ -9332,6 +9458,8 @@ def _handle_external_upgrade_slurm_jobs(
             refresh_interval_seconds=refresh_interval_seconds,
         )
         with _external_upgrade_slurm_prompt_paused(interactive_prompt_pause):
+            if return_after_operator_action and _wait_for_fast_scheduler_reclassification(jobs):
+                return _fast_scheduler_reclassification_line()
             _wait_for_external_upgrade_slurm_jobs(
                 command_runner=command_runner,
                 kube_context=kube_context,
@@ -9491,17 +9619,30 @@ def _external_upgrade_quiesce_slurm_partitions(
     )
     if not selected_nodes:
         return ()
-    partitions = _external_upgrade_affected_partitions(
+    snapshot = _external_upgrade_partition_state_snapshot(
         command_runner=command_runner,
         kube_context=kube_context,
-        node_names=selected_nodes,
     )
-    records = slurm_partition_quiesce_records(
-        partitions=partitions,
-        states=_external_upgrade_partition_state_snapshot(
+    fallback_partitions: tuple[str, ...] = ()
+    fallback_error: RuntimeError | None = None
+    try:
+        fallback_partitions = _external_upgrade_affected_partitions(
             command_runner=command_runner,
             kube_context=kube_context,
-        ),
+            node_names=selected_nodes,
+        )
+    except RuntimeError as exc:
+        fallback_error = exc
+    partitions = slurm_partitions_overlapping_nodes(
+        states=snapshot,
+        node_names=selected_nodes,
+        fallback_partitions=fallback_partitions,
+    )
+    if not partitions and fallback_error is not None:
+        raise fallback_error
+    records = slurm_partition_quiesce_records(
+        partitions=partitions,
+        states=snapshot,
     )
     applied: list[SlurmPartitionQuiesceRecord] = []
     for record in records:
@@ -9545,6 +9686,21 @@ def _restore_external_upgrade_slurm_partitions(
     kube_context: str,
     records: Sequence[SlurmPartitionQuiesceRecord],
 ) -> None:
+    def _partition_already_restored(partition: str, previous_state: str) -> bool:
+        try:
+            snapshot = _external_upgrade_partition_state_snapshot(
+                command_runner=command_runner,
+                kube_context=kube_context,
+            )
+        except Exception:
+            return False
+        expected = slurm_partition_state_token(previous_state)
+        for state in snapshot:
+            if state.name != partition:
+                continue
+            return slurm_partition_state_token(state.state) == expected
+        return False
+
     for record in records:
         partition = str(record.partition or "").strip()
         previous_state = str(record.previous_state or "").strip()
@@ -9563,6 +9719,8 @@ def _restore_external_upgrade_slurm_partitions(
             timeout_seconds=120,
         )
         if result.returncode != 0:
+            if _partition_already_restored(partition, previous_state):
+                continue
             raise RuntimeError(
                 "External Soperator upgrade could not restore Slurm scheduling for "
                 f"partition {partition}: " + _command_detail(result)
@@ -14596,7 +14754,16 @@ def _execute_external_node_template_upgrade_phase(
         tuple(worker_work[index : index + worker_budget])
         for index in range(0, len(worker_work), max(1, worker_budget))
     )
-    phase["worker_waves"] = [[str(work["group_name"]) for work in wave] for wave in worker_waves]
+    phase["worker_target_mode"] = "provider-unit"
+    phase["worker_dispatch_policy"] = (
+        "slurm-clear-fast" if slurm_scheduling_quiesce else "wave-budget"
+    )
+    phase["worker_waves"] = (
+        []
+        if slurm_scheduling_quiesce
+        else [[str(work["group_name"]) for work in wave] for wave in worker_waves]
+    )
+    phase["worker_provider_units"] = [str(work["group_name"]) for work in worker_work]
     worker_slurm_quiesce_records: tuple[SlurmPartitionQuiesceRecord, ...] = ()
     if worker_work and slurm_scheduling_quiesce:
         worker_group_names = tuple(str(work["group_name"]) for work in worker_work)
@@ -14637,6 +14804,133 @@ def _execute_external_node_template_upgrade_phase(
         if checkpoint_writer is not None:
             checkpoint_writer()
 
+    def _worker_group_nodes(work: Mapping[str, Any]) -> tuple[str, ...]:
+        return _nodes_for_worker_groups(
+            source_report=source_report,
+            worker_node_groups=(str(work["group_name"]),),
+        )
+
+    def _blocking_slurm_jobs_by_worker_unit(
+        work_items: Sequence[Mapping[str, Any]],
+    ) -> dict[str, tuple[AffectedSlurmJob, ...]]:
+        if not work_items:
+            return {}
+        source_snapshot = _mapping(source_report.get("snapshot"))
+        if not _has_live_slurmcluster_resource(source_snapshot):
+            return {str(work["group_name"]): () for work in work_items}
+        nodes_by_group = {str(work["group_name"]): _worker_group_nodes(work) for work in work_items}
+        all_nodes = tuple(
+            dict.fromkeys(node for nodes in nodes_by_group.values() for node in nodes if node)
+        )
+        if not all_nodes:
+            return {str(work["group_name"]): () for work in work_items}
+        jobs = _external_upgrade_slurm_jobs(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            node_names=all_nodes,
+            include_pending=False,
+        )
+        result: dict[str, tuple[AffectedSlurmJob, ...]] = {}
+        for group_name, nodes in nodes_by_group.items():
+            node_set = set(nodes)
+            result[group_name] = tuple(
+                job for job in jobs if node_set.intersection(slurm_job_nodes(job))
+            )
+        return result
+
+    def _preflight_worker_units(work_items: Sequence[Mapping[str, Any]]) -> list[str]:
+        if not work_items:
+            return []
+        return _run_soperator_worker_rollout_live_preflight(
+            source_report=source_report,
+            worker_node_groups=tuple(str(work["group_name"]) for work in work_items),
+            command_runner=command_runner,
+            kube_context=kube_context,
+            rollout=rollout,
+            job_policy=job_policy,
+            cancel_job_ids=cancel_job_ids,
+            requeue_job_ids=requeue_job_ids,
+            job_wait_timeout_seconds=job_wait_timeout_seconds,
+            job_refresh_interval_seconds=job_refresh_interval_seconds,
+            slurm_decision_recorder=slurm_decision_recorder,
+            interactive_prompt_pause=interactive_prompt_pause,
+            allow_resolved_interactive_job_policy=allow_resolved_interactive_job_policy,
+            include_pending=not slurm_scheduling_quiesce,
+            return_after_operator_action=slurm_scheduling_quiesce,
+        )
+
+    def _preflight_requested_reclassification(preflight_lines: Sequence[str]) -> bool:
+        return any(
+            "remaining affected jobs will be reclassified by the worker scheduler" in line
+            for line in preflight_lines
+        )
+
+    def _dispatch_worker_units(
+        work_items: Sequence[Mapping[str, Any]],
+        *,
+        worker_wave: int | None,
+    ) -> list[str]:
+        nonlocal mutation_performed
+        if not work_items:
+            return []
+        for work in work_items:
+            group_state = work["group_state"]
+            if isinstance(group_state, dict):
+                group_state["status"] = "updating"
+                if worker_wave is not None:
+                    group_state["worker_wave"] = worker_wave
+                group_state["worker_target_mode"] = "provider-unit"
+                group_state["started_at"] = group_state.get("started_at") or _utc_now()
+        if checkpoint_writer is not None:
+            checkpoint_writer()
+        results: list[tuple[bool, list[str]]] = []
+        if len(work_items) > 1:
+            worker_exception: BaseException | None = None
+            max_workers = min(len(work_items), 32)
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_by_group = {
+                    executor.submit(
+                        _run_prepared_group,
+                        work,
+                        allow_service_quiesce=False,
+                        write_progress=False,
+                    ): str(work["group_name"])
+                    for work in work_items
+                }
+                for future in as_completed(future_by_group):
+                    try:
+                        results.append(future.result())
+                    except Exception as exc:
+                        worker_exception = exc
+                        for pending in future_by_group:
+                            pending.cancel()
+                        break
+            if worker_exception is not None:
+                if checkpoint_writer is not None:
+                    checkpoint_writer()
+                raise worker_exception
+        else:
+            for work in work_items:
+                try:
+                    results.append(
+                        _run_prepared_group(
+                            work,
+                            allow_service_quiesce=False,
+                            write_progress=False,
+                        )
+                    )
+                except Exception:
+                    if checkpoint_writer is not None:
+                        checkpoint_writer()
+                    raise
+        dispatch_lines: list[str] = []
+        for phase_mutation, work_lines in results:
+            mutation_performed = mutation_performed or phase_mutation
+            dispatch_lines.extend(work_lines)
+        if checkpoint_writer is not None:
+            checkpoint_writer()
+        return dispatch_lines
+
     def _restore_worker_slurm_quiesce() -> None:
         if not worker_slurm_quiesce_records:
             return
@@ -14658,95 +14952,78 @@ def _execute_external_node_template_upgrade_phase(
             )
 
     try:
-        for wave_index, wave in enumerate(worker_waves, start=1):
-            phase["active_worker_wave"] = wave_index
-            fresh_wave = any(
-                str(work.get("previous_status", "") or "")
-                not in {"updating", "waiting-rollout"}
-                for work in wave
-            )
-            if fresh_wave:
-                wave_worker_groups = tuple(str(work["group_name"]) for work in wave)
-                lines.extend(
-                    _run_soperator_worker_rollout_live_preflight(
-                        source_report=source_report,
-                        worker_node_groups=wave_worker_groups,
-                        command_runner=command_runner,
-                        kube_context=kube_context,
-                        rollout=rollout,
-                        job_policy=job_policy,
-                        cancel_job_ids=cancel_job_ids,
-                        requeue_job_ids=requeue_job_ids,
-                        job_wait_timeout_seconds=job_wait_timeout_seconds,
-                        job_refresh_interval_seconds=job_refresh_interval_seconds,
-                        slurm_decision_recorder=slurm_decision_recorder,
-                        interactive_prompt_pause=interactive_prompt_pause,
-                        allow_resolved_interactive_job_policy=(
-                            allow_resolved_interactive_job_policy
-                        ),
-                        include_pending=not slurm_scheduling_quiesce,
-                    )
-                )
-            for work in wave:
-                group_state = work["group_state"]
-                if isinstance(group_state, dict):
-                    group_state["status"] = "updating"
-                    group_state["worker_wave"] = wave_index
-                    group_state["started_at"] = group_state.get("started_at") or _utc_now()
-            if checkpoint_writer is not None:
-                checkpoint_writer()
-            lines.append(
-                f"External worker node-template wave {wave_index}: "
-                + ", ".join(str(work["group_name"]) for work in wave)
-                + "."
-            )
-            results: list[tuple[bool, list[str]]] = []
-            if (
-                rollout.strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE
-                and len(wave) > 1
-            ):
-                worker_exception: BaseException | None = None
-                with ThreadPoolExecutor(max_workers=len(wave)) as executor:
-                    future_by_group = {
-                        executor.submit(
-                            _run_prepared_group,
-                            work,
-                            allow_service_quiesce=False,
-                            write_progress=False,
-                        ): str(work["group_name"])
-                        for work in wave
+        if slurm_scheduling_quiesce:
+            remaining_work: list[Mapping[str, Any]] = list(worker_work)
+            dispatch_round = 0
+            while remaining_work:
+                blocking_by_group = _blocking_slurm_jobs_by_worker_unit(remaining_work)
+                clear_work = [
+                    work
+                    for work in remaining_work
+                    if not blocking_by_group.get(str(work["group_name"]), ())
+                ]
+                blocked_work = [
+                    work
+                    for work in remaining_work
+                    if blocking_by_group.get(str(work["group_name"]), ())
+                ]
+                phase["blocked_worker_provider_units"] = [
+                    {
+                        "group": str(work["group_name"]),
+                        "blocking_job_ids": [
+                            job.job_id
+                            for job in blocking_by_group.get(str(work["group_name"]), ())
+                        ],
                     }
-                    for future in as_completed(future_by_group):
-                        try:
-                            results.append(future.result())
-                        except Exception as exc:
-                            worker_exception = exc
-                            for pending in future_by_group:
-                                pending.cancel()
-                            break
-                if worker_exception is not None:
-                    if checkpoint_writer is not None:
-                        checkpoint_writer()
-                    raise worker_exception
-            else:
-                for work in wave:
-                    try:
-                        results.append(
-                            _run_prepared_group(
-                                work,
-                                allow_service_quiesce=False,
-                                write_progress=False,
-                            )
-                        )
-                    except Exception:
-                        if checkpoint_writer is not None:
-                            checkpoint_writer()
-                        raise
-            for phase_mutation, work_lines in results:
-                mutation_performed = mutation_performed or phase_mutation
-                lines.extend(work_lines)
-            if checkpoint_writer is not None:
-                checkpoint_writer()
+                    for work in blocked_work
+                ]
+                for work in blocked_work:
+                    group_state = work["group_state"]
+                    if isinstance(group_state, dict):
+                        group_state["status"] = "blocked-by-jobs"
+                        group_state["worker_target_mode"] = "provider-unit"
+                        group_state["blocking_job_ids"] = [
+                            job.job_id
+                            for job in blocking_by_group.get(str(work["group_name"]), ())
+                        ]
+                if checkpoint_writer is not None:
+                    checkpoint_writer()
+                if not clear_work:
+                    lines.extend(_preflight_worker_units(remaining_work))
+                    continue
+                preflight_lines = _preflight_worker_units(clear_work)
+                lines.extend(preflight_lines)
+                if _preflight_requested_reclassification(preflight_lines):
+                    continue
+                dispatch_round += 1
+                phase["active_worker_dispatch_round"] = dispatch_round
+                lines.append(
+                    "External worker node-template Slurm-clear fast dispatch "
+                    f"{dispatch_round}: "
+                    + ", ".join(str(work["group_name"]) for work in clear_work)
+                    + "."
+                )
+                lines.extend(_dispatch_worker_units(clear_work, worker_wave=None))
+                clear_names = {str(work["group_name"]) for work in clear_work}
+                remaining_work = [
+                    work for work in remaining_work if str(work["group_name"]) not in clear_names
+                ]
+        else:
+            for wave_index, wave in enumerate(worker_waves, start=1):
+                phase["active_worker_wave"] = wave_index
+                fresh_wave = any(
+                    str(work.get("previous_status", "") or "")
+                    not in {"updating", "waiting-rollout"}
+                    for work in wave
+                )
+                if fresh_wave:
+                    lines.extend(_preflight_worker_units(wave))
+                lines.append(
+                    f"External worker node-template wave {wave_index}: "
+                    + ", ".join(str(work["group_name"]) for work in wave)
+                    + "."
+                )
+                lines.extend(_dispatch_worker_units(wave, worker_wave=wave_index))
     except (Exception, KeyboardInterrupt) as exc:
         try:
             _restore_worker_slurm_quiesce()
@@ -14775,12 +15052,17 @@ def _execute_external_node_template_upgrade_phase(
     lines.append(
         "External node-template strategy: service-role groups use "
         f"{service_strategy} ({_effective_service_role_strategy_label(rollout)}); "
-        "worker groups use "
-        f"{rollout.strategy} with "
-        + _worker_rollout_budget_label(rollout, worker_group_count=len(worker_groups))
-        + " and "
-        + _effective_worker_group_strategy_label(rollout)
-        + "."
+        + (
+            "worker groups use Slurm-clear fast provider-unit dispatch under "
+            "partition quiesce; max-unavailable wave pacing is not used."
+            if slurm_scheduling_quiesce
+            else "worker groups use "
+            f"{rollout.strategy} with "
+            + _worker_rollout_budget_label(rollout, worker_group_count=len(worker_groups))
+            + " and "
+            + _effective_worker_group_strategy_label(rollout)
+            + "."
+        )
     )
     phase["completed_at"] = _utc_now()
     return mutation_performed, lines
@@ -16350,6 +16632,7 @@ def _execute_populate_jail_refresh_phase(
     slurm_decision_recorder: Callable[[Mapping[str, Any]], None] | None = None,
     interactive_prompt_pause: Callable[[], Any] | None = None,
     allow_resolved_interactive_job_policy: bool = False,
+    slurm_scheduling_quiesce: bool = True,
     checkpoint_writer: Callable[[], None] | None = None,
     jail_sfs_resize_handler: JailSfsResizeHandler | None = None,
 ) -> tuple[bool, list[str]]:
@@ -16619,7 +16902,7 @@ def _execute_populate_jail_refresh_phase(
         allow_missing_login_recovery=not live_source_slurmcluster_present,
         interactive_prompt_pause=interactive_prompt_pause,
         allow_resolved_interactive_job_policy=allow_resolved_interactive_job_policy,
-        slurm_scheduling_quiesce=False,
+        slurm_scheduling_quiesce=slurm_scheduling_quiesce,
     )
     phase["slurm_quiet_at"] = _utc_now()
     phase["slurm_quiet_lines"] = list(quiet_lines)
@@ -21007,6 +21290,8 @@ def _execute_soperator_migration_unlocked(
             "scheduling_quiesce": slurm_scheduling_quiesce,
         }
     )
+    slurm_state.setdefault("cxcli_held_job_ids", [])
+    slurm_state.setdefault("held_job_release_manual_command", None)
     checkpoint["slurm"] = slurm_state
     checkpoint["login_continuity"] = {
         **dict(_mapping(checkpoint.get("login_continuity"))),
@@ -21076,6 +21361,29 @@ def _execute_soperator_migration_unlocked(
         elif action == "scheduling-quiesce-restored":
             slurm["quiesced_partitions"] = []
             slurm["partition_restore_manual_command"] = None
+        elif action in {"requeue-hold-selected", "requeue-hold-all"}:
+            raw_job_ids = decision.get("job_ids")
+            held_ids = slurm.setdefault("cxcli_held_job_ids", [])
+            if not isinstance(held_ids, list):
+                held_ids = []
+                slurm["cxcli_held_job_ids"] = held_ids
+            existing = {str(job_id or "").strip() for job_id in held_ids}
+            if isinstance(raw_job_ids, Sequence) and not isinstance(
+                raw_job_ids, (str, bytes, bytearray)
+            ):
+                for job_id in raw_job_ids:
+                    text = str(job_id or "").strip()
+                    if text and text not in existing:
+                        held_ids.append(text)
+                        existing.add(text)
+            slurm["held_job_release_manual_command"] = (
+                "scontrol release " + " ".join(shlex.quote(str(job_id)) for job_id in held_ids)
+                if held_ids
+                else None
+            )
+        elif action == "held-jobs-released":
+            slurm["cxcli_held_job_ids"] = []
+            slurm["held_job_release_manual_command"] = None
         _append_event(
             checkpoint,
             "slurm-job-policy",
@@ -21180,6 +21488,7 @@ def _execute_soperator_migration_unlocked(
                     slurm_decision_recorder=_record_slurm_decision,
                     interactive_prompt_pause=status_prompt_pause,
                     allow_resolved_interactive_job_policy=allow_resolved_interactive_job_policy,
+                    skip_slurm_jobs=slurm_scheduling_quiesce,
                 )
             except SoperatorMigrationPhasePending as exc:
                 quota_preflight_pending_phase = _EXTERNAL_NODE_TEMPLATE_PHASE_ID
@@ -21495,6 +21804,7 @@ def _execute_soperator_migration_unlocked(
                 slurm_decision_recorder=_record_slurm_decision,
                 interactive_prompt_pause=status_prompt_pause,
                 allow_resolved_interactive_job_policy=allow_resolved_interactive_job_policy,
+                slurm_scheduling_quiesce=slurm_scheduling_quiesce,
                 checkpoint_writer=_checkpoint_progress,
                 jail_sfs_resize_handler=jail_sfs_resize_handler,
             ),
@@ -21814,6 +22124,49 @@ def _execute_soperator_migration_unlocked(
         checkpoint["pending_reason"] = pending_reason
         _append_event(checkpoint, "execute-pending", pending_phase=pending_phase)
     else:
+        slurm_state = checkpoint.setdefault("slurm", {})
+        if not isinstance(slurm_state, dict):
+            slurm_state = {}
+            checkpoint["slurm"] = slurm_state
+        held_job_ids = tuple(
+            str(job_id or "").strip()
+            for job_id in slurm_state.get("cxcli_held_job_ids", []) or []
+            if str(job_id or "").strip()
+        )
+        if held_job_ids:
+            release_command = "scontrol release " + " ".join(
+                shlex.quote(job_id) for job_id in held_job_ids
+            )
+            checkpoint["pending_phase"] = "slurm-held-job-release"
+            checkpoint["pending_reason"] = (
+                "releasing Slurm jobs requeue-held by cxcli during the upgrade"
+            )
+            slurm_state["held_job_release_manual_command"] = release_command
+            _checkpoint_progress()
+            try:
+                _external_upgrade_release_slurm_jobs(
+                    command_runner=active_command_runner,
+                    kube_context=kube_context,
+                    job_ids=held_job_ids,
+                )
+            except Exception as exc:
+                checkpoint["pending_reason"] = (
+                    "cxcli could not release Slurm jobs it requeue-held during the upgrade. "
+                    "Run: "
+                    + release_command
+                    + ". Release error: "
+                    + str(exc)
+                )
+                slurm_state["held_job_release_manual_command"] = release_command
+                _checkpoint_progress()
+                raise RuntimeError(str(checkpoint["pending_reason"])) from exc
+            _record_slurm_decision(
+                {
+                    "at": _utc_now(),
+                    "action": "held-jobs-released",
+                    "job_ids": list(held_job_ids),
+                }
+            )
         checkpoint["pending_phase"] = "none"
         checkpoint["pending_reason"] = ""
         _append_event(checkpoint, "execute-completed")
@@ -21907,18 +22260,23 @@ def _execute_soperator_migration_unlocked(
             3,
             "Auto-selected source worker node groups: " + ", ".join(approved_worker_groups),
         )
+    if slurm_scheduling_quiesce:
+        rollout_summary = (
+            "Slurm-clear fast provider-unit dispatch under partition quiesce; "
+            "max-unavailable wave pacing is not used"
+        )
+    else:
+        rollout_summary = (
+            _worker_rollout_budget_label(
+                rollout,
+                worker_group_count=rollout_worker_group_count,
+            )
+            + "; "
+            + _worker_group_strategy_label(rollout)
+        )
     lines.insert(
         3 if not approved_worker_groups else 4,
-        "External node-template worker rollout: "
-        + rollout.strategy
-        + " ("
-        + _worker_rollout_budget_label(
-            rollout,
-            worker_group_count=rollout_worker_group_count,
-        )
-        + "; "
-        + _worker_group_strategy_label(rollout)
-        + ").",
+        "External node-template worker rollout: " + rollout.strategy + f" ({rollout_summary}).",
     )
     lines.extend(phase_lines)
     lines.extend(

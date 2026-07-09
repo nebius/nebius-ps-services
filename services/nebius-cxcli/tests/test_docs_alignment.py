@@ -1738,6 +1738,10 @@ def test_docs_define_component_selector_contract() -> None:
     assert "checks affected Slurm jobs on external node-template workers" in readme_flat
     assert "queued information rather than blockers" in readme_flat
     assert "`--slurm-scheduling-quiesce / --no-slurm-scheduling-quiesce`" in readme_flat
+    assert "Slurm-clear fast dispatch" in readme_flat
+    assert "`provider-unit` mode" in readme_flat
+    assert "cxcli-held Slurm job IDs" in readme_flat
+    assert "releases only those recorded cxcli-held job IDs" in readme_flat
     assert "This does not use `scontrol hold all`" in readme_flat
     assert "each affected running job" not in readme_flat
     assert "each displayed affected job" in readme_flat
@@ -2087,11 +2091,15 @@ def test_docs_define_component_selector_contract() -> None:
         design_flat
     )
     assert "are queued information while partition quiesce is active" in design_flat
+    assert "Slurm-clear fast provider-unit dispatch" in design_flat
+    assert "do not claim exact-node replacement inside a mixed busy/free node group" in design_flat
+    assert "successful upgrades release only jobs that cxcli requeue-held" in design_flat
+    assert "newly clear provider units are dispatched before reopening the monitor" in design_flat
     assert "TTY managed and external upgrade runs default to `interactive`" in design_flat
     assert "non-TTY and `--no-interactive` upgrade runs default to `fail`" in design_flat
     assert "explicit policy such as `--job-policy wait-to-finish`" in design_flat
     assert "The `?` key opens a scrollable help overlay" in design_flat
-    assert "waits in normal terminal output for the current Slurm gate" in design_flat
+    assert "keeps polling silently at the current Slurm gate" in design_flat
     assert "cancel action keys call `scancel`" in design_flat
     assert "Slurm may report cancelled jobs as `COMPLETING`" in design_flat
     assert "action keys refresh the same table in place after Slurm updates" in design_flat

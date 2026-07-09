@@ -4224,12 +4224,12 @@ def test_execute_records_approval_and_runs_checkpointed_mutators(tmp_path: Path)
     drain_indices = [
         index
         for index, (command, _input_text) in enumerate(runner.calls)
-        if command[8:] == ("scontrol", "update", "PartitionName=ALL", "State=DRAIN")
+        if command[8:] == ("scontrol", "update", "PartitionName=main", "State=DOWN")
     ]
     resume_indices = [
         index
         for index, (command, _input_text) in enumerate(runner.calls)
-        if command[8:] == ("scontrol", "update", "PartitionName=ALL", "State=UP")
+        if command[8:] == ("scontrol", "update", "PartitionName=main", "State=UP")
     ]
     last_drain_before_refresh = max(
         index for index in drain_indices if index < refresh_index
@@ -6805,11 +6805,187 @@ def test_execute_upgrades_external_node_template_with_safe_surge_strategy(
     )
     assert phase["node_groups"]["gpu-pool"]["strategy"] == "safe-surge"
     assert phase["node_groups"]["gpu-pool"]["strategy_restored"] is True
-    assert phase["worker_waves"] == [["gpu-pool"]]
+    assert phase["worker_target_mode"] == "provider-unit"
+    assert phase["worker_dispatch_policy"] == "slurm-clear-fast"
+    assert phase["worker_waves"] == []
+    assert phase["worker_provider_units"] == ["gpu-pool"]
     assert any(
         line.startswith("post-upgrade-mk8s-check: External MK8s node-template verified")
         for line in result.lines
     )
+
+
+def test_external_node_template_fast_scheduler_dispatches_naturally_cleared_units(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _source_worker_group(name: str, node_group_id: str, node: str) -> dict[str, Any]:
+        return {
+            "gpu": True,
+            "node_count": 1,
+            "labels": {
+                "nebius.com/node-group": name,
+                "nebius.com/node-group-id": node_group_id,
+                "slurm.nebius.ai/nodeset": name,
+            },
+            "allocatable": {"nvidia.com/gpu": "8"},
+            "nodes": [node],
+        }
+
+    def _live_worker_group(name: str, node_group_id: str) -> dict[str, Any]:
+        return {
+            "metadata": {
+                "id": node_group_id,
+                "name": name,
+                "parent_id": "cluster-123",
+            },
+            "spec": {
+                "version": "1.32",
+                "strategy": {
+                    "max_surge": {"count": 1},
+                    "max_unavailable": {"count": 0},
+                    "drain_timeout": "10m",
+                },
+                "template": {
+                    "metadata": {"labels": {"nebius.com/node-group": name}},
+                    "resources": {
+                        "platform": "gpu-h100-sxm",
+                        "preset": "8gpu-128vcpu-1600gb",
+                    },
+                    "boot_disk": {"type": "NETWORK_SSD", "size_gibibytes": "256"},
+                    "gpu_settings": {"drivers_preset": "cuda12.8"},
+                    "os": "ubuntu22.04",
+                    "network_interfaces": [{"subnet_id": "subnet-123"}],
+                    "filesystems": [],
+                },
+            },
+            "status": _ready_node_group_status(version="1.32", nodes=1),
+        }
+
+    monkeypatch.setattr(migration.time, "sleep", lambda _: None)
+    snapshot = _snapshot()
+    snapshot["node_groups"] = {
+        "worker-a": _source_worker_group("worker-a", "nodegroup-worker-a", "worker-a-0"),
+        "worker-b": _source_worker_group("worker-b", "nodegroup-worker-b", "worker-b-0"),
+    }
+    snapshot["soperator_resources"] = [
+        {
+            "apiVersion": "slurm.nebius.ai/v1alpha1",
+            "kind": "SlurmCluster",
+            "metadata": {"name": "soperator", "namespace": "soperator"},
+            "spec": {},
+        }
+    ]
+    source_report = _source_report(snapshot)
+    payload = _payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    assert isinstance(target, dict)
+    onboarding = target["soperator_onboarding"]
+    assert isinstance(onboarding, dict)
+    onboarding["actions"] = ["upgrade-external-node-template"]
+    onboarding["node_template_upgrade"] = {
+        "target_k8s_version": "1.33",
+        "target_os": "ubuntu24.04",
+        "target_gpu_stack_preset": "cuda13.0",
+        "rollout": {"strategy": "zero-surge"},
+    }
+    both_jobs = (
+        "101|alice|RUNNING|main|worker-a-0|worker-a-0||None|"
+        "00:05|30:00|25:00|active\n"
+        "102|alice|RUNNING|main|worker-b-0|worker-b-0||None|"
+        "00:05|30:00|25:00|active\n"
+    )
+    worker_b_job = (
+        "102|alice|RUNNING|main|worker-b-0|worker-b-0||None|"
+        "00:05|30:00|25:00|active\n"
+    )
+    runner = _FakeCommandRunner(
+        existing_node_groups=[
+            _live_worker_group("worker-a", "nodegroup-worker-a"),
+            _live_worker_group("worker-b", "nodegroup-worker-b"),
+        ],
+        live_nodes=[
+            {
+                "metadata": {
+                    "name": "worker-a-0",
+                    "labels": {
+                        "nebius.com/node-group": "worker-a",
+                        "nebius.com/node-group-id": "nodegroup-worker-a",
+                    },
+                },
+                "spec": {},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            },
+            {
+                "metadata": {
+                    "name": "worker-b-0",
+                    "labels": {
+                        "nebius.com/node-group": "worker-b",
+                        "nebius.com/node-group-id": "nodegroup-worker-b",
+                    },
+                },
+                "spec": {},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            },
+        ],
+        live_slurmclusters=[
+            {
+                "metadata": {"name": "external-cluster", "namespace": "soperator"},
+                "status": {"phase": "Available"},
+            },
+            {"metadata": {"name": "soperator", "namespace": "soperator"}},
+        ],
+        slurm_queue_outputs=[
+            both_jobs,
+            both_jobs,
+            worker_b_job,
+            worker_b_job,
+            worker_b_job,
+            worker_b_job,
+            "",
+            "",
+        ],
+        cluster={
+            "metadata": {"id": "cluster-123", "name": "external-cluster"},
+            "spec": {"control_plane": {"version": "1.32"}},
+        },
+    )
+
+    result = execute_soperator_migration(
+        config_path=tmp_path / "config.yaml",
+        target_ref="external-cluster",
+        payload=payload,
+        source_report=source_report,
+        snapshot_collector=lambda *, kube_context: snapshot,
+        approved=True,
+        command_runner=runner,
+        job_policy="wait-to-finish",
+        job_wait_timeout_seconds=30,
+        job_refresh_interval_seconds=1,
+    )
+
+    assert result.pending_phase == "none"
+    update_commands = [
+        command
+        for command, _input_text in runner.calls
+        if command[:4] == ("nebius", "mk8s", "node-group", "update")
+        and "--version" in command
+    ]
+    assert [command[4] for command in update_commands] == [
+        "nodegroup-worker-a",
+        "nodegroup-worker-b",
+    ]
+    checkpoint = json.loads(
+        soperator_migration_checkpoint_path(
+            tmp_path / "config.yaml",
+            "external-cluster",
+            payload_or_config=payload,
+        ).read_text(encoding="utf-8")
+    )
+    phase = checkpoint["phase_state"]["external-node-template-upgrade"]
+    assert phase["worker_dispatch_policy"] == "slurm-clear-fast"
+    assert phase["worker_waves"] == []
+    assert phase["blocked_worker_provider_units"] == []
 
 
 def test_execute_external_node_template_parallel_worker_failure_checkpoints_after_executor_exit(
@@ -6961,7 +7137,10 @@ def test_execute_external_node_template_parallel_worker_failure_checkpoints_afte
         )
     )
     phase = checkpoint["phase_state"]["external-node-template-upgrade"]
-    assert phase["worker_waves"] == [["worker-gpu-a", "worker-gpu-b"]]
+    assert phase["worker_target_mode"] == "provider-unit"
+    assert phase["worker_dispatch_policy"] == "slurm-clear-fast"
+    assert phase["worker_waves"] == []
+    assert phase["worker_provider_units"] == ["worker-gpu-a", "worker-gpu-b"]
     assert phase["node_groups"]["worker-gpu-b"]["status"] == "failed"
     assert "simulated update failure" in phase["node_groups"]["worker-gpu-b"]["error"]
 
@@ -7639,6 +7818,7 @@ def test_execute_external_node_template_blocks_nonempty_slurm_queue_before_mutat
         approved=True,
         command_runner=runner,
         job_policy="fail",
+        slurm_scheduling_quiesce=False,
     )
 
     assert result.pending_phase == "external-node-template-upgrade"
@@ -7653,7 +7833,14 @@ def test_execute_external_node_template_rechecks_slurm_queue_before_worker_wave(
     tmp_path: Path,
 ) -> None:
     snapshot = _snapshot_with_compute_source()
-    runner = _FakeCommandRunner(slurm_queue_outputs=["", "RUNNING\n"])
+    runner = _FakeCommandRunner(
+        slurm_queue_outputs=[
+            "",
+            "99|root|RUNNING|main|node-a|||None|0:01|30:00|29:59|late-job\n",
+            "99|root|RUNNING|main|node-a|||None|0:01|30:00|29:59|late-job\n",
+            "99|root|RUNNING|main|node-a|||None|0:01|30:00|29:59|late-job\n",
+        ]
+    )
 
     result = execute_soperator_migration(
         config_path=tmp_path / "config.yaml",
@@ -9304,6 +9491,82 @@ def test_external_upgrade_quiesce_restores_partial_partition_on_apply_failure(
     ]
 
 
+def test_external_upgrade_restore_accepts_already_restored_partition() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "login-0"},
+                                "status": {"phase": "Running"},
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if (
+            "scontrol" in command
+            and "update" in command
+            and "PartitionName=main" in command
+            and "State=UP" in command
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                1,
+                "",
+                "scontrol: fatal: Could not establish a configuration source",
+            )
+        if command[-4:] == ("scontrol", "show", "partition", "-o"):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                "PartitionName=main State=UP Nodes=worker-[0-1]\n",
+                "",
+            )
+        return SoperatorMigrationCommandResult(command, 0, "", "")
+
+    migration._restore_external_upgrade_slurm_partitions(
+        command_runner=runner,
+        kube_context="external-context",
+        records=(
+            migration.SlurmPartitionQuiesceRecord(
+                partition="main",
+                previous_state="UP",
+                applied_state="DOWN",
+            ),
+        ),
+    )
+
+    assert any(call[-4:] == ("scontrol", "show", "partition", "-o") for call in calls)
+
+
 def test_populate_jail_refresh_phase_job_policy_fail_blocks_before_helm_overwrite(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -10009,7 +10272,7 @@ def test_populate_jail_refresh_phase_restores_writers_when_migration_fails(
         '{"spec": {"replicas": 2}}',
     ) in commands
     assert any(
-        command[8:] == ("scontrol", "update", "PartitionName=ALL", "State=UP")
+        command[8:] == ("scontrol", "update", "PartitionName=main", "State=UP")
         for command in commands
     )
 
@@ -10621,7 +10884,67 @@ def test_external_upgrade_interactive_callback_requeue_holds_in_tui(
     assert queue_outputs == []
 
 
-def test_external_upgrade_interactive_background_wait_uses_wait_path(
+def test_external_upgrade_interactive_action_applied_returns_to_fast_scheduler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+    queue_outputs = [
+        "42|alice|RUNNING|gpu|worker-gpu-0-0|00:05|30:00|25:00|restartable-train\n",
+    ]
+    captured: dict[str, object] = {}
+
+    def _prompt(
+        _jobs: Sequence[migration.AffectedSlurmJob],
+        **kwargs: object,
+    ) -> tuple[str, tuple[str, ...]]:
+        captured["exit_after_action"] = kwargs.get("exit_after_action")
+        return migration.SLURM_JOB_CONTROL_ACTION_APPLIED, ("42",)
+
+    monkeypatch.setattr(
+        migration,
+        "_prompt_external_upgrade_slurm_job_control",
+        _prompt,
+    )
+
+    lines = migration._handle_external_upgrade_slurm_jobs(
+        command_runner=_external_upgrade_slurm_runner(
+            queue_outputs=queue_outputs,
+            calls=calls,
+        ),
+        kube_context="external-context",
+        node_names=("worker-gpu-0-0",),
+        policy="interactive",
+        cancel_job_ids=(),
+        requeue_job_ids=(),
+        wait_timeout_seconds=30,
+        refresh_interval_seconds=1,
+        allow_resolved_interactive_job_policy=True,
+        return_after_operator_action=True,
+    )
+
+    assert captured["exit_after_action"] is True
+    assert lines == [
+        "Slurm job preflight: operator action completed; "
+        "remaining affected jobs will be reclassified by the worker scheduler."
+    ]
+
+
+def test_external_upgrade_release_slurm_jobs_uses_scontrol_release() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    migration._external_upgrade_release_slurm_jobs(  # noqa: SLF001
+        command_runner=_external_upgrade_slurm_runner(
+            queue_outputs=[],
+            calls=calls,
+        ),
+        kube_context="external-context",
+        job_ids=("42", "43"),
+    )
+
+    assert any(call[8:] == ("scontrol", "release", "42", "43") for call in calls)
+
+
+def test_external_upgrade_interactive_background_wait_uses_silent_poll(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[str, ...]] = []
@@ -10633,6 +10956,11 @@ def test_external_upgrade_interactive_background_wait_uses_wait_path(
     sleeps: list[int] = []
 
     monkeypatch.setattr(migration.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(
+        migration,
+        "_wait_for_external_upgrade_slurm_jobs",
+        lambda **_kwargs: pytest.fail("background wait must not use the Rich wait path"),
+    )
     monkeypatch.setattr(
         migration,
         "_prompt_external_upgrade_slurm_job_control",
@@ -14479,7 +14807,7 @@ def test_rolling_compute_migration_guards_login_before_source_retirement(
     monkeypatch.setattr(migration, "_has_soperator_custom_resources", lambda _snapshot: True)
     monkeypatch.setattr(migration, "_live_source_slurmcluster_present", lambda **_kwargs: True)
     monkeypatch.setattr(migration, "_external_upgrade_worker_nodeset_slurm_nodes", lambda **_kwargs: ())
-    monkeypatch.setattr(migration, "_ensure_slurm_quiet", lambda **_kwargs: ["quiet"])
+    monkeypatch.setattr(migration, "_ensure_slurm_quiet", lambda **_kwargs: (["quiet"], ()))
     monkeypatch.setattr(
         migration,
         "_ensure_worker_nodeset_topology_checkpoint",

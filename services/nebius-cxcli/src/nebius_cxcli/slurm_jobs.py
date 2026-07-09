@@ -234,6 +234,43 @@ def slurm_partition_quiesce_records(
     return tuple(records)
 
 
+def slurm_partitions_overlapping_nodes(
+    *,
+    states: Sequence[SlurmPartitionState],
+    node_names: Sequence[str],
+    fallback_partitions: Sequence[str] = (),
+) -> tuple[str, ...]:
+    selected_nodes = {
+        clean_slurm_value(str(node or "")) for node in node_names if clean_slurm_value(str(node))
+    }
+    selected_fallback = [
+        clean_slurm_value(str(partition or ""))
+        for partition in fallback_partitions
+        if clean_slurm_value(str(partition))
+    ]
+    partitions: list[str] = []
+    seen: set[str] = set()
+
+    def _append(partition: str) -> None:
+        if partition and partition not in seen:
+            seen.add(partition)
+            partitions.append(partition)
+
+    for state in states:
+        nodes = clean_slurm_value(state.nodes)
+        if not state.name or not nodes:
+            continue
+        if nodes.upper() == "ALL":
+            if selected_nodes:
+                _append(state.name)
+            continue
+        if selected_nodes.intersection(expand_slurm_hostlist(nodes)):
+            _append(state.name)
+    for partition in selected_fallback:
+        _append(partition)
+    return tuple(partitions)
+
+
 def _split_hostlist_items(value: str) -> list[str]:
     items: list[str] = []
     current: list[str] = []
@@ -288,6 +325,10 @@ def _node_fields_for_job(job: AffectedSlurmJob) -> tuple[str, ...]:
         for field in (job.allocated_nodes, job.requested_nodes, job.scheduled_nodes)
         for item in expand_slurm_hostlist(field)
     )
+
+
+def slurm_job_nodes(job: AffectedSlurmJob) -> tuple[str, ...]:
+    return _node_fields_for_job(job)
 
 
 def pending_job_impact_scope(

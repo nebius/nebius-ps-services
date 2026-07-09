@@ -424,6 +424,8 @@ from .slurm_jobs import (
     parse_squeue_jobs,
     selected_display_job_ids,
     slurm_partition_quiesce_records,
+    slurm_partition_state_token,
+    slurm_partitions_overlapping_nodes,
 )
 from .soperator_artifacts import (
     SoperatorClusterArtifactIdentity,
@@ -7896,6 +7898,25 @@ def _soperator_upgrade_requeue_jobs(
     )
 
 
+def _soperator_upgrade_release_jobs(
+    namespace: str,
+    job_ids: Sequence[str],
+    *,
+    kube_context: str | None = None,
+    extra_env: Mapping[str, str] | None = None,
+) -> None:
+    selected = tuple(_non_empty_text(job_id) for job_id in job_ids if _non_empty_text(job_id))
+    if not selected:
+        return
+    _run_soperator_upgrade_login_command(
+        namespace,
+        "scontrol release " + " ".join(shlex.quote(job_id) for job_id in selected),
+        kube_context=kube_context,
+        extra_env=extra_env,
+        timeout_seconds=120,
+    )
+
+
 def _soperator_upgrade_wait_for_requeued_jobs_to_leave_nodes(
     *,
     namespace: str,
@@ -8092,6 +8113,37 @@ def _soperator_upgrade_wait_for_jobs(
         )
 
 
+def _soperator_upgrade_wait_for_jobs_silently(
+    *,
+    namespace: str,
+    node_names: Sequence[str],
+    timeout_seconds: int,
+    refresh_interval_seconds: int,
+    kube_context: str | None = None,
+    extra_env: Mapping[str, str] | None = None,
+    include_pending: bool = True,
+) -> None:
+    deadline = time.monotonic() + timeout_seconds if timeout_seconds > 0 else None
+    poll_interval = max(refresh_interval_seconds, 1)
+    while True:
+        remaining = _soperator_upgrade_affected_jobs(
+            namespace=namespace,
+            node_names=node_names,
+            kube_context=kube_context,
+            extra_env=extra_env,
+            include_pending=include_pending,
+        )
+        if not remaining:
+            return
+        if deadline is not None and time.monotonic() >= deadline:
+            raise RuntimeError(
+                "Timed out waiting for Slurm jobs to finish. Rerun with a longer "
+                "--job-wait-timeout, cancel, requeue, or requeue-hold selected jobs, "
+                "or use --job-policy wait-then-cancel."
+            )
+        time.sleep(poll_interval)
+
+
 def _soperator_upgrade_slurm_nodes_for_rollout(
     *,
     namespace: str,
@@ -8251,17 +8303,29 @@ def _soperator_upgrade_quiesce_slurm_partitions(
     selected_nodes = tuple(_non_empty_text(node) for node in node_names if _non_empty_text(node))
     if not selected_nodes:
         return ()
-    partitions = _soperator_upgrade_affected_partitions(
-        namespace=namespace,
-        node_names=selected_nodes,
-        kube_context=kube_context,
-        extra_env=extra_env,
-    )
     snapshot = _soperator_upgrade_partition_state_snapshot(
         namespace=namespace,
         kube_context=kube_context,
         extra_env=extra_env,
     )
+    fallback_partitions: tuple[str, ...] = ()
+    fallback_error: RuntimeError | None = None
+    try:
+        fallback_partitions = _soperator_upgrade_affected_partitions(
+            namespace=namespace,
+            node_names=selected_nodes,
+            kube_context=kube_context,
+            extra_env=extra_env,
+        )
+    except RuntimeError as exc:
+        fallback_error = exc
+    partitions = slurm_partitions_overlapping_nodes(
+        states=snapshot,
+        node_names=selected_nodes,
+        fallback_partitions=fallback_partitions,
+    )
+    if not partitions and fallback_error is not None:
+        raise fallback_error
     records = slurm_partition_quiesce_records(partitions=partitions, states=snapshot)
     applied: list[SlurmPartitionQuiesceRecord] = []
     for record in records:
@@ -8303,21 +8367,42 @@ def _soperator_upgrade_restore_slurm_partitions(
     kube_context: str | None = None,
     extra_env: Mapping[str, str] | None = None,
 ) -> None:
+    def _partition_already_restored(partition: str, previous_state: str) -> bool:
+        try:
+            snapshot = _soperator_upgrade_partition_state_snapshot(
+                namespace=namespace,
+                kube_context=kube_context,
+                extra_env=extra_env,
+            )
+        except Exception:
+            return False
+        expected = slurm_partition_state_token(previous_state)
+        for state in snapshot:
+            if state.name != partition:
+                continue
+            return slurm_partition_state_token(state.state) == expected
+        return False
+
     for record in records:
         partition = _non_empty_text(record.partition)
         previous_state = _non_empty_text(record.previous_state)
         if not partition or not previous_state:
             continue
-        _run_soperator_upgrade_login_command(
-            namespace,
-            "scontrol update PartitionName="
-            + shlex.quote(partition)
-            + " State="
-            + shlex.quote(previous_state),
-            kube_context=kube_context,
-            extra_env=extra_env,
-            timeout_seconds=120,
-        )
+        try:
+            _run_soperator_upgrade_login_command(
+                namespace,
+                "scontrol update PartitionName="
+                + shlex.quote(partition)
+                + " State="
+                + shlex.quote(previous_state),
+                kube_context=kube_context,
+                extra_env=extra_env,
+                timeout_seconds=120,
+            )
+        except Exception:
+            if _partition_already_restored(partition, previous_state):
+                continue
+            raise
 
 
 def _soperator_upgrade_slurm_partition_restore_command(
@@ -8648,7 +8733,15 @@ def _handle_soperator_upgrade_running_jobs(
                     timeout_seconds=wait_timeout_seconds,
                     refresh_interval_seconds=refresh_interval_seconds,
                 )
-                _wait_for_all()
+                _soperator_upgrade_wait_for_jobs_silently(
+                    namespace=namespace,
+                    node_names=selected_node_names,
+                    timeout_seconds=wait_timeout_seconds,
+                    refresh_interval_seconds=refresh_interval_seconds,
+                    kube_context=kube_context,
+                    extra_env=extra_env,
+                    include_pending=include_pending,
+                )
                 _record("background-wait-completed")
                 return _drain_after_jobs_clear()
             if action == "wait-to-finish":
@@ -15382,6 +15475,8 @@ def _run_managed_soperator_cluster_upgrade(
     slurm_state.setdefault("restore_manual_command", None)
     slurm_state.setdefault("quiesced_partitions", [])
     slurm_state.setdefault("partition_restore_manual_command", None)
+    slurm_state.setdefault("cxcli_held_job_ids", [])
+    slurm_state.setdefault("held_job_release_manual_command", None)
     slurm_state["job_policy"] = job_policy
     slurm_state["scheduling_quiesce"] = slurm_scheduling_quiesce
     checkpoint["slurm"] = slurm_state
@@ -15833,6 +15928,29 @@ def _run_managed_soperator_cluster_upgrade(
             slurm_quiesce_records = ()
             slurm_state["quiesced_partitions"] = []
             slurm_state["partition_restore_manual_command"] = None
+        elif action in {"requeue-hold-selected", "requeue-hold-all"}:
+            raw_job_ids = decision.get("job_ids")
+            held_ids = slurm_state.setdefault("cxcli_held_job_ids", [])
+            if not isinstance(held_ids, list):
+                held_ids = []
+                slurm_state["cxcli_held_job_ids"] = held_ids
+            existing = {_non_empty_text(job_id) for job_id in held_ids}
+            if isinstance(raw_job_ids, Sequence) and not isinstance(
+                raw_job_ids, (str, bytes, bytearray)
+            ):
+                for job_id in raw_job_ids:
+                    text = _non_empty_text(job_id)
+                    if text and text not in existing:
+                        held_ids.append(text)
+                        existing.add(text)
+            slurm_state["held_job_release_manual_command"] = (
+                "scontrol release " + " ".join(shlex.quote(str(job_id)) for job_id in held_ids)
+                if held_ids
+                else None
+            )
+        elif action == "held-jobs-released":
+            slurm_state["cxcli_held_job_ids"] = []
+            slurm_state["held_job_release_manual_command"] = None
         _write_soperator_upgrade_checkpoint(checkpoint_path, checkpoint)
 
     soperator_worker_job_policy_checked = False
@@ -17300,6 +17418,51 @@ def _run_managed_soperator_cluster_upgrade(
                     + (": " + ", ".join(failed) if failed else ".")
                 )
             _complete_checkpoint_phase("shared-safety-verification")
+        slurm_state = checkpoint.setdefault("slurm", {})
+        if not isinstance(slurm_state, dict):
+            slurm_state = {}
+            checkpoint["slurm"] = slurm_state
+        held_job_ids = tuple(
+            _non_empty_text(job_id)
+            for job_id in slurm_state.get("cxcli_held_job_ids", []) or []
+            if _non_empty_text(job_id)
+        )
+        if held_job_ids:
+            release_command = "scontrol release " + " ".join(
+                shlex.quote(job_id) for job_id in held_job_ids
+            )
+            _set_phase(
+                "slurm-held-job-release",
+                "Releasing Slurm jobs requeue-held by cxcli during the upgrade.",
+            )
+            slurm_state["held_job_release_manual_command"] = release_command
+            _write_soperator_upgrade_checkpoint(checkpoint_path, checkpoint)
+            try:
+                _soperator_upgrade_release_jobs(
+                    plan.namespace or "default",
+                    held_job_ids,
+                    kube_context=plan.request.kube_context,
+                )
+            except Exception as exc:
+                checkpoint["pending_phase"] = "slurm-held-job-release"
+                checkpoint["pending_reason"] = (
+                    "cxcli could not release Slurm jobs it requeue-held during the upgrade. "
+                    "Run: "
+                    + release_command
+                    + ". Release error: "
+                    + str(exc)
+                )
+                slurm_state["held_job_release_manual_command"] = release_command
+                _checkpoint("slurm-held-job-release-failed", error=str(exc))
+                raise RuntimeError(str(checkpoint["pending_reason"])) from exc
+            _record_slurm_decision(
+                {
+                    "at": _soperator_upgrade_now_iso(),
+                    "action": "held-jobs-released",
+                    "job_ids": list(held_job_ids),
+                }
+            )
+            _checkpoint("slurm-held-jobs-released", job_ids=list(held_job_ids))
         with _phase_spinner(
             "completed",
             "All managed Soperator upgrade gates passed; writing final reports.",

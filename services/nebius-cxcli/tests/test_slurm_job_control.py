@@ -9,9 +9,11 @@ from rich.text import Text
 from textual.widgets import DataTable, Footer, Static
 
 from nebius_cxcli.slurm_job_control import (
+    SLURM_JOB_CONTROL_ACTION_APPLIED,
     SLURM_JOB_CONTROL_ACTION_PROMPT,
     SLURM_JOB_CONTROL_BACKGROUND_WAIT,
     SLURM_JOB_CONTROL_HELP,
+    SLURM_JOB_CONTROL_JOBS_CHANGED,
     SLURM_JOB_CONTROL_JOBS_CLEARED,
     SLURM_JOB_CONTROL_KEYS,
     SLURM_JOB_CONTROL_WAIT_COMPLETED,
@@ -29,6 +31,7 @@ from nebius_cxcli.slurm_jobs import (
     slurm_job_is_active,
     slurm_job_is_terminating,
     slurm_partition_quiesce_records,
+    slurm_partitions_overlapping_nodes,
     slurm_remaining_seconds,
 )
 
@@ -96,6 +99,42 @@ def test_slurm_partition_quiesce_records_fail_closed_for_unknown_partition() -> 
 
     with pytest.raises(RuntimeError, match="Could not inspect Slurm partition `gpu`"):
         slurm_partition_quiesce_records(partitions=("gpu",), states=states)
+
+
+def test_slurm_partitions_overlapping_nodes_include_hidden_and_background() -> None:
+    states = parse_scontrol_show_partition_states(
+        "\n".join(
+            (
+                "PartitionName=main State=UP Nodes=worker-[0-1]",
+                "PartitionName=hidden State=UP Nodes=worker-[0-1] Hidden=YES",
+                "PartitionName=background State=UP Nodes=worker-[0-1] Hidden=YES",
+                "PartitionName=login State=UP Nodes=login-0",
+            )
+        )
+    )
+
+    assert slurm_partitions_overlapping_nodes(
+        states=states,
+        node_names=("worker-0",),
+        fallback_partitions=("main",),
+    ) == ("main", "hidden", "background")
+
+
+def test_slurm_partitions_overlapping_nodes_preserve_fallback_for_missing_nodes_metadata() -> None:
+    states = parse_scontrol_show_partition_states(
+        "\n".join(
+            (
+                "PartitionName=main State=UP Nodes=worker-0",
+                "PartitionName=debug State=UP Nodes=(null)",
+            )
+        )
+    )
+
+    assert slurm_partitions_overlapping_nodes(
+        states=states,
+        node_names=("worker-1",),
+        fallback_partitions=("debug",),
+    ) == ("debug",)
 
 
 def test_slurm_job_control_all_requeue_actions_select_only_active_jobs() -> None:
@@ -298,8 +337,12 @@ def test_slurm_job_control_textual_app_uses_single_concise_legend() -> None:
 
     assert footer_count == 0
     assert "Keys:" in keys_text
-    assert "b background" in keys_text
+    assert "b terminal" in keys_text
+    assert "c/C cancel" in keys_text
+    assert "q/Q requeue" in keys_text
+    assert "h/H hold" in keys_text
     assert "? help" in keys_text
+    assert "x abort upgrade" in keys_text
     assert keys_text == SLURM_JOB_CONTROL_KEYS
 
 
@@ -452,6 +495,29 @@ def test_slurm_job_control_textual_idle_poll_exits_when_jobs_clear() -> None:
     assert result.action == SLURM_JOB_CONTROL_JOBS_CLEARED
 
 
+def test_slurm_job_control_textual_fast_scheduler_exits_when_jobs_change() -> None:
+    def _jobs_provider() -> tuple[AffectedSlurmJob, ...]:
+        return (_job("42", allocated_nodes="worker-1"),)
+
+    async def _run():
+        app = create_slurm_job_control_app(
+            (_job("41", allocated_nodes="worker-0"), _job("42", allocated_nodes="worker-1")),
+            title="Affected Slurm jobs",
+            jobs_provider=_jobs_provider,
+            poll_interval_seconds=1,
+            exit_after_action=True,
+        )
+        async with app.run_test(size=(160, 40)) as pilot:
+            await pilot.pause(1.5)
+        return app.return_value
+
+    result = asyncio.run(_run())
+
+    assert result is not None
+    assert result.action == SLURM_JOB_CONTROL_JOBS_CHANGED
+    assert result.selected_job_ids == ()
+
+
 def test_slurm_job_control_textual_wait_returns_refresh_errors() -> None:
     def _jobs_provider() -> tuple[AffectedSlurmJob, ...]:
         raise RuntimeError("squeue failed")
@@ -507,6 +573,39 @@ def test_slurm_job_control_textual_callback_runs_action_and_refreshes_in_place()
     assert row_count == 1
     assert job_id == "44"
     assert result is None
+
+
+def test_slurm_job_control_textual_callback_can_exit_after_action_for_fast_scheduler() -> None:
+    actions: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = []
+
+    def _action_handler(
+        action: str,
+        selected: tuple[str, ...],
+        displayed_jobs: tuple[AffectedSlurmJob, ...],
+    ) -> tuple[AffectedSlurmJob, ...]:
+        actions.append((action, selected, tuple(job.job_id for job in displayed_jobs)))
+        return (_job("44", state="PENDING", allocated_nodes="", reason="Priority"),)
+
+    async def _run():
+        app = create_slurm_job_control_app(
+            (_job("41"), _job("44", state="PENDING", allocated_nodes="", reason="Priority")),
+            title="Affected Slurm jobs",
+            action_handler=_action_handler,
+            poll_interval_seconds=30,
+            exit_after_action=True,
+        )
+        async with app.run_test(size=(160, 40)) as pilot:
+            await pilot.press("space")
+            await pilot.press("c")
+            await pilot.pause(0.5)
+        return app.return_value
+
+    result = asyncio.run(_run())
+
+    assert actions == [("cancel-selected", ("41",), ("41", "44"))]
+    assert result is not None
+    assert result.action == SLURM_JOB_CONTROL_ACTION_APPLIED
+    assert result.selected_job_ids == ("41",)
 
 
 def test_slurm_job_control_textual_callback_exits_when_action_clears_jobs() -> None:
