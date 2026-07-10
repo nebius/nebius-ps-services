@@ -10148,10 +10148,12 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
     styled = cli_module._style_soperator_migration_status_message(
         "External Soperator upgrade status [4s] phase external-node-template-upgrade "
         "[MK8s control-plane/node-template upgrade] (degraded): MK8s Node Groups degraded: "
-        "Node groups: 4 group(s); nodegroup-gpu-pool (gpu-pool):3/4 Ready, "
-        "nodegroup-login (login):2/2 Ready, nodegroup-system (system):2/2 Ready; updating "
-        "system:PROVISIONING,ready=2/3,event=WaitingForNodeRef,outdated=1,reconciling || "
-        "Registered nodes: 7/8 Ready; in transition gpu-node-a:replacing (down) | "
+        "Provider node groups (source=Nebius API, groups=4)\n"
+        "total=8 upgraded=7 upgrading=1 remaining=1 ready/current=7/8\n"
+        "group       state         total  upgraded  upgrading  remaining  ready/current  event\n"
+        "gpu-pool    PROVISIONING  4      3         1          1          3/4            "
+        "WaitingForNodeRef\n"
+        "login       RUNNING       2      2         0          0          2/2            - | "
         "Slurm Workers draining: workers drained=1"
     )
 
@@ -10161,17 +10163,15 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
     assert "MK8s control-plane/node-template upgrade" in styled
     assert "([bold yellow]degraded[/bold yellow]):" in styled
     assert "[bold white]MK8s Node Groups[/bold white]" in styled
-    assert "[bold cyan]Node groups:[/bold cyan]" in styled
-    assert "[dim] || [/dim]" in styled
-    assert "[bold magenta]Registered nodes:[/bold magenta]" in styled
-    assert "nodegroup-gpu-pool [bold red](gpu-pool)[/bold red]:3/4 " in styled
-    assert "3/4 [bold red]Ready[/bold red]" in styled
-    assert "nodegroup-login [bold blue](login)[/bold blue]:2/2 " in styled
-    assert "2/2 [green]Ready[/green]" in styled
-    assert "nodegroup-system [bold red](system)[/bold red]:2/2 " in styled
-    assert "[bold red]system[/bold red]:PROVISIONING" in styled
-    assert "7/8 [bold red]Ready[/bold red]" in styled
-    assert "[bold yellow]replacing (down)[/bold yellow]" in styled
+    assert "[bold cyan]Provider node groups[/bold cyan]" in styled
+    assert "[dim]source=Nebius API[/dim]" in styled
+    assert "[bold cyan]total[/bold cyan]=8" in styled
+    assert "[bold cyan]upgraded[/bold cyan]=7" in styled
+    assert "[bold yellow]upgrading[/bold yellow]=1" in styled
+    assert "[bold cyan]remaining[/bold cyan]=1" in styled
+    assert "[bold cyan]ready/current[/bold cyan]=7/8" in styled
+    assert "gpu-pool    [bold yellow]PROVISIONING[/bold yellow]" in styled
+    assert "login       [green]RUNNING[/green]" in styled
     assert "[bold white]Slurm Workers[/bold white]" in styled
 
     initial_messages: list[str] = []
@@ -10203,8 +10203,11 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
         emit(
             "External Soperator upgrade status [4s] phase external-node-template-upgrade "
             "[MK8s control-plane/node-template upgrade] (degraded): MK8s Node Groups degraded: "
-            "Node groups: 4 group(s); nodegroup-gpu-pool (gpu-pool):3/4 Ready || "
-            "Registered nodes: 7/8 Ready"
+            "Provider node groups (source=Nebius API, groups=1)\n"
+            "total=4 upgraded=3 upgrading=1 remaining=1 ready/current=3/4\n"
+            "group     state         total  upgraded  upgrading  remaining  ready/current  event\n"
+            "gpu-pool  PROVISIONING  4      3         1          1          3/4            "
+            "WaitingForNodeRef"
         )
 
     assert initial_messages
@@ -10215,10 +10218,11 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
     assert "top-level stage:" not in updates[0]
     assert "MK8s control-plane/node-template upgrade" in updates[0]
     assert "[bold white]MK8s Node Groups[/bold white]" in updates[0]
-    assert "[bold cyan]Node groups:[/bold cyan]" in updates[0]
-    assert "[bold magenta]Registered nodes:[/bold magenta]" in updates[0]
-    assert "nodegroup-gpu-pool [bold red](gpu-pool)[/bold red]:3/4 " in updates[0]
-    assert "3/4 [bold red]Ready[/bold red]" in updates[0]
+    assert "[bold cyan]Provider node groups[/bold cyan]" in updates[0]
+    assert "[bold cyan]upgraded[/bold cyan]=3" in updates[0]
+    assert "[bold yellow]upgrading[/bold yellow]=1" in updates[0]
+    assert "[bold cyan]remaining[/bold cyan]=1" in updates[0]
+    assert "[bold yellow]PROVISIONING[/bold yellow]" in updates[0]
 
 
 def test_soperator_migration_status_spinner_suppresses_stray_enter_echo(
@@ -10522,6 +10526,8 @@ def test_ext_soperator_upgrade_execute_runs_checkpointed_preflight(
     assert "Execute preflight checkpoint:" in result.output
     assert "Live source version verified: 3.0.5" in result.output
     assert "Pending phase: customer-approval" in result.output
+    assert "Next command: nebius-cxcli ext-soperator upgrade" in result.output
+    assert "--target external-cluster --execute --approve" in result.output
     assert "Upgrade performed: no." in result.output
     checkpoint_path = _ext_soperator_checkpoint_path(config_path)
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))

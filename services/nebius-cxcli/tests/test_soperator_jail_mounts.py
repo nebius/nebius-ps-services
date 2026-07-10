@@ -29,8 +29,12 @@ def test_apply_external_persistent_mount_values_adds_home_in_shared_area() -> No
     ]
     volume_sources = {item["name"]: item for item in values["volumeSources"]}
     assert set(volume_sources) == {
+        "controller-spool",
         "jail",
     }
+    assert volume_sources["controller-spool"]["persistentVolumeClaim"]["claimName"] == (
+        "controller-spool-pvc"
+    )
     assert volume_sources["jail"]["persistentVolumeClaim"]["claimName"] == (
         "jail-rootfs-slot-a-pvc"
     )

@@ -79,6 +79,16 @@ All notable changes to this project are tracked here. This changelog follows
   now refuses its temporary login writer hold under the default `target-ready`
   policy; operators must choose `wait-active` or `grace-period` for that
   maintenance window.
+- Fixed external Soperator chart/Jail handoff during rolling compute migration.
+  Target values now preserve the chart-default `controller-spool`
+  `volumeSources` entry, fail before Helm mutation when a rendered
+  `volumeSourceName` has no matching source, and bump the rolling-compute
+  values revision so reruns reapply corrected values. Login Slurm smoke can
+  defer only across a planned Jail Upgrade chart/rootfs boundary when the
+  failure matches known old-rootfs/target-config markers; post-Jail `scontrol`,
+  `sbatch`, and accounting/QOS smoke is fail-closed. Execute output now
+  de-duplicates repeated phase/preflight lines and prints a resume command in
+  pending footers.
 - Changed external service-role node-template rollout to default to serial
   zero-surge, with `max_surge=0`, `max_unavailable=1`, and `drain_timeout=30m`.
   `ext-soperator onboard` and `ext-soperator upgrade` now expose
@@ -221,15 +231,14 @@ All notable changes to this project are tracked here. This changelog follows
   before continuing. The job-control screen now highlights `COMPLETING` jobs
   and explains that Slurm may keep cancelled jobs in cleanup while nodes return
   to service.
-- Clarified external Soperator upgrade live status during MK8s work: the
-  external node-template phase label now names both control-plane and
-  node-template work, active control-plane hops emit a separate `MK8s Control
-  Plane` status signal, and node totals are labeled `Registered nodes` because
-  they come from the current Kubernetes Node list and may temporarily drop
-  during zero-surge replacement.
-- Improved external Soperator upgrade live-status readability by adding
-  Nebius node-group display names in parentheses when available and coloring
-  terminal `x/y Ready` markers plus node-group display names by readiness.
+- Changed external Soperator upgrade MK8s live status to a Nebius API-backed
+  provider node-group rollout table. The table now shows per-node-group
+  provider state, total, upgraded, upgrading, remaining, ready/current, and
+  latest event columns from one node-group snapshot per refresh, and no longer
+  mixes Kubernetes `Registered nodes` counts into the MK8s section.
+- Improved external Soperator upgrade live-status readability by highlighting
+  provider table labels, rollout counters, and provider states in terminal
+  output while preserving the same plain-text table in non-interactive logs.
 - Fixed external Soperator upgrade live-status spinners so stray Enter/key
   presses while no prompt is active do not echo new lines that duplicate the
   current status row. cxcli restores normal terminal input before prompts and
@@ -243,8 +252,8 @@ All notable changes to this project are tracked here. This changelog follows
   while polling Slurm in a background worker. Read-only Slurm probes now return
   bounded timeout errors instead of freezing long-running upgrade status checks.
   MK8s node-template status now also surfaces active Nebius node-group rollout
-  state, event code, outdated count, and reconciling state when Kubernetes nodes
-  are still Ready. Jail Upgrade status now includes live Kubernetes,
+  state, event code, upgraded, upgrading, remaining, and ready/current counts.
+  Jail Upgrade status now includes live Kubernetes,
   Slurm, Soperator, and populate-jail Job signals instead of an unknown
   no-checks message.
 - Added `examples/slurm-jobs/submit-job-test.sh --watch-jobs` to watch smoke

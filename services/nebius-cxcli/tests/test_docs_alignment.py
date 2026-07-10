@@ -862,7 +862,16 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "Preflight and backup: validate the current bundle" in soperator_flat
     assert "Slurm and MK8s rollout: when MK8s target flags are supplied" in soperator_flat
     assert "Jail Upgrade: when the target populate-jail image changed" in soperator_flat
+    assert "require post-rootfs `scontrol`, `sbatch`, and accounting/QOS smoke" in (
+        soperator_flat
+    )
     assert "The Soperator jail is the shared Linux root filesystem" in soperator_flat
+    assert "Jail Upgrade follows the Soperator chart/rootfs activation boundary" in (
+        soperator_flat
+    )
+    assert "then later Kubernetes-only hops after Slurm has passed post-Jail smoke" in (
+        soperator_flat
+    )
     assert "The refresh uses an active/passive rootfs model" in soperator_flat
     assert "contains two logical rootfs slots plus one shared persistent-mount area" in (
         soperator_flat
@@ -881,6 +890,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "creates a Kubernetes Job named like `<target>-populate-jail-passive-<slot>`" in (
         soperator_flat
     )
+    assert "an `sbatch` CLI parse/submit-dry-run check" in soperator_flat
     assert "the cluster can briefly contain old pods using the old slot" in soperator_flat
     assert (
         "A single login or worker pod is not expected to run with both slot-a and "
@@ -2052,6 +2062,13 @@ def test_docs_define_component_selector_contract() -> None:
         "execute preflight refreshes live discovery, verifies source release/fingerprint"
         in design_flat
     )
+    assert "Jail Upgrade follows the Soperator chart/rootfs activation boundary" in (
+        design_flat
+    )
+    assert "handoff plus Jail rootfs refresh in that same segment" in design_flat
+    assert "requires post-Jail `scontrol`, `sbatch`, and accounting/QOS smoke" in (
+        design_flat
+    )
     assert "validation hold verifies MK8s, target Soperator" in design_flat
     assert "every executed stage runs a fast stage-scoped verification" in design_flat
     assert "including the post-MK8s validation and Jail Upgrade boundaries" in design_flat
@@ -2320,26 +2337,20 @@ def test_docs_define_component_selector_contract() -> None:
     )
     assert "suppresses stray key echo while no prompt is active" in design_flat
     assert "Storage phases show aligned SFS/PVC copy progress" in readme_flat
-    assert "separate `Node groups:` and `Registered nodes:` sections" in readme_flat
-    assert "registered-node count comes from current Kubernetes Node objects" in readme_flat
+    assert "Nebius API-backed provider node-group rollout table" in readme_flat
+    assert "one node-group snapshot per refresh" in readme_flat
+    assert "provider state, total, upgraded, upgrading, remaining, ready/current" in readme_flat
+    assert "without mixing in Kubernetes registered-node counts" in readme_flat
     assert "separate `MK8s Control Plane` signal" in readme_flat
-    assert "separate `Node groups:` and `Registered nodes:` sections" in design_flat
-    assert "registered-node count comes from current Kubernetes Node objects" in design_flat
+    assert "Nebius API-backed provider node-group rollout table" in design_flat
+    assert "one node-group snapshot per refresh" in design_flat
+    assert "provider state, total, upgraded, upgrading, remaining" in design_flat
+    assert "without mixing in Kubernetes registered-node counts" in design_flat
     assert "separate `MK8s Control Plane` signal" in design_flat
-    assert "show it in parentheses after the node-group id" in readme_flat
-    assert "colors that display name blue for ready groups and red for degraded groups" in (
-        readme_flat
-    )
-    assert "colors `Ready` green for `x/y Ready` counts" in readme_flat
-    assert "show it in parentheses after the node-group id" in design_flat
-    assert "colors that display name blue for ready groups and red for degraded groups" in (
-        design_flat
-    )
-    assert "colors `Ready` green for `x/y Ready` counts" in design_flat
-    assert "node-group readiness stays in the first section" in readme_flat
-    assert "Node-level rollout transitions such as `replacing (cordoned)`" in readme_flat
-    assert "real problem-node details such as `NotReady (down)`" in readme_flat
-    assert "Transition nodes and down states are highlighted" in readme_flat
+    assert "missing provider fields render as `unknown`" in readme_flat
+    assert "Terminal output highlights provider table labels and states" in readme_flat
+    assert "missing provider fields render as `unknown`" in design_flat
+    assert "Terminal output highlights provider table labels and states" in design_flat
     assert "Slurm worker names/states" in readme_flat
     assert "timeout-guarded checkpoints" in design_flat
     assert "remains blocked until the explicit migration executor is implemented" not in design_flat

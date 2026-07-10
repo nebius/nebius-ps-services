@@ -123,6 +123,7 @@ from .soperator_jail_mounts import (
     jail_persistent_mount_status,
     jail_rootfs_uses_legacy_active_source,
     parse_jail_persistent_mount_specs,
+    sync_jail_volume_sources,
 )
 from .soperator_onboarding import (
     ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
@@ -400,7 +401,7 @@ _SOPERATOR_CONTROLLER_POD = "controller-0"
 _SOPERATOR_CONTROLLER_CONTAINER = "slurmctld"
 _SOPERATOR_LEGACY_SLURM_CONF = "/mnt/jail/etc/slurm/slurm.conf"
 _SOPERATOR_SLURM_CLI_NAMES = frozenset(
-    {"sacct", "sbatch", "scancel", "scontrol", "sinfo", "squeue", "srun"}
+    {"sacct", "sacctmgr", "sbatch", "scancel", "scontrol", "sinfo", "squeue", "srun"}
 )
 _SOPERATOR_SOURCE_RELEASE_NAMES = frozenset(
     {
@@ -474,7 +475,7 @@ _SOPERATOR_SOURCE_CHART_PREFIXES = (
 )
 _TARGET_KUBE_RBAC_PROXY_REPOSITORY = "registry.k8s.io/kubebuilder/kube-rbac-proxy"
 _TARGET_KUBE_RBAC_PROXY_TAG = "v0.15.0"
-_ROLLING_COMPUTE_VALUES_REVISION = 14
+_ROLLING_COMPUTE_VALUES_REVISION = 15
 _VALIDATION_HOLD_REVISION = 2
 _TARGET_SLURM_PLUGIN_DIR = "/usr/lib/x86_64-linux-gnu/slurm"
 _TARGET_GPU_GRES_AFFINITY_PARAMETER = "l3cache_as_socket"
@@ -8013,14 +8014,15 @@ def _ensure_rolling_login_continuity(
     ):
         continuity["slurm_smoke"] = {
             "status": "deferred",
-            "reason": "target handoff changed Slurm config before final cutover",
+            "reason": "target chart/rootfs handoff requires Jail Upgrade before Slurm CLI smoke",
+            "requires_post_jail_smoke": True,
             "returncode": smoke.returncode,
             "stdout": smoke.stdout.strip(),
             "stderr": smoke.stderr.strip(),
         }
         smoke_lines = [
-            "Login continuity: Slurm smoke deferred because target handoff changed "
-            "Slurm config before final cutover."
+            "Login continuity: Slurm CLI smoke deferred across the target chart/rootfs "
+            "handoff; Jail Upgrade must pass post-rootfs Slurm smoke before advancing."
         ]
     else:
         continuity["slurm_smoke"] = {
@@ -8050,6 +8052,52 @@ def _ensure_rolling_login_continuity(
         *smoke_lines,
         *lines,
     ]
+
+
+def _ensure_post_jail_slurm_smoke(
+    *,
+    phase: dict[str, Any],
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+) -> list[str]:
+    smoke_state = phase.setdefault("post_jail_slurm_smoke", {})
+    if not isinstance(smoke_state, dict):
+        raise RuntimeError("populate-jail-refresh.post_jail_slurm_smoke must be a mapping.")
+    checks: list[dict[str, Any]] = []
+    for name, args in (
+        ("scontrol", ("scontrol", "ping")),
+        ("sbatch", ("sbatch", "--test-only", "--wrap=/bin/true")),
+        ("accounting-qos", ("sacctmgr", "-nP", "show", "qos", "format=name")),
+    ):
+        result = _kubectl_exec_login(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            args=args,
+            check=False,
+            timeout_seconds=120,
+        )
+        check = {
+            "name": name,
+            "command": " ".join(args),
+            "status": "passed" if result.returncode == 0 else "failed",
+            "returncode": result.returncode,
+            "stdout": result.stdout.strip(),
+            "stderr": result.stderr.strip(),
+        }
+        checks.append(check)
+        if result.returncode != 0:
+            smoke_state["status"] = "failed"
+            smoke_state["failed_check"] = name
+            smoke_state["checks"] = checks
+            smoke_state["reason"] = _command_detail(result)
+            raise SoperatorMigrationPhasePending(
+                f"post-Jail Slurm smoke failed: {name} did not pass after Jail Upgrade "
+                "rootfs switch."
+            )
+    smoke_state["status"] = "passed"
+    smoke_state["checked_at"] = _utc_now()
+    smoke_state["checks"] = checks
+    return ["Jail Upgrade post-rootfs Slurm smoke passed: scontrol, sbatch, accounting/QOS."]
 
 
 _SLURM_HANDOFF_MISMATCH_MARKERS = (
@@ -8104,6 +8152,28 @@ def _rolling_compute_checkpoint_quiesce_records(
 
 def _rolling_compute_target_handoff_started(phase: Mapping[str, Any]) -> bool:
     return bool(str(phase.get("target_values_apply_started_at", "") or "").strip())
+
+
+def _checkpoint_jail_upgrade_planned(checkpoint: Mapping[str, Any]) -> bool:
+    planned_phases = checkpoint.get("planned_phases")
+    if isinstance(planned_phases, Sequence) and not isinstance(
+        planned_phases, (str, bytes, bytearray)
+    ):
+        return POPULATE_JAIL_REFRESH_PHASE_ID in {
+            str(phase or "").strip() for phase in planned_phases
+        }
+    return POPULATE_JAIL_REFRESH_PHASE_ID in _mapping(checkpoint.get("phase_state"))
+
+
+def _rolling_compute_slurm_smoke_may_defer(
+    *,
+    checkpoint: Mapping[str, Any],
+    phase: Mapping[str, Any],
+) -> bool:
+    return (
+        _checkpoint_jail_upgrade_planned(checkpoint)
+        and _rolling_compute_target_handoff_started(phase)
+    )
 
 
 def _slurm_cli_allows_controller_fallback(args: Sequence[str]) -> bool:
@@ -9938,92 +10008,6 @@ def _updating_external_node_template_groups(
     return frozenset(labels)
 
 
-def _active_external_node_template_rollout_statuses(
-    *,
-    nebius_api: SoperatorMigrationNebiusApi,
-    checkpoint: Mapping[str, Any],
-    phase_id: str,
-) -> tuple[tuple[str, ...], bool]:
-    if phase_id != _EXTERNAL_NODE_TEMPLATE_PHASE_ID:
-        return (), False
-    phase = _mapping(_mapping(checkpoint.get("phase_state")).get(phase_id))
-    node_groups = _mapping(phase.get("node_groups"))
-    details: list[str] = []
-    rollout_active = False
-    for source_group, raw_state in node_groups.items():
-        state = _mapping(raw_state)
-        checkpoint_status = str(state.get("status", "") or "").strip().lower()
-        if checkpoint_status not in {"updating", "waiting-rollout"}:
-            continue
-        node_group_id = str(state.get("node_group_id", "") or "").strip()
-        label = (
-            str(state.get("node_group_name", "") or "").strip()
-            or str(state.get("source_group", "") or "").strip()
-            or str(source_group)
-        )
-        if not node_group_id:
-            details.append(f"{label}:status unavailable (missing node group id)")
-            rollout_active = True
-            continue
-        try:
-            node_group = _node_group_payload_by_id(
-                nebius_api=nebius_api,
-                node_group_id=node_group_id,
-            )
-        except Exception as exc:
-            details.append(f"{label}:status unavailable ({exc})")
-            rollout_active = True
-            continue
-        status = _mapping(node_group.get("status"))
-        ready = _int_or_none(_first_mapping_value(status, "ready_node_count", "readyNodeCount"))
-        target = _int_or_none(_first_mapping_value(status, "target_node_count", "targetNodeCount"))
-        outdated = _int_or_none(
-            _first_mapping_value(status, "outdated_node_count", "outdatedNodeCount")
-        )
-        reconciling = bool(status.get("reconciling", False))
-        status_state = str(status.get("state", "") or "").strip()
-        ready_text = f"ready={ready}/{target}" if ready is not None and target is not None else ""
-        event_code = ""
-        for event in reversed(_sequence_of_mappings(status.get("events"))):
-            occurrence = _mapping(event.get("last_occurrence", event.get("lastOccurrence")))
-            event_code = str(occurrence.get("code", "") or event.get("code", "") or "").strip()
-            if event_code:
-                break
-        parts = [item for item in (status_state, ready_text) if item]
-        if event_code:
-            parts.append(f"event={event_code}")
-        if outdated is not None:
-            parts.append(f"outdated={outdated}")
-        if reconciling:
-            parts.append("reconciling")
-        if checkpoint_status == "waiting-rollout":
-            parts.append("checkpoint=waiting-rollout")
-        ready_rollout, _readiness_summary = _node_group_readiness_summary(node_group)
-        if checkpoint_status == "waiting-rollout" or not ready_rollout:
-            rollout_active = True
-        details.append(f"{label}:" + (",".join(parts) if parts else "status present"))
-    return tuple(details), rollout_active
-
-
-def _node_in_group_set(item: Mapping[str, Any], groups: frozenset[str]) -> bool:
-    if not groups:
-        return False
-    labels = _node_labels(item)
-    for key in (
-        "nebius.com/node-group",
-        "yandex.cloud/node-group-id",
-        "nebius.com/node-group-id",
-        "slurm.nebius.ai/nodeset-name",
-        "slurm.nebius.ai/nodeset",
-        "node.kubernetes.io/instance-type",
-    ):
-        value = str(labels.get(key, "") or "").strip()
-        if value and (value in groups or (normalize_component_token(value) or value) in groups):
-            return True
-    group = _node_group_label(item)
-    return group in groups or (normalize_component_token(group) or group) in groups
-
-
 def _format_problem_node_details(
     details: Sequence[str],
     *,
@@ -10060,164 +10044,263 @@ def _active_external_control_plane_status_signal(
     return None
 
 
-def _external_status_node_group_display_names(
+@dataclass(frozen=True)
+class _Mk8sNodeGroupStatusRow:
+    group: str
+    state: str
+    total: int | None
+    upgraded: int | None
+    upgrading: int | None
+    remaining: int | None
+    ready: int | None
+    current: int | None
+    event: str
+    active: bool
+    degraded: bool
+    unknown: bool
+
+
+def _node_group_latest_event_code(status: Mapping[str, Any]) -> str:
+    for event in reversed(_sequence_of_mappings(status.get("events"))):
+        occurrence = _mapping(event.get("last_occurrence", event.get("lastOccurrence")))
+        event_code = str(occurrence.get("code", "") or event.get("code", "") or "").strip()
+        if event_code:
+            return event_code
+    return "-"
+
+
+def _mk8s_status_node_group_aliases(node_group: Mapping[str, Any]) -> frozenset[str]:
+    aliases: set[str] = set()
+    for value in (_node_group_id(node_group), _node_group_name(node_group)):
+        text = str(value or "").strip()
+        if not text:
+            continue
+        aliases.add(text)
+        normalized = normalize_component_token(text)
+        if normalized:
+            aliases.add(normalized)
+    return frozenset(aliases)
+
+
+def _mk8s_status_node_group_row(
+    *,
+    node_group: Mapping[str, Any],
+    active_group_labels: frozenset[str],
+) -> _Mk8sNodeGroupStatusRow:
+    group = _node_group_name(node_group) or _node_group_id(node_group) or "unknown"
+    status = _mapping(node_group.get("status"))
+    aliases = _mk8s_status_node_group_aliases(node_group)
+    active = any(alias in active_group_labels for alias in aliases)
+    if not status:
+        return _Mk8sNodeGroupStatusRow(
+            group=group,
+            state="unknown",
+            total=None,
+            upgraded=None,
+            upgrading=None,
+            remaining=None,
+            ready=None,
+            current=None,
+            event="unknown",
+            active=active,
+            degraded=False,
+            unknown=True,
+        )
+
+    total = _int_or_none(_first_mapping_value(status, "target_node_count", "targetNodeCount"))
+    current = _int_or_none(_first_mapping_value(status, "node_count", "nodeCount"))
+    ready = _int_or_none(_first_mapping_value(status, "ready_node_count", "readyNodeCount"))
+    remaining = _int_or_none(
+        _first_mapping_value(status, "outdated_node_count", "outdatedNodeCount")
+    )
+    upgraded = None if total is None or remaining is None else max(0, total - remaining)
+    upgrading = None
+    if total is not None and current is not None and ready is not None:
+        upgrading = max(0, max(current, total) - ready)
+    raw_state = str(_first_mapping_value(status, "state", "State") or "").strip()
+    state = raw_state or "unknown"
+    unknown = any(
+        value is None
+        for value in (
+            total,
+            upgraded,
+            upgrading,
+            remaining,
+            ready,
+            current,
+        )
+    ) or not raw_state
+    ready_rollout, _readiness_summary = _node_group_readiness_summary(node_group)
+    degraded = active or not ready_rollout or state not in {"RUNNING", "unknown"}
+    return _Mk8sNodeGroupStatusRow(
+        group=group,
+        state=state,
+        total=total,
+        upgraded=upgraded,
+        upgrading=upgrading,
+        remaining=remaining,
+        ready=ready,
+        current=current,
+        event=_node_group_latest_event_code(status),
+        active=active,
+        degraded=degraded,
+        unknown=unknown,
+    )
+
+
+def _mk8s_status_row_sort_key(row: _Mk8sNodeGroupStatusRow) -> tuple[int, str]:
+    if row.active:
+        rank = 0
+    elif row.degraded:
+        rank = 1
+    elif row.unknown:
+        rank = 2
+    else:
+        rank = 3
+    return rank, row.group
+
+
+def _mk8s_status_int_text(value: int | None) -> str:
+    return "unknown" if value is None else str(value)
+
+
+def _mk8s_status_total_text(values: Sequence[int | None]) -> str:
+    known_total = sum(value for value in values if value is not None)
+    unknown_count = sum(1 for value in values if value is None)
+    if not unknown_count:
+        return str(known_total)
+    if known_total <= 0:
+        return "unknown"
+    return f"{known_total}+unknown"
+
+
+def _mk8s_status_ready_current_text(
+    ready: int | None,
+    current: int | None,
+) -> str:
+    return f"{_mk8s_status_int_text(ready)}/{_mk8s_status_int_text(current)}"
+
+
+def _mk8s_status_totals_line(rows: Sequence[_Mk8sNodeGroupStatusRow]) -> str:
+    return (
+        f"total={_mk8s_status_total_text(tuple(row.total for row in rows))} "
+        f"upgraded={_mk8s_status_total_text(tuple(row.upgraded for row in rows))} "
+        f"upgrading={_mk8s_status_total_text(tuple(row.upgrading for row in rows))} "
+        f"remaining={_mk8s_status_total_text(tuple(row.remaining for row in rows))} "
+        f"ready/current="
+        f"{_mk8s_status_total_text(tuple(row.ready for row in rows))}/"
+        f"{_mk8s_status_total_text(tuple(row.current for row in rows))}"
+    )
+
+
+def _format_mk8s_status_table(rows: Sequence[_Mk8sNodeGroupStatusRow]) -> tuple[str, ...]:
+    table_rows: list[tuple[str, ...]] = [
+        ("group", "state", "total", "upgraded", "upgrading", "remaining", "ready/current", "event")
+    ]
+    table_rows.extend(
+        (
+            row.group,
+            row.state,
+            _mk8s_status_int_text(row.total),
+            _mk8s_status_int_text(row.upgraded),
+            _mk8s_status_int_text(row.upgrading),
+            _mk8s_status_int_text(row.remaining),
+            _mk8s_status_ready_current_text(row.ready, row.current),
+            row.event,
+        )
+        for row in rows
+    )
+    widths = [max(len(row[column]) for row in table_rows) for column in range(len(table_rows[0]))]
+    return tuple(
+        "  ".join(value.ljust(widths[column]) for column, value in enumerate(row)).rstrip()
+        for row in table_rows
+    )
+
+
+def _mk8s_status_cluster_id(
     *,
     nebius_api: SoperatorMigrationNebiusApi,
     checkpoint: Mapping[str, Any],
     phase_id: str,
-) -> Mapping[str, str]:
-    if phase_id != _EXTERNAL_NODE_TEMPLATE_PHASE_ID:
-        return {}
+    payload: Mapping[str, Any],
+    source_report: Mapping[str, Any],
+    target_ref: str,
+) -> str:
     phase = _mapping(_mapping(checkpoint.get("phase_state")).get(phase_id))
     cluster_id = str(phase.get("cluster_id", "") or "").strip()
-    if not cluster_id:
-        return {}
-    try:
-        node_groups = _list_node_groups(nebius_api=nebius_api, cluster_id=cluster_id)
-    except Exception:
-        return {}
-    display_names: dict[str, str] = {}
-    for node_group in node_groups:
-        node_group_id = _node_group_id(node_group)
-        node_group_name = _node_group_name(node_group)
-        if not node_group_id or not node_group_name:
-            continue
-        display_names[node_group_id] = node_group_name
-        normalized_id = normalize_component_token(node_group_id)
-        if normalized_id:
-            display_names[normalized_id] = node_group_name
-    return display_names
-
-
-def _format_status_node_group_label(label: str, display_names: Mapping[str, str]) -> str:
-    display = display_names.get(label) or display_names.get(normalize_component_token(label) or "")
-    if not display or normalize_component_token(display) == normalize_component_token(label):
-        return label
-    return f"{label} ({display})"
+    if cluster_id:
+        return cluster_id
+    return _external_migration_cluster_id(
+        payload=payload,
+        target_ref=target_ref,
+        source_report=source_report,
+        nebius_api=nebius_api,
+    )
 
 
 def _collect_mk8s_status(
     *,
     nebius_api: SoperatorMigrationNebiusApi,
-    command_runner: SoperatorMigrationCommandRunner,
-    kube_context: str,
     checkpoint: Mapping[str, Any],
     phase_id: str,
+    payload: Mapping[str, Any],
+    source_report: Mapping[str, Any],
+    target_ref: str,
 ) -> SoperatorMigrationStatusSignal:
     try:
-        result = command_runner(
-            [
-                "kubectl",
-                "--context",
-                kube_context,
-                "get",
-                "nodes",
-                "-o",
-                "json",
-                "--request-timeout=20s",
-            ],
-            timeout_seconds=30,
-            check=False,
+        cluster_id = _mk8s_status_cluster_id(
+            nebius_api=nebius_api,
+            checkpoint=checkpoint,
+            phase_id=phase_id,
+            payload=payload,
+            source_report=source_report,
+            target_ref=target_ref,
         )
-    except subprocess.TimeoutExpired:
+        node_groups = _list_node_groups(nebius_api=nebius_api, cluster_id=cluster_id)
+    except Exception as exc:
         return SoperatorMigrationStatusSignal(
             "MK8s Node Groups",
             "unknown",
-            "node status timed out while listing Kubernetes nodes",
+            "Provider node groups (source=Nebius API) unavailable: " + str(exc),
         )
-    if result.returncode != 0:
-        return SoperatorMigrationStatusSignal(
-            "MK8s Node Groups",
-            "unknown",
-            "node status unavailable: " + _command_detail(result),
+    active_group_labels = _updating_external_node_template_groups(
+        checkpoint=checkpoint,
+        phase_id=phase_id,
+    )
+    rows = tuple(
+        sorted(
+            (
+                _mk8s_status_node_group_row(
+                    node_group=node_group,
+                    active_group_labels=active_group_labels,
+                )
+                for node_group in node_groups
+            ),
+            key=_mk8s_status_row_sort_key,
         )
-    try:
-        payload = json.loads(result.stdout or "{}")
-    except json.JSONDecodeError:
-        return SoperatorMigrationStatusSignal(
-            "MK8s Node Groups",
-            "unknown",
-            "node status returned invalid JSON",
-        )
-    items = payload.get("items") if isinstance(payload, Mapping) else None
-    nodes = tuple(item for item in _sequence_of_mappings(items))
-    if not nodes:
+    )
+    summary_lines = [
+        f"Provider node groups (source=Nebius API, groups={len(rows)})",
+        _mk8s_status_totals_line(rows),
+        *_format_mk8s_status_table(rows),
+    ]
+    if not rows:
         return SoperatorMigrationStatusSignal(
             "MK8s Node Groups",
             "down",
-            "Node groups: 0 group(s) || Registered nodes: 0/0 Ready",
+            "\n".join(summary_lines),
         )
-    total = len(nodes)
-    ready = sum(1 for item in nodes if _node_ready(item))
-    cordoned = sum(1 for item in nodes if _mapping(item.get("spec")).get("unschedulable") is True)
-    display_names = _external_status_node_group_display_names(
-        nebius_api=nebius_api,
-        checkpoint=checkpoint,
-        phase_id=phase_id,
-    )
-    updating_groups = _updating_external_node_template_groups(
-        checkpoint=checkpoint,
-        phase_id=phase_id,
-    )
-    groups: dict[str, list[int]] = {}
-    transition_nodes: list[str] = []
-    problem_nodes: list[str] = []
-    for item in nodes:
-        group = groups.setdefault(_node_group_label(item), [0, 0])
-        group[1] += 1
-        node_ready = _node_ready(item)
-        cordoned_node = _node_cordoned(item)
-        if node_ready:
-            group[0] += 1
-        if node_ready and not cordoned_node:
-            continue
-        node_name = _node_name(item) or f"node-{len(transition_nodes) + len(problem_nodes) + 1}"
-        upgrading = _node_in_group_set(item, updating_groups)
-        if upgrading:
-            detail = "replacing (down)" if not node_ready else "replacing (cordoned)"
-            transition_nodes.append(f"{node_name}:{detail}")
-        elif cordoned_node:
-            transition_nodes.append(f"{node_name}:cordoned")
-        else:
-            problem_nodes.append(f"{node_name}:NotReady (down)")
-    group_summary = ", ".join(
-        f"{_format_status_node_group_label(name, display_names)}:{counts[0]}/{counts[1]} Ready"
-        for name, counts in sorted(groups.items())[:_STATUS_MAX_NODE_GROUP_DETAILS]
-    )
-    if len(groups) > _STATUS_MAX_NODE_GROUP_DETAILS:
-        group_summary += f", +{len(groups) - _STATUS_MAX_NODE_GROUP_DETAILS} more groups"
-    group_parts = [f"{len(groups)} group(s)"]
-    if group_summary:
-        group_parts.append(group_summary)
-    rollout_details, rollout_active = _active_external_node_template_rollout_statuses(
-        nebius_api=nebius_api,
-        checkpoint=checkpoint,
-        phase_id=phase_id,
-    )
-    if rollout_details:
-        group_parts.append(
-            "updating "
-            + _format_problem_node_details(
-                rollout_details,
-                max_items=_STATUS_MAX_NODE_GROUP_DETAILS,
-            )
-        )
-    node_parts = [f"{ready}/{total} Ready"]
-    if cordoned:
-        node_parts.append(f"{cordoned} cordoned")
-    if transition_nodes:
-        node_parts.append("in transition " + _format_problem_node_details(transition_nodes))
-    if problem_nodes:
-        node_parts.append("problem nodes " + _format_problem_node_details(problem_nodes))
-    state = "serving"
-    if ready <= 0:
-        state = "down"
-    elif ready < total or cordoned or rollout_active:
+    if any(row.degraded for row in rows):
         state = "degraded"
-    summary = (
-        "Node groups: " + "; ".join(group_parts) + " || Registered nodes: " + "; ".join(node_parts)
+    elif any(row.unknown for row in rows):
+        state = "unknown"
+    else:
+        state = "serving"
+    return SoperatorMigrationStatusSignal(
+        "MK8s Node Groups",
+        state,
+        "\n".join(summary_lines),
     )
-    return SoperatorMigrationStatusSignal("MK8s Node Groups", state, summary)
 
 
 def _storage_status_expected_pvcs(
@@ -10736,12 +10819,13 @@ class SoperatorMigrationStatusReporter:
                 signals.append(
                     _collect_mk8s_status(
                         nebius_api=self._nebius_api,
-                        command_runner=self._command_runner,
-                        kube_context=self._kube_context,
                         checkpoint=self._checkpoint,
                         phase_id=phase_id,
+                        payload=self._payload,
+                        source_report=self._source_report,
+                        target_ref=self._target_ref,
                     )
-            )
+                )
             if scope.get("slurm"):
                 signals.append(
                     _collect_slurm_status(
@@ -11736,11 +11820,105 @@ def _patch_target_values_for_compute(
     else:
         _patch_legacy_worker_nodeset_fallback(values, worker_count=worker_count)
     _patch_target_slurm_runtime(values)
+    values = sync_jail_volume_sources(values)
     ensure_soperator_gpu_driver_jail_values(
         values,
         context=f"External Soperator upgrade target {target_ref}",
     )
     return values
+
+
+def _jail_persistent_mount_volume_source_name(mount: Mapping[str, Any]) -> str:
+    mount_path = str(mount.get("mountPath") or "").strip()
+    slug = re.sub(r"[^a-z0-9]+", "-", mount_path.strip("/").lower()).strip("-") or "root"
+    base = f"jail-persistent-{slug}"
+    if len(base) <= 52:
+        return base
+    digest = hashlib.sha1(mount_path.encode("utf-8")).hexdigest()[:8]
+    return f"{base[:43].rstrip('-')}-{digest}"
+
+
+def _active_passive_jail_rootfs_enabled(values: Mapping[str, Any]) -> bool:
+    strategy = str(_mapping(values.get("jailRootfs")).get("strategy") or "activePassive").strip()
+    return strategy == "activePassive"
+
+
+def _target_values_volume_controller_spool_name(values: Mapping[str, Any]) -> str:
+    volume = _mapping(values.get("volume"))
+    controller_spool = _mapping(volume.get("controllerSpool"))
+    return str(controller_spool.get("name") or "controller-spool").strip()
+
+
+def _target_values_declared_volume_source_names(values: Mapping[str, Any]) -> set[str]:
+    declared = {"slurm-scripts"}
+    if _active_passive_jail_rootfs_enabled(values):
+        slots = _mapping(_mapping(values.get("jailRootfs")).get("slots"))
+        for slot_name in ("slot-a", "slot-b"):
+            slot = _mapping(slots.get(slot_name))
+            declared.add(str(slot.get("volumeSourceName") or f"jail-rootfs-{slot_name}").strip())
+        for mount in _sequence_of_mappings(values.get(JAIL_PERSISTENT_MOUNTS_VALUES_KEY)):
+            source_name = _jail_persistent_mount_volume_source_name(mount)
+            if source_name:
+                declared.add(source_name)
+    volume_sources = values.get("volumeSources")
+    if volume_sources is None:
+        controller_spool = _target_values_volume_controller_spool_name(values)
+        if controller_spool:
+            declared.add(controller_spool)
+    else:
+        for item in _sequence_of_mappings(volume_sources):
+            source_name = str(item.get("name") or "").strip()
+            if source_name:
+                declared.add(source_name)
+    external_nfs_enabled = _mapping(values.get("externalNfs")).get("enabled")
+    if external_nfs_enabled is True or str(external_nfs_enabled or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        declared.add("external-home")
+    return {name for name in declared if name}
+
+
+def _collect_volume_source_name_references(value: Any) -> set[str]:
+    refs: set[str] = set()
+    if isinstance(value, Mapping):
+        source_name = str(value.get("volumeSourceName") or "").strip()
+        if source_name:
+            refs.add(source_name)
+        for child in value.values():
+            refs.update(_collect_volume_source_name_references(child))
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for child in value:
+            refs.update(_collect_volume_source_name_references(child))
+    return refs
+
+
+def _target_values_referenced_volume_source_names(values: Mapping[str, Any]) -> set[str]:
+    referenced: set[str] = set()
+    for key in ("populateJail", "slurmNodes", "nodesets"):
+        referenced.update(_collect_volume_source_name_references(values.get(key)))
+    controller_spool = _target_values_volume_controller_spool_name(values)
+    explicit_controller_spool = _mapping(
+        _mapping(_mapping(_mapping(values.get("slurmNodes")).get("controller")).get("volumes")).get(
+            "spool"
+        )
+    )
+    referenced.add(str(explicit_controller_spool.get("volumeSourceName") or controller_spool))
+    return {name for name in referenced if name}
+
+
+def _validate_target_values_volume_sources(values: Mapping[str, Any]) -> None:
+    declared = _target_values_declared_volume_source_names(values)
+    referenced = _target_values_referenced_volume_source_names(values)
+    missing = sorted(referenced - declared)
+    if missing:
+        raise RuntimeError(
+            "Target Soperator values are not render-valid: volumeSourceName(s) "
+            + ", ".join(missing)
+            + " have no matching SlurmCluster.spec.volumeSources[].name."
+        )
 
 
 def _source_worker_nodeset_values(
@@ -13075,6 +13253,7 @@ def _helm_upgrade_target_soperator(
     expected_version: str = "",
     wait: bool = True,
 ) -> None:
+    _validate_target_values_volume_sources(values)
     chart_path = _target_soperator_chart_path()
     _ensure_soperator_chart_dependencies(command_runner=command_runner, chart_path=chart_path)
     _apply_soperator_crds(
@@ -15808,6 +15987,10 @@ def _execute_rolling_compute_migration_phase(
         phase.setdefault("target_values_apply_started_at", _utc_now())
         if checkpoint_writer is not None:
             checkpoint_writer()
+        allow_slurm_smoke_defer = _rolling_compute_slurm_smoke_may_defer(
+            checkpoint=checkpoint,
+            phase=phase,
+        )
         _helm_upgrade_target_soperator(
             command_runner=command_runner,
             kube_context=kube_context,
@@ -15827,7 +16010,7 @@ def _execute_rolling_compute_migration_phase(
                 source_login_pod_names=source_login_pod_names,
                 login_session_policy=login_session_policy,
                 login_session_drain_timeout_seconds=login_session_drain_timeout_seconds,
-                allow_degraded_slurm_smoke=target_handoff_resume,
+                allow_degraded_slurm_smoke=allow_slurm_smoke_defer,
             )
         )
         if checkpoint_writer is not None:
@@ -15953,7 +16136,6 @@ def _reapply_stale_rolling_compute_values(
     if _rolling_compute_values_revision(checkpoint) >= _ROLLING_COMPUTE_VALUES_REVISION:
         return False, []
     phase = _phase_state(checkpoint, "rolling-compute-migration")
-    slurm_quiesce_records = _rolling_compute_checkpoint_quiesce_records(phase)
     lines = _ensure_worker_nodeset_topology_checkpoint(
         checkpoint=checkpoint,
         source_report=source_report,
@@ -16015,9 +16197,10 @@ def _reapply_stale_rolling_compute_values(
         "session_drain_timeout_seconds": login_session_drain_timeout_seconds,
     }
     phase.setdefault("target_values_apply_started_at", _utc_now())
-    target_handoff_resume = bool(
-        slurm_quiesce_records
-    ) and _rolling_compute_target_handoff_started(phase)
+    allow_slurm_smoke_defer = _rolling_compute_slurm_smoke_may_defer(
+        checkpoint=checkpoint,
+        phase=phase,
+    )
     _helm_upgrade_target_soperator(
         command_runner=command_runner,
         kube_context=kube_context,
@@ -16037,7 +16220,7 @@ def _reapply_stale_rolling_compute_values(
             source_login_pod_names=source_login_pod_names,
             login_session_policy=login_session_policy,
             login_session_drain_timeout_seconds=login_session_drain_timeout_seconds,
-            allow_degraded_slurm_smoke=target_handoff_resume,
+            allow_degraded_slurm_smoke=allow_slurm_smoke_defer,
         )
     )
     lines.extend(
@@ -17373,6 +17556,7 @@ def _execute_populate_jail_refresh_phase(
             checkpoint_writer()
     try:
         maintenance_restored = True
+        post_jail_smoke_lines: list[str] = []
         refresh_values = populate_jail_refresh_values(values)
         _helm_upgrade_target_soperator(
             command_runner=command_runner,
@@ -17542,6 +17726,13 @@ def _execute_populate_jail_refresh_phase(
                 records=slurm_quiesce_records,
             )
             phase["slurm_resumed_at"] = _utc_now()
+        post_jail_smoke_lines = _ensure_post_jail_slurm_smoke(
+            phase=phase,
+            command_runner=command_runner,
+            kube_context=kube_context,
+        )
+        if checkpoint_writer is not None:
+            checkpoint_writer()
     except Exception:
         _restore_after_refresh_failure()
         raise
@@ -17559,6 +17750,7 @@ def _execute_populate_jail_refresh_phase(
         *topology_lines,
         *migration_lines,
         "Slurm partitions resumed after active/passive jail rootfs refresh.",
+        *post_jail_smoke_lines,
         (
             "Jail rootfs passive slot populated and consumers switched "
             f"from {slots.active_slot} to {slots.passive_slot}."
@@ -18444,6 +18636,48 @@ def _external_upgrade_status_summary(
     if mutation_performed:
         return "pending after upgrade mutation; rerun the same command to resume."
     return "pending before upgrade mutation; rerun the same command after resolving the gate."
+
+
+def _external_upgrade_resume_command(config_path: Path, target_ref: str) -> str:
+    return (
+        "nebius-cxcli ext-soperator upgrade "
+        + shlex.quote(str(config_path))
+        + " --target "
+        + shlex.quote(target_ref)
+        + " --execute --approve"
+    )
+
+
+_EXTERNAL_EXECUTE_DEDUPE_PREFIXES = (
+    "Quota preflight ",
+    "Worker rollout live preflight:",
+    "Slurm worker rollout preflight:",
+    "External MK8s control plane already ",
+    "External node-template already handled:",
+    "External node-template strategy:",
+    "Applied target GPU stack chart:",
+    "Applied target GPU stack post-render patch:",
+)
+
+
+def _external_execute_line_dedupe_key(line: str) -> str:
+    text = str(line or "").strip()
+    unprefixed = re.sub(r"^[a-z0-9-]+:\s+", "", text)
+    if any(unprefixed.startswith(prefix) for prefix in _EXTERNAL_EXECUTE_DEDUPE_PREFIXES):
+        return unprefixed
+    return text
+
+
+def _dedupe_external_execute_lines(lines: Sequence[str]) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for line in lines:
+        key = _external_execute_line_dedupe_key(line)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(str(line))
+    return deduped
 
 
 def _write_soperator_migrate_report(
@@ -22667,21 +22901,30 @@ def _execute_soperator_migration_unlocked(
         "External node-template worker rollout: " + rollout.strategy + f" ({rollout_summary}).",
     )
     lines.extend(phase_lines)
-    lines.extend(
+    footer = [
+        "Upgrade status: "
+        + _external_upgrade_status_summary(
+            pending_phase=str(checkpoint["pending_phase"]),
+            pending_reason=pending_reason,
+            mutation_performed=mutation_performed,
+        ),
+        f"Pending phase: {checkpoint['pending_phase']}",
+        f"Pending reason: {pending_reason or 'none'}",
+    ]
+    if str(checkpoint["pending_phase"]) != "none":
+        footer.append(
+            "Next command: "
+            + _external_upgrade_resume_command(config_path, normalized_target)
+        )
+    footer.extend(
         [
-            "Upgrade status: "
-            + _external_upgrade_status_summary(
-                pending_phase=str(checkpoint["pending_phase"]),
-                pending_reason=pending_reason,
-                mutation_performed=mutation_performed,
-            ),
-            f"Pending phase: {checkpoint['pending_phase']}",
-            f"Pending reason: {pending_reason or 'none'}",
             "Upgrade performed: " + ("yes." if mutation_performed else "no."),
             f"Upgrade report: {report_path}",
             f"Upgrade JSON report: {json_report_path}",
         ]
     )
+    lines.extend(footer)
+    lines = _dedupe_external_execute_lines(lines)
     return SoperatorMigrationExecutionResult(
         checkpoint_path=checkpoint_path,
         completed_phases=tuple(_ordered_phase_list(completed_phases, phase_ids)),

@@ -678,7 +678,8 @@ and chart source-family changes.
   Terraform-managed control-plane/node-group readiness; chart apply updates the
   Soperator app row, rerenders, validates, applies Flux/static manifests, and
   verifies live chart identity; Jail Upgrade populates the passive
-  active/passive rootfs slot and switches consumers when required; fast stage
+  active/passive rootfs slot, switches consumers when required, and requires
+  post-rootfs `scontrol`, `sbatch`, and accounting/QOS smoke; fast stage
   gates record
   `fast_verification` after each completed managed upgrade stage, including the
   post-MK8s validation and Jail Upgrade boundaries, before advancing;
@@ -1362,7 +1363,10 @@ reusable Nebius allocation and persisted as
 `slurmNodes.login.sshdServiceAnnotations`, and verifies the original Service UID,
 ClusterIP, LoadBalancer ingress, allocation id, target login StatefulSet
 readiness, preserved-Service EndpointSlice readiness, and login-side Slurm smoke
-before source login retirement,
+before source login retirement, defers that Slurm CLI smoke only when Jail
+Upgrade is planned and the failure matches known old-rootfs/target-config
+handoff markers, and requires post-Jail `scontrol`, `sbatch`, and accounting/QOS
+smoke after consumers switch,
 refuses the later first-adoption persistent-mount login writer hold under the
 default `target-ready` session policy because that hold temporarily removes
 continuous login endpoints; operators must explicitly choose `wait-active` or
@@ -1501,22 +1505,20 @@ The interactive terminal renderer keeps those status updates in one spinner
 line, suppresses stray key echo while no prompt is active, and restores normal
 terminal input before prompts or full-screen Slurm job controls. Storage phases
 then show aligned SFS/PVC copy progress plus MK8s and Slurm continuity signals,
-while compute and cutover phases emit MK8s status as separate `Node groups:`
-and `Registered nodes:` sections. Nebius node-group readiness stays in the
-first section, while the registered-node count comes from current Kubernetes
-Node objects and can temporarily drop during zero-surge replacement before the
-new node joins. Node-level external-upgrade rollout transitions such as
-`replacing (cordoned)` and problem-node details like `NotReady (down)` stay in
-the second section. The external node-template phase label covers both the MK8s
-control-plane hop and node-template rollout, and live status reports a separate
-`MK8s Control Plane` signal while a control-plane hop is active.
-When the Nebius node-group display name is available, status lines show it in
-parentheses after the node-group id; terminal output colors that display name
-blue for ready groups and red for degraded groups. Terminal output also colors
-`Ready` green for `x/y Ready` counts where all listed nodes are ready and red
-when the ready count is lower than the total. Transition nodes and down states
-are highlighted in terminal output, and large clusters stay compact with `+N
-more` suffixes. Slurm worker names/states, queue health, and Soperator
+while compute and cutover phases emit MK8s status as a Nebius API-backed
+provider node-group rollout table sourced from one node-group snapshot per
+refresh. The table starts with aggregate totals, then lists one row per node
+group with provider state, total, upgraded, upgrading, remaining,
+ready/current, and latest event columns. `upgraded`, `upgrading`, and
+`remaining` are derived from provider status counters, so large groups such as
+1000-node worker pools remain scan-friendly without mixing in Kubernetes
+registered-node counts. Active or degraded groups sort before unchanged ready
+groups, and missing provider fields render as `unknown`. The external
+node-template phase label covers both the MK8s control-plane hop and
+node-template rollout, and live status reports a separate `MK8s Control Plane`
+signal while a control-plane hop is active. Terminal output highlights provider
+table labels and states while preserving the same plain-text table in
+non-interactive logs. Slurm worker names/states, queue health, and Soperator
 SlurmCluster reconciliation remain adjacent component details. The checkpoint
 records compact status snapshots at phase start, phase end, and pending gates.
 These status lines describe best-effort service continuity and degradation
@@ -3326,6 +3328,11 @@ only a desired-state change; it does not rewrite a rootfs slot that has already
 been populated. cxcli therefore treats jail refresh as a separate
 `populate-jail-refresh` phase in both managed `soperator upgrade` and external
 `ext-soperator upgrade`.
+Jail Upgrade follows the Soperator chart/rootfs activation boundary, not the
+eventual final Kubernetes target. For old-source external paths, the intended
+order is the first supported Kubernetes staging hop, then target Soperator chart
+handoff plus Jail rootfs refresh in that same segment, then later Kubernetes-only
+hops after Slurm has passed post-Jail smoke.
 
 The jail refresh design uses active/passive rootfs slots plus a shared
 persistent-mount area on the same physical jail SFS:
@@ -3415,8 +3422,9 @@ The refresh sequence is deliberately ordered:
    with the active slot, rollback slot, target worker NodeSets, persistent mount
    state, and live login/worker consumer checks, then waits for login and target
    worker readiness before source retirement.
-9. Resume Slurm partitions and run postflight verification before considering
-   the refresh complete.
+9. Resume Slurm partitions, then require post-rootfs Slurm smoke from a login
+   pod: `scontrol ping`, an `sbatch` CLI parse/submit-dry-run check, and a
+   lightweight accounting/QOS query before considering the refresh complete.
 
 The switch-over is not a live bind-mount flip inside an already-running
 login or worker container. The chart exposes both slot volumes as possible

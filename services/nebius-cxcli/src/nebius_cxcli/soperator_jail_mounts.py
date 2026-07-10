@@ -443,8 +443,16 @@ def _referenced_controller_spool_volume_sources(values: Mapping[str, Any]) -> tu
     controller = _mapping(slurm_nodes.get("controller"))
     volumes = _mapping(controller.get("volumes"))
     spool = _mapping(volumes.get("spool"))
-    name = str(spool.get("volumeSourceName") or "").strip()
-    return (name,) if name else ()
+    names: list[str] = []
+    explicit_name = str(spool.get("volumeSourceName") or "").strip()
+    if explicit_name:
+        names.append(explicit_name)
+    volume = _mapping(values.get("volume"))
+    controller_spool = _mapping(volume.get("controllerSpool"))
+    default_name = str(controller_spool.get("name") or "controller-spool").strip()
+    if default_name and default_name not in names:
+        names.append(default_name)
+    return tuple(names)
 
 
 def sync_jail_volume_sources(values: Mapping[str, Any]) -> dict[str, Any]:

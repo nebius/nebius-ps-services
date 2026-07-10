@@ -707,6 +707,7 @@ def _ready_node_group_status(version: str = "1.31", *, nodes: int = 1) -> dict[s
         "node_count": nodes,
         "outdated_node_count": 0,
         "reconciling": False,
+        "state": "RUNNING",
     }
 
 
@@ -3097,6 +3098,30 @@ def test_execute_writes_checkpoint_and_stops_before_mutation(tmp_path: Path) -> 
     assert checkpoint["completed_phases"] == ["discovery-and-plan"]
     assert checkpoint["pending_phase"] == "customer-approval"
     assert checkpoint["events"][0]["event"] == "execute-preflight-completed"
+
+
+def test_external_execute_output_dedupes_phase_lines_and_builds_resume_command(
+    tmp_path: Path,
+) -> None:
+    lines = migration._dedupe_external_execute_lines(  # noqa: SLF001
+        [
+            "Quota preflight node group login: existing login, no new quota.",
+            "external-node-template-upgrade: Quota preflight node group login: existing login, no new quota.",
+            "target-gpu-stack-remediation: Applied target GPU stack chart: nvidia-gpu-operator=gpu-operator",
+            "Applied target GPU stack chart: nvidia-gpu-operator=gpu-operator",
+            "Pending phase: rolling-compute-migration",
+        ]
+    )
+
+    assert lines == [
+        "Quota preflight node group login: existing login, no new quota.",
+        "target-gpu-stack-remediation: Applied target GPU stack chart: nvidia-gpu-operator=gpu-operator",
+        "Pending phase: rolling-compute-migration",
+    ]
+    assert migration._external_upgrade_resume_command(  # noqa: SLF001
+        tmp_path / "config.yaml",
+        "external-cluster",
+    ).endswith("--target external-cluster --execute --approve")
 
 
 def test_execute_requires_backup_metadata_before_approved_mutation(tmp_path: Path) -> None:
@@ -8600,6 +8625,49 @@ def test_kubectl_exec_login_uses_controller_for_slurm_when_login_pod_missing() -
     assert not any(call[6:9] == ("login-0", "--", "scontrol") for call in calls)
 
 
+def test_kubectl_exec_login_uses_controller_for_sacctmgr_when_login_pod_missing() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        calls.append(command)
+        if command == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+            "-o",
+            "json",
+            "--request-timeout=20s",
+        ):
+            return SoperatorMigrationCommandResult(command, 0, json.dumps({"items": []}), "")
+        if command[6:11] == ("controller-0", "-c", "slurmctld", "--", "sacctmgr"):
+            return SoperatorMigrationCommandResult(command, 0, "normal\n", "")
+        return SoperatorMigrationCommandResult(command, 1, "", "unexpected command")
+
+    result = migration._kubectl_exec_login(  # noqa: SLF001
+        command_runner=runner,
+        kube_context="external-context",
+        args=("sacctmgr", "-nP", "show", "qos", "format=name"),
+        check=False,
+        timeout_seconds=7,
+    )
+
+    assert result.returncode == 0
+    assert result.args[6:11] == ("controller-0", "-c", "slurmctld", "--", "sacctmgr")
+    assert not any(call[6:9] == ("login-0", "--", "sacctmgr") for call in calls)
+
+
 def test_kubectl_exec_login_reports_controller_failure_when_login_pod_missing() -> None:
     calls: list[tuple[str, ...]] = []
 
@@ -8803,7 +8871,8 @@ def test_rolling_login_continuity_defers_slurm_smoke_after_target_handoff_mismat
     continuity = phase["login_continuity"]
     assert isinstance(continuity, dict)
     assert continuity["slurm_smoke"]["status"] == "deferred"
-    assert "Slurm smoke deferred" in "\n".join(lines)
+    assert "Slurm CLI smoke deferred" in "\n".join(lines)
+    assert continuity["slurm_smoke"]["requires_post_jail_smoke"] is True
 
 
 def test_rolling_login_continuity_keeps_slurm_smoke_fail_closed_by_default(
@@ -8927,6 +8996,91 @@ def test_rolling_login_continuity_fails_closed_when_controller_fallback_fails(
             login_session_drain_timeout_seconds=300,
             allow_degraded_slurm_smoke=True,
         )
+
+
+def test_rolling_compute_slurm_smoke_defer_requires_planned_jail_upgrade() -> None:
+    phase = {"target_values_apply_started_at": "2026-07-09T12:00:00Z"}
+
+    assert not migration._rolling_compute_slurm_smoke_may_defer(  # noqa: SLF001
+        checkpoint={"planned_phases": ["rolling-compute-migration"]},
+        phase=phase,
+    )
+    assert migration._rolling_compute_slurm_smoke_may_defer(  # noqa: SLF001
+        checkpoint={
+            "planned_phases": [
+                "rolling-compute-migration",
+                migration.POPULATE_JAIL_REFRESH_PHASE_ID,
+            ]
+        },
+        phase=phase,
+    )
+    assert not migration._rolling_compute_slurm_smoke_may_defer(  # noqa: SLF001
+        checkpoint={
+            "planned_phases": [
+                "rolling-compute-migration",
+                migration.POPULATE_JAIL_REFRESH_PHASE_ID,
+            ]
+        },
+        phase={},
+    )
+
+
+def test_post_jail_slurm_smoke_requires_scontrol_sbatch_and_accounting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def exec_login(**kwargs: object) -> SoperatorMigrationCommandResult:
+        args = tuple(str(item) for item in kwargs["args"])  # type: ignore[index]
+        calls.append(args)
+        return SoperatorMigrationCommandResult(args, 0, "ok\n", "")
+
+    monkeypatch.setattr(migration, "_kubectl_exec_login", exec_login)
+    phase: dict[str, Any] = {}
+
+    lines = migration._ensure_post_jail_slurm_smoke(  # noqa: SLF001
+        phase=phase,
+        command_runner=lambda *args, **kwargs: SoperatorMigrationCommandResult((), 0, "", ""),
+        kube_context="external-context",
+    )
+
+    assert phase["post_jail_slurm_smoke"]["status"] == "passed"
+    assert calls == [
+        ("scontrol", "ping"),
+        ("sbatch", "--test-only", "--wrap=/bin/true"),
+        ("sacctmgr", "-nP", "show", "qos", "format=name"),
+    ]
+    assert "post-rootfs Slurm smoke passed" in "\n".join(lines)
+
+
+def test_post_jail_slurm_smoke_fails_closed_on_sbatch_handoff_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def exec_login(**kwargs: object) -> SoperatorMigrationCommandResult:
+        args = tuple(str(item) for item in kwargs["args"])  # type: ignore[index]
+        if args and args[0] == "sbatch":
+            return SoperatorMigrationCommandResult(
+                args,
+                1,
+                "",
+                "sbatch: error: _parse_next_key: Parsing error at unrecognized key: MetricsType",
+            )
+        return SoperatorMigrationCommandResult(args, 0, "ok\n", "")
+
+    monkeypatch.setattr(migration, "_kubectl_exec_login", exec_login)
+    phase: dict[str, Any] = {}
+
+    with pytest.raises(migration.SoperatorMigrationPhasePending, match="post-Jail Slurm smoke"):
+        migration._ensure_post_jail_slurm_smoke(  # noqa: SLF001
+            phase=phase,
+            command_runner=lambda *args, **kwargs: SoperatorMigrationCommandResult((), 0, "", ""),
+            kube_context="external-context",
+        )
+
+    smoke = phase["post_jail_slurm_smoke"]
+    assert smoke["status"] == "failed"
+    assert smoke["failed_check"] == "sbatch"
+    assert smoke["checks"][-1]["status"] == "failed"
 
 
 def test_kubectl_exec_login_falls_back_to_controller_after_timeout() -> None:
@@ -10392,6 +10546,13 @@ def test_populate_jail_refresh_phase_migrates_legacy_persistent_mounts_before_po
     assert checkpoint["populate_jail_refresh"]["legacy_persistent_mount_migration"][
         "status"
     ] == "completed"
+    post_jail_smoke = populate_phase["post_jail_slurm_smoke"]
+    assert post_jail_smoke["status"] == "passed"
+    assert [check["name"] for check in post_jail_smoke["checks"]] == [
+        "scontrol",
+        "sbatch",
+        "accounting-qos",
+    ]
 
     applied_jobs: list[tuple[int, Mapping[str, Any]]] = []
     for index, (command, input_text) in enumerate(runner.calls):
@@ -13649,31 +13810,49 @@ def test_execute_emits_phase_aware_status_for_storage_and_compute(tmp_path: Path
     }
 
 
+def _collect_provider_mk8s_status(
+    runner: _FakeCommandRunner,
+    checkpoint: Mapping[str, Any],
+) -> migration.SoperatorMigrationStatusSignal:
+    return migration._collect_mk8s_status(
+        nebius_api=runner.nebius_api,
+        checkpoint=checkpoint,
+        phase_id="external-node-template-upgrade",
+        payload=_payload(),
+        source_report=_source_report(),
+        target_ref="external-cluster",
+    )
+
+
+def _provider_checkpoint(
+    node_groups: Mapping[str, Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    return {
+        "phase_state": {
+            "external-node-template-upgrade": {
+                "cluster_id": "cluster-123",
+                "node_groups": dict(node_groups or {}),
+            }
+        }
+    }
+
+
 def test_external_node_template_status_reports_control_plane_hop() -> None:
     runner = _FakeCommandRunner(
-        live_nodes=[
+        existing_node_groups=[
             {
-                "metadata": {
-                    "name": "system-node-a",
-                    "labels": {"nebius.com/node-group-id": "nodegroup-system"},
-                },
-                "spec": {},
-                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                "metadata": {"id": "nodegroup-system", "name": "system"},
+                "status": _ready_node_group_status(nodes=1),
             }
         ]
     )
-    checkpoint = {
-        "phase_state": {
-            "external-node-template-upgrade": {
-                "control_plane": {
-                    "hops": {
-                        "1.32": {
-                            "status": "updating",
-                            "from_version": "1.31",
-                            "target_version": "1.32",
-                        }
-                    }
-                }
+    checkpoint = _provider_checkpoint()
+    checkpoint["phase_state"]["external-node-template-upgrade"]["control_plane"] = {
+        "hops": {
+            "1.32": {
+                "status": "updating",
+                "from_version": "1.31",
+                "target_version": "1.32",
             }
         }
     }
@@ -13703,108 +13882,66 @@ def test_external_node_template_status_reports_control_plane_hop() -> None:
         snapshot.summary
     )
     assert "MK8s Node Groups serving:" in snapshot.summary
-    assert "Registered nodes: 1/1 Ready" in snapshot.summary
+    assert "Provider node groups (source=Nebius API, groups=1)" in snapshot.summary
+    assert "total=1 upgraded=1 upgrading=0 remaining=0 ready/current=1/1" in snapshot.summary
+    assert "Registered nodes" not in snapshot.summary
+    assert runner.nebius_api.calls == [("node_group.list", "cluster-123")]
     assert messages == [snapshot.summary]
 
 
-def test_mk8s_status_reports_node_groups_and_replacing_nodes() -> None:
+def test_mk8s_status_reports_provider_node_group_rollout_table() -> None:
     runner = _FakeCommandRunner(
         existing_node_groups=[
             {
                 "metadata": {"id": "nodegroup-gpu-pool", "name": "gpu-pool"},
-                "status": _ready_node_group_status(nodes=2),
-            }
-        ],
-        live_nodes=[
-            {
-                "metadata": {
-                    "name": "gpu-node-a",
-                    "labels": {"nebius.com/node-group-id": "nodegroup-gpu-pool"},
+                "status": {
+                    "ready_node_count": 1,
+                    "target_node_count": 2,
+                    "node_count": 1,
+                    "outdated_node_count": 1,
+                    "reconciling": True,
+                    "state": "PROVISIONING",
+                    "events": [{"last_occurrence": {"code": "NodeProvisioning"}}],
                 },
-                "spec": {},
-                "status": {"conditions": [{"type": "Ready", "status": "False"}]},
             },
             {
-                "metadata": {
-                    "name": "gpu-node-b",
-                    "labels": {"nebius.com/node-group-id": "nodegroup-gpu-pool"},
-                },
-                "spec": {"unschedulable": True},
-                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
-            },
-            {
-                "metadata": {
-                    "name": "login-node-a",
-                    "labels": {"nebius.com/node-group": "login-pool"},
-                },
-                "spec": {},
-                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                "metadata": {"id": "nodegroup-login", "name": "login-pool"},
+                "status": _ready_node_group_status(nodes=1),
             },
         ]
     )
-    checkpoint = {
-        "phase_state": {
-            "external-node-template-upgrade": {
-                "cluster_id": "cluster-123",
-                "node_groups": {
-                    "gpu-pool": {
-                        "status": "updating",
-                        "node_group_name": "gpu-pool",
-                        "node_group_id": "nodegroup-gpu-pool",
-                    }
-                }
+    checkpoint = _provider_checkpoint(
+        {
+            "gpu-pool": {
+                "status": "updating",
+                "node_group_name": "gpu-pool",
+                "node_group_id": "nodegroup-gpu-pool",
             }
         }
-    }
-
-    signal = migration._collect_mk8s_status(
-        nebius_api=runner.nebius_api,
-        command_runner=runner,
-        kube_context="external-context",
-        checkpoint=checkpoint,
-        phase_id="external-node-template-upgrade",
     )
+
+    signal = _collect_provider_mk8s_status(runner, checkpoint)
 
     assert signal.name == "MK8s Node Groups"
     assert signal.state == "degraded"
-    assert signal.summary.startswith("Node groups: 2 group(s); ")
-    assert "nodegroup-gpu-pool (gpu-pool):1/2 Ready" in signal.summary
-    assert "login-pool:1/1 Ready" in signal.summary
-    assert " || Registered nodes: 2/3 Ready; 1 cordoned; " in signal.summary
-    assert (
-        "in transition gpu-node-a:replacing (down), gpu-node-b:replacing (cordoned)"
-    ) in signal.summary
-    assert "problem nodes" not in signal.summary
+    assert signal.summary.startswith("Provider node groups (source=Nebius API, groups=2)")
+    assert "total=3 upgraded=2 upgrading=1 remaining=1 ready/current=2/2" in signal.summary
+    assert "group       state         total  upgraded  upgrading  remaining  ready/current  event" in (
+        signal.summary
+    )
+    assert "gpu-pool    PROVISIONING  2      1         1          1          1/1" in (
+        signal.summary
+    )
+    assert "NodeProvisioning" in signal.summary
+    assert "login-pool  RUNNING       1      1         0          0          1/1" in (
+        signal.summary
+    )
+    assert "Registered nodes" not in signal.summary
+    assert runner.nebius_api.calls == [("node_group.list", "cluster-123")]
 
 
 def test_mk8s_status_reports_reconciling_node_group_when_nodes_ready() -> None:
     runner = _FakeCommandRunner(
-        live_nodes=[
-            {
-                "metadata": {
-                    "name": "system-node-a",
-                    "labels": {"nebius.com/node-group-id": "nodegroup-system"},
-                },
-                "spec": {},
-                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
-            },
-            {
-                "metadata": {
-                    "name": "system-node-b",
-                    "labels": {"nebius.com/node-group-id": "nodegroup-system"},
-                },
-                "spec": {},
-                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
-            },
-            {
-                "metadata": {
-                    "name": "system-node-c",
-                    "labels": {"nebius.com/node-group-id": "nodegroup-system"},
-                },
-                "spec": {},
-                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
-            },
-        ],
         existing_node_groups=[
             {
                 "metadata": {"id": "nodegroup-system", "name": "system"},
@@ -13816,61 +13953,33 @@ def test_mk8s_status_reports_reconciling_node_group_when_nodes_ready() -> None:
                     "outdated_node_count": 3,
                     "reconciling": True,
                     "state": "PROVISIONING",
-                    "events": [
-                        {
-                            "last_occurrence": {
-                                "code": "Draining",
-                            },
-                        }
-                    ],
+                    "events": [{"last_occurrence": {"code": "Draining"}}],
                 },
             }
         ],
     )
-    checkpoint = {
-        "phase_state": {
-            "external-node-template-upgrade": {
-                "cluster_id": "cluster-123",
-                "node_groups": {
-                    "system": {
-                        "status": "updating",
-                        "node_group_name": "system",
-                        "node_group_id": "nodegroup-system",
-                    }
-                }
+    checkpoint = _provider_checkpoint(
+        {
+            "system": {
+                "status": "updating",
+                "node_group_name": "system",
+                "node_group_id": "nodegroup-system",
             }
         }
-    }
-
-    signal = migration._collect_mk8s_status(
-        nebius_api=runner.nebius_api,
-        command_runner=runner,
-        kube_context="external-context",
-        checkpoint=checkpoint,
-        phase_id="external-node-template-upgrade",
     )
+
+    signal = _collect_provider_mk8s_status(runner, checkpoint)
 
     assert signal.name == "MK8s Node Groups"
     assert signal.state == "degraded"
-    assert "nodegroup-system (system):3/3 Ready" in signal.summary
-    assert (
-        "updating system:PROVISIONING,ready=3/3,event=Draining,outdated=3,reconciling"
-    ) in signal.summary
-    assert "Registered nodes: 3/3 Ready" in signal.summary
+    assert "total=3 upgraded=0 upgrading=0 remaining=3 ready/current=3/3" in signal.summary
+    assert "system  PROVISIONING  3      0         0          3          3/3" in signal.summary
+    assert "Draining" in signal.summary
+    assert "Registered nodes" not in signal.summary
 
 
-def test_mk8s_status_reports_checkpointed_waiting_rollout_when_nodes_ready() -> None:
+def test_mk8s_status_reports_checkpointed_waiting_rollout_when_provider_ready() -> None:
     runner = _FakeCommandRunner(
-        live_nodes=[
-            {
-                "metadata": {
-                    "name": "worker-node-a",
-                    "labels": {"nebius.com/node-group-id": "nodegroup-worker"},
-                },
-                "spec": {},
-                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
-            }
-        ],
         existing_node_groups=[
             {
                 "metadata": {"id": "nodegroup-worker", "name": "worker"},
@@ -13879,153 +13988,130 @@ def test_mk8s_status_reports_checkpointed_waiting_rollout_when_nodes_ready() -> 
             }
         ],
     )
-    checkpoint = {
-        "phase_state": {
-            "external-node-template-upgrade": {
-                "cluster_id": "cluster-123",
-                "node_groups": {
-                    "worker": {
-                        "status": "waiting-rollout",
-                        "node_group_name": "worker",
-                        "node_group_id": "nodegroup-worker",
-                    }
-                },
+    checkpoint = _provider_checkpoint(
+        {
+            "worker": {
+                "status": "waiting-rollout",
+                "node_group_name": "worker",
+                "node_group_id": "nodegroup-worker",
             }
         }
-    }
-
-    signal = migration._collect_mk8s_status(
-        nebius_api=runner.nebius_api,
-        command_runner=runner,
-        kube_context="external-context",
-        checkpoint=checkpoint,
-        phase_id="external-node-template-upgrade",
     )
+
+    signal = _collect_provider_mk8s_status(runner, checkpoint)
 
     assert signal.name == "MK8s Node Groups"
     assert signal.state == "degraded"
-    assert "nodegroup-worker (worker):1/1 Ready" in signal.summary
-    assert "updating worker:ready=1/1" in signal.summary
-    assert "checkpoint=waiting-rollout" in signal.summary
-    assert "Registered nodes: 1/1 Ready" in signal.summary
+    assert "total=1 upgraded=1 upgrading=0 remaining=0 ready/current=1/1" in signal.summary
+    assert "worker  RUNNING  1      1         0          0          1/1" in signal.summary
+    assert "Registered nodes" not in signal.summary
 
 
-def test_mk8s_status_keeps_problem_label_for_non_upgrading_notready_nodes() -> None:
+def test_mk8s_status_reports_mixed_provider_groups_and_unknown_fields() -> None:
     runner = _FakeCommandRunner(
-        live_nodes=[
+        existing_node_groups=[
             {
-                "metadata": {
-                    "name": "gpu-node-a",
-                    "labels": {"nebius.com/node-group": "gpu-pool"},
-                },
-                "spec": {},
-                "status": {"conditions": [{"type": "Ready", "status": "False"}]},
+                "metadata": {"id": "nodegroup-accounting", "name": "accounting"},
+                "status": _ready_node_group_status(nodes=2),
             },
             {
-                "metadata": {
-                    "name": "login-node-a",
-                    "labels": {"nebius.com/node-group": "login-pool"},
+                "metadata": {"id": "nodegroup-worker", "name": "worker"},
+                "status": {
+                    "ready_node_count": 3,
+                    "target_node_count": 4,
+                    "node_count": 5,
+                    "outdated_node_count": 2,
+                    "reconciling": True,
+                    "state": "PROVISIONING",
+                    "events": [{"last_occurrence": {"code": "NodeProvisioning"}}],
                 },
-                "spec": {},
-                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            },
+            {
+                "metadata": {"id": "nodegroup-system", "name": "system"},
+                "status": _ready_node_group_status(nodes=3),
+            },
+            {
+                "metadata": {"id": "nodegroup-mystery", "name": "mystery"},
             },
         ]
     )
-
-    signal = migration._collect_mk8s_status(
-        nebius_api=runner.nebius_api,
-        command_runner=runner,
-        kube_context="external-context",
-        checkpoint={},
-        phase_id="external-node-template-upgrade",
-    )
-
-    assert signal.name == "MK8s Node Groups"
-    assert signal.state == "degraded"
-    assert signal.summary.startswith(
-        "Node groups: 2 group(s); gpu-pool:0/1 Ready, login-pool:1/1 Ready"
-    )
-    assert " || Registered nodes: 1/2 Ready; " in signal.summary
-    assert "problem nodes gpu-node-a:NotReady (down)" in signal.summary
-    assert "in transition" not in signal.summary
-
-
-def test_mk8s_status_bounds_many_groups_and_transition_nodes() -> None:
-    live_nodes: list[dict[str, Any]] = []
-    node_groups: dict[str, dict[str, str]] = {}
-    group_count = 40
-    nodes_per_group = 100
-    cordoned_per_group = 2
-    for index in range(group_count):
-        group_name = f"worker-{index:02d}"
-        node_groups[group_name] = {
-            "status": "updating",
-            "node_group_name": group_name,
-            "node_group_id": f"nodegroup-{index:02d}",
-        }
-        for node_index in range(nodes_per_group):
-            cordoned = node_index < cordoned_per_group
-            live_nodes.append(
-                {
-                    "metadata": {
-                        "name": (
-                            f"{group_name}-old-{node_index:02d}"
-                            if cordoned
-                            else f"{group_name}-node-{node_index:02d}"
-                        ),
-                        "labels": {"nebius.com/node-group": group_name},
-                    },
-                    "spec": {"unschedulable": True} if cordoned else {},
-                    "status": {"conditions": [{"type": "Ready", "status": "True"}]},
-                },
-            )
-    runner = _FakeCommandRunner(live_nodes=live_nodes)
-    checkpoint = {
-        "phase_state": {
-            "external-node-template-upgrade": {
-                "node_groups": node_groups,
+    checkpoint = _provider_checkpoint(
+        {
+            "worker": {
+                "status": "updating",
+                "node_group_name": "worker",
+                "node_group_id": "nodegroup-worker",
             }
         }
-    }
-
-    signal = migration._collect_mk8s_status(
-        nebius_api=runner.nebius_api,
-        command_runner=runner,
-        kube_context="external-context",
-        checkpoint=checkpoint,
-        phase_id="external-node-template-upgrade",
     )
+
+    signal = _collect_provider_mk8s_status(runner, checkpoint)
 
     assert signal.name == "MK8s Node Groups"
     assert signal.state == "degraded"
-    assert signal.summary.startswith("Node groups: 40 group(s); ")
-    assert "worker-00:100/100 Ready" in signal.summary
-    assert "worker-05:100/100 Ready" in signal.summary
-    assert "worker-06:100/100 Ready" not in signal.summary
-    assert "+34 more groups" in signal.summary
-    assert " || Registered nodes: 4000/4000 Ready; 80 cordoned; " in signal.summary
-    assert "in transition worker-00-old-00:replacing (cordoned)" in signal.summary
-    assert "worker-03-old-01:replacing (cordoned)" in signal.summary
-    assert "worker-04-old-00:replacing (cordoned)" not in signal.summary
-    assert "+72 more" in signal.summary
-    assert len(signal.summary) < 800
+    assert "total=9+unknown upgraded=7+unknown upgrading=2+unknown" in signal.summary
+    assert "remaining=2+unknown ready/current=8+unknown/10+unknown" in signal.summary
+    assert "worker      PROVISIONING  4        2         2" in signal.summary
+    assert "mystery     unknown       unknown  unknown   unknown" in signal.summary
+    assert signal.summary.index("worker") < signal.summary.index("mystery")
+    assert signal.summary.index("mystery") < signal.summary.index("accounting")
+    assert "Registered nodes" not in signal.summary
 
 
-def test_mk8s_status_sections_empty_node_inventory() -> None:
-    runner = _FakeCommandRunner()
-    runner.live_nodes = []
-
-    signal = migration._collect_mk8s_status(
-        nebius_api=runner.nebius_api,
-        command_runner=runner,
-        kube_context="external-context",
-        checkpoint={},
-        phase_id="external-node-template-upgrade",
+def test_mk8s_status_reports_large_provider_node_group_rollout() -> None:
+    runner = _FakeCommandRunner(
+        existing_node_groups=[
+            {
+                "metadata": {"id": "nodegroup-worker-00", "name": "worker-00"},
+                "status": {
+                    "ready_node_count": 300,
+                    "target_node_count": 1000,
+                    "node_count": 1000,
+                    "outdated_node_count": 700,
+                    "reconciling": True,
+                    "state": "PROVISIONING",
+                    "events": [{"last_occurrence": {"code": "NodeProvisioning"}}],
+                },
+            }
+        ]
     )
+    checkpoint = _provider_checkpoint(
+        {
+            "worker-00": {
+                "status": "updating",
+                "node_group_name": "worker-00",
+                "node_group_id": "nodegroup-worker-00",
+            }
+        }
+    )
+
+    signal = _collect_provider_mk8s_status(runner, checkpoint)
+
+    assert signal.name == "MK8s Node Groups"
+    assert signal.state == "degraded"
+    assert "total=1000 upgraded=300 upgrading=700 remaining=700 ready/current=300/1000" in (
+        signal.summary
+    )
+    assert "worker-00  PROVISIONING  1000   300       700        700        300/1000" in (
+        signal.summary
+    )
+    assert "NodeProvisioning" in signal.summary
+    assert "Registered nodes" not in signal.summary
+
+
+def test_mk8s_status_sections_empty_provider_node_group_inventory() -> None:
+    runner = _FakeCommandRunner(existing_node_groups=[])
+
+    signal = _collect_provider_mk8s_status(runner, _provider_checkpoint())
 
     assert signal.name == "MK8s Node Groups"
     assert signal.state == "down"
-    assert signal.summary == "Node groups: 0 group(s) || Registered nodes: 0/0 Ready"
+    assert signal.summary == (
+        "Provider node groups (source=Nebius API, groups=0)\n"
+        "total=0 upgraded=0 upgrading=0 remaining=0 ready/current=0/0\n"
+        "group  state  total  upgraded  upgrading  remaining  ready/current  event"
+    )
+    assert runner.nebius_api.calls == [("node_group.list", "cluster-123")]
 
 
 def test_slurm_status_reports_named_worker_states() -> None:
@@ -14044,6 +14130,10 @@ def test_slurm_status_reports_named_worker_states() -> None:
 def test_slurm_status_defers_sinfo_during_target_handoff_resume() -> None:
     calls: list[tuple[str, ...]] = []
     checkpoint = {
+        "planned_phases": [
+            "rolling-compute-migration",
+            migration.POPULATE_JAIL_REFRESH_PHASE_ID,
+        ],
         "phase_state": {
             "rolling-compute-migration": {
                 "slurm_quiesced_partitions": [
@@ -15114,6 +15204,13 @@ def test_execute_migrates_compute_when_slurm_resources_exist(tmp_path: Path) -> 
         "importerPath": "",
         "required": False,
     }
+    volume_sources = {item["name"]: item for item in helm_values["volumeSources"]}
+    assert volume_sources["controller-spool"]["persistentVolumeClaim"]["claimName"] == (
+        "controller-spool-pvc"
+    )
+    assert volume_sources["jail"]["persistentVolumeClaim"]["claimName"] == (
+        "jail-rootfs-slot-a-pvc"
+    )
     assert helm_values["volume"]["controllerSpool"]["size"] == "128Gi"
     assert helm_values["volume"]["jail"]["size"] == "2Ti"
     assert helm_values["storage"]["jail"]["matchExpressions"] == [
@@ -15384,6 +15481,37 @@ def test_execute_recovers_partial_cutover_without_login_pod(tmp_path: Path) -> N
         call[0][0] == "helm" and "upgrade" in call[0] and call[0][5] == "soperator"
         for call in runner.calls
     )
+
+
+def test_target_values_volume_source_validation_fails_dangling_controller_spool() -> None:
+    with pytest.raises(RuntimeError, match="controller-spool"):
+        migration._validate_target_values_volume_sources(  # noqa: SLF001
+            {
+                "volumeSources": [
+                    {
+                        "name": "jail",
+                        "persistentVolumeClaim": {"claimName": "jail-rootfs-slot-a-pvc"},
+                    }
+                ]
+            }
+        )
+
+
+def test_target_values_volume_source_validation_allows_synced_controller_spool() -> None:
+    values = migration.sync_jail_volume_sources(
+        {
+            "volumeSources": [
+                {
+                    "name": "jail",
+                    "persistentVolumeClaim": {"claimName": "jail-rootfs-slot-a-pvc"},
+                }
+            ]
+        }
+    )
+
+    migration._validate_target_values_volume_sources(values)  # noqa: SLF001
+    volume_sources = {item["name"]: item for item in values["volumeSources"]}
+    assert "controller-spool" in volume_sources
 
 
 def test_rolling_compute_migration_resumes_slurm_after_post_drain_failure(
@@ -15668,7 +15796,7 @@ def test_rolling_compute_target_handoff_requires_apply_start_marker() -> None:
     ("quiet_mode", "expected_degraded_smoke", "expected_line"),
     (
         ("success", False, "quiet"),
-        ("handoff-mismatch", True, "markerless resume observed target-era Slurm config handoff"),
+        ("handoff-mismatch", False, "markerless resume observed target-era Slurm config handoff"),
     ),
 )
 def test_rolling_compute_migration_markerless_checkpoint_probes_before_reusing_quiesce(
@@ -15826,6 +15954,10 @@ def test_rolling_compute_migration_resume_reuses_checkpointed_quiesce_after_targ
     allow_degraded_slurm_smoke: list[bool] = []
     restored: list[tuple[str, ...]] = []
     checkpoint = {
+        "planned_phases": [
+            "rolling-compute-migration",
+            migration.POPULATE_JAIL_REFRESH_PHASE_ID,
+        ],
         "phase_state": {
             "rolling-compute-migration": {
                 "slurm_quiesced_partitions": [
