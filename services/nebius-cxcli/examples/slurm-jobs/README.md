@@ -142,17 +142,19 @@ Use `--watch-jobs` from the login node while the upgrade is running to produce
 a timestamped proof stream from Slurm's live queue:
 
 ```bash
-./submit-job-test.sh --watch-jobs --watch-duration 900
+./submit-job-test.sh --watch-jobs
 ```
 
 The watcher matches `sop-*-job-test*` job names by default, polls `squeue`, and
 prints each observed job ID, state, elapsed time, remaining time, partition,
-nodes, and name. Scope the proof to known IDs when needed:
+nodes, and name until the observed jobs finish and leave the queue. Scope the
+proof to known IDs when needed:
 
 ```bash
-./submit-job-test.sh --watch-jobs --watch-job-ids 12345,12346 --watch-duration 900
+./submit-job-test.sh --watch-jobs --watch-job-ids 12345,12346
 ```
 
-Use `--watch-once` for a single snapshot. If `sacct` is available, the watcher
-also prints final accounting evidence for observed jobs before reporting pass
-or fail.
+Use `--watch-duration <seconds>` only when you want an explicit maximum watch
+window, and use `--watch-once` for a single snapshot. If `sacct` is available,
+the watcher also prints final accounting evidence for observed jobs before
+reporting pass or fail.

@@ -8366,6 +8366,7 @@ _STATUS_PHASES_WITH_MK8S_ONLY = frozenset(
     {_EXTERNAL_NODE_TEMPLATE_PHASE_ID, _TARGET_GPU_STACK_PHASE_ID}
 )
 _STATUS_STATE_RANK = {
+    "not-started": 0,
     "serving": 0,
     "draining": 1,
     "upgrading": 2,
@@ -10008,6 +10009,39 @@ def _updating_external_node_template_groups(
     return frozenset(labels)
 
 
+def _external_node_template_control_plane_updating(
+    *,
+    checkpoint: Mapping[str, Any],
+    phase_id: str,
+) -> bool:
+    if phase_id != _EXTERNAL_NODE_TEMPLATE_PHASE_ID:
+        return False
+    phase = _mapping(_mapping(checkpoint.get("phase_state")).get(phase_id))
+    control_plane = _mapping(phase.get("control_plane"))
+    hops = _mapping(control_plane.get("hops"))
+    return any(
+        str(_mapping(raw_state).get("status", "") or "").strip().lower() == "updating"
+        for raw_state in hops.values()
+    )
+
+
+def _external_node_template_groups_not_started(
+    *,
+    checkpoint: Mapping[str, Any],
+    phase_id: str,
+) -> bool:
+    if phase_id != _EXTERNAL_NODE_TEMPLATE_PHASE_ID:
+        return False
+    phase = _mapping(_mapping(checkpoint.get("phase_state")).get(phase_id))
+    return (
+        _external_node_template_control_plane_updating(
+            checkpoint=checkpoint,
+            phase_id=phase_id,
+        )
+        and not _mapping(phase.get("node_groups"))
+    )
+
+
 def _format_problem_node_details(
     details: Sequence[str],
     *,
@@ -10110,15 +10144,24 @@ def _mk8s_status_node_group_row(
     total = _int_or_none(_first_mapping_value(status, "target_node_count", "targetNodeCount"))
     current = _int_or_none(_first_mapping_value(status, "node_count", "nodeCount"))
     ready = _int_or_none(_first_mapping_value(status, "ready_node_count", "readyNodeCount"))
+    raw_state = str(_first_mapping_value(status, "state", "State") or "").strip()
+    state = raw_state or "unknown"
     remaining = _int_or_none(
         _first_mapping_value(status, "outdated_node_count", "outdatedNodeCount")
     )
+    if (
+        remaining is None
+        and state == "RUNNING"
+        and not bool(status.get("reconciling", False))
+        and total is not None
+        and current == total
+        and ready == total
+    ):
+        remaining = 0
     upgraded = None if total is None or remaining is None else max(0, total - remaining)
     upgrading = None
     if total is not None and current is not None and ready is not None:
         upgrading = max(0, max(current, total) - ready)
-    raw_state = str(_first_mapping_value(status, "state", "State") or "").strip()
-    state = raw_state or "unknown"
     unknown = any(
         value is None
         for value in (
@@ -10144,6 +10187,37 @@ def _mk8s_status_node_group_row(
         event=_node_group_latest_event_code(status),
         active=active,
         degraded=degraded,
+        unknown=unknown,
+    )
+
+
+def _mk8s_status_not_started_row(row: _Mk8sNodeGroupStatusRow) -> _Mk8sNodeGroupStatusRow:
+    remaining = row.total
+    upgraded = 0 if row.total is not None else None
+    upgrading = 0
+    unknown = any(
+        value is None
+        for value in (
+            row.total,
+            upgraded,
+            upgrading,
+            remaining,
+            row.ready,
+            row.current,
+        )
+    ) or row.state == "unknown"
+    return _Mk8sNodeGroupStatusRow(
+        group=row.group,
+        state=row.state,
+        total=row.total,
+        upgraded=upgraded,
+        upgrading=upgrading,
+        remaining=remaining,
+        ready=row.ready,
+        current=row.current,
+        event=row.event,
+        active=False,
+        degraded=row.degraded,
         unknown=unknown,
     )
 
@@ -10267,6 +10341,10 @@ def _collect_mk8s_status(
         checkpoint=checkpoint,
         phase_id=phase_id,
     )
+    node_groups_not_started = _external_node_template_groups_not_started(
+        checkpoint=checkpoint,
+        phase_id=phase_id,
+    )
     rows = tuple(
         sorted(
             (
@@ -10279,6 +10357,8 @@ def _collect_mk8s_status(
             key=_mk8s_status_row_sort_key,
         )
     )
+    if node_groups_not_started:
+        rows = tuple(_mk8s_status_not_started_row(row) for row in rows)
     summary_lines = [
         f"Provider node groups (source=Nebius API, groups={len(rows)})",
         _mk8s_status_totals_line(rows),
@@ -10290,7 +10370,9 @@ def _collect_mk8s_status(
             "down",
             "\n".join(summary_lines),
         )
-    if any(row.degraded for row in rows):
+    if node_groups_not_started and not any(row.degraded or row.unknown for row in rows):
+        state = "not-started"
+    elif any(row.degraded for row in rows):
         state = "degraded"
     elif any(row.unknown for row in rows):
         state = "unknown"

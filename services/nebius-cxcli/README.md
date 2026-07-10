@@ -3789,9 +3789,14 @@ event columns. `upgraded`, `upgrading`, and `remaining` are derived from the
 provider status counters, so large groups such as 1000-node worker pools remain
 scan-friendly without mixing in Kubernetes registered-node counts. Active or
 degraded groups sort before unchanged ready groups, and missing provider fields
-render as `unknown`. The external node-template phase label covers both the
-MK8s control-plane hop and node-template rollout, and live status reports a
-separate `MK8s Control Plane` signal while a control-plane hop is active.
+render as `unknown`, except an omitted `outdated_node_count` on a fully ready
+`RUNNING` group is treated as zero remaining. While a control-plane hop is
+active before node-template rollout state exists, node groups render as
+`not-started` with `upgraded=0`, `upgrading=0`, and `remaining=<total>` when the
+provider reports total counts. The external node-template phase label covers
+both the MK8s control-plane hop and node-template rollout, and live status
+reports a separate `MK8s Control Plane` signal while a control-plane hop is
+active.
 Terminal output highlights provider table labels and states while preserving the
 same plain-text table in non-interactive logs.
 Slurm worker names/states, queue health, and Soperator SlurmCluster
@@ -4168,9 +4173,9 @@ bash ./submit-job-test.sh
 # Submit 10 CPU jobs to a cpu partition.
 bash ./submit-job-test.sh --part-type cpu --partition cpu --count 10
 
-# In another login-node shell during the upgrade, watch that the smoke jobs
-# remain visible and uninterrupted for a 15-minute window.
-bash ./submit-job-test.sh --watch-jobs --watch-duration 900
+# In another login-node shell during the upgrade, watch until the smoke jobs
+# finish and leave Slurm's live queue.
+bash ./submit-job-test.sh --watch-jobs
 ```
 
 By default, Slurm may place multiple sample jobs on one node when the partition
@@ -4179,7 +4184,9 @@ per job where the cluster policy allows that. Use `--run-minutes` and
 `--wall-minutes` to change the job duration, `--submit-mode array` for compact
 bulk submission, and `--dry-run` to inspect the generated `sbatch` commands.
 Use `--watch-jobs` during the upgrade to print timestamped `squeue` snapshots
-and optional `sacct` evidence for the observed smoke job IDs.
+until the observed jobs finish and leave the live queue, plus optional `sacct`
+evidence for the observed smoke job IDs. Add `--watch-duration <seconds>` only
+when you want an explicit maximum watch window.
 
 During Soperator upgrades, a real terminal defaults to the interactive job
 policy, so human operators can keep the command short and still select wait,

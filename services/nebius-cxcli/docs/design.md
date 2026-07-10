@@ -1513,10 +1513,14 @@ ready/current, and latest event columns. `upgraded`, `upgrading`, and
 `remaining` are derived from provider status counters, so large groups such as
 1000-node worker pools remain scan-friendly without mixing in Kubernetes
 registered-node counts. Active or degraded groups sort before unchanged ready
-groups, and missing provider fields render as `unknown`. The external
-node-template phase label covers both the MK8s control-plane hop and
-node-template rollout, and live status reports a separate `MK8s Control Plane`
-signal while a control-plane hop is active. Terminal output highlights provider
+groups, and missing provider fields render as `unknown`, except an omitted
+`outdated_node_count` on a fully ready `RUNNING` group is treated as zero
+remaining. While a control-plane hop is active before node-template rollout
+state exists, node groups render as `not-started` with `upgraded=0`,
+`upgrading=0`, and `remaining=<total>` when the provider reports total counts.
+The external node-template phase label covers both the MK8s control-plane hop
+and node-template rollout, and live status reports a separate `MK8s Control
+Plane` signal while a control-plane hop is active. Terminal output highlights provider
 table labels and states while preserving the same plain-text table in
 non-interactive logs. Slurm worker names/states, queue health, and Soperator
 SlurmCluster reconciliation remain adjacent component details. The checkpoint

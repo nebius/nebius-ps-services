@@ -55,7 +55,7 @@ Options:
   --watch-jobs               Watch submitted smoke jobs instead of submitting new jobs.
   --watch-once               Print one watch snapshot and exit. Used with --watch-jobs.
   --watch-interval <seconds> Poll interval for --watch-jobs. Default: 15.
-  --watch-duration <seconds> Watch duration for --watch-jobs. Default: --run-minutes in seconds.
+  --watch-duration <seconds> Optional max duration for --watch-jobs. Default: until jobs finish.
   --watch-job-name <pattern> Shell pattern for matching smoke job names. Default: sop-*-job-test*.
   --watch-job-ids <ids>      Comma-separated Slurm job IDs to watch instead of name matching.
   --dry-run                  Print sbatch commands without submitting.
@@ -72,7 +72,7 @@ Examples:
   ./submit-job-test.sh --partition main --count 10 --gpus-per-job 1
   ./submit-job-test.sh --part-type cpu --partition cpu --count 10
   ./submit-job-test.sh --partition main --count 10 --submit-mode array --dry-run
-  ./submit-job-test.sh --watch-jobs --watch-duration 900
+  ./submit-job-test.sh --watch-jobs
   ./submit-job-test.sh --watch-jobs --watch-job-ids 12345,12346
 EOF
 }
@@ -373,10 +373,9 @@ validate_args() {
   validate_positive_int "--cpus-per-task" "$cpus_per_task"
   validate_positive_int "--watch-interval" "$watch_interval_seconds"
 
-  if [[ -z "$watch_duration_seconds" ]]; then
-    watch_duration_seconds=$((run_minutes * 60))
+  if [[ -n "$watch_duration_seconds" ]]; then
+    validate_positive_int "--watch-duration" "$watch_duration_seconds"
   fi
-  validate_positive_int "--watch-duration" "$watch_duration_seconds"
   watch_job_ids="$(normalize_csv "$watch_job_ids")"
 
   if ((wall_minutes < run_minutes)); then
@@ -731,6 +730,7 @@ watch_slurm_jobs() {
   local visible_job_ids
   local sleep_seconds
   local remaining_seconds
+  local duration_label
 
   if ((dry_run)); then
     print_command squeue -h -o "%i|%T|%M|%L|%P|%N|%j"
@@ -743,12 +743,18 @@ watch_slurm_jobs() {
 
   require_command squeue
   started_at="$(date +%s)"
-  deadline=$((started_at + watch_duration_seconds))
+  if [[ -n "$watch_duration_seconds" ]]; then
+    deadline=$((started_at + watch_duration_seconds))
+    duration_label="${watch_duration_seconds}s"
+  else
+    deadline=0
+    duration_label="until-clear"
+  fi
   seen_job_ids="$(normalize_csv "$watch_job_ids")"
   watch_failures=0
 
-  printf 'Slurm job watch started: duration=%ss interval=%ss name_pattern=%s job_ids=%s\n' \
-    "$watch_duration_seconds" "$watch_interval_seconds" "$watch_job_name_pattern" \
+  printf 'Slurm job watch started: duration=%s interval=%ss name_pattern=%s job_ids=%s\n' \
+    "$duration_label" "$watch_interval_seconds" "$watch_job_name_pattern" \
     "${watch_job_ids:-name-filter}"
 
   while true; do
@@ -794,13 +800,15 @@ watch_slurm_jobs() {
       break
     fi
     now="$(date +%s)"
-    if ((now >= deadline)); then
-      break
-    fi
     sleep_seconds="$watch_interval_seconds"
-    remaining_seconds=$((deadline - now))
-    if ((remaining_seconds < sleep_seconds)); then
-      sleep_seconds="$remaining_seconds"
+    if [[ -n "$watch_duration_seconds" ]]; then
+      if ((now >= deadline)); then
+        break
+      fi
+      remaining_seconds=$((deadline - now))
+      if ((remaining_seconds < sleep_seconds)); then
+        sleep_seconds="$remaining_seconds"
+      fi
     fi
     sleep "$sleep_seconds"
   done

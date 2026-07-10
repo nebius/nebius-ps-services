@@ -9,6 +9,14 @@ All notable changes to this project are tracked here. This changelog follows
 - Fixed Nebius SDK-backed operations, including `ext-soperator upgrade`, so
   synchronous SDK waits use a cxcli-owned background event loop instead of
   colliding with an active CLI event loop.
+- Fixed external Soperator upgrade status so node groups show `not-started`
+  with `upgraded=0`, `upgrading=0`, and `remaining=<total>` while the MK8s
+  control-plane hop is running before node-template rollout starts, and fully
+  ready `RUNNING` groups no longer show `upgraded=unknown` when Nebius omits
+  `outdated_node_count` after rollout has started.
+- Changed `examples/slurm-jobs/submit-job-test.sh --watch-jobs` so the default
+  watch continues until observed smoke jobs finish and leave Slurm's live queue;
+  `--watch-duration` remains available as an explicit maximum watch window.
 - Clarified the external Soperator access boundary: core onboarding, backup,
   and upgrade operations use Nebius API plus Kubernetes API/kubeconfig access,
   run Slurm commands through `kubectl exec`, and do not SSH from the operator

@@ -2348,8 +2348,10 @@ def test_docs_define_component_selector_contract() -> None:
     assert "without mixing in Kubernetes registered-node counts" in design_flat
     assert "separate `MK8s Control Plane` signal" in design_flat
     assert "missing provider fields render as `unknown`" in readme_flat
+    assert "omitted `outdated_node_count` on a fully ready `RUNNING` group" in readme_flat
     assert "Terminal output highlights provider table labels and states" in readme_flat
     assert "missing provider fields render as `unknown`" in design_flat
+    assert "omitted `outdated_node_count` on a fully ready `RUNNING` group" in design_flat
     assert "Terminal output highlights provider table labels and states" in design_flat
     assert "Slurm worker names/states" in readme_flat
     assert "timeout-guarded checkpoints" in design_flat
@@ -2521,7 +2523,7 @@ def test_readme_guides_soperator_slurm_checks_through_login_service() -> None:
     assert "cd /shared/slurm-jobs" not in section
     assert "bash ./submit-job-test.sh\n" in section
     assert "bash ./submit-job-test.sh --part-type cpu --partition cpu --count 10" in section
-    assert "bash ./submit-job-test.sh --watch-jobs --watch-duration 900" in section
+    assert "bash ./submit-job-test.sh --watch-jobs" in section
     assert "timestamped `squeue` snapshots" in section_flat
     assert "a real terminal defaults to the interactive job policy" in section_flat
     assert "nebius-cxcli soperator upgrade CONFIG_YAML --target TARGET" in section_flat

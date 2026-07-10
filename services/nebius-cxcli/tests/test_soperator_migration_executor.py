@@ -13842,7 +13842,12 @@ def test_external_node_template_status_reports_control_plane_hop() -> None:
         existing_node_groups=[
             {
                 "metadata": {"id": "nodegroup-system", "name": "system"},
-                "status": _ready_node_group_status(nodes=1),
+                "status": {
+                    "ready_node_count": 1,
+                    "target_node_count": 1,
+                    "node_count": 1,
+                    "state": "RUNNING",
+                },
             }
         ]
     )
@@ -13881,9 +13886,10 @@ def test_external_node_template_status_reports_control_plane_hop() -> None:
     assert "MK8s Control Plane upgrading: control-plane hop 1.31 -> 1.32 in progress" in (
         snapshot.summary
     )
-    assert "MK8s Node Groups serving:" in snapshot.summary
+    assert "MK8s Node Groups not-started:" in snapshot.summary
     assert "Provider node groups (source=Nebius API, groups=1)" in snapshot.summary
-    assert "total=1 upgraded=1 upgrading=0 remaining=0 ready/current=1/1" in snapshot.summary
+    assert "total=1 upgraded=0 upgrading=0 remaining=1 ready/current=1/1" in snapshot.summary
+    assert "system  RUNNING  1      0         0          1          1/1" in snapshot.summary
     assert "Registered nodes" not in snapshot.summary
     assert runner.nebius_api.calls == [("node_group.list", "cluster-123")]
     assert messages == [snapshot.summary]
@@ -13976,6 +13982,90 @@ def test_mk8s_status_reports_reconciling_node_group_when_nodes_ready() -> None:
     assert "system  PROVISIONING  3      0         0          3          3/3" in signal.summary
     assert "Draining" in signal.summary
     assert "Registered nodes" not in signal.summary
+
+
+def test_mk8s_status_infers_completed_groups_when_outdated_counter_missing() -> None:
+    runner = _FakeCommandRunner(
+        existing_node_groups=[
+            {
+                "metadata": {"id": "nodegroup-system", "name": "system"},
+                "status": {
+                    "ready_node_count": 3,
+                    "target_node_count": 3,
+                    "node_count": 3,
+                    "outdated_node_count": 3,
+                    "state": "PROVISIONING",
+                    "events": [{"last_occurrence": {"code": "Draining"}}],
+                },
+            },
+            {
+                "metadata": {"id": "nodegroup-accounting", "name": "accounting"},
+                "status": {
+                    "ready_node_count": 2,
+                    "target_node_count": 2,
+                    "node_count": 2,
+                    "state": "RUNNING",
+                },
+            },
+            {
+                "metadata": {"id": "nodegroup-controller", "name": "controller"},
+                "status": {
+                    "ready_node_count": 2,
+                    "target_node_count": 2,
+                    "node_count": 2,
+                    "state": "RUNNING",
+                },
+            },
+            {
+                "metadata": {"id": "nodegroup-login", "name": "login"},
+                "status": {
+                    "ready_node_count": 2,
+                    "target_node_count": 2,
+                    "node_count": 2,
+                    "state": "RUNNING",
+                },
+            },
+            {
+                "metadata": {"id": "nodegroup-worker-0-0", "name": "worker-0-0"},
+                "status": {
+                    "ready_node_count": 2,
+                    "target_node_count": 2,
+                    "node_count": 2,
+                    "state": "RUNNING",
+                },
+            },
+        ]
+    )
+    checkpoint = _provider_checkpoint(
+        {
+            "system": {
+                "status": "updating",
+                "node_group_name": "system",
+                "node_group_id": "nodegroup-system",
+            }
+        }
+    )
+
+    signal = _collect_provider_mk8s_status(runner, checkpoint)
+
+    assert signal.name == "MK8s Node Groups"
+    assert signal.state == "degraded"
+    assert "total=11 upgraded=8 upgrading=0 remaining=3 ready/current=11/11" in signal.summary
+    assert "system      PROVISIONING  3      0         0          3          3/3" in (
+        signal.summary
+    )
+    assert "accounting  RUNNING       2      2         0          0          2/2" in (
+        signal.summary
+    )
+    assert "controller  RUNNING       2      2         0          0          2/2" in (
+        signal.summary
+    )
+    assert "login       RUNNING       2      2         0          0          2/2" in (
+        signal.summary
+    )
+    assert "worker-0-0  RUNNING       2      2         0          0          2/2" in (
+        signal.summary
+    )
 
 
 def test_mk8s_status_reports_checkpointed_waiting_rollout_when_provider_ready() -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -73,6 +74,7 @@ def test_submitter_help_documents_public_flags() -> None:
     assert "submit-job-test.sh --login <login-external-ip>" in result.stdout
     assert "--login copies this directory" in result.stdout
     assert "Default: auto" in result.stdout
+    assert "Default: until jobs finish" in result.stdout
     assert "Examples:\n  ./submit-job-test.sh\n" in result.stdout
     for flag in PUBLIC_FLAGS:
         assert flag in result.stdout
@@ -84,7 +86,7 @@ def test_example_readme_documents_login_node_copy_flow() -> None:
     assert "./examples/slurm-jobs/submit-job-test.sh --login <login-external-ip>" in readme
     assert "login-node SSH session" in readme
     assert "/root/testjobs" in readme
-    assert "./submit-job-test.sh --watch-jobs --watch-duration 900" in readme
+    assert "./submit-job-test.sh --watch-jobs" in readme
     assert "timestamped proof stream" in readme
     assert "scp -r examples/slurm-jobs" not in readme
     assert "cd /shared/slurm-jobs" not in readme
@@ -243,6 +245,54 @@ def test_watch_jobs_dry_run_prints_watch_command_without_submitting() -> None:
     assert sbatch_lines(result.stdout) == []
     assert "squeue -h -o" in result.stdout
     assert "sacct -X -n -P -j 12345\\,12346" in result.stdout
+
+
+def test_watch_jobs_default_runs_until_observed_jobs_clear(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    squeue = bin_dir / "squeue"
+    sacct = bin_dir / "sacct"
+    sleep = bin_dir / "sleep"
+    squeue_count = bin_dir / "squeue.count"
+    squeue.write_text(
+        "#!/usr/bin/env bash\n"
+        f"count_file={shlex.quote(str(squeue_count))}\n"
+        'count="$(cat "$count_file" 2>/dev/null || printf \'0\')"\n'
+        "count=$((count + 1))\n"
+        'printf "%s\\n" "$count" >"$count_file"\n'
+        "if ((count == 1)); then\n"
+        "  printf '%s\\n' '60|RUNNING|00:10|20:00|main|worker-0|sop-gpu-job-test-01'\n"
+        "fi\n",
+        encoding="utf-8",
+    )
+    sacct.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' '60|COMPLETED|0:0|00:30:04|2026-07-04T05:09:24|2026-07-04T05:39:28'\n",
+        encoding="utf-8",
+    )
+    sleep.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    squeue.chmod(0o755)
+    sacct.chmod(0o755)
+    sleep.chmod(0o755)
+    env = os.environ.copy()
+    env["NO_COLOR"] = "1"
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+
+    result = subprocess.run(
+        ["bash", str(SUBMITTER), "--watch-jobs", "--watch-job-ids", "60"],
+        check=False,
+        cwd=EXAMPLE_DIR,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Slurm job watch started: duration=until-clear interval=15s" in result.stdout
+    assert "duration=1800s" not in result.stdout
+    assert "Slurm job watch sample 2" in result.stdout
+    assert "All observed Slurm smoke jobs left squeue with COMPLETED accounting state." in result.stdout
+    assert "Slurm job watch result: PASS - observed 1 job id(s)" in result.stdout
 
 
 def test_watch_jobs_accepts_completed_explicit_job_from_sacct(tmp_path: Path) -> None:
