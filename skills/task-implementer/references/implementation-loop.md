@@ -31,6 +31,13 @@ Build a dependency-first task queue:
 Each task should have one coherent output. A task may include code, tests, docs,
 and validation when those changes belong to the same behavioral surface.
 
+For serial multi-layer applications, prefer vertical tasks over horizontal
+layer tasks. A useful task should carry one user-visible or system-visible
+behavior through the layers it needs, such as frontend -> API -> service ->
+database, with its tests and docs when they belong to that behavior. Use a
+horizontal foundation task only when it unblocks multiple later slices, such as
+schema contracts, auth, migrations, shared test harnesses, or safety preflights.
+
 Avoid splitting into ceremony-only tasks such as "inspect code" or "run tests"
 unless the user explicitly wants planning-only output. Inspection,
 brainstorm/context gathering, design, planning, and validation are gates inside
@@ -55,8 +62,9 @@ Before editing the active task:
    plausible implementations. If `design` is unavailable but needed, record a
    compact local design note and mark it `design_skill_unavailable`.
 3. Create a short implementation plan in the handoff: exact steps, likely
-   files, docs/changelog impact, validation commands, stop conditions, rollback
-   notes, and the review/commit gates.
+   files, vertical slice or layers covered, docs/changelog impact, validation
+   commands including end-to-end slice checks, stop conditions, rollback notes,
+   and the review/commit gates.
 4. Implement only after the context, design, and plan fields are populated or
    explicitly marked not needed.
 
@@ -113,6 +121,8 @@ agent to read fully before editing.
 Record summaries, not transcripts:
 
 - changed files and why
+- vertical slice or layers covered
+- end-to-end validation for the completed behavior
 - validation commands and outcome
 - code-review decision and scoped fixes applied
 - commit hash/message, or the exact blocker that prevented commit

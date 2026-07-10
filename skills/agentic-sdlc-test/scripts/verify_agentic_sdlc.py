@@ -219,6 +219,153 @@ def check_design(ctx: Context) -> None:
     ctx.add("Environment checked", "Design contract", status, detail)
 
 
+def check_vertical_slice_contract(ctx: Context) -> None:
+    checks = {
+        "sdlc-create-design template": (
+            ctx.skills_root / "sdlc-create-design" / "assets" / "templates" / "design.md.template",
+            [
+                "### End-To-End Feature Flow",
+                "### Layer Map",
+                "#### Feature End-To-End Flow",
+                "#### Feature Layer Map",
+                "- Vertical slice:",
+            ],
+        ),
+        "sdlc-create-plan skill": (
+            ctx.skills_root / "sdlc-create-plan" / "SKILL.md",
+            [
+                "vertical end-to-end feature slices",
+                "plan one end-to-end slice",
+                "Plan identifies the end-to-end slice",
+            ],
+        ),
+        "sdlc-create-plan template": (
+            ctx.skills_root / "sdlc-create-plan" / "assets" / "templates" / "feature-plan.md.template",
+            [
+                "# FEAT-<id> Plan v<N>",
+                "## End-To-End Slice",
+                "Layer flow: <frontend -> API -> service -> database, or N/A>",
+                "Cross-layer validation target: <expected observable result>",
+            ],
+        ),
+        "sdlc-implement-plan skill": (
+            ctx.skills_root / "sdlc-implement-plan" / "SKILL.md",
+            [
+                "vertical end-to-end slice",
+                "without widening feature scope",
+                "instead of broadening scope",
+            ],
+        ),
+        "sdlc-gather-context skill": (
+            ctx.skills_root / "sdlc-gather-context" / "SKILL.md",
+            [
+                "vertical slice",
+                "layer owners",
+                "boundary contracts",
+            ],
+        ),
+        "sdlc-gather-context template": (
+            ctx.skills_root / "sdlc-gather-context" / "assets" / "templates" / "context-pack.md.template",
+            [
+                "## Layer And Boundary Context",
+                "Layer Or Boundary",
+                "Contract Or Gap",
+            ],
+        ),
+        "sdlc-tdd skill": (
+            ctx.skills_root / "sdlc-tdd" / "SKILL.md",
+            [
+                "planned end-to-end slice",
+                "layer contracts",
+                "cross-layer validation target",
+            ],
+        ),
+        "sdlc-validate-codes skill": (
+            ctx.skills_root / "sdlc-validate-codes" / "SKILL.md",
+            [
+                "locked-slice boundary validation",
+                "End-To-End Slice",
+                "implementation stayed inside the planned layers",
+            ],
+        ),
+        "sdlc-validate-codes template": (
+            ctx.skills_root / "sdlc-validate-codes" / "assets" / "templates" / "validate.md.template",
+            [
+                "## Slice Boundary Check",
+                "Locked End-To-End Slice",
+                "Changed Files Within Planned Layers",
+            ],
+        ),
+        "sdlc-unit-tests skill": (
+            ctx.skills_root / "sdlc-unit-tests" / "SKILL.md",
+            [
+                "planned end-to-end slice",
+                "cross-layer validation target",
+                "Planned slice coverage passes",
+            ],
+        ),
+        "sdlc-unit-tests template": (
+            ctx.skills_root / "sdlc-unit-tests" / "assets" / "templates" / "tests.md.template",
+            [
+                "## End-To-End Slice Coverage",
+                "Slice Element",
+                "layer contract / boundary / validation target / N/A",
+            ],
+        ),
+        "sdlc-evaluate skill": (
+            ctx.skills_root / "sdlc-evaluate" / "SKILL.md",
+            [
+                "planned end-to-end slice",
+                "Layer-isolated checks alone",
+                "Planned end-to-end slice observation",
+            ],
+        ),
+        "sdlc-evaluate template": (
+            ctx.skills_root / "sdlc-evaluate" / "assets" / "templates" / "evaluate.md.template",
+            [
+                "## End-To-End Slice Observation",
+                "Layer Boundaries Exercised",
+                "Cross-Layer Result",
+            ],
+        ),
+        "sdlc-update-documents skill": (
+            ctx.skills_root / "sdlc-update-documents" / "SKILL.md",
+            [
+                "evaluated end-to-end slice evidence",
+                "multi-layer behavior",
+                "route the gap back to `sdlc-evaluate`",
+            ],
+        ),
+        "sdlc-update-documents template": (
+            ctx.skills_root / "sdlc-update-documents" / "assets" / "templates" / "documents.md.template",
+            [
+                "End-to-end slice",
+                "Evaluation:",
+                "Source evidence",
+            ],
+        ),
+        "sdlc-align-specs skill": (
+            ctx.skills_root / "sdlc-align-specs" / "SKILL.md",
+            [
+                "end-to-end slice evidence",
+                "Vertical flow, layer map, locked slice",
+                "Slice mismatch maps to the earliest owner",
+            ],
+        ),
+    }
+    for name, (path, terms) in checks.items():
+        text = read_text(path)
+        if not text:
+            ctx.add("Environment checked", name, "FAIL", f"Missing or unreadable: {path}")
+            continue
+        missing = [term for term in terms if term not in text]
+        status = "PASS" if not missing else "FAIL"
+        detail = f"Vertical slice contract terms present in {path}."
+        if missing:
+            detail = "Missing expected vertical slice terms: " + ", ".join(missing)
+        ctx.add("Environment checked", name, status, detail)
+
+
 def check_skill_discovery(ctx: Context) -> None:
     base = ctx.global_skills_dir
     ctx.add("Skill discovery results", "Global skills directory", "PASS" if base.is_dir() else "FAIL", str(base))
@@ -824,6 +971,7 @@ def main(argv: list[str]) -> int:
     report_path = (ns.report or (ctx.verification_root / "report.md")).expanduser().resolve(strict=False)
     ctx.verification_root.mkdir(parents=True, exist_ok=True)
     check_design(ctx)
+    check_vertical_slice_contract(ctx)
     check_skill_discovery(ctx)
     check_hook_config(ctx)
     setup_disposable_project(ctx)

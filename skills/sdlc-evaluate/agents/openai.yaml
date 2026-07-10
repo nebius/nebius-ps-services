@@ -1,6 +1,6 @@
 interface:
   display_name: "SDLC Evaluate"
   short_description: "Evaluate acceptance behavior"
-  default_prompt: "Use $sdlc-evaluate to evaluate observed Agentic SDLC product behavior against real-world acceptance criteria, using the requirements Live Experiment Environment only when it is safe and allowed."
+  default_prompt: "Use $sdlc-evaluate to evaluate observed Agentic SDLC product behavior and any planned end-to-end slice against real-world acceptance criteria, using the requirements Live Experiment Environment only when it is safe and allowed."
 policy:
   allow_implicit_invocation: false

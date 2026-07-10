@@ -854,6 +854,18 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "upgrade a managed cluster from `1.31` to `1.34` as" in soperator_flat
     assert "`1.31 -> 1.33` and `1.31 -> 1.34` requests" in soperator_flat
     assert "Managed upgrades do not persist a locked multi-run path" in soperator_flat
+    assert (
+        "For managed `mk8s-node-template` resume, cxcli performs internal Nebius API resume reconciliation"
+        in soperator_flat
+    )
+    assert (
+        "the checkpointed target, the current command target, the live MK8s control plane"
+        in soperator_flat
+    )
+    assert (
+        "provider state, API-reported Kubernetes version, total, upgraded, upgrading, remaining"
+        in soperator_flat
+    )
     assert "blocks the combined run and prints a chart-first command" in soperator_flat
     assert "Run the Soperator chart upgrade while Kubernetes stays at `1.32`" in (soperator_flat)
     assert "unsupported` and `not_validated` paths fail fast unless" in soperator_flat
@@ -1091,6 +1103,10 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "absent-source persistent mount behavior for future writes such as `/models`" in (
         unreleased_flat
     )
+    assert "internal Nebius API resume reconciliation for managed `soperator upgrade`" in (
+        unreleased_flat
+    )
+    assert "retrying the Terraform-managed workflow" in unreleased_flat
 
 
 def test_docs_define_discover_and_bootstrap_ci_boundaries() -> None:
@@ -1826,6 +1842,8 @@ def test_docs_define_component_selector_contract() -> None:
     assert "approve-soperator-migration" not in design
     assert "Reruns are action-idempotent rather than checkpoint-only" in readme_flat
     assert "rechecks the corresponding live state" in readme_flat
+    assert "internal resume reconciliation against the checkpointed target" in readme_flat
+    assert "live Nebius state only proves whether the phase should complete" in readme_flat
     assert (
         "Rerunning `ext-soperator onboard` is safe and refreshes the source discovery bundle"
         in readme_flat
@@ -1840,6 +1858,7 @@ def test_docs_define_component_selector_contract() -> None:
     )
     assert "still-rolling or not-yet-visible template state is checkpointed" in readme_flat
     assert "does not create duplicate worker groups or require 2x worker quota" in readme_flat
+    assert "provider state, API-reported Kubernetes version" in readme_flat
     assert (
         "External Soperator upgrade owns external Kubernetes minor, node OS image, and Nebius-image GPU-stack upgrades selected by onboarding"
         in readme_flat
@@ -2098,6 +2117,18 @@ def test_docs_define_component_selector_contract() -> None:
     )
     assert "The managed stage model is explicit" in design_flat
     assert "planning/dry-run resolves chart and MK8s target intent" in design_flat
+    assert (
+        "Managed `mk8s-node-template` resume performs internal Nebius API resume reconciliation"
+        in design_flat
+    )
+    assert (
+        "live Nebius API state is the machine source for current MK8s infrastructure reality"
+        in design_flat
+    )
+    assert (
+        "records managed MK8s reconciliation diagnostics under `mk8s` and `phase_state[\"mk8s-node-template\"]`"
+        in design_flat
+    )
     assert "Kubernetes minor upgrades must follow provider-supported hops" in design_flat
     assert (
         "target GPU stack reconciliation phase when paired with external upgrade work"
@@ -2232,8 +2263,11 @@ def test_docs_define_component_selector_contract() -> None:
     assert "Missing, partial, or errored provider evidence remains conservative" in design_flat
     assert "`waiting-rollout` on the external-node-template checkpoint" in design_flat
     assert "requested template fields are not visible yet" in design_flat
+    assert "resumes through internal resume reconciliation" in design_flat
+    assert "Checkpoints remain authoritative for mutation ownership" in design_flat
     assert "external-node-template group as `waiting-rollout`" in readme_flat
     assert "instead of submitting a duplicate node-group update" in readme_flat
+    assert "provider state, API-reported Kubernetes version" in design_flat
     assert "Before completion, cxcli verifies the external MK8s control plane" in design_flat
     assert "discovered Nebius node-group provider readiness" in design_flat
     assert "before validation-and-rollback hold" in readme_flat
@@ -2339,12 +2373,18 @@ def test_docs_define_component_selector_contract() -> None:
     assert "Storage phases show aligned SFS/PVC copy progress" in readme_flat
     assert "Nebius API-backed provider node-group rollout table" in readme_flat
     assert "one node-group snapshot per refresh" in readme_flat
-    assert "provider state, total, upgraded, upgrading, remaining, ready/current" in readme_flat
+    assert (
+        "provider state, API-reported Kubernetes version, total, upgraded, upgrading, "
+        "remaining, ready/current"
+    ) in readme_flat
     assert "without mixing in Kubernetes registered-node counts" in readme_flat
     assert "separate `MK8s Control Plane` signal" in readme_flat
     assert "Nebius API-backed provider node-group rollout table" in design_flat
     assert "one node-group snapshot per refresh" in design_flat
-    assert "provider state, total, upgraded, upgrading, remaining" in design_flat
+    assert (
+        "provider state, API-reported Kubernetes version, total, upgraded, upgrading, remaining"
+        in design_flat
+    )
     assert "without mixing in Kubernetes registered-node counts" in design_flat
     assert "separate `MK8s Control Plane` signal" in design_flat
     assert "missing provider fields render as `unknown`" in readme_flat

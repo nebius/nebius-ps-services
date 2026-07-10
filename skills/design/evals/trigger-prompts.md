@@ -32,6 +32,11 @@ Before coding, inspect README.md, design.md, and the relevant modules, then
 design the components and implementation plan for this feature.
 ```
 
+```text
+Design this three-layer app feature before implementation. Show the vertical
+slice from frontend through API to database, then create the /plan handoff.
+```
+
 ## Should Not Trigger
 
 ```text

@@ -1,6 +1,6 @@
 interface:
   display_name: "Agentic SDLC Test"
   short_description: "Verify Agentic SDLC workflow safely"
-  default_prompt: "Use $agentic-sdlc-test to verify the Agentic SDLC workflow against docs/agentic-sdlc-design.md and write a safe report."
+  default_prompt: "Use $agentic-sdlc-test to verify the Agentic SDLC workflow, including vertical-slice phase contracts, against docs/agentic-sdlc-design.md and write a safe report."
 policy:
   allow_implicit_invocation: false

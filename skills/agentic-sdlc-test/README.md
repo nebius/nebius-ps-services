@@ -2,16 +2,16 @@
 
 `agentic-sdlc-test` verifies the Agentic SDLC workflow from outside the
 workflow. It checks the design contract, global `sdlc-*` skill discovery, hook
-metadata invocation policy, hook configuration, disposable hook behavior,
-idempotency expectations, failure-loop routing, steering, and the disposable
-golden-path workflow.
+metadata invocation policy, vertical-slice SDLC template and downstream phase
+contracts, hook configuration, disposable hook behavior, idempotency expectations,
+failure-loop routing, steering, and the disposable golden-path workflow.
 
 ## What It Does
 
 - Reads `docs/agentic-sdlc-design.md` as the workflow contract.
 - Uses `references/verification-checklist.md` as the test plan.
-- Runs `scripts/verify_agentic_sdlc.py` for static discovery and disposable
-  hook fixture checks.
+- Runs `scripts/verify_agentic_sdlc.py` for static discovery, SDLC contract
+  checks, and disposable hook fixture checks.
 - Writes the verification report to `~/.codex/sdlc-verification/report.md`.
 - Keeps real repositories, installed skills, hooks, and agent configuration
   unchanged.

@@ -290,6 +290,7 @@ from .mk8s_upgrade import (
     blocking_preflight_findings,
     collect_kubernetes_preflight_findings,
     find_source_mk8s_component,
+    format_mk8s_provider_node_group_status,
     format_node_template_upgrade_plan,
     minor_version_hops,
     node_group_node_template_rollout_complete,
@@ -2739,6 +2740,11 @@ _SOPERATOR_MK8S_TOP_LEVEL_PHASE_IDS = frozenset(
     }
 )
 _SOPERATOR_JAIL_TOP_LEVEL_PHASE_IDS = frozenset({POPULATE_JAIL_REFRESH_PHASE_ID})
+_MANAGED_MK8S_RECONCILIATION_COMPLETED = "completed"
+_MANAGED_MK8S_RECONCILIATION_WAITING = "waiting"
+_MANAGED_MK8S_RECONCILIATION_RETRY = "retry"
+_MANAGED_MK8S_RECONCILIATION_DRIFT_CONFLICT = "drift-conflict"
+_MANAGED_MK8S_RECONCILIATION_UNKNOWN = "unknown"
 _SOPERATOR_UPGRADE_JOB_POLICIES = frozenset(
     {
         "interactive",
@@ -15242,6 +15248,351 @@ def _run_soperator_mk8s_node_template_phase(
     )
 
 
+@dataclass(frozen=True)
+class _ManagedMk8sResumeReconciliation:
+    status: str
+    reason: str
+    readiness: Mk8sUpgradeReadinessResult | None = None
+    provider_status_lines: tuple[str, ...] = ()
+
+
+def _managed_mk8s_target_payload(
+    *,
+    requested: bool,
+    to_k8s_version: str | None,
+    to_os: str | None,
+    to_gpu_stack_preset: str | None,
+    node_group: str,
+) -> dict[str, Any]:
+    return {
+        "requested": requested,
+        "target_k8s_version": _non_empty_text(to_k8s_version) or None,
+        "target_os": _non_empty_text(to_os) or None,
+        "target_gpu_stack_preset": _non_empty_text(to_gpu_stack_preset) or None,
+        "node_group": _non_empty_text(node_group) or None,
+    }
+
+
+def _raise_if_managed_mk8s_checkpoint_target_conflicts(
+    existing: Mapping[str, Any],
+    *,
+    current: Mapping[str, Any],
+    checkpoint_path: Path,
+) -> None:
+    if not bool(existing.get("requested")):
+        return
+    if not bool(current.get("requested")):
+        raise RuntimeError(
+            f"Unfinished Soperator upgrade checkpoint {checkpoint_path} includes managed "
+            "MK8s node-template work, but this run did not request a managed MK8s target. "
+            "Rerun the same `soperator upgrade` command before changing upgrade targets."
+        )
+    conflicts: list[str] = []
+    for key, label in (
+        ("target_k8s_version", "Kubernetes version"),
+        ("target_os", "OS image"),
+        ("target_gpu_stack_preset", "GPU stack"),
+        ("node_group", "node group"),
+    ):
+        old = _non_empty_text(existing.get(key))
+        new = _non_empty_text(current.get(key))
+        if old != new and (old or new):
+            conflicts.append(f"{label}: checkpoint={old}, requested={new or 'unchanged'}")
+    if not conflicts:
+        return
+    raise RuntimeError(
+        f"Unfinished Soperator upgrade checkpoint {checkpoint_path} targets different managed "
+        "MK8s node-template values than this run. Rerun the same command first so cxcli "
+        "can reconcile the checkpointed phase, or review/remove the checkpoint after "
+        "manual recovery.\n" + "\n".join(f"- {item}" for item in conflicts)
+    )
+
+
+def _managed_mk8s_source_sync_required(
+    *,
+    source_payload: Mapping[str, Any],
+    target_ref: str,
+    plan: Mk8sNodeTemplateUpgradePlan,
+) -> bool:
+    selected_group_keys = tuple(group.source.key for group in plan.node_groups if group.source)
+    final_group_versions = source_node_group_versions_for_groups(plan.all_node_groups)
+    final_group_versions = dict(final_group_versions)
+    for group in plan.node_groups:
+        if group.source is not None:
+            final_group_versions[group.source.key] = plan.target_version
+    sync_payload = copy.deepcopy(to_plain_data(source_payload))
+    if not isinstance(sync_payload, dict):
+        sync_payload = {}
+    return update_source_node_template(
+        sync_payload,
+        instance_id=target_ref,
+        target_version=plan.target_version,
+        target_os=plan.target_os,
+        target_gpu_stack_preset=plan.target_gpu_stack_preset,
+        node_group_keys=selected_group_keys,
+        node_group_versions=final_group_versions,
+    )
+
+
+def _managed_mk8s_plan_target_fields_visible(plan: Mk8sNodeTemplateUpgradePlan) -> bool:
+    if plan.hops:
+        return False
+    for group in plan.node_groups:
+        target_drivers_preset = node_template_target_drivers_preset(
+            group,
+            target_gpu_stack_preset=plan.target_gpu_stack_preset,
+        )
+        driver_matches = (
+            target_drivers_preset is None or group.drivers_preset == target_drivers_preset
+        )
+        try:
+            group_version = parse_k8s_version(group.version).minor_text
+        except ValueError:
+            return False
+        if group_version != plan.target_version or group.os != plan.target_os or not driver_matches:
+            return False
+    return True
+
+
+def _managed_mk8s_reconciliation_status_for_error(
+    *,
+    plan: Mk8sNodeTemplateUpgradePlan,
+    error: Exception,
+) -> str:
+    reason = str(error)
+    reason_lower = reason.lower()
+    unknown_markers = (
+        "status not returned",
+        "status missing",
+        "unknown",
+        "did not return",
+        "not found in the live mk8s api response",
+    )
+    if any(marker in reason_lower for marker in unknown_markers):
+        return _MANAGED_MK8S_RECONCILIATION_UNKNOWN
+    if _managed_mk8s_plan_target_fields_visible(plan):
+        return _MANAGED_MK8S_RECONCILIATION_WAITING
+    return _MANAGED_MK8S_RECONCILIATION_RETRY
+
+
+def _managed_soperator_mk8s_reconcile_live(
+    *,
+    config_path: Path,
+    target_ref: str,
+    to_k8s_version: str | None,
+    to_os: str | None,
+    to_gpu_stack_preset: str | None,
+    node_group: str,
+    disruption_policy: str,
+    drain_timeout: str,
+    strategy_max_surge_count: int | None,
+) -> _ManagedMk8sResumeReconciliation:
+    sdk: Any | None = None
+    try:
+        source_payload = _load_source_payload(config_path)
+        generated_config, _paths, manifest = _load_deploy_context_readonly(config_path)
+        project_id = str(generated_config.client_info.nebius.project_id).strip()
+        sdk = init_nebius_sdk(
+            parent_id=project_id or None,
+            endpoint=_non_empty_text(os.environ.get("NEBIUS_ENDPOINT")) or None,
+            context="Managed Soperator MK8s node-template reconciliation",
+            prefer_operator_auth=True,
+        )
+        executor = Mk8sKubernetesVersionExecutor(sdk)
+        target = parse_upgrade_selector(f"infra:mk8s@{target_ref}")
+        source_component = find_source_mk8s_component(source_payload, target.instance_id)
+        selected_target = _resolve_managed_mk8s_upgrade_target(
+            manifest,
+            target_instance_id=target.instance_id,
+        )
+        cluster_name = source_mk8s_cluster_name(source_component, fallback=target.instance_id)
+        cluster = executor.get_cluster_by_name(project_id=project_id, name=cluster_name)
+        cluster_id = _live_mk8s_cluster_id(cluster, cluster_name=cluster_name)
+        _managed_mk8s_target_with_cluster_id(selected_target, cluster_id=cluster_id)
+        live_node_groups = executor.list_node_groups(cluster_id)
+        selected_live_groups = _selected_node_template_live_groups(
+            source_component=source_component,
+            live_node_groups=live_node_groups,
+            node_group=node_group,
+        )
+        target_version = (
+            parse_k8s_version(str(to_k8s_version)).minor_text
+            if _non_empty_text(to_k8s_version)
+            else _cluster_control_plane_minor_version(cluster, cluster_id=cluster_id)
+        )
+        target_os = (
+            validate_os_image_value(str(to_os))
+            if _non_empty_text(to_os)
+            else validate_os_image_value(
+                _single_selected_live_value(
+                    selected_live_groups,
+                    attr="os",
+                    option_name="--to-os",
+                    value_label="OS image",
+                )
+            )
+        )
+        target_gpu_stack_preset = _default_node_template_gpu_stack_preset(
+            selected_live_groups,
+            to_gpu_stack_preset=to_gpu_stack_preset,
+            prompt_gpu_stack=False,
+        )
+        policy = validate_disruption_policy(disruption_policy)
+        resolved_timeout = resolve_drain_timeout(policy, drain_timeout)
+        plan = plan_node_template_upgrade(
+            target=target,
+            cluster=cluster,
+            cluster_id=cluster_id,
+            source_component=source_component,
+            target_version=target_version,
+            target_os=target_os,
+            target_gpu_stack_preset=target_gpu_stack_preset,
+            disruption_policy=policy,
+            drain_timeout=resolved_timeout,
+            strategy_max_surge_count=strategy_max_surge_count,
+            live_node_groups=live_node_groups,
+            compatibility_lookup=executor.compatibility_choices,
+            node_group=_non_empty_text(node_group),
+            preflight_findings=(),
+        )
+        provider_status_lines = format_mk8s_provider_node_group_status(
+            tuple(group.raw for group in plan.all_node_groups)
+        )
+        if plan.compatibility_failures:
+            details = "; ".join(f"{item.node_group}: {item.reason}" for item in plan.compatibility_failures)
+            return _ManagedMk8sResumeReconciliation(
+                _MANAGED_MK8S_RECONCILIATION_DRIFT_CONFLICT,
+                "Managed MK8s node-template target is no longer compatible with live "
+                f"Nebius API state: {details}",
+                provider_status_lines=provider_status_lines,
+            )
+        if _managed_mk8s_source_sync_required(
+            source_payload=source_payload,
+            target_ref=target_ref,
+            plan=plan,
+        ):
+            return _ManagedMk8sResumeReconciliation(
+                _MANAGED_MK8S_RECONCILIATION_RETRY,
+                "Live MK8s resources match or are reconcilable, but config.yaml/generated "
+                "Terraform still need the managed node-template target synced.",
+                provider_status_lines=provider_status_lines,
+            )
+        try:
+            readiness = verify_mk8s_upgrade_plan_ready(
+                executor=executor,
+                plan=plan,
+                label="Managed MK8s node-template reconciliation",
+            )
+        except Exception as exc:
+            return _ManagedMk8sResumeReconciliation(
+                _managed_mk8s_reconciliation_status_for_error(plan=plan, error=exc),
+                str(exc),
+                provider_status_lines=provider_status_lines,
+            )
+        return _ManagedMk8sResumeReconciliation(
+            _MANAGED_MK8S_RECONCILIATION_COMPLETED,
+            readiness.summary(),
+            readiness=readiness,
+            provider_status_lines=provider_status_lines,
+        )
+    except Exception as exc:
+        return _ManagedMk8sResumeReconciliation(
+            _MANAGED_MK8S_RECONCILIATION_UNKNOWN,
+            "Nebius API managed MK8s reconciliation did not return complete live state: "
+            + str(exc),
+        )
+    finally:
+        if sdk is not None:
+            with suppress(Exception):
+                sdk.sync_close()
+
+
+def _managed_mk8s_readiness_payload(
+    readiness: Mk8sUpgradeReadinessResult | None,
+) -> dict[str, Any] | None:
+    if readiness is None:
+        return None
+    return {
+        "summary": readiness.summary(),
+        "cluster_id": readiness.cluster_id,
+        "cluster_name": readiness.cluster_name,
+        "expected_k8s_version": readiness.expected_k8s_version,
+        "observed_k8s_version": readiness.observed_k8s_version,
+        "ready_node_group_count": readiness.ready_node_group_count,
+        "node_groups": [
+            {
+                "id": group.id,
+                "name": group.name,
+                "ready": group.ready,
+                "summary": group.summary,
+            }
+            for group in readiness.node_groups
+        ],
+    }
+
+
+def _record_managed_mk8s_reconciliation(
+    *,
+    checkpoint: dict[str, Any],
+    reconciliation: _ManagedMk8sResumeReconciliation,
+) -> None:
+    payload: dict[str, Any] = {
+        "reconciled_at": _soperator_upgrade_now_iso(),
+        "reconciliation_status": reconciliation.status,
+        "reconciliation_reason": reconciliation.reason,
+    }
+    if reconciliation.provider_status_lines:
+        payload["provider_node_group_status"] = list(reconciliation.provider_status_lines)
+    readiness_payload = _managed_mk8s_readiness_payload(reconciliation.readiness)
+    if readiness_payload is not None:
+        payload["reconciliation_readiness"] = readiness_payload
+    mk8s_state = checkpoint.setdefault("mk8s", {})
+    if isinstance(mk8s_state, dict):
+        mk8s_state.update(copy.deepcopy(payload))
+        if reconciliation.status == _MANAGED_MK8S_RECONCILIATION_COMPLETED:
+            mk8s_state["status"] = "completed"
+        elif reconciliation.status in {
+            _MANAGED_MK8S_RECONCILIATION_WAITING,
+            _MANAGED_MK8S_RECONCILIATION_UNKNOWN,
+        }:
+            mk8s_state["status"] = "waiting-rollout"
+        elif reconciliation.status == _MANAGED_MK8S_RECONCILIATION_RETRY:
+            mk8s_state["status"] = "retry"
+        elif reconciliation.status == _MANAGED_MK8S_RECONCILIATION_DRIFT_CONFLICT:
+            mk8s_state["status"] = "failed"
+    phase_state = _soperator_upgrade_phase_state(checkpoint, "mk8s-node-template")
+    phase_state.update(copy.deepcopy(payload))
+
+
+def _apply_managed_mk8s_resume_reconciliation(
+    *,
+    checkpoint: dict[str, Any],
+    completed_phases: set[str],
+    reconciliation: _ManagedMk8sResumeReconciliation,
+) -> bool:
+    _record_managed_mk8s_reconciliation(
+        checkpoint=checkpoint,
+        reconciliation=reconciliation,
+    )
+    if reconciliation.status == _MANAGED_MK8S_RECONCILIATION_COMPLETED:
+        return False
+    completed_phases.discard("mk8s-node-template")
+    checkpoint["completed_phases"] = _ordered_soperator_upgrade_completed_phases(completed_phases)
+    checkpoint["pending_phase"] = "mk8s-node-template"
+    checkpoint["pending_reason"] = reconciliation.reason
+    return True
+
+
+def _print_managed_mk8s_provider_status(
+    reconciliation: _ManagedMk8sResumeReconciliation,
+) -> None:
+    if not reconciliation.provider_status_lines:
+        return
+    console.print("Managed MK8s node-template status:")
+    for line in reconciliation.provider_status_lines:
+        console.print(line)
+
+
 def _run_managed_soperator_cluster_upgrade(
     *,
     config_path: Path,
@@ -15451,14 +15802,29 @@ def _run_managed_soperator_cluster_upgrade(
             allow_unsupported_soperator_upgrade_path=allow_unsupported_soperator_upgrade_path,
         )
     )
-    checkpoint["mk8s"] = {
-        "requested": requested_mk8s_change,
-        "target_k8s_version": _non_empty_text(to_k8s_version) or None,
-        "target_os": _non_empty_text(to_os) or None,
-        "target_gpu_stack_preset": _non_empty_text(to_gpu_stack_preset) or None,
-        "node_group": _non_empty_text(node_group) or None,
-        "status": "planned" if requested_mk8s_change else "not-requested",
-    }
+    current_mk8s_target = _managed_mk8s_target_payload(
+        requested=requested_mk8s_change,
+        to_k8s_version=to_k8s_version,
+        to_os=to_os,
+        to_gpu_stack_preset=to_gpu_stack_preset,
+        node_group=node_group,
+    )
+    existing_mk8s_state = _state_mapping(checkpoint.get("mk8s"))
+    _raise_if_managed_mk8s_checkpoint_target_conflicts(
+        existing_mk8s_state,
+        current=current_mk8s_target,
+        checkpoint_path=checkpoint_path,
+    )
+    existing_mk8s_state.update(current_mk8s_target)
+    existing_mk8s_state.setdefault(
+        "status",
+        "planned" if requested_mk8s_change else "not-requested",
+    )
+    if requested_mk8s_change and existing_mk8s_state.get("status") == "not-requested":
+        existing_mk8s_state["status"] = "planned"
+    if not requested_mk8s_change:
+        existing_mk8s_state["status"] = "not-requested"
+    checkpoint["mk8s"] = existing_mk8s_state
     if support_report:
         checkpoint["soperator_support_policy"] = {
             "findings": list(soperator_upgrade_support_findings(support_report)),
@@ -16022,6 +16388,50 @@ def _run_managed_soperator_cluster_upgrade(
             ],
         )
 
+    if requested_mk8s_change and "mk8s-node-template" in completed_phases:
+        reconciliation = _managed_soperator_mk8s_reconcile_live(
+            config_path=config_path,
+            target_ref=target.target_ref,
+            to_k8s_version=to_k8s_version,
+            to_os=to_os,
+            to_gpu_stack_preset=to_gpu_stack_preset,
+            node_group=node_group,
+            disruption_policy=disruption_policy,
+            drain_timeout=drain_timeout,
+            strategy_max_surge_count=strategy_max_surge_count,
+        )
+        _print_managed_mk8s_provider_status(reconciliation)
+        demoted = _apply_managed_mk8s_resume_reconciliation(
+            checkpoint=checkpoint,
+            completed_phases=completed_phases,
+            reconciliation=reconciliation,
+        )
+        if reconciliation.status == _MANAGED_MK8S_RECONCILIATION_DRIFT_CONFLICT:
+            _checkpoint(
+                "managed-mk8s-reconciliation-drift-conflict",
+                phase="mk8s-node-template",
+                reason=reconciliation.reason,
+            )
+            raise RuntimeError(reconciliation.reason)
+        if demoted:
+            _checkpoint(
+                "managed-mk8s-reconciliation-retry",
+                phase="mk8s-node-template",
+                reconciliation_status=reconciliation.status,
+                reason=reconciliation.reason,
+            )
+            console.print(
+                "Managed MK8s node-template resume reconciliation: "
+                f"{reconciliation.status} - {reconciliation.reason}",
+                soft_wrap=True,
+            )
+        else:
+            _checkpoint(
+                "managed-mk8s-reconciliation-completed",
+                phase="mk8s-node-template",
+                reason=reconciliation.reason,
+            )
+
     try:
         if _start_checkpoint_phase(
             "preflight",
@@ -16356,6 +16766,27 @@ def _run_managed_soperator_cluster_upgrade(
                     drain_timeout=drain_timeout,
                     strategy_max_surge_count=strategy_max_surge_count,
                 )
+                reconciliation = _managed_soperator_mk8s_reconcile_live(
+                    config_path=config_path,
+                    target_ref=target.target_ref,
+                    to_k8s_version=to_k8s_version,
+                    to_os=to_os,
+                    to_gpu_stack_preset=to_gpu_stack_preset,
+                    node_group=node_group,
+                    disruption_policy=disruption_policy,
+                    drain_timeout=drain_timeout,
+                    strategy_max_surge_count=strategy_max_surge_count,
+                )
+                _print_managed_mk8s_provider_status(reconciliation)
+                _record_managed_mk8s_reconciliation(
+                    checkpoint=checkpoint,
+                    reconciliation=reconciliation,
+                )
+                if reconciliation.status != _MANAGED_MK8S_RECONCILIATION_COMPLETED:
+                    raise RuntimeError(
+                        "Managed MK8s node-template phase did not verify after the "
+                        "node-template workflow: " + reconciliation.reason
+                    )
                 mk8s_state = checkpoint.setdefault("mk8s", {})
                 if isinstance(mk8s_state, dict):
                     mk8s_state["status"] = "completed"
@@ -16374,7 +16805,7 @@ def _run_managed_soperator_cluster_upgrade(
                 phase_id="mk8s-node-template",
                 summary=(
                     "Managed MK8s node-template rollout completed through the "
-                    "node-template workflow."
+                    "node-template workflow and Nebius API resume reconciliation."
                 ),
                 checks=[
                     stage_fast_verification_check(
@@ -16402,6 +16833,14 @@ def _run_managed_soperator_cluster_upgrade(
                         "recorded="
                         + str(mk8s_map.get("target_gpu_stack_preset") or "unchanged")
                         + f", expected={to_gpu_stack_preset or 'unchanged'}",
+                    ),
+                    stage_fast_verification_check(
+                        "Nebius API resume reconciliation",
+                        "passed"
+                        if mk8s_map.get("reconciliation_status")
+                        == _MANAGED_MK8S_RECONCILIATION_COMPLETED
+                        else "failed",
+                        str(mk8s_map.get("reconciliation_reason") or "not recorded"),
                     ),
                 ],
             )

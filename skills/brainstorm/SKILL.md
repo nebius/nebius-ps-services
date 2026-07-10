@@ -1,6 +1,6 @@
 ---
 name: brainstorm
-description: "Use for exploratory, chat-only brainstorming about an idea, proposal, design direction, architecture question, product/technical topic, or research question before implementation. Gather only source-ranked context relevant to the topic, question, or problem from the current project folder, sibling projects, related skills, internal Confluence/Slack via connectors or MCP when available, and official vendor docs; for major decisions, consult installed `design` and `system-design-rules` skills as advisory sources when accessible; challenge assumptions and discuss options without making code changes."
+description: "Use for exploratory, chat-only brainstorming about an idea, proposal, design direction, architecture question, product/technical topic, or research question before implementation. Gather only source-ranked context relevant to the topic, question, or problem from the current project folder, sibling projects, related skills, internal Confluence/Slack via connectors or MCP when available, and official vendor docs; resolve recommendation-changing source conflicts with bounded `research` when source priority is insufficient; for major decisions, consult installed `design` and `system-design-rules` skills as advisory sources when accessible; challenge assumptions and discuss options without making code changes."
 ---
 
 # Brainstorm
@@ -70,7 +70,9 @@ Skip broad background, adjacent files, and interesting but non-decisive context.
    clouds, APIs, SDKs, CLIs, package managers, frameworks, and standards.
 
 Read `references/source-priority.md` when the topic needs more than one source
-class, source conflicts appear, or the user asks for deeper research.
+class, source conflicts appear, or the user asks for deeper research. Use
+`research` only for a bounded follow-up when a recommendation-changing conflict
+remains unresolved after applying the source-priority rules.
 
 ## Process
 
@@ -104,7 +106,12 @@ class, source conflicts appear, or the user asks for deeper research.
 8. If vendor behavior matters, verify it against current official vendor docs.
    If official docs are unavailable or inconclusive, mark that fact as
    unverified instead of guessing.
-9. Answer in the conversation with concise evidence, tradeoffs, assumptions,
+9. After relevant context has been gathered, resolve source conflicts through
+   the source-priority rubric first. If a conflict materially affects the
+   recommendation and still cannot be resolved, use `research` for a bounded
+   deep-research pass on the exact conflict, then return to `brainstorm` for
+   chat-only synthesis.
+10. Answer in the conversation with concise evidence, tradeoffs, assumptions,
    challenges, and open questions. Keep source notes close to claims and omit
    context that did not affect the answer.
 
@@ -126,6 +133,9 @@ class, source conflicts appear, or the user asks for deeper research.
 ## Guardrails
 
 - Do not guess when a source can reasonably be checked.
+- Do not escalate every brainstorm into `research`; use it only for unresolved
+  recommendation-changing conflicts or deeper due diligence explicitly needed
+  by the current topic.
 - Do not treat memory, prior conversation, or unofficial web content as current
   fact when repo evidence, internal sources, or official docs are available.
 - Do not expose secrets, tokens, private endpoints, customer data, internal
@@ -164,6 +174,8 @@ the user to judge the answer:
   when starting a new brainstorm.
 - Source-backed facts, with local file paths, internal source names, or vendor
   doc links when available and safe.
+- Source conflicts that changed the answer, including whether bounded
+  `research` was used, skipped, or unavailable.
 - Assumptions and hypotheses clearly labeled.
 - Tradeoffs, options, risks, and challenges to weak assumptions.
 - Open questions that would change the recommendation.

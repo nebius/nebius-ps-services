@@ -110,6 +110,25 @@ def _mk8s_ready_status(version: str = "1.33", *, nodes: int = 1) -> SimpleNamesp
     )
 
 
+def _stub_managed_mk8s_completed_reconciliation(
+    monkeypatch: pytest.MonkeyPatch,
+    calls: list[object],
+) -> None:
+    def _reconcile(**kwargs: object) -> cli._ManagedMk8sResumeReconciliation:
+        calls.append(("mk8s-reconciliation", kwargs))
+        return cli._ManagedMk8sResumeReconciliation(
+            cli._MANAGED_MK8S_RECONCILIATION_COMPLETED,
+            "Managed MK8s node-template reconciliation verified.",
+            provider_status_lines=(
+                "Provider node groups (source=Nebius API, groups=1)",
+                "group   state    k8s",
+                "worker  RUNNING  1.33",
+            ),
+        )
+
+    monkeypatch.setattr(cli, "_managed_soperator_mk8s_reconcile_live", _reconcile)
+
+
 def _empty_quota_report() -> cli.QuotaReport:
     return cli.QuotaReport(
         tenant_id="tenant-123",
@@ -4269,6 +4288,7 @@ def test_soperator_upgrade_mk8s_only_runs_node_template_phase_without_raw_kubect
         "_run_soperator_mk8s_node_template_phase",
         lambda **kwargs: calls.append(("mk8s-node-template", kwargs)),
     )
+    _stub_managed_mk8s_completed_reconciliation(monkeypatch, calls)
     monkeypatch.setattr(
         cli,
         "_soperator_upgrade_restore_slurm_nodes",
@@ -4426,6 +4446,7 @@ def test_soperator_upgrade_shared_safety_failure_after_slurm_restore_does_not_le
         "_run_soperator_mk8s_node_template_phase",
         lambda **kwargs: calls.append(("mk8s-node-template", kwargs)),
     )
+    _stub_managed_mk8s_completed_reconciliation(monkeypatch, calls)
     monkeypatch.setattr(
         cli,
         "_soperator_upgrade_restore_slurm_nodes",

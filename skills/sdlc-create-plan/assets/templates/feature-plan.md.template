@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD033 -->
+
 # FEAT-<id> Plan v<N>
 
 ## Scope
@@ -17,6 +19,13 @@
 ## Files To Avoid
 
 - <path>: <reason>
+
+## End-To-End Slice
+
+- Behavior: <user-visible or system-visible behavior>
+- Layer flow: <frontend -> API -> service -> database, or N/A>
+- Foundation prerequisites: <schema/auth/migration/harness/safety blockers, or none>
+- Cross-layer validation target: <expected observable result>
 
 ## TDD Steps
 
@@ -46,3 +55,5 @@
 
 - Design: <hash-or-summary>
 - Context: <hash-or-summary>
+
+<!-- markdownlint-enable MD033 -->

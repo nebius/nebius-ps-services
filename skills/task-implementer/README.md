@@ -5,7 +5,9 @@ explicit sequential task loops.
 It turns a complex user request that is bigger than one coherent task into
 `task-1` through `task-n`, orders the tasks by dependencies and priority, and
 implements one task at a time with a markdown handoff between fresh Codex
-sessions.
+sessions. For serial multi-layer application work, it prefers vertical tasks
+that deliver one behavior through the connected layers over broad layer-by-layer
+tasks, unless a shared foundation must be built first.
 
 It is intentionally smaller than Agentic SDLC. It does not create committed
 requirements/design docs, private SDLC JSON state, hooks, PRs, or merge
@@ -42,6 +44,9 @@ through `$commit` before the next fresh session starts.
   when useful; do not let it own implementation.
 - Use `design` as a supporting skill for unresolved architecture, component,
   contract, or technology choices before implementation.
+- Prefer vertical end-to-end tasks for multi-layer application features; use
+  foundation-only tasks only for true blockers such as schema, auth,
+  migrations, test harnesses, or safety preflights.
 - Use `code-review` and `$commit` as required per-task gates after validation
   and before session handoff.
 - Use `$sdlc-start` for Agentic SDLC.

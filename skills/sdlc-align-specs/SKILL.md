@@ -1,6 +1,6 @@
 ---
 name: sdlc-align-specs
-description: "Use only as part of the Agentic SDLC workflow; use when Agentic SDLC requirements, design, plans, tests, implementation, documentation, and evidence must be checked for consistency. This is SDLC-specific and does not replace the general `align` skill."
+description: "Use only as part of the Agentic SDLC workflow; use when Agentic SDLC requirements, design, plans, tests, implementation, documentation, end-to-end slice evidence, and other evidence must be checked for consistency. This is SDLC-specific and does not replace the general `align` skill."
 ---
 
 # Align Specs
@@ -47,6 +47,11 @@ evidence tell one consistent story.
 
 - Map `REQ-*` to `FEAT-*`, plans, tests, implementation, documentation, and
   evidence.
+- For features with a vertical flow or layer map, check that `docs/design.md`,
+  the locked plan's End-To-End Slice, TDD/tests, implementation boundaries,
+  validation evidence, evaluation evidence, documentation updates, and UAT
+  evidence all describe the same slice or explicitly record why no slice
+  applies.
 - Check stable IDs and status fields.
 - Check that no manual spec edits bypassed owner skills.
 - Check that evidence supports claimed state transitions.
@@ -66,6 +71,10 @@ evidence tell one consistent story.
 - Missing evidence routes to the responsible phase.
 - Spec contradiction maps to `SPEC_GAP`.
 - Plan/design mismatch maps to `DESIGN_DEFECT` or `PLAN_DEFECT`.
+- Slice mismatch maps to the earliest owner: design for wrong layer map, plan
+  for wrong slice, TDD/tests for missing coverage, implementation for
+  out-of-scope files, evaluation for missing observation, or documentation for
+  unsupported wording.
 - Documentation mismatch maps to `DOCUMENTATION_DRIFT` and routes to
   `sdlc-update-documents`.
 
@@ -80,6 +89,7 @@ evidence tell one consistent story.
 
 - Alignment report exists.
 - Each drift item has an owner skill or blocker.
+- Vertical flow, layer map, locked slice, and evidence agree when applicable.
 - No unresolved inconsistency remains before commit or PR readiness is claimed.
 
 ## SDLC Invariants

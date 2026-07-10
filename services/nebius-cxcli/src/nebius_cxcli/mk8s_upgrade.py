@@ -231,6 +231,20 @@ class Mk8sUpgradeReadinessResult:
         )
 
 
+@dataclass(frozen=True)
+class _Mk8sProviderNodeGroupStatusRow:
+    group: str
+    state: str
+    k8s: str
+    total: int | None
+    upgraded: int | None
+    upgrading: int | None
+    remaining: int | None
+    ready: int | None
+    current: int | None
+    event: str
+
+
 def _text(value: Any) -> str:
     return str(value or "").strip()
 
@@ -1347,6 +1361,169 @@ def format_node_template_upgrade_plan(
 
 def _metadata_name(metadata: Any) -> str:
     return _text(getattr(metadata, "name", None))
+
+
+def _int_or_none(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    raw = _text(value)
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _node_group_latest_event_code(status: Any) -> str:
+    events = getattr(status, "events", None)
+    if not isinstance(events, Sequence) or isinstance(events, (str, bytes)):
+        return "-"
+    for event in reversed(events):
+        occurrence = getattr(event, "last_occurrence", None) or getattr(
+            event,
+            "lastOccurrence",
+            None,
+        )
+        event_code = _text(getattr(occurrence, "code", None)) or _text(
+            getattr(event, "code", None)
+        )
+        if event_code:
+            return event_code
+    return "-"
+
+
+def _provider_node_group_status_row(node_group: Any) -> _Mk8sProviderNodeGroupStatusRow:
+    metadata = getattr(node_group, "metadata", None)
+    spec = getattr(node_group, "spec", None)
+    status = getattr(node_group, "status", None)
+    group = _metadata_name(metadata) or _text(getattr(metadata, "id", None)) or "unknown"
+    state = _text(getattr(status, "state", None)) or "unknown"
+    k8s = _text(getattr(spec, "version", None))
+    if k8s:
+        try:
+            k8s = parse_k8s_version(k8s).minor_text
+        except ValueError:
+            k8s = "unknown"
+    else:
+        k8s = "unknown"
+    total = _int_or_none(getattr(status, "target_node_count", None))
+    current = _int_or_none(getattr(status, "node_count", None))
+    ready = _int_or_none(getattr(status, "ready_node_count", None))
+    remaining = _int_or_none(getattr(status, "outdated_node_count", None))
+    if (
+        remaining is None
+        and state == "RUNNING"
+        and not bool(getattr(status, "reconciling", False))
+        and total is not None
+        and current == total
+        and ready == total
+    ):
+        remaining = 0
+    upgraded = None if total is None or remaining is None else max(0, total - remaining)
+    upgrading = None
+    if total is not None and current is not None and ready is not None:
+        upgrading = max(0, max(current, total) - ready)
+    return _Mk8sProviderNodeGroupStatusRow(
+        group=group,
+        state=state,
+        k8s=k8s,
+        total=total,
+        upgraded=upgraded,
+        upgrading=upgrading,
+        remaining=remaining,
+        ready=ready,
+        current=current,
+        event=_node_group_latest_event_code(status),
+    )
+
+
+def _mk8s_status_int_text(value: int | None) -> str:
+    return "unknown" if value is None else str(value)
+
+
+def _mk8s_status_total_text(values: Sequence[int | None]) -> str:
+    known_total = sum(value for value in values if value is not None)
+    unknown_count = sum(1 for value in values if value is None)
+    if not unknown_count:
+        return str(known_total)
+    if known_total <= 0:
+        return "unknown"
+    return f"{known_total}+unknown"
+
+
+def _mk8s_status_ready_current_text(
+    ready: int | None,
+    current: int | None,
+) -> str:
+    return f"{_mk8s_status_int_text(ready)}/{_mk8s_status_int_text(current)}"
+
+
+def _mk8s_status_totals_line(rows: Sequence[_Mk8sProviderNodeGroupStatusRow]) -> str:
+    return (
+        f"total={_mk8s_status_total_text(tuple(row.total for row in rows))} "
+        f"upgraded={_mk8s_status_total_text(tuple(row.upgraded for row in rows))} "
+        f"upgrading={_mk8s_status_total_text(tuple(row.upgrading for row in rows))} "
+        f"remaining={_mk8s_status_total_text(tuple(row.remaining for row in rows))} "
+        f"ready/current="
+        f"{_mk8s_status_total_text(tuple(row.ready for row in rows))}/"
+        f"{_mk8s_status_total_text(tuple(row.current for row in rows))}"
+    )
+
+
+def _format_provider_node_group_status_table(
+    rows: Sequence[_Mk8sProviderNodeGroupStatusRow],
+) -> tuple[str, ...]:
+    table_rows: list[tuple[str, ...]] = [
+        (
+            "group",
+            "state",
+            "k8s",
+            "total",
+            "upgraded",
+            "upgrading",
+            "remaining",
+            "ready/current",
+            "event",
+        )
+    ]
+    table_rows.extend(
+        (
+            row.group,
+            row.state,
+            row.k8s,
+            _mk8s_status_int_text(row.total),
+            _mk8s_status_int_text(row.upgraded),
+            _mk8s_status_int_text(row.upgrading),
+            _mk8s_status_int_text(row.remaining),
+            _mk8s_status_ready_current_text(row.ready, row.current),
+            row.event,
+        )
+        for row in rows
+    )
+    widths = [max(len(row[column]) for row in table_rows) for column in range(len(table_rows[0]))]
+    return tuple(
+        "  ".join(value.ljust(widths[column]) for column, value in enumerate(row)).rstrip()
+        for row in table_rows
+    )
+
+
+def format_mk8s_provider_node_group_status(node_groups: Sequence[Any]) -> tuple[str, ...]:
+    """Return a compact Nebius API-backed provider node-group status table."""
+
+    rows = tuple(
+        sorted(
+            (_provider_node_group_status_row(node_group) for node_group in node_groups),
+            key=lambda row: row.group,
+        )
+    )
+    return (
+        f"Provider node groups (source=Nebius API, groups={len(rows)})",
+        _mk8s_status_totals_line(rows),
+        *_format_provider_node_group_status_table(rows),
+    )
 
 
 def _version_prefix_matches(raw: str, version: str) -> bool:

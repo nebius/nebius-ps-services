@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD033 -->
+
 # FEAT-<id> Test Evidence
 
 ## Commands
@@ -9,6 +11,12 @@
 ## Acceptance Criteria Covered
 
 - REQ-<id> AC-<id>: <test path or command>
+
+## End-To-End Slice Coverage
+
+| Slice Element | Test Evidence | Result |
+| --- | --- | --- |
+| <layer contract / boundary / validation target / N/A> | <test path or command> | <pass / fail / blocked / N/A> |
 
 ## Failure Classification
 

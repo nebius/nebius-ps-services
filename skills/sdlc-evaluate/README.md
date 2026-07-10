@@ -5,9 +5,9 @@ installed into a Codex runtime only when `install-skills.sh` is run.
 
 ## What It Does
 
-Evaluate observed product behavior against real-world acceptance criteria,
-using the requirements Live Experiment Environment only when it is confirmed
-safe and allowed.
+Evaluate observed product behavior against real-world acceptance criteria and
+any planned end-to-end slice, using the requirements Live Experiment
+Environment only when it is confirmed safe and allowed.
 
 ## Main Boundaries
 
@@ -29,4 +29,5 @@ safe and allowed.
 
 - Evaluation evidence exists.
 - Acceptance criteria are explicitly pass or fail.
+- Planned end-to-end slice observation is recorded or a blocker is classified.
 - State moves to `evaluated` only when pass.

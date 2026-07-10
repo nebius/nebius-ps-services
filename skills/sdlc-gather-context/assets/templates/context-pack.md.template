@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD033 -->
+
 # FEAT-<id> Context Pack
 
 ## Scope
@@ -18,6 +20,12 @@
 ## Design Implications
 
 - <implication>
+
+## Layer And Boundary Context
+
+| Layer Or Boundary | Existing Evidence | Contract Or Gap | Source |
+| --- | --- | --- | --- |
+| <UI / API / service / database / N/A> | <file, test, doc, or none> | <responsibility, contract, or gap> | <source> |
 
 ## Open Context Questions
 

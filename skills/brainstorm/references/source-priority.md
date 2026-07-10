@@ -141,6 +141,11 @@ When sources disagree:
 - Prefer current internal docs over stale Slack threads for durable decisions,
   but use Slack as useful history when docs are absent.
 - State the conflict, what was preferred, and what remains uncertain.
+- If source ranking does not resolve a conflict that materially changes the
+  recommendation, use `research` for a bounded deep-dive on that exact
+  conflict. Keep the research pass read-only, bring only the decision-relevant
+  findings back into `brainstorm`, and do not convert the whole conversation
+  into a research report by default.
 
 ## Answer Shape
 

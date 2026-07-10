@@ -267,6 +267,38 @@ def test_verify_mk8s_upgrade_plan_ready_confirms_live_k8s_os_and_gpu_stack() -> 
     assert "Kubernetes 1.33" in result.summary()
 
 
+def test_format_mk8s_provider_node_group_status_includes_k8s_column() -> None:
+    ready = _node_group(id="ng-system", name="system", version="1.33")
+    ready.status = SimpleNamespace(
+        state="RUNNING",
+        ready_node_count=3,
+        target_node_count=3,
+        node_count=3,
+        outdated_node_count=0,
+        reconciling=False,
+        events=[],
+    )
+    rolling = _node_group(id="ng-gpu", name="gpu", version="1.33")
+    rolling.status = SimpleNamespace(
+        state="UPDATING",
+        ready_node_count=1,
+        target_node_count=2,
+        node_count=2,
+        outdated_node_count=1,
+        reconciling=True,
+        events=[SimpleNamespace(last_occurrence=SimpleNamespace(code="ROLLING"))],
+    )
+
+    lines = upgrade.format_mk8s_provider_node_group_status((rolling, ready))
+    rendered = "\n".join(lines)
+
+    assert "Provider node groups (source=Nebius API, groups=2)" in rendered
+    assert "group   state     k8s" in rendered
+    assert "system  RUNNING   1.33" in rendered
+    assert "gpu     UPDATING  1.33" in rendered
+    assert "ROLLING" in rendered
+
+
 def test_verify_mk8s_upgrade_plan_ready_fails_when_live_os_does_not_match() -> None:
     planned_raw = _node_group(
         id="ng-system",

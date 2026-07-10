@@ -6,6 +6,23 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Added internal Nebius API resume reconciliation for managed `soperator
+  upgrade` MK8s node-template phases. Reruns now compare the checkpointed
+  target, current command target, and live MK8s control-plane/node-group state
+  before trusting a completed phase, waiting on provider rollout, retrying the
+  Terraform-managed workflow, or failing fast on drift.
+- Added internal Nebius API resume reconciliation for external Soperator
+  node-template upgrades. Interrupted control-plane hops and node-group updates
+  now compare checkpoint state, the accepted upgrade plan, and live Nebius
+  state before cxcli decides to complete, wait, retry, or fail fast on drift.
+- Added the API-reported Kubernetes version to the external Soperator upgrade
+  provider node-group status table so cxcli's live screen stays aligned with
+  Nebius console node-group state.
+- Fixed `ext-soperator upgrade` checkpoint resume after an interrupted external
+  node-template update. Checkpointed `updating` node groups are now treated as
+  in-progress rollout state on rerun, reports show the accepted mutation as
+  `Upgrade performed: yes`, and cxcli avoids submitting a duplicate Nebius
+  node-group update while provider readback is still settling.
 - Fixed Nebius SDK-backed operations, including `ext-soperator upgrade`, so
   synchronous SDK waits use a cxcli-owned background event loop instead of
   colliding with an active CLI event loop.

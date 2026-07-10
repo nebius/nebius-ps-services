@@ -2567,6 +2567,20 @@ chart-first command. Run the Soperator chart upgrade while Kubernetes stays at
 `1.32`, then rerun `soperator upgrade --to-k8s-version 1.33`, and later
 `--to-k8s-version 1.34` as separate provider-supported hops.
 
+For managed `mk8s-node-template` resume, cxcli performs internal Nebius API
+resume reconciliation before trusting a completed checkpointed phase. The
+recheck compares the checkpointed target, the current command target, the live
+MK8s control plane, and provider node-group template/readiness state. Checkpoint
+state remains authoritative for phase order, backup, approval, Slurm, and
+duplicate-mutation ownership; live Nebius API state is the machine source for
+current MK8s infrastructure reality. A compatible live state can complete,
+wait, or retry the existing Terraform-managed node-template workflow. Drift that
+cannot be safely reconciled fails fast, and missing provider evidence records
+`unknown` without marking the phase complete. During reconciliation and waiting,
+the managed screen can show a compact Nebius API-backed provider node-group
+status table with provider state, API-reported Kubernetes version, total,
+upgraded, upgrading, remaining, ready/current, and latest event columns.
+
 Before mutation, managed and external Soperator upgrade flows evaluate the
 committed Soperator/Kubernetes support policy from
 `soperator_migration_profiles.yaml`. `unsupported` and `not_validated` paths
@@ -2592,7 +2606,9 @@ CXCLI-managed Soperator upgrade follows these stages:
    `--job-policy` (`wait-to-finish`, `wait-then-cancel`, `cancel-selected`,
    `cancel-all`, `requeue-selected`, `requeue-all`, `requeue-hold-selected`, or
    `requeue-hold-all`), run the Terraform-managed node-template workflow, and
-   wait for stable control-plane and node-group readiness.
+   wait for stable control-plane and node-group readiness while rendering
+   Nebius API-backed provider node-group status snapshots from the live
+   reconciliation/readiness checks.
 4. Soperator chart apply: when a chart target is requested, update the Soperator
    app row, rerender and validate the bundle, apply the target Flux/static
    Soperator manifests, and verify the live chart identity on Kubernetes objects.
@@ -3604,8 +3620,15 @@ preflight result for resume and is ignored by cxcli-managed deployments
 If an accepted Nebius node-group update times out while provider readback is
 still catching up, cxcli stores the external-node-template group as
 `waiting-rollout` even when requested template fields are not visible yet; the
-next identical execute command re-reads live state from the checkpoint instead
-of submitting a duplicate node-group update.
+next identical execute command runs internal resume reconciliation against the
+checkpointed target, the accepted upgrade plan, and the live Nebius API node
+group instead of submitting a duplicate node-group update. If the operator
+interrupts the command after cxcli has checkpointed a control-plane hop or node
+group as `updating`, the next run treats that record as in-progress rollout
+state, reports `Upgrade performed: yes`, and keeps waiting for live state
+instead of issuing another Nebius update. Checkpoints still own phase order,
+approval, backup, and mutation-attempt facts; live Nebius state only proves
+whether the phase should complete, wait, retry, or fail on drift.
 
 The planned phases depend on the accepted storage and compute modes:
 
@@ -3739,7 +3762,12 @@ Operator and Network Operator Helm releases; aligned-SFS phases verify the
 filesystems and node-group attachments; final cutover verifies the target
 SlurmCluster and expected NodeSets. If a completed action is no longer
 satisfied, cxcli removes that phase from the local completed set and reruns the
-existing phase handler. During execute, every completed stage also records a
+existing phase handler. For external node-template resume, cxcli also performs
+internal resume reconciliation before submit, skip, or wait decisions: it
+compares the checkpointed control-plane/node-group state, the accepted upgrade
+plan, and live Nebius API state, then records whether the phase is completed,
+waiting, retryable, unknown, or a drift conflict. During execute, every completed
+stage also records a
 targeted stage-scoped `fast_verification` checkpoint, prints
 `Phase validation <phase-id>: PASS|FAIL|SKIP - <summary>`, and the external
 upgrade report includes a `Stage Fast Verification` rollup plus the JSON
@@ -3763,7 +3791,8 @@ Kubernetes version, OS image, and GPU driver preset. If a Nebius node-group
 update command times out after the request is accepted, cxcli re-reads the live
 node group: ready matching state continues, still-rolling or not-yet-visible
 template state is checkpointed as a pending external-node-template phase, and
-the same execute command resumes without starting a duplicate update. Data-copy
+the same execute command resumes through internal Nebius API reconciliation
+without starting a duplicate update. Data-copy
 and old infrastructure retirement phases remain guarded by their explicit
 checkpoints because rerunning them can have customer-data or teardown impact.
 
@@ -3784,12 +3813,13 @@ SFS/PVC copy progress plus MK8s and Slurm serving/degradation signals. Compute
 and cutover phases show MK8s status as a Nebius API-backed provider
 node-group rollout table sourced from one node-group snapshot per refresh.
 The table starts with aggregate totals, then lists one row per node group with
-provider state, total, upgraded, upgrading, remaining, ready/current, and latest
-event columns. `upgraded`, `upgrading`, and `remaining` are derived from the
-provider status counters, so large groups such as 1000-node worker pools remain
-scan-friendly without mixing in Kubernetes registered-node counts. Active or
-degraded groups sort before unchanged ready groups, and missing provider fields
-render as `unknown`, except an omitted `outdated_node_count` on a fully ready
+provider state, API-reported Kubernetes version, total, upgraded, upgrading,
+remaining, ready/current, and latest event columns. `upgraded`, `upgrading`,
+and `remaining` are derived from the provider status counters, so large groups
+such as 1000-node worker pools remain scan-friendly without mixing in
+Kubernetes registered-node counts. Active or degraded groups sort before
+unchanged ready groups, and missing provider fields render as `unknown`, except
+an omitted `outdated_node_count` on a fully ready
 `RUNNING` group is treated as zero remaining. While a control-plane hop is
 active before node-template rollout state exists, node groups render as
 `not-started` with `upgraded=0`, `upgrading=0`, and `remaining=<total>` when the

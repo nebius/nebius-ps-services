@@ -829,6 +829,68 @@ def _payload(
     return payload
 
 
+def _external_node_template_only_payload(
+    *,
+    target_k8s_version: str = "1.32",
+    target_os: str = "ubuntu24.04",
+    target_gpu_stack_preset: str = "cuda13.0",
+) -> dict[str, Any]:
+    payload = _payload(target_k8s_version=target_k8s_version)
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    assert isinstance(target, dict)
+    onboarding = target["soperator_onboarding"]
+    assert isinstance(onboarding, dict)
+    onboarding["actions"] = ["upgrade-external-node-template"]
+    onboarding["node_template_upgrade"] = {
+        "target_k8s_version": target_k8s_version,
+        "target_os": target_os,
+        "target_gpu_stack_preset": target_gpu_stack_preset,
+    }
+    onboarding["analysis_fingerprint"] = soperator_onboarding_fingerprint(
+        payload,
+        target_ref="external-cluster",
+    )
+    return payload
+
+
+def _write_external_node_template_resume_checkpoint(
+    *,
+    config_path: Path,
+    source_report: Mapping[str, Any],
+    phase_state: Mapping[str, Any],
+    completed: bool = False,
+) -> Path:
+    checkpoint_path = soperator_migration_checkpoint_path(config_path, "external-cluster")
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    completed_phases = ["discovery-and-plan", "customer-approval"]
+    if completed:
+        completed_phases.append("external-node-template-upgrade")
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+                "target_ref": "external-cluster",
+                "source_report_fingerprint": migration._source_report_checkpoint_fingerprint(
+                    source_report
+                ),
+                "source_version": "3.0.5",
+                "target_version": "4.0.1-ps.1",
+                "created_at": "2026-06-07T00:00:00Z",
+                "completed_phases": completed_phases,
+                "pending_phase": "none" if completed else "external-node-template-upgrade",
+                "customer_approved_at": "2026-06-07T00:00:00Z",
+                "backup": _backup_metadata_with_archive(config_path, "node-template-resume"),
+                "events": [],
+                "phase_state": {
+                    "external-node-template-upgrade": dict(phase_state),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return checkpoint_path
+
+
 def _locked_upgrade_path_fixture() -> dict[str, Any]:
     jail_rootfs = {
         "current_image": "cr.example/populate_jail:3.0.5-slurm-cuda12.8.0",
@@ -7344,6 +7406,37 @@ class _TimeoutBeforeLiveNodeTemplateVisibleRunner(_TimeoutAfterAcceptedNodeTempl
         )
 
 
+class _InterruptDuringNodeTemplateUpdateRunner(_TimeoutAfterAcceptedNodeTemplateUpdateRunner):
+    def __init__(self) -> None:
+        super().__init__()
+        self.interrupted = False
+
+    def __call__(
+        self,
+        args,
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        command = tuple(str(item) for item in args)
+        if (
+            command[:4] == ("nebius", "mk8s", "node-group", "update")
+            and command[4] == "nodegroup-gpu-pool"
+            and "--version" in command
+            and not self.interrupted
+        ):
+            self.calls.append((command, input_text))
+            self.interrupted = True
+            raise KeyboardInterrupt
+        return super().__call__(
+            command,
+            input_text=input_text,
+            timeout_seconds=timeout_seconds,
+            check=check,
+        )
+
+
 def test_execute_external_node_template_reconciles_accepted_timeout_when_ready(
     tmp_path: Path,
 ) -> None:
@@ -7376,6 +7469,76 @@ def test_execute_external_node_template_reconciles_accepted_timeout_when_ready(
     )
 
 
+def test_execute_external_node_template_interrupt_marks_mutation_and_avoids_duplicate_update(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    runner = _InterruptDuringNodeTemplateUpdateRunner()
+
+    with pytest.raises(KeyboardInterrupt):
+        execute_soperator_migration(
+            config_path=config_path,
+            target_ref="external-cluster",
+            payload=_payload(target_k8s_version="1.33"),
+            source_report=_source_report(target_k8s_version="1.33"),
+            backup_metadata=_backup_metadata("interrupted-node-template"),
+            snapshot_collector=lambda *, kube_context: _snapshot(),
+            approved=True,
+            command_runner=runner,
+        )
+
+    checkpoint_path = soperator_migration_checkpoint_path(config_path, "external-cluster")
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["pending_phase"] == "external-node-template-upgrade"
+    assert checkpoint["pending_reason"] == "interrupted by user"
+    phase = checkpoint["phase_state"]["external-node-template-upgrade"]
+    group_state = phase["node_groups"]["gpu-pool"]
+    assert phase["mutation_performed"] is True
+    assert group_state["status"] == "updating"
+    assert group_state["mutation_performed"] is True
+
+    upgrade_report = Path(checkpoint["upgrade_report"]).read_text(encoding="utf-8")
+    upgrade_json_report = json.loads(
+        Path(checkpoint["upgrade_report_json"]).read_text(encoding="utf-8")
+    )
+    assert "- Upgrade status: `pending after upgrade mutation; rerun the same command to resume.`" in (
+        upgrade_report
+    )
+    assert "- Upgrade performed: `yes`" in upgrade_report
+    assert upgrade_json_report["upgrade_performed"] is True
+    assert upgrade_json_report["pending_phase"] == "external-node-template-upgrade"
+
+    resumed = execute_soperator_migration(
+        config_path=config_path,
+        target_ref="external-cluster",
+        payload=_payload(target_k8s_version="1.33"),
+        source_report=_source_report(target_k8s_version="1.33"),
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        approved=True,
+        command_runner=runner,
+    )
+
+    assert resumed.pending_phase == "external-node-template-upgrade"
+    assert resumed.mutation_performed is True
+    assert any(line == "Upgrade performed: yes." for line in resumed.lines)
+    node_template_updates = [
+        call[0]
+        for call in runner.calls
+        if call[0][:4] == ("nebius", "mk8s", "node-group", "update")
+        and call[0][4] == "nodegroup-gpu-pool"
+        and "--version" in call[0]
+    ]
+    assert len(node_template_updates) == 1
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    group_state = checkpoint["phase_state"]["external-node-template-upgrade"]["node_groups"][
+        "gpu-pool"
+    ]
+    assert group_state["status"] == "waiting-rollout"
+    assert group_state["reconciliation_status"] == "waiting"
+    assert group_state["reconciliation_reason"] == group_state["pending_reason"]
+    assert "will not submit a duplicate node-group update" in group_state["pending_reason"]
+
+
 def test_execute_external_node_template_resume_waiting_rollout_without_duplicate_update(
     tmp_path: Path,
 ) -> None:
@@ -7394,6 +7557,12 @@ def test_execute_external_node_template_resume_waiting_rollout_without_duplicate
     )
 
     assert result.pending_phase == "external-node-template-upgrade"
+    assert result.mutation_performed is True
+    assert any(
+        line == "Upgrade status: pending after upgrade mutation; rerun the same command to resume."
+        for line in result.lines
+    )
+    assert any(line == "Upgrade performed: yes." for line in result.lines)
     checkpoint = json.loads(
         soperator_migration_checkpoint_path(config_path, "external-cluster").read_text(
             encoding="utf-8"
@@ -7411,6 +7580,36 @@ def test_execute_external_node_template_resume_waiting_rollout_without_duplicate
         "--strategy-drain-timeout",
         "10m",
     ]
+    assert "rollout is still in progress" in group_state["pending_reason"]
+    upgrade_report = Path(checkpoint["upgrade_report"]).read_text(encoding="utf-8")
+    upgrade_json_report = json.loads(
+        Path(checkpoint["upgrade_report_json"]).read_text(encoding="utf-8")
+    )
+    assert "- Upgrade performed: `yes`" in upgrade_report
+    assert upgrade_json_report["upgrade_performed"] is True
+    rerun_status = _collect_provider_mk8s_status(runner, checkpoint)
+    assert _mk8s_status_row_cells(rerun_status.summary, "gpu-pool")[2] == "1.33"
+
+    still_waiting = execute_soperator_migration(
+        config_path=config_path,
+        target_ref="external-cluster",
+        payload=_payload(target_k8s_version="1.33"),
+        source_report=_source_report(target_k8s_version="1.33"),
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        approved=True,
+        command_runner=runner,
+    )
+    assert still_waiting.pending_phase == "external-node-template-upgrade"
+    checkpoint = json.loads(
+        soperator_migration_checkpoint_path(config_path, "external-cluster").read_text(
+            encoding="utf-8"
+        )
+    )
+    group_state = checkpoint["phase_state"]["external-node-template-upgrade"]["node_groups"][
+        "gpu-pool"
+    ]
+    assert group_state["reconciliation_status"] == "waiting"
+    assert group_state["reconciliation_reason"] == group_state["pending_reason"]
     assert "rollout is still in progress" in group_state["pending_reason"]
 
     for node_group in runner.existing_node_groups:
@@ -7469,6 +7668,7 @@ def test_execute_external_node_template_resume_waiting_rollout_without_duplicate
         "gpu-pool"
     ]
     assert group_state["status"] == "completed"
+    assert group_state["reconciliation_status"] == "completed"
     assert group_state["strategy_restored"] is True
 
 
@@ -7516,6 +7716,16 @@ def test_execute_external_node_template_waits_after_accepted_timeout_before_temp
     )
     assert still_not_visible.pending_phase == "external-node-template-upgrade"
     assert still_not_visible.mutation_performed is True
+    checkpoint = json.loads(
+        soperator_migration_checkpoint_path(config_path, "external-cluster").read_text(
+            encoding="utf-8"
+        )
+    )
+    group_state = checkpoint["phase_state"]["external-node-template-upgrade"]["node_groups"][
+        "gpu-pool"
+    ]
+    assert group_state["reconciliation_status"] == "waiting"
+    assert group_state["reconciliation_reason"] == group_state["pending_reason"]
     node_template_updates = [
         call[0]
         for call in runner.calls
@@ -7596,8 +7806,261 @@ def test_execute_external_node_template_waits_after_accepted_timeout_before_temp
         "gpu-pool"
     ]
     assert group_state["status"] == "completed"
+    assert group_state["reconciliation_status"] == "completed"
     assert group_state["strategy_restored"] is True
     assert "error" not in group_state
+
+
+def test_execute_external_node_template_resume_waits_for_interrupted_control_plane(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    source_report = _source_report()
+    payload = _external_node_template_only_payload()
+    checkpoint_path = _write_external_node_template_resume_checkpoint(
+        config_path=config_path,
+        source_report=source_report,
+        phase_state={
+            "control_plane": {
+                "hops": {
+                    "1.32": {
+                        "status": "updating",
+                        "from_version": "1.31",
+                        "target_version": "1.32",
+                        "provider_update_attempted": True,
+                    }
+                }
+            }
+        },
+    )
+    runner = _FakeCommandRunner()
+
+    result = execute_soperator_migration(
+        config_path=config_path,
+        target_ref="external-cluster",
+        payload=payload,
+        source_report=source_report,
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        command_runner=runner,
+    )
+
+    assert result.pending_phase == "external-node-template-upgrade"
+    cluster_updates = [
+        call[0] for call in runner.calls if call[0][:4] == ("nebius", "mk8s", "cluster", "update")
+    ]
+    assert cluster_updates == []
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    hop = checkpoint["phase_state"]["external-node-template-upgrade"]["control_plane"]["hops"][
+        "1.32"
+    ]
+    assert hop["status"] == "updating"
+    assert hop["reconciliation_status"] == "waiting"
+    assert hop["reconciliation_reason"] == hop["pending_reason"]
+    assert "will not submit a duplicate control-plane update" in hop["pending_reason"]
+
+
+def test_execute_external_node_template_resume_unknown_when_live_status_missing(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    source_report = _source_report(target_k8s_version="1.33")
+    payload = _external_node_template_only_payload(target_k8s_version="1.33")
+    checkpoint_path = _write_external_node_template_resume_checkpoint(
+        config_path=config_path,
+        source_report=source_report,
+        phase_state={
+            "control_plane": {"status": "already-current", "hops": {}},
+            "node_groups": {
+                "gpu-pool": {
+                    "status": "waiting-rollout",
+                    "target": {
+                        "k8s_version": "1.33",
+                        "os": "ubuntu24.04",
+                        "gpu_stack_preset": "cuda13.0",
+                    },
+                    "mutation_performed": True,
+                    "provider_update_attempted": True,
+                }
+            },
+        },
+    )
+    runner = _TimeoutAfterAcceptedNodeTemplateUpdateRunner()
+    runner.cluster["spec"]["control_plane"]["version"] = "1.33"
+    node_group = runner.existing_node_groups[0]
+    spec = node_group["spec"]
+    assert isinstance(spec, dict)
+    spec["version"] = "1.33"
+    template = spec["template"]
+    assert isinstance(template, dict)
+    template["os"] = "ubuntu24.04"
+    gpu_settings = template["gpu_settings"]
+    assert isinstance(gpu_settings, dict)
+    gpu_settings["drivers_preset"] = "cuda13.0"
+    node_group.pop("status", None)
+
+    result = execute_soperator_migration(
+        config_path=config_path,
+        target_ref="external-cluster",
+        payload=payload,
+        source_report=source_report,
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        command_runner=runner,
+    )
+
+    assert result.pending_phase == "external-node-template-upgrade"
+    node_template_updates = [
+        call[0]
+        for call in runner.calls
+        if call[0][:4] == ("nebius", "mk8s", "node-group", "update")
+        and call[0][4] == "nodegroup-gpu-pool"
+        and "--version" in call[0]
+    ]
+    assert node_template_updates == []
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    group_state = checkpoint["phase_state"]["external-node-template-upgrade"]["node_groups"][
+        "gpu-pool"
+    ]
+    assert group_state["status"] == "waiting-rollout"
+    assert group_state["reconciliation_status"] == "unknown"
+    assert group_state["reconciliation_reason"] == group_state["pending_reason"]
+    assert "status not returned by Nebius API" in group_state["pending_reason"]
+
+
+def test_execute_external_node_template_resume_fails_fast_on_checkpoint_target_drift(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    source_report = _source_report(target_k8s_version="1.33")
+    payload = _external_node_template_only_payload(target_k8s_version="1.33")
+    checkpoint_path = _write_external_node_template_resume_checkpoint(
+        config_path=config_path,
+        source_report=source_report,
+        phase_state={
+            "control_plane": {"status": "already-current", "hops": {}},
+            "node_groups": {
+                "gpu-pool": {
+                    "status": "waiting-rollout",
+                    "target": {
+                        "k8s_version": "1.33",
+                        "os": "ubuntu22.04",
+                        "gpu_stack_preset": "cuda13.0",
+                    },
+                    "mutation_performed": True,
+                    "provider_update_attempted": True,
+                }
+            },
+        },
+    )
+    runner = _TimeoutAfterAcceptedNodeTemplateUpdateRunner()
+    runner.cluster["spec"]["control_plane"]["version"] = "1.33"
+
+    with pytest.raises(RuntimeError, match="checkpoint drift"):
+        execute_soperator_migration(
+            config_path=config_path,
+            target_ref="external-cluster",
+            payload=payload,
+            source_report=source_report,
+            snapshot_collector=lambda *, kube_context: _snapshot(),
+            command_runner=runner,
+        )
+
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    group_state = checkpoint["phase_state"]["external-node-template-upgrade"]["node_groups"][
+        "gpu-pool"
+    ]
+    assert group_state["status"] == "failed"
+    assert group_state["reconciliation_status"] == "drift-conflict"
+    assert group_state["target"]["os"] == "ubuntu22.04"
+    assert group_state["accepted_plan_target"]["os"] == "ubuntu24.04"
+    assert "accepted upgrade plan target" in group_state["reconciliation_reason"]
+
+
+def test_execute_external_node_template_completed_checkpoint_live_drift_retries_phase(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    source_report = _source_report(target_k8s_version="1.33")
+    payload = _external_node_template_only_payload(target_k8s_version="1.33")
+    checkpoint_path = _write_external_node_template_resume_checkpoint(
+        config_path=config_path,
+        source_report=source_report,
+        completed=True,
+        phase_state={
+            "control_plane": {
+                "status": "already-current",
+                "current_version": "1.33",
+                "target_version": "1.33",
+                "hops": {},
+            },
+            "node_groups": {
+                "gpu-pool": {
+                    "status": "completed",
+                    "target": {
+                        "k8s_version": "1.33",
+                        "os": "ubuntu24.04",
+                        "gpu_stack_preset": "cuda13.0",
+                    },
+                }
+            },
+        },
+    )
+    runner = _FakeCommandRunner(
+        cluster={
+            "metadata": {"id": "cluster-123", "name": "external-cluster"},
+            "spec": {"control_plane": {"version": "1.33"}},
+        },
+        existing_node_groups=[
+            {
+                "metadata": {
+                    "id": "nodegroup-gpu-pool",
+                    "name": "gpu-pool",
+                    "parent_id": "cluster-123",
+                },
+                "spec": {
+                    "version": "1.32",
+                    "template": {
+                        "metadata": {"labels": {"nebius.com/node-group": "gpu-pool"}},
+                        "resources": {
+                            "platform": "gpu-h100-sxm",
+                            "preset": "8gpu-128vcpu-1600gb",
+                        },
+                        "gpu_settings": {"drivers_preset": "cuda12.8"},
+                        "os": "ubuntu22.04",
+                    },
+                },
+                "status": _ready_node_group_status(version="1.32", nodes=2),
+            }
+        ],
+    )
+
+    result = execute_soperator_migration(
+        config_path=config_path,
+        target_ref="external-cluster",
+        payload=payload,
+        source_report=source_report,
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        command_runner=runner,
+    )
+
+    assert result.pending_phase == "none"
+    assert any(
+        "external-node-template-upgrade: live state no longer satisfies completed action; retrying."
+        in line
+        for line in result.lines
+    )
+    node_template_updates = [
+        call[0]
+        for call in runner.calls
+        if call[0][:4] == ("nebius", "mk8s", "node-group", "update")
+        and call[0][4] == "nodegroup-gpu-pool"
+        and "--version" in call[0]
+    ]
+    assert len(node_template_updates) == 1
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert "external-node-template-upgrade" in checkpoint["completed_phases"]
+    assert "execute-phase-reconcile-required" in {
+        event["event"] for event in checkpoint["events"]
+    }
 
 
 def test_execute_external_node_template_allows_zero_surge_worker_fallback(
@@ -7941,7 +8404,18 @@ def test_execute_external_node_template_rechecks_slurm_queue_before_worker_wave(
     )
 
     assert result.pending_phase == "external-node-template-upgrade"
+    assert result.mutation_performed is True
     assert "Affected Slurm jobs exist for the upgrade scope" in result.pending_reason
+    checkpoint_path = soperator_migration_checkpoint_path(
+        tmp_path / "config.yaml",
+        "external-cluster",
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    group_state = checkpoint["phase_state"]["external-node-template-upgrade"]["node_groups"][
+        "gpu-pool"
+    ]
+    assert group_state["status"] == "updating"
+    assert "provider_update_attempted" not in group_state
     worker_updates = [
         call[0]
         for call in runner.calls
@@ -7950,6 +8424,30 @@ def test_execute_external_node_template_rechecks_slurm_queue_before_worker_wave(
         and "--version" in call[0]
     ]
     assert worker_updates == []
+
+    runner.slurm_queue_outputs = []
+    runner.slurm_queue_output = ""
+
+    resumed = execute_soperator_migration(
+        config_path=tmp_path / "config.yaml",
+        target_ref="external-cluster",
+        payload=_payload(include_placements=True),
+        source_report=_source_report(snapshot),
+        snapshot_collector=lambda *, kube_context: snapshot,
+        approved=True,
+        command_runner=runner,
+        job_policy="fail",
+    )
+
+    worker_updates = [
+        call[0]
+        for call in runner.calls
+        if call[0][:4] == ("nebius", "mk8s", "node-group", "update")
+        and call[0][4] == "nodegroup-gpu-pool"
+        and "--version" in call[0]
+    ]
+    assert len(worker_updates) == 1
+    assert resumed.pending_phase == "none"
 
 
 def _external_upgrade_slurm_runner(
@@ -13837,11 +14335,20 @@ def _provider_checkpoint(
     }
 
 
+def _mk8s_status_row_cells(summary: str, group: str) -> list[str]:
+    for line in summary.splitlines():
+        cells = line.split()
+        if cells and cells[0] == group:
+            return cells
+    raise AssertionError(f"MK8s status row not found for {group!r}:\n{summary}")
+
+
 def test_external_node_template_status_reports_control_plane_hop() -> None:
     runner = _FakeCommandRunner(
         existing_node_groups=[
             {
                 "metadata": {"id": "nodegroup-system", "name": "system"},
+                "spec": {"version": "1.31"},
                 "status": {
                     "ready_node_count": 1,
                     "target_node_count": 1,
@@ -13889,7 +14396,16 @@ def test_external_node_template_status_reports_control_plane_hop() -> None:
     assert "MK8s Node Groups not-started:" in snapshot.summary
     assert "Provider node groups (source=Nebius API, groups=1)" in snapshot.summary
     assert "total=1 upgraded=0 upgrading=0 remaining=1 ready/current=1/1" in snapshot.summary
-    assert "system  RUNNING  1      0         0          1          1/1" in snapshot.summary
+    assert _mk8s_status_row_cells(snapshot.summary, "system")[:8] == [
+        "system",
+        "RUNNING",
+        "1.31",
+        "1",
+        "0",
+        "0",
+        "1",
+        "1/1",
+    ]
     assert "Registered nodes" not in snapshot.summary
     assert runner.nebius_api.calls == [("node_group.list", "cluster-123")]
     assert messages == [snapshot.summary]
@@ -13900,6 +14416,7 @@ def test_mk8s_status_reports_provider_node_group_rollout_table() -> None:
         existing_node_groups=[
             {
                 "metadata": {"id": "nodegroup-gpu-pool", "name": "gpu-pool"},
+                "spec": {"version": "1.31"},
                 "status": {
                     "ready_node_count": 1,
                     "target_node_count": 2,
@@ -13912,6 +14429,7 @@ def test_mk8s_status_reports_provider_node_group_rollout_table() -> None:
             },
             {
                 "metadata": {"id": "nodegroup-login", "name": "login-pool"},
+                "spec": {"version": "1.32"},
                 "status": _ready_node_group_status(nodes=1),
             },
         ]
@@ -13932,16 +14450,30 @@ def test_mk8s_status_reports_provider_node_group_rollout_table() -> None:
     assert signal.state == "degraded"
     assert signal.summary.startswith("Provider node groups (source=Nebius API, groups=2)")
     assert "total=3 upgraded=2 upgrading=1 remaining=1 ready/current=2/2" in signal.summary
-    assert "group       state         total  upgraded  upgrading  remaining  ready/current  event" in (
+    assert "group       state         k8s   total  upgraded  upgrading  remaining" in (
         signal.summary
     )
-    assert "gpu-pool    PROVISIONING  2      1         1          1          1/1" in (
-        signal.summary
-    )
+    assert _mk8s_status_row_cells(signal.summary, "gpu-pool")[:8] == [
+        "gpu-pool",
+        "PROVISIONING",
+        "1.31",
+        "2",
+        "1",
+        "1",
+        "1",
+        "1/1",
+    ]
     assert "NodeProvisioning" in signal.summary
-    assert "login-pool  RUNNING       1      1         0          0          1/1" in (
-        signal.summary
-    )
+    assert _mk8s_status_row_cells(signal.summary, "login-pool")[:8] == [
+        "login-pool",
+        "RUNNING",
+        "1.32",
+        "1",
+        "1",
+        "0",
+        "0",
+        "1/1",
+    ]
     assert "Registered nodes" not in signal.summary
     assert runner.nebius_api.calls == [("node_group.list", "cluster-123")]
 
@@ -13979,7 +14511,16 @@ def test_mk8s_status_reports_reconciling_node_group_when_nodes_ready() -> None:
     assert signal.name == "MK8s Node Groups"
     assert signal.state == "degraded"
     assert "total=3 upgraded=0 upgrading=0 remaining=3 ready/current=3/3" in signal.summary
-    assert "system  PROVISIONING  3      0         0          3          3/3" in signal.summary
+    assert _mk8s_status_row_cells(signal.summary, "system")[:8] == [
+        "system",
+        "PROVISIONING",
+        "1.32",
+        "3",
+        "0",
+        "0",
+        "3",
+        "3/3",
+    ]
     assert "Draining" in signal.summary
     assert "Registered nodes" not in signal.summary
 
@@ -13989,6 +14530,7 @@ def test_mk8s_status_infers_completed_groups_when_outdated_counter_missing() -> 
         existing_node_groups=[
             {
                 "metadata": {"id": "nodegroup-system", "name": "system"},
+                "spec": {"version": "1.31"},
                 "status": {
                     "ready_node_count": 3,
                     "target_node_count": 3,
@@ -14000,6 +14542,7 @@ def test_mk8s_status_infers_completed_groups_when_outdated_counter_missing() -> 
             },
             {
                 "metadata": {"id": "nodegroup-accounting", "name": "accounting"},
+                "spec": {"version": "1.32"},
                 "status": {
                     "ready_node_count": 2,
                     "target_node_count": 2,
@@ -14009,6 +14552,7 @@ def test_mk8s_status_infers_completed_groups_when_outdated_counter_missing() -> 
             },
             {
                 "metadata": {"id": "nodegroup-controller", "name": "controller"},
+                "spec": {"version": "1.32"},
                 "status": {
                     "ready_node_count": 2,
                     "target_node_count": 2,
@@ -14018,6 +14562,7 @@ def test_mk8s_status_infers_completed_groups_when_outdated_counter_missing() -> 
             },
             {
                 "metadata": {"id": "nodegroup-login", "name": "login"},
+                "spec": {"version": "1.32"},
                 "status": {
                     "ready_node_count": 2,
                     "target_node_count": 2,
@@ -14027,6 +14572,7 @@ def test_mk8s_status_infers_completed_groups_when_outdated_counter_missing() -> 
             },
             {
                 "metadata": {"id": "nodegroup-worker-0-0", "name": "worker-0-0"},
+                "spec": {"version": "1.32"},
                 "status": {
                     "ready_node_count": 2,
                     "target_node_count": 2,
@@ -14051,21 +14597,27 @@ def test_mk8s_status_infers_completed_groups_when_outdated_counter_missing() -> 
     assert signal.name == "MK8s Node Groups"
     assert signal.state == "degraded"
     assert "total=11 upgraded=8 upgrading=0 remaining=3 ready/current=11/11" in signal.summary
-    assert "system      PROVISIONING  3      0         0          3          3/3" in (
-        signal.summary
-    )
-    assert "accounting  RUNNING       2      2         0          0          2/2" in (
-        signal.summary
-    )
-    assert "controller  RUNNING       2      2         0          0          2/2" in (
-        signal.summary
-    )
-    assert "login       RUNNING       2      2         0          0          2/2" in (
-        signal.summary
-    )
-    assert "worker-0-0  RUNNING       2      2         0          0          2/2" in (
-        signal.summary
-    )
+    assert _mk8s_status_row_cells(signal.summary, "system")[:8] == [
+        "system",
+        "PROVISIONING",
+        "1.31",
+        "3",
+        "0",
+        "0",
+        "3",
+        "3/3",
+    ]
+    for group in ("accounting", "controller", "login", "worker-0-0"):
+        assert _mk8s_status_row_cells(signal.summary, group)[:8] == [
+            group,
+            "RUNNING",
+            "1.32",
+            "2",
+            "2",
+            "0",
+            "0",
+            "2/2",
+        ]
 
 
 def test_mk8s_status_reports_checkpointed_waiting_rollout_when_provider_ready() -> None:
@@ -14093,7 +14645,16 @@ def test_mk8s_status_reports_checkpointed_waiting_rollout_when_provider_ready() 
     assert signal.name == "MK8s Node Groups"
     assert signal.state == "degraded"
     assert "total=1 upgraded=1 upgrading=0 remaining=0 ready/current=1/1" in signal.summary
-    assert "worker  RUNNING  1      1         0          0          1/1" in signal.summary
+    assert _mk8s_status_row_cells(signal.summary, "worker")[:8] == [
+        "worker",
+        "RUNNING",
+        "1.32",
+        "1",
+        "1",
+        "0",
+        "0",
+        "1/1",
+    ]
     assert "Registered nodes" not in signal.summary
 
 
@@ -14102,10 +14663,12 @@ def test_mk8s_status_reports_mixed_provider_groups_and_unknown_fields() -> None:
         existing_node_groups=[
             {
                 "metadata": {"id": "nodegroup-accounting", "name": "accounting"},
+                "spec": {"version": "1.32"},
                 "status": _ready_node_group_status(nodes=2),
             },
             {
                 "metadata": {"id": "nodegroup-worker", "name": "worker"},
+                "spec": {"version": "1.31"},
                 "status": {
                     "ready_node_count": 3,
                     "target_node_count": 4,
@@ -14118,6 +14681,7 @@ def test_mk8s_status_reports_mixed_provider_groups_and_unknown_fields() -> None:
             },
             {
                 "metadata": {"id": "nodegroup-system", "name": "system"},
+                "spec": {"version": "1.32"},
                 "status": _ready_node_group_status(nodes=3),
             },
             {
@@ -14141,8 +14705,22 @@ def test_mk8s_status_reports_mixed_provider_groups_and_unknown_fields() -> None:
     assert signal.state == "degraded"
     assert "total=9+unknown upgraded=7+unknown upgrading=2+unknown" in signal.summary
     assert "remaining=2+unknown ready/current=8+unknown/10+unknown" in signal.summary
-    assert "worker      PROVISIONING  4        2         2" in signal.summary
-    assert "mystery     unknown       unknown  unknown   unknown" in signal.summary
+    assert _mk8s_status_row_cells(signal.summary, "worker")[:6] == [
+        "worker",
+        "PROVISIONING",
+        "1.31",
+        "4",
+        "2",
+        "2",
+    ]
+    assert _mk8s_status_row_cells(signal.summary, "mystery")[:6] == [
+        "mystery",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+        "unknown",
+    ]
     assert signal.summary.index("worker") < signal.summary.index("mystery")
     assert signal.summary.index("mystery") < signal.summary.index("accounting")
     assert "Registered nodes" not in signal.summary
@@ -14153,6 +14731,7 @@ def test_mk8s_status_reports_large_provider_node_group_rollout() -> None:
         existing_node_groups=[
             {
                 "metadata": {"id": "nodegroup-worker-00", "name": "worker-00"},
+                "spec": {"version": "1.31"},
                 "status": {
                     "ready_node_count": 300,
                     "target_node_count": 1000,
@@ -14182,9 +14761,16 @@ def test_mk8s_status_reports_large_provider_node_group_rollout() -> None:
     assert "total=1000 upgraded=300 upgrading=700 remaining=700 ready/current=300/1000" in (
         signal.summary
     )
-    assert "worker-00  PROVISIONING  1000   300       700        700        300/1000" in (
-        signal.summary
-    )
+    assert _mk8s_status_row_cells(signal.summary, "worker-00")[:8] == [
+        "worker-00",
+        "PROVISIONING",
+        "1.31",
+        "1000",
+        "300",
+        "700",
+        "700",
+        "300/1000",
+    ]
     assert "NodeProvisioning" in signal.summary
     assert "Registered nodes" not in signal.summary
 
@@ -14199,7 +14785,7 @@ def test_mk8s_status_sections_empty_provider_node_group_inventory() -> None:
     assert signal.summary == (
         "Provider node groups (source=Nebius API, groups=0)\n"
         "total=0 upgraded=0 upgrading=0 remaining=0 ready/current=0/0\n"
-        "group  state  total  upgraded  upgrading  remaining  ready/current  event"
+        "group  state  k8s  total  upgraded  upgrading  remaining  ready/current  event"
     )
     assert runner.nebius_api.calls == [("node_group.list", "cluster-123")]
 

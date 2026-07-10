@@ -5,7 +5,8 @@ installed into a Codex runtime only when `install-skills.sh` is run.
 
 ## What It Does
 
-Answer whether the code behaves correctly against the feature tests and acceptance criteria.
+Answer whether the code behaves correctly against the feature tests,
+acceptance criteria, and any planned end-to-end slice.
 
 ## Main Boundaries
 
@@ -23,6 +24,7 @@ Answer whether the code behaves correctly against the feature tests and acceptan
 ## Output
 
 - Required tests pass.
+- Planned slice coverage passes or the blocker is classified.
 - Evidence file exists.
 - Failures are classified if not passing.
 - State moves to `tested`.

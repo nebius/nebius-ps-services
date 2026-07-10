@@ -5,7 +5,8 @@ implementation. It reads requirements, inspects existing code or greenfield
 context, routes topic, requirement, and technology due diligence through
 `research` when available, applies `system-design-rules` to non-trivial
 solution decisions, chooses components and boundaries, compares alternatives,
-and produces a Codex `/plan` handoff.
+designs vertical end-to-end slices for serial multi-layer applications, and
+produces a Codex `/plan` handoff.
 
 ## Files
 
@@ -14,7 +15,7 @@ and produces a Codex `/plan` handoff.
 - `agents/openai.yaml`: UI metadata and implicit invocation policy.
 - `references/design-workflow.md`: detailed phase checklist, `research`
   handoff guidance, `system-design-rules` decision-review guidance, depth
-  guidance, and `/plan` handoff template.
+  guidance, vertical-slice strategy, and `/plan` handoff template.
 - `evals/trigger-prompts.md`: should-trigger and should-not-trigger examples.
 
 ## Boundaries

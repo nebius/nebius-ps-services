@@ -251,9 +251,10 @@ The requirements template also records:
 `<project>/docs/design.md` does not exist. The template defines the front
 matter, source requirements link, design summary, technology choices,
 architecture sections, stable `FEAT-*` feature blocks, requirements covered,
-context evidence, implementation boundaries, TDD success criteria, validation
-plan, test plan, evaluation plan, done definition, UAT strategy, risks, open
-design questions, decision log, and change log.
+context evidence, end-to-end feature flow, layer map, implementation
+boundaries, TDD success criteria, validation plan, test plan, evaluation plan,
+done definition, UAT strategy, risks, open design questions, decision log, and
+change log.
 
 The design template also records:
 
@@ -473,20 +474,25 @@ Required happy-path evidence:
   `REQ-*` IDs.
 - `sdlc-start` creates or resumes private local run state and recommends one
   next skill.
-- `sdlc-gather-context` records a compact context pack.
+- `sdlc-gather-context` records a compact context pack, including layer and
+  boundary facts when the feature may span a vertical slice.
 - `sdlc-create-design` creates committed design with stable `FEAT-*` IDs.
 - `sdlc-auto-steering` records active-run steering, classifies mid-run prompts,
   and derives compact reminders without changing product-truth docs.
 - `sdlc-create-plan` writes a private locked plan version.
-- `sdlc-tdd` records test intent before implementation.
+- `sdlc-tdd` records test intent before implementation, including planned
+  slice contracts and cross-layer validation targets when present.
 - `sdlc-implement-plan` changes only the disposable project for the current
   feature.
 - `sdlc-validate-codes`, `sdlc-unit-tests`, and `sdlc-evaluate` record passing
-  evidence or route failures for classification.
+  evidence or route failures for classification, including slice boundary
+  checks, slice coverage, and end-to-end slice observation when the locked plan
+  defines one.
 - `sdlc-update-documents` updates README, changelog, examples, or usage docs
   when implemented behavior requires it and records documentation evidence.
-- `sdlc-align-specs` confirms requirements, design, plan, implementation, and
-  evidence agree, including documentation evidence when it exists.
+  Multi-layer behavior docs are backed by evaluated slice evidence.
+- `sdlc-align-specs` confirms requirements, design, plan, implementation,
+  documentation, slice evidence, and other evidence agree.
 - `sdlc-commit` creates one local feature-scoped commit only after evidence
   passes.
 - `sdlc-uat-tests` records product-level UAT evidence after all features are
@@ -577,15 +583,19 @@ any provided details through `sdlc-create-requirements`.
 
 Builds a compact context pack for one `REQ-*` or `FEAT-*`. It gathers official
 vendor facts first, internal/project facts second, and code/test evidence
-third. The context pack records sources, constraints, unresolved risks, and
-design implications without dumping raw pages, threads, or logs.
+third. For serial multi-layer features, it also records layer owners, API or
+command contracts, persistence expectations, fixtures, integration seams, and
+gaps that affect the vertical slice. The context pack records sources,
+constraints, unresolved risks, and design implications without dumping raw
+pages, threads, or logs.
 
 ### `sdlc-create-design`
 
 Converts requirements and gathered context into `docs/design.md`. It maps
 stable `REQ-*` blocks to stable `FEAT-*` blocks, defines architecture,
-boundaries, data flow, control flow, state, error handling, security,
-observability, validation, tests, evaluation, rollback, and done criteria.
+boundaries, vertical end-to-end feature flow, layer map, data flow, control
+flow, state, error handling, security, observability, validation, tests,
+evaluation, rollback, and done criteria.
 
 ### `sdlc-auto-steering`
 
@@ -604,58 +614,71 @@ committed product-truth docs.
 Creates a private, locked execution plan for exactly one ready feature. Plans
 live under the local run directory, not in the repository. Existing locked
 plans are never edited in place; changed design or context creates a new plan
-version.
+version. For serial multi-layer features, the plan preserves the end-to-end
+slice and groups steps by behavior across layers rather than by isolated layer.
 
 ### `sdlc-tdd`
 
 Defines success before implementation. It writes or maps tests from
-requirements, feature design, and the locked plan, then records expected red or
-already-green evidence. It does not implement production behavior or weaken
-acceptance criteria.
+requirements, feature design, the locked plan, and any planned end-to-end slice,
+then records expected red or already-green evidence. When a slice is present,
+tests cover the smallest useful layer contracts or cross-layer validation
+target that would fail if planned behavior is missing. It does not implement
+production behavior or weaken acceptance criteria.
 
 ### `sdlc-implement-plan`
 
 Implements production code for the current feature only. It rereads the locked
 plan, feature design, context pack, source files, and tests, then makes the
-smallest coherent implementation inside the plan boundaries.
+smallest coherent implementation inside the plan boundaries. When the locked
+plan defines a vertical slice, implementation follows that slice and routes
+plan or design defects backward instead of widening scope.
 
 ### `sdlc-validate-codes`
 
 Checks whether the implementation can build, parse, lint, type-check, import,
-and validate configuration. After those mechanical checks pass, it uses
-`code-review` in review-only mode against the current feature diff, changed
-files, tests, locked plan, and design context. It records validation and review
-evidence in the local run state and classifies failures instead of treating
-missing tooling, broken tooling, or blocking review findings as success. This
-is not PR readiness; `review-pr` remains the PR review and merge-readiness
-phase after PR creation.
+validate configuration, and stay inside the locked plan and End-To-End Slice.
+After those mechanical and boundary checks pass, it uses `code-review` in
+review-only mode against the current feature diff, changed files, tests, locked
+plan, and design context. It records validation and review evidence in the
+local run state and classifies failures instead of treating missing tooling,
+broken tooling, slice drift, or blocking review findings as success. This is
+not PR readiness; `review-pr` remains the PR review and merge-readiness phase
+after PR creation.
 
 ### `sdlc-unit-tests`
 
 Runs behavior tests for the current feature, including unit, integration,
-component, contract, regression, and mock-based tests when applicable. It
-records test evidence and classifies failures as implementation, test,
-environment, or design defects.
+component, contract, regression, and mock-based tests when applicable. When the
+locked plan defines an end-to-end slice, it records the tests that prove the
+slice's cross-layer validation target or classifies the gap. It records test
+evidence and classifies failures as implementation, test, environment, or
+design defects.
 
 ### `sdlc-evaluate`
 
 Observes product behavior against acceptance and negative criteria after
 validation and tests pass. It chooses the correct route for the product shape:
 `sdlc-gui-test`, `sdlc-tui-test`, API/service checks, performance checks, or
-manual review. When `docs/requirements.md` provides a confirmed safe Live
-Experiment Environment, it may use that environment within the recorded
-allowed actions; missing, unsafe, or unconfirmed live access is classified
-instead of guessed around. Passing tests alone are not treated as evaluation.
+manual review. When a locked plan defines an end-to-end slice, it observes the
+feature through that user-visible or system-visible flow; layer-isolated checks
+alone are insufficient unless the plan says no slice applies. When
+`docs/requirements.md` provides a confirmed safe Live Experiment Environment,
+it may use that environment within the recorded allowed actions; missing,
+unsafe, or unconfirmed live access is classified instead of guessed around.
+Passing tests alone are not treated as evaluation.
 
 ### `sdlc-update-documents`
 
 Updates project-facing documentation after feature evaluation, resolved
 documentation steering, UAT, or final run evidence. It may update README,
 changelog, usage docs, examples, docs indexes, or generated docs that describe
-implemented behavior, then records documentation evidence under the private run
-directory as `evidence/FEAT-*/documents.md` or `evidence/uat/documents.md`. It
-does not edit `docs/requirements.md` or `docs/design.md`; spec or design drift
-routes back to `sdlc-create-requirements` or `sdlc-create-design`.
+implemented behavior. When documentation describes a multi-layer feature flow,
+it uses evaluated end-to-end slice evidence rather than implementation intent
+alone. It records documentation evidence under the private run directory as
+`evidence/FEAT-*/documents.md` or `evidence/uat/documents.md`. It does not edit
+`docs/requirements.md` or `docs/design.md`; spec, design, or missing slice
+evidence routes back to the responsible phase.
 
 ### `sdlc-gui-test`
 
@@ -680,10 +703,14 @@ input.
 
 ### `sdlc-align-specs`
 
-Checks that requirements, design, locked plans, tests, implementation, and
-evidence tell one consistent story, including documentation evidence when it
-exists. It is SDLC-specific and does not replace the general `align` skill.
-Drift is routed to the responsible SDLC skill.
+Checks that requirements, design, locked plans, tests, implementation,
+documentation, end-to-end slice evidence, and other evidence tell one
+consistent story. For vertical features, it verifies that the design's feature
+flow and layer map, the locked plan's End-To-End Slice, tests, implementation
+boundaries, validation evidence, evaluation evidence, documentation, and UAT
+all describe the same slice or explicitly record why no slice applies. It is
+SDLC-specific and does not replace the general `align` skill. Drift is routed
+to the responsible SDLC skill.
 
 ### `sdlc-commit`
 

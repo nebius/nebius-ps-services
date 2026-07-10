@@ -30,6 +30,10 @@ Use $brainstorm to explore whether this should become an SDLC feature or just a 
 Use $brainstorm to think through this major architecture decision. If $design and $system-design-rules are available, consult them as advisors but keep the discussion chat-only.
 ```
 
+```text
+Use $brainstorm to compare these conflicting repo and vendor signals. If source priority cannot resolve the conflict, use bounded $research for that conflict and come back with options.
+```
+
 ## Should Not Trigger
 
 ```text

@@ -1,6 +1,6 @@
 ---
 name: sdlc-validate-codes
-description: "Use only as part of the Agentic SDLC workflow; use after implementation or before `sdlc-commit` to run build, parse, lint, type, import, dependency, and configuration validation, then use `code-review` as a review-only implementation-quality gate before marking the feature validated."
+description: "Use only as part of the Agentic SDLC workflow; use after implementation or before `sdlc-commit` to run build, parse, lint, type, import, dependency, configuration, and locked-slice boundary validation, then use `code-review` as a review-only implementation-quality gate before marking the feature validated."
 ---
 
 # Validate Codes
@@ -59,6 +59,9 @@ passed a review-only implementation-quality gate before deeper behavior tests.
 - Detect the project stack and reuse configured project commands.
 - Run the smallest reliable validation set first.
 - Include syntax, linting, type checking when configured, Python import checks when relevant, config validation, and feasible build checks.
+- Compare changed files, configuration, generated artifacts, and entry points
+  against the locked plan and its End-To-End Slice. Record whether the
+  implementation stayed inside the planned layers and boundary contracts.
 - Record exact commands and outcomes.
 - After mechanical checks pass, use `code-review` in review-only mode on the
   current feature diff, changed files, nearby tests, locked plan, and design
@@ -79,6 +82,8 @@ passed a review-only implementation-quality gate before deeper behavior tests.
 ## Failure Handling
 
 - Syntax, lint, type, import, build, or config failure maps to `VALIDATION_DEFECT`.
+- Changed files outside the locked slice map to `IMPLEMENTATION_DEFECT` unless
+  the plan was incomplete, in which case route to `sdlc-create-plan`.
 - Missing tooling maps to `ENVIRONMENT_DEFECT` unless intentionally absent.
 - Missing or unavailable `code-review` maps to `ENVIRONMENT_DEFECT` unless
   local SDLC policy explicitly waives the review gate.
@@ -102,6 +107,7 @@ passed a review-only implementation-quality gate before deeper behavior tests.
 
 - Validation evidence exists.
 - Required checks pass or blocker is classified.
+- Slice boundary validation passes or the responsible blocker is classified.
 - `code-review` decision is recorded.
 - State moves to `validated` only when mechanical validation passes and
   `code-review` does not request changes or owner review.

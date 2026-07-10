@@ -1,6 +1,6 @@
 ---
 name: sdlc-create-plan
-description: "Use only as part of the Agentic SDLC workflow; use when one ready Agentic SDLC feature from `docs/design.md` needs a locked local execution plan before tests or implementation. Plans are private local artifacts and must not be committed."
+description: "Use only as part of the Agentic SDLC workflow; use when one ready Agentic SDLC feature from `docs/design.md` needs a locked local execution plan before tests or implementation. Plans are private local artifacts, should preserve vertical end-to-end feature slices when applicable, and must not be committed."
 ---
 
 # Create Plan
@@ -46,6 +46,10 @@ Create a local, locked execution plan for exactly one feature.
 - Use `assets/templates/feature-plan.md.template` for plan shape.
 - Confirm feature status is ready and dependencies are complete or explicitly allowed.
 - Identify files to inspect, create, modify, and avoid.
+- For serial multi-layer application features, plan one end-to-end slice around
+  the feature's behavior and layer map. Group test-first, implementation,
+  validation, and evaluation steps by behavior across layers rather than by
+  isolated layers. Use foundation-only steps only when they are true blockers.
 - Define test-first, implementation, validation, evaluation, rollback, and stop-condition steps.
 - Lock the plan.
 
@@ -72,6 +76,7 @@ Create a local, locked execution plan for exactly one feature.
 
 - Local plan exists and is locked.
 - Plan contains test, implementation, validation, and evaluation steps.
+- Plan identifies the end-to-end slice or records why no vertical slice applies.
 - Plan references exact feature and requirement IDs.
 
 ## SDLC Invariants

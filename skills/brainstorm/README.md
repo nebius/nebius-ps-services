@@ -5,8 +5,10 @@ implementation. It gathers only source-ranked context that is relevant to the
 topic, question, or problem statement, challenges assumptions, and keeps facts,
 hypotheses, tradeoffs, and open questions separated. For major design or
 architecture decisions, it consults `design` and `system-design-rules` as
-advisory context when those skills are installed and accessible, then stays in
-chat unless the user asks to switch workflows.
+advisory context when those skills are installed and accessible. If gathered
+sources conflict on a recommendation-changing point and source priority cannot
+settle it, `brainstorm` uses bounded `research` for that exact conflict, then
+returns to chat unless the user asks to switch workflows.
 
 The skill is intentionally read-only during the brainstorming conversation. If
 the user decides to implement, document, ticket, message, commit, or publish

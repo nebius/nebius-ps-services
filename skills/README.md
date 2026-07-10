@@ -39,7 +39,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | --- | --- | --- |
 | `align` | Implicit allowed | Project-wide alignment and changed-scope quality gates across code, wiring, tests, CI, CLI/help, config, documentation, workflows, project skills, code review, lint/syntax, and security. |
 | `align-skill` | Implicit allowed | Review, harden, validate, and improve existing or newly scaffolded Codex or Agent Skill folders after an initial scaffold or draft exists. |
-| `brainstorm` | Implicit allowed | Explore ideas in chat with relevant source-ranked project, repo, skill, internal, vendor, and advisory design-skill context before implementation. |
+| `brainstorm` | Implicit allowed | Explore ideas in chat with relevant source-ranked project, repo, skill, internal, vendor, bounded research for unresolved source conflicts, and advisory design-skill context before implementation. |
 | `code-review` | Implicit allowed | Neutral findings-first review of local diffs, local branches, changed files, modules, repository areas, or patches for bugs, tests, reliability, maintainability, and structural simplification. |
 | `create-learning-course` | Explicit only | Create public-safe learning courses, course workspaces, syllabi, lessons, exercises, glossaries, and publication review checkpoints. |
 | `global-context-management` | Implicit allowed | Keep complex Codex tasks focused with durable task state, concise parent-thread context, targeted read-only subagents when the prompt or local hook policy request authorizes delegation, focused validation, and final risk review. |
@@ -74,7 +74,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | Skill | Invocation | Description |
 | --- | --- | --- |
 | `apply-security` | Implicit allowed | Advise on, review, and safely remediate security issues across design, implementation, infrastructure, deployment, Helm, Kubernetes, Terraform, CI/CD, shell, and application code. |
-| `design` | Implicit allowed | Design software features, applications, components, APIs, data flows, and technology choices before implementation, using `research` and `system-design-rules` where relevant before the `/plan` handoff. |
+| `design` | Implicit allowed | Design software features, applications, components, APIs, data flows, vertical end-to-end slices, and technology choices before implementation, using `research` and `system-design-rules` where relevant before the `/plan` handoff. |
 | `github-workflows` | Implicit allowed | Create, review, or standardize GitHub Actions for PR/merge CI, merge automation, reusable workflows, permissions, and release/image YAML. |
 | `gitignore` | Implicit allowed | Create or update stack-aware `.gitignore` files with sensible macOS, VS Code, and detected language/tool defaults. |
 | `helmchart` | Implicit allowed | Create, review, harden, refactor, lint, template, or standardize Helm charts and chart CI. |
@@ -84,7 +84,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `python-project` | Implicit allowed | Scaffold or harden Python projects with modern packaging, `src/` layout, Ruff, pytest, Typer, Pydantic, services, APIs, and CI. |
 | `shell-scripting` | Implicit allowed | Create, refactor, or review Bash automation with strict mode, safe argument parsing, idempotency, and readable CLI output. |
 | `system-design-rules` | Implicit allowed | Evaluate system designs, ADRs, architecture options, APIs, data ownership, reliability, security, observability, scale, cost, and team boundaries with a practical design checklist. |
-| `task-implementer` | Explicit only | Break complex brownfield implementation-loop requests into ordered `task-1`..`task-n` work items and run them sequentially with per-task context gathering, design, planning, validation, `code-review`, `$commit`, and markdown handoff checkpoints between fresh Codex sessions. |
+| `task-implementer` | Explicit only | Break complex brownfield implementation-loop requests into ordered `task-1`..`task-n` work items, prefer vertical tasks for serial multi-layer features, and run them sequentially with per-task context gathering, design, planning, validation, `code-review`, `$commit`, and markdown handoff checkpoints between fresh Codex sessions. |
 | `terraform` | Implicit allowed | Scaffold, standardize, or improve Terraform repositories and modules with state guidance, validation, security controls, examples, and CI. |
 
 ### Agentic SDLC Workflow
@@ -94,25 +94,25 @@ workflow, normally starting with `$sdlc-start`.
 
 | Skill | Invocation | Description |
 | --- | --- | --- |
-| `sdlc-align-specs` | Explicit only | Check SDLC requirements, design, plans, tests, implementation, documentation, and evidence for consistency. |
+| `sdlc-align-specs` | Explicit only | Check SDLC requirements, design, plans, tests, implementation, documentation, end-to-end slice evidence, and other evidence for consistency. |
 | `sdlc-auto-steering` | Explicit only | Refresh private active-run steering by recording mid-run user prompts, classifying them, and deriving compact reminders before the next SDLC phase. |
 | `sdlc-classify-failure` | Explicit only | Classify failed SDLC phases and route the loop to the earliest responsible phase. |
 | `sdlc-commit` | Explicit only | Create a local feature-scoped SDLC commit after validation, tests, and evaluation pass; never pushes. |
-| `sdlc-create-design` | Explicit only | Create or update `docs/design.md` from requirements, gathered context, and codebase evidence, preserving stable feature IDs and implementation-ready design boundaries. |
-| `sdlc-create-plan` | Explicit only | Create a locked private local execution plan for one ready feature before tests or implementation. |
+| `sdlc-create-design` | Explicit only | Create or update `docs/design.md` from requirements, gathered context, and codebase evidence, preserving stable feature IDs, vertical feature flow, and implementation-ready design boundaries. |
+| `sdlc-create-plan` | Explicit only | Create a locked private local execution plan for one ready feature before tests or implementation, preserving the end-to-end slice when applicable. |
 | `sdlc-create-requirements` | Explicit only | Create or update `docs/requirements.md` from user prompts, tickets, stories, change requests, and optional safe live experiment environment details while preserving stable requirement IDs. |
-| `sdlc-evaluate` | Explicit only | Evaluate whether the current feature solves the real-world requirement using acceptance criteria, the right harness, and any confirmed safe live experiment environment. |
-| `sdlc-gather-context` | Explicit only | Build compact feature context packs from product, vendor, internal, codebase, and test sources. |
+| `sdlc-evaluate` | Explicit only | Evaluate whether the current feature and any planned end-to-end slice solve the real-world requirement using acceptance criteria, the right harness, and any confirmed safe live experiment environment. |
+| `sdlc-gather-context` | Explicit only | Build compact feature context packs from product, vendor, internal, codebase, layer-boundary, and test sources. |
 | `sdlc-gui-test` | Explicit only | Control and evaluate browser UI behavior against SDLC acceptance criteria with screenshots or accessibility snapshots when available. |
-| `sdlc-implement-plan` | Explicit only | Implement production code for the current locked feature plan after `sdlc-tdd`, staying inside plan boundaries. |
+| `sdlc-implement-plan` | Explicit only | Implement production code for the current locked feature plan after `sdlc-tdd`, staying inside plan boundaries and the planned vertical slice when present. |
 | `sdlc-merge-pr` | Explicit only | Merge a specific Agentic SDLC pull request only after explicit user request and final readiness checks. |
 | `sdlc-start` | Explicit only | Start, resume, or continue the Agentic SDLC workflow, encourage safe live environment capture when useful, and choose the next phase from local run state. |
-| `sdlc-tdd` | Explicit only | Convert acceptance criteria and design success criteria into failing or already-green tests before implementation. |
+| `sdlc-tdd` | Explicit only | Convert acceptance criteria, design success criteria, and any planned end-to-end slice into failing or already-green tests before implementation. |
 | `sdlc-tui-test` | Explicit only | Control and evaluate terminal, CLI wizard, or TUI flows with transcript and exit-code evidence. |
-| `sdlc-update-documents` | Explicit only | Update project-facing README, changelog, usage docs, examples, or generated docs from implemented SDLC evidence without editing requirements or design. |
+| `sdlc-update-documents` | Explicit only | Update project-facing README, changelog, usage docs, examples, or generated docs from implemented and evaluated SDLC evidence without editing requirements or design. |
 | `sdlc-uat-tests` | Explicit only | Run product-level user acceptance testing across the whole system, using any confirmed safe live experiment environment, before PR creation. |
-| `sdlc-unit-tests` | Explicit only | Run behavior, regression, integration, component, contract, or mock-based tests for the current feature. |
-| `sdlc-validate-codes` | Explicit only | Run build, parse, lint, type, import, dependency, and configuration validation for the current feature, then use `code-review` as a review-only quality gate. |
+| `sdlc-unit-tests` | Explicit only | Run behavior, regression, integration, component, contract, or mock-based tests for the current feature and planned slice. |
+| `sdlc-validate-codes` | Explicit only | Run build, parse, lint, type, import, dependency, configuration, and locked-slice boundary validation for the current feature, then use `code-review` as a review-only quality gate. |
 
 ## Using Skills in Codex Chat
 
@@ -260,9 +260,10 @@ when available, and official vendor docs only when those sources can answer the
 question, resolve the challenge, close a named gap, or change the
 recommendation. It separates facts from hypotheses, challenges weak
 assumptions, compares options, consults `design` and `system-design-rules` for
-major decisions when those skills are installed and accessible, and stops short
-of editing files, creating tickets, sending messages, or mutating external
-systems. If the user pivots to execution, it should
+major decisions when those skills are installed and accessible, uses bounded
+`research` only for unresolved recommendation-changing source conflicts, and
+stops short of editing files, creating tickets, sending messages, or mutating
+external systems. If the user pivots to execution, it should
 summarize the brainstorm and hand off to the appropriate implementation,
 alignment, SDLC, or communication skill.
 
@@ -304,7 +305,8 @@ design before implementation. It follows a phased workflow: understand
 requirements, understand the existing system or greenfield context, route
 missing knowledge through `research` when available, design the solution, apply
 `system-design-rules` to non-trivial solution decisions, evaluate alternatives,
-and create a Codex `/plan` handoff. Use it for new features,
+define vertical end-to-end slices for serial multi-layer applications, and
+create a Codex `/plan` handoff. Use it for new features,
 major changes, APIs, data flows, integrations, and new applications when the
 user wants a practical design and implementation-ready plan, not immediate
 coding. Use `brainstorm` for open-ended ideation, `system-design-rules` for
@@ -347,7 +349,10 @@ records a short plan, implements one task at a time, runs focused validation,
 uses `code-review`, fixes scoped findings, commits the completed task through
 `$commit`, and updates the handoff with context, design, plan, changed files,
 validation, review result, fixes, commit evidence, blockers, and the
-next-session prompt. Because it mutates code, invokes local commit checkpoints,
+next-session prompt. For serial multi-layer application work, it prefers
+vertical tasks that carry one behavior through connected layers over broad
+layer-by-layer tasks unless a shared foundation is a true blocker. Because it
+mutates code, invokes local commit checkpoints,
 and may launch follow-on implementation sessions, it is explicit-only. Use
 `global-context-management` for general context hygiene, `$sdlc-start` for
 Agentic SDLC, and `align` for final changed-surface alignment.
@@ -426,34 +431,39 @@ local state layout, hook boundaries, and full skill-by-skill lifecycle.
   next skill without duplicating history on unchanged resumes. At run start, it
   encourages safe live experiment environment capture through requirements.
 - `sdlc-gather-context`: builds compact feature context packs from official docs,
-  internal sources, code, and tests.
+  internal sources, code, tests, and layer-boundary evidence when a vertical
+  slice may apply.
 - `sdlc-create-design`: creates or updates `docs/design.md`, maps requirements to
   stable `FEAT-*` blocks, records selected and rejected design options, and
-  defines implementation, validation, test, evaluation, rollout, and rollback
-  boundaries.
+  defines vertical feature flow, layer map, implementation, validation, test,
+  evaluation, rollout, and rollback boundaries.
 - `sdlc-auto-steering`: refreshes private active-run steering, records every
   mid-run user prompt safely, classifies entries, derives compact reminders,
   and routes requirements, design, docs, or human-input changes back through
   `sdlc-start`.
-- `sdlc-create-plan`: creates locked private local execution plans for one feature.
-- `sdlc-tdd`: writes or maps tests before implementation.
+- `sdlc-create-plan`: creates locked private local execution plans for one feature,
+  preserving the end-to-end slice when applicable.
+- `sdlc-tdd`: writes or maps tests before implementation, including planned
+  slice contracts and cross-layer validation targets when present.
 - `sdlc-implement-plan`: implements production code for the current locked feature
-  plan only.
-- `sdlc-validate-codes`: runs syntax, lint, type, import, config, dependency, and
-  build checks where configured, then uses `code-review` in review-only mode to
-  catch blocking implementation-quality issues before behavior tests.
+  plan only, following the planned vertical slice when present.
+- `sdlc-validate-codes`: runs syntax, lint, type, import, config, dependency,
+  build, and locked-slice boundary checks where configured, then uses
+  `code-review` in review-only mode to catch blocking implementation-quality
+  issues before behavior tests.
 - `sdlc-unit-tests`: runs feature behavior, regression, integration, component,
-  contract, or mock-based tests.
+  contract, or mock-based tests, including slice coverage when present.
 - `sdlc-evaluate`: observes feature behavior against acceptance criteria and routes
   to GUI, TUI, API, service, or manual evaluation, using a confirmed safe live
-  experiment environment only within recorded allowed actions.
+  experiment environment only within recorded allowed actions, and records
+  planned slice observation when applicable.
 - `sdlc-update-documents`: updates project-facing README, changelog, examples,
   usage docs, docs indexes, or generated docs after evaluated implementation or
   UAT evidence, while routing requirements and design drift to their owner
-  skills.
+  skills. Multi-layer behavior docs require evaluated slice evidence.
 - `sdlc-align-specs`: checks SDLC requirements, design, plans, tests,
-  implementation, docs, and evidence for consistency before commit or PR
-  readiness.
+  implementation, docs, end-to-end slice evidence, and other evidence for
+  consistency before commit or PR readiness.
 - `sdlc-classify-failure`: classifies failed phases before retrying and routes to
   the earliest responsible SDLC phase.
 - `sdlc-gui-test`: controls and evaluates browser UI flows with screenshots or

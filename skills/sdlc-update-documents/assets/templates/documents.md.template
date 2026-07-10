@@ -10,6 +10,7 @@
   - Validation: `<path or none>`
   - Tests: `<path or none>`
   - Evaluation: `<path or none>`
+  - End-to-end slice: `<path or N/A>`
   - UAT: `<path or none>`
   - Steering: `<entry IDs or none>`
 

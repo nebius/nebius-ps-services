@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD033 -->
+
 # FEAT-<id> Evaluation Evidence
 
 ## Route
@@ -21,6 +23,15 @@
 ## Observation
 
 <What was observed.>
+
+## End-To-End Slice Observation
+
+| Field | Value |
+| --- | --- |
+| Planned Slice | <summary or N/A> |
+| Flow Observed | <yes, no, N/A> |
+| Layer Boundaries Exercised | <summary or N/A> |
+| Cross-Layer Result | <pass, fail, blocked, N/A> |
 
 ## Acceptance Result
 

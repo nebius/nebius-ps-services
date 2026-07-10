@@ -5,7 +5,8 @@ installed into a Codex runtime only when `install-skills.sh` is run.
 
 ## What It Does
 
-Define success before implementation by creating tests that prove the current feature behavior.
+Define success before implementation by creating tests that prove the current
+feature behavior and any planned end-to-end slice.
 
 ## Main Boundaries
 
@@ -23,5 +24,7 @@ Define success before implementation by creating tests that prove the current fe
 ## Output
 
 - Tests exist and map to acceptance criteria.
+- Planned slice contracts and cross-layer validation targets are covered or a
+  blocker is classified.
 - Test run evidence exists.
 - Expected red or already-green state is recorded.

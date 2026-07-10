@@ -1,6 +1,6 @@
 ---
 name: sdlc-implement-plan
-description: "Use only as part of the Agentic SDLC workflow; use after `sdlc-tdd` when a locked Agentic SDLC feature plan needs production implementation. Implements only the current feature plan and stays inside its boundaries."
+description: "Use only as part of the Agentic SDLC workflow; use after `sdlc-tdd` when a locked Agentic SDLC feature plan needs production implementation. Implements only the current feature plan, including its vertical end-to-end slice when present, and stays inside its boundaries."
 ---
 
 # Implement Plan
@@ -45,7 +45,9 @@ Implement production code for one feature while staying inside the locked plan.
 ## Process
 
 - Re-read the locked plan and inspect current code before editing.
-- Make the smallest coherent implementation.
+- Make the smallest coherent implementation. When the locked plan defines a
+  vertical end-to-end slice, implement that slice through the planned layers
+  without widening feature scope.
 - Preserve public behavior unrelated to the feature.
 - Keep style consistent with nearby code.
 - Run focused tests when useful and record changed files plus rationale.
@@ -54,7 +56,9 @@ Implement production code for one feature while staying inside the locked plan.
 
 - Reruns converge instead of duplicating code.
 - If implementation already exists, verify it against the plan instead of rewriting.
-- If source drift invalidates the plan, stop and route to `sdlc-create-plan`.
+- If source drift invalidates the plan, or if the vertical slice cannot be
+  implemented inside the locked boundaries, stop and route to
+  `sdlc-create-plan` or `sdlc-create-design` instead of broadening scope.
 
 ## Failure Handling
 
@@ -74,6 +78,7 @@ Implement production code for one feature while staying inside the locked plan.
 ## Completion Criteria
 
 - Planned code changes are implemented.
+- Planned vertical slice is implemented or a plan/design defect is recorded.
 - Focused tests are runnable or blocker is recorded.
 - Changed files match implementation boundaries.
 - State moves to `implemented`.

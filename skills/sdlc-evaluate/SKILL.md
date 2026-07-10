@@ -1,6 +1,6 @@
 ---
 name: sdlc-evaluate
-description: "Use only as part of the Agentic SDLC workflow; use after validation and tests in the Agentic SDLC loop to determine whether the current feature solves the real-world requirement using acceptance criteria, the correct evaluation harness, and any confirmed safe live experiment environment."
+description: "Use only as part of the Agentic SDLC workflow; use after validation and tests in the Agentic SDLC loop to determine whether the current feature and any planned end-to-end slice solve the real-world requirement using acceptance criteria, the correct evaluation harness, and any confirmed safe live experiment environment."
 ---
 
 # SDLC Evaluate
@@ -54,6 +54,10 @@ Evaluate observed product behavior against real-world acceptance criteria.
   fit the recorded allowed actions. Otherwise fall back to local, mocked, dry
   run, or manual evaluation as appropriate.
 - Compare observed behavior against acceptance and negative criteria.
+- When the locked plan defines an end-to-end slice, observe the feature through
+  that slice's user-visible or system-visible flow. Layer-isolated checks alone
+  are not enough to mark the feature evaluated unless the plan says no vertical
+  slice applies.
 - Record control, observation, and evaluation evidence.
 
 ## Idempotency
@@ -65,6 +69,9 @@ Evaluate observed product behavior against real-world acceptance criteria.
 ## Failure Handling
 
 - Real behavior mismatch maps to `EVALUATION_DEFECT`.
+- Missing end-to-end slice observation maps to `EVALUATION_DEFECT` or
+  `ENVIRONMENT_DEFECT` based on whether product behavior or access prevented
+  the observation.
 - Automation failure maps to `ENVIRONMENT_DEFECT` or `EVALUATION_DEFECT` based on cause.
 - Missing required live environment access maps to `ENVIRONMENT_DEFECT` or
   `HUMAN_INPUT_REQUIRED` based on whether setup or a human-owned decision is
@@ -86,6 +93,7 @@ Evaluate observed product behavior against real-world acceptance criteria.
 
 - Evaluation evidence exists.
 - Acceptance criteria are explicitly pass or fail.
+- Planned end-to-end slice observation is recorded or a blocker is classified.
 - State moves to `evaluated` only when pass.
 
 ## SDLC Invariants

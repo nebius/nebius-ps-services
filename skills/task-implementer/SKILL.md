@@ -1,6 +1,6 @@
 ---
 name: task-implementer
-description: "Use only when the user explicitly asks for a complex sequential brownfield implementation loop: split multi-task work into ordered task-1..task-n items, inspect target code first, gather per-task context with brainstorm when available, route architecture/contracts/missing-code/ambiguous boundaries through design, then plan and implement one task per fresh Codex session with validation, code-review, fixes, $commit, and a markdown handoff checkpoint. Do not use for ordinary one-shot implementation, Agentic SDLC, chat-only brainstorming, standalone code review, standalone commits, PRs, or parallel multi-agent edits."
+description: "Use only when the user explicitly asks for a complex sequential brownfield implementation loop: split multi-task work into ordered task-1..task-n items, inspect target code first, prefer vertical end-to-end tasks for serial multi-layer features, gather per-task context with brainstorm when available, route architecture/contracts/missing-code/ambiguous boundaries through design, then plan and implement one task per fresh Codex session with validation, code-review, fixes, $commit, and a markdown handoff checkpoint. Do not use for ordinary one-shot implementation, Agentic SDLC, chat-only brainstorming, standalone code review, standalone commits, PRs, or parallel multi-agent edits."
 ---
 
 # Task Implementer
@@ -102,9 +102,15 @@ data, or broad copied documentation.
 5. Identify dependencies and order tasks as `task-1`, `task-2`, ..., `task-n`.
    Order by prerequisite relationships first, then user priority, user-visible
    risk, shared contracts, and validation value.
+   For serial multi-layer application work, prefer tasks that complete one
+   coherent vertical slice through the required layers, such as UI -> API ->
+   persistence, instead of broad layer-only tasks. Use foundation-only tasks
+   only for true prerequisites such as schema contracts, auth, migrations, test
+   harnesses, or safety preflights that block vertical slices.
 6. For each task, record: goal, rationale, dependencies, likely files,
-   brainstorm/context needs, design need, plan, implementation steps,
-   validation commands, done criteria, and rollback notes.
+   brainstorm/context needs, design need, vertical slice or layers covered,
+   plan, implementation steps, validation commands, done criteria, and rollback
+   notes.
 7. For the active task, gather only the context needed for that task. Use
    `brainstorm` when available and relevant for source-ranked context,
    tradeoffs, and assumption checks; keep it read-only and summarize the useful
@@ -116,8 +122,8 @@ data, or broad copied documentation.
    is unavailable for a task that needs it, do a compact local design pass and
    mark the handoff assumption as `design_skill_unavailable`.
 9. Create a short per-task implementation plan after context and design: exact
-   steps, likely files, validation commands, documentation/changelog updates,
-   rollback notes, and stop conditions.
+   steps, likely files, vertical slice and end-to-end validation, documentation
+   or changelog updates, rollback notes, and stop conditions.
 10. Implement only the active task. Keep edits within its boundary; update docs,
    README, and changelog only when they are in scope for that task.
 11. Run the narrowest relevant validation for the active task. Broaden only when
@@ -186,6 +192,10 @@ the intended context boundary.
   consumers.
 - Put tests with the task they verify unless the task is explicitly a test-only
   preparation step.
+- For serial multi-layer application work, prefer vertical deliverables that
+  connect the relevant layers for one behavior before starting the next
+  behavior. Avoid broad layer-by-layer tasks unless a shared foundation is a
+  real dependency.
 - Put high-blast-radius shared code before leaf UI/docs cleanup only when the
   shared change is a prerequisite.
 - Prefer smaller tasks that can be validated and checkpointed independently.
@@ -264,8 +274,8 @@ or repeated attempts without new evidence.
 
 - The handoff contains an ordered `task-1` through `task-n` queue.
 - Exactly one task is active at a time, and each completed task records files
-  changed, validation, `code-review` outcome, fixes, commit hash/message, and a
-  short checkpoint summary.
+  changed, vertical slice or layers covered, validation, `code-review` outcome,
+  fixes, commit hash/message, and a short checkpoint summary.
 - Each task session stops after saving the reviewed and committed handoff
   checkpoint; the next task starts in a fresh session using the handoff as
   context.

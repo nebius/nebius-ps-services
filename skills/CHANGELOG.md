@@ -144,6 +144,18 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Updated `brainstorm` to route unresolved recommendation-changing source
+  conflicts through a bounded `research` pass, and strengthened `design`,
+  `task-implementer`, and Agentic SDLC design/plan/implementation skills to
+  prefer vertical end-to-end slices for serial multi-layer application work,
+  with verifier coverage for the new SDLC template and phase contracts.
+- Aligned downstream Agentic SDLC skills with the vertical-slice architecture:
+  context packs now capture layer-boundary facts, TDD and unit-test phases
+  carry planned slice coverage, validation records locked-slice boundary
+  checks, evaluation records end-to-end slice observation, documentation
+  requires evaluated slice evidence for multi-layer behavior, and
+  `sdlc-align-specs` checks the slice across specs, plans, tests,
+  implementation, docs, and evidence.
 - Hardened `task-implementer` so complex sequential loops explicitly require
   per-task context gathering, `design` routing for non-trivial choices, a short
   implementation plan before edits, and handoff fields for context, design,

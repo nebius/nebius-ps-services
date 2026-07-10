@@ -1,6 +1,6 @@
 ---
 name: design
-description: "Use for non-SDLC software design before implementation: understand requirements, inspect an existing codebase or greenfield context, route topic, requirement, and technology due diligence through `research` when available, apply `system-design-rules` to standard/deep solution decisions, choose components and architecture, compare alternatives, and create a Codex `/plan` handoff. Use for new features, major changes, architecture/design docs, ADR-like decisions, and new applications when the user needs a design and implementation plan rather than immediate coding; do not use for open-ended brainstorming, checklist-only review, Agentic SDLC-owned `docs/design.md`, or immediate implementation."
+description: "Use for non-SDLC software design before implementation: understand requirements, inspect an existing codebase or greenfield context, route topic, requirement, and technology due diligence through `research` when available, apply `system-design-rules` to standard/deep solution decisions, choose components and architecture, design vertical end-to-end slices for serial multi-layer applications, compare alternatives, and create a Codex `/plan` handoff. Use for new features, major changes, architecture/design docs, ADR-like decisions, and new applications when the user needs a design and implementation plan rather than immediate coding; do not use for open-ended brainstorming, checklist-only review, Agentic SDLC-owned `docs/design.md`, or immediate implementation."
 ---
 
 # Design
@@ -19,6 +19,8 @@ codebase yet.
   integration before code exists.
 - Choosing components, technologies, boundaries, data flow, control flow,
   validation strategy, rollout, and operational concerns.
+- Designing applications whose frontend, API, service, data, or infrastructure
+  layers are connected in a serial end-to-end flow.
 - Producing a final `/plan` handoff that another Codex run can execute.
 - Updating or drafting a design document only when the user asks for a
   committed design artifact.
@@ -125,6 +127,13 @@ existing system. Define:
 - observability, operations, rollout, rollback, and supportability
 - tests, validation, and acceptance checks
 
+For applications whose layers are connected in a serial flow such as
+frontend -> API -> database, default to a vertical-slice design. Describe the
+end-to-end user or system flow, each layer's responsibility, contracts between
+layers, data lifecycle, and validation path together. Use horizontal
+foundation-first steps only for true prerequisites such as schema contracts,
+auth, migrations, shared harnesses, or safety preflights that block the slice.
+
 For brownfield work, name the exact integration points and files or modules
 likely to change. For greenfield work, name the initial project structure and
 bootstrap sequence at a design level.
@@ -157,6 +166,7 @@ Use the Codex `/plan` command when available. The plan handoff must include:
 - assumptions and unresolved questions
 - `system-design-rules` findings or skipped-review rationale
 - ordered implementation steps
+- vertical slice order and any prerequisite foundation steps
 - expected files or modules to inspect or modify
 - tests and validation commands to add or run
 - documentation and changelog updates when in scope

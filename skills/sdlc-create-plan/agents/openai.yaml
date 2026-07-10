@@ -1,6 +1,6 @@
 interface:
   display_name: "SDLC Create Plan"
   short_description: "Lock one feature plan"
-  default_prompt: "Use $sdlc-create-plan to create a local, locked Agentic SDLC execution plan for exactly one feature."
+  default_prompt: "Use $sdlc-create-plan to create a local, locked Agentic SDLC execution plan for exactly one feature, preserving the vertical end-to-end slice when the feature spans serial application layers."
 policy:
   allow_implicit_invocation: false

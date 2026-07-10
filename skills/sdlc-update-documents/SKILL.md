@@ -70,6 +70,9 @@ after feature evaluation or UAT.
 - Compare implemented behavior and evidence against existing docs. Update only
   documentation that describes the active feature, run-level product behavior,
   commands, configuration, examples, or usage that actually changed.
+- When docs describe a multi-layer feature flow, base the wording on evaluated
+  end-to-end slice evidence instead of implementation intent alone. If the
+  planned slice was not evaluated, route the gap back to `sdlc-evaluate`.
 - Record documentation evidence with files changed, source evidence, steering
   entries consumed, and any docs intentionally left unchanged.
 - Mark consumed `docs-update` steering entries resolved only after the relevant
@@ -93,6 +96,8 @@ after feature evaluation or UAT.
 
 - Missing implementation, validation, test, or evaluation evidence routes back
   to the responsible phase.
+- Missing evaluated slice evidence for docs that describe multi-layer behavior
+  routes back to `sdlc-evaluate`.
 - Requirements drift routes to `sdlc-create-requirements`.
 - Design drift routes to `sdlc-create-design`.
 - Ambiguous user-facing wording or unresolved product decision maps to
@@ -114,6 +119,8 @@ after feature evaluation or UAT.
 ## Completion Criteria
 
 - In-scope user-facing docs match implemented and evaluated behavior.
+- Multi-layer behavior docs are backed by evaluated end-to-end slice evidence
+  when applicable.
 - Changelog is updated when a user-facing behavior, command, workflow, or
   documentation contract changed and a changelog exists.
 - Documentation evidence is written under the active private run directory.

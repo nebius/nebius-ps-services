@@ -10,6 +10,15 @@
 
 TODO: Validation result.
 
+## Slice Boundary Check
+
+| Field | Result |
+| --- | --- |
+| Locked End-To-End Slice | TODO slice summary or N/A |
+| Changed Files Within Planned Layers | TODO yes/no/N/A |
+| Boundary Contracts Preserved | TODO yes/no/N/A |
+| Out-Of-Scope Changes | TODO none or list |
+
 ## Code Review
 
 | Scope | Decision | Blocking Findings | Owner Review Needed |

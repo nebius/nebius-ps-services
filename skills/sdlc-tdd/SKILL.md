@@ -1,6 +1,6 @@
 ---
 name: sdlc-tdd
-description: "Use only as part of the Agentic SDLC workflow; use after `sdlc-create-plan` when an Agentic SDLC feature needs tests written before implementation. Converts acceptance criteria and design success criteria into failing or already-green tests."
+description: "Use only as part of the Agentic SDLC workflow; use after `sdlc-create-plan` when an Agentic SDLC feature needs tests written before implementation. Converts acceptance criteria, design success criteria, and any planned end-to-end slice into failing or already-green tests."
 ---
 
 # SDLC TDD
@@ -44,6 +44,10 @@ Define success before implementation by creating tests that prove the current fe
 
 - Identify acceptance criteria that can be tested.
 - Choose the smallest useful test level first.
+- When the locked plan defines an end-to-end slice, map tests to the slice's
+  layer contracts and cross-layer validation target. Prefer the smallest useful
+  unit, contract, component, or integration coverage that would fail if one
+  planned layer or boundary is missing.
 - Write tests that fail for missing behavior when implementation is absent.
 - Avoid over-mocking real behavior.
 - Run focused tests and record evidence.
@@ -59,6 +63,9 @@ Define success before implementation by creating tests that prove the current fe
 - If test framework is missing, route to project scaffolding or design update.
 - If criteria are not testable, route to `sdlc-create-requirements`.
 - If design lacks test seams, route to `sdlc-create-design`.
+- If the planned slice cannot be tested from the available seams, route to
+  `sdlc-create-plan` or `sdlc-create-design` instead of replacing it with
+  layer-isolated tests only.
 
 ## Must Not
 
@@ -69,6 +76,8 @@ Define success before implementation by creating tests that prove the current fe
 ## Completion Criteria
 
 - Tests exist and map to acceptance criteria.
+- Planned end-to-end slice coverage is present or a plan/design blocker is
+  classified.
 - Test run evidence exists.
 - Expected red or already-green state is recorded.
 

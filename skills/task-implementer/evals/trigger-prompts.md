@@ -27,6 +27,12 @@ commit, and hand off to the next fresh session.
 ```
 
 ```text
+$task-implementer Split this multi-layer app change into vertical tasks that
+carry one behavior through frontend, API, and database, then implement each
+task through the normal per-task implementation and commit loop.
+```
+
+```text
 $task-implementer Continue from ~/.codex/task-implementer/my-repo/run-2026-06-28/handoff.md and implement the next pending task.
 ```
 

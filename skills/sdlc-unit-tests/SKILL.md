@@ -1,6 +1,6 @@
 ---
 name: sdlc-unit-tests
-description: "Use only as part of the Agentic SDLC workflow; use after validation in the Agentic SDLC loop to run behavior tests for the current feature, including unit, integration, component, contract, regression, and mock-based tests when applicable."
+description: "Use only as part of the Agentic SDLC workflow; use after validation in the Agentic SDLC loop to run behavior tests for the current feature and any planned end-to-end slice, including unit, integration, component, contract, regression, and mock-based tests when applicable."
 ---
 
 # Unit Tests
@@ -33,6 +33,7 @@ Answer whether the code behaves correctly against the feature tests and acceptan
 - Test configuration.
 - Test files.
 - Feature design.
+- Locked plan and its End-To-End Slice when present.
 - Acceptance criteria.
 - Existing test conventions.
 
@@ -48,6 +49,10 @@ Answer whether the code behaves correctly against the feature tests and acceptan
 - Run focused feature tests first.
 - Run nearby regression tests.
 - Run integration or component tests required by design.
+- When the locked plan defines an end-to-end slice, run or record the tests that
+  prove the slice's cross-layer validation target and layer contracts. If the
+  available suite cannot prove the slice, classify the gap instead of marking
+  the feature tested.
 - Run broader suite only when feasible.
 - Record commands and outcomes.
 
@@ -73,6 +78,7 @@ Answer whether the code behaves correctly against the feature tests and acceptan
 ## Completion Criteria
 
 - Required tests pass.
+- Planned slice coverage passes or the blocker is classified.
 - Evidence file exists.
 - Failures are classified if not passing.
 - State moves to `tested`.

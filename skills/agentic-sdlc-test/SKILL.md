@@ -100,10 +100,11 @@ remotes.
    ```
 
    This script performs read-only discovery of global `sdlc-*` skills,
-   explicit-only `agents/openai.yaml` invocation policy, and hook
-   configuration, creates a disposable verification root, runs hook fixture
-   tests against disposable `CODEX_HOME` state, and writes a report. It does
-   not edit installed skills or hooks.
+   explicit-only `agents/openai.yaml` invocation policy, key source-template
+   and downstream vertical-slice contract terms, and hook configuration,
+   creates a disposable verification root, runs hook fixture tests against
+   disposable `CODEX_HOME` state, and writes a report. It does not edit
+   installed skills or hooks.
 3. Review the preflight report.
    If skill discovery, hook configuration, PreToolUse safety, or Stop
    continuation checks fail, record the issue and stop before the golden path

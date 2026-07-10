@@ -1,6 +1,6 @@
 interface:
   display_name: "SDLC Create Design"
   short_description: "Create SDLC design.md from requirements, context, and code evidence"
-  default_prompt: "Use $sdlc-create-design to convert requirements, gathered context, and codebase evidence into Agentic SDLC architecture and feature designs in `docs/design.md`, preserving stable FEAT IDs and recording implementation-ready boundaries, alternatives, validation, tests, evaluation, rollout, and rollback."
+  default_prompt: "Use $sdlc-create-design to convert requirements, gathered context, and codebase evidence into Agentic SDLC architecture and feature designs in `docs/design.md`, preserving stable FEAT IDs and recording vertical end-to-end feature flow, implementation-ready boundaries, alternatives, validation, tests, evaluation, rollout, and rollback."
 policy:
   allow_implicit_invocation: false

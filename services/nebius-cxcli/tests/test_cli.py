@@ -10150,10 +10150,10 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
         "[MK8s control-plane/node-template upgrade] (degraded): MK8s Node Groups degraded: "
         "Provider node groups (source=Nebius API, groups=4)\n"
         "total=8 upgraded=7 upgrading=1 remaining=1 ready/current=7/8\n"
-        "group       state         total  upgraded  upgrading  remaining  ready/current  event\n"
-        "gpu-pool    PROVISIONING  4      3         1          1          3/4            "
+        "group       state         k8s   total  upgraded  upgrading  remaining  ready/current  event\n"
+        "gpu-pool    PROVISIONING  1.32  4      3         1          1          3/4            "
         "WaitingForNodeRef\n"
-        "login       RUNNING       2      2         0          0          2/2            - | "
+        "login       RUNNING       1.32  2      2         0          0          2/2            - | "
         "Slurm Workers draining: workers drained=1"
     )
 
@@ -10170,8 +10170,8 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
     assert "[bold yellow]upgrading[/bold yellow]=1" in styled
     assert "[bold cyan]remaining[/bold cyan]=1" in styled
     assert "[bold cyan]ready/current[/bold cyan]=7/8" in styled
-    assert "gpu-pool    [bold yellow]PROVISIONING[/bold yellow]" in styled
-    assert "login       [green]RUNNING[/green]" in styled
+    assert "gpu-pool    [bold yellow]PROVISIONING[/bold yellow]  1.32" in styled
+    assert "login       [green]RUNNING[/green]       1.32" in styled
     assert "[bold white]Slurm Workers[/bold white]" in styled
 
     initial_messages: list[str] = []
@@ -10205,8 +10205,8 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
             "[MK8s control-plane/node-template upgrade] (degraded): MK8s Node Groups degraded: "
             "Provider node groups (source=Nebius API, groups=1)\n"
             "total=4 upgraded=3 upgrading=1 remaining=1 ready/current=3/4\n"
-            "group     state         total  upgraded  upgrading  remaining  ready/current  event\n"
-            "gpu-pool  PROVISIONING  4      3         1          1          3/4            "
+            "group     state         k8s   total  upgraded  upgrading  remaining  ready/current  event\n"
+            "gpu-pool  PROVISIONING  1.32  4      3         1          1          3/4            "
             "WaitingForNodeRef"
         )
 
@@ -10324,6 +10324,137 @@ def test_soperator_upgrade_phase_display_omits_top_level_stage() -> None:
         "creating restore-capable backup archive before mutation."
     )
     assert "top-level stage:" not in line
+
+
+def test_managed_soperator_mk8s_checkpoint_target_conflict_fails_fast(tmp_path: Path) -> None:
+    checkpoint_path = tmp_path / "checkpoint.json"
+    existing = {
+        "requested": True,
+        "target_k8s_version": "1.33",
+        "target_os": "ubuntu24.04",
+        "target_gpu_stack_preset": "cuda12.8",
+        "node_group": "gpu",
+    }
+    current = {
+        "requested": True,
+        "target_k8s_version": "1.34",
+        "target_os": "ubuntu24.04",
+        "target_gpu_stack_preset": "cuda12.8",
+        "node_group": "gpu",
+    }
+
+    with pytest.raises(RuntimeError, match="targets different managed MK8s"):
+        cli_module._raise_if_managed_mk8s_checkpoint_target_conflicts(
+            existing,
+            current=current,
+            checkpoint_path=checkpoint_path,
+        )
+    existing_without_os = dict(existing, target_os=None)
+    current_with_os = dict(existing, target_os="ubuntu24.04")
+    with pytest.raises(RuntimeError, match="OS image"):
+        cli_module._raise_if_managed_mk8s_checkpoint_target_conflicts(
+            existing_without_os,
+            current=current_with_os,
+            checkpoint_path=checkpoint_path,
+        )
+
+
+def test_managed_soperator_mk8s_waiting_reconciliation_demotes_completed_phase() -> None:
+    checkpoint = {
+        "mk8s": {"requested": True, "target_k8s_version": "1.33"},
+        "phase_state": {},
+        "completed_phases": ["preflight", "mk8s-node-template"],
+        "pending_phase": "none",
+    }
+    completed_phases = {"preflight", "mk8s-node-template"}
+    reconciliation = cli_module._ManagedMk8sResumeReconciliation(
+        cli_module._MANAGED_MK8S_RECONCILIATION_WAITING,
+        "target node-template fields are visible, but provider readiness is incomplete",
+        provider_status_lines=(
+            "Provider node groups (source=Nebius API, groups=1)",
+            "group  state     k8s",
+            "gpu    UPDATING  1.33",
+        ),
+    )
+
+    demoted = cli_module._apply_managed_mk8s_resume_reconciliation(
+        checkpoint=checkpoint,
+        completed_phases=completed_phases,
+        reconciliation=reconciliation,
+    )
+
+    assert demoted is True
+    assert "mk8s-node-template" not in completed_phases
+    assert checkpoint["pending_phase"] == "mk8s-node-template"
+    assert checkpoint["mk8s"]["status"] == "waiting-rollout"
+    assert checkpoint["mk8s"]["reconciliation_status"] == "waiting"
+    assert "group  state" in "\n".join(checkpoint["mk8s"]["provider_node_group_status"])
+
+
+def test_managed_soperator_mk8s_completed_reconciliation_preserves_phase() -> None:
+    checkpoint = {
+        "mk8s": {"requested": True, "target_k8s_version": "1.33"},
+        "phase_state": {},
+        "completed_phases": ["mk8s-node-template"],
+        "pending_phase": "none",
+    }
+    completed_phases = {"mk8s-node-template"}
+    reconciliation = cli_module._ManagedMk8sResumeReconciliation(
+        cli_module._MANAGED_MK8S_RECONCILIATION_COMPLETED,
+        "Managed MK8s node-template reconciliation verified.",
+        provider_status_lines=(
+            "Provider node groups (source=Nebius API, groups=1)",
+            "group   state    k8s",
+            "system  RUNNING  1.33",
+        ),
+    )
+
+    demoted = cli_module._apply_managed_mk8s_resume_reconciliation(
+        checkpoint=checkpoint,
+        completed_phases=completed_phases,
+        reconciliation=reconciliation,
+    )
+
+    assert demoted is False
+    assert "mk8s-node-template" in completed_phases
+    assert checkpoint["pending_phase"] == "none"
+    assert checkpoint["mk8s"]["status"] == "completed"
+    assert checkpoint["phase_state"]["mk8s-node-template"]["reconciliation_status"] == "completed"
+
+
+def test_managed_soperator_mk8s_unknown_reconciliation_never_marks_complete() -> None:
+    checkpoint = {
+        "mk8s": {"requested": True, "target_k8s_version": "1.33"},
+        "phase_state": {},
+        "completed_phases": ["mk8s-node-template"],
+        "pending_phase": "none",
+    }
+    completed_phases = {"mk8s-node-template"}
+    reconciliation = cli_module._ManagedMk8sResumeReconciliation(
+        cli_module._MANAGED_MK8S_RECONCILIATION_UNKNOWN,
+        "status missing ready_node_count",
+    )
+
+    demoted = cli_module._apply_managed_mk8s_resume_reconciliation(
+        checkpoint=checkpoint,
+        completed_phases=completed_phases,
+        reconciliation=reconciliation,
+    )
+
+    assert demoted is True
+    assert "mk8s-node-template" not in completed_phases
+    assert checkpoint["pending_phase"] == "mk8s-node-template"
+    assert checkpoint["mk8s"]["status"] == "waiting-rollout"
+    assert checkpoint["mk8s"]["reconciliation_status"] == "unknown"
+
+
+def test_managed_soperator_mk8s_missing_live_api_fields_are_unknown() -> None:
+    status = cli_module._managed_mk8s_reconciliation_status_for_error(
+        plan=SimpleNamespace(),
+        error=RuntimeError("node group worker not found in the live MK8s API response"),
+    )
+
+    assert status == cli_module._MANAGED_MK8S_RECONCILIATION_UNKNOWN
 
 
 def test_ext_soperator_upgrade_dry_run_rejects_gpu_reconciliation_only_deploy_route(

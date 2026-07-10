@@ -8,8 +8,9 @@ installed into a Codex runtime only when `install-skills.sh` is run.
 Convert requirements and gathered context into evidence-backed architecture
 and feature designs in `docs/design.md`. The skill maps stable `REQ-*` blocks
 to stable `FEAT-*` blocks, records selected and rejected design options, and
-defines implementation, validation, test, evaluation, rollout, and rollback
-boundaries before planning starts.
+defines vertical end-to-end feature flow, layer boundaries, implementation,
+validation, test, evaluation, rollout, and rollback boundaries before planning
+starts.
 
 ## Design Method
 
@@ -22,6 +23,8 @@ boundaries before planning starts.
 - Compare the baseline/current approach, selected design, and a simpler or
   more conservative alternative when the decision is non-trivial or
   hard to reverse.
+- For serial multi-layer application features, record the end-to-end feature
+  flow, layer map, boundary contracts, and cross-layer validation path.
 
 ## Main Boundaries
 
@@ -44,6 +47,6 @@ boundaries before planning starts.
 - `docs/design.md` exists.
 - Every P0 requirement maps to at least one feature.
 - Every ready feature has selected and rejected options, implementation
-  boundaries, validation, test, evaluation, rollout, rollback, and done
-  criteria.
+  boundaries, vertical flow or layer map when applicable, validation, test,
+  evaluation, rollout, rollback, and done criteria.
 - Open design questions are explicit.

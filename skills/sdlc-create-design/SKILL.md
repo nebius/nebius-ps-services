@@ -1,6 +1,6 @@
 ---
 name: sdlc-create-design
-description: "Use only as part of the Agentic SDLC workflow; use when `docs/design.md` must be created or updated from `docs/requirements.md`, gathered context, and codebase evidence. This skill owns design.md, stable FEAT IDs, design decisions, alternatives, and implementation-ready validation boundaries."
+description: "Use only as part of the Agentic SDLC workflow; use when `docs/design.md` must be created or updated from `docs/requirements.md`, gathered context, and codebase evidence. This skill owns design.md, stable FEAT IDs, design decisions, alternatives, vertical end-to-end feature flow, and implementation-ready validation boundaries."
 ---
 
 # Create Design
@@ -62,6 +62,12 @@ and feature designs in `docs/design.md`.
 - Define architecture, component boundaries, APIs or commands, data flow,
   control flow, state, error, security, observability, operations, rollout,
   rollback, and ownership models.
+- For serial multi-layer application features, define the vertical end-to-end
+  feature flow and layer map, such as UI -> API -> service -> database. Record
+  each layer's responsibility, boundary contract, persistence expectations,
+  and cross-layer validation path. Use foundation-only design boundaries only
+  for true prerequisites such as schema contracts, auth, migrations, shared
+  harnesses, or safety preflights.
 - For non-trivial or hard-to-reverse decisions, compare the baseline/current
   approach, the selected design, and one simpler or more conservative
   alternative when meaningful. Record the selected option, rejected
@@ -98,8 +104,8 @@ and feature designs in `docs/design.md`.
 - `docs/design.md` exists.
 - Every P0 requirement maps to at least one feature.
 - Every ready feature has selected and rejected options, implementation
-  boundaries, validation, test, evaluation, rollout, rollback, and done
-  criteria.
+  boundaries, vertical flow or layer map when applicable, validation, test,
+  evaluation, rollout, rollback, and done criteria.
 - Open design questions are explicit.
 
 ## SDLC Invariants

@@ -27,6 +27,7 @@ def main() -> int:
             (
                 "Use only when the user explicitly asks",
                 "bigger than one coherent task",
+                "vertical",
                 "brainstorm",
                 "design",
                 "per-task implementation plan",
@@ -42,6 +43,7 @@ def main() -> int:
             read("references/implementation-loop.md"),
             (
                 "Per-Task Context, Design, And Plan",
+                "vertical tasks",
                 "Use `brainstorm`",
                 "Route to `design`",
                 "Create a short implementation plan",
@@ -54,6 +56,8 @@ def main() -> int:
             (
                 "Brainstorm/context result:",
                 "Design result:",
+                "Vertical slice or layers:",
+                "End-to-end validation:",
                 "Plan:",
                 "Plan followed:",
                 "Do not continue in current session: yes",
@@ -65,6 +69,7 @@ def main() -> int:
             read("agents/openai.yaml"),
             (
                 "allow_implicit_invocation: false",
+                "vertical",
                 "gather context with brainstorm",
                 "route design or contract choices through design",
                 "write a short plan",
@@ -77,6 +82,7 @@ def main() -> int:
                 "Should Trigger",
                 "Should Not Trigger",
                 "global-context-management",
+                "vertical",
                 "per-task implementation and commit loop",
             ),
         ),

@@ -4165,6 +4165,23 @@ def _node_group_update_visibility_pending_message(
     )
 
 
+def _node_group_update_interrupted_pending_message(
+    *,
+    node_group_id: str,
+    action: str,
+    node_group: Mapping[str, Any],
+) -> str:
+    return (
+        f"External node-template checkpoint for {node_group_id} was interrupted while the "
+        f"{action} may still be in progress, and the live node group has not yet reported "
+        "the requested node-template fields ("
+        + _node_group_template_update_current_summary(node_group)
+        + "). Rerun the same `nebius-cxcli ext-soperator upgrade ... --execute --approve` "
+        "command; cxcli will re-read live state from the checkpoint and will not submit "
+        "a duplicate node-group update while the prior update is still settling."
+    )
+
+
 def _node_group_update_timeout_message(
     *,
     node_group_id: str,
@@ -4177,6 +4194,204 @@ def _node_group_update_timeout_message(
         "Rerun the same `nebius-cxcli ext-soperator upgrade ... --execute --approve` "
         "command; cxcli will re-read the live node group and resume without starting "
         "a duplicate update."
+    )
+
+
+_EXTERNAL_RECONCILIATION_COMPLETED = "completed"
+_EXTERNAL_RECONCILIATION_WAITING = "waiting"
+_EXTERNAL_RECONCILIATION_RETRY = "retry"
+_EXTERNAL_RECONCILIATION_DRIFT_CONFLICT = "drift-conflict"
+_EXTERNAL_RECONCILIATION_UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class _ExternalNodeTemplateReconciliation:
+    status: str
+    reason: str
+    readiness_summary: str = ""
+
+
+def _record_external_node_template_reconciliation(
+    state: dict[str, Any],
+    reconciliation: _ExternalNodeTemplateReconciliation,
+) -> None:
+    state["reconciled_at"] = _utc_now()
+    state["reconciliation_status"] = reconciliation.status
+    state["reconciliation_reason"] = reconciliation.reason
+    if reconciliation.readiness_summary:
+        state["reconciliation_readiness"] = reconciliation.readiness_summary
+
+
+def _control_plane_update_interrupted_pending_message(
+    *,
+    target_version: str,
+    current_version: str,
+) -> str:
+    return (
+        "External MK8s control-plane checkpoint was interrupted after cxcli submitted "
+        f"the Nebius API update to Kubernetes {target_version}, but the live control "
+        f"plane still reports {current_version or 'unknown'}. Rerun the same "
+        "`nebius-cxcli ext-soperator upgrade ... --execute --approve` command; "
+        "cxcli will re-read live state from the checkpoint and will not submit a "
+        "duplicate control-plane update while the prior update is still settling."
+    )
+
+
+def _reconcile_external_control_plane_hop_resume(
+    *,
+    state: Mapping[str, Any],
+    current_version: str,
+    hop_from_version: str,
+    hop_to_version: str,
+) -> _ExternalNodeTemplateReconciliation:
+    previous_status = str(state.get("status", "") or "")
+    provider_update_attempted = state.get("provider_update_attempted") is True
+    if previous_status != "updating" or not provider_update_attempted:
+        return _ExternalNodeTemplateReconciliation(
+            _EXTERNAL_RECONCILIATION_RETRY,
+            "control-plane hop has no checkpointed provider update attempt; retry phase handler.",
+        )
+
+    checkpoint_target = str(state.get("target_version", "") or "").strip()
+    if checkpoint_target and checkpoint_target != hop_to_version:
+        return _ExternalNodeTemplateReconciliation(
+            _EXTERNAL_RECONCILIATION_DRIFT_CONFLICT,
+            "External MK8s control-plane checkpoint target "
+            f"{checkpoint_target} does not match the accepted upgrade plan target "
+            f"{hop_to_version}. Stop and confirm which control-plane upgrade should "
+            "own this cluster before rerunning cxcli.",
+        )
+
+    if not current_version:
+        return _ExternalNodeTemplateReconciliation(
+            _EXTERNAL_RECONCILIATION_UNKNOWN,
+            "Nebius API did not report the live MK8s control-plane version; cxcli "
+            "cannot safely mark the checkpointed control-plane update complete.",
+        )
+
+    if _minor_version_at_least(current_version, hop_to_version):
+        return _ExternalNodeTemplateReconciliation(
+            _EXTERNAL_RECONCILIATION_COMPLETED,
+            "Live Nebius API control-plane version satisfies the checkpointed hop.",
+        )
+
+    return _ExternalNodeTemplateReconciliation(
+        _EXTERNAL_RECONCILIATION_WAITING,
+        _control_plane_update_interrupted_pending_message(
+            target_version=hop_to_version,
+            current_version=current_version or hop_from_version,
+        ),
+    )
+
+
+def _node_group_resume_checkpoint_conflict_reason(
+    *,
+    group_name: str,
+    node_group_id: str,
+    checkpoint_target: Mapping[str, Any],
+    target_payload: Mapping[str, Any],
+) -> str:
+    return (
+        "External node-template checkpoint drift for "
+        f"{group_name} ({node_group_id}): checkpoint target "
+        f"{dict(checkpoint_target)} does not match the accepted upgrade plan target "
+        f"{dict(target_payload)} after a provider update was attempted. Stop and "
+        "confirm whether the old checkpoint or the refreshed onboarding plan should "
+        "own this Nebius node-group update before rerunning cxcli."
+    )
+
+
+def _reconcile_external_node_group_resume(
+    *,
+    group_name: str,
+    group_state: Mapping[str, Any],
+    checkpoint_target: Mapping[str, Any],
+    target_payload: Mapping[str, Any],
+    previous_status: str,
+    node_group_id: str,
+    node_group: Mapping[str, Any],
+    update_args: Sequence[str],
+    clear_template_gpu_settings: bool,
+) -> _ExternalNodeTemplateReconciliation:
+    provider_update_attempted = _node_group_provider_update_attempted(group_state)
+    resume_started_rollout = previous_status == "waiting-rollout" or (
+        previous_status == "updating" and provider_update_attempted
+    )
+    if not resume_started_rollout:
+        return _ExternalNodeTemplateReconciliation(
+            _EXTERNAL_RECONCILIATION_RETRY,
+            "node group has no checkpointed provider update attempt; retry phase handler.",
+        )
+
+    if provider_update_attempted and checkpoint_target and checkpoint_target != target_payload:
+        return _ExternalNodeTemplateReconciliation(
+            _EXTERNAL_RECONCILIATION_DRIFT_CONFLICT,
+            _node_group_resume_checkpoint_conflict_reason(
+                group_name=group_name,
+                node_group_id=node_group_id,
+                checkpoint_target=checkpoint_target,
+                target_payload=target_payload,
+            ),
+        )
+
+    if not _mapping(node_group.get("spec")):
+        return _ExternalNodeTemplateReconciliation(
+            _EXTERNAL_RECONCILIATION_UNKNOWN,
+            f"Nebius API did not return spec for node group {node_group_id}; cxcli "
+            "cannot safely mark the checkpointed node-template update complete.",
+        )
+
+    if update_args or clear_template_gpu_settings:
+        if not provider_update_attempted:
+            return _ExternalNodeTemplateReconciliation(
+                _EXTERNAL_RECONCILIATION_RETRY,
+                "node group still differs from target and no provider update attempt "
+                "is checkpointed; retry phase handler.",
+            )
+        if previous_status == "updating":
+            reason = _node_group_update_interrupted_pending_message(
+                node_group_id=node_group_id,
+                action="node-template update",
+                node_group=node_group,
+            )
+        else:
+            reason = _node_group_update_visibility_pending_message(
+                node_group_id=node_group_id,
+                action="node-template update",
+                node_group=node_group,
+            )
+        return _ExternalNodeTemplateReconciliation(
+            _EXTERNAL_RECONCILIATION_WAITING,
+            reason,
+        )
+
+    ready, readiness_summary = _node_group_readiness_summary(node_group)
+    if not ready:
+        reason = _node_group_update_timeout_message(
+            node_group_id=node_group_id,
+            action="node-template update",
+            readiness_summary=readiness_summary,
+        )
+        if (
+            "status not returned by Nebius API" in readiness_summary
+            or "status missing" in readiness_summary
+        ):
+            return _ExternalNodeTemplateReconciliation(
+                _EXTERNAL_RECONCILIATION_UNKNOWN,
+                reason,
+                readiness_summary,
+            )
+        return _ExternalNodeTemplateReconciliation(
+            _EXTERNAL_RECONCILIATION_WAITING,
+            reason,
+            readiness_summary,
+        )
+
+    return _ExternalNodeTemplateReconciliation(
+        _EXTERNAL_RECONCILIATION_COMPLETED,
+        "Live Nebius API node-group template and rollout readiness satisfy the "
+        "checkpointed node-template update.",
+        readiness_summary,
     )
 
 
@@ -10082,6 +10297,7 @@ def _active_external_control_plane_status_signal(
 class _Mk8sNodeGroupStatusRow:
     group: str
     state: str
+    k8s: str
     total: int | None
     upgraded: int | None
     upgrading: int | None
@@ -10122,6 +10338,7 @@ def _mk8s_status_node_group_row(
     active_group_labels: frozenset[str],
 ) -> _Mk8sNodeGroupStatusRow:
     group = _node_group_name(node_group) or _node_group_id(node_group) or "unknown"
+    k8s = _minor_version_text_or_empty(_node_group_version(node_group)) or "unknown"
     status = _mapping(node_group.get("status"))
     aliases = _mk8s_status_node_group_aliases(node_group)
     active = any(alias in active_group_labels for alias in aliases)
@@ -10129,6 +10346,7 @@ def _mk8s_status_node_group_row(
         return _Mk8sNodeGroupStatusRow(
             group=group,
             state="unknown",
+            k8s=k8s,
             total=None,
             upgraded=None,
             upgrading=None,
@@ -10178,6 +10396,7 @@ def _mk8s_status_node_group_row(
     return _Mk8sNodeGroupStatusRow(
         group=group,
         state=state,
+        k8s=k8s,
         total=total,
         upgraded=upgraded,
         upgrading=upgrading,
@@ -10209,6 +10428,7 @@ def _mk8s_status_not_started_row(row: _Mk8sNodeGroupStatusRow) -> _Mk8sNodeGroup
     return _Mk8sNodeGroupStatusRow(
         group=row.group,
         state=row.state,
+        k8s=row.k8s,
         total=row.total,
         upgraded=upgraded,
         upgrading=upgrading,
@@ -10269,12 +10489,23 @@ def _mk8s_status_totals_line(rows: Sequence[_Mk8sNodeGroupStatusRow]) -> str:
 
 def _format_mk8s_status_table(rows: Sequence[_Mk8sNodeGroupStatusRow]) -> tuple[str, ...]:
     table_rows: list[tuple[str, ...]] = [
-        ("group", "state", "total", "upgraded", "upgrading", "remaining", "ready/current", "event")
+        (
+            "group",
+            "state",
+            "k8s",
+            "total",
+            "upgraded",
+            "upgrading",
+            "remaining",
+            "ready/current",
+            "event",
+        )
     ]
     table_rows.extend(
         (
             row.group,
             row.state,
+            row.k8s,
             _mk8s_status_int_text(row.total),
             _mk8s_status_int_text(row.upgraded),
             _mk8s_status_int_text(row.upgrading),
@@ -14796,9 +15027,50 @@ def _execute_external_node_template_upgrade_phase(
             "External Soperator upgrade checkpoint external-node-template-upgrade.control_plane "
             "must be a mapping."
         )
-    cluster = _cluster_payload_by_id(nebius_api=nebius_api, cluster_id=cluster_id)
+    try:
+        cluster = _cluster_payload_by_id(nebius_api=nebius_api, cluster_id=cluster_id)
+    except Exception as exc:
+        hop_state = _mapping(control_plane.get("hops"))
+        for raw_state in hop_state.values():
+            if not isinstance(raw_state, dict):
+                continue
+            if (
+                str(raw_state.get("status", "") or "") == "updating"
+                and raw_state.get("provider_update_attempted") is True
+            ):
+                reconciliation = _ExternalNodeTemplateReconciliation(
+                    _EXTERNAL_RECONCILIATION_UNKNOWN,
+                    "Nebius API did not return the live MK8s control-plane state for "
+                    f"{cluster_id}: {exc}. cxcli cannot safely mark the checkpointed "
+                    "control-plane update complete.",
+                )
+                _record_external_node_template_reconciliation(raw_state, reconciliation)
+                raw_state["pending_reason"] = reconciliation.reason
+                if checkpoint_writer is not None:
+                    checkpoint_writer()
+                raise SoperatorMigrationPhasePending(reconciliation.reason) from exc
+        raise
     current_version = _minor_version_text_or_empty(_cluster_control_plane_version(cluster))
     if not current_version:
+        hop_state = _mapping(control_plane.get("hops"))
+        for raw_state in hop_state.values():
+            if not isinstance(raw_state, dict):
+                continue
+            if (
+                str(raw_state.get("status", "") or "") == "updating"
+                and raw_state.get("provider_update_attempted") is True
+            ):
+                reconciliation = _ExternalNodeTemplateReconciliation(
+                    _EXTERNAL_RECONCILIATION_UNKNOWN,
+                    "Nebius API did not report the live MK8s control-plane version; "
+                    "cxcli cannot safely mark the checkpointed control-plane update "
+                    "complete.",
+                )
+                _record_external_node_template_reconciliation(raw_state, reconciliation)
+                raw_state["pending_reason"] = reconciliation.reason
+                if checkpoint_writer is not None:
+                    checkpoint_writer()
+                raise SoperatorMigrationPhasePending(reconciliation.reason)
         raise SoperatorMigrationPhasePending(
             "external-node-template-upgrade could not detect the live MK8s control-plane "
             "version. Rerun onboarding after confirming Nebius API access works."
@@ -14826,6 +15098,55 @@ def _execute_external_node_template_upgrade_phase(
                 "External Soperator upgrade checkpoint external-node-template-upgrade "
                 f"control-plane hop {hop.to_version} must be a mapping."
             )
+        reconciliation = _reconcile_external_control_plane_hop_resume(
+            state=state,
+            current_version=current_version,
+            hop_from_version=hop.from_version,
+            hop_to_version=hop.to_version,
+        )
+        if reconciliation.status != _EXTERNAL_RECONCILIATION_RETRY:
+            _record_external_node_template_reconciliation(state, reconciliation)
+        if reconciliation.status == _EXTERNAL_RECONCILIATION_COMPLETED:
+            phase["mutation_performed"] = True
+            state.update(
+                {
+                    "from_version": hop.from_version,
+                    "target_version": hop.to_version,
+                    "status": "completed",
+                    "completed_at": _utc_now(),
+                    "observed_version": current_version,
+                }
+            )
+            control_plane["current_version"] = current_version
+            if checkpoint_writer is not None:
+                checkpoint_writer()
+            lines.append(
+                "External MK8s control-plane hop completed after resume "
+                f"reconciliation: {hop.to_version}."
+            )
+            continue
+        if reconciliation.status in {
+            _EXTERNAL_RECONCILIATION_WAITING,
+            _EXTERNAL_RECONCILIATION_UNKNOWN,
+        }:
+            phase["mutation_performed"] = True
+            state.update(
+                {
+                    "from_version": hop.from_version,
+                    "target_version": hop.to_version,
+                    "status": "updating",
+                    "pending_reason": reconciliation.reason,
+                }
+            )
+            if checkpoint_writer is not None:
+                checkpoint_writer()
+            raise SoperatorMigrationPhasePending(reconciliation.reason)
+        if reconciliation.status == _EXTERNAL_RECONCILIATION_DRIFT_CONFLICT:
+            state["status"] = "failed"
+            state["error"] = reconciliation.reason
+            if checkpoint_writer is not None:
+                checkpoint_writer()
+            raise RuntimeError(reconciliation.reason)
         if (
             state.get("status") == "completed"
             and state.get("target_version") == hop.to_version
@@ -14845,6 +15166,9 @@ def _execute_external_node_template_upgrade_phase(
         if checkpoint_writer is not None:
             checkpoint_writer()
         try:
+            state["provider_update_attempted"] = True
+            if checkpoint_writer is not None:
+                checkpoint_writer()
             cluster = _update_cluster_control_plane(
                 nebius_api=nebius_api,
                 cluster_id=cluster_id,
@@ -14907,6 +15231,7 @@ def _execute_external_node_template_upgrade_phase(
                 f"node group {group_name} must be a mapping."
             )
         previous_status = str(group_state.get("status", "") or "")
+        checkpoint_target = _mapping(group_state.get("target"))
         node_group_id = _source_group_node_group_id(raw_group)
         if not node_group_id:
             raise SoperatorMigrationPhasePending(
@@ -14914,10 +15239,32 @@ def _execute_external_node_template_upgrade_phase(
                 f"source group '{group_name}'. Rerun `nebius-cxcli ext-soperator onboard` "
                 "against a Nebius MK8s target."
             )
-        node_group = _node_group_payload_by_id(
-            nebius_api=nebius_api,
-            node_group_id=node_group_id,
-        )
+        try:
+            node_group = _node_group_payload_by_id(
+                nebius_api=nebius_api,
+                node_group_id=node_group_id,
+            )
+        except Exception as exc:
+            provider_update_attempted = _node_group_provider_update_attempted(group_state)
+            resume_started_rollout = previous_status == "waiting-rollout" or (
+                previous_status == "updating" and provider_update_attempted
+            )
+            if resume_started_rollout:
+                reconciliation = _ExternalNodeTemplateReconciliation(
+                    _EXTERNAL_RECONCILIATION_UNKNOWN,
+                    "Nebius API did not return the live node group "
+                    f"{node_group_id}: {exc}. cxcli cannot safely mark the "
+                    "checkpointed node-template update complete.",
+                )
+                _record_external_node_template_reconciliation(group_state, reconciliation)
+                phase["mutation_performed"] = True
+                group_state["mutation_performed"] = True
+                group_state["status"] = "waiting-rollout"
+                group_state["pending_reason"] = reconciliation.reason
+                if checkpoint_writer is not None:
+                    checkpoint_writer()
+                raise SoperatorMigrationPhasePending(reconciliation.reason) from exc
+            raise
         update_args = _external_node_template_update_args(
             node_group=node_group,
             source_group=raw_group,
@@ -15021,27 +15368,42 @@ def _execute_external_node_template_upgrade_phase(
             mutation_performed = True
             return True
 
-        resume_waiting_rollout = group_state.get("status") == "waiting-rollout"
-        if resume_waiting_rollout and (update_args or clear_template_gpu_settings):
-            group_state["pending_reason"] = _node_group_update_visibility_pending_message(
-                node_group_id=node_group_id,
-                action="node-template update",
-                node_group=node_group,
-            )
+        reconciliation = _reconcile_external_node_group_resume(
+            group_name=group_name,
+            group_state=group_state,
+            checkpoint_target=checkpoint_target,
+            target_payload=target_payload,
+            previous_status=previous_status,
+            node_group_id=node_group_id,
+            node_group=node_group,
+            update_args=update_args,
+            clear_template_gpu_settings=clear_template_gpu_settings,
+        )
+        if reconciliation.status != _EXTERNAL_RECONCILIATION_RETRY:
+            _record_external_node_template_reconciliation(group_state, reconciliation)
+        if reconciliation.status == _EXTERNAL_RECONCILIATION_DRIFT_CONFLICT:
+            if checkpoint_target:
+                group_state["target"] = dict(checkpoint_target)
+            group_state["accepted_plan_target"] = dict(target_payload)
+            group_state["status"] = "failed"
+            group_state["error"] = reconciliation.reason
+            if checkpoint_writer is not None:
+                checkpoint_writer()
+            raise RuntimeError(reconciliation.reason)
+        if reconciliation.status in {
+            _EXTERNAL_RECONCILIATION_WAITING,
+            _EXTERNAL_RECONCILIATION_UNKNOWN,
+        }:
+            phase["mutation_performed"] = True
+            group_state["mutation_performed"] = True
+            group_state["status"] = "waiting-rollout"
+            group_state["pending_reason"] = reconciliation.reason
             if checkpoint_writer is not None:
                 checkpoint_writer()
             raise SoperatorMigrationPhasePending(str(group_state["pending_reason"]))
-        if resume_waiting_rollout and not update_args and not clear_template_gpu_settings:
-            ready, readiness_summary = _node_group_readiness_summary(node_group)
-            if not ready:
-                group_state["pending_reason"] = _node_group_update_timeout_message(
-                    node_group_id=node_group_id,
-                    action="node-template update",
-                    readiness_summary=readiness_summary,
-                )
-                if checkpoint_writer is not None:
-                    checkpoint_writer()
-                raise SoperatorMigrationPhasePending(str(group_state["pending_reason"]))
+        if reconciliation.status == _EXTERNAL_RECONCILIATION_COMPLETED:
+            phase["mutation_performed"] = True
+            group_state["mutation_performed"] = True
             strategy_restored = _restore_original_strategy_if_required(node_group)
             group_state["status"] = "completed"
             group_state["completed_at"] = _utc_now()
@@ -15198,9 +15560,12 @@ def _execute_external_node_template_upgrade_phase(
                     pod_names=login_pods_before_update,
                 )
             )
+        if write_progress and checkpoint_writer is not None:
+            checkpoint_writer()
+        try:
+            group_state["provider_update_attempted"] = True
             if write_progress and checkpoint_writer is not None:
                 checkpoint_writer()
-        try:
             _update_node_group_with_temporary_strategy(
                 nebius_api=nebius_api,
                 node_group_id=str(work["node_group_id"]),
@@ -15211,6 +15576,12 @@ def _execute_external_node_template_upgrade_phase(
                 timeout=str(work["timeout"]),
                 timeout_seconds=int(work["timeout_seconds"]),
             )
+            mutation_performed = True
+            phase["mutation_performed"] = True
+            group_state["mutation_performed"] = True
+            group_state["status"] = "waiting-rollout"
+            if write_progress and checkpoint_writer is not None:
+                checkpoint_writer()
         except SoperatorMigrationPhasePending as exc:
             mutation_performed = True
             phase["mutation_performed"] = True
@@ -19303,6 +19674,70 @@ def _checkpoint_has_mutating_progress(checkpoint: Mapping[str, Any] | None) -> b
     return False
 
 
+def _node_group_provider_update_attempted(group: Mapping[str, Any]) -> bool:
+    return (
+        group.get("provider_update_attempted") is True
+        or group.get("mutation_performed") is True
+    )
+
+
+def _external_node_template_phase_mutation_performed(phase: Mapping[str, Any]) -> bool:
+    if phase.get("mutation_performed") is True:
+        return True
+    control_plane = _mapping(phase.get("control_plane"))
+    for hop in _mapping(control_plane.get("hops")).values():
+        if not isinstance(hop, Mapping):
+            continue
+        if (
+            hop.get("provider_update_attempted") is True
+            or hop.get("mutation_performed") is True
+        ):
+            return True
+        if str(hop.get("status", "") or "") == "completed":
+            return True
+    for group in _mapping(phase.get("node_groups")).values():
+        if not isinstance(group, Mapping):
+            continue
+        if _node_group_provider_update_attempted(group):
+            return True
+        if str(group.get("status", "") or "") == "completed":
+            return True
+    return False
+
+
+def _checkpoint_phase_mutation_performed(
+    checkpoint: Mapping[str, Any] | None,
+    phase_id: str,
+) -> bool:
+    if checkpoint is None:
+        return False
+    for event in checkpoint.get("events", []) or []:
+        if (
+            isinstance(event, Mapping)
+            and str(event.get("phase", "") or "") == phase_id
+            and event.get("mutation_performed") is True
+        ):
+            return True
+    phase = _mapping(_mapping(checkpoint.get("phase_state")).get(phase_id))
+    if phase.get("mutation_performed") is True:
+        return True
+    if phase_id == _EXTERNAL_NODE_TEMPLATE_PHASE_ID:
+        return _external_node_template_phase_mutation_performed(phase)
+    return False
+
+
+def _checkpoint_upgrade_mutation_performed(checkpoint: Mapping[str, Any] | None) -> bool:
+    if checkpoint is None:
+        return False
+    for event in checkpoint.get("events", []) or []:
+        if isinstance(event, Mapping) and event.get("mutation_performed") is True:
+            return True
+    for phase_id in _MUTATING_PHASE_IDS:
+        if _checkpoint_phase_mutation_performed(checkpoint, phase_id):
+            return True
+    return False
+
+
 def _checkpoint_mutating_progress_started(checkpoint: Mapping[str, Any] | None) -> bool:
     completed = {
         str(phase or "").strip()
@@ -22281,7 +22716,7 @@ def _execute_soperator_migration_unlocked(
         phase_id: str,
         exc: BaseException,
     ) -> None:
-        nonlocal pending_phase, pending_reason
+        nonlocal mutation_performed, pending_phase, pending_reason
         interrupted = isinstance(exc, (KeyboardInterrupt, EOFError))
         pending_phase = phase_id
         pending_reason = (
@@ -22289,6 +22724,19 @@ def _execute_soperator_migration_unlocked(
             if interrupted
             else (str(exc).strip() or exc.__class__.__name__)
         )
+        phase_mutation_performed = _checkpoint_phase_mutation_performed(checkpoint, phase_id)
+        mutation_performed = (
+            mutation_performed
+            or phase_mutation_performed
+            or _checkpoint_upgrade_mutation_performed(checkpoint)
+        )
+        if phase_mutation_performed and phase_id in _MUTATING_PHASE_IDS:
+            failed_phase_state = _phase_state(checkpoint, phase_id)
+            failed_phase_state["mutation_performed"] = True
+            if phase_id == _EXTERNAL_NODE_TEMPLATE_PHASE_ID:
+                for group in _mapping(failed_phase_state.get("node_groups")).values():
+                    if isinstance(group, dict) and _node_group_provider_update_attempted(group):
+                        group["mutation_performed"] = True
         checkpoint["pending_phase"] = pending_phase
         checkpoint["pending_reason"] = pending_reason
         _append_event(
@@ -22874,6 +23322,7 @@ def _execute_soperator_migration_unlocked(
         checkpoint["pending_phase"] = "none"
         checkpoint["pending_reason"] = ""
         _append_event(checkpoint, "execute-completed")
+    mutation_performed = mutation_performed or _checkpoint_upgrade_mutation_performed(checkpoint)
     report_path = _migrate_report_path(
         config_path,
         target_ref=normalized_target,

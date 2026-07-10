@@ -86,6 +86,22 @@ Build the design from behavior and constraints before selecting tools. Define:
 - observability, metrics, logs, traces, dashboards, alerts, and runbooks
 - tests, acceptance checks, validation commands, and evaluation criteria
 
+For serial multi-layer applications, design by vertical feature slice before
+planning broad layer work. A vertical slice ties one user-visible or
+system-visible behavior through the relevant layers, for example
+frontend -> API -> service -> database. Capture:
+
+- end-to-end trigger, request, state change, response, and user-visible result
+- each layer's responsibility and ownership
+- contracts between layers, including API shape, validation, error model, and
+  persistence expectations
+- data lifecycle across authoritative and derived state
+- tests and acceptance checks that prove the slice works through its boundaries
+
+Use horizontal foundation steps only when they are true prerequisites for
+multiple slices, such as schema contracts, auth, migrations, shared test
+harnesses, infrastructure safety, or observability needed before safe delivery.
+
 Brownfield designs should name likely files/modules and how the design fits the
 existing architecture. Greenfield designs should name the initial project
 shape, runtime, framework, storage, deployment target, and bootstrap order.
@@ -156,6 +172,11 @@ Implementation Steps:
 1. ...
 2. ...
 3. ...
+
+Vertical Slice Strategy:
+- end-to-end slice order: ...
+- prerequisite foundation steps: ...
+- cross-layer validation: ...
 
 Files Or Areas To Inspect/Modify:
 - ...
