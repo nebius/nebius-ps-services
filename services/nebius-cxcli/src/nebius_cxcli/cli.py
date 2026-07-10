@@ -56520,6 +56520,7 @@ _SOPERATOR_MIGRATION_PLAN_TOPIC_STYLES = {
     "Node-group per-group strategy": "bold cyan",
     "Safe-surge spare capacity required": "bold yellow",
     "Zero-surge spare capacity required": "bold yellow",
+    "Large quiesced worker rollout guidance": "bold yellow",
     "Node-group drain timeout": "yellow",
     "Service-role rollout": "cyan",
     "Planned worker waves": "cyan",
@@ -57958,6 +57959,7 @@ def _format_soperator_migration_plan_lines(
             _external_node_template_rollout_plan_lines(
                 rollout=rollout,
                 source_report=source_report,
+                slurm_scheduling_quiesce=slurm_scheduling_quiesce,
             )
         )
         lines.append(

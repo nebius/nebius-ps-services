@@ -163,48 +163,20 @@ surfaces.
    remaining blockers in run evidence; if local state cannot be updated, report
    that explicitly.
 
-## Recommended Commands
+## Command Reference
 
-- PR metadata:
-  - `gh pr view <pr-or-url> --json number,url,title,author,headRefName,headRepository,headRepositoryOwner,baseRefName,isCrossRepository,isDraft,maintainerCanModify,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup`
-- Changed files:
-  - `gh pr diff <pr-or-url> --name-only`
-  - `gh pr view <pr-or-url> --json files`
-- Checkout:
-  - `gh pr checkout <pr-or-url>`
-- Local base sync:
-  - `git fetch origin <base>`
-  - `git merge-tree --write-tree origin/<base> HEAD`
-  - `git merge --no-edit origin/<base>`
-  - rebase only when safe: `git rebase origin/<base>`
-  - non-destructive alternative when appropriate:
-    `gh pr update-branch <pr-or-url>`
-- Conflict checks:
-  - `git diff --name-only --diff-filter=U`
-  - `rg -n '^(<{7}|={7}|>{7})'`
-- Push:
-  - same-repository branch: `git push origin HEAD:<head-branch>`
-  - fork branch when GitHub created a writable remote:
-    `git push <head-remote> HEAD:<head-branch>`
-  - after an intentional safe rebase:
-    `git push --force-with-lease <head-remote> HEAD:<head-branch>`
+Read `references/command-reference.md` when exact GitHub CLI or Git commands
+are needed for PR metadata, checkout, local base sync, conflict detection, or
+branch updates.
 
 ## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
-for reusable templates, `scripts/` for deterministic helpers, and README or
-changelog entries for human-facing or release-note updates.
-
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report the
-skipped source update instead.
-
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.
 
 ## Guardrails
 

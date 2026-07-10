@@ -3798,7 +3798,7 @@ def test_external_node_template_rollout_config_validation_and_cli_precedence() -
         "worker_group_strategy": {
             "max_surge_count": 0,
             "max_unavailable_count": 1,
-            "drain_timeout": "30m",
+            "drain_timeout": "10m",
         },
     }
 
@@ -3945,7 +3945,7 @@ def test_external_node_template_rollout_config_validation_and_cli_precedence() -
         "worker_group_strategy": {
             "max_surge_count": 1,
             "max_unavailable_count": 0,
-            "drain_timeout": "30m",
+            "drain_timeout": "10m",
         },
     }
 
@@ -4021,6 +4021,27 @@ def test_zero_surge_service_role_plan_warns_for_one_node_groups() -> None:
         "Zero-surge service-role warning: discovered service-role capacity for login" in line
         for line in lines
     )
+
+
+def test_external_node_template_rollout_plan_guides_large_quiesced_workers() -> None:
+    snapshot = _snapshot()
+    snapshot["node_groups"]["gpu-pool"]["node_count"] = 3000
+    rollout = migration.resolve_external_node_template_rollout(
+        {"node_template_upgrade": {"rollout": {}}}
+    )
+
+    lines = migration._external_node_template_rollout_plan_lines(  # noqa: SLF001
+        rollout=rollout,
+        source_report=_source_report(snapshot),
+        slurm_scheduling_quiesce=True,
+    )
+
+    guidance = "\n".join(lines)
+    assert "Large quiesced worker rollout guidance:" in guidance
+    assert "max_unavailable=1 still makes Nebius replace one node at a time" in guidance
+    assert "largest worker group gpu-pool has 3000 nodes" in guidance
+    assert "--strategy-max-unavailable-count 25" in guidance
+    assert "Service-role rollout stays serial by default" in guidance
 
 
 def test_external_node_template_completion_recheck_rejects_k8s_downgrade_target() -> None:
@@ -6870,7 +6891,7 @@ def test_execute_upgrades_external_node_template_with_safe_surge_strategy(
     )
     assert update_command[update_command.index("--strategy-max-surge-count") + 1] == "1"
     assert update_command[update_command.index("--strategy-max-unavailable-count") + 1] == "0"
-    assert update_command[update_command.index("--strategy-drain-timeout") + 1] == "30m"
+    assert update_command[update_command.index("--strategy-drain-timeout") + 1] == "10m"
     node_template_update_index = next(
         index for index, call in enumerate(runner.calls) if call[0] == update_command
     )
@@ -6935,7 +6956,7 @@ def test_execute_upgrades_external_node_template_with_safe_surge_strategy(
         "worker_group_strategy": {
             "max_surge_count": 1,
             "max_unavailable_count": 0,
-            "drain_timeout": "30m",
+            "drain_timeout": "10m",
         },
     }
     assert phase["control_plane"]["hops"]["1.32"]["status"] == "completed"
@@ -8113,7 +8134,7 @@ def test_execute_external_node_template_allows_zero_surge_worker_fallback(
     update_command = node_template_updates[0]
     assert update_command[update_command.index("--strategy-max-surge-count") + 1] == "0"
     assert update_command[update_command.index("--strategy-max-unavailable-count") + 1] == "1"
-    assert update_command[update_command.index("--strategy-drain-timeout") + 1] == "30m"
+    assert update_command[update_command.index("--strategy-drain-timeout") + 1] == "10m"
     assert update_command[update_command.index("--timeout") + 1] == "1000m"
 
 
@@ -14478,6 +14499,52 @@ def test_mk8s_status_reports_provider_node_group_rollout_table() -> None:
     assert runner.nebius_api.calls == [("node_group.list", "cluster-123")]
 
 
+def test_mk8s_status_counts_provider_rollout_when_ready_nodes_hide_replacement() -> None:
+    runner = _FakeCommandRunner(
+        existing_node_groups=[
+            {
+                "metadata": {"id": "nodegroup-worker-0-0", "name": "worker-0-0"},
+                "spec": {"version": "1.32"},
+                "status": {
+                    "ready_node_count": 2,
+                    "target_node_count": 2,
+                    "node_count": 2,
+                    "outdated_node_count": 1,
+                    "reconciling": False,
+                    "state": "PROVISIONING",
+                    "events": [{"last_occurrence": {"code": "NodeProvisioning"}}],
+                },
+            }
+        ]
+    )
+    checkpoint = _provider_checkpoint(
+        {
+            "worker-0-0": {
+                "status": "updating",
+                "node_group_name": "worker-0-0",
+                "node_group_id": "nodegroup-worker-0-0",
+            }
+        }
+    )
+
+    signal = _collect_provider_mk8s_status(runner, checkpoint)
+
+    assert signal.name == "MK8s Node Groups"
+    assert signal.state == "degraded"
+    assert "total=2 upgraded=1 upgrading=1 remaining=1 ready/current=2/2" in signal.summary
+    assert _mk8s_status_row_cells(signal.summary, "worker-0-0")[:8] == [
+        "worker-0-0",
+        "PROVISIONING",
+        "1.32",
+        "2",
+        "1",
+        "1",
+        "1",
+        "2/2",
+    ]
+    assert "NodeProvisioning" in signal.summary
+
+
 def test_mk8s_status_reports_reconciling_node_group_when_nodes_ready() -> None:
     runner = _FakeCommandRunner(
         existing_node_groups=[
@@ -14510,14 +14577,14 @@ def test_mk8s_status_reports_reconciling_node_group_when_nodes_ready() -> None:
 
     assert signal.name == "MK8s Node Groups"
     assert signal.state == "degraded"
-    assert "total=3 upgraded=0 upgrading=0 remaining=3 ready/current=3/3" in signal.summary
+    assert "total=3 upgraded=0 upgrading=3 remaining=3 ready/current=3/3" in signal.summary
     assert _mk8s_status_row_cells(signal.summary, "system")[:8] == [
         "system",
         "PROVISIONING",
         "1.32",
         "3",
         "0",
-        "0",
+        "3",
         "3",
         "3/3",
     ]
@@ -14596,14 +14663,14 @@ def test_mk8s_status_infers_completed_groups_when_outdated_counter_missing() -> 
 
     assert signal.name == "MK8s Node Groups"
     assert signal.state == "degraded"
-    assert "total=11 upgraded=8 upgrading=0 remaining=3 ready/current=11/11" in signal.summary
+    assert "total=11 upgraded=8 upgrading=3 remaining=3 ready/current=11/11" in signal.summary
     assert _mk8s_status_row_cells(signal.summary, "system")[:8] == [
         "system",
         "PROVISIONING",
         "1.31",
         "3",
         "0",
-        "0",
+        "3",
         "3",
         "3/3",
     ]

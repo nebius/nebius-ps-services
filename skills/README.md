@@ -6,8 +6,10 @@ of `SKILL.md`.
 
 This root README is the concise catalog and install guide. Most skill folders
 also have a local `README.md` that explains architecture, core concepts,
-workflow, and important files. `SKILL.md` remains the runtime instruction file
-Codex loads when the skill is used.
+workflow, and important files. `SKILL.md` remains the concise runtime
+instruction file Codex loads when the skill is used; longer command cookbooks,
+rubrics, standards, and templates live under `references/` or `assets/` and
+are loaded on demand.
 
 Every reusable skill includes a `## Learning Loop` section in `SKILL.md`. When
 durable, public-safe, evidence-backed knowledge is discovered while using a

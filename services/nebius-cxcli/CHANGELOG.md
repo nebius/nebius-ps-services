@@ -31,6 +31,10 @@ All notable changes to this project are tracked here. This changelog follows
   control-plane hop is running before node-template rollout starts, and fully
   ready `RUNNING` groups no longer show `upgraded=unknown` when Nebius omits
   `outdated_node_count` after rollout has started.
+- Fixed external Soperator upgrade provider node-group status so active
+  `PROVISIONING`, `Draining`, or `NodeProvisioning` rows with positive
+  `outdated_node_count` report nonzero `upgrading` even when `ready/current`
+  is already full.
 - Changed `examples/slurm-jobs/submit-job-test.sh --watch-jobs` so the default
   watch continues until observed smoke jobs finish and leave Slurm's live queue;
   `--watch-duration` remains available as an explicit maximum watch window.
@@ -120,6 +124,10 @@ All notable changes to this project are tracked here. This changelog follows
   `--service-role-rollout-strategy zero-surge|safe-surge`; explicit
   `service_role_strategy: safe-surge` configs still preserve service-role
   capacity with one temporary surge node per active service group.
+- Changed external worker node-template rollout so worker `drain_timeout`
+  defaults to `10m` when no explicit worker timeout is configured while keeping
+  service-role rollout at `30m`, and added large quiesced-worker dry-run
+  guidance for `--strategy-max-unavailable-count`.
 - Fixed approved `ext-soperator upgrade --execute` terminal output so the live
   phase spinner is closed before final checkpoint, report, and post-upgrade
   config-refresh lines are printed.

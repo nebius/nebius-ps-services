@@ -45,3 +45,5 @@ Validation, docs, and CI alignment
 
 - `SKILL.md`: Terraform structure, workflow, and guardrails.
 - `agents/openai.yaml`: UI metadata.
+- `references/terraform-standards.md`: layout profiles, implementation
+  standards, documentation requirements, generation rules, and quality gates.

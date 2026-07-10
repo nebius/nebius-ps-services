@@ -1533,10 +1533,14 @@ while compute and cutover phases emit MK8s status as a Nebius API-backed
 provider node-group rollout table sourced from one node-group snapshot per
 refresh. The table starts with aggregate totals, then lists one row per node
 group with provider state, API-reported Kubernetes version, total, upgraded,
-upgrading, remaining, ready/current, and latest event columns. `upgraded`,
-`upgrading`, and `remaining` are derived from provider status counters, so large
-groups such as 1000-node worker pools remain scan-friendly without mixing in
-Kubernetes registered-node counts. Active or degraded groups sort before
+upgrading, remaining, ready/current, and latest event columns. `upgraded` is
+`total - outdated_node_count`, `remaining` is `outdated_node_count`, and
+`upgrading` is provider-active rollout nodes: readiness deficit plus at least
+`remaining` when state/event signals active rollout such as `PROVISIONING`,
+`Draining`, or `NodeProvisioning`. This keeps large groups such as 1000-node
+worker pools scan-friendly without mixing in Kubernetes registered-node counts
+and still shows provider replacement when `ready/current` is already full.
+Active or degraded groups sort before
 unchanged ready groups, and missing provider fields render as `unknown`, except
 an omitted `outdated_node_count` on a fully ready `RUNNING` group is treated as
 zero remaining. While a control-plane hop is active before node-template rollout
@@ -1672,7 +1676,8 @@ and aligned SFS filesystem attachments, through direct Nebius node-group
 updates. cxcli snapshots each node group's original strategy, keeps
 service-role groups serial, uses zero-surge
 (`max_surge=0`, `max_unavailable=1`, `drain_timeout=30m`) by default, and
-updates worker groups with zero-surge by default. Operators can select bounded
+updates worker groups with zero-surge
+(`max_surge=0`, `max_unavailable=1`, `drain_timeout=10m`) by default. Operators can select bounded
 worker safe-surge waves or service-role safe-surge when spare quota/capacity is
 available and preserving active service-role capacity is more important than
 avoiding surge quota.
@@ -1689,7 +1694,11 @@ when the operator explicitly chooses safe-surge for that role.
 Interactive external onboarding asks `slurm_scheduling_quiesce` before rollout
 pacing. With the default `true`, cxcli skips normal worker wave and worker
 `max_unavailable_count` prompts because Slurm-clear workers dispatch as soon as
-active or `COMPLETING` jobs are gone, regardless of worker group wave pacing. If
+active or `COMPLETING` jobs are gone, regardless of worker group wave pacing.
+Nebius still applies per-group `max_unavailable_count` inside each dispatched
+worker group; for large quiesced groups, dry-run output recommends
+`min(25, max(2, ceil(largest_worker_group_node_count * 0.05)))` while
+service-role rollout stays serial by default. If
 the operator chooses `false`, cxcli warns that scheduling remains active and then
 shows the advanced rollout controls.
 
@@ -1703,7 +1712,7 @@ node_template_upgrade:
     worker_group_strategy:
       max_surge_count: 0
       max_unavailable_count: 1
-      drain_timeout: 30m
+      drain_timeout: 10m
 ```
 
 The capacity-preserving safe-surge shape is:
@@ -1720,7 +1729,7 @@ node_template_upgrade:
     worker_group_strategy:
       max_surge_count: 1
       max_unavailable_count: 0
-      drain_timeout: 30m
+      drain_timeout: 10m
 ```
 
 Incompatible storage axes require an aligned-SFS plan: create and dual-attach

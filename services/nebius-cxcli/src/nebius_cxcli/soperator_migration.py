@@ -364,7 +364,9 @@ SOPERATOR_SAFE_SURGE_WORKER_GROUP_STRATEGY_DEFAULT_MAX_SURGE_COUNT = 1
 SOPERATOR_SAFE_SURGE_WORKER_GROUP_STRATEGY_DEFAULT_MAX_UNAVAILABLE_COUNT = 0
 SOPERATOR_ZERO_SURGE_WORKER_GROUP_STRATEGY_DEFAULT_MAX_SURGE_COUNT = 0
 SOPERATOR_ZERO_SURGE_WORKER_GROUP_STRATEGY_DEFAULT_MAX_UNAVAILABLE_COUNT = 1
-SOPERATOR_WORKER_GROUP_STRATEGY_DEFAULT_DRAIN_TIMEOUT = "30m"
+SOPERATOR_WORKER_GROUP_STRATEGY_DEFAULT_DRAIN_TIMEOUT = "10m"
+SOPERATOR_SERVICE_ROLE_GROUP_STRATEGY_DEFAULT_DRAIN_TIMEOUT = "30m"
+_SOPERATOR_LARGE_WORKER_GROUP_TUNING_MIN_NODES = 50
 _SOPERATOR_STORAGE_DEFAULTS: Mapping[str, Mapping[str, Any]] = {
     "jail": {
         "size_gib": 1024,
@@ -690,7 +692,7 @@ class SoperatorExternalNodeTemplateRollout:
     service_role_max_unavailable_count: int = (
         SOPERATOR_ZERO_SURGE_WORKER_GROUP_STRATEGY_DEFAULT_MAX_UNAVAILABLE_COUNT
     )
-    service_role_drain_timeout: str = SOPERATOR_WORKER_GROUP_STRATEGY_DEFAULT_DRAIN_TIMEOUT
+    service_role_drain_timeout: str = SOPERATOR_SERVICE_ROLE_GROUP_STRATEGY_DEFAULT_DRAIN_TIMEOUT
     strategy_max_surge_count: int = (
         SOPERATOR_ZERO_SURGE_WORKER_GROUP_STRATEGY_DEFAULT_MAX_SURGE_COUNT
     )
@@ -2117,6 +2119,7 @@ def resolve_external_node_template_rollout(
             "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout."
             "service_role_group_strategy.drain_timeout"
         ),
+        default=SOPERATOR_SERVICE_ROLE_GROUP_STRATEGY_DEFAULT_DRAIN_TIMEOUT,
     )
     resolved_max_surge = _non_negative_int_or_default(
         strategy_max_surge_count
@@ -2324,11 +2327,46 @@ def _zero_surge_service_role_capacity_warning_lines(
     ]
 
 
+def _large_quiesced_worker_rollout_guidance_line(
+    worker_groups: Sequence[tuple[str, Mapping[str, Any]]],
+    *,
+    rollout: SoperatorExternalNodeTemplateRollout,
+    slurm_scheduling_quiesce: bool,
+) -> str | None:
+    if not slurm_scheduling_quiesce:
+        return None
+    if rollout.strategy_max_unavailable_count != 1:
+        return None
+    worker_sizes = {
+        group_name: _positive_int(raw_group.get("node_count"), fallback=0)
+        for group_name, raw_group in worker_groups
+    }
+    if not worker_sizes:
+        return None
+    largest_size = max(worker_sizes.values())
+    if largest_size < _SOPERATOR_LARGE_WORKER_GROUP_TUNING_MIN_NODES:
+        return None
+    largest_groups = ", ".join(
+        group_name for group_name, size in worker_sizes.items() if size == largest_size
+    )
+    recommended = min(25, max(2, math.ceil(largest_size * 0.05)))
+    return (
+        "Large quiesced worker rollout guidance: Slurm quiesce can clear affected "
+        "workers for immediate provider dispatch, but max_unavailable=1 still makes "
+        "Nebius replace one node at a time inside each worker group; largest worker "
+        f"group {largest_groups} has {largest_size} node"
+        f"{'' if largest_size == 1 else 's'}, consider "
+        f"--strategy-max-unavailable-count {recommended}. Service-role rollout stays "
+        "serial by default."
+    )
+
+
 def _external_node_template_rollout_plan_lines(
     *,
     rollout: SoperatorExternalNodeTemplateRollout,
     source_report: Mapping[str, Any],
     worker_node_groups: Sequence[str] = (),
+    slurm_scheduling_quiesce: bool = False,
 ) -> list[str]:
     service_groups, worker_groups = _split_external_node_template_upgrade_groups(
         source_report=source_report,
@@ -2408,6 +2446,13 @@ def _external_node_template_rollout_plan_lines(
             for index, wave in enumerate(waves, start=1)
         )
         lines.append("Planned worker waves: " + wave_text + ".")
+        large_group_guidance = _large_quiesced_worker_rollout_guidance_line(
+            worker_groups,
+            rollout=rollout,
+            slurm_scheduling_quiesce=slurm_scheduling_quiesce,
+        )
+        if large_group_guidance:
+            lines.append(large_group_guidance)
     else:
         lines.append("Planned worker waves: none detected.")
     return lines
@@ -10332,6 +10377,31 @@ def _mk8s_status_node_group_aliases(node_group: Mapping[str, Any]) -> frozenset[
     return frozenset(aliases)
 
 
+_MK8S_PROVIDER_ACTIVE_ROLLOUT_EVENTS = frozenset(
+    {
+        "Draining",
+        "NodeProvisioning",
+        "WaitingForNodeRef",
+        "ROLLING",
+    }
+)
+_MK8S_PROVIDER_ACTIVE_ROLLOUT_STATES = frozenset({"PROVISIONING", "UPDATING"})
+
+
+def _mk8s_provider_rollout_active(
+    *,
+    state: str,
+    reconciling: bool,
+    event: str,
+) -> bool:
+    if reconciling:
+        return True
+    normalized_state = state.strip().upper()
+    if normalized_state in _MK8S_PROVIDER_ACTIVE_ROLLOUT_STATES:
+        return True
+    return event in _MK8S_PROVIDER_ACTIVE_ROLLOUT_EVENTS
+
+
 def _mk8s_status_node_group_row(
     *,
     node_group: Mapping[str, Any],
@@ -10364,13 +10434,15 @@ def _mk8s_status_node_group_row(
     ready = _int_or_none(_first_mapping_value(status, "ready_node_count", "readyNodeCount"))
     raw_state = str(_first_mapping_value(status, "state", "State") or "").strip()
     state = raw_state or "unknown"
+    reconciling = bool(status.get("reconciling", False))
+    event = _node_group_latest_event_code(status)
     remaining = _int_or_none(
         _first_mapping_value(status, "outdated_node_count", "outdatedNodeCount")
     )
     if (
         remaining is None
         and state == "RUNNING"
-        and not bool(status.get("reconciling", False))
+        and not reconciling
         and total is not None
         and current == total
         and ready == total
@@ -10380,6 +10452,17 @@ def _mk8s_status_node_group_row(
     upgrading = None
     if total is not None and current is not None and ready is not None:
         upgrading = max(0, max(current, total) - ready)
+    if (
+        upgrading is not None
+        and remaining is not None
+        and remaining > 0
+        and _mk8s_provider_rollout_active(
+            state=state,
+            reconciling=reconciling,
+            event=event,
+        )
+    ):
+        upgrading = max(upgrading, remaining)
     unknown = any(
         value is None
         for value in (
@@ -10403,7 +10486,7 @@ def _mk8s_status_node_group_row(
         remaining=remaining,
         ready=ready,
         current=current,
-        event=_node_group_latest_event_code(status),
+        event=event,
         active=active,
         degraded=degraded,
         unknown=unknown,

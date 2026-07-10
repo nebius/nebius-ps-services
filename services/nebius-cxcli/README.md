@@ -2771,8 +2771,9 @@ Underlying MK8s upgrade ownership is different for managed and external targets:
   `service_role_strategy: safe-surge` or `--service-role-rollout-strategy
   safe-surge` uses `max_surge=1`, `max_unavailable=0`, `drain_timeout=30m`
   and requires one temporary replacement node per active service group. Worker
-  groups default to zero-surge; worker safe-surge runs in bounded waves only
-  when selected, after
+  groups default to zero-surge with `max_surge=0`, `max_unavailable=1`, and
+  `drain_timeout=10m`; worker safe-surge runs in bounded waves only when
+  selected, after
   quota/capacity, worker-node health, and Slurm queue preflights pass. Set
   `drain_timeout: none` when
   waiting indefinitely is safer than provider drain fallback. CPU node groups
@@ -3386,7 +3387,12 @@ Important external upgrade flags:
   workers still block mutation until they finish, are cancelled, or are requeued
   away from the affected scope. In external node-template worker phases, quiesce
   enables Slurm-clear fast dispatch: cxcli starts every clear provider unit
-  immediately instead of pacing it through worker waves or `max_unavailable`.
+  immediately instead of pacing it through worker waves; Nebius still applies
+  the configured per-group `max_unavailable` while replacing nodes inside each
+  dispatched worker group. For large quiesced worker groups, dry-run output
+  recommends an exact `--strategy-max-unavailable-count` value using 5% of the
+  largest worker group capped at 25, while keeping service-role rollout serial
+  by default.
   Current Nebius node-template mutation is provider-unit scoped, so cxcli reports
   `provider-unit` mode and does not claim exact-node replacement inside a mixed
   busy/free node group. Reports and checkpoints record quiesced partitions,
@@ -3484,14 +3490,18 @@ Interactive Slurm job actions map to these Slurm commands:
   count is already the concurrency limit.
 - `--strategy-max-surge-count`, `--strategy-max-unavailable-count`, and
   `--strategy-drain-timeout`: configure the Nebius node-group strategy inside
-  each active worker group. zero-surge defaults are `0`, `1`, and `30m`;
-  safe-surge defaults are `1`, `0`, and `30m`. Service-role groups have their
+  each active worker group. zero-surge defaults are `0`, `1`, and `10m`;
+  safe-surge defaults are `1`, `0`, and `10m`. Service-role groups have their
   own rollout strategy: zero-surge defaults are `max_surge=0`,
   `max_unavailable=1`, and `drain_timeout=30m`, while explicit service-role
   safe-surge uses `max_surge=1`, `max_unavailable=0`, and `drain_timeout=30m`.
   Use `--strategy-drain-timeout none` to wait indefinitely for drain completion;
   a finite timeout can let Nebius delete the node after that timeout when drain
   is still blocked.
+  With Slurm scheduling quiesce enabled, cxcli can dispatch idle worker provider
+  units immediately, but Nebius still replaces nodes inside a worker group at
+  the configured `max_unavailable`; for large groups the plan recommends
+  `min(25, max(2, ceil(largest_worker_group_node_count * 0.05)))`.
 
 The same rollout contract is persisted under the target onboarding block:
 
@@ -3507,7 +3517,7 @@ deploy:
             worker_group_strategy:
               max_surge_count: 0
               max_unavailable_count: 1
-              drain_timeout: 30m
+              drain_timeout: 10m
 ```
 
 When onboarding accepts external node-template work, the same target also stores
@@ -3583,7 +3593,7 @@ deploy:
             worker_group_strategy:
               max_surge_count: 1
               max_unavailable_count: 0
-              drain_timeout: 30m
+              drain_timeout: 10m
 ```
 
 Before the first mutation, `--execute --approve` refreshes live discovery,
@@ -3814,10 +3824,14 @@ and cutover phases show MK8s status as a Nebius API-backed provider
 node-group rollout table sourced from one node-group snapshot per refresh.
 The table starts with aggregate totals, then lists one row per node group with
 provider state, API-reported Kubernetes version, total, upgraded, upgrading,
-remaining, ready/current, and latest event columns. `upgraded`, `upgrading`,
-and `remaining` are derived from the provider status counters, so large groups
-such as 1000-node worker pools remain scan-friendly without mixing in
-Kubernetes registered-node counts. Active or degraded groups sort before
+remaining, ready/current, and latest event columns. `upgraded` is
+`total - outdated_node_count`, `remaining` is `outdated_node_count`, and
+`upgrading` is provider-active rollout nodes: readiness deficit plus at least
+`remaining` when state/event signals active rollout such as `PROVISIONING`,
+`Draining`, or `NodeProvisioning`. This keeps 1000-node worker pools
+scan-friendly without mixing in Kubernetes registered-node counts and still
+shows provider replacement when `ready/current` is already full. Active or
+degraded groups sort before
 unchanged ready groups, and missing provider fields render as `unknown`, except
 an omitted `outdated_node_count` on a fully ready
 `RUNNING` group is treated as zero remaining. While a control-plane hop is

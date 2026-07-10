@@ -279,87 +279,20 @@ without rewriting branch history.
     - recommended manual merge order
     - any blockers that remain
 
-## Recommended Commands
+## Command Reference
 
-- Default branch detection:
-  - `gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name'`
-  - fallback: `git symbolic-ref --short refs/remotes/origin/HEAD | sed 's#^origin/##'`
-- Refresh refs:
-  - `git fetch origin`
-- Pre-test hygiene and local validation before committing:
-  - `git status --short`
-  - `rg -n '^(<{7}|={7}|>{7})'`
-  - `git diff --check`
-  - run existing formatter/lint commands for touched files when available
-  - run focused local tests and wait for completion
-- Conflict checks:
-  - `git merge-tree --write-tree origin/<base> <branch-or-origin/branch>`
-  - `git diff --name-only --diff-filter=U`
-  - `rg -n '^(<{7}|={7}|>{7})'`
-- Base branch merge before PR creation:
-  - `git fetch origin`
-  - `git merge-tree --write-tree origin/<base> HEAD`
-  - `git merge --no-edit origin/<base>`
-  - rerun focused validation after the merge
-  - new remote branch: `git push -u origin HEAD:<branch>`
-  - existing remote branch: `git push origin HEAD:<branch>`
-- Complete local-work staging:
-  - `git status --short`
-  - `git add -A`
-  - `git diff --cached --check`
-  - `git diff --cached --stat`
-  - `git commit -m "<concise message>"`
-- Current feature-branch PR path:
-  - `git branch --show-current`
-  - `git status --short`
-  - `git diff --check`
-  - run existing formatter/lint commands for touched files when available
-  - run focused local tests and wait for completion
-  - `git add -A`
-  - `git diff --cached --check`
-  - `git diff --cached --stat`
-  - `git commit -m "<concise message>"`
-  - `git fetch origin`
-  - `git merge-tree --write-tree origin/<base> HEAD`
-  - `git merge --no-edit origin/<base>`
-  - rerun focused validation after merge
-  - new remote branch: `git push -u origin HEAD:<branch>`
-  - existing remote branch: `git push origin HEAD:<branch>`
-  - `gh pr create --base <base> --head <branch> --title <title> --body <body>`
-- Ordered merge simulation:
-  - `git switch --detach origin/<base>`
-  - `git switch -c tmp/pr-order-check-<short-id>`
-  - `git merge --no-edit <first-branch-or-origin/first-branch>`
-  - `git merge --no-edit <next-branch-or-origin/next-branch>`
-  - if a simulation merge conflicts: `git merge --abort`
-  - `git switch <original-branch>`
-  - `git branch -D tmp/pr-order-check-<short-id>`
-- Existing PR lookup:
-  - `gh pr list --head <branch> --state open --json number,url,headRefName,baseRefName`
-- PR readiness:
-  - `gh pr view <number> --json number,url,headRefName,baseRefName,mergeable,mergeStateStatus`
-  - `gh pr checks <number>`
-  - `gh pr checks <number> --watch`
-- PR creation:
-  - `gh pr create --base <base> --head <branch> --title <title> --body <body>`
-  - draft variant: `gh pr create --draft ...`
+Read `references/command-reference.md` when exact Git or GitHub CLI commands
+are needed for branch detection, validation, base merges, ordered merge
+simulation, PR lookup, checks, or PR creation.
 
 ## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
-for reusable templates, `scripts/` for deterministic helpers, and README or
-changelog entries for human-facing or release-note updates.
-
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report the
-skipped source update instead.
-
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.
 
 ## Guardrails
 

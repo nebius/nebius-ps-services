@@ -51,3 +51,5 @@ Review checks, diffs, conflicts, and comments
 
 - `SKILL.md`: PR review and repair workflow.
 - `agents/openai.yaml`: UI metadata.
+- `references/command-reference.md`: exact GitHub CLI and Git command cookbook
+  loaded when inspecting, syncing, or updating a PR branch.

@@ -9295,7 +9295,7 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
         result.output
     )
     assert (
-        "Node-group per-group strategy: max_surge=0, max_unavailable=1, drain_timeout=30m"
+        "Node-group per-group strategy: max_surge=0, max_unavailable=1, drain_timeout=10m"
         in result.output
     )
     assert (

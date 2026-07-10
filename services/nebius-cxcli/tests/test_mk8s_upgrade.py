@@ -299,6 +299,28 @@ def test_format_mk8s_provider_node_group_status_includes_k8s_column() -> None:
     assert "ROLLING" in rendered
 
 
+def test_format_mk8s_provider_node_group_status_counts_active_ready_rollout() -> None:
+    rolling = _node_group(id="ng-worker-0-0", name="worker-0-0", version="1.32")
+    rolling.status = SimpleNamespace(
+        state="PROVISIONING",
+        ready_node_count=2,
+        target_node_count=2,
+        node_count=2,
+        outdated_node_count=1,
+        reconciling=False,
+        events=[SimpleNamespace(last_occurrence=SimpleNamespace(code="NodeProvisioning"))],
+    )
+
+    lines = upgrade.format_mk8s_provider_node_group_status((rolling,))
+    rendered = "\n".join(lines)
+
+    assert "total=2 upgraded=1 upgrading=1 remaining=1 ready/current=2/2" in rendered
+    assert (
+        "worker-0-0  PROVISIONING  1.32  2      1         1          1          "
+        "2/2            NodeProvisioning"
+    ) in rendered
+
+
 def test_verify_mk8s_upgrade_plan_ready_fails_when_live_os_does_not_match() -> None:
     planned_raw = _node_group(
         id="ng-system",

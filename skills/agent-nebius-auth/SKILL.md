@@ -228,16 +228,9 @@ PYTHONDONTWRITEBYTECODE=1 python3 -B scripts/test_install_hook_registration.py
 
 ## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `scripts/` for deterministic setup logic, and
-`assets/hooks/` for runtime hook behavior.
-
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report that it
-was skipped instead.
-
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.

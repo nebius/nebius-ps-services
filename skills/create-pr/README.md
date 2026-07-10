@@ -104,3 +104,5 @@ Report PR number, URL, and blockers
 
 - `SKILL.md`: PR creation workflow, guardrails, and command guidance.
 - `agents/openai.yaml`: UI metadata and default prompt.
+- `references/command-reference.md`: exact Git and GitHub CLI command cookbook
+  loaded when executing or validating PR operations.

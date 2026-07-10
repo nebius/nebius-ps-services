@@ -144,6 +144,11 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Lightened all repo-owned runtime `SKILL.md` files by replacing the repeated
+  long learning-loop section with a concise equivalent, and moved detailed
+  command, checklist, and standards material from `align`, `align-skill`,
+  `create-pr`, `review-pr`, and `terraform` into on-demand `references/`
+  files while preserving each skill workflow and validation contract.
 - Updated `brainstorm` to route unresolved recommendation-changing source
   conflicts through a bounded `research` pass, and strengthened `design`,
   `task-implementer`, and Agentic SDLC design/plan/implementation skills to

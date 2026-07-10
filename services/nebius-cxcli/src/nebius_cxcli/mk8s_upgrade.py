@@ -1395,6 +1395,31 @@ def _node_group_latest_event_code(status: Any) -> str:
     return "-"
 
 
+_PROVIDER_ACTIVE_ROLLOUT_EVENTS = frozenset(
+    {
+        "Draining",
+        "NodeProvisioning",
+        "WaitingForNodeRef",
+        "ROLLING",
+    }
+)
+_PROVIDER_ACTIVE_ROLLOUT_STATES = frozenset({"PROVISIONING", "UPDATING"})
+
+
+def _provider_rollout_active(
+    *,
+    state: str,
+    reconciling: bool,
+    event: str,
+) -> bool:
+    if reconciling:
+        return True
+    normalized_state = state.strip().upper()
+    if normalized_state in _PROVIDER_ACTIVE_ROLLOUT_STATES:
+        return True
+    return event in _PROVIDER_ACTIVE_ROLLOUT_EVENTS
+
+
 def _provider_node_group_status_row(node_group: Any) -> _Mk8sProviderNodeGroupStatusRow:
     metadata = getattr(node_group, "metadata", None)
     spec = getattr(node_group, "spec", None)
@@ -1413,10 +1438,12 @@ def _provider_node_group_status_row(node_group: Any) -> _Mk8sProviderNodeGroupSt
     current = _int_or_none(getattr(status, "node_count", None))
     ready = _int_or_none(getattr(status, "ready_node_count", None))
     remaining = _int_or_none(getattr(status, "outdated_node_count", None))
+    reconciling = bool(getattr(status, "reconciling", False))
+    event = _node_group_latest_event_code(status)
     if (
         remaining is None
         and state == "RUNNING"
-        and not bool(getattr(status, "reconciling", False))
+        and not reconciling
         and total is not None
         and current == total
         and ready == total
@@ -1426,6 +1453,17 @@ def _provider_node_group_status_row(node_group: Any) -> _Mk8sProviderNodeGroupSt
     upgrading = None
     if total is not None and current is not None and ready is not None:
         upgrading = max(0, max(current, total) - ready)
+    if (
+        upgrading is not None
+        and remaining is not None
+        and remaining > 0
+        and _provider_rollout_active(
+            state=state,
+            reconciling=reconciling,
+            event=event,
+        )
+    ):
+        upgrading = max(upgrading, remaining)
     return _Mk8sProviderNodeGroupStatusRow(
         group=group,
         state=state,
@@ -1436,7 +1474,7 @@ def _provider_node_group_status_row(node_group: Any) -> _Mk8sProviderNodeGroupSt
         remaining=remaining,
         ready=ready,
         current=current,
-        event=_node_group_latest_event_code(status),
+        event=event,
     )
 
 

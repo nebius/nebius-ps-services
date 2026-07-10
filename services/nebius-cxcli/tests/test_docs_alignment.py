@@ -1869,6 +1869,17 @@ def test_docs_define_component_selector_contract() -> None:
         in readme_flat
     )
     assert "service-role groups and worker groups both default to zero-surge" in readme_flat
+    worker_default_readme = (
+        "Worker groups default to zero-surge with `max_surge=0`, "
+        "`max_unavailable=1`, and `drain_timeout=10m`"
+    )
+    assert worker_default_readme in readme_flat
+    assert "`upgrading` is provider-active rollout nodes" in readme_flat
+    large_quiesced_worker_guidance = (
+        "recommends an exact `--strategy-max-unavailable-count` value using 5% "
+        "of the largest worker group capped at 25"
+    )
+    assert large_quiesced_worker_guidance in readme_flat
     assert "service-role groups use safe-surge by default" not in readme_flat
     stale_login_service_role_safe_surge_default = (
         "login/service-role groups use `max_surge=1`, `max_unavailable=0`, "
@@ -2288,6 +2299,11 @@ def test_docs_define_component_selector_contract() -> None:
     assert "does not create parallel worker node groups" in design_flat
     assert "worker groups default to zero-surge" in design_flat
     assert "Service-role groups are serial zero-surge by default" in design_flat
+    assert "`drain_timeout=10m`) by default" in design_flat
+    assert "`upgrading` is provider-active rollout nodes" in design_flat
+    assert (
+        "`min(25, max(2, ceil(largest_worker_group_node_count * 0.05)))`" in design_flat
+    )
     assert (
         "requires spare surge capacity for active service groups by default"
         not in design_flat

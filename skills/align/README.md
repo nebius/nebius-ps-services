@@ -88,3 +88,5 @@ required-reference and safe-remediation rules.
 
 - `SKILL.md`: runtime alignment workflow and guardrails.
 - `agents/openai.yaml`: UI metadata and invocation prompt.
+- `references/quality-gate.md`: detailed changed-surface, wiring, review, and
+  modularity checklist loaded only when mapping or validating a scope.

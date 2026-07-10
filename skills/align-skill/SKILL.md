@@ -61,49 +61,18 @@ alignment.
 
 ## Triggering This Skill
 
-Official OpenAI documentation confirms that Codex Skills are available in the
-Codex CLI, IDE extension, and Codex app. It also confirms progressive
-disclosure: Codex starts with each skill's `name`, `description`, and file path,
-then loads the full `SKILL.md` only when it decides the skill is relevant.
-In large skill sets, OpenAI docs state that Codex may shorten descriptions or
-omit some skills from the initial skills list, so front-load the key trigger
-terms and boundaries in the front matter `description`.
+Codex uses progressive disclosure: it sees skill metadata first, then loads
+the full `SKILL.md` only when the skill is selected. Front-load target type,
+authoring intent, and boundaries in the front matter `description`.
 
-Confirmed explicit invocation in CLI/IDE: run `/skills` or type `$` to mention a
-skill. Implicit invocation depends on the front matter `description`.
-
-For reliable activation in CLI, IDE extension, or the Codex app, mention
-`align-skill` and the target path, skill name, folder, GitHub repository URL, or
-GitHub tree URL. Do not claim support for manual `@skill` syntax or any other
-explicit invocation syntax unless current official OpenAI documentation
+For deterministic activation, mention `align-skill` plus the target path,
+skill name, folder, GitHub repository URL, or GitHub tree URL. In CLI/IDE,
+confirmed explicit mechanisms include `/skills` and `$` skill mention. Do not
+document `@skill` or other syntax unless current official OpenAI documentation
 confirms it.
 
-Practical prompts:
-
-```text
-Use align-skill to review and align `skills/foo`.
-Use align-skill as a helper after skill-creator scaffolded a release-triage skill.
-Align these skills against the canonical structure and official vendor docs.
-Review all skills under this folder and produce an alignment report.
-Validate this GitHub skills repo and propose safe changes.
-Fix the `SKILL.md` for this skill so it follows Codex Skill best practices.
-Help me harden this draft `SKILL.md` into a safe, secure, fast Codex skill.
-Add the standard learning-loop rule to every skill under `skills/`.
-Check whether this skill has safe guardrails before live validation.
-Standardize this multi-skill folder and add missing references, assets, or scripts.
-Review this skill's vendor-specific commands against official documentation.
-Align `skills/foo` and `skills/bar`, but do not run live tests unless the environment is confirmed as non-production.
-```
-
-VS Code-compatible IDE example: open the repository in VS Code, Cursor, or
-Windsurf, then ask: "Use align-skill to align `skills/foo`."
-
-Codex app or desktop local example: open the local project that contains the
-skills, choose the local workflow, then ask: "Use align-skill to review all
-skills under `skills/`."
-
-For expanded CLI, VS Code-compatible IDE, and Codex app guidance, read
-`references/triggering-guide.md`.
+Read `references/triggering-guide.md` when reviewing trigger behavior, surface
+support, or prompt examples.
 
 ## Alignment Principles
 
@@ -197,20 +166,12 @@ as unverified instead of presenting it as fact. Read
 
 ## Learning Loop
 
-When using this skill, capture durable, reusable, public-safe learnings back
-into this skill's local source materials before completion when the current task
-contract allows source edits. Update the narrowest appropriate surface:
-`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
-for reusable templates, `scripts/` for deterministic helpers, and README or
-changelog entries for human-facing or release-note updates.
-
-If the current task is explicitly read-only/report-only, or source writes are
-outside this skill's task contract, do not edit skill sources; report the
-skipped source update instead.
-
-Do not capture secrets, private URLs, customer data, raw logs, one-off local
-state, or unverified/vendor-specific claims. If a useful learning is not safe,
-not evidence-backed, or outside this skill's scope, report that it was skipped.
+When using this skill, capture durable, reusable, public-safe learnings
+in the narrowest appropriate surface only when the task contract allows source edits.
+For read-only/report-only work, or when a learning is not public-safe,
+evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
+edit skill sources; report that it was skipped. Do not capture secrets, private
+URLs, customer data, raw logs, or one-off local state.
 
 ## Mandatory Review Lanes
 
@@ -250,47 +211,17 @@ effects.
 
 ## Canonical Skill Structure
 
-OpenAI portable minimum:
+Read `references/canonical-skill-structure.md` when checking structure,
+metadata, naming, section placement, optional resources, or stateful-workflow
+profile requirements. Keep the core distinction loaded here:
 
-```text
-skill-name/
-`-- SKILL.md
-```
-
-Portable skill with common optional resources:
-
-```text
-skill-name/
-|-- SKILL.md
-|-- agents/
-|   `-- openai.yaml
-|-- references/
-|-- scripts/
-`-- assets/
-```
-
-This repository's source-owned standard:
-
-```text
-skill-name/
-|-- SKILL.md
-|-- agents/
-|   `-- openai.yaml
-|-- assets/
-|-- evals/
-|-- references/
-`-- scripts/
-```
-
-For this repository, keep `agents/openai.yaml` for every source-owned skill;
-do not remove it as an "optional" upstream file. Only add the other optional
-folders when they serve the skill. Follow existing repository conventions when
-they are clearer or stricter than the generic OpenAI baseline.
-OpenAI Codex treats `agents/openai.yaml` as optional metadata for UI metadata,
-invocation policy, and tool dependencies. This repository requires it for
-source-owned skills so UI metadata, default prompts, dependencies, and
-invocation policy can be validated. In this repository, `evals/` is an optional
-surface for reusable trigger or quality evaluation prompts.
+- OpenAI portable minimum: a skill folder with `SKILL.md` containing front
+  matter `name` and `description`.
+- OpenAI optional resources: `agents/openai.yaml`, `references/`, `scripts/`,
+  and `assets/` when they serve the skill.
+- This repository's source-owned standard: every repo-owned skill keeps
+  `agents/openai.yaml`; `assets/`, `evals/`, `references/`, and `scripts/` are
+  added only when useful.
 
 ## Invocation Policy Selection
 
