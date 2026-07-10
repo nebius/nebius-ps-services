@@ -6,6 +6,9 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Fixed Nebius SDK-backed operations, including `ext-soperator upgrade`, so
+  synchronous SDK waits use a cxcli-owned background event loop instead of
+  colliding with an active CLI event loop.
 - Clarified the external Soperator access boundary: core onboarding, backup,
   and upgrade operations use Nebius API plus Kubernetes API/kubeconfig access,
   run Slurm commands through `kubectl exec`, and do not SSH from the operator
