@@ -23,6 +23,14 @@ class SoperatorClusterArtifactIdentity:
     target_ref: str = ""
     kube_context: str = ""
 
+    def __post_init__(self) -> None:
+        if (
+            not self.cluster_key
+            or self.cluster_key in {".", ".."}
+            or _artifact_token(self.cluster_key) != self.cluster_key
+        ):
+            raise ValueError("Soperator artifact cluster_key must be one safe path token.")
+
     def as_metadata(self) -> dict[str, str]:
         return {
             "cluster_key": self.cluster_key,
@@ -50,7 +58,8 @@ def _artifact_token(value: Any) -> str:
             continue
         chars.append("-")
         previous_separator = True
-    return "".join(chars).strip("-")
+    token = "".join(chars).strip("-")
+    return "" if token in {".", ".."} else token
 
 
 def _mapping_text(source: Mapping[str, Any], *keys: str) -> str:
@@ -166,10 +175,14 @@ def _infra_cluster_name(payload: Mapping[str, Any], target_ref: str) -> str:
             continue
         inputs = _nested_mapping(row, "inputs")
         cluster = _nested_mapping(inputs, "cluster")
-        return _mapping_text(
-            row,
-            "cluster_name",
-        ) or _mapping_text(inputs, "cluster_name") or _mapping_text(cluster, "cluster_name")
+        return (
+            _mapping_text(
+                row,
+                "cluster_name",
+            )
+            or _mapping_text(inputs, "cluster_name")
+            or _mapping_text(cluster, "cluster_name")
+        )
     return ""
 
 
@@ -203,7 +216,13 @@ def soperator_cluster_reports_root(
     project_dir: Path,
     identity: SoperatorClusterArtifactIdentity,
 ) -> Path:
-    return project_dir / "generated" / "reports" / SOPERATOR_CLUSTER_ARTIFACTS_DIR_NAME / identity.cluster_key
+    return (
+        project_dir
+        / "generated"
+        / "reports"
+        / SOPERATOR_CLUSTER_ARTIFACTS_DIR_NAME
+        / identity.cluster_key
+    )
 
 
 def soperator_cluster_report_dir(

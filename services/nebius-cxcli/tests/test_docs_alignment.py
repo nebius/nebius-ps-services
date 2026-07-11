@@ -75,7 +75,9 @@ def test_design_architecture_summary_matches_upgrade_surface() -> None:
         "a compatible rerun reuses the checkpointed `UP -> DOWN` partition records" in design_flat
     )
     assert "Slurm worker status reports deferred/upgrading from checkpoint state" in design_flat
-    assert "markerless checkpoints must probe Slurm first" in design_flat
+    assert "non-v3 journal evidence fails closed instead of using a markerless fallback" in (
+        design_flat
+    )
     assert "falls back to the controller `slurmctld` container" in design_flat
     assert "replacement login and worker pod evidence" in design_flat
     assert "Slurm configuration and accounting database state are protected customer state" in (
@@ -489,8 +491,7 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
         "- `ext-soperator onboard`: `--client-name`, `--tenant-id`, `--project-id`, "
         "`--region-id`, `--email`, `--cluster-id`, `--target-id`, "
         "`--kube-context`, `--access`, `--storage-mode`, `--compute-mode`, "
-        "`--to-chart-version`, `--to-k8s-version`, `--source-version`, "
-        "`--allow-unsupported-soperator-upgrade-path`, `--worker-rollout-strategy`, "
+        "`--to-k8s-version`, `--source-version`, `--worker-rollout-strategy`, "
         "`--service-role-rollout-strategy`, `--worker-wave-groups`, "
         "`--worker-wave-percent`, `--max-parallel-worker-groups`, "
         "`--strategy-max-surge-count`, `--strategy-max-unavailable-count`, "
@@ -505,7 +506,6 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
         "`--job-refresh-interval`, `--dry-run/--execute`, "
         "`--approve/--no-approve`, "
         "`--approve-remediation/--no-approve-remediation`, "
-        "`--allow-unsupported-soperator-upgrade-path`, "
         "`--interactive/--no-interactive`, `--worker-rollout-strategy`, "
         "`--service-role-rollout-strategy`, `--worker-wave-groups`, `--worker-wave-percent`, "
         "`--max-parallel-worker-groups`, `--strategy-max-surge-count`, "
@@ -662,15 +662,15 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     )
     assert "same laptop, workdir, and operator account that started it" in soperator_flat
     assert (
-        ".nebius-cxcli/soperator-clusters/<cluster-key>/ext-soperator-upgrade/checkpoint.json"
+        ".nebius-cxcli/soperator-clusters/<cluster-key>/ext-soperator-upgrade/campaigns/<campaign-id>/checkpoint.json"
         in soperator
     )
     assert (
         ".nebius-cxcli/soperator-clusters/<cluster-key>/soperator-upgrade/checkpoint.json"
         in soperator
     )
-    assert "these checkpoints stay local" in soperator_flat
-    assert "After the final locked segment completes" in soperator_flat
+    assert "these journals stay local" in soperator_flat
+    assert "completed campaign remains the audit record" in soperator_flat
     assert "`nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>`" in soperator
     assert (
         "`nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run`"
@@ -747,12 +747,12 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert soperator.index("### Soperator Slurm Scheduling And Command Examples") < (
         soperator.index("### Soperator Rules and Safety Checks")
     )
-    assert "Read-only against live cluster state" in soperator
+    assert "Read-only against live resources" in soperator
     assert "`--worker-rollout-strategy`, `--service-role-rollout-strategy`" in soperator
     assert "non-interactive onboarding" in soperator
     assert "verifies the needed quota and capacity during `--execute` preflight" in (soperator_flat)
-    assert "prints a color-highlighted sectioned plan covering target discovery" in (soperator_flat)
-    assert "refuses deploy-owned/no-upgrade action sets with render/deploy guidance" in (soperator)
+    assert "Reconcile live state and inspect the first unmet segment" in soperator_flat
+    assert "A complete campaign is a live-verified no-op" in soperator_flat
     assert (
         "`nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --execute --approve`"
         in soperator
@@ -813,12 +813,10 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
         in soperator_flat
     )
     assert "External upgrade follows these stages:" in soperator_flat
-    assert "Plan and dry run: load `config.yaml`, read the accepted discovery bundle" in (
+    assert "Plan and dry run: load the v3 campaign from `config.yaml`, refresh all live" in (
         soperator_flat
     )
-    assert "Execute preflight: refresh live discovery, verify the source release" in (
-        soperator_flat
-    )
+    assert "Execute preflight: verify the campaign fingerprint and live source" in (soperator_flat)
     assert "Validation hold: verify external MK8s control-plane and node-group readiness" in (
         soperator_flat
     )
@@ -830,7 +828,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
         "write the segment snapshot under `generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/segments/<segment-id>/`"
         in (soperator_flat)
     )
-    assert "Final handoff: after the last locked segment reports `Pending phase: none`" in (
+    assert "Campaign completion: after the last segment reports `Pending phase: none`" in (
         soperator_flat
     )
     assert "For Kubernetes minor changes, run provider-supported hops" in soperator_flat
@@ -851,8 +849,9 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     )
     assert "blocks the combined run and prints a chart-first command" in soperator_flat
     assert "Run the Soperator chart upgrade while Kubernetes stays at `1.32`" in (soperator_flat)
-    assert "unsupported` and `not_validated` paths fail fast unless" in soperator_flat
-    assert "`supported_with_warning` continue without the override" in soperator_flat
+    assert "External v3 campaigns are strictly catalog-pinned and fail closed" in (soperator_flat)
+    assert "The managed `soperator upgrade` command retains its explicit" in soperator_flat
+    assert "Paths marked `supported_with_warning` continue with the warning" in soperator_flat
     assert "CXCLI-managed Soperator upgrade follows these stages:" in soperator_flat
     assert "Preflight and backup: validate the current bundle" in soperator_flat
     assert "Slurm and MK8s rollout: when MK8s target flags are supplied" in soperator_flat
@@ -1565,7 +1564,6 @@ def test_docs_define_component_selector_contract() -> None:
         "  --target-id <logical-target-id> \\\n"
         "  --storage-mode keep-existing-storage \\\n"
         "  --compute-mode keep-existing-compute \\\n"
-        "  --to-chart-version <soperator-chart-version> \\\n"
         "  --to-k8s-version <major.minor> \\\n"
         "  --no-interactive"
     ) in readme
@@ -1594,33 +1592,25 @@ def test_docs_define_component_selector_contract() -> None:
     assert "External onboarding is not a Terraform import" in readme_flat
     assert "remain outside Terraform ownership" in readme_flat
     assert (
-        "If the accepted onboarding report says no external-upgrade-owned work is required"
+        "Register a new target, report its active campaign, or propose the next campaign after completion"
         in readme_flat
     )
-    assert "deploy the rendered desired state" in readme_flat
-    assert "`deploy <config.yaml>` applies the generated desired state" in readme_flat
-    assert "`nebius-cxcli deploy <config.yaml>`" in readme
-    assert "Plain `deploy <config.yaml>` reconciles every generated target" in readme_flat
     assert (
-        "Use `deploy --target <target-id>` only when you intentionally want to narrow"
-        in readme_flat
+        "Register a new target, report its active campaign, or propose the next campaign after completion"
+        in design_flat
     )
+    assert "`config.yaml` is the only desired-path authority" in readme_flat
+    assert "Execute or reconcile at most one approved campaign segment, then stop" in readme_flat
     assert "Healthy evidence is reported as `gpu-stack: verified`" in readme_flat
     assert "`gpu-rdma: validation-planned`" in readme_flat
-    assert "Target GPU stack reconciliation alone is not external-upgrade-owned work" in readme_flat
+    assert "Soperator/operator pins" in readme_flat
     assert (
-        "if no Soperator chart, storage, compute, or external node-template upgrade action is selected"
-        in readme_flat
-    )
-    assert "`ext-soperator upgrade` fails fast" in readme_flat
-    assert "do not run `deploy` before the external upgrade" in readme_flat
-    assert (
-        "`ext-soperator upgrade --execute` must first verify the live source release, create a restore-capable backup"
+        "`ext-soperator upgrade --execute` verifies the live source release, creates or reuses a restore-capable backup"
         in readme_flat
     )
     assert "Each executed stage runs a fast stage-scoped verification" in readme_flat
     assert "leaves that same phase pending" in readme_flat
-    assert "After the final locked segment completes" in readme_flat
+    assert "completed campaign remains the audit record" in readme_flat
     assert (
         "`generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/report.md` reports `Pending phase: none`"
         in readme_flat
@@ -1661,69 +1651,50 @@ def test_docs_define_component_selector_contract() -> None:
     assert "Soperator/Slurm validation suite still runs at validation hold" in readme_flat
     assert "per-phase `phase_state[<phase>].fast_verification` proof" in design_flat
     assert "targeted phase-fast smoke" in design_flat
-    assert (
-        "the selected actions become deploy-owned for the next normal reconciliation" in readme_flat
-    )
-    assert "If the report still shows any pending phase other than `none`" in readme_flat
-    assert "rerun the same `ext-soperator upgrade ... --execute --approve` command" in readme_flat
-    assert (
-        "If the final report shows `Pending phase: none` but the post-upgrade config refresh was skipped"
-        in readme_flat
-    )
-    assert "`ext-soperator onboard` only as an intentional repair path" in readme_flat
+    assert "Rerun the same upgrade command while a phase is pending" in readme_flat
+    assert "The journal never stores or reconstructs the desired path" in readme_flat
     assert "The external Soperator steady-state handoff is:" in readme_flat
     assert (
-        "decides whether the accepted `deploy.targets[].soperator_onboarding.actions` list contains external-upgrade-owned work"
+        "`ext-soperator onboard` discovers the live cluster and locks the full path under `deploy.targets[].soperator_onboarding.upgrade_path`"
         in readme_flat
     )
     assert "`deploy.targets[].soperator_onboarding.upgrade_path`" in readme_flat
-    assert "accepted full locked upgrade path" in readme_flat
+    assert "complete provider-supported campaign" in readme_flat
     assert (
         "Each `ext-soperator upgrade --execute --approve` run advances one locked segment"
         in readme_flat
     )
     assert (
-        "keeps onboarding in place and prints a next action to rerun the exact original "
-        "command with every option unchanged"
-    ) in readme_flat
+        "each execute invocation resumes or finishes at most one segment and stops" in readme_flat
+    )
+    assert "reports `Pending phase: none` and the completed campaign remains" in readme_flat
     assert (
-        "`generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/report.md` shows `Pending phase: none`"
+        "With no later provider-supported or catalog-pinned target, config bytes remain unchanged"
         in readme_flat
     )
-    assert (
-        "`config.yaml` and the `generated/reports/soperator-clusters/<cluster-key>/discovery/` bundle into the deploy-owned onboarding shape"
-        in readme_flat
-    )
-    assert "edit `config.yaml`, run `render`, then run `deploy`" in readme_flat
-    assert (
-        "Rerunning `ext-soperator onboard` after a completed external upgrade is read-only"
-        in readme_flat
-    )
-    assert "keep the target on the deploy path" in readme_flat
     assert "reconcile-target-gpu-stack" in readme_flat
     assert "target GPU stack reconciliation" in readme_flat
     assert "target-gpu-stack-remediation" in readme_flat
     assert (
         "`nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run`" in readme
     )
-    assert "color-highlighted sectioned plan covering target discovery" in readme_flat
-    assert "the full locked path, completed/current/remaining segments" in readme_flat
+    assert "Reconcile live state and inspect the first unmet segment" in readme_flat
+    assert "complete end-to-end `nebius-cxcli-ext-soperator-upgrade-campaign/v3` campaign" in (
+        readme_flat
+    )
     assert (
         "accepted onboarding actions, persistent jail mounts when a rootfs refresh "
-        "or explicit mount input makes them relevant, node-template rollout, "
-        "phases including `Jail Upgrade`"
-    ) in readme_flat
-    assert (
-        "Checkpoint refresh preserves the original ordered plan, including `Jail Upgrade` / `populate-jail-refresh`"
-        in readme_flat
+        "or explicit mount input makes them relevant, external node-template rollout, phases"
+    ) in design_flat
+    assert "The operation journal cannot recreate or replace the desired campaign" in readme_flat
+    assert "Do not onboard the cluster again between segments" in readme_flat
+    assert "The SDK-generated cluster access is canonical" in readme_flat
+    assert "must expose the same `kube-system` UID" in readme_flat
+    assert "Observation-only completion is limited to an exact provider-only MK8s segment" in (
+        readme_flat
     )
-    assert (
-        "Existing locked-path resumption stays on the same upgrade command until all locked segments are complete"
-        in (readme_flat)
-    )
-    assert (
-        "use a fresh `ext-soperator onboard` decision only to plan a new later path" in readme_flat
-    )
+    assert "Nebius mutations require a successful terminal SDK operation" in readme_flat
+    assert "rerun the same idempotent `onboard` command only to check for a later" in readme_flat
     assert "`ext-soperator onboard` is read-only against live cluster state" in readme_flat
     assert "The initial discovery summary is read-only" in readme_flat
     assert "does not list future upgrade phases as live onboarding actions" in readme_flat
@@ -1734,35 +1705,29 @@ def test_docs_define_component_selector_contract() -> None:
     assert "Onboarding asks for two independent layers" in readme_flat
     assert "compute mode is `keep-existing-compute` or `create-aligned-node-groups`" in readme_flat
     assert "Keeping existing compute preserves the discovered node groups" in readme_flat
-    assert "`--to-chart-version`: target Soperator chart version" in readme
-    assert "Defaults to the `component_sources.yaml` Soperator chart pin" in readme_flat
-    assert "non-default versions must resolve from the configured Soperator chart source" in (
+    assert (
+        "The Soperator chart/app target is always the exact `component_sources.yaml` catalog pin"
+        in readme_flat
+    )
+    assert "External onboarding has no chart-version override" in readme_flat
+    assert "`--to-k8s-version`: target Kubernetes `major.minor` version" in readme
+    assert "recommends the highest endpoint reachable by every concrete node group" in readme_flat
+    assert "omission prints the recommendation without writing a target or campaign" in (
         readme_flat
     )
-    assert "`deploy.targets[].soperator_onboarding.target_version`" in readme_flat
-    assert "`render` and `ext-soperator upgrade` target the same version" in readme_flat
-    assert "`--to-k8s-version`: target Kubernetes `major.minor` version" in readme
-    assert "defaults this field to the next provider-supported minor hop" in readme_flat
-    assert "does not jump straight to the latest supported minor" in readme_flat
     assert "`summary.md` includes `Upgrade Guidance` without gating discovery" in readme_flat
     assert (
         "that section shows Kubernetes minor hops, the current/target Soperator chart package state"
     ) in readme_flat
     assert "Support-policy evidence validates the path but does not by itself mean" in readme_flat
     assert "canonical ordering across the Kubernetes `1.33+` boundary" in readme_flat
-    assert (
-        "print the matched Soperator/Kubernetes upgrade-path rule during the decision summary"
-        in (readme_flat)
-    )
-    assert (
-        "Unsupported accepted plans still require `--allow-unsupported-soperator-upgrade-path`"
-        in (readme_flat)
-    )
+    assert "External v3 campaigns are strictly catalog-pinned and fail closed" in readme_flat
+    assert "they have no support-policy bypass" in readme_flat
     assert "discovered storage sizes are lower bounds" in readme_flat
     assert "Render/deploy must not request a smaller PVC/PV size" in readme_flat
     assert "from the live node-group ids" in readme_flat
     assert "preserves the live `SlurmCluster` resource name as `values.clusterName`" in readme_flat
-    assert "accepted onboarding fingerprint and source release" in readme_flat
+    assert "accepted campaign fingerprint and source release" in readme_flat
     assert (
         "choose a source version from the exact committed external-upgrade profile rows"
         in readme_flat
@@ -1779,7 +1744,7 @@ def test_docs_define_component_selector_contract() -> None:
     assert "known Soperator release name in a non-standard namespace" in readme_flat
     assert "matched migration profile instead of requiring source-version input" in readme_flat
     assert (
-        "local `.nebius-cxcli/soperator-clusters/<cluster-key>/ext-soperator-upgrade/` timeout-guarded checkpoint"
+        "`.nebius-cxcli/soperator-clusters/<cluster-key>/ext-soperator-upgrade/campaigns/<campaign-id>/checkpoint.json`"
         in readme_flat
     )
     assert "`--approve` / `--no-approve`: record customer approval" in readme_flat
@@ -1793,10 +1758,11 @@ def test_docs_define_component_selector_contract() -> None:
     assert "checks affected Slurm jobs on external node-template workers" in readme_flat
     assert "queued information rather than blockers" in readme_flat
     assert "`--slurm-scheduling-quiesce / --no-slurm-scheduling-quiesce`" in readme_flat
-    assert "Slurm-clear fast dispatch" in readme_flat
+    assert "completely job-free provider group becomes eligible for dispatch" in readme_flat
     assert "`provider-unit` mode" in readme_flat
-    assert "cxcli-held Slurm job IDs" in readme_flat
-    assert "releases only those recorded cxcli-held job IDs" in readme_flat
+    assert "exact observed held state for every cxcli-held Slurm job" in readme_flat
+    assert "Successful upgrades release only jobs that cxcli requeue-held" in readme_flat
+    assert "scontrol show job <jobid> -o" in readme_flat
     assert "This does not use `scontrol hold all`" in readme_flat
     assert "each affected running job" not in readme_flat
     assert "each displayed affected job" in readme_flat
@@ -1813,60 +1779,46 @@ def test_docs_define_component_selector_contract() -> None:
         in readme_flat
     )
     assert (
-        "normalizes target `kube-rbac-proxy` image values to "
+        "normalizes the Soperator manager and Soperator checks `kube-rbac-proxy` image values to "
         "`registry.k8s.io/kubebuilder/kube-rbac-proxy:v0.15.0`"
-    ) in readme_flat
+    ) in design_flat
     assert "Slurm rejects the scoped node filter" in readme_flat
     assert "unfiltered cluster-wide job list" in readme_flat
     assert "Slurm can show a cancelled job as `COMPLETING`" in readme_flat
     assert "waits for the selected jobs to leave the affected node list" in readme_flat
-    assert (
-        "The selected `deploy.targets[].soperator_onboarding.actions` list is the desired external upgrade contract"
-        in readme_flat
-    )
+    assert "The v3 campaign and each segment's selected" in readme_flat
+    assert "actions` projection are the desired external upgrade contract" in readme_flat
     assert "`approve-external-soperator-upgrade`" in readme_flat
     assert "approve-soperator-migration" not in readme
     assert "approve-soperator-migration" not in design
-    assert "Reruns are action-idempotent rather than checkpoint-only" in readme_flat
-    assert "rechecks the corresponding live state" in readme_flat
-    assert "internal resume reconciliation against the checkpointed target" in readme_flat
-    assert "live Nebius state only proves whether the phase should complete" in readme_flat
+    assert "The operation journal cannot recreate or replace the desired campaign" in readme_flat
+    assert "live Nebius, Kubernetes, Soperator, Jail, and Slurm observations prove" in readme_flat
     assert (
-        "Rerunning `ext-soperator onboard` is safe and refreshes the source discovery bundle"
-        in readme_flat
+        "Rerunning `ext-soperator onboard` is safe and does not mutate the cluster" in readme_flat
     )
-    assert (
-        "cxcli enriches the single bulk Kubernetes node inventory with Nebius control-plane and node-group template inventory by node group"
-        in readme_flat
-    )
-    assert "omits the `upgrade-external-node-template` action" in readme_flat
-    assert (
-        "missing, partial, or errored provider inventory keeps that action selected" in readme_flat
-    )
-    assert "still-rolling or not-yet-visible template state is checkpointed" in readme_flat
-    assert "does not create duplicate worker groups or require 2x worker quota" in readme_flat
-    assert "provider state, API-reported Kubernetes version" in readme_flat
+    assert "Identical input is a byte-for-byte config no-op" in readme_flat
+    assert "An executing or pending campaign is reported but never rewritten" in readme_flat
+    assert "Provider API failure or incomplete compatibility data is blocked/unknown" in readme_flat
     assert (
         "External Soperator upgrade owns external Kubernetes minor, node OS image, and Nebius-image GPU-stack upgrades selected by onboarding"
         in readme_flat
     )
     assert "direct Nebius SDK/API cluster and node-group update calls" in readme_flat
-    assert (
-        "external node-template and target GPU stack reconciliation as their own required actions"
-        in readme_flat
-    )
-    assert "service-role groups and worker groups both default to zero-surge" in readme_flat
-    worker_default_readme = (
-        "Worker groups default to zero-surge with `max_surge=0`, "
-        "`max_unavailable=1`, and `drain_timeout=10m`"
-    )
-    assert worker_default_readme in readme_flat
+    assert "upgrades the control plane first" in readme_flat
+    assert "Service groups run serially" in readme_flat
+    assert "provider drain timeout unset" in readme_flat
+    assert "`max(1, floor(5% * group size))`, capped at 25" in readme_flat
     assert "`upgrading` is provider-active rollout nodes" in readme_flat
-    large_quiesced_worker_guidance = (
-        "recommends an exact `--strategy-max-unavailable-count` value using 5% "
-        "of the largest worker group capped at 25"
+    assert "deduplicated Slurm DOWN/DRAIN nodes from a 5% node-weighted global budget" in (
+        readme_flat
     )
-    assert large_quiesced_worker_guidance in readme_flat
+    assert "admits at most eight groups" in readme_flat
+    assert "`--approve-service-role-downtime`" in readme_flat
+    assert "Generic `--approve` remains independently required" in readme_flat
+    assert "exact campaign fingerprint and affected provider groups" in design_flat
+    assert "V3 zero-surge worker admission is independent of the legacy serial wave fallback" in (
+        design_flat
+    )
     assert "service-role groups use safe-surge by default" not in readme_flat
     stale_login_service_role_safe_surge_default = (
         "login/service-role groups use `max_surge=1`, `max_unavailable=0`, "
@@ -1936,9 +1888,8 @@ def test_docs_define_component_selector_contract() -> None:
     assert (
         "Phases complete only when their live prerequisites are absent or satisfied" in readme_flat
     )
-    assert "Non-interactive `component add apps:soperator@<target>`" in readme
-    assert "canonical initial onboarding command" in readme_flat
-    assert "does not create Terraform-managed MK8s/SFS rows" in readme_flat
+    assert "External targets are registered only through `nebius-cxcli ext-soperator" in readme
+    assert "`component add` does not act as an external onboarding alias" in readme_flat
     assert "`apps.charts[].placements.*`" in readme
     assert "worker` onto GPU node groups" in readme_flat
     assert "worker labels distinguish `worker-cpu` and `worker-gpu`" in readme_flat
@@ -1983,9 +1934,8 @@ def test_docs_define_component_selector_contract() -> None:
         in (design_flat)
     )
     assert "remain `not_validated` until cxcli has an explicit tested policy rule" in (design_flat)
-    assert (
-        "defaults to one provider-supported minor hop from the discovered control-plane version"
-        in (design_flat)
+    assert "defaults to the highest endpoint reachable by every concrete node group" in (
+        design_flat
     )
     assert "does not present external upgrade phases as actions taken by the onboard command" in (
         design_flat
@@ -2004,21 +1954,16 @@ def test_docs_define_component_selector_contract() -> None:
     assert "Keeping existing compute preserves discovered node groups" in design_flat
     assert "This is primarily a day-2 Soperator management and upgrade path" in design_flat
     assert "not a Terraform-managed MK8s row" in design_flat
-    assert "If the accepted report says no external-upgrade-owned work is required" in design_flat
     assert "Healthy evidence is reported as `gpu-stack: verified`" in design_flat
     assert "`gpu-rdma: validation-planned` evidence" in design_flat
-    assert "Target GPU stack reconciliation alone is not external-upgrade-owned work" in design_flat
-    assert "fast stage gates record `fast_verification`" in design_flat
-    assert "`ext-soperator upgrade` fails fast with the render/deploy route" in design_flat
-    assert "plain `deploy <config.yaml>` reconciles the generated desired state" in design_flat
-    assert "`deploy --target <target-id>` is only a narrowing selector" in design_flat
-    assert "normal render/deploy applies it as desired state" in design_flat
-    assert (
-        "If the accepted onboarding report says external-upgrade-owned work is required"
-        in design_flat
+    assert "Target GPU stack reconciliation is represented in the same external campaign" in (
+        design_flat
     )
-    assert "skip normal deploy and continue with" in design_flat
-    assert "After the final locked segment completes" in design_flat
+    assert "fast stage gates record `fast_verification`" in design_flat
+    assert "`ext-soperator upgrade` returns a complete no-op" in design_flat
+    assert "Use upgrade for reruns/resume while those actions remain selected" in design_flat
+    assert "It does not rewrite desired state from live observations" in design_flat
+    assert "completed immutable campaign remains in `config.yaml`" in design_flat
     assert (
         "`generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/report.md` shows `Pending phase: none`"
         in design_flat
@@ -2044,14 +1989,9 @@ def test_docs_define_component_selector_contract() -> None:
         assert report_name in design_flat
     assert "JSON `stage_verification` details" in design_flat
     assert "JSON detail files referenced from those Markdown reports" in design_flat
-    assert "external-upgrade-owned actions are no longer selected" in design_flat
-    assert "future normal reconciliation can use render/deploy" in design_flat
     assert "If the report still shows any pending phase other than `none`" in design_flat
     assert "rerun the same `ext-soperator upgrade ... --execute --approve` command" in design_flat
-    assert (
-        "If the final report shows `Pending phase: none` but the post-upgrade config refresh was skipped"
-        in design_flat
-    )
+    assert "completed immutable campaign remains in `config.yaml`" in design_flat
     assert (
         "`nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run`" in design
     )
@@ -2138,7 +2078,7 @@ def test_docs_define_component_selector_contract() -> None:
         "repeat the same `ext-soperator upgrade --execute --approve` command until the path is complete"
         in (design_flat)
     )
-    assert "a fresh `ext-soperator onboard` decision is only for planning a new later path" in (
+    assert "a fresh `ext-soperator onboard` decision is only for proposing a later campaign" in (
         design_flat
     )
     assert "discovered PVC/PV sizes as lower bounds" in design_flat
@@ -2168,7 +2108,7 @@ def test_docs_define_component_selector_contract() -> None:
     assert "`helm-release-detected`" in design
     assert "`soperator_migration_profiles.yaml`" in design
     assert (
-        "local `.nebius-cxcli/soperator-clusters/<cluster-key>/ext-soperator-upgrade/` timeout-guarded checkpoint"
+        "`.nebius-cxcli/soperator-clusters/<cluster-key>/ext-soperator-upgrade/campaigns/<campaign-id>/checkpoint.json` operation journal"
         in design_flat
     )
     assert (
@@ -2179,24 +2119,23 @@ def test_docs_define_component_selector_contract() -> None:
         in design_flat
     )
     assert (
-        "resume checkpoints are local under `.nebius-cxcli/soperator-clusters/<cluster-key>/ext-soperator-upgrade/`"
+        "checkpoints are local under `.nebius-cxcli/soperator-clusters/<cluster-key>/ext-soperator-upgrade/campaigns/<campaign-id>/`"
         in design_flat
     )
-    assert (
-        "Compatible checkpoint refresh preserves the original ordered phase plan, including `Jail Upgrade` / `populate-jail-refresh`"
-        in design_flat
-    )
-    assert "normal `validate`, `render`, and `deploy` can run from any workstation" in design_flat
+    assert "The journal never preserves or reconstructs the desired phase plan" in design_flat
     assert "quiesces affected Slurm scheduling partitions" in design_flat
     assert "setting cxcli-owned `UP` partitions to `DOWN` during worker gates" in design_flat
     assert "pending jobs in affected partitions or requested/scheduled on affected nodes" in (
         design_flat
     )
     assert "are queued information while partition quiesce is active" in design_flat
-    assert "Slurm-clear fast provider-unit dispatch" in design_flat
+    assert "a job-free provider group is eligible for dispatch" in design_flat
+    assert "5% node-weighted global, partition, zone, and GPU-domain budgets" in design_flat
     assert "do not claim exact-node replacement inside a mixed busy/free node group" in design_flat
-    assert "successful upgrades release only jobs that cxcli requeue-held" in design_flat
-    assert "newly clear provider units are dispatched before reopening the monitor" in design_flat
+    assert "Successful upgrades release only jobs that cxcli requeue-held" in design_flat
+    assert "fresh observation still matches that cxcli-owned post-state" in design_flat
+    assert "Recovery guidance is inspection-only" in design_flat
+    assert "eight-group ceiling still decide whether it may start" in design_flat
     assert "TTY managed and external upgrade runs default to `interactive`" in design_flat
     assert "non-TTY and `--no-interactive` upgrade runs default to `fail`" in design_flat
     assert "explicit policy such as `--job-policy wait-to-finish`" in design_flat
@@ -2234,24 +2173,19 @@ def test_docs_define_component_selector_contract() -> None:
     assert "runs a strict net-new quota preflight before the first mutation" in design_flat
     assert "target service-role node groups that do not already exist" in design_flat
     assert "Existing worker node groups are preserved in place" in design_flat
-    assert "Reruns are action-idempotent" in design_flat
-    assert (
-        "`deploy.targets[].soperator_onboarding.actions` list defines the desired work"
-        in design_flat
+    assert "Reruns are live-reconciled" in design_flat
+    assert "the accepted v3 campaign defines the desired work" in design_flat
+    assert "Rerunning `ext-soperator onboard` remains read-only while a campaign is active" in (
+        design_flat
     )
-    assert "rechecks completed action phases against live state before skipping them" in design_flat
-    assert "Rerunning `ext-soperator onboard` remains read-only" in design_flat
-    assert "refreshes the source discovery bundle with provider template evidence" in design_flat
-    assert "current/target Kubernetes version fields" in design_flat
-    assert (
-        "removes `upgrade-external-node-template` only when the live control plane and every discovered node-group template already match"
-        in design_flat
-    )
-    assert "Missing, partial, or errored provider evidence remains conservative" in design_flat
+    assert "Missing, partial, or errored provider evidence is blocked/unknown" in design_flat
     assert "`waiting-rollout` on the external-node-template checkpoint" in design_flat
     assert "requested template fields are not visible yet" in design_flat
     assert "resumes through internal resume reconciliation" in design_flat
-    assert "Checkpoints remain authoritative for mutation ownership" in design_flat
+    assert "`config.yaml` owns path and phase order" in design_flat
+    assert "the journal owns operation intent, backups, provider ids, and compensation" in (
+        design_flat
+    )
     assert "external-node-template group as `waiting-rollout`" in readme_flat
     assert "instead of submitting a duplicate node-group update" in readme_flat
     assert "provider state, API-reported Kubernetes version" in design_flat
@@ -2275,9 +2209,9 @@ def test_docs_define_component_selector_contract() -> None:
     assert "does not create parallel worker node groups" in design_flat
     assert "worker groups default to zero-surge" in design_flat
     assert "Service-role groups are serial zero-surge by default" in design_flat
-    assert "`drain_timeout=10m`) by default" in design_flat
+    assert "provider drain timeout unset" in design_flat
     assert "`upgrading` is provider-active rollout nodes" in design_flat
-    assert "`min(25, max(2, ceil(largest_worker_group_node_count * 0.05)))`" in design_flat
+    assert "`max(1, floor(5% * group size))`, capped at 25" in design_flat
     assert "requires spare surge capacity for active service groups by default" not in design_flat
     stale_service_role_safe_surge_default = (
         "uses safe-surge (`max_surge=1`, `max_unavailable=0`, `drain_timeout=30m`) by default"
@@ -2352,7 +2286,7 @@ def test_docs_define_component_selector_contract() -> None:
         "`generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/report.md`"
         in design
     )
-    assert "resume relies on phase checkpoints" in design_flat
+    assert "resume timeout-guarded phases from checkpoints" in design_flat
     assert "interactive spinner backed by phase-aware status snapshots" in design_flat
     assert (
         "canonical phase id, human-readable phase label, and overall phase health before component details"
@@ -2392,8 +2326,8 @@ def test_docs_define_component_selector_contract() -> None:
     assert "Slurm worker names/states" in readme_flat
     assert "timeout-guarded checkpoints" in design_flat
     assert "remains blocked until the explicit migration executor is implemented" not in design_flat
-    assert "component add apps:soperator@<target>" in design_flat
-    assert "compatibility path" in design_flat
+    assert "`component add` does not infer external onboarding" in design_flat
+    assert "External targets are registered only by `ext-soperator onboard`" in design_flat
     assert "`production-cluster` materializes the complete MK8s+SFS+Soperator" in design
     assert (
         "ext-soperator onboard <config.yaml-or-deployments-root>` resolves the selected"

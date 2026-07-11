@@ -5,6 +5,7 @@ from __future__ import annotations
 import ipaddress
 import re
 from collections.abc import Mapping
+from datetime import datetime
 from typing import Any
 
 from .component_defaults import (
@@ -46,6 +47,7 @@ from .soperator_onboarding import (
     SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA,
     validate_soperator_onboarding_acceptance,
 )
+from .soperator_upgrade_campaign import soperator_upgrade_campaign_fingerprint
 
 _ROOT_KEYS = frozenset({"version", "client_info", "deploy", "infra", "apps"})
 _ID_PATTERN = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
@@ -95,14 +97,25 @@ _SOPERATOR_ONBOARDING_NODE_TEMPLATE_KEYS = frozenset(
         "rollout",
     }
 )
-_SOPERATOR_LOCKED_UPGRADE_PATH_KEYS = frozenset(
+_SOPERATOR_UPGRADE_CAMPAIGN_KEYS = frozenset(
     {
+        "campaign_id",
+        "capabilities_source",
+        "catalog_fingerprint",
+        "created_at",
+        "fingerprint",
+        "final_targets",
+        "identity",
         "jail_rootfs",
         "locked",
+        "managed_operators",
+        "mk8s",
         "recommended_order",
         "recommended_order_policy",
+        "rollout",
         "schema",
         "segments",
+        "source_provenance",
         "source_k8s_version",
         "soperator_app",
         "soperator_chart",
@@ -111,15 +124,85 @@ _SOPERATOR_LOCKED_UPGRADE_PATH_KEYS = frozenset(
         "target_k8s_version",
     }
 )
-_SOPERATOR_LOCKED_UPGRADE_PATH_SEGMENT_KEYS = frozenset(
+_SOPERATOR_UPGRADE_CAMPAIGN_IDENTITY_KEYS = frozenset(
+    {
+        "cluster_id",
+        "cluster_name",
+        "jail_filesystem_id",
+        "kubernetes_uid",
+        "project_id",
+        "slurmcluster_uid",
+        "soperator_uid",
+        "target_ref",
+    }
+)
+_SOPERATOR_UPGRADE_CAMPAIGN_SOURCE_PROVENANCE_KEYS = frozenset(
+    {
+        "component_catalog",
+        "discovery",
+        "provider_capabilities",
+        "source_contract",
+        "support_policy",
+    }
+)
+_SOPERATOR_UPGRADE_CAMPAIGN_FINAL_TARGET_KEYS = frozenset(
+    {
+        "jail_artifact_digest",
+        "jail_artifact_identity_warning",
+        "jail_cuda_version",
+        "jail_rootfs_image",
+        "jail_rootfs_version",
+        "kubernetes",
+        "soperator_app",
+        "soperator_chart",
+    }
+)
+_SOPERATOR_UPGRADE_CAMPAIGN_MANAGED_OPERATOR_ROLES = frozenset({"gpu", "network"})
+_SOPERATOR_UPGRADE_CAMPAIGN_MANAGED_OPERATOR_KEYS = frozenset(
+    {
+        "chart",
+        "chart_version",
+        "component_id",
+        "namespace",
+        "release_name",
+        "repository",
+    }
+)
+_SOPERATOR_UPGRADE_CAMPAIGN_ROLLOUT_KEYS = frozenset(
+    {
+        "failure_domain_budgeting",
+        "global_unavailable_percent",
+        "hard_concurrent_worker_group_ceiling",
+        "max_concurrent_worker_groups",
+        "max_parallel_worker_groups",
+        "per_group_unavailable_cap",
+        "per_group_unavailable_percent",
+        "provider_drain_timeout",
+        "quiesced_worker_max_surge",
+        "service_role_group_strategy",
+        "service_role_mode",
+        "service_role_strategy",
+        "slurm_scheduling_quiesce",
+        "strategy",
+        "worker_group_strategy",
+        "worker_wave_groups",
+        "worker_wave_percent",
+    }
+)
+_SOPERATOR_UPGRADE_CAMPAIGN_GROUP_STRATEGY_KEYS = frozenset(
+    {"drain_timeout", "max_surge_count", "max_unavailable_count"}
+)
+_SOPERATOR_UPGRADE_CAMPAIGN_SEGMENT_KEYS = frozenset(
     {
         "actions",
         "current_k8s_version",
+        "depends_on",
         "id",
         "index",
         "jail_rootfs",
         "k8s_upgrade_required",
         "kind",
+        "mk8s",
         "soperator_app",
         "soperator_chart",
         "soperator_upgrade_required",
@@ -127,13 +210,43 @@ _SOPERATOR_LOCKED_UPGRADE_PATH_SEGMENT_KEYS = frozenset(
         "title",
     }
 )
+_SOPERATOR_UPGRADE_CAMPAIGN_MK8S_KEYS = frozenset({"control_plane", "node_groups"})
+_SOPERATOR_UPGRADE_CAMPAIGN_CONTROL_PLANE_KEYS = frozenset({"source_version", "target_version"})
+_SOPERATOR_UPGRADE_CAMPAIGN_NODE_GROUP_KEYS = frozenset(
+    {
+        "compatibility_source",
+        "gpu_software_mode",
+        "id",
+        "name",
+        "platform",
+        "preset",
+        "role",
+        "source",
+        "target",
+    }
+)
+_SOPERATOR_UPGRADE_CAMPAIGN_NODE_TEMPLATE_KEYS = frozenset(
+    {"drivers_preset", "kubernetes_version", "os"}
+)
+_SOPERATOR_UPGRADE_CAMPAIGN_GPU_SOFTWARE_MODES = frozenset(
+    {"none", "operator-managed", "provider-managed"}
+)
+_SOPERATOR_UPGRADE_CAMPAIGN_FINGERPRINT_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_SOPERATOR_UPGRADE_CAMPAIGN_ID_PATTERN = re.compile(r"^campaign-[0-9a-f]{16}$")
 _SOPERATOR_LOCKED_VERSION_RECORD_KEYS = frozenset(
     {"current_version", "target_version", "upgrade_required"}
 )
 _SOPERATOR_LOCKED_JAIL_ROOTFS_KEYS = frozenset(
     {
         "current_image",
+        "current_evidence_reason",
+        "current_evidence_status",
+        "current_jail_filesystem_id",
         "current_job_name",
+        "current_job_uid",
+        "current_pvc_name",
+        "current_pvc_uid",
+        "current_slot",
         "current_source",
         "current_version",
         "live_desired_image",
@@ -143,6 +256,9 @@ _SOPERATOR_LOCKED_JAIL_ROOTFS_KEYS = frozenset(
         "refresh_required",
         "slurmcluster_name",
         "target_image",
+        "target_cuda_version",
+        "target_digest",
+        "target_identity_warning",
         "target_source",
         "target_version",
     }
@@ -254,6 +370,15 @@ def _validate_k8s_minor_version_for_validation(value: Any, field_label: str) -> 
         raise ValueError(f"{field_label} must be a Kubernetes major.minor version")
 
 
+def _required_k8s_minor_for_validation(value: Any, field_label: str) -> tuple[int, int]:
+    text = _required_string_for_validation(value, field_label)
+    raw = text.lstrip("v")
+    if not re.fullmatch(r"[0-9]+\.[0-9]+", raw):
+        raise ValueError(f"{field_label} must be a Kubernetes major.minor version")
+    major, minor = raw.split(".", maxsplit=1)
+    return int(major), int(minor)
+
+
 def _validate_soperator_onboarding_actions(value: Any, field_label: str) -> None:
     if value is None:
         return
@@ -300,7 +425,7 @@ def _validate_soperator_onboarding_node_template(
         raise ValueError(f"{field_label}.slurm_scheduling_quiesce must be true or false")
 
 
-def _validate_locked_version_record(record: Any, field_label: str) -> None:
+def _validate_locked_version_record(record: Any, field_label: str) -> tuple[str, str, bool]:
     if not isinstance(record, Mapping):
         raise ValueError(f"{field_label} must be a mapping")
     _validate_unknown_keys(
@@ -308,12 +433,25 @@ def _validate_locked_version_record(record: Any, field_label: str) -> None:
         allowed_keys=_SOPERATOR_LOCKED_VERSION_RECORD_KEYS,
         field_label=field_label,
     )
-    for key in ("current_version", "target_version"):
-        if key not in record:
-            raise ValueError(f"{field_label}.{key} is required")
-        _optional_string_for_validation(record.get(key), f"{field_label}.{key}")
-    if not isinstance(record.get("upgrade_required"), bool):
+    current_version = _required_string_for_validation(
+        record.get("current_version"),
+        f"{field_label}.current_version",
+    )
+    target_version = _required_string_for_validation(
+        record.get("target_version"),
+        f"{field_label}.target_version",
+    )
+    upgrade_required = record.get("upgrade_required")
+    if not isinstance(upgrade_required, bool):
         raise ValueError(f"{field_label}.upgrade_required must be true or false")
+    expected_upgrade_required = current_version != target_version
+    if upgrade_required is not expected_upgrade_required:
+        raise ValueError(
+            f"{field_label}.upgrade_required must be "
+            f"{'true' if expected_upgrade_required else 'false'} because current_version "
+            f"{'differs from' if expected_upgrade_required else 'matches'} target_version"
+        )
+    return current_version, target_version, upgrade_required
 
 
 def _validate_locked_jail_rootfs_record(record: Any, field_label: str) -> None:
@@ -326,7 +464,14 @@ def _validate_locked_jail_rootfs_record(record: Any, field_label: str) -> None:
     )
     for key in (
         "current_image",
+        "current_evidence_reason",
+        "current_evidence_status",
+        "current_jail_filesystem_id",
         "current_job_name",
+        "current_job_uid",
+        "current_pvc_name",
+        "current_pvc_uid",
+        "current_slot",
         "current_source",
         "current_version",
         "live_desired_image",
@@ -335,6 +480,9 @@ def _validate_locked_jail_rootfs_record(record: Any, field_label: str) -> None:
         "reason",
         "slurmcluster_name",
         "target_image",
+        "target_cuda_version",
+        "target_digest",
+        "target_identity_warning",
         "target_source",
         "target_version",
     ):
@@ -344,12 +492,660 @@ def _validate_locked_jail_rootfs_record(record: Any, field_label: str) -> None:
         raise ValueError(f"{field_label}.refresh_required must be true or false")
 
 
-def _validate_locked_upgrade_path_segment(segment: Any, field_label: str) -> None:
+def _soperator_campaign_jail_source_identity(
+    record: Mapping[str, Any],
+    field_label: str,
+) -> tuple[str, str]:
+    return (
+        _required_string_for_validation(
+            record.get("current_image"),
+            f"{field_label}.current_image",
+        ),
+        _required_string_for_validation(
+            record.get("current_version"),
+            f"{field_label}.current_version",
+        ),
+    )
+
+
+def _soperator_campaign_jail_target_identity(
+    record: Mapping[str, Any],
+    field_label: str,
+) -> tuple[str, str, str, str, str, str]:
+    return (
+        _required_string_for_validation(
+            record.get("target_image"),
+            f"{field_label}.target_image",
+        ),
+        _required_string_for_validation(
+            record.get("target_version"),
+            f"{field_label}.target_version",
+        ),
+        _required_string_for_validation(
+            record.get("target_cuda_version"),
+            f"{field_label}.target_cuda_version",
+        ),
+        _required_string_for_validation(
+            record.get("target_source"),
+            f"{field_label}.target_source",
+        ),
+        _as_text(record.get("target_digest")),
+        _as_text(record.get("target_identity_warning")),
+    )
+
+
+def _validate_soperator_campaign_identity(
+    identity: Any,
+    field_label: str,
+    *,
+    expected_project_id: str,
+    expected_cluster_id: str,
+    expected_target_ref: str,
+) -> None:
+    if not isinstance(identity, Mapping):
+        raise ValueError(f"{field_label} must be a mapping")
+    _validate_unknown_keys(
+        identity,
+        allowed_keys=_SOPERATOR_UPGRADE_CAMPAIGN_IDENTITY_KEYS,
+        field_label=field_label,
+    )
+    immutable_keys = (
+        "project_id",
+        "cluster_id",
+        "target_ref",
+        "kubernetes_uid",
+        "soperator_uid",
+        "slurmcluster_uid",
+        "jail_filesystem_id",
+    )
+    for key in immutable_keys:
+        _required_string_for_validation(identity.get(key), f"{field_label}.{key}")
+    if "cluster_name" not in identity:
+        raise ValueError(f"{field_label}.cluster_name is required")
+    _optional_string_for_validation(identity.get("cluster_name"), f"{field_label}.cluster_name")
+
+    expected_values = {
+        "project_id": expected_project_id,
+        "cluster_id": expected_cluster_id,
+        "target_ref": expected_target_ref,
+    }
+    for key, expected in expected_values.items():
+        if not expected:
+            raise ValueError(
+                f"{field_label}.{key} cannot be verified because the owning config field is empty"
+            )
+        actual = _as_text(identity.get(key))
+        if actual != expected:
+            raise ValueError(f"{field_label}.{key} must match the owning config value")
+
+
+def _validate_soperator_campaign_source_provenance(value: Any, field_label: str) -> None:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_label} must be a mapping")
+    _validate_unknown_keys(
+        value,
+        allowed_keys=_SOPERATOR_UPGRADE_CAMPAIGN_SOURCE_PROVENANCE_KEYS,
+        field_label=field_label,
+    )
+    expected_values = {
+        "discovery": "live-kubernetes-and-nebius-sdk",
+        "provider_capabilities": "nebius-sdk-list-versions-and-compatibility-matrix",
+        "component_catalog": "component_sources.yaml",
+        "support_policy": "committed-soperator-upgrade-support-policy",
+        "source_contract": "campaign-source-waypoints",
+    }
+    for key, expected in expected_values.items():
+        actual = _required_string_for_validation(value.get(key), f"{field_label}.{key}")
+        if actual != expected:
+            raise ValueError(f"{field_label}.{key} must be '{expected}'")
+
+
+def _validate_soperator_campaign_final_targets(
+    value: Any,
+    field_label: str,
+    *,
+    target_k8s: tuple[int, int],
+    soperator_app: Mapping[str, Any],
+    soperator_chart: Mapping[str, Any],
+    jail_rootfs: Mapping[str, Any],
+) -> None:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_label} must be a mapping")
+    _validate_unknown_keys(
+        value,
+        allowed_keys=_SOPERATOR_UPGRADE_CAMPAIGN_FINAL_TARGET_KEYS,
+        field_label=field_label,
+    )
+    for key in _SOPERATOR_UPGRADE_CAMPAIGN_FINAL_TARGET_KEYS:
+        if key not in value:
+            raise ValueError(f"{field_label}.{key} is required")
+    final_k8s = _required_k8s_minor_for_validation(
+        value.get("kubernetes"),
+        f"{field_label}.kubernetes",
+    )
+    if final_k8s != target_k8s:
+        raise ValueError(f"{field_label}.kubernetes must match target_k8s_version")
+    cross_checks = {
+        "soperator_app": _as_text(soperator_app.get("target_version")),
+        "soperator_chart": _as_text(soperator_chart.get("target_version")),
+        "jail_rootfs_image": _as_text(jail_rootfs.get("target_image")),
+        "jail_rootfs_version": _as_text(jail_rootfs.get("target_version")),
+        "jail_cuda_version": _as_text(jail_rootfs.get("target_cuda_version")),
+    }
+    for key, expected in cross_checks.items():
+        actual = _required_string_for_validation(value.get(key), f"{field_label}.{key}")
+        if not expected or actual != expected:
+            raise ValueError(f"{field_label}.{key} must match the campaign target record")
+    artifact_digest = _optional_string_for_validation(
+        value.get("jail_artifact_digest"),
+        f"{field_label}.jail_artifact_digest",
+    )
+    identity_warning = _optional_string_for_validation(
+        value.get("jail_artifact_identity_warning"),
+        f"{field_label}.jail_artifact_identity_warning",
+    )
+    if artifact_digest != _as_text(jail_rootfs.get("target_digest")):
+        raise ValueError(
+            f"{field_label}.jail_artifact_digest must match the campaign target record"
+        )
+    if identity_warning != _as_text(jail_rootfs.get("target_identity_warning")):
+        raise ValueError(
+            f"{field_label}.jail_artifact_identity_warning must match the campaign target record"
+        )
+    if artifact_digest and not re.fullmatch(r"sha256:[0-9a-f]{64}", artifact_digest):
+        raise ValueError(f"{field_label}.jail_artifact_digest must be a sha256 digest when set")
+    if not artifact_digest and not identity_warning:
+        raise ValueError(
+            f"{field_label} requires jail_artifact_digest or jail_artifact_identity_warning"
+        )
+
+
+def _validate_soperator_campaign_managed_operators(
+    value: Any,
+    field_label: str,
+    *,
+    required: bool,
+) -> None:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_label} must be a mapping")
+    _validate_unknown_keys(
+        value,
+        allowed_keys=_SOPERATOR_UPGRADE_CAMPAIGN_MANAGED_OPERATOR_ROLES,
+        field_label=field_label,
+    )
+    if not required:
+        if value:
+            raise ValueError(
+                f"{field_label} must be empty when every campaign node group is CPU-only"
+            )
+        return
+    expected_component_ids = {
+        "gpu": "nvidia-gpu-operator",
+        "network": "nvidia-network-operator",
+    }
+    for role, expected_component_id in expected_component_ids.items():
+        operator = value.get(role)
+        operator_label = f"{field_label}.{role}"
+        if not isinstance(operator, Mapping):
+            raise ValueError(f"{operator_label} must be a mapping")
+        _validate_unknown_keys(
+            operator,
+            allowed_keys=_SOPERATOR_UPGRADE_CAMPAIGN_MANAGED_OPERATOR_KEYS,
+            field_label=operator_label,
+        )
+        for key in _SOPERATOR_UPGRADE_CAMPAIGN_MANAGED_OPERATOR_KEYS:
+            _required_string_for_validation(operator.get(key), f"{operator_label}.{key}")
+        if _as_text(operator.get("component_id")) != expected_component_id:
+            raise ValueError(f"{operator_label}.component_id must be '{expected_component_id}'")
+
+
+def _required_campaign_int(
+    value: Any,
+    field_label: str,
+    *,
+    minimum: int,
+    maximum: int | None = None,
+) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{field_label} must be an integer")
+    if value < minimum or (maximum is not None and value > maximum):
+        range_label = f"{minimum}..{maximum}" if maximum is not None else f">= {minimum}"
+        raise ValueError(f"{field_label} must be {range_label}")
+    return value
+
+
+def _validate_soperator_campaign_rollout(value: Any, field_label: str) -> None:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_label} must be a mapping")
+    _validate_unknown_keys(
+        value,
+        allowed_keys=_SOPERATOR_UPGRADE_CAMPAIGN_ROLLOUT_KEYS,
+        field_label=field_label,
+    )
+    global_percent = _required_campaign_int(
+        value.get("global_unavailable_percent"),
+        f"{field_label}.global_unavailable_percent",
+        minimum=1,
+        maximum=100,
+    )
+    if global_percent != 5:
+        raise ValueError(f"{field_label}.global_unavailable_percent must be 5")
+    per_group_percent = _required_campaign_int(
+        value.get("per_group_unavailable_percent"),
+        f"{field_label}.per_group_unavailable_percent",
+        minimum=1,
+        maximum=100,
+    )
+    if per_group_percent > global_percent:
+        raise ValueError(
+            f"{field_label}.per_group_unavailable_percent must not exceed "
+            "global_unavailable_percent"
+        )
+    if per_group_percent != 5:
+        raise ValueError(f"{field_label}.per_group_unavailable_percent must be 5")
+    per_group_cap = _required_campaign_int(
+        value.get("per_group_unavailable_cap"),
+        f"{field_label}.per_group_unavailable_cap",
+        minimum=1,
+    )
+    if per_group_cap != 25:
+        raise ValueError(f"{field_label}.per_group_unavailable_cap must be 25")
+    max_concurrent = _required_campaign_int(
+        value.get("max_concurrent_worker_groups"),
+        f"{field_label}.max_concurrent_worker_groups",
+        minimum=1,
+    )
+    hard_ceiling = _required_campaign_int(
+        value.get("hard_concurrent_worker_group_ceiling"),
+        f"{field_label}.hard_concurrent_worker_group_ceiling",
+        minimum=1,
+        maximum=32,
+    )
+    if max_concurrent > hard_ceiling:
+        raise ValueError(
+            f"{field_label}.max_concurrent_worker_groups must not exceed "
+            "hard_concurrent_worker_group_ceiling"
+        )
+    if max_concurrent != 8:
+        raise ValueError(f"{field_label}.max_concurrent_worker_groups must be 8")
+    if hard_ceiling != 32:
+        raise ValueError(f"{field_label}.hard_concurrent_worker_group_ceiling must be 32")
+    failure_domains = value.get("failure_domain_budgeting")
+    if failure_domains != ["partition", "zone", "gpu"]:
+        raise ValueError(
+            f"{field_label}.failure_domain_budgeting must be ['partition', 'zone', 'gpu']"
+        )
+    if (
+        _required_string_for_validation(
+            value.get("service_role_mode"),
+            f"{field_label}.service_role_mode",
+        )
+        != "serial"
+    ):
+        raise ValueError(f"{field_label}.service_role_mode must be 'serial'")
+    quiesced_surge = _required_campaign_int(
+        value.get("quiesced_worker_max_surge"),
+        f"{field_label}.quiesced_worker_max_surge",
+        minimum=0,
+    )
+    if quiesced_surge != 0:
+        raise ValueError(f"{field_label}.quiesced_worker_max_surge must be 0")
+    provider_drain_timeout = _required_string_for_validation(
+        value.get("provider_drain_timeout"),
+        f"{field_label}.provider_drain_timeout",
+    )
+    if provider_drain_timeout != "unset":
+        raise ValueError(f"{field_label}.provider_drain_timeout must be 'unset'")
+    slurm_scheduling_quiesce = value.get("slurm_scheduling_quiesce")
+    if not isinstance(slurm_scheduling_quiesce, bool):
+        raise ValueError(f"{field_label}.slurm_scheduling_quiesce must be true or false")
+    worker_strategy = ""
+    for key in ("strategy", "service_role_strategy"):
+        if key not in value:
+            continue
+        strategy = _required_string_for_validation(value.get(key), f"{field_label}.{key}")
+        if strategy not in _SOPERATOR_WORKER_ROLLOUT_STRATEGIES:
+            raise ValueError(
+                f"{field_label}.{key} must be one of: "
+                + ", ".join(sorted(_SOPERATOR_WORKER_ROLLOUT_STRATEGIES))
+            )
+        if key == "strategy":
+            worker_strategy = strategy
+    wave_groups = value.get("worker_wave_groups")
+    wave_percent = value.get("worker_wave_percent")
+    if wave_groups is not None:
+        _required_campaign_int(
+            wave_groups,
+            f"{field_label}.worker_wave_groups",
+            minimum=1,
+        )
+    if wave_percent is not None:
+        _required_campaign_int(
+            wave_percent,
+            f"{field_label}.worker_wave_percent",
+            minimum=1,
+            maximum=100,
+        )
+    if wave_groups is not None and wave_percent is not None:
+        raise ValueError(
+            f"{field_label} must set only one of worker_wave_groups or worker_wave_percent"
+        )
+    if value.get("max_parallel_worker_groups") is not None:
+        _required_campaign_int(
+            value.get("max_parallel_worker_groups"),
+            f"{field_label}.max_parallel_worker_groups",
+            minimum=1,
+        )
+        if wave_groups is not None:
+            raise ValueError(
+                f"{field_label}.max_parallel_worker_groups cannot be combined with "
+                "worker_wave_groups"
+            )
+    worker_max_surge: int | None = None
+    for key in ("service_role_group_strategy", "worker_group_strategy"):
+        if key not in value:
+            continue
+        group_strategy = value.get(key)
+        group_label = f"{field_label}.{key}"
+        if not isinstance(group_strategy, Mapping):
+            raise ValueError(f"{group_label} must be a mapping")
+        _validate_unknown_keys(
+            group_strategy,
+            allowed_keys=_SOPERATOR_UPGRADE_CAMPAIGN_GROUP_STRATEGY_KEYS,
+            field_label=group_label,
+        )
+        max_surge = _required_campaign_int(
+            group_strategy.get("max_surge_count"),
+            f"{group_label}.max_surge_count",
+            minimum=0,
+        )
+        if key == "worker_group_strategy":
+            worker_max_surge = max_surge
+        max_unavailable = _required_campaign_int(
+            group_strategy.get("max_unavailable_count"),
+            f"{group_label}.max_unavailable_count",
+            minimum=0,
+        )
+        if max_surge == 0 and max_unavailable == 0:
+            raise ValueError(
+                f"{group_label} must keep max_surge_count or max_unavailable_count above zero"
+            )
+        drain_timeout = _required_string_for_validation(
+            group_strategy.get("drain_timeout"),
+            f"{group_label}.drain_timeout",
+        )
+        if drain_timeout != "none":
+            raise ValueError(f"{group_label}.drain_timeout must be 'none'")
+    if slurm_scheduling_quiesce and worker_strategy != "zero-surge":
+        raise ValueError(
+            f"{field_label}.strategy must be 'zero-surge' when slurm_scheduling_quiesce is true"
+        )
+    if slurm_scheduling_quiesce and worker_max_surge != 0:
+        raise ValueError(
+            f"{field_label}.worker_group_strategy.max_surge_count must be 0 when "
+            "slurm_scheduling_quiesce is true"
+        )
+
+
+def _validate_soperator_campaign_node_template(
+    value: Any,
+    field_label: str,
+) -> tuple[tuple[int, int], str, str]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_label} must be a mapping")
+    _validate_unknown_keys(
+        value,
+        allowed_keys=_SOPERATOR_UPGRADE_CAMPAIGN_NODE_TEMPLATE_KEYS,
+        field_label=field_label,
+    )
+    for key in _SOPERATOR_UPGRADE_CAMPAIGN_NODE_TEMPLATE_KEYS:
+        if key not in value:
+            raise ValueError(f"{field_label}.{key} is required")
+    kubernetes_version = _required_k8s_minor_for_validation(
+        value.get("kubernetes_version"),
+        f"{field_label}.kubernetes_version",
+    )
+    os_image = _required_string_for_validation(value.get("os"), f"{field_label}.os")
+    drivers_preset = _optional_string_for_validation(
+        value.get("drivers_preset"),
+        f"{field_label}.drivers_preset",
+    )
+    return kubernetes_version, os_image, drivers_preset
+
+
+def _validate_soperator_campaign_node_group(
+    node_group: Any,
+    field_label: str,
+    *,
+    control_plane_source: tuple[int, int],
+    control_plane_target: tuple[int, int],
+) -> tuple[str, str, tuple[tuple[int, int], str, str], tuple[tuple[int, int], str, str]]:
+    if not isinstance(node_group, Mapping):
+        raise ValueError(f"{field_label} must be a mapping")
+    _validate_unknown_keys(
+        node_group,
+        allowed_keys=_SOPERATOR_UPGRADE_CAMPAIGN_NODE_GROUP_KEYS,
+        field_label=field_label,
+    )
+    for key in _SOPERATOR_UPGRADE_CAMPAIGN_NODE_GROUP_KEYS:
+        if key not in node_group:
+            raise ValueError(f"{field_label}.{key} is required")
+    node_group_id = _required_string_for_validation(node_group.get("id"), f"{field_label}.id")
+    node_group_name = _required_string_for_validation(
+        node_group.get("name"),
+        f"{field_label}.name",
+    )
+    for key in ("role", "platform"):
+        _required_string_for_validation(node_group.get(key), f"{field_label}.{key}")
+    _required_string_for_validation(node_group.get("preset"), f"{field_label}.preset")
+    gpu_software_mode = _required_string_for_validation(
+        node_group.get("gpu_software_mode"),
+        f"{field_label}.gpu_software_mode",
+    )
+    if gpu_software_mode not in _SOPERATOR_UPGRADE_CAMPAIGN_GPU_SOFTWARE_MODES:
+        raise ValueError(
+            f"{field_label}.gpu_software_mode must be one of: "
+            + ", ".join(sorted(_SOPERATOR_UPGRADE_CAMPAIGN_GPU_SOFTWARE_MODES))
+        )
+    compatibility_source = _required_string_for_validation(
+        node_group.get("compatibility_source"),
+        f"{field_label}.compatibility_source",
+    )
+    if compatibility_source != "nebius-sdk-get-compatibility-matrix":
+        raise ValueError(
+            f"{field_label}.compatibility_source must be 'nebius-sdk-get-compatibility-matrix'"
+        )
+    source = _validate_soperator_campaign_node_template(
+        node_group.get("source"),
+        f"{field_label}.source",
+    )
+    target = _validate_soperator_campaign_node_template(
+        node_group.get("target"),
+        f"{field_label}.target",
+    )
+    if source[0] != control_plane_source:
+        raise ValueError(
+            f"{field_label}.source.kubernetes_version must match the segment control-plane "
+            "source_version"
+        )
+    if target[0] != control_plane_target:
+        raise ValueError(
+            f"{field_label}.target.kubernetes_version must match the segment control-plane "
+            "target_version"
+        )
+    source_drivers = source[2]
+    target_drivers = target[2]
+    if gpu_software_mode == "provider-managed":
+        if not source_drivers or not target_drivers:
+            raise ValueError(
+                f"{field_label} provider-managed GPU tuples require non-empty drivers_preset"
+            )
+    elif source_drivers or target_drivers:
+        raise ValueError(
+            f"{field_label} {gpu_software_mode} tuples must use an empty drivers_preset"
+        )
+    return node_group_id, node_group_name, source, target
+
+
+def _validate_soperator_campaign_mk8s_segment(
+    mk8s: Any,
+    field_label: str,
+    *,
+    k8s_upgrade_required: bool,
+) -> tuple[
+    tuple[int, int],
+    tuple[int, int],
+    dict[str, tuple[tuple[int, int], str, str]],
+    dict[str, tuple[tuple[int, int], str, str]],
+]:
+    if not isinstance(mk8s, Mapping):
+        raise ValueError(f"{field_label} must be a mapping")
+    _validate_unknown_keys(
+        mk8s,
+        allowed_keys=_SOPERATOR_UPGRADE_CAMPAIGN_MK8S_KEYS,
+        field_label=field_label,
+    )
+    control_plane = mk8s.get("control_plane")
+    if not isinstance(control_plane, Mapping):
+        raise ValueError(f"{field_label}.control_plane must be a mapping")
+    _validate_unknown_keys(
+        control_plane,
+        allowed_keys=_SOPERATOR_UPGRADE_CAMPAIGN_CONTROL_PLANE_KEYS,
+        field_label=f"{field_label}.control_plane",
+    )
+    for key in _SOPERATOR_UPGRADE_CAMPAIGN_CONTROL_PLANE_KEYS:
+        if key not in control_plane:
+            raise ValueError(f"{field_label}.control_plane.{key} is required")
+    source = _required_k8s_minor_for_validation(
+        control_plane.get("source_version"),
+        f"{field_label}.control_plane.source_version",
+    )
+    target = _required_k8s_minor_for_validation(
+        control_plane.get("target_version"),
+        f"{field_label}.control_plane.target_version",
+    )
+    advances_one_minor = target[0] == source[0] and target[1] == source[1] + 1
+    stays_on_minor = target == source
+    if k8s_upgrade_required and not advances_one_minor:
+        raise ValueError(f"{field_label}.control_plane must advance exactly one Kubernetes minor")
+    if not k8s_upgrade_required and not stays_on_minor:
+        raise ValueError(
+            f"{field_label}.control_plane must stay on the current Kubernetes minor when "
+            "k8s_upgrade_required is false"
+        )
+
+    node_groups = mk8s.get("node_groups")
+    if not isinstance(node_groups, list):
+        raise ValueError(f"{field_label}.node_groups must be a list")
+    if k8s_upgrade_required and not node_groups:
+        raise ValueError(f"{field_label}.node_groups must not be empty for a Kubernetes hop")
+    source_by_id: dict[str, tuple[tuple[int, int], str, str]] = {}
+    target_by_id: dict[str, tuple[tuple[int, int], str, str]] = {}
+    seen_names: set[str] = set()
+    for index, node_group in enumerate(node_groups):
+        node_group_id, node_group_name, group_source, group_target = (
+            _validate_soperator_campaign_node_group(
+                node_group,
+                f"{field_label}.node_groups[{index}]",
+                control_plane_source=source,
+                control_plane_target=target,
+            )
+        )
+        if node_group_id in source_by_id:
+            raise ValueError(
+                f"{field_label}.node_groups[{index}].id '{node_group_id}' is duplicated"
+            )
+        if node_group_name in seen_names:
+            raise ValueError(
+                f"{field_label}.node_groups[{index}].name '{node_group_name}' is duplicated"
+            )
+        source_by_id[node_group_id] = group_source
+        target_by_id[node_group_id] = group_target
+        seen_names.add(node_group_name)
+    return source, target, source_by_id, target_by_id
+
+
+def _validate_soperator_campaign_mk8s_inventory(
+    mk8s: Any,
+    field_label: str,
+) -> tuple[
+    tuple[int, int],
+    tuple[int, int],
+    dict[str, tuple[tuple[int, int], str, str]],
+    dict[str, tuple[tuple[int, int], str, str]],
+]:
+    if not isinstance(mk8s, Mapping):
+        raise ValueError(f"{field_label} must be a mapping")
+    _validate_unknown_keys(
+        mk8s,
+        allowed_keys=_SOPERATOR_UPGRADE_CAMPAIGN_MK8S_KEYS,
+        field_label=field_label,
+    )
+    control_plane = mk8s.get("control_plane")
+    if not isinstance(control_plane, Mapping):
+        raise ValueError(f"{field_label}.control_plane must be a mapping")
+    _validate_unknown_keys(
+        control_plane,
+        allowed_keys=_SOPERATOR_UPGRADE_CAMPAIGN_CONTROL_PLANE_KEYS,
+        field_label=f"{field_label}.control_plane",
+    )
+    source = _required_k8s_minor_for_validation(
+        control_plane.get("source_version"),
+        f"{field_label}.control_plane.source_version",
+    )
+    target = _required_k8s_minor_for_validation(
+        control_plane.get("target_version"),
+        f"{field_label}.control_plane.target_version",
+    )
+    if source[0] != target[0] or source[1] > target[1]:
+        raise ValueError(f"{field_label}.control_plane must not downgrade or cross a major")
+    node_groups = mk8s.get("node_groups")
+    if not isinstance(node_groups, list):
+        raise ValueError(f"{field_label}.node_groups must be a list")
+    source_by_id: dict[str, tuple[tuple[int, int], str, str]] = {}
+    target_by_id: dict[str, tuple[tuple[int, int], str, str]] = {}
+    seen_names: set[str] = set()
+    for index, node_group in enumerate(node_groups):
+        node_group_id, node_group_name, group_source, group_target = (
+            _validate_soperator_campaign_node_group(
+                node_group,
+                f"{field_label}.node_groups[{index}]",
+                control_plane_source=source,
+                control_plane_target=target,
+            )
+        )
+        if node_group_id in source_by_id:
+            raise ValueError(
+                f"{field_label}.node_groups[{index}].id '{node_group_id}' is duplicated"
+            )
+        if node_group_name in seen_names:
+            raise ValueError(
+                f"{field_label}.node_groups[{index}].name '{node_group_name}' is duplicated"
+            )
+        source_by_id[node_group_id] = group_source
+        target_by_id[node_group_id] = group_target
+        seen_names.add(node_group_name)
+    return source, target, source_by_id, target_by_id
+
+
+def _validate_soperator_campaign_segment(
+    segment: Any,
+    field_label: str,
+    *,
+    expected_index: int,
+    expected_dependency_id: str,
+) -> tuple[
+    str,
+    tuple[int, int],
+    tuple[int, int],
+    dict[str, tuple[tuple[int, int], str, str]],
+    dict[str, tuple[tuple[int, int], str, str]],
+]:
     if not isinstance(segment, Mapping):
         raise ValueError(f"{field_label} must be a mapping")
     _validate_unknown_keys(
         segment,
-        allowed_keys=_SOPERATOR_LOCKED_UPGRADE_PATH_SEGMENT_KEYS,
+        allowed_keys=_SOPERATOR_UPGRADE_CAMPAIGN_SEGMENT_KEYS,
         field_label=field_label,
     )
     for key in ("id", "kind", "title"):
@@ -379,28 +1175,118 @@ def _validate_locked_upgrade_path_segment(segment: Any, field_label: str) -> Non
         if not isinstance(segment.get(key), bool):
             raise ValueError(f"{field_label}.{key} must be true or false")
     index = segment.get("index")
-    if index is not None and (isinstance(index, bool) or not isinstance(index, int) or index <= 0):
-        raise ValueError(f"{field_label}.index must be a positive integer")
+    if isinstance(index, bool) or not isinstance(index, int) or index != expected_index:
+        raise ValueError(f"{field_label}.index must be {expected_index}")
+    depends_on = segment.get("depends_on")
+    expected_dependencies = [expected_dependency_id] if expected_dependency_id else []
+    if depends_on != expected_dependencies:
+        raise ValueError(f"{field_label}.depends_on must be {expected_dependencies}")
     if "actions" not in segment:
         raise ValueError(f"{field_label}.actions is required")
     _validate_soperator_onboarding_actions(segment.get("actions"), f"{field_label}.actions")
+    current_k8s = _required_k8s_minor_for_validation(
+        segment.get("current_k8s_version"),
+        f"{field_label}.current_k8s_version",
+    )
+    target_k8s = _required_k8s_minor_for_validation(
+        segment.get("target_k8s_version"),
+        f"{field_label}.target_k8s_version",
+    )
+    mk8s_source, mk8s_target, group_sources, group_targets = (
+        _validate_soperator_campaign_mk8s_segment(
+            segment.get("mk8s"),
+            f"{field_label}.mk8s",
+            k8s_upgrade_required=segment.get("k8s_upgrade_required") is True,
+        )
+    )
+    if current_k8s != mk8s_source:
+        raise ValueError(
+            f"{field_label}.current_k8s_version must match mk8s.control_plane.source_version"
+        )
+    if target_k8s != mk8s_target:
+        raise ValueError(
+            f"{field_label}.target_k8s_version must match mk8s.control_plane.target_version"
+        )
+    return (
+        _as_text(segment.get("id")),
+        mk8s_source,
+        mk8s_target,
+        group_sources,
+        group_targets,
+    )
 
 
-def _validate_soperator_locked_upgrade_path(upgrade_path: Any, field_label: str) -> None:
+def _validate_soperator_upgrade_campaign(
+    upgrade_path: Any,
+    field_label: str,
+    *,
+    expected_project_id: str,
+    expected_cluster_id: str,
+    expected_target_ref: str,
+) -> None:
     if upgrade_path is None:
-        return
+        raise ValueError(
+            f"{field_label} is required and must use '{SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA}'"
+        )
     if not isinstance(upgrade_path, Mapping):
         raise ValueError(f"{field_label} must be a mapping")
-    _validate_unknown_keys(
-        upgrade_path,
-        allowed_keys=_SOPERATOR_LOCKED_UPGRADE_PATH_KEYS,
-        field_label=field_label,
-    )
     schema = upgrade_path.get("schema")
     if schema != SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA:
         raise ValueError(f"{field_label}.schema must be '{SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA}'")
+    _validate_unknown_keys(
+        upgrade_path,
+        allowed_keys=_SOPERATOR_UPGRADE_CAMPAIGN_KEYS,
+        field_label=field_label,
+    )
     if upgrade_path.get("locked") is not True:
         raise ValueError(f"{field_label}.locked must be true")
+    campaign_id = _required_string_for_validation(
+        upgrade_path.get("campaign_id"),
+        f"{field_label}.campaign_id",
+    )
+    if not _SOPERATOR_UPGRADE_CAMPAIGN_ID_PATTERN.fullmatch(campaign_id):
+        raise ValueError(
+            f"{field_label}.campaign_id must be 'campaign-' plus 16 lowercase hex digits"
+        )
+    fingerprint = _required_string_for_validation(
+        upgrade_path.get("fingerprint"),
+        f"{field_label}.fingerprint",
+    )
+    if not _SOPERATOR_UPGRADE_CAMPAIGN_FINGERPRINT_PATTERN.fullmatch(fingerprint):
+        raise ValueError(f"{field_label}.fingerprint must be 64 lowercase hex digits")
+    catalog_fingerprint = _required_string_for_validation(
+        upgrade_path.get("catalog_fingerprint"),
+        f"{field_label}.catalog_fingerprint",
+    )
+    if not _SOPERATOR_UPGRADE_CAMPAIGN_FINGERPRINT_PATTERN.fullmatch(catalog_fingerprint):
+        raise ValueError(f"{field_label}.catalog_fingerprint must be 64 lowercase hex digits")
+    capabilities_source = _required_string_for_validation(
+        upgrade_path.get("capabilities_source"),
+        f"{field_label}.capabilities_source",
+    )
+    if capabilities_source != "nebius-sdk":
+        raise ValueError(f"{field_label}.capabilities_source must be 'nebius-sdk'")
+    created_at = _required_string_for_validation(
+        upgrade_path.get("created_at"),
+        f"{field_label}.created_at",
+    )
+    try:
+        parsed_created_at = datetime.fromisoformat(created_at)
+    except ValueError as exc:
+        raise ValueError(f"{field_label}.created_at must be an ISO-8601 timestamp") from exc
+    if parsed_created_at.tzinfo is None:
+        raise ValueError(f"{field_label}.created_at must include a timezone")
+    _validate_soperator_campaign_identity(
+        upgrade_path.get("identity"),
+        f"{field_label}.identity",
+        expected_project_id=expected_project_id,
+        expected_cluster_id=expected_cluster_id,
+        expected_target_ref=expected_target_ref,
+    )
+    _validate_soperator_campaign_source_provenance(
+        upgrade_path.get("source_provenance"),
+        f"{field_label}.source_provenance",
+    )
     for key in (
         "source_k8s_version",
         "target_k8s_version",
@@ -410,38 +1296,319 @@ def _validate_soperator_locked_upgrade_path(upgrade_path: Any, field_label: str)
         if key not in upgrade_path:
             raise ValueError(f"{field_label}.{key} is required")
         _optional_string_for_validation(upgrade_path.get(key), f"{field_label}.{key}")
-    _validate_locked_version_record(
-        upgrade_path.get("soperator_app"),
-        f"{field_label}.soperator_app",
+    support_status = _as_text(upgrade_path.get("support_status"))
+    if support_status not in {"supported", "supported_with_warning"}:
+        raise ValueError(
+            f"{field_label}.support_status must be supported or supported_with_warning"
+        )
+    soperator_app = upgrade_path.get("soperator_app")
+    soperator_chart = upgrade_path.get("soperator_chart")
+    jail_rootfs = upgrade_path.get("jail_rootfs")
+    campaign_app_source, campaign_app_target, campaign_app_upgrade_required = (
+        _validate_locked_version_record(
+            soperator_app,
+            f"{field_label}.soperator_app",
+        )
     )
-    _validate_locked_version_record(
-        upgrade_path.get("soperator_chart"),
-        f"{field_label}.soperator_chart",
+    campaign_chart_source, campaign_chart_target, campaign_chart_upgrade_required = (
+        _validate_locked_version_record(
+            soperator_chart,
+            f"{field_label}.soperator_chart",
+        )
     )
     _validate_locked_jail_rootfs_record(
-        upgrade_path.get("jail_rootfs"),
+        jail_rootfs,
         f"{field_label}.jail_rootfs",
     )
-    for key in ("source_k8s_version", "target_k8s_version"):
-        _validate_k8s_minor_version_for_validation(upgrade_path.get(key), f"{field_label}.{key}")
+    source_k8s = _required_k8s_minor_for_validation(
+        upgrade_path.get("source_k8s_version"),
+        f"{field_label}.source_k8s_version",
+    )
+    target_k8s = _required_k8s_minor_for_validation(
+        upgrade_path.get("target_k8s_version"),
+        f"{field_label}.target_k8s_version",
+    )
+    if source_k8s[0] != target_k8s[0] or source_k8s[1] > target_k8s[1]:
+        raise ValueError(
+            f"{field_label} must not downgrade Kubernetes or cross a Kubernetes major version"
+        )
+    mk8s_source, mk8s_target, campaign_group_sources, campaign_group_targets = (
+        _validate_soperator_campaign_mk8s_inventory(
+            upgrade_path.get("mk8s"),
+            f"{field_label}.mk8s",
+        )
+    )
+    if mk8s_source != source_k8s or mk8s_target != target_k8s:
+        raise ValueError(
+            f"{field_label}.mk8s control-plane source/target must match campaign Kubernetes endpoints"
+        )
+    if not isinstance(soperator_app, Mapping):  # narrowed by validation above
+        raise ValueError(f"{field_label}.soperator_app must be a mapping")
+    if not isinstance(soperator_chart, Mapping):  # narrowed by validation above
+        raise ValueError(f"{field_label}.soperator_chart must be a mapping")
+    if not isinstance(jail_rootfs, Mapping):  # narrowed by validation above
+        raise ValueError(f"{field_label}.jail_rootfs must be a mapping")
+    campaign_jail_source = _soperator_campaign_jail_source_identity(
+        jail_rootfs,
+        f"{field_label}.jail_rootfs",
+    )
+    campaign_jail_target = _soperator_campaign_jail_target_identity(
+        jail_rootfs,
+        f"{field_label}.jail_rootfs",
+    )
+    campaign_jail_refresh_required = jail_rootfs.get("refresh_required") is True
+    _validate_soperator_campaign_final_targets(
+        upgrade_path.get("final_targets"),
+        f"{field_label}.final_targets",
+        target_k8s=target_k8s,
+        soperator_app=soperator_app,
+        soperator_chart=soperator_chart,
+        jail_rootfs=jail_rootfs,
+    )
+    _validate_soperator_campaign_managed_operators(
+        upgrade_path.get("managed_operators"),
+        f"{field_label}.managed_operators",
+        required=any(
+            _as_text(node_group.get("gpu_software_mode")) != "none"
+            for node_group in (
+                upgrade_path.get("mk8s", {}).get("node_groups", [])
+                if isinstance(upgrade_path.get("mk8s"), Mapping)
+                else []
+            )
+            if isinstance(node_group, Mapping)
+        ),
+    )
     recommended_order = upgrade_path.get("recommended_order")
-    if recommended_order is not None:
-        if not isinstance(recommended_order, list):
-            raise ValueError(f"{field_label}.recommended_order must be a list")
-        for index, item in enumerate(recommended_order):
-            if not isinstance(item, str):
-                raise ValueError(f"{field_label}.recommended_order[{index}] must be a string")
+    if not isinstance(recommended_order, list):
+        raise ValueError(f"{field_label}.recommended_order must be a list")
+    for index, item in enumerate(recommended_order):
+        if not isinstance(item, str):
+            raise ValueError(f"{field_label}.recommended_order[{index}] must be a string")
     recommended_order_policy = upgrade_path.get("recommended_order_policy")
-    if recommended_order_policy is not None and not isinstance(recommended_order_policy, Mapping):
+    if not isinstance(recommended_order_policy, Mapping):
         raise ValueError(f"{field_label}.recommended_order_policy must be a mapping")
+    _validate_soperator_campaign_rollout(
+        upgrade_path.get("rollout"),
+        f"{field_label}.rollout",
+    )
     segments = upgrade_path.get("segments")
     if not isinstance(segments, list):
         raise ValueError(f"{field_label}.segments must be a list")
+    segment_ids: set[str] = set()
+    current_control_plane = source_k8s
+    current_soperator_app = campaign_app_source
+    current_soperator_chart = campaign_chart_source
+    current_jail_source = campaign_jail_source
+    soperator_app_transition_count = 0
+    soperator_chart_transition_count = 0
+    jail_refresh_segment_count = 0
+    expected_node_group_ids: set[str] | None = None
+    previous_node_group_targets: dict[str, tuple[tuple[int, int], str, str]] = {}
+    previous_segment_id = ""
     for index, segment in enumerate(segments):
-        _validate_locked_upgrade_path_segment(segment, f"{field_label}.segments[{index}]")
+        if not isinstance(segment, Mapping):
+            raise ValueError(f"{field_label}.segments[{index}] must be a mapping")
+        (
+            segment_id,
+            segment_source,
+            segment_target,
+            group_sources,
+            group_targets,
+        ) = _validate_soperator_campaign_segment(
+            segment,
+            f"{field_label}.segments[{index}]",
+            expected_index=index + 1,
+            expected_dependency_id=previous_segment_id,
+        )
+        if segment_id in segment_ids:
+            raise ValueError(f"{field_label}.segments[{index}].id '{segment_id}' is duplicated")
+        segment_ids.add(segment_id)
+        previous_segment_id = segment_id
+        if segment_source != current_control_plane:
+            raise ValueError(
+                f"{field_label}.segments[{index}].mk8s.control_plane.source_version must "
+                "match the previous segment target"
+            )
+        current_control_plane = segment_target
+        if group_targets:
+            group_ids = set(group_targets)
+            if expected_node_group_ids is None:
+                expected_node_group_ids = group_ids
+            elif group_ids != expected_node_group_ids:
+                raise ValueError(
+                    f"{field_label}.segments[{index}].mk8s.node_groups must contain the same "
+                    "immutable node-group ids as the previous Kubernetes hop"
+                )
+            for node_group_id, source_tuple in group_sources.items():
+                previous_target = previous_node_group_targets.get(node_group_id)
+                if previous_target is not None and source_tuple != previous_target:
+                    raise ValueError(
+                        f"{field_label}.segments[{index}].mk8s node group '{node_group_id}' "
+                        "source tuple must match its previous segment target tuple"
+                    )
+            previous_node_group_targets = group_targets
+
+        segment_app_source, segment_app_target, segment_app_upgrade_required = (
+            _validate_locked_version_record(
+                segment.get("soperator_app"),
+                f"{field_label}.segments[{index}].soperator_app",
+            )
+        )
+        if segment_app_source != current_soperator_app:
+            raise ValueError(
+                f"{field_label}.segments[{index}].soperator_app.current_version must match "
+                "the previous segment target or campaign source"
+            )
+        if segment_app_target not in {current_soperator_app, campaign_app_target}:
+            raise ValueError(
+                f"{field_label}.segments[{index}].soperator_app.target_version must stay "
+                "unchanged or advance directly to the campaign target"
+            )
+        if segment_app_upgrade_required:
+            soperator_app_transition_count += 1
+        current_soperator_app = segment_app_target
+
+        segment_chart_source, segment_chart_target, segment_chart_upgrade_required = (
+            _validate_locked_version_record(
+                segment.get("soperator_chart"),
+                f"{field_label}.segments[{index}].soperator_chart",
+            )
+        )
+        if segment_chart_source != current_soperator_chart:
+            raise ValueError(
+                f"{field_label}.segments[{index}].soperator_chart.current_version must match "
+                "the previous segment target or campaign source"
+            )
+        if segment_chart_target not in {current_soperator_chart, campaign_chart_target}:
+            raise ValueError(
+                f"{field_label}.segments[{index}].soperator_chart.target_version must stay "
+                "unchanged or advance directly to the campaign target"
+            )
+        if segment_chart_upgrade_required:
+            soperator_chart_transition_count += 1
+        current_soperator_chart = segment_chart_target
+
+        expected_soperator_upgrade = bool(
+            segment_app_upgrade_required or segment_chart_upgrade_required
+        )
+        if segment.get("soperator_upgrade_required") is not expected_soperator_upgrade:
+            raise ValueError(
+                f"{field_label}.segments[{index}].soperator_upgrade_required must be "
+                f"{'true' if expected_soperator_upgrade else 'false'} for its app/chart "
+                "version transitions"
+            )
+
+        segment_jail = segment.get("jail_rootfs")
+        if not isinstance(segment_jail, Mapping):
+            raise ValueError(f"{field_label}.segments[{index}].jail_rootfs must be a mapping")
+        segment_jail_source = _soperator_campaign_jail_source_identity(
+            segment_jail,
+            f"{field_label}.segments[{index}].jail_rootfs",
+        )
+        if segment_jail_source != current_jail_source:
+            raise ValueError(
+                f"{field_label}.segments[{index}].jail_rootfs current image/version must "
+                "match the previous segment target or campaign source"
+            )
+        segment_jail_target = _soperator_campaign_jail_target_identity(
+            segment_jail,
+            f"{field_label}.segments[{index}].jail_rootfs",
+        )
+        if segment_jail_target != campaign_jail_target:
+            raise ValueError(
+                f"{field_label}.segments[{index}].jail_rootfs target image/CUDA identity "
+                "must match the campaign final target"
+            )
+        if segment_jail.get("refresh_required") is True:
+            jail_refresh_segment_count += 1
+            current_jail_source = campaign_jail_target[:2]
+    if current_control_plane != target_k8s:
+        raise ValueError(
+            f"{field_label}.segments must form a contiguous control-plane path from "
+            "source_k8s_version to target_k8s_version"
+        )
+    if current_soperator_app != campaign_app_target:
+        raise ValueError(
+            f"{field_label}.segments must advance Soperator app from the campaign source "
+            "to its final target"
+        )
+    if current_soperator_chart != campaign_chart_target:
+        raise ValueError(
+            f"{field_label}.segments must advance Soperator chart from the campaign source "
+            "to its final target"
+        )
+    if soperator_app_transition_count != int(campaign_app_upgrade_required):
+        raise ValueError(
+            f"{field_label}.segments must contain exactly one Soperator app transition when "
+            "the campaign app upgrade is required, and none otherwise"
+        )
+    if soperator_chart_transition_count != int(campaign_chart_upgrade_required):
+        raise ValueError(
+            f"{field_label}.segments must contain exactly one Soperator chart transition when "
+            "the campaign chart upgrade is required, and none otherwise"
+        )
+    if jail_refresh_segment_count != int(campaign_jail_refresh_required):
+        raise ValueError(
+            f"{field_label}.segments must contain exactly one Jail rootfs refresh when the "
+            "campaign refresh is required, and none otherwise"
+        )
+    if current_jail_source != campaign_jail_target[:2]:
+        raise ValueError(
+            f"{field_label}.segments must advance the Jail rootfs image/version from the "
+            "campaign source to its final target"
+        )
+    if expected_node_group_ids is not None and expected_node_group_ids != set(
+        campaign_group_targets
+    ):
+        raise ValueError(
+            f"{field_label}.mk8s.node_groups must contain the same immutable ids as every Kubernetes hop"
+        )
+    if previous_node_group_targets and previous_node_group_targets != campaign_group_targets:
+        raise ValueError(
+            f"{field_label}.mk8s.node_groups final targets must match the final Kubernetes hop"
+        )
+    if expected_node_group_ids is not None:
+        first_segment = next(
+            (
+                segment
+                for segment in segments
+                if isinstance(segment, Mapping)
+                and isinstance(segment.get("mk8s"), Mapping)
+                and segment["mk8s"].get("node_groups")
+            ),
+            None,
+        )
+        if isinstance(first_segment, Mapping):
+            _first_source, _first_target, first_group_sources, _first_group_targets = (
+                _validate_soperator_campaign_mk8s_segment(
+                    first_segment.get("mk8s"),
+                    f"{field_label}.segments[first].mk8s",
+                    k8s_upgrade_required=first_segment.get("k8s_upgrade_required") is True,
+                )
+            )
+            if first_group_sources != campaign_group_sources:
+                raise ValueError(
+                    f"{field_label}.mk8s.node_groups sources must match the first Kubernetes hop"
+                )
+
+    expected_fingerprint = soperator_upgrade_campaign_fingerprint(upgrade_path)
+    if fingerprint != expected_fingerprint:
+        raise ValueError(f"{field_label}.fingerprint does not match the immutable campaign payload")
+    expected_campaign_id = f"campaign-{fingerprint[:16]}"
+    if campaign_id != expected_campaign_id:
+        raise ValueError(
+            f"{field_label}.campaign_id must be '{expected_campaign_id}' for the campaign fingerprint"
+        )
 
 
-def _validate_soperator_onboarding(onboarding: Mapping[str, Any], field_label: str) -> None:
+def _validate_soperator_onboarding(
+    onboarding: Mapping[str, Any],
+    field_label: str,
+    *,
+    campaign_project_id: str = "",
+    campaign_cluster_id: str = "",
+    campaign_target_ref: str = "",
+) -> None:
     _validate_unknown_keys(
         onboarding,
         allowed_keys=_SOPERATOR_ONBOARDING_KEYS,
@@ -489,9 +1656,12 @@ def _validate_soperator_onboarding(onboarding: Mapping[str, Any], field_label: s
         f"{field_label}.node_template_upgrade",
     )
     _validate_soperator_onboarding_rollout(onboarding, field_label)
-    _validate_soperator_locked_upgrade_path(
+    _validate_soperator_upgrade_campaign(
         onboarding.get("upgrade_path"),
         f"{field_label}.upgrade_path",
+        expected_project_id=campaign_project_id,
+        expected_cluster_id=campaign_cluster_id,
+        expected_target_ref=campaign_target_ref,
     )
 
 
@@ -512,6 +1682,7 @@ def _validate_soperator_onboarding_rollout(onboarding: Mapping[str, Any], field_
             f"{field_label}.node_template_upgrade.rollout.strategy must be one of: "
             + ", ".join(sorted(_SOPERATOR_WORKER_ROLLOUT_STRATEGIES))
         )
+    slurm_scheduling_quiesce = node_template.get("slurm_scheduling_quiesce", True)
     service_role_strategy = (
         normalize_component_token(rollout.get("service_role_strategy")) or "zero-surge"
     )
@@ -630,6 +1801,11 @@ def _validate_soperator_onboarding_rollout(onboarding: Mapping[str, Any], field_
         key="worker_group_strategy",
         role_label="worker",
     )
+    if slurm_scheduling_quiesce is True and strategy != "zero-surge":
+        raise ValueError(
+            f"{field_label}.node_template_upgrade.rollout.strategy must be zero-surge "
+            "when slurm_scheduling_quiesce is true"
+        )
 
 
 def _resolve_mapping_segment(node: Mapping[str, Any], segment: str) -> Any:
@@ -1030,9 +2206,15 @@ def _validate_deploy(payload: Mapping[str, Any]) -> None:
                         f"deploy.targets[{index}].soperator_onboarding must be a mapping"
                     )
                 if isinstance(onboarding, Mapping):
+                    campaign_project_id = _as_text(raw_target.get("project_id")) or _as_text(
+                        _mapping_path_value(payload, "client_info.nebius.project_id")
+                    )
                     _validate_soperator_onboarding(
                         onboarding,
                         f"deploy.targets[{index}].soperator_onboarding",
+                        campaign_project_id=campaign_project_id,
+                        campaign_cluster_id=cluster_id,
+                        campaign_target_ref=target_ref,
                     )
             _validate_observability(
                 raw_target.get("observability"),

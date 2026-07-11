@@ -3723,7 +3723,7 @@ def test_soperator_rollout_prompt_guidance_includes_concise_field_comments(
             "0"
         ),
         "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.worker_group_strategy.drain_timeout": (
-            "30m"
+            "none"
         ),
     }
 
@@ -3736,14 +3736,14 @@ def test_soperator_rollout_prompt_guidance_includes_concise_field_comments(
         {
             "soperator_onboarding": {
                 "node_template_upgrade": {
-                        "rollout": {
-                            "strategy": "safe-surge",
-                            "service_role_strategy": "zero-surge",
-                            "worker_wave_groups": 1,
-                            "worker_group_strategy": {
-                                "max_surge_count": 1,
+                    "rollout": {
+                        "strategy": "safe-surge",
+                        "service_role_strategy": "zero-surge",
+                        "worker_wave_groups": 1,
+                        "worker_group_strategy": {
+                            "max_surge_count": 1,
                             "max_unavailable_count": 0,
-                            "drain_timeout": "30m",
+                            "drain_timeout": "none",
                         },
                     }
                 }
@@ -3758,12 +3758,12 @@ def test_soperator_rollout_prompt_guidance_includes_concise_field_comments(
         "service_role_group_strategy": {
             "max_surge_count": 0,
             "max_unavailable_count": 1,
-            "drain_timeout": "30m",
+            "drain_timeout": "none",
         },
         "worker_group_strategy": {
             "max_surge_count": 1,
             "max_unavailable_count": 0,
-            "drain_timeout": "30m",
+            "drain_timeout": "none",
         },
     }
     joined = "\n".join(captured)
@@ -3775,7 +3775,7 @@ def test_soperator_rollout_prompt_guidance_includes_concise_field_comments(
     assert "Max parallel worker groups" not in joined
     assert "Max surge count: temporary extra nodes per active group" in joined
     assert "Max unavailable count: nodes per group allowed down" in joined
-    assert "Drain timeout: time to wait for pod eviction" in joined
+    assert "Drain timeout:" not in joined
 
 
 def test_soperator_rollout_prompt_keeps_parallel_cap_for_percent_waves(
@@ -3805,7 +3805,7 @@ def test_soperator_rollout_prompt_keeps_parallel_cap_for_percent_waves(
             "0"
         ),
         "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.worker_group_strategy.drain_timeout": (
-            "30m"
+            "none"
         ),
     }
 
@@ -3818,14 +3818,14 @@ def test_soperator_rollout_prompt_keeps_parallel_cap_for_percent_waves(
         {
             "soperator_onboarding": {
                 "node_template_upgrade": {
-                        "rollout": {
-                            "strategy": "safe-surge",
-                            "service_role_strategy": "safe-surge",
-                            "worker_wave_percent": 1,
-                            "worker_group_strategy": {
-                                "max_surge_count": 1,
+                    "rollout": {
+                        "strategy": "safe-surge",
+                        "service_role_strategy": "safe-surge",
+                        "worker_wave_percent": 1,
+                        "worker_group_strategy": {
+                            "max_surge_count": 1,
                             "max_unavailable_count": 0,
-                            "drain_timeout": "30m",
+                            "drain_timeout": "none",
                         },
                     }
                 }
@@ -3841,12 +3841,12 @@ def test_soperator_rollout_prompt_keeps_parallel_cap_for_percent_waves(
         "service_role_group_strategy": {
             "max_surge_count": 1,
             "max_unavailable_count": 0,
-            "drain_timeout": "30m",
+            "drain_timeout": "none",
         },
         "worker_group_strategy": {
             "max_surge_count": 1,
             "max_unavailable_count": 0,
-            "drain_timeout": "30m",
+            "drain_timeout": "none",
         },
     }
     joined = "\n".join(captured)

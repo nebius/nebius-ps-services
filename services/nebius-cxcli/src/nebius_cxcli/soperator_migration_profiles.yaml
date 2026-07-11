@@ -3,6 +3,27 @@ source: https://github.com/nebius/soperator/releases
 generated_from: github-releases-api-and-release-tarballs
 target_policy: component_sources.yaml pinned soperator chart version
 generator_scope: chart-tarball-crd-template-image-and-slurm-contract-fingerprints
+host_driver_jail_cuda_policy:
+  schema: nebius-cxcli-soperator-host-driver-jail-cuda-policy/v1
+  references:
+  - https://docs.nebius.com/kubernetes/gpu/set-up
+  - https://docs.nvidia.com/cuda/archive/12.9.0/cuda-toolkit-release-notes/index.html
+  - https://docs.nvidia.com/deploy/cuda-compatibility/minor-version-compatibility.html
+  driver_presets:
+    cuda12.8:
+      driver_branch: 570
+    cuda13.0:
+      driver_branch: 580
+  jail_cuda:
+    12.9.0:
+      minimum_driver_branch: 575
+      allow_newer_driver_branches: true
+      operator_managed:
+        required_managed_gpu_operator:
+          component_id: nvidia-gpu-operator
+          chart: gpu-operator
+          chart_version: v25.10.0
+          repository: oci://cr.eu-north1.nebius.cloud/marketplace/nebius/nvidia-gpu-operator/chart/gpu-operator
 support_rules:
 - id: k8s-1-33-requires-soperator-1-23
   status: unsupported
@@ -18,8 +39,8 @@ support_rules:
   status: not_validated
   source_version_range: <1.22.0
   message: Soperator source versions older than 1.22.x are not validated by cxcli
-    for this upgrade path. Run a smoke test or rerun with --allow-unsupported-soperator-upgrade-path
-    for an explicit testing override.
+    for this upgrade path. The path remains blocked until cxcli has an explicit
+    committed validation rule.
   references:
   - https://github.com/nebius/soperator/releases
 - id: k8s-before-1-33-soperator-1-22-plus-supported
@@ -41,8 +62,8 @@ support_rules:
   target_chart_version_policy: not_cxcli_pin
   message: Soperator chart packages with the same upstream app version as the
     cxcli-pinned target are not validated unless they match the component_sources.yaml
-    chart pin exactly. Keep the cxcli-pinned target or rerun with --allow-unsupported-soperator-upgrade-path
-    after explicit testing.
+    chart pin exactly. Keep the cxcli-pinned target; other chart packages remain
+    blocked.
   references:
   - component_sources.yaml
 - id: soperator-target-before-cxcli-pin-not-validated
@@ -50,8 +71,7 @@ support_rules:
   target_version_range: '>=1.23.0,<4.0.2'
   message: Intermediate Soperator targets before the cxcli-pinned target are not
     part of the canonical cxcli upgrade path. Upgrade directly to the cxcli-pinned
-    target or rerun with --allow-unsupported-soperator-upgrade-path after explicit
-    testing.
+    target; intermediate targets remain blocked.
   references:
   - https://github.com/nebius/soperator/issues/1510
   - https://github.com/nebius/soperator/pull/1512
@@ -59,8 +79,8 @@ support_rules:
   status: not_validated
   target_version_range: '>4.0.2,<5.0.0'
   message: Soperator targets newer than the cxcli-pinned target are not validated
-    by cxcli yet. Keep the cxcli-pinned target or rerun with
-    --allow-unsupported-soperator-upgrade-path after explicit testing.
+    by cxcli yet. Keep the cxcli-pinned target until a newer committed support
+    rule is available.
   references:
   - https://github.com/nebius/soperator/releases
 - id: k8s-1-33-soperator-4-supported

@@ -6,6 +6,89 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Replaced the external Soperator v2 path/checkpoint contract with the breaking
+  `nebius-cxcli-ext-soperator-upgrade-campaign/v3` two-command workflow.
+  `ext-soperator onboard` is now described as: “Register a new target, report
+  its active campaign, or propose the next campaign after completion.” It
+  registers each cluster once and atomically locks
+  the complete SDK-derived campaign in `config.yaml`, including every
+  control-plane hop, exact per-node-group OS/`drivers_preset` tuple, pinned
+  Soperator and managed-operator targets, Jail image/CUDA identity, immutable
+  live resource identities, dependencies, and disruption budgets. Identical
+  onboarding is a byte-stable no-op; active campaigns are never replanned; and
+  completed campaigns can be archived and rotated only after explicit
+  acceptance of a later final target. `ext-soperator upgrade` now requires
+  exactly one of `--dry-run` or `--execute`, treats config as the sole campaign
+  authority, observes live state before resuming, advances at most one segment,
+  and stores only operation evidence in a campaign-scoped v3 journal. Persistent
+  replacement node groups retain an immutable original-ID-to-live-ID binding so
+  later hops use the replacement while copying every desired tuple exclusively
+  from the locked campaign. Old campaign and checkpoint schemas are rejected
+  without conversion.
+  Non-interactive onboarding derives and fingerprints
+  `slurm_scheduling_quiesce: false` for worker safe-surge and `true` for worker
+  zero-surge, so the documented fixed-wave safe-surge command is deterministic.
+  Active-campaign onboarding reruns reject retired, legacy, and non-v3 journal
+  sidecars before reporting the preserved campaign and never rewrite config on
+  that recovery-required path. Worker rollout admission is node-weighted with
+  a five-percent global unavailable budget, a five-percent per-group budget
+  capped at 25, at most eight concurrent groups, serial service roles, and no
+  provider forced-drain timeout. V3 node-weighted worker concurrency no longer
+  inherits the legacy one-group zero-surge fallback, so completely job-free
+  quiesced groups can use the accepted fixed/percent/cap limit up to eight while
+  global, per-group, and failure-domain budgets remain authoritative. A
+  nonredundant zero-surge service-role group now fails closed unless execute is
+  given `--approve-service-role-downtime`; the operation journal binds that
+  separate acceptance to the exact campaign fingerprint, segment, provider
+  group identities, and live capacity evidence, and never inherits it across
+  campaigns. Generic `--approve` remains independently required.
+  The shared Kubernetes Lease is revalidated before every live command or
+  provider call, and backup accounting replica compensation is journaled with
+  immutable deployment identity before quiescing so an interrupted backup can
+  restore it without overwriting a customer replica change. External onboarding
+  now derives the Soperator chart/app target only from the exact component
+  catalog pin and removes chart-version and unsupported-policy overrides.
+  Explicit onboarding kube contexts are now bound to the requested Nebius MK8s
+  cluster through matching `kube-system` UIDs before any config write.
+  Active/passive local Jail PVs now resolve their immutable backing SFS ID from
+  fresh Nebius SDK node-group `mount_tag: jail` attachments and reject mixed
+  filesystem identities. Locked desired-image evidence is accepted only before
+  its scheduled Jail repair; refresh targets and later/final waypoints require a
+  completed active/passive populate-jail Job whose UID, image, slot, and PVC
+  match the Bound canonical active PVC, immutable filesystem identity, and all
+  live SlurmCluster/NodeSet Jail consumers. A completed passive-slot Job alone
+  no longer satisfies the campaign before consumer switch-over, and final
+  reconciliation binds the live identities back to the archived refresh-segment
+  operation evidence.
+  Observation-only completion is restricted to terminal provider-only MK8s
+  segments; composite actions resume through their journaled executor. Nebius
+  updates require both successful terminal SDK status and a real provider
+  operation ID. The ID is durably journaled before the terminal wait; an
+  accepted but ambiguous operation remains pending and cannot be submitted a
+  second time, while a later live-state reconciliation closes it using the
+  stored ID. Every resume path now queries that exact operation before treating
+  an unmet live postcondition as pending; terminal failure or identity drift is
+  recovery-required. V3 journals reject unknown or malformed compensation
+  obligations, and no checkpoint can complete while one remains. Journal files
+  and immutable journal archives use mode `0600`,
+  their state directories use `0700`, and atomic journal replacement fsyncs
+  the parent directory. Accepted worker wave limits are enforced in addition
+  to node-weighted disruption budgets. Managed GPU/network operator completion
+  now matches the exact release name, namespace, chart/version, and deployed
+  status exposed by raw Helm JSON, and validates repository evidence whenever
+  a collector supplies it. Strategy, Slurm, drain, accounting, and service-role
+  restoration fails closed unless live UID, resource version, and temporary
+  values still prove cxcli ownership. Slurm partition quiesce now persists and
+  rechecks a canonical full-record fingerprint before `State=DOWN`, records the
+  exact observed post-mutation fingerprint, and restores only while that value
+  still proves cxcli ownership; ambiguous interruption or customer/runtime
+  drift requires manual recovery. Slurm `requeuehold` now journals each job's
+  immutable identity, exact pre-state, and mutation intent before dispatch,
+  then persists the exact held post-state. Final release uses a fresh exact
+  compare-and-set; identity drift, customer re-hold/state drift, or unknown
+  observation remains recovery-required with inspection-only guidance. A held
+  job observed after only an intent checkpoint is never adopted or released,
+  because cxcli cannot prove whether it or the customer dispatched that hold.
 - Fixed external Soperator accounting continuity during chart takeover. After
   affected jobs reach the quiet gate, rolling compute now quiesces source
   accounting, captures a fresh `slurm_acct_db`-only dump under the

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
 from nebius_cxcli.soperator_artifacts import (
+    SoperatorClusterArtifactIdentity,
     soperator_cluster_artifact_identity,
     soperator_cluster_artifact_identity_from_payload,
 )
@@ -44,6 +47,20 @@ def test_soperator_cluster_key_falls_back_to_target() -> None:
     identity = soperator_cluster_artifact_identity(target_ref="External Soperator")
 
     assert identity.cluster_key == "external-soperator"
+
+
+@pytest.mark.parametrize("unsafe_value", (".", ".."))
+def test_soperator_cluster_key_rejects_dot_path_components(unsafe_value: str) -> None:
+    identity = soperator_cluster_artifact_identity(
+        cluster_id=unsafe_value,
+        cluster_name=unsafe_value,
+        kube_context=unsafe_value,
+        target_ref="safe-target",
+    )
+
+    assert identity.cluster_key == "safe-target"
+    with pytest.raises(ValueError, match="safe path token"):
+        SoperatorClusterArtifactIdentity(cluster_key=unsafe_value)
 
 
 def test_soperator_cluster_identity_from_payload_uses_target_cluster_id() -> None:

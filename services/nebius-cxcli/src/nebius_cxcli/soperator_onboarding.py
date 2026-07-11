@@ -33,9 +33,14 @@ from .soperator_discovery import (
     write_soperator_discovery_bundle,
 )
 from .soperator_populate_jail import POPULATE_JAIL_REFRESH_PHASE_ID
+from .soperator_upgrade_campaign import SOPERATOR_UPGRADE_CAMPAIGN_SCHEMA
 
 ONBOARDING_SCHEMA = "nebius-cxcli-soperator-onboarding/v2"
-SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA = "nebius-cxcli-ext-soperator-upgrade-path/v2"
+SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA = SOPERATOR_UPGRADE_CAMPAIGN_SCHEMA
+EXT_SOPERATOR_ONBOARD_DESCRIPTION = (
+    "Register a new target, report its active campaign, or propose the next campaign "
+    "after completion."
+)
 ONBOARDING_REPORT_DIR = "reports"
 SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME = SOPERATOR_DISCOVERY_DIR_NAME
 ONBOARDING_STATE_NO_SOPERATOR_DETECTED = "no-soperator-detected"
@@ -132,6 +137,9 @@ SOPERATOR_CRD_RESOURCE_KINDS = (
 SOPERATOR_CRD_NAMES = frozenset(name for name, _resource_kind in SOPERATOR_CRD_RESOURCE_KINDS)
 SOPERATOR_MIGRATION_PROFILE_DATA_FILE = Path(__file__).with_name(
     "soperator_migration_profiles.yaml"
+)
+SOPERATOR_HOST_DRIVER_JAIL_CUDA_POLICY_SCHEMA = (
+    "nebius-cxcli-soperator-host-driver-jail-cuda-policy/v1"
 )
 SOPERATOR_COMPATIBLE_RELEASE_NAMES = frozenset({"soperator", "slurm-operator"})
 SOPERATOR_COMPATIBLE_CONTROLLER_RELEASE_NAMES = frozenset({"soperator-controller"})
@@ -483,8 +491,10 @@ def validate_soperator_onboarding_acceptance(
             )
     raise ValueError(
         f"apps:soperator target '{target}' uses onboard-existing-cluster but does not have "
-        "a current accepted deploy.targets[].soperator_onboarding analysis. Rerun the "
-        "Soperator onboarding wizard or refresh the analysis fingerprint before render/deploy."
+        "a current accepted configuration. External Soperator upgrade requires a locked "
+        "v3 campaign in deploy.targets[].soperator_onboarding.upgrade_path. Run "
+        "`nebius-cxcli ext-soperator onboard` for this cluster; a journal is never an "
+        "upgrade-path authority."
     )
 
 
@@ -680,6 +690,10 @@ def _sequence_of_mappings(value: Any) -> tuple[Mapping[str, Any], ...]:
     return tuple(item for item in value if isinstance(item, Mapping))
 
 
+def _mapping_value(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
 def _sequence_of_names(value: Any) -> set[str]:
     names: set[str] = set()
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
@@ -801,6 +815,243 @@ def _load_soperator_migration_profile_data() -> Mapping[str, Any]:
         if isinstance(payload, Mapping):
             return payload
     return {}
+
+
+def _host_driver_jail_cuda_policy_error(message: str) -> RuntimeError:
+    return RuntimeError(
+        "Committed Soperator host-driver/Jail-CUDA compatibility policy is invalid: " + message
+    )
+
+
+def _normalized_jail_cuda_version(value: object) -> str:
+    text = str(value or "").strip().lower().removeprefix("cuda")
+    if not re.fullmatch(r"[0-9]+\.[0-9]+(?:\.[0-9]+)?", text):
+        return ""
+    parts = text.split(".")
+    if len(parts) == 2:
+        parts.append("0")
+    return ".".join(str(int(part)) for part in parts)
+
+
+def soperator_host_driver_jail_cuda_policy() -> Mapping[str, Any]:
+    payload = _load_soperator_migration_profile_data()
+    raw_policy = payload.get("host_driver_jail_cuda_policy")
+    if not isinstance(raw_policy, Mapping):
+        raise _host_driver_jail_cuda_policy_error("policy mapping is missing.")
+    schema = str(raw_policy.get("schema", "") or "").strip()
+    if schema != SOPERATOR_HOST_DRIVER_JAIL_CUDA_POLICY_SCHEMA:
+        raise _host_driver_jail_cuda_policy_error(
+            f"schema must be {SOPERATOR_HOST_DRIVER_JAIL_CUDA_POLICY_SCHEMA}, "
+            f"got {schema or 'missing'}."
+        )
+
+    raw_driver_presets = raw_policy.get("driver_presets")
+    if not isinstance(raw_driver_presets, Mapping) or not raw_driver_presets:
+        raise _host_driver_jail_cuda_policy_error("driver_presets must be a non-empty mapping.")
+    driver_presets: dict[str, dict[str, int]] = {}
+    for raw_preset, raw_record in raw_driver_presets.items():
+        preset = str(raw_preset or "").strip().lower()
+        if not preset or not isinstance(raw_record, Mapping):
+            raise _host_driver_jail_cuda_policy_error(
+                "every driver_presets entry must have a name and mapping value."
+            )
+        branch = raw_record.get("driver_branch")
+        if isinstance(branch, bool) or not isinstance(branch, int) or branch <= 0:
+            raise _host_driver_jail_cuda_policy_error(
+                f"driver_presets.{preset}.driver_branch must be a positive integer."
+            )
+        if preset in driver_presets:
+            raise _host_driver_jail_cuda_policy_error(
+                f"driver preset {preset} is declared more than once."
+            )
+        driver_presets[preset] = {"driver_branch": branch}
+
+    raw_jail_cuda = raw_policy.get("jail_cuda")
+    if not isinstance(raw_jail_cuda, Mapping) or not raw_jail_cuda:
+        raise _host_driver_jail_cuda_policy_error("jail_cuda must be a non-empty mapping.")
+    jail_cuda: dict[str, dict[str, Any]] = {}
+    required_operator_fields = (
+        "component_id",
+        "chart",
+        "chart_version",
+        "repository",
+    )
+    for raw_version, raw_rule in raw_jail_cuda.items():
+        version = _normalized_jail_cuda_version(raw_version)
+        if not version or not isinstance(raw_rule, Mapping):
+            raise _host_driver_jail_cuda_policy_error(
+                "every jail_cuda entry must have a semantic CUDA version and mapping value."
+            )
+        minimum_branch = raw_rule.get("minimum_driver_branch")
+        if (
+            isinstance(minimum_branch, bool)
+            or not isinstance(minimum_branch, int)
+            or minimum_branch <= 0
+        ):
+            raise _host_driver_jail_cuda_policy_error(
+                f"jail_cuda.{version}.minimum_driver_branch must be a positive integer."
+            )
+        allow_newer = raw_rule.get("allow_newer_driver_branches")
+        if not isinstance(allow_newer, bool):
+            raise _host_driver_jail_cuda_policy_error(
+                f"jail_cuda.{version}.allow_newer_driver_branches must be boolean."
+            )
+        operator_managed = raw_rule.get("operator_managed")
+        required_target = (
+            operator_managed.get("required_managed_gpu_operator")
+            if isinstance(operator_managed, Mapping)
+            else None
+        )
+        if not isinstance(required_target, Mapping):
+            raise _host_driver_jail_cuda_policy_error(
+                f"jail_cuda.{version}.operator_managed.required_managed_gpu_operator "
+                "must be a mapping."
+            )
+        normalized_target = {
+            field: str(required_target.get(field, "") or "").strip()
+            for field in required_operator_fields
+        }
+        missing_fields = [field for field, value in normalized_target.items() if not value]
+        if missing_fields:
+            raise _host_driver_jail_cuda_policy_error(
+                f"jail_cuda.{version} managed GPU operator target is missing "
+                + ", ".join(missing_fields)
+                + "."
+            )
+        if version in jail_cuda:
+            raise _host_driver_jail_cuda_policy_error(
+                f"Jail CUDA version {version} is declared more than once."
+            )
+        jail_cuda[version] = {
+            "minimum_driver_branch": minimum_branch,
+            "allow_newer_driver_branches": allow_newer,
+            "operator_managed": {
+                "required_managed_gpu_operator": normalized_target,
+            },
+        }
+    return {
+        "schema": schema,
+        "driver_presets": driver_presets,
+        "jail_cuda": jail_cuda,
+    }
+
+
+def validate_soperator_host_driver_jail_cuda_compatibility(
+    *,
+    jail_cuda_version: str,
+    node_group_targets: Sequence[Mapping[str, Any]],
+    managed_gpu_operator_target: Mapping[str, Any],
+) -> None:
+    policy = soperator_host_driver_jail_cuda_policy()
+    normalized_cuda = _normalized_jail_cuda_version(jail_cuda_version)
+    jail_rules = policy.get("jail_cuda")
+    rule = jail_rules.get(normalized_cuda) if isinstance(jail_rules, Mapping) else None
+    if not normalized_cuda or not isinstance(rule, Mapping):
+        raise RuntimeError(
+            "External Soperator campaign cannot be locked: committed host-driver/"
+            f"Jail-CUDA policy has no rule for Jail CUDA {jail_cuda_version or 'missing'}."
+        )
+    driver_presets = policy.get("driver_presets")
+    if not isinstance(driver_presets, Mapping):
+        raise _host_driver_jail_cuda_policy_error("normalized driver_presets are missing.")
+    minimum_branch = int(rule["minimum_driver_branch"])
+    allow_newer = rule.get("allow_newer_driver_branches") is True
+    operator_managed = rule.get("operator_managed")
+    required_operator = (
+        operator_managed.get("required_managed_gpu_operator")
+        if isinstance(operator_managed, Mapping)
+        else None
+    )
+    if not isinstance(required_operator, Mapping):
+        raise _host_driver_jail_cuda_policy_error(
+            f"normalized Jail CUDA {normalized_cuda} operator target is missing."
+        )
+
+    conflicts: list[str] = []
+    for index, node_group in enumerate(node_group_targets):
+        target = node_group.get("target")
+        target_mapping = target if isinstance(target, Mapping) else node_group
+        mode = str(node_group.get("gpu_software_mode", "") or "").strip()
+        if mode == "none":
+            continue
+        name = str(node_group.get("name", "") or node_group.get("id", "") or index).strip()
+        drivers_preset = str(target_mapping.get("drivers_preset", "") or "").strip().lower()
+        if mode == "provider-managed":
+            preset_rule = driver_presets.get(drivers_preset)
+            if not isinstance(preset_rule, Mapping):
+                conflicts.append(
+                    f"node group {name}: provider-managed drivers_preset "
+                    f"{drivers_preset or 'missing'} is not committed"
+                )
+                continue
+            branch = preset_rule.get("driver_branch")
+            compatible = isinstance(branch, int) and (
+                branch >= minimum_branch if allow_newer else branch == minimum_branch
+            )
+            if not compatible:
+                conflicts.append(
+                    f"node group {name}: drivers_preset {drivers_preset} uses driver "
+                    f"branch {branch}, below Jail CUDA {normalized_cuda} minimum branch "
+                    f"{minimum_branch}"
+                )
+            continue
+        if mode == "operator-managed":
+            if drivers_preset:
+                conflicts.append(
+                    f"node group {name}: operator-managed mode must not set "
+                    f"drivers_preset {drivers_preset}"
+                )
+                continue
+            mismatches = [
+                field
+                for field, expected in required_operator.items()
+                if str(managed_gpu_operator_target.get(field, "") or "").strip()
+                != str(expected or "").strip()
+            ]
+            if mismatches:
+                conflicts.append(
+                    f"node group {name}: operator-managed mode requires the exact "
+                    "committed managed GPU operator target; mismatched " + ", ".join(mismatches)
+                )
+            continue
+        conflicts.append(f"node group {name}: unknown GPU software mode {mode or 'missing'}")
+    if conflicts:
+        raise RuntimeError(
+            "External Soperator campaign cannot be locked because host-driver/Jail-CUDA "
+            "compatibility validation failed: " + "; ".join(conflicts) + "."
+        )
+
+
+def soperator_provider_driver_presets_for_jail_cuda(
+    jail_cuda_version: str,
+) -> frozenset[str]:
+    """Return committed provider-managed presets compatible with one Jail CUDA pin."""
+
+    policy = soperator_host_driver_jail_cuda_policy()
+    normalized_cuda = _normalized_jail_cuda_version(jail_cuda_version)
+    jail_rules = policy.get("jail_cuda")
+    rule = jail_rules.get(normalized_cuda) if isinstance(jail_rules, Mapping) else None
+    if not normalized_cuda or not isinstance(rule, Mapping):
+        raise RuntimeError(
+            "External Soperator campaign cannot be locked: committed host-driver/"
+            f"Jail-CUDA policy has no rule for Jail CUDA {jail_cuda_version or 'missing'}."
+        )
+    driver_presets = policy.get("driver_presets")
+    if not isinstance(driver_presets, Mapping):
+        raise _host_driver_jail_cuda_policy_error("normalized driver_presets are missing.")
+    minimum_branch = int(rule["minimum_driver_branch"])
+    allow_newer = rule.get("allow_newer_driver_branches") is True
+    return frozenset(
+        str(preset)
+        for preset, raw_record in driver_presets.items()
+        if isinstance(raw_record, Mapping)
+        and isinstance(raw_record.get("driver_branch"), int)
+        and (
+            int(raw_record["driver_branch"]) >= minimum_branch
+            if allow_newer
+            else int(raw_record["driver_branch"]) == minimum_branch
+        )
+    )
 
 
 def soperator_migration_profile_versions() -> tuple[str, ...]:
@@ -1079,8 +1330,8 @@ def _soperator_upgrade_support_status_finding(
     rule_id = "default-not-validated"
     message = (
         "No committed cxcli Soperator/Kubernetes support rule matched this source, "
-        "target, and Kubernetes target version path. Run a smoke test or rerun with "
-        "--allow-unsupported-soperator-upgrade-path for an explicit testing override."
+        "target, and Kubernetes target version path. The path remains blocked until "
+        "cxcli has an explicit committed validation rule."
     )
     references: tuple[str, ...] = ()
     recommended_order: Mapping[str, Any] | None = None
@@ -3565,6 +3816,7 @@ def build_soperator_onboarding_report_from_config(
             onboarding=onboarding,
         )
         if source_report is not None:
+            source_report["onboard_description"] = EXT_SOPERATOR_ONBOARD_DESCRIPTION
             source_report["accepted_fingerprint"] = soperator_onboarding_fingerprint(
                 payload_or_config,
                 target_ref=target_ref,
@@ -3593,6 +3845,7 @@ def build_soperator_onboarding_report_from_config(
         if onboarding.get("accepted") is True:
             report = _report_with_accepted_onboarding_contract(report, onboarding)
     report_payload = report.to_dict()
+    report_payload["onboard_description"] = EXT_SOPERATOR_ONBOARD_DESCRIPTION
     if isinstance(onboarding, Mapping):
         upgrade_path = onboarding.get("upgrade_path")
         if isinstance(upgrade_path, Mapping):
@@ -3704,6 +3957,318 @@ def write_source_soperator_discovery_report(
         output_dir=output_dir,
         redaction=redaction,
     )
+
+
+def _soperator_jail_pvc_binding(
+    soperator_resources: Sequence[Mapping[str, Any]],
+) -> tuple[str, str] | None:
+    slurmclusters = tuple(
+        item
+        for item in soperator_resources
+        if str(item.get("kind", "") or "").strip() == "SlurmCluster"
+    )
+    if not slurmclusters:
+        return None
+
+    bindings: set[tuple[str, str]] = set()
+    unresolved: list[str] = []
+    for slurmcluster in slurmclusters:
+        metadata = (
+            slurmcluster.get("metadata")
+            if isinstance(slurmcluster.get("metadata"), Mapping)
+            else {}
+        )
+        namespace = str(metadata.get("namespace", "") or "soperator").strip()
+        cluster_name = str(metadata.get("name", "") or "<unnamed>").strip()
+        spec = slurmcluster.get("spec") if isinstance(slurmcluster.get("spec"), Mapping) else {}
+        volume_sources: dict[str, list[Mapping[str, Any]]] = {}
+        for source in _sequence_of_mappings(spec.get("volumeSources")):
+            source_name = str(source.get("name", "") or "").strip()
+            if source_name:
+                volume_sources.setdefault(source_name, []).append(source)
+
+        referenced_source_names: set[str] = set()
+        direct_claim_names: set[str] = set()
+        slurm_nodes = spec.get("slurmNodes")
+        if isinstance(slurm_nodes, Mapping):
+            for role in slurm_nodes.values():
+                if not isinstance(role, Mapping):
+                    continue
+                volumes = role.get("volumes")
+                jail = volumes.get("jail") if isinstance(volumes, Mapping) else None
+                if not isinstance(jail, Mapping):
+                    continue
+                persistent_volume_claim = jail.get("persistentVolumeClaim")
+                claim_name = str(
+                    persistent_volume_claim.get("claimName", "")
+                    if isinstance(persistent_volume_claim, Mapping)
+                    else ""
+                ).strip()
+                if claim_name:
+                    direct_claim_names.add(claim_name)
+                source_name = str(jail.get("volumeSourceName", "") or "").strip()
+                if source_name:
+                    referenced_source_names.add(source_name)
+
+        if not referenced_source_names and not direct_claim_names:
+            referenced_source_names.update(
+                source_name
+                for source_name in volume_sources
+                if normalize_component_token(source_name) in {"jail", "jail-rootfs"}
+            )
+
+        bindings.update((namespace, claim_name) for claim_name in direct_claim_names)
+        for source_name in sorted(referenced_source_names):
+            source_matches = volume_sources.get(source_name, [])
+            if len(source_matches) != 1:
+                unresolved.append(
+                    f"{namespace}/{cluster_name} volumeSourceName={source_name} "
+                    f"resolved to {len(source_matches)} declarations"
+                )
+                continue
+            persistent_volume_claim = source_matches[0].get("persistentVolumeClaim")
+            claim_name = str(
+                persistent_volume_claim.get("claimName", "")
+                if isinstance(persistent_volume_claim, Mapping)
+                else ""
+            ).strip()
+            if not claim_name:
+                unresolved.append(
+                    f"{namespace}/{cluster_name} volumeSourceName={source_name} has no PVC"
+                )
+                continue
+            bindings.add((namespace, claim_name))
+
+    if unresolved:
+        raise RuntimeError(
+            "Soperator Jail identity resolution failed: unresolved SlurmCluster Jail "
+            "volume reference(s): " + "; ".join(unresolved) + "."
+        )
+    if len(bindings) != 1:
+        details = ", ".join(f"{namespace}/{name}" for namespace, name in sorted(bindings))
+        if not details:
+            details = "none"
+        raise RuntimeError(
+            "Soperator Jail identity resolution failed: expected exactly one discovered "
+            f"Jail PVC binding, found {len(bindings)} ({details})."
+        )
+    return next(iter(bindings))
+
+
+def _soperator_jail_filesystem_identity(
+    *,
+    soperator_resources: Sequence[Mapping[str, Any]],
+    pvcs: Sequence[Mapping[str, Any]],
+    pvs: Sequence[Mapping[str, Any]],
+) -> str:
+    binding = _soperator_jail_pvc_binding(soperator_resources)
+    if binding is None:
+        return ""
+    namespace, claim_name = binding
+    pvc_matches = [
+        item
+        for item in pvcs
+        if str(
+            item.get("metadata", {}).get("namespace", "")
+            if isinstance(item.get("metadata"), Mapping)
+            else ""
+        ).strip()
+        == namespace
+        and str(
+            item.get("metadata", {}).get("name", "")
+            if isinstance(item.get("metadata"), Mapping)
+            else ""
+        ).strip()
+        == claim_name
+    ]
+    if len(pvc_matches) != 1:
+        raise RuntimeError(
+            "Soperator Jail identity resolution failed: discovered Jail PVC "
+            f"{namespace}/{claim_name} resolved to {len(pvc_matches)} live PVC objects."
+        )
+    pvc = pvc_matches[0]
+    pvc_status = pvc.get("status") if isinstance(pvc.get("status"), Mapping) else {}
+    if str(pvc_status.get("phase", "") or "").strip() != "Bound":
+        raise RuntimeError(
+            "Soperator Jail identity resolution failed: discovered Jail PVC "
+            f"{namespace}/{claim_name} is not Bound."
+        )
+    pvc_spec = pvc.get("spec") if isinstance(pvc.get("spec"), Mapping) else {}
+    pv_name = str(pvc_spec.get("volumeName", "") or "").strip()
+    if not pv_name:
+        raise RuntimeError(
+            "Soperator Jail identity resolution failed: discovered Jail PVC "
+            f"{namespace}/{claim_name} has no bound PV name."
+        )
+    pv_matches = [
+        item
+        for item in pvs
+        if str(
+            item.get("metadata", {}).get("name", "")
+            if isinstance(item.get("metadata"), Mapping)
+            else ""
+        ).strip()
+        == pv_name
+    ]
+    if len(pv_matches) != 1:
+        raise RuntimeError(
+            "Soperator Jail identity resolution failed: bound PV "
+            f"{pv_name} resolved to {len(pv_matches)} live PV objects."
+        )
+    pv = pv_matches[0]
+    pv_status = pv.get("status") if isinstance(pv.get("status"), Mapping) else {}
+    if str(pv_status.get("phase", "") or "").strip() != "Bound":
+        raise RuntimeError(f"Soperator Jail identity resolution failed: PV {pv_name} is not Bound.")
+    pv_spec = pv.get("spec") if isinstance(pv.get("spec"), Mapping) else {}
+    claim_ref = pv_spec.get("claimRef") if isinstance(pv_spec.get("claimRef"), Mapping) else {}
+    if (
+        str(claim_ref.get("namespace", "") or "").strip() != namespace
+        or str(claim_ref.get("name", "") or "").strip() != claim_name
+    ):
+        raise RuntimeError(
+            "Soperator Jail identity resolution failed: PV "
+            f"{pv_name} claimRef does not match {namespace}/{claim_name}."
+        )
+    pvc_metadata = pvc.get("metadata") if isinstance(pvc.get("metadata"), Mapping) else {}
+    pvc_uid = str(pvc_metadata.get("uid", "") or "").strip()
+    claim_uid = str(claim_ref.get("uid", "") or "").strip()
+    if pvc_uid and claim_uid and pvc_uid != claim_uid:
+        raise RuntimeError(
+            "Soperator Jail identity resolution failed: PV "
+            f"{pv_name} claimRef UID does not match the discovered Jail PVC."
+        )
+    csi = pv_spec.get("csi") if isinstance(pv_spec.get("csi"), Mapping) else {}
+    volume_handle = str(csi.get("volumeHandle", "") or "").strip()
+    if not volume_handle:
+        local = pv_spec.get("local") if isinstance(pv_spec.get("local"), Mapping) else {}
+        local_path = str(local.get("path", "") or "").strip()
+        if local_path:
+            # Active/passive Jail slots are local-path PVs backed by a Nebius SFS
+            # mounted on the node. The PV path identifies only the logical slot;
+            # the immutable backing filesystem ID is resolved from the fresh
+            # Nebius SDK node-group attachment inventory after snapshots merge.
+            return ""
+        raise RuntimeError(
+            "Soperator Jail identity resolution failed: bound PV "
+            f"{pv_name} has no CSI volumeHandle."
+        )
+    return volume_handle
+
+
+def soperator_jail_filesystem_identity_from_provider_node_groups(
+    node_groups: Mapping[str, Any],
+    *,
+    kubernetes_identity: str = "",
+) -> str:
+    """Resolve one immutable Jail SFS ID from Nebius node-group attachments."""
+
+    existing_identity = str(kubernetes_identity or "").strip()
+    candidates: dict[str, list[str]] = {}
+    incomplete: list[str] = []
+    for group_key, raw_group in sorted(node_groups.items(), key=lambda item: str(item[0])):
+        if not isinstance(raw_group, Mapping):
+            continue
+        provider = raw_group.get("provider")
+        provider = provider if isinstance(provider, Mapping) else {}
+        template = provider.get("node_template")
+        template = template if isinstance(template, Mapping) else {}
+        filesystems = template.get("filesystems")
+        if not isinstance(filesystems, Sequence) or isinstance(
+            filesystems,
+            (str, bytes, bytearray),
+        ):
+            continue
+        group_name = str(
+            provider.get("node_group_name") or raw_group.get("node_group_name") or group_key
+        ).strip()
+        for attachment in filesystems:
+            if not isinstance(attachment, Mapping):
+                continue
+            mount_tag = str(attachment.get("mount_tag") or attachment.get("mountTag") or "").strip()
+            if normalize_component_token(mount_tag) != "jail":
+                continue
+            filesystem_id = str(
+                attachment.get("filesystem_id") or attachment.get("filesystemId") or ""
+            ).strip()
+            if not filesystem_id:
+                for key in ("existing_filesystem", "existingFilesystem", "filesystem"):
+                    nested = attachment.get(key)
+                    if isinstance(nested, Mapping):
+                        filesystem_id = str(nested.get("id", "") or "").strip()
+                    if filesystem_id:
+                        break
+            if not filesystem_id:
+                incomplete.append(group_name or str(group_key))
+                continue
+            candidates.setdefault(filesystem_id, []).append(group_name or str(group_key))
+
+    if incomplete:
+        raise RuntimeError(
+            "Soperator Jail identity resolution failed: Nebius node-group Jail "
+            "attachment(s) have no immutable filesystem ID: "
+            + ", ".join(sorted(set(incomplete)))
+            + "."
+        )
+    if len(candidates) > 1:
+        details = "; ".join(
+            f"{filesystem_id} on {', '.join(sorted(set(groups)))}"
+            for filesystem_id, groups in sorted(candidates.items())
+        )
+        raise RuntimeError(
+            "Soperator Jail identity resolution failed: Nebius node-group Jail "
+            f"attachments reference multiple backing filesystems ({details})."
+        )
+    provider_identity = next(iter(candidates), "")
+    if existing_identity and provider_identity and existing_identity != provider_identity:
+        raise RuntimeError(
+            "Soperator Jail identity resolution failed: Kubernetes CSI identity "
+            f"{existing_identity} conflicts with Nebius node-group attachment identity "
+            f"{provider_identity}."
+        )
+    resolved = provider_identity or existing_identity
+    if not resolved:
+        raise RuntimeError(
+            "Soperator Jail identity resolution failed: neither the bound Jail PV nor "
+            "fresh Nebius SDK node-group Jail attachments expose an immutable backing "
+            "filesystem ID."
+        )
+    return resolved
+
+
+def _soperator_slurmcluster_uid(
+    soperator_resources: Sequence[Mapping[str, Any]],
+) -> str:
+    candidates: list[tuple[str, str, str]] = []
+    for resource in soperator_resources:
+        if str(resource.get("kind", "") or "").strip().lower() != "slurmcluster":
+            continue
+        metadata = resource.get("metadata")
+        metadata = metadata if isinstance(metadata, Mapping) else {}
+        candidates.append(
+            (
+                str(metadata.get("namespace", "") or "soperator").strip(),
+                str(metadata.get("name", "") or "<unnamed>").strip(),
+                str(metadata.get("uid", "") or "").strip(),
+            )
+        )
+    if not candidates:
+        return ""
+    if len(candidates) != 1:
+        identities = ", ".join(
+            f"{namespace}/{name} uid={uid or 'missing'}"
+            for namespace, name, uid in sorted(candidates)
+        )
+        raise RuntimeError(
+            "Soperator identity resolution failed: expected exactly one discovered "
+            f"SlurmCluster identity, found {len(candidates)} ({identities})."
+        )
+    namespace, name, uid = candidates[0]
+    if not uid:
+        raise RuntimeError(
+            "Soperator identity resolution failed: discovered SlurmCluster "
+            f"{namespace}/{name} has no immutable UID."
+        )
+    return uid
 
 
 def collect_kubectl_soperator_snapshot(
@@ -3851,6 +4416,12 @@ def collect_kubectl_soperator_snapshot(
         errors=collection_errors,
         extra_env=extra_env,
     )
+    slurm_health = _collect_slurm_health_from_login(
+        kube_context=context,
+        workloads=workloads,
+        timeout=timeout,
+        extra_env=extra_env,
+    )
     node_groups: dict[str, dict[str, Any]] = {}
     for item in nodes.get("items", []) if isinstance(nodes, Mapping) else []:
         if not isinstance(item, Mapping):
@@ -3924,19 +4495,48 @@ def collect_kubectl_soperator_snapshot(
                 text_key = str(key)
                 if text_key.startswith(("nebius.com/", "slurm.nebius.ai/", "topology.nebius.com/")):
                     label_map.setdefault(text_key, str(value))
+    kubernetes_uid = ""
+    soperator_uid = ""
+    for item in namespaces.get("items", []) if isinstance(namespaces, Mapping) else []:
+        if not isinstance(item, Mapping):
+            continue
+        metadata = item.get("metadata")
+        if not isinstance(metadata, Mapping):
+            continue
+        namespace_name = str(metadata.get("name", "") or "").strip()
+        namespace_uid = str(metadata.get("uid", "") or "").strip()
+        if namespace_name == "kube-system":
+            kubernetes_uid = namespace_uid
+        elif namespace_name == "soperator":
+            soperator_uid = namespace_uid
+    collected_soperator_resources = (
+        soperator_resources.get("items", []) if isinstance(soperator_resources, Mapping) else []
+    )
+    collected_pvcs = pvcs.get("items", []) if isinstance(pvcs, Mapping) else []
+    collected_pvs = pvs.get("items", []) if isinstance(pvs, Mapping) else []
+    slurmcluster_uid = _soperator_slurmcluster_uid(
+        _sequence_of_mappings(collected_soperator_resources)
+    )
+    jail_filesystem_id = _soperator_jail_filesystem_identity(
+        soperator_resources=_sequence_of_mappings(collected_soperator_resources),
+        pvcs=_sequence_of_mappings(collected_pvcs),
+        pvs=_sequence_of_mappings(collected_pvs),
+    )
     return {
         "node_groups": node_groups,
         "helm_releases": helm_releases if isinstance(helm_releases, list) else [],
         "crds": crd_names,
         "namespaces": namespace_names,
-        "pvs": pvs.get("items", []) if isinstance(pvs, Mapping) else [],
-        "pvcs": pvcs.get("items", []) if isinstance(pvcs, Mapping) else [],
-        "soperator_resources": (
-            soperator_resources.get("items", []) if isinstance(soperator_resources, Mapping) else []
-        ),
+        "pvs": collected_pvs,
+        "pvcs": collected_pvcs,
+        "soperator_resources": collected_soperator_resources,
         "soperator_namespace_resources": _sanitize_namespace_resource_items(
             workloads.get("items", []) if isinstance(workloads, Mapping) else []
         ),
+        "kubernetes_nodes": _sanitize_kubernetes_node_items(
+            nodes.get("items", []) if isinstance(nodes, Mapping) else []
+        ),
+        "slurm_health": slurm_health,
         "worker_topology_by_nodeset": worker_topology_by_nodeset,
         "gpu_stack": {
             "helm_releases": gpu_stack_helm_releases,
@@ -3946,7 +4546,114 @@ def collect_kubectl_soperator_snapshot(
                 else []
             ),
         },
+        "cluster_identity": {
+            "kubernetes_uid": kubernetes_uid,
+            "soperator_uid": soperator_uid,
+            "slurmcluster_uid": slurmcluster_uid,
+            "jail_filesystem_id": jail_filesystem_id,
+        },
         "collection_errors": collection_errors,
+    }
+
+
+def _sanitize_kubernetes_node_items(items: Any) -> list[dict[str, Any]]:
+    sanitized: list[dict[str, Any]] = []
+    for item in _sequence_of_mappings(items):
+        metadata = _mapping_value(item.get("metadata"))
+        spec = _mapping_value(item.get("spec"))
+        status = _mapping_value(item.get("status"))
+        sanitized.append(
+            {
+                "metadata": {
+                    "name": metadata.get("name"),
+                    "labels": copy.deepcopy(to_plain_data(_mapping_value(metadata.get("labels")))),
+                },
+                "spec": {"unschedulable": spec.get("unschedulable") is True},
+                "status": {
+                    "conditions": [
+                        dict(copy.deepcopy(to_plain_data(dict(condition))))
+                        for condition in _sequence_of_mappings(status.get("conditions"))
+                    ]
+                },
+            }
+        )
+    return sanitized
+
+
+def _collect_slurm_health_from_login(
+    *,
+    kube_context: str,
+    workloads: Mapping[str, Any],
+    timeout: int,
+    extra_env: Mapping[str, str] | None,
+) -> dict[str, Any]:
+    login_pods: list[str] = []
+    for item in _sequence_of_mappings(workloads.get("items")):
+        if str(item.get("kind", "") or "").strip() != "Pod":
+            continue
+        metadata = _mapping_value(item.get("metadata"))
+        status = _mapping_value(item.get("status"))
+        name = str(metadata.get("name", "") or "").strip()
+        labels = _mapping_value(metadata.get("labels"))
+        component = normalize_component_token(
+            labels.get("app.kubernetes.io/component")
+            or labels.get("slurm.nebius.ai/nodeset")
+            or labels.get("slurm.nebius.ai/nodeset-name")
+        )
+        if (
+            name
+            and str(status.get("phase", "") or "").strip() == "Running"
+            and (component == "login" or name.startswith("login-"))
+        ):
+            login_pods.append(name)
+    if not login_pods:
+        return {
+            "checked": False,
+            "healthy": False,
+            "reason": "running login pod not found",
+        }
+    pod = sorted(login_pods)[0]
+    command = [
+        "kubectl",
+        "--context",
+        kube_context,
+        "-n",
+        "soperator",
+        "exec",
+        pod,
+        "--",
+        "scontrol",
+        "ping",
+    ]
+    run_env = None if extra_env is None else {**os.environ, **dict(extra_env)}
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=run_env,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        return {
+            "checked": True,
+            "healthy": False,
+            "pod": pod,
+            "reason": str(exc),
+        }
+    output = "\n".join(
+        part.strip() for part in (completed.stdout, completed.stderr) if part and part.strip()
+    )
+    healthy = completed.returncode == 0 and bool(
+        re.search(r"\bSlurmctld(?:\([^)]*\))?.*\bis\s+UP\b", output, re.IGNORECASE)
+    )
+    return {
+        "checked": True,
+        "healthy": healthy,
+        "pod": pod,
+        "output": output[:1000],
+        "reason": "" if healthy else "scontrol ping did not report Slurmctld UP",
     }
 
 
@@ -3975,8 +4682,13 @@ def _sanitize_namespace_resource_items(items: Any) -> list[dict[str, Any]]:
             data = item.get("data")
             row["data_keys"] = sorted(str(key) for key in data) if isinstance(data, Mapping) else []
         elif kind in {"Deployment", "StatefulSet", "DaemonSet", "Pod"}:
+            spec = item.get("spec") if isinstance(item.get("spec"), Mapping) else {}
+            if kind in {"Deployment", "StatefulSet"}:
+                row["spec"] = {"replicas": spec.get("replicas")}
             row["status"] = item.get("status") if isinstance(item.get("status"), Mapping) else {}
         elif kind == "Job":
+            row["metadata"]["uid"] = metadata.get("uid")
+            row["metadata"]["creationTimestamp"] = metadata.get("creationTimestamp")
             row["status"] = item.get("status") if isinstance(item.get("status"), Mapping) else {}
             spec = item.get("spec") if isinstance(item.get("spec"), Mapping) else {}
             template = spec.get("template") if isinstance(spec.get("template"), Mapping) else {}
@@ -3995,6 +4707,24 @@ def _sanitize_namespace_resource_items(items: Any) -> list[dict[str, Any]]:
                 ]
             else:
                 row["containers"] = []
+            volumes = pod_spec.get("volumes")
+            row["pvc_claim_names"] = (
+                sorted(
+                    {
+                        str(pvc.get("claimName") or "").strip()
+                        for volume in volumes
+                        if isinstance(volume, Mapping)
+                        and isinstance(
+                            pvc := volume.get("persistentVolumeClaim"),
+                            Mapping,
+                        )
+                        and str(pvc.get("claimName") or "").strip()
+                    }
+                )
+                if isinstance(volumes, Sequence)
+                and not isinstance(volumes, (str, bytes, bytearray))
+                else []
+            )
         elif kind == "Service":
             spec = item.get("spec") if isinstance(item.get("spec"), Mapping) else {}
             row["spec"] = {

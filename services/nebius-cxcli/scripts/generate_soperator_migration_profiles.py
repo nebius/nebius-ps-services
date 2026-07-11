@@ -125,9 +125,7 @@ def _discover_chart_dirs(repo_root: Path) -> list[Path]:
     if not helm_root.is_dir():
         return []
     return sorted(
-        path
-        for path in helm_root.iterdir()
-        if path.is_dir() and (path / "Chart.yaml").is_file()
+        path for path in helm_root.iterdir() if path.is_dir() and (path / "Chart.yaml").is_file()
     )
 
 
@@ -154,11 +152,7 @@ def _component_id(chart_dir: Path, chart_name: str) -> str:
 
 
 def _iter_chart_file_paths(chart_dir: Path) -> tuple[Path, ...]:
-    paths = [
-        path.relative_to(chart_dir)
-        for path in chart_dir.rglob("*")
-        if path.is_file()
-    ]
+    paths = [path.relative_to(chart_dir) for path in chart_dir.rglob("*") if path.is_file()]
     return tuple(sorted(paths, key=lambda item: item.as_posix()))
 
 
@@ -261,14 +255,18 @@ def _chart_contract(repo_root: Path, chart_dir: Path) -> dict[str, Any]:
     metadata = _load_yaml_file(chart_dir / "Chart.yaml")
     chart_name = str(metadata.get("name", "") or "").strip()
     chart_version = str(metadata.get("version", "") or "").strip()
-    app_version = str(metadata.get("appVersion", "") or metadata.get("app_version", "") or "").strip()
+    app_version = str(
+        metadata.get("appVersion", "") or metadata.get("app_version", "") or ""
+    ).strip()
     file_paths = _iter_chart_file_paths(chart_dir)
     crd_paths = tuple(
         path
         for path in file_paths
         if path.parts and (path.parts[0] == "crds" or "crd" in path.name.lower())
     )
-    template_paths = tuple(path for path in file_paths if path.parts and path.parts[0] == "templates")
+    template_paths = tuple(
+        path for path in file_paths if path.parts and path.parts[0] == "templates"
+    )
     values_paths = tuple(
         path
         for path in file_paths
@@ -465,6 +463,38 @@ def _source_controller_quiesce_contract(
     }
 
 
+def _host_driver_jail_cuda_policy() -> dict[str, Any]:
+    return {
+        "schema": "nebius-cxcli-soperator-host-driver-jail-cuda-policy/v1",
+        "references": [
+            "https://docs.nebius.com/kubernetes/gpu/set-up",
+            "https://docs.nvidia.com/cuda/archive/12.9.0/cuda-toolkit-release-notes/index.html",
+            "https://docs.nvidia.com/deploy/cuda-compatibility/minor-version-compatibility.html",
+        ],
+        "driver_presets": {
+            "cuda12.8": {"driver_branch": 570},
+            "cuda13.0": {"driver_branch": 580},
+        },
+        "jail_cuda": {
+            "12.9.0": {
+                "minimum_driver_branch": 575,
+                "allow_newer_driver_branches": True,
+                "operator_managed": {
+                    "required_managed_gpu_operator": {
+                        "component_id": "nvidia-gpu-operator",
+                        "chart": "gpu-operator",
+                        "chart_version": "v25.10.0",
+                        "repository": (
+                            "oci://cr.eu-north1.nebius.cloud/marketplace/nebius/"
+                            "nvidia-gpu-operator/chart/gpu-operator"
+                        ),
+                    }
+                },
+            }
+        },
+    }
+
+
 def _support_rules() -> list[dict[str, Any]]:
     return [
         {
@@ -488,8 +518,8 @@ def _support_rules() -> list[dict[str, Any]]:
             "source_version_range": "<1.22.0",
             "message": (
                 "Soperator source versions older than 1.22.x are not validated by "
-                "cxcli for this upgrade path. Run a smoke test or rerun with "
-                "--allow-unsupported-soperator-upgrade-path for an explicit testing override."
+                "cxcli for this upgrade path. The path remains blocked until cxcli "
+                "has an explicit committed validation rule."
             ),
             "references": [
                 "https://github.com/nebius/soperator/releases",
@@ -522,8 +552,7 @@ def _support_rules() -> list[dict[str, Any]]:
                 "Soperator chart packages with the same upstream app version as "
                 "the cxcli-pinned target are not validated unless they match the "
                 "component_sources.yaml chart pin exactly. Keep the cxcli-pinned "
-                "target or rerun with --allow-unsupported-soperator-upgrade-path "
-                "after explicit testing."
+                "target; other chart packages remain blocked."
             ),
             "references": [
                 "component_sources.yaml",
@@ -536,8 +565,7 @@ def _support_rules() -> list[dict[str, Any]]:
             "message": (
                 "Intermediate Soperator targets before the cxcli-pinned target are "
                 "not part of the canonical cxcli upgrade path. Upgrade directly to "
-                "the cxcli-pinned target or rerun with "
-                "--allow-unsupported-soperator-upgrade-path after explicit testing."
+                "the cxcli-pinned target; intermediate targets remain blocked."
             ),
             "references": [
                 "https://github.com/nebius/soperator/issues/1510",
@@ -550,9 +578,8 @@ def _support_rules() -> list[dict[str, Any]]:
             "target_version_range": ">4.0.2,<5.0.0",
             "message": (
                 "Soperator targets newer than the cxcli-pinned target are not "
-                "validated by cxcli yet. Keep the cxcli-pinned target or rerun "
-                "with --allow-unsupported-soperator-upgrade-path after explicit "
-                "testing."
+                "validated by cxcli yet. Keep the cxcli-pinned target until a newer "
+                "committed support rule is available."
             ),
             "references": [
                 "https://github.com/nebius/soperator/releases",
@@ -628,6 +655,7 @@ def _profile_payload(
         "generated_from": "github-releases-api-and-release-tarballs",
         "target_policy": "component_sources.yaml pinned soperator chart version",
         "generator_scope": GENERATOR_SCOPE,
+        "host_driver_jail_cuda_policy": _host_driver_jail_cuda_policy(),
         "support_rules": _support_rules(),
         "profile_groups": {
             "legacy-v1-to-target": {

@@ -178,6 +178,171 @@ def _soperator_upgrade_checkpoint_path(paths: cli.ProjectPaths) -> Path:
     )
 
 
+def _external_soperator_chart_upgrade_campaign() -> dict[str, Any]:
+    identity = {
+        "project_id": "project-456",
+        "cluster_id": "mk8scluster-123",
+        "cluster_name": "external-cluster",
+        "target_ref": "external-cluster",
+        "kubernetes_uid": "kubernetes-uid-123",
+        "soperator_uid": "soperator-uid-123",
+        "slurmcluster_uid": "slurmcluster-uid-123",
+        "jail_filesystem_id": "filesystem-123",
+    }
+    jail_rootfs = {
+        "current_image": "cr.example/populate-jail:4.0.2",
+        "current_version": "4.0.2",
+        "current_source": "completed-populate-jail-job",
+        "current_job_name": "external-cluster-populate-jail",
+        "live_desired_image": "cr.example/populate-jail:4.0.2",
+        "live_desired_version": "4.0.2",
+        "live_desired_source": "slurmcluster.spec.populateJail.image",
+        "slurmcluster_name": "external-cluster",
+        "target_image": "cr.example/populate-jail:4.0.2",
+        "target_version": "4.0.2",
+        "target_cuda_version": "12.9.0",
+        "target_digest": "",
+        "target_identity_warning": "Artifact digest unavailable; exact tag is pinned.",
+        "target_source": "pinned-chart-defaults",
+        "refresh_required": False,
+        "reason": "current image matches the campaign target",
+    }
+    segment = {
+        "id": "segment-1-soperator-1-22-3-4-0-2-ps-3",
+        "index": 1,
+        "depends_on": [],
+        "kind": "soperator-upgrade",
+        "title": "Soperator chart 1.22.3 -> 4.0.2-ps.3",
+        "current_k8s_version": "1.32",
+        "target_k8s_version": "1.32",
+        "soperator_app": {
+            "current_version": "1.22.3",
+            "target_version": "4.0.2",
+            "upgrade_required": True,
+        },
+        "soperator_chart": {
+            "current_version": "1.22.3",
+            "target_version": "4.0.2-ps.3",
+            "upgrade_required": True,
+        },
+        "jail_rootfs": copy.deepcopy(jail_rootfs),
+        "k8s_upgrade_required": False,
+        "soperator_upgrade_required": True,
+        "mk8s": {
+            "control_plane": {
+                "source_version": "1.32",
+                "target_version": "1.32",
+            },
+            "node_groups": [],
+        },
+        "actions": ["upgrade-soperator"],
+    }
+    campaign = {
+        "schema": cli._SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA,
+        "locked": True,
+        "identity": identity,
+        "source_provenance": {
+            "discovery": "live-kubernetes-and-nebius-sdk",
+            "provider_capabilities": "nebius-sdk-list-versions-and-compatibility-matrix",
+            "component_catalog": "component_sources.yaml",
+            "support_policy": "committed-soperator-upgrade-support-policy",
+            "source_contract": "campaign-source-waypoints",
+        },
+        "catalog_fingerprint": "a" * 64,
+        "capabilities_source": "nebius-sdk",
+        "source_k8s_version": "1.32",
+        "target_k8s_version": "1.32",
+        "mk8s": {
+            "control_plane": {"source_version": "1.32", "target_version": "1.32"},
+            "node_groups": [],
+        },
+        "soperator_app": copy.deepcopy(segment["soperator_app"]),
+        "soperator_chart": copy.deepcopy(segment["soperator_chart"]),
+        "jail_rootfs": copy.deepcopy(jail_rootfs),
+        "support_status": "supported",
+        "support_rule_id": "k8s-before-1-33-soperator-1-22-plus-supported",
+        "recommended_order": ["Soperator chart 1.22.3 -> 4.0.2-ps.3"],
+        "recommended_order_policy": {},
+        "final_targets": {
+            "kubernetes": "1.32",
+            "soperator_app": "4.0.2",
+            "soperator_chart": "4.0.2-ps.3",
+            "jail_rootfs_image": "cr.example/populate-jail:4.0.2",
+            "jail_rootfs_version": "4.0.2",
+            "jail_cuda_version": "12.9.0",
+            "jail_artifact_digest": "",
+            "jail_artifact_identity_warning": ("Artifact digest unavailable; exact tag is pinned."),
+        },
+        "managed_operators": {
+            "gpu": {
+                "component_id": "nvidia-gpu-operator",
+                "chart_version": "25.3.0",
+                "chart": "gpu-operator",
+                "repository": "oci://example.invalid/charts",
+                "release_name": "gpu-operator",
+                "namespace": "nvidia-gpu-operator",
+            },
+            "network": {
+                "component_id": "nvidia-network-operator",
+                "chart_version": "25.1.0",
+                "chart": "network-operator",
+                "repository": "oci://example.invalid/charts",
+                "release_name": "network-operator",
+                "namespace": "nvidia-network-operator",
+            },
+        },
+        "rollout": {
+            "strategy": "zero-surge",
+            "service_role_strategy": "zero-surge",
+            "slurm_scheduling_quiesce": True,
+            "service_role_group_strategy": {
+                "max_surge_count": 0,
+                "max_unavailable_count": 1,
+                "drain_timeout": "none",
+            },
+            "worker_group_strategy": {
+                "max_surge_count": 0,
+                "max_unavailable_count": 1,
+                "drain_timeout": "none",
+            },
+            "global_unavailable_percent": 5,
+            "per_group_unavailable_percent": 5,
+            "per_group_unavailable_cap": 25,
+            "max_concurrent_worker_groups": 8,
+            "hard_concurrent_worker_group_ceiling": 32,
+            "failure_domain_budgeting": ["partition", "zone", "gpu"],
+            "service_role_mode": "serial",
+            "quiesced_worker_max_surge": 0,
+            "provider_drain_timeout": "unset",
+        },
+        "segments": [segment],
+    }
+    return cli.finalize_soperator_upgrade_campaign(
+        campaign,
+        created_at="2026-07-11T12:00:00+00:00",
+    )
+
+
+def _campaign_managed_operator_app_rows(
+    campaign: Mapping[str, Any],
+    *,
+    target_ref: str = "external-cluster",
+) -> list[dict[str, Any]]:
+    managed_operators = campaign["managed_operators"]
+    return [
+        {
+            "id": pin["component_id"],
+            "instance_id": target_ref,
+            "enabled": True,
+            "version": pin["chart_version"],
+            "chart": pin["chart"],
+            "repo": pin["repository"],
+        }
+        for role in ("gpu", "network")
+        for pin in (managed_operators[role],)
+    ]
+
+
 @pytest.mark.parametrize(
     ("phase_id", "expected_stage"),
     [
@@ -202,6 +367,21 @@ def test_soperator_upgrade_top_level_stage_groups_known_phases(
 def _reset_component_sources_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("NEBIUS_CXCLI_COMPONENT_SOURCES_FILE", raising=False)
     monkeypatch.delenv("NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE", raising=False)
+
+    class _TestClusterLease:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def __enter__(self) -> _TestClusterLease:
+            return self
+
+        def assert_held(self) -> None:
+            return None
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    monkeypatch.setattr(cli, "SoperatorMigrationClusterLease", _TestClusterLease)
     monkeypatch.setattr(
         component_sources,
         "_discover_terraform_outputs",
@@ -1050,6 +1230,7 @@ def test_ext_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path)
         dry_run=False,
         approve=True,
         approve_remediation=False,
+        approve_service_role_downtime=True,
         allow_unsupported_soperator_upgrade_path=False,
         interactive=False,
     )
@@ -1080,6 +1261,7 @@ def test_ext_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path)
     ]
     assert "--execute" in args
     assert "--approve" in args
+    assert "--approve-service-role-downtime" in args
 
 
 def _run_soperator_upgrade_for_test(
@@ -6489,6 +6671,45 @@ def test_soperator_upgrade_pending_job_blocks_fail_policy_without_drain(
     assert drained == []
 
 
+def _cli_slurm_partition_state(
+    name: str,
+    state: str,
+    *,
+    fields: Mapping[str, str] | None = None,
+) -> cli.SlurmPartitionState:
+    line = " ".join(
+        (
+            f"PartitionName={name}",
+            f"State={state}",
+            "Nodes=worker-[0-1]",
+            *(f"{key}={value}" for key, value in (fields or {}).items()),
+        )
+    )
+    parsed = cli.parse_scontrol_show_partition_states(line)
+    assert len(parsed) == 1
+    return parsed[0]
+
+
+def _cli_slurm_quiesce_record(
+    partition: str,
+    *,
+    applied: bool = True,
+) -> cli.SlurmPartitionQuiesceRecord:
+    previous = _cli_slurm_partition_state(partition, "UP")
+    record = cli.SlurmPartitionQuiesceRecord(
+        partition=partition,
+        previous_state="UP",
+        previous_record=previous.record,
+        previous_record_fingerprint=previous.record_fingerprint,
+        applied_state="DOWN",
+    )
+    return (
+        record.with_applied_observation(_cli_slurm_partition_state(partition, "DOWN"))
+        if applied
+        else record
+    )
+
+
 def test_soperator_upgrade_quiesce_treats_pending_jobs_as_queued(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -6503,13 +6724,7 @@ def test_soperator_upgrade_quiesce_treats_pending_jobs_as_queued(
     monkeypatch.setattr(
         cli,
         "_soperator_upgrade_quiesce_slurm_partitions",
-        lambda **_kwargs: (
-            cli.SlurmPartitionQuiesceRecord(
-                partition="main",
-                previous_state="UP",
-                applied_state="DOWN",
-            ),
-        ),
+        lambda **_kwargs: (_cli_slurm_quiesce_record("main"),),
     )
     monkeypatch.setattr(
         cli,
@@ -6568,9 +6783,7 @@ def test_post_jail_pre_release_rejects_slurm_config_errors_while_quiesced(
     monkeypatch.setattr(soperator_migration, "_kubectl_exec_login_once", _exec_login)
     phase: dict[str, Any] = {
         "slurm_quiet_at": "2026-07-10T12:00:00Z",
-        "slurm_quiesced_partitions": [
-            {"partition": "main", "previous_state": "UP", "applied_state": "DOWN"}
-        ],
+        "slurm_quiesced_partitions": [_cli_slurm_quiesce_record("main").as_payload()],
     }
 
     with pytest.raises(
@@ -6639,11 +6852,7 @@ def test_managed_pre_release_config_failure_keeps_slurm_quiesced_without_restore
     manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
     calls: list[object] = []
     restore_mutations: list[str] = []
-    quiesce_record = cli.SlurmPartitionQuiesceRecord(
-        partition="main",
-        previous_state="UP",
-        applied_state="DOWN",
-    )
+    quiesce_record = _cli_slurm_quiesce_record("main")
 
     monkeypatch.setattr(
         cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
@@ -6808,6 +7017,7 @@ def test_soperator_upgrade_quiesce_restores_partial_partition_on_apply_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     commands: list[str] = []
+    partition_states = {"main": "UP", "gpu": "UP"}
 
     monkeypatch.setattr(
         cli,
@@ -6817,9 +7027,8 @@ def test_soperator_upgrade_quiesce_restores_partial_partition_on_apply_failure(
     monkeypatch.setattr(
         cli,
         "_soperator_upgrade_partition_state_snapshot",
-        lambda **_kwargs: (
-            cli.SlurmPartitionState(name="main", state="UP"),
-            cli.SlurmPartitionState(name="gpu", state="UP"),
+        lambda **_kwargs: tuple(
+            _cli_slurm_partition_state(name, state) for name, state in partition_states.items()
         ),
     )
 
@@ -6830,7 +7039,10 @@ def test_soperator_upgrade_quiesce_restores_partial_partition_on_apply_failure(
     ) -> SimpleNamespace:
         commands.append(command)
         if "PartitionName=gpu State=DOWN" in command:
-            raise RuntimeError("scontrol update failed")
+            return SimpleNamespace(stdout="", stderr="scontrol update failed", returncode=1)
+        match = re.search(r"PartitionName=(\S+) State=(\S+)", command)
+        if match:
+            partition_states[match.group(1)] = match.group(2)
         return SimpleNamespace(stdout="", stderr="", returncode=0)
 
     monkeypatch.setattr(cli, "_run_soperator_upgrade_login_command", _login_command)
@@ -6839,6 +7051,7 @@ def test_soperator_upgrade_quiesce_restores_partial_partition_on_apply_failure(
         cli._soperator_upgrade_quiesce_slurm_partitions(
             namespace="soperator",
             node_names=("worker-0",),
+            record_recorder=lambda _record: None,
         )
 
     assert commands == [
@@ -6867,21 +7080,15 @@ def test_soperator_upgrade_restore_accepts_already_restored_partition(
     monkeypatch.setattr(
         cli,
         "_soperator_upgrade_partition_state_snapshot",
-        lambda **_kwargs: (cli.SlurmPartitionState(name="main", state="UP"),),
+        lambda **_kwargs: (_cli_slurm_partition_state("main", "UP"),),
     )
 
     cli._soperator_upgrade_restore_slurm_partitions(
         namespace="soperator",
-        records=(
-            cli.SlurmPartitionQuiesceRecord(
-                partition="main",
-                previous_state="UP",
-                applied_state="DOWN",
-            ),
-        ),
+        records=(_cli_slurm_quiesce_record("main"),),
     )
 
-    assert commands == ["scontrol update PartitionName=main State=UP"]
+    assert commands == []
 
 
 def test_soperator_upgrade_affected_jobs_include_scoped_pending_jobs(
@@ -11512,9 +11719,9 @@ def test_ext_soperator_upgrade_interactive_non_tty_fails_before_backup(
             job_wait_timeout=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
             job_refresh_interval=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
             dry_run=False,
+            execute=True,
             approve=True,
             approve_remediation=False,
-            allow_unsupported_soperator_upgrade_path=False,
             interactive=True,
             worker_rollout_strategy=None,
             worker_wave_groups=None,
@@ -11542,80 +11749,21 @@ def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_by_terminal_m
 ) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text("deploy: {}\n", encoding="utf-8")
-    locked_upgrade_path: dict[str, Any] = {
-        "schema": cli._SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA,
-        "locked": True,
-        "source_k8s_version": "1.32",
-        "target_k8s_version": "1.32",
-        "soperator_app": {
-            "current_version": "1.22.3",
-            "target_version": "4.0.2",
-            "upgrade_required": True,
-        },
-        "soperator_chart": {
-            "current_version": "1.22.3",
-            "target_version": "4.0.2-ps.3",
-            "upgrade_required": True,
-        },
-        "jail_rootfs": {
-            "current_image": "",
-            "current_version": "",
-            "current_source": "not-detected",
-            "current_job_name": "",
-            "live_desired_image": "",
-            "live_desired_version": "",
-            "live_desired_source": "",
-            "slurmcluster_name": "",
-            "target_image": "",
-            "target_version": "",
-            "target_source": "",
-            "refresh_required": False,
-            "reason": "populate-jail image evidence is incomplete",
-        },
-        "segments": [
-            {
-                "id": "segment-1-soperator-1-22-3-4-0-2-ps-3",
-                "title": "Soperator chart 1.22.3 -> 4.0.2-ps.3",
-                "index": 1,
-                "kind": "soperator-upgrade",
-                "current_k8s_version": "1.32",
-                "target_k8s_version": "1.32",
-                "soperator_app": {
-                    "current_version": "1.22.3",
-                    "target_version": "4.0.2",
-                    "upgrade_required": True,
-                },
-                "soperator_chart": {
-                    "current_version": "1.22.3",
-                    "target_version": "4.0.2-ps.3",
-                    "upgrade_required": True,
-                },
-                "jail_rootfs": {
-                    "current_image": "",
-                    "current_version": "",
-                    "current_source": "not-detected",
-                    "current_job_name": "",
-                    "live_desired_image": "",
-                    "live_desired_version": "",
-                    "live_desired_source": "",
-                    "slurmcluster_name": "",
-                    "target_image": "",
-                    "target_version": "",
-                    "target_source": "",
-                    "refresh_required": False,
-                    "reason": "populate-jail image evidence is incomplete",
-                },
-                "actions": ["upgrade-soperator"],
-                "soperator_upgrade_required": True,
-                "k8s_upgrade_required": False,
-            }
-        ],
-    }
+    locked_upgrade_path = _external_soperator_chart_upgrade_campaign()
     payload: dict[str, Any] = {
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {"project_id": "project-456"},
+            "notifications": {},
+        },
+        "apps": {"charts": _campaign_managed_operator_app_rows(locked_upgrade_path)},
         "deploy": {
             "targets": [
                 {
                     "instance_id": "external-cluster",
+                    "kind": "external-mk8s",
+                    "cluster_id": "mk8scluster-123",
+                    "kube_context": "external-context",
                     "soperator_onboarding": {
                         "accepted": True,
                         "actions": ["upgrade-soperator"],
@@ -11625,7 +11773,7 @@ def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_by_terminal_m
                     },
                 }
             ]
-        }
+        },
     }
     captured: dict[str, Any] = {}
     events: list[str] = []
@@ -11667,9 +11815,16 @@ def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_by_terminal_m
         cli,
         "_load_soperator_source_discovery_report",
         lambda **_kwargs: {
+            "cluster_id": "mk8scluster-123",
             "report": {"source_version": "1.22.3", "target_version": "4.0.2-ps.3"},
-            "snapshot": {},
+            "snapshot": {"cluster_identity": locked_upgrade_path["identity"]},
         },
+    )
+    monkeypatch.setattr(cli, "_external_soperator_campaign_live_waypoint_index", lambda **_: 0)
+    monkeypatch.setattr(
+        cli,
+        "_revalidate_config_campaign_under_shared_lease",
+        lambda **_kwargs: None,
     )
     monkeypatch.setattr(cli, "_require_soperator_migration_actions", lambda **_kwargs: None)
     monkeypatch.setattr(
@@ -11682,6 +11837,11 @@ def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_by_terminal_m
     )
     monkeypatch.setattr(
         cli,
+        "_validate_external_soperator_kubernetes_uid_before_lease",
+        lambda *, campaign, kube_context: kube_context,
+    )
+    monkeypatch.setattr(
+        cli,
         "_create_external_soperator_upgrade_backup",
         lambda **_kwargs: events.append("backup") or {"path": str(tmp_path / "backup.tar.gz")},
     )
@@ -11689,11 +11849,6 @@ def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_by_terminal_m
         cli,
         "external_soperator_upgrade_protected_comparison_passed",
         lambda **_kwargs: True,
-    )
-    monkeypatch.setattr(
-        cli,
-        "_refresh_soperator_onboarding_after_completed_migration",
-        lambda **_kwargs: (),
     )
 
     def _execute(**kwargs: Any) -> SimpleNamespace:
@@ -11713,9 +11868,9 @@ def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_by_terminal_m
         job_wait_timeout=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
         job_refresh_interval=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
         dry_run=False,
+        execute=True,
         approve=True,
         approve_remediation=False,
-        allow_unsupported_soperator_upgrade_path=False,
         interactive=interactive,
         worker_rollout_strategy=None,
         worker_wave_groups=None,
@@ -11743,50 +11898,20 @@ def test_ext_soperator_upgrade_execute_prints_final_output_after_status_exits(
 ) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text("deploy: {}\n", encoding="utf-8")
-    locked_upgrade_path: dict[str, Any] = {
-        "schema": cli._SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA,
-        "locked": True,
-        "source_k8s_version": "1.32",
-        "target_k8s_version": "1.32",
-        "soperator_app": {
-            "current_version": "1.22.3",
-            "target_version": "4.0.2",
-            "upgrade_required": True,
-        },
-        "soperator_chart": {
-            "current_version": "1.22.3",
-            "target_version": "4.0.2-ps.3",
-            "upgrade_required": True,
-        },
-        "jail_rootfs": {"refresh_required": False},
-        "segments": [
-            {
-                "id": "segment-1-soperator-1-22-3-4-0-2-ps-3",
-                "kind": "soperator-upgrade",
-                "current_k8s_version": "1.32",
-                "target_k8s_version": "1.32",
-                "actions": ["upgrade-soperator"],
-                "soperator_upgrade_required": True,
-                "k8s_upgrade_required": False,
-                "soperator_app": {
-                    "current_version": "1.22.3",
-                    "target_version": "4.0.2",
-                    "upgrade_required": True,
-                },
-                "soperator_chart": {
-                    "current_version": "1.22.3",
-                    "target_version": "4.0.2-ps.3",
-                    "upgrade_required": True,
-                },
-                "jail_rootfs": {"refresh_required": False},
-            }
-        ],
-    }
+    locked_upgrade_path = _external_soperator_chart_upgrade_campaign()
     payload: dict[str, Any] = {
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {"project_id": "project-456"},
+            "notifications": {},
+        },
+        "apps": {"charts": _campaign_managed_operator_app_rows(locked_upgrade_path)},
         "deploy": {
             "targets": [
                 {
                     "instance_id": "external-cluster",
+                    "kind": "external-mk8s",
+                    "cluster_id": "mk8scluster-123",
                     "kube_context": "external-context",
                     "soperator_onboarding": {
                         "accepted": True,
@@ -11797,7 +11922,7 @@ def test_ext_soperator_upgrade_execute_prints_final_output_after_status_exits(
                     },
                 }
             ]
-        }
+        },
     }
     status_active = False
     printed: list[tuple[bool, str]] = []
@@ -11861,9 +11986,16 @@ def test_ext_soperator_upgrade_execute_prints_final_output_after_status_exits(
         cli,
         "_load_soperator_source_discovery_report",
         lambda **_kwargs: {
+            "cluster_id": "mk8scluster-123",
             "report": {"source_version": "1.22.3", "target_version": "4.0.2-ps.3"},
-            "snapshot": {},
+            "snapshot": {"cluster_identity": locked_upgrade_path["identity"]},
         },
+    )
+    monkeypatch.setattr(cli, "_external_soperator_campaign_live_waypoint_index", lambda **_: 0)
+    monkeypatch.setattr(
+        cli,
+        "_revalidate_config_campaign_under_shared_lease",
+        lambda **_kwargs: None,
     )
     monkeypatch.setattr(cli, "_require_soperator_migration_actions", lambda **_kwargs: None)
     monkeypatch.setattr(
@@ -11881,6 +12013,11 @@ def test_ext_soperator_upgrade_execute_prints_final_output_after_status_exits(
     )
     monkeypatch.setattr(
         cli,
+        "_validate_external_soperator_kubernetes_uid_before_lease",
+        lambda *, campaign, kube_context: kube_context,
+    )
+    monkeypatch.setattr(
+        cli,
         "_create_external_soperator_upgrade_backup",
         lambda **_kwargs: {"path": str(tmp_path / "backup.tar.gz")},
     )
@@ -11888,11 +12025,6 @@ def test_ext_soperator_upgrade_execute_prints_final_output_after_status_exits(
         cli,
         "external_soperator_upgrade_protected_comparison_passed",
         lambda **_kwargs: True,
-    )
-    monkeypatch.setattr(
-        cli,
-        "_refresh_soperator_onboarding_after_completed_migration",
-        lambda **_kwargs: ("refresh complete",),
     )
     monkeypatch.setattr(
         cli,
@@ -11910,9 +12042,9 @@ def test_ext_soperator_upgrade_execute_prints_final_output_after_status_exits(
         job_wait_timeout=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
         job_refresh_interval=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
         dry_run=False,
+        execute=True,
         approve=True,
         approve_remediation=False,
-        allow_unsupported_soperator_upgrade_path=False,
         interactive=False,
         worker_rollout_strategy=None,
         worker_wave_groups=None,
@@ -11924,9 +12056,13 @@ def test_ext_soperator_upgrade_execute_prints_final_output_after_status_exits(
     )
 
     assert (False, "execute complete") in printed
-    assert (False, "refresh complete") in printed
+    assert (
+        False,
+        "Campaign segment reconciled successfully; config.yaml remains the immutable "
+        "desired-campaign authority.",
+    ) in printed
     assert (True, "execute complete") not in printed
-    assert (True, "refresh complete") not in printed
+    assert not any(active for active, _line in printed)
 
 
 def test_render_command_points_gpu_reconciliation_only_soperator_to_deploy(
@@ -25236,9 +25372,13 @@ def test_cli_help_examples_have_visual_separator_and_comments_block() -> None:
     ext_soperator_onboard_examples = ext_soperator_onboard_help.split("Examples:", maxsplit=1)[
         1
     ].split("Comments:", maxsplit=1)[0]
-    assert "--no-interactive; | nebius-cxcli validate <config.yaml>" in " ".join(
-        ext_soperator_onboard_examples.split()
-    )
+    normalized_onboard_examples = " ".join(ext_soperator_onboard_examples.split())
+    assert (
+        "--to-k8s-version <major.minor> --no-interactive; | nebius-cxcli "
+        "ext-soperator onboard ./deployments --client-name acme"
+    ) in normalized_onboard_examples
+    assert "nebius-cxcli validate" not in normalized_onboard_examples
+    assert "nebius-cxcli render" not in normalized_onboard_examples
     assert "--cluster-id selects" not in ext_soperator_onboard_examples
     assert "The command updates" not in ext_soperator_onboard_examples
     assert "generated/reports/soperator-discovery" not in ext_soperator_onboard_examples
@@ -25956,28 +26096,30 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         normalized_soperator_help
     )
     assert (
-        "upgrade is only for accepted onboarding plans that contain external-upgrade-owned actions"
-        in (normalized_soperator_help)
-    )
-    assert "including Jail Upgrade when target image/action evidence requires a rootfs refresh" in (
+        "onboard registers one cluster identity or reconciles its complete v3 campaign "
+        "in config.yaml"
+    ) in normalized_soperator_help
+    assert "upgrade reconciles live state and advances at most one campaign segment" in (
         normalized_soperator_help
     )
     assert (
         "nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root> "
         "--cluster-id <mk8scluster-id>"
     ) in normalized_soperator_help
-    assert "Comments:" in normalized_soperator_help
-    assert "stores a cxcli target id in deploy.targets[].instance_id" in (normalized_soperator_help)
-    assert (
-        "If the accepted onboarding report says no external-upgrade-owned work is required, "
-        "deploy reconciles every generated target" in normalized_soperator_help
+    assert "Campaign workflow:" in normalized_soperator_help
+    assert "Optional support bundle:" in normalized_soperator_help
+    assert "Onboarding stores a cxcli target id in deploy.targets[].instance_id" in (
+        normalized_soperator_help
     )
-    assert "use deploy --target <target-id> only to narrow one run" in (normalized_soperator_help)
-    assert "deploy-report.md plus deploy-time validations" in normalized_soperator_help
-    assert (
-        "If external-upgrade-owned work is required, do not deploy first"
-        in normalized_soperator_help
+    assert "A complete campaign is a live-verified no-op" in normalized_soperator_help
+    assert "a later campaign is proposed only by rerunning onboard after completion" in (
+        normalized_soperator_help
     )
+    assert (
+        "Register a new target, report its active campaign, or propose the next campaign "
+        "after completion"
+    ) in normalized_soperator_help
+    assert "No prepare-upgrade command exists" in normalized_soperator_help
     assert (
         "nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run"
         in normalized_soperator_help
@@ -25985,17 +26127,20 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert (
         "nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --execute --approve"
     ) in normalized_soperator_help
-    assert "CXCLI managed chart-only Soperator upgrades use soperator upgrade" in (
-        normalized_soperator_help
-    )
+    assert "CXCLI managed clusters use soperator upgrade" in (normalized_soperator_help)
+    assert (
+        "external MK8s control-plane, node-template, chart, and Jail changes remain owned "
+        "by ext-soperator upgrade"
+    ) in normalized_soperator_help
     assert "Terraform-managed MK8s node-template upgrades use upgrade node-template" in (
         normalized_soperator_help
     )
     assert "onboard [OPTIONS] CONFIG_OR_DEPLOYMENTS_ROOT" in soperator_onboard_help
     assert "upgrade [OPTIONS] CONFIG_YAML" in ext_soperator_upgrade_help
-    assert "Register/adopt an existing Nebius MK8s target for Soperator" in (
-        normalized_soperator_onboard_help
-    )
+    assert (
+        "Register a new target, report its active campaign, or propose the next campaign "
+        "after completion"
+    ) in normalized_soperator_onboard_help
     assert "Existing project config.yaml, project directory containing config.yaml" in (
         normalized_soperator_onboard_help
     )
@@ -26036,7 +26181,8 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--storage-mode" in normalized_soperator_onboard_help
     assert "--compute-mode" in normalized_soperator_onboard_help
     assert "--source-version" in normalized_soperator_onboard_help
-    assert "--to-chart-version" in normalized_soperator_onboard_help
+    assert "--to-chart-version" not in normalized_soperator_onboard_help
+    assert "--allow-unsupported-soperator-upgrade-path" not in (normalized_soperator_onboard_help)
     assert "--validate-sources --no-validate-sources" in normalized_soperator_onboard_help
     assert "keep-existing-storage preserves live PVC/PV sizes and selectors" in (
         normalized_soperator_onboard_help
@@ -26047,28 +26193,26 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "source version used only when discovery cannot infer" in (
         normalized_soperator_onboard_help
     )
-    assert "Target Soperator chart version for onboarding analysis" in (
+    assert "catalog-pinned" in normalized_soperator_onboard_help
+    assert "Interactive onboarding recommends the highest endpoint reachable" in (
         normalized_soperator_onboard_help
     )
-    assert "component_sources.yaml Soperator chart pin" in normalized_soperator_onboard_help
-    assert "Interactive onboarding defaults to the next discovered minor hop" in (
+    assert "Non-interactive runs must pass the exact final target" in (
         normalized_soperator_onboard_help
     )
-    assert "non-interactive runs can pass the final supported target" in (
-        normalized_soperator_onboard_help
-    )
-    assert "lock every sequential hop" in normalized_soperator_onboard_help
-    assert "does not bypass Kubernetes minor-hop, backup, quota, protected-state" in (
-        normalized_soperator_onboard_help
-    )
+    assert "locks every contiguous hop" in normalized_soperator_onboard_help
     assert "--cluster-id mk8scluster-..." in normalized_soperator_onboard_help
     assert "--target-id external-cluster" in normalized_soperator_onboard_help
     assert "--storage-mode keep-existing-storage" in normalized_soperator_onboard_help
     assert "--compute-mode keep-existing-compute" in normalized_soperator_onboard_help
-    assert "--to-chart-version <chart-version>" in normalized_soperator_onboard_help
     assert "--worker-rollout-strategy safe-surge --worker-wave-groups 1" in (
         normalized_soperator_onboard_help
     )
+    assert (
+        "Non-interactive onboarding deterministically leaves Slurm scheduling active "
+        "for safe-surge and quiesces scheduling for zero-surge; both values are "
+        "fingerprinted"
+    ) in normalized_soperator_onboard_help
     assert "create a project config under the deployments root" in normalized_soperator_onboard_help
     assert "--worker-rollout-strategy" in normalized_soperator_onboard_help
     assert "--service-role-rollout-strategy" in normalized_soperator_onboard_help
@@ -26083,31 +26227,27 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "Default: 0 for zero-surge / 1 for safe-surge" in (normalized_soperator_onboard_help)
     assert "Default: 1 for zero-surge / 0 for safe-surge" in (normalized_soperator_onboard_help)
     assert "--source-version 1.23.3" not in normalized_soperator_onboard_help
-    assert "nebius-cxcli validate <config.yaml>" in normalized_soperator_onboard_help
-    assert "nebius-cxcli render <config.yaml>" in normalized_soperator_onboard_help
+    assert "nebius-cxcli validate <config.yaml>" not in normalized_soperator_onboard_help
+    assert "nebius-cxcli render <config.yaml>" not in normalized_soperator_onboard_help
     assert (
-        "reruns refresh read-only source discovery and Nebius provider node-template inventory by node group"
-        in (normalized_soperator_onboard_help)
+        "Reruns report the active campaign without replacing it, or propose a later complete "
+        "campaign after live-verified completion" in (normalized_soperator_onboard_help)
     )
-    assert "locked path includes Jail Upgrade before validation" in (
+    assert "The campaign contains every SDK-validated Kubernetes hop" in (
         normalized_soperator_onboard_help
     )
+    assert "Soperator/chart target, and Jail Upgrade" in normalized_soperator_onboard_help
+    assert (
+        "Non-interactive mode requires the exact final --to-k8s-version; when omitted it "
+        "prints the recommended reachable target and writes no target or campaign"
+    ) in normalized_soperator_onboard_help
     assert "--cluster-id selects the Nebius MK8s cluster to adopt" in (
         normalized_soperator_onboard_help
     )
     assert "--target-id is only the optional cxcli logical target id" in (
         normalized_soperator_onboard_help
     )
-    assert "For install/adopt-only targets with no external-upgrade-owned actions" in (
-        normalized_soperator_onboard_help
-    )
-    assert "run nebius-cxcli deploy <config.yaml> to reconcile the generated desired state" in (
-        normalized_soperator_onboard_help
-    )
-    assert "use deploy --target <target-id> only to narrow a run" in (
-        normalized_soperator_onboard_help
-    )
-    assert "For external-upgrade-required targets, do not deploy first" in (
+    assert "do not render, deploy, or onboard again between segments" in (
         normalized_soperator_onboard_help
     )
     assert (
@@ -26150,8 +26290,15 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "Jail rootfs backing SFS resize policy" in normalized_ext_soperator_upgrade_help
     assert "Nebius SDK/API" in normalized_ext_soperator_upgrade_help
     assert "<mountPath>=<localPath>" in normalized_ext_soperator_upgrade_help
-    assert "--dry-run --execute" in normalized_ext_soperator_upgrade_help
+    assert "--dry-run" in normalized_ext_soperator_upgrade_help
+    assert "--execute" in normalized_ext_soperator_upgrade_help
     assert "--approve --no-approve" in normalized_ext_soperator_upgrade_help
+    assert "--approve-service-role-downtime" in normalized_ext_soperator_upgrade_help
+    assert "exact campaign fingerprint" in normalized_ext_soperator_upgrade_help
+    assert "Generic --approve remains required" in normalized_ext_soperator_upgrade_help
+    assert "--allow-unsupported-soperator-upgrade-path" not in (
+        normalized_ext_soperator_upgrade_help
+    )
     assert "--interactive --no-interactive" in normalized_ext_soperator_upgrade_help
     assert "--worker-node-groups" not in normalized_ext_soperator_upgrade_help
     assert "cxcli target id of the onboarded external MK8s target" in (
@@ -26165,7 +26312,10 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "cutover, Jail Upgrade, validation, and retirement phases" in (
         normalized_ext_soperator_upgrade_help
     )
-    assert "Use --execute only after accepting that plan" in normalized_ext_soperator_upgrade_help
+    assert "Execute one accepted campaign segment after live reconciliation" in (
+        normalized_ext_soperator_upgrade_help
+    )
+    assert "Mutually exclusive with --dry-run" in normalized_ext_soperator_upgrade_help
     assert "Confirm approval for the accepted external upgrade plan" in (
         normalized_ext_soperator_upgrade_help
     )
@@ -26214,18 +26364,22 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert (
         "--execute --approve refreshes discovery, creates a restore-capable backup"
     ) in normalized_ext_soperator_upgrade_help
-    assert "runs exactly one locked upgrade-path segment" in (normalized_ext_soperator_upgrade_help)
+    assert "runs at most one locked campaign segment" in normalized_ext_soperator_upgrade_help
     assert "Soperator/storage/compute/GPU-stack/Jail Upgrade work" in (
         normalized_ext_soperator_upgrade_help
     )
-    assert "If the accepted locked path still contains more segments" in (
+    assert "If the accepted campaign still contains more segments" in (
         normalized_ext_soperator_upgrade_help
     )
     assert (
-        "repeat the same ext-soperator upgrade --execute --approve command until the path is complete"
+        "repeat the same ext-soperator upgrade --execute --approve command until it is complete"
         in (normalized_ext_soperator_upgrade_help)
     )
-    assert "use a fresh ext-soperator onboard decision only to plan a new later path" in (
+    assert (
+        "The v3 operation journal never supplies a missing desired path"
+        in normalized_ext_soperator_upgrade_help
+    )
+    assert "rerun the idempotent onboard command only to check for and accept a later campaign" in (
         normalized_ext_soperator_upgrade_help
     )
     assert "--worker-rollout-strategy" in normalized_ext_soperator_upgrade_help
@@ -26239,6 +26393,9 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--strategy-max-surge-count" in normalized_ext_soperator_upgrade_help
     assert "--strategy-max-unavailable-count" in normalized_ext_soperator_upgrade_help
     assert "--strategy-drain-timeout" in normalized_ext_soperator_upgrade_help
+    assert "must be none and must match the accepted v3 campaign" in (
+        normalized_ext_soperator_upgrade_help
+    )
     assert "--max-global-unavailable-worker-nodes" not in normalized_ext_soperator_upgrade_help
     assert "--max-global-unavailable-worker-percent" not in normalized_ext_soperator_upgrade_help
     assert "zero-surge is the worker default and requires no spare worker quota" in (
@@ -26251,7 +26408,10 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "safe-surge uses temporary service-role surge capacity" in (
         normalized_ext_soperator_upgrade_help
     )
-    assert "does not bypass Kubernetes minor-hop, backup, quota, protected-state" in (
+    assert "Unsupported campaigns and non-v3 journals fail closed" in (
+        normalized_ext_soperator_upgrade_help
+    )
+    assert "external upgrade has no support-policy override" in (
         normalized_ext_soperator_upgrade_help
     )
     assert "remove [OPTIONS] [COMPONENT_SELECTOR]..." in component_remove_help
@@ -32252,28 +32412,34 @@ def test_soperator_onboarding_target_selection_rejects_multiple_empty_target_row
 
 
 def test_soperator_onboarding_target_defaults_do_not_accept_partial_analysis() -> None:
-    target = cli._soperator_onboarding_target_defaults(
-        "cluster1",
-        kube_context="ctx-1",
-        snapshot={
-            "node_groups": {},
-            "helm_releases": [
-                {
-                    "name": "custom-slurm",
-                    "namespace": "slurm",
-                    "chart": "soperator-1.0.0",
-                    "app_version": "1.0.0",
-                }
-            ],
-            "crds": [],
-            "collection_errors": [],
-        },
-        pinned_chart_version="0.25.0",
-        pinned_app_version="0.25.0",
-    )
-
-    assert target["soperator_onboarding"]["state"] == "existing-soperator-unknown"
-    assert target["soperator_onboarding"]["accepted"] is False
+    with pytest.raises(ValueError, match="no provider MK8s cluster id"):
+        cli._soperator_onboarding_target_defaults(
+            "cluster1",
+            kube_context="ctx-1",
+            project_id="project-456",
+            cluster_id="mk8scluster-123",
+            snapshot={
+                "node_groups": {},
+                "cluster_identity": {
+                    "kubernetes_uid": "kubernetes-uid-123",
+                    "soperator_uid": "soperator-uid-123",
+                    "slurmcluster_uid": "slurmcluster-uid-123",
+                    "jail_filesystem_id": "filesystem-123",
+                },
+                "helm_releases": [
+                    {
+                        "name": "custom-slurm",
+                        "namespace": "slurm",
+                        "chart": "soperator-1.0.0",
+                        "app_version": "1.0.0",
+                    }
+                ],
+                "crds": [],
+                "collection_errors": [],
+            },
+            pinned_chart_version="0.25.0",
+            pinned_app_version="0.25.0",
+        )
 
 
 def test_soperator_partition_and_topology_profiles_do_not_overwrite_user_values() -> None:

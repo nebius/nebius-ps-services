@@ -89,9 +89,15 @@ def test_slurm_partition_quiesce_records_only_up_partitions() -> None:
         states=states,
     )
 
-    assert [record.as_payload() for record in records] == [
-        {"partition": "main", "previous_state": "UP", "applied_state": "DOWN"}
-    ]
+    assert len(records) == 1
+    record = records[0]
+    assert record.partition == "main"
+    assert record.previous_state == "UP"
+    assert record.applied_state == "DOWN"
+    assert record.previous_record == "Nodes=worker-[0-1] PartitionName=main State=UP"
+    assert len(record.previous_record_fingerprint) == 64
+    assert record.applied_record == ""
+    assert record.applied_record_fingerprint == ""
 
 
 def test_slurm_partition_quiesce_records_fail_closed_for_unknown_partition() -> None:

@@ -87,6 +87,7 @@ from .component_sources import (
     resolve_component_sources_profile,
     set_component_sources_file_override,
     set_component_sources_profile_override,
+    tf_module_source_by_id,
 )
 from .component_wiring import (
     _UNRESOLVED,
@@ -292,7 +293,6 @@ from .mk8s_upgrade import (
     find_source_mk8s_component,
     format_mk8s_provider_node_group_status,
     format_node_template_upgrade_plan,
-    minor_version_hops,
     node_group_node_template_rollout_complete,
     node_group_uses_nebius_gpu_image,
     node_template_target_drivers_preset,
@@ -426,7 +426,6 @@ from .slurm_jobs import (
     parse_squeue_jobs,
     selected_display_job_ids,
     slurm_partition_quiesce_records,
-    slurm_partition_state_token,
     slurm_partitions_overlapping_nodes,
 )
 from .soperator_artifacts import (
@@ -478,7 +477,9 @@ from .soperator_migration import (
     SOPERATOR_WORKER_ROLLOUT_DEFAULT_WAVE_PERCENT,
     SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE,
     SOPERATOR_WORKER_ROLLOUT_STRATEGY_ZERO_SURGE,
+    SoperatorMigrationClusterLease,
     SoperatorMigrationCommandResult,
+    SoperatorMigrationExecutionLock,
     SoperatorMigrationExecutionResult,
     SoperatorMigrationPhasePending,
     _bind_passive_populate_job_checkpoint,
@@ -503,28 +504,37 @@ from .soperator_migration import (
     _require_persistent_mount_reprobe_binding,
     _restore_persistent_migration_writers,
     _retire_stale_source_soperator_helm_releases,
+    _revalidate_config_campaign_under_shared_lease,
     _rootfs_handoff_pending_reason,
     _SdkSoperatorMigrationNebiusApi,
     _source_worker_nodeset_values,
     _source_worker_partition_configuration,
     _sync_persistent_mount_decisions_from_migration_entries,
     _target_worker_nodeset_names,
+    _validate_checkpoint_journal_contract,
     _validate_completed_passive_populate_job_checkpoint,
     _verify_target_rootfs_handoff_consumers,
     _wait_for_target_slurmcluster_available,
     _wait_for_target_worker_nodesets_ready,
     execute_soperator_migration,
+    external_soperator_upgrade_backup_compensation,
     external_soperator_upgrade_protected_comparison_passed,
     external_soperator_upgrade_resume_backup_metadata,
     external_soperator_upgrade_top_level_stage,
+    initialize_soperator_migration_operation_journal,
     legacy_soperator_migration_checkpoint_path,
     normalize_external_login_session_policy,
     old_soperator_migration_checkpoint_path,
+    record_live_satisfied_soperator_upgrade_campaign_segment,
+    record_soperator_migration_backup_binding,
+    record_soperator_migration_backup_compensation,
     resolve_external_node_template_rollout,
     soperator_migration_checkpoint_path,
+    soperator_migration_lock_path,
     stabilize_soperator_login_load_balancer_allocations,
 )
 from .soperator_onboarding import (
+    EXT_SOPERATOR_ONBOARD_DESCRIPTION,
     ONBOARDING_ACCEPTABLE_STATES,
     ONBOARDING_ACTION_ADOPT_SOPERATOR,
     ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
@@ -537,7 +547,6 @@ from .soperator_onboarding import (
     ONBOARDING_COMPUTE_MODE_CREATE_ALIGNED_NODE_GROUPS,
     ONBOARDING_COMPUTE_MODE_KEEP_EXISTING,
     ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_GPU_STACK_PRESET,
-    ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION,
     ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS,
     ONBOARDING_REQUIRED_STORAGE_KEYS,
     ONBOARDING_SERVICE_ROLES,
@@ -549,6 +558,7 @@ from .soperator_onboarding import (
     analyze_soperator_onboarding_snapshot,
     collect_kubectl_soperator_snapshot,
     normalize_soperator_release_version,
+    soperator_host_driver_jail_cuda_policy,
     soperator_migration_profile_for_version,
     soperator_migration_profile_versions,
     soperator_onboarding_effective_compute_mode,
@@ -557,9 +567,11 @@ from .soperator_onboarding import (
     soperator_onboarding_report_for_modes,
     soperator_onboarding_target,
     soperator_onboarding_target_refs,
+    soperator_provider_driver_presets_for_jail_cuda,
     soperator_upgrade_support_findings,
     soperator_upgrade_support_requires_override,
     source_soperator_discovery_report_path,
+    validate_soperator_host_driver_jail_cuda_compatibility,
     validate_soperator_onboarding_acceptance,
     write_soperator_onboarding_reports,
     write_source_soperator_discovery_report,
@@ -595,6 +607,21 @@ from .soperator_scaling import (
     build_worker_scale_plan,
     execute_worker_scale_plan,
     worker_scale_plan_lines,
+)
+from .soperator_upgrade_campaign import (
+    campaign_node_group_gpu_software_mode,
+    campaign_node_group_role,
+    compile_node_group_hop_targets,
+    effective_campaign_segment_for_replacements,
+    external_soperator_final_health_conflicts,
+    finalize_soperator_upgrade_campaign,
+    journal_node_group_replacement_transitions,
+    project_campaign_node_groups_for_replacements,
+    provider_control_plane_versions,
+    snapshot_campaign_identity,
+    soperator_upgrade_campaign_fingerprint,
+    validate_campaign_segment_capabilities,
+    validated_control_plane_path,
 )
 from .soperator_upgrade_safety import (
     ProtectedCustomerState,
@@ -2145,21 +2172,21 @@ ext_soperator_app = typer.Typer(
     help=(
         "Manage existing external Nebius MK8s clusters for Soperator. "
         "discover writes a support-safe read-only Soperator discovery bundle; "
-        "onboard registers/adopts one cluster into config.yaml without "
-        "Terraform-owning it. backup/restore move restore-capable Soperator "
-        "state to new empty target clusters only. upgrade is only for accepted "
-        "onboarding plans that contain external-upgrade-owned actions, including "
-        "Jail Upgrade when target image/action evidence requires a rootfs refresh."
+        "onboard registers one cluster identity or reconciles its complete v3 campaign "
+        "in config.yaml without Terraform-owning it; upgrade reconciles live state and "
+        "advances at most one campaign segment. backup/restore move restore-capable "
+        "Soperator state to new empty target clusters only."
     ),
     epilog=(
-        "Workflow: nebius-cxcli ext-soperator discover --project-id PROJECT "
-        "--cluster-id MK8SCLUSTER --output-dir ./support-bundles; "
-        "nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root> "
-        "--cluster-id <mk8scluster-id>; nebius-cxcli validate <config.yaml>; "
-        "nebius-cxcli render <config.yaml>; "
+        "Campaign workflow: nebius-cxcli ext-soperator onboard "
+        "<config.yaml-or-deployments-root> "
+        "--cluster-id <mk8scluster-id>; "
         "nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run; "
         "nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> "
         "--execute --approve; "
+        "repeat dry-run/execute for each remaining segment. Optional support bundle: "
+        "nebius-cxcli ext-soperator discover --project-id PROJECT "
+        "--cluster-id MK8SCLUSTER --output-dir ./support-bundles; "
         "nebius-cxcli ext-soperator scale-down --project-id PROJECT "
         "--cluster-id MK8SCLUSTER --kube-context CONTEXT --nodeset worker-gpu-0 "
         "--to-workers 0 --job-policy wait-to-finish --dry-run; "
@@ -2174,13 +2201,10 @@ ext_soperator_app = typer.Typer(
         "at the original/source cluster or an existing Soperator namespace. "
         "Onboarding stores a cxcli target id in deploy.targets[].instance_id; by default it is "
         "derived from the live MK8s cluster name, or it can be set with --target-id. "
-        "After render, install/adopt-only targets use deploy instead of external upgrade. "
-        "If the accepted onboarding report says no external-upgrade-owned work is required, deploy "
-        "reconciles every generated target and produces deploy-report.md plus deploy-time "
-        "validations; use deploy --target <target-id> only to narrow one run. If external-upgrade-owned "
-        "work is required, do not deploy first. CXCLI managed chart-only Soperator upgrades use "
-        "soperator upgrade; external MK8s control-plane and node-template upgrades selected by "
-        "onboarding are owned by ext-soperator upgrade; Terraform-managed MK8s node-template "
+        "A complete campaign is a live-verified no-op; a later campaign is proposed only by "
+        "rerunning onboard after completion. CXCLI managed clusters use soperator upgrade; "
+        "external MK8s control-plane, node-template, chart, and Jail changes remain owned by "
+        "ext-soperator upgrade; Terraform-managed MK8s node-template "
         "upgrades use upgrade node-template. Use the separate discover command only when you "
         "need a support-safe discovery bundle, and the separate backup command only when you "
         "need an operator-requested archive outside the upgrade run; upgrade --execute --approve "
@@ -2189,7 +2213,7 @@ ext_soperator_app = typer.Typer(
         "External Kubernetes node-template work advances one Kubernetes minor hop per "
         "upgrade run; repeat the same ext-soperator upgrade --execute --approve command "
         "until all locked path segments are complete instead of rerunning discovery or "
-        "onboarding between normal Kubernetes hops."
+        "onboarding between normal Kubernetes hops. No prepare-upgrade command exists."
     ),
 )
 soperator_app = typer.Typer(
@@ -4780,7 +4804,13 @@ def _soperator_upgrade_phase_display_line(
     return f"Soperator upgrade phase `{phase_id}`: {comment}"
 
 
-def _write_text_atomic(path: Path, content: str, *, encoding: str = "utf-8") -> None:
+def _write_text_atomic(
+    path: Path,
+    content: str,
+    *,
+    encoding: str = "utf-8",
+    file_mode: int | None = None,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     data = content.encode(encoding)
     fd = -1
@@ -4794,10 +4824,17 @@ def _write_text_atomic(path: Path, content: str, *, encoding: str = "utf-8") -> 
         temp_path = Path(raw_temp_path)
         with os.fdopen(fd, "wb") as handle:
             fd = -1
+            if file_mode is not None:
+                os.fchmod(handle.fileno(), file_mode)
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temp_path, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     finally:
         if fd >= 0:
             os.close(fd)
@@ -6143,12 +6180,11 @@ def _soperator_upgrade_write_accounting_unavailable(
     return payload
 
 
-def _soperator_upgrade_quiesce_accounting(
+def _soperator_upgrade_accounting_deployment_state(
     namespace: str,
     *,
     kube_context: str | None = None,
 ) -> dict[str, Any]:
-    state: dict[str, Any] = {"deployment": _SOPERATOR_UPGRADE_ACCOUNTING_DEPLOYMENT}
     get_result = _run_soperator_upgrade_kubectl(
         namespace,
         ["get", f"deployment/{_SOPERATOR_UPGRADE_ACCOUNTING_DEPLOYMENT}", "-o", "json"],
@@ -6172,11 +6208,48 @@ def _soperator_upgrade_quiesce_accounting(
         deployment = json.loads(get_result.stdout)
     except json.JSONDecodeError as exc:
         raise RuntimeError("Could not parse accounting deployment state.") from exc
+    metadata = deployment.get("metadata", {})
+    if not isinstance(metadata, Mapping):
+        metadata = {}
     replicas = deployment.get("spec", {}).get("replicas", 1)
-    state["replicas"] = int(replicas if replicas is not None else 1)
+    state = {
+        "namespace": namespace,
+        "deployment": _SOPERATOR_UPGRADE_ACCOUNTING_DEPLOYMENT,
+        "uid": _non_empty_text(metadata.get("uid")),
+        "resource_version": _non_empty_text(metadata.get("resourceVersion")),
+        "replicas": int(replicas if replicas is not None else 1),
+    }
+    if not state["uid"] or not state["resource_version"]:
+        raise RuntimeError(
+            "Chart-managed Soperator accounting deployment has incomplete immutable identity."
+        )
+    return state
+
+
+def _soperator_upgrade_quiesce_accounting(
+    namespace: str,
+    *,
+    kube_context: str | None = None,
+    compensation_intent: Callable[[Mapping[str, Any]], None] | None = None,
+    mutation_guard: Callable[[], None] | None = None,
+) -> dict[str, Any]:
+    state = _soperator_upgrade_accounting_deployment_state(
+        namespace,
+        kube_context=kube_context,
+    )
+    if compensation_intent is not None:
+        compensation_intent(state)
+    if mutation_guard is not None:
+        mutation_guard()
     _run_soperator_upgrade_kubectl(
         namespace,
-        ["scale", f"deployment/{_SOPERATOR_UPGRADE_ACCOUNTING_DEPLOYMENT}", "--replicas=0"],
+        [
+            "scale",
+            f"deployment/{_SOPERATOR_UPGRADE_ACCOUNTING_DEPLOYMENT}",
+            f"--current-replicas={state['replicas']}",
+            f"--resource-version={state['resource_version']}",
+            "--replicas=0",
+        ],
         kube_context=kube_context,
         timeout_seconds=120,
     )
@@ -6188,15 +6261,55 @@ def _soperator_upgrade_restore_accounting(
     state: Mapping[str, Any],
     *,
     kube_context: str | None = None,
+    expected_current_replicas: int,
+    mutation_guard: Callable[[], None] | None = None,
 ) -> None:
-    replicas = int(state.get("replicas", 1) or 1)
+    if mutation_guard is not None:
+        mutation_guard()
+    expected_uid = _non_empty_text(state.get("uid"))
+    original_resource_version = _non_empty_text(state.get("resource_version"))
+    if not expected_uid or not original_resource_version:
+        raise RuntimeError(
+            "recovery-required: chart-managed accounting restore evidence has "
+            "incomplete immutable identity; cxcli did not scale the deployment."
+        )
+    raw_replicas = state.get("replicas", 1)
+    replicas = int(raw_replicas if raw_replicas is not None else 1)
+    observed = _soperator_upgrade_accounting_deployment_state(
+        namespace,
+        kube_context=kube_context,
+    )
+    if _non_empty_text(observed.get("uid")) != expected_uid:
+        raise RuntimeError(
+            "recovery-required: chart-managed accounting deployment identity changed "
+            "before replica restoration; cxcli did not overwrite the replacement."
+        )
+    observed_replicas = observed.get("replicas")
+    if observed_replicas == replicas:
+        return
+    if observed_replicas != expected_current_replicas:
+        raise RuntimeError(
+            "recovery-required: chart-managed accounting replicas changed before "
+            "restoration; cxcli did not overwrite the customer change."
+        )
+    observed_resource_version = _non_empty_text(observed.get("resource_version"))
+    if not observed_resource_version:
+        raise RuntimeError(
+            "recovery-required: chart-managed accounting deployment has no current "
+            "resourceVersion for compare-and-set restoration."
+        )
+    args = [
+        "scale",
+        f"deployment/{_SOPERATOR_UPGRADE_ACCOUNTING_DEPLOYMENT}",
+        f"--current-replicas={expected_current_replicas}",
+        f"--resource-version={observed_resource_version}",
+        f"--replicas={replicas}",
+    ]
+    if mutation_guard is not None:
+        mutation_guard()
     _run_soperator_upgrade_kubectl(
         namespace,
-        [
-            "scale",
-            f"deployment/{_SOPERATOR_UPGRADE_ACCOUNTING_DEPLOYMENT}",
-            f"--replicas={replicas}",
-        ],
+        args,
         kube_context=kube_context,
         timeout_seconds=120,
     )
@@ -6423,9 +6536,11 @@ def _create_restore_capable_soperator_upgrade_backup(
     command: Sequence[str],
     source_k8s_version: str | None = None,
     checkpoint_event: Callable[[str], None] | None = None,
+    checkpoint_compensation: Callable[[bool, Mapping[str, Any]], None] | None = None,
     archive_prefix: str = "soperator-upgrade",
     source_kind: str = "managed-upgrade",
     kube_context: str | None = None,
+    mutation_guard: Callable[[], None] | None = None,
 ) -> _SoperatorUpgradeBackupResult:
     if _soperator_upgrade_accounting_external_db_enabled(source_payload, target):
         raise RuntimeError(
@@ -6554,6 +6669,12 @@ def _create_restore_capable_soperator_upgrade_backup(
                 accounting_state = _soperator_upgrade_quiesce_accounting(
                     namespace,
                     kube_context=kube_context,
+                    compensation_intent=(
+                        (lambda state: checkpoint_compensation(True, state))
+                        if checkpoint_compensation is not None
+                        else None
+                    ),
+                    mutation_guard=mutation_guard,
                 )
             except RuntimeError as exc:
                 if "Could not find chart-managed Soperator accounting deployment" not in str(exc):
@@ -6582,7 +6703,11 @@ def _create_restore_capable_soperator_upgrade_backup(
                     namespace,
                     accounting_state,
                     kube_context=kube_context,
+                    expected_current_replicas=0,
+                    mutation_guard=mutation_guard,
                 )
+                if checkpoint_compensation is not None:
+                    checkpoint_compensation(False, accounting_state)
                 accounting_state = None
                 if checkpoint_event is not None:
                     checkpoint_event("accounting-restored")
@@ -6715,7 +6840,11 @@ def _create_restore_capable_soperator_upgrade_backup(
                 namespace,
                 accounting_state,
                 kube_context=kube_context,
+                expected_current_replicas=0,
+                mutation_guard=mutation_guard,
             )
+            if checkpoint_compensation is not None:
+                checkpoint_compensation(False, accounting_state)
 
 
 def _soperator_restore_extract_archive(archive_path: Path, output_dir: Path) -> None:
@@ -7162,6 +7291,7 @@ def _soperator_restore_accounting_db(
                 namespace,
                 accounting_state,
                 kube_context=kube_context,
+                expected_current_replicas=0,
             )
 
 
@@ -8296,12 +8426,34 @@ def _soperator_upgrade_partition_state_snapshot(
     return parse_scontrol_show_partition_states(result.stdout)
 
 
+def _soperator_upgrade_partition_state(
+    *,
+    namespace: str,
+    partition: str,
+    kube_context: str | None = None,
+    extra_env: Mapping[str, str] | None = None,
+) -> SlurmPartitionState:
+    snapshot = _soperator_upgrade_partition_state_snapshot(
+        namespace=namespace,
+        kube_context=kube_context,
+        extra_env=extra_env,
+    )
+    for state in snapshot:
+        if state.name == partition:
+            return state
+    raise RuntimeError(
+        "recovery-required: cxcli cannot verify Slurm partition "
+        f"{partition!r} because it is absent from the full live partition snapshot."
+    )
+
+
 def _soperator_upgrade_quiesce_slurm_partitions(
     *,
     namespace: str,
     node_names: Sequence[str],
     kube_context: str | None = None,
     extra_env: Mapping[str, str] | None = None,
+    record_recorder: Callable[[SlurmPartitionQuiesceRecord], None] | None = None,
 ) -> tuple[SlurmPartitionQuiesceRecord, ...]:
     selected_nodes = tuple(_non_empty_text(node) for node in node_names if _non_empty_text(node))
     if not selected_nodes:
@@ -8330,10 +8482,50 @@ def _soperator_upgrade_quiesce_slurm_partitions(
     if not partitions and fallback_error is not None:
         raise fallback_error
     records = slurm_partition_quiesce_records(partitions=partitions, states=snapshot)
+    if records and record_recorder is None:
+        raise RuntimeError(
+            "recovery-required: Slurm scheduling quiesce requires a durable full-record "
+            "ownership journal before State=DOWN."
+        )
     applied: list[SlurmPartitionQuiesceRecord] = []
+
+    def _compensate_applied() -> None:
+        if not applied:
+            return
+        try:
+            _soperator_upgrade_restore_slurm_partitions(
+                namespace=namespace,
+                records=applied,
+                kube_context=kube_context,
+                extra_env=extra_env,
+            )
+        except Exception as restore_exc:
+            raise RuntimeError(
+                "Could not restore partially quiesced Slurm partitions after "
+                "scheduling quiesce failed. Inspect: "
+                + _soperator_upgrade_slurm_partition_restore_command(applied)
+            ) from restore_exc
+
     for record in records:
         try:
-            _run_soperator_upgrade_login_command(
+            if record_recorder is not None:
+                record_recorder(record)
+            live_before = _soperator_upgrade_partition_state(
+                namespace=namespace,
+                partition=record.partition,
+                kube_context=kube_context,
+                extra_env=extra_env,
+            )
+            if (
+                live_before.record != record.previous_record
+                or live_before.record_fingerprint != record.previous_record_fingerprint
+            ):
+                raise RuntimeError(
+                    "recovery-required: Slurm partition "
+                    f"{record.partition!r} changed after cxcli persisted quiesce intent "
+                    "and before State=DOWN. No partition mutation was issued."
+                )
+            result = _run_soperator_upgrade_login_command(
                 namespace,
                 "scontrol update PartitionName="
                 + shlex.quote(record.partition)
@@ -8342,25 +8534,51 @@ def _soperator_upgrade_quiesce_slurm_partitions(
                 kube_context=kube_context,
                 extra_env=extra_env,
                 timeout_seconds=120,
+                check=False,
             )
-            applied.append(record)
-        except Exception:
-            if applied:
-                try:
-                    _soperator_upgrade_restore_slurm_partitions(
-                        namespace=namespace,
-                        records=applied,
-                        kube_context=kube_context,
-                        extra_env=extra_env,
+            live_after = _soperator_upgrade_partition_state(
+                namespace=namespace,
+                partition=record.partition,
+                kube_context=kube_context,
+                extra_env=extra_env,
+            )
+            if (
+                live_after.record == record.previous_record
+                and live_after.record_fingerprint == record.previous_record_fingerprint
+            ):
+                detail = (
+                    result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
+                    if result.returncode != 0
+                    else "state stayed unchanged"
+                )
+                raise RuntimeError(
+                    f"Could not pause Slurm scheduling for partition {record.partition}: {detail}"
+                )
+            try:
+                applied_record = record.with_applied_observation(live_after)
+            except ValueError as exc:
+                raise RuntimeError(
+                    "recovery-required: Slurm partition "
+                    f"{record.partition!r} did not expose the exact cxcli State=DOWN "
+                    "postcondition. Automatic restore is unsafe."
+                ) from exc
+            applied.append(applied_record)
+            if record_recorder is not None:
+                record_recorder(applied_record)
+            if result.returncode != 0:
+                raise RuntimeError(
+                    "Could not pause Slurm scheduling for partition "
+                    f"{record.partition}: "
+                    + (
+                        result.stderr.strip()
+                        or result.stdout.strip()
+                        or f"exit {result.returncode}"
                     )
-                except Exception as restore_exc:
-                    raise RuntimeError(
-                        "Could not restore partially quiesced Slurm partitions after "
-                        "scheduling quiesce failed. Run: "
-                        + _soperator_upgrade_slurm_partition_restore_command(applied)
-                    ) from restore_exc
+                )
+        except Exception:
+            _compensate_applied()
             raise
-    return records
+    return tuple(applied)
 
 
 def _soperator_upgrade_restore_slurm_partitions(
@@ -8370,56 +8588,153 @@ def _soperator_upgrade_restore_slurm_partitions(
     kube_context: str | None = None,
     extra_env: Mapping[str, str] | None = None,
 ) -> None:
-    def _partition_already_restored(partition: str, previous_state: str) -> bool:
-        try:
-            snapshot = _soperator_upgrade_partition_state_snapshot(
-                namespace=namespace,
-                kube_context=kube_context,
-                extra_env=extra_env,
-            )
-        except Exception:
-            return False
-        expected = slurm_partition_state_token(previous_state)
-        for state in snapshot:
-            if state.name != partition:
-                continue
-            return slurm_partition_state_token(state.state) == expected
-        return False
-
     for record in records:
         partition = _non_empty_text(record.partition)
         previous_state = _non_empty_text(record.previous_state)
         if not partition or not previous_state:
             continue
-        try:
-            _run_soperator_upgrade_login_command(
-                namespace,
-                "scontrol update PartitionName="
-                + shlex.quote(partition)
-                + " State="
-                + shlex.quote(previous_state),
-                kube_context=kube_context,
-                extra_env=extra_env,
-                timeout_seconds=120,
+        live_before = _soperator_upgrade_partition_state(
+            namespace=namespace,
+            partition=partition,
+            kube_context=kube_context,
+            extra_env=extra_env,
+        )
+        if (
+            live_before.record == record.previous_record
+            and live_before.record_fingerprint == record.previous_record_fingerprint
+        ):
+            continue
+        if not record.applied_record or not record.applied_record_fingerprint:
+            raise RuntimeError(
+                "recovery-required: cxcli will not restore Slurm partition "
+                f"{partition!r}: the journal lacks a durable full post-mutation "
+                "fingerprint proving cxcli owns the live change."
             )
-        except Exception:
-            if _partition_already_restored(partition, previous_state):
-                continue
-            raise
+        if (
+            live_before.record != record.applied_record
+            or live_before.record_fingerprint != record.applied_record_fingerprint
+        ):
+            raise RuntimeError(
+                "recovery-required: cxcli will not restore Slurm partition "
+                f"{partition!r}: the full live fingerprint differs from both the "
+                "saved customer record and cxcli's recorded State=DOWN record."
+            )
+        result = _run_soperator_upgrade_login_command(
+            namespace,
+            "scontrol update PartitionName="
+            + shlex.quote(partition)
+            + " State="
+            + shlex.quote(previous_state),
+            kube_context=kube_context,
+            extra_env=extra_env,
+            timeout_seconds=120,
+            check=False,
+        )
+        live_after = _soperator_upgrade_partition_state(
+            namespace=namespace,
+            partition=partition,
+            kube_context=kube_context,
+            extra_env=extra_env,
+        )
+        if (
+            live_after.record == record.previous_record
+            and live_after.record_fingerprint == record.previous_record_fingerprint
+        ):
+            continue
+        if result.returncode != 0:
+            raise RuntimeError(
+                result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
+            )
+        raise RuntimeError(
+            "recovery-required: Slurm accepted cxcli's restore request for partition "
+            f"{partition!r}, but the full live record does not match the exact saved "
+            "pre-mutation fingerprint."
+        )
 
 
 def _soperator_upgrade_slurm_partition_restore_command(
     records: Sequence[SlurmPartitionQuiesceRecord],
 ) -> str:
     commands = [
-        "scontrol update PartitionName="
-        + shlex.quote(record.partition)
-        + " State="
-        + shlex.quote(record.previous_state)
+        "scontrol show partition " + shlex.quote(record.partition) + " -o"
         for record in records
         if _non_empty_text(record.partition) and _non_empty_text(record.previous_state)
     ]
     return "; ".join(commands)
+
+
+def _soperator_upgrade_quiesce_record_from_payload(
+    payload: Mapping[str, Any],
+) -> SlurmPartitionQuiesceRecord:
+    partition = _non_empty_text(payload.get("partition"))
+    try:
+        return SlurmPartitionQuiesceRecord(
+            partition=partition,
+            previous_state=_non_empty_text(payload.get("previous_state")),
+            previous_record=_non_empty_text(payload.get("previous_record")),
+            previous_record_fingerprint=_non_empty_text(payload.get("previous_record_fingerprint")),
+            applied_state=_non_empty_text(payload.get("applied_state")) or "DOWN",
+            applied_record=_non_empty_text(payload.get("applied_record")),
+            applied_record_fingerprint=_non_empty_text(payload.get("applied_record_fingerprint")),
+        )
+    except ValueError as exc:
+        raise RuntimeError(
+            "recovery-required: managed Soperator Slurm quiesce journal has invalid "
+            f"full-record ownership evidence for {partition or 'unknown partition'}."
+        ) from exc
+
+
+def _soperator_upgrade_quiesce_records_from_payload(
+    payload: Any,
+) -> tuple[SlurmPartitionQuiesceRecord, ...]:
+    if payload is None:
+        return ()
+    if not isinstance(payload, Sequence) or isinstance(payload, (str, bytes, bytearray)):
+        raise RuntimeError(
+            "recovery-required: managed Soperator Slurm quiesce journal must be a list."
+        )
+    records: list[SlurmPartitionQuiesceRecord] = []
+    for item in payload:
+        if not isinstance(item, Mapping):
+            raise RuntimeError(
+                "recovery-required: managed Soperator Slurm quiesce journal entries "
+                "must be mappings."
+            )
+        records.append(_soperator_upgrade_quiesce_record_from_payload(item))
+    return tuple(records)
+
+
+def _merge_soperator_upgrade_quiesce_records(
+    existing: Sequence[SlurmPartitionQuiesceRecord],
+    incoming: Sequence[SlurmPartitionQuiesceRecord],
+) -> tuple[SlurmPartitionQuiesceRecord, ...]:
+    merged = {record.partition: record for record in existing}
+    for record in incoming:
+        current = merged.get(record.partition)
+        if current is None:
+            merged[record.partition] = record
+            continue
+        if (
+            current.previous_state != record.previous_state
+            or current.previous_record_fingerprint != record.previous_record_fingerprint
+            or current.applied_state != record.applied_state
+        ):
+            raise RuntimeError(
+                "recovery-required: conflicting managed Soperator Slurm quiesce "
+                f"ownership evidence for {record.partition}."
+            )
+        if (
+            current.applied_record_fingerprint
+            and record.applied_record_fingerprint
+            and current.applied_record_fingerprint != record.applied_record_fingerprint
+        ):
+            raise RuntimeError(
+                "recovery-required: conflicting managed Soperator Slurm post-mutation "
+                f"fingerprints for {record.partition}."
+            )
+        if record.applied_record_fingerprint and not current.applied_record_fingerprint:
+            merged[record.partition] = record
+    return tuple(merged.values())
 
 
 def _handle_soperator_upgrade_running_jobs(
@@ -8478,11 +8793,26 @@ def _handle_soperator_upgrade_running_jobs(
 
     include_pending = not slurm_scheduling_quiesce
     if slurm_scheduling_quiesce:
+        if decision_recorder is None:
+            raise RuntimeError(
+                "recovery-required: Slurm scheduling quiesce requires a durable "
+                "partition ownership journal before State=DOWN."
+            )
+
+        def _record_partition_evidence(record: SlurmPartitionQuiesceRecord) -> None:
+            _record(
+                "scheduling-quiesce-recorded",
+                node_names=selected_node_names,
+                partitions=[record.as_payload()],
+                pending_jobs="queued-not-blocking",
+            )
+
         quiesced_partitions = _soperator_upgrade_quiesce_slurm_partitions(
             namespace=namespace,
             node_names=selected_node_names,
             kube_context=kube_context,
             extra_env=extra_env,
+            record_recorder=_record_partition_evidence,
         )
         if quiesced_partitions:
             _record(
@@ -12577,6 +12907,7 @@ def _external_soperator_upgrade_command_args(
     dry_run: bool,
     approve: bool,
     approve_remediation: bool,
+    approve_service_role_downtime: bool,
     allow_unsupported_soperator_upgrade_path: bool,
     interactive: bool,
 ) -> tuple[str, ...]:
@@ -12623,6 +12954,8 @@ def _external_soperator_upgrade_command_args(
     args.append("--dry-run" if dry_run else "--execute")
     args.append("--approve" if approve else "--no-approve")
     args.append("--approve-remediation" if approve_remediation else "--no-approve-remediation")
+    if approve_service_role_downtime:
+        args.append("--approve-service-role-downtime")
     if allow_unsupported_soperator_upgrade_path:
         args.append("--allow-unsupported-soperator-upgrade-path")
     return tuple(args)
@@ -12710,6 +13043,8 @@ def _create_external_soperator_upgrade_backup(
     target_chart_version: str | None = None,
     source_k8s_version: str | None = None,
     target_k8s_version: str | None = None,
+    checkpoint_compensation: Callable[[bool, Mapping[str, Any]], None] | None = None,
+    mutation_guard: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     target, plan = _soperator_backup_plan_from_payload(
         source_payload=source_payload,
@@ -12754,6 +13089,8 @@ def _create_external_soperator_upgrade_backup(
         archive_prefix="ext-soperator-upgrade",
         source_kind="external-upgrade",
         kube_context=kube_context,
+        checkpoint_compensation=checkpoint_compensation,
+        mutation_guard=mutation_guard,
     )
     console.print(f"External Soperator upgrade backup archive: {backup.path}", soft_wrap=True)
     console.print(f"Archive SHA256: {backup.sha256}", soft_wrap=True)
@@ -12775,6 +13112,74 @@ def _create_external_soperator_upgrade_backup(
         "accounting_db_dump": backup.accounting_db_included,
         "report_redacted": True,
     }
+
+
+def _reconcile_external_soperator_backup_compensation(
+    *,
+    config_path: Path,
+    payload: Mapping[str, Any],
+    target_ref: str,
+    kube_context: str | None,
+    mutation_guard: Callable[[], None] | None = None,
+) -> None:
+    obligation = external_soperator_upgrade_backup_compensation(
+        config_path=config_path,
+        target_ref=target_ref,
+        payload=payload,
+    )
+    if obligation is None:
+        return
+    if mutation_guard is not None:
+        mutation_guard()
+    namespace = _non_empty_text(obligation.get("namespace"))
+    deployment = _non_empty_text(obligation.get("deployment"))
+    if deployment != _SOPERATOR_UPGRADE_ACCOUNTING_DEPLOYMENT or not namespace:
+        raise RuntimeError(
+            "recovery-required: external Soperator backup accounting compensation "
+            "references an unsupported deployment identity."
+        )
+    observed = _soperator_upgrade_accounting_deployment_state(
+        namespace,
+        kube_context=kube_context,
+    )
+    if _non_empty_text(observed.get("uid")) != _non_empty_text(obligation.get("uid")):
+        raise RuntimeError(
+            "recovery-required: chart-managed accounting deployment identity changed "
+            "while backup compensation was pending; cxcli did not overwrite it."
+        )
+    original_replicas = obligation.get("replicas")
+    observed_replicas = observed.get("replicas")
+    if (
+        isinstance(original_replicas, bool)
+        or not isinstance(original_replicas, int)
+        or original_replicas < 0
+        or isinstance(observed_replicas, bool)
+        or not isinstance(observed_replicas, int)
+        or observed_replicas < 0
+    ):
+        raise RuntimeError(
+            "recovery-required: backup accounting replica compensation evidence is invalid."
+        )
+    if observed_replicas == 0 and original_replicas != 0:
+        _soperator_upgrade_restore_accounting(
+            namespace,
+            obligation,
+            kube_context=kube_context,
+            expected_current_replicas=0,
+            mutation_guard=mutation_guard,
+        )
+    elif observed_replicas != original_replicas:
+        raise RuntimeError(
+            "recovery-required: chart-managed accounting replicas changed while cxcli "
+            "owed backup compensation; cxcli did not overwrite the customer change."
+        )
+    record_soperator_migration_backup_compensation(
+        config_path=config_path,
+        target_ref=target_ref,
+        payload=payload,
+        required=False,
+        state=obligation,
+    )
 
 
 def _load_soperator_backup_generated_context(
@@ -13788,6 +14193,26 @@ def _run_external_soperator_discovery_command(
             "Pass --kube-context or --cluster-id, or onboard the target first."
         )
     snapshot = collect_kubectl_soperator_snapshot(kube_context=explicit_context)
+    if resolved_cluster_id and not _snapshot_has_complete_provider_mk8s_campaign_capabilities(
+        snapshot,
+        cluster_id=resolved_cluster_id,
+    ):
+        try:
+            provider_snapshot = _collect_provider_mk8s_template_snapshot(
+                payload,
+                cluster_id=resolved_cluster_id,
+            )
+            _require_complete_provider_mk8s_campaign_snapshot(
+                provider_snapshot,
+                cluster_id=resolved_cluster_id,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "External Soperator discovery could not collect complete live Nebius MK8s "
+                "control-plane, node-group, and compatibility-matrix capabilities. No "
+                f"discovery bundle was written: {exc}"
+            ) from exc
+        snapshot = _merge_provider_mk8s_template_snapshot(snapshot, provider_snapshot)
     return _write_soperator_discovery_bundle_from_snapshot(
         project_dir=project_dir,
         config_path=config_path,
@@ -15865,18 +16290,8 @@ def _run_managed_soperator_cluster_upgrade(
     existing_quiesced_partitions = _state_mapping(checkpoint.get("slurm")).get(
         "quiesced_partitions"
     )
-    slurm_quiesce_records: tuple[SlurmPartitionQuiesceRecord, ...] = tuple(
-        SlurmPartitionQuiesceRecord(
-            partition=str(item.get("partition", "") or "").strip(),
-            previous_state=str(item.get("previous_state", "") or "").strip(),
-            applied_state=str(item.get("applied_state", "DOWN") or "DOWN").strip(),
-        )
-        for item in (
-            existing_quiesced_partitions if isinstance(existing_quiesced_partitions, list) else []
-        )
-        if isinstance(item, Mapping)
-        and str(item.get("partition", "") or "").strip()
-        and str(item.get("previous_state", "") or "").strip()
+    slurm_quiesce_records = _soperator_upgrade_quiesce_records_from_payload(
+        existing_quiesced_partitions
     )
     protected_state_before = _managed_soperator_upgrade_baseline_from_checkpoint(checkpoint)
     component_label = f"{target.selector} ({plan.namespace or 'default'}/{plan.release_name})"
@@ -16461,34 +16876,14 @@ def _run_managed_soperator_cluster_upgrade(
         if isinstance(decisions, list):
             decisions.append(copy.deepcopy(to_plain_data(decision)))
         action = str(decision.get("action", "") or "")
-        if action == "scheduling-quiesce-applied":
+        if action in {"scheduling-quiesce-recorded", "scheduling-quiesce-applied"}:
             raw_partitions = decision.get("partitions")
-            records: list[SlurmPartitionQuiesceRecord] = []
-            if isinstance(raw_partitions, Sequence) and not isinstance(
-                raw_partitions, (str, bytes, bytearray)
-            ):
-                for item in raw_partitions:
-                    if not isinstance(item, Mapping):
-                        continue
-                    partition = _non_empty_text(item.get("partition"))
-                    previous_state = _non_empty_text(item.get("previous_state"))
-                    applied_state = _non_empty_text(item.get("applied_state")) or "DOWN"
-                    if partition and previous_state:
-                        records.append(
-                            SlurmPartitionQuiesceRecord(
-                                partition=partition,
-                                previous_state=previous_state,
-                                applied_state=applied_state,
-                            )
-                        )
+            records = _soperator_upgrade_quiesce_records_from_payload(raw_partitions)
             if records:
-                merged: list[SlurmPartitionQuiesceRecord] = list(slurm_quiesce_records)
-                seen = {record.partition for record in merged}
-                for record in records:
-                    if record.partition not in seen:
-                        merged.append(record)
-                        seen.add(record.partition)
-                slurm_quiesce_records = tuple(merged)
+                slurm_quiesce_records = _merge_soperator_upgrade_quiesce_records(
+                    slurm_quiesce_records,
+                    records,
+                )
                 slurm_state["quiesced_partitions"] = [
                     record.as_payload() for record in slurm_quiesce_records
                 ]
@@ -20591,26 +20986,20 @@ def _soperator_route_guidance_lines(
     onboarding: Mapping[str, Any],
     migration_required: bool,
 ) -> tuple[str, ...]:
-    if migration_required:
-        labels = _soperator_migration_reason_labels(onboarding) or (
-            "external-upgrade-owned action",
-        )
+    _ = migration_required
+    labels = _soperator_migration_reason_labels(onboarding)
+    if labels:
         return ("Accepted onboarding actions:", *(f"  - {label}" for label in labels))
-
-    if ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK in {
-        str(action or "").strip() for action in onboarding.get("actions", []) or ()
-    }:
-        return (
-            "Route: render -> deploy.",
-            (
-                "Reason: only target GPU/RDMA reconciliation is selected; without a "
-                "Soperator upgrade, external node-template upgrade, storage remediation, "
-                "or compute replacement, deploy can apply that rendered desired state."
-            ),
-        )
+    actions = tuple(
+        str(action or "").strip()
+        for action in onboarding.get("actions", []) or ()
+        if str(action or "").strip()
+    )
+    if actions:
+        return ("Accepted onboarding actions:", *(f"  - {action}" for action in actions))
     return (
-        "Route: render -> deploy.",
-        "Reason: no external-upgrade-owned Soperator onboarding actions are selected.",
+        "Accepted onboarding actions: none; ext-soperator upgrade will live-verify "
+        "the completed campaign.",
     )
 
 
@@ -20755,57 +21144,39 @@ def _print_soperator_onboard_next_steps(
     migration_required: bool,
     onboarding: Mapping[str, Any],
 ) -> None:
+    _ = migration_required
     config_arg = _config_cli_arg(config_path)
     target_arg = shlex.quote(normalize_component_token(target_ref) or target_ref)
     guidance_lines = _soperator_route_guidance_lines(
         onboarding=onboarding,
         migration_required=migration_required,
     )
-    if migration_required:
-        for line in guidance_lines:
-            console.print(line, soft_wrap=True)
-    else:
-        console.print("Soperator onboarding route:")
-        for line in guidance_lines:
-            console.print(f"  {line}", soft_wrap=True)
+    console.print("External Soperator campaign:")
+    for line in guidance_lines:
+        console.print(f"  {line}", soft_wrap=True)
     console.print("Next steps:")
+    login_policy_suffix = _external_soperator_execute_login_policy_suffix(
+        config_path=config_path,
+        payload=payload,
+        target_ref=target_ref,
+        onboarding=onboarding,
+    )
     commands: list[tuple[str, str]] = [
-        (f"nebius-cxcli validate {config_arg}", ""),
-        (f"nebius-cxcli render {config_arg}", ""),
+        (
+            f"nebius-cxcli ext-soperator upgrade {config_arg} --target {target_arg} --dry-run",
+            "",
+        ),
+        (
+            "nebius-cxcli ext-soperator upgrade "
+            f"{config_arg} --target {target_arg}{login_policy_suffix} "
+            "--execute --approve",
+            "After the dry run is accepted:",
+        ),
     ]
-    if migration_required:
-        login_policy_suffix = _external_soperator_execute_login_policy_suffix(
-            config_path=config_path,
-            payload=payload,
-            target_ref=target_ref,
-            onboarding=onboarding,
-        )
-        commands.extend(
-            [
-                (
-                    f"nebius-cxcli ext-soperator upgrade {config_arg} --target {target_arg} --dry-run",
-                    "",
-                ),
-                (
-                    "nebius-cxcli ext-soperator upgrade "
-                    f"{config_arg} --target {target_arg}{login_policy_suffix} "
-                    "--execute --approve",
-                    "After the dry run is accepted:",
-                ),
-            ]
-        )
-    else:
-        commands.append((f"nebius-cxcli deploy {config_arg}", ""))
     for command, suffix in commands:
         if suffix:
             console.print(suffix.strip())
         _print_copy_paste_command(command)
-    if not migration_required:
-        console.print(
-            f"Use `--target {target_arg}` only when you intentionally want to narrow "
-            "deploy to this generated target.",
-            soft_wrap=True,
-        )
 
 
 def _print_create_next_steps(config_path: Path) -> None:
@@ -20828,7 +21199,7 @@ def _print_component_edit_config_only_note() -> None:
 def _print_soperator_onboard_config_only_note() -> None:
     console.print(
         "Only config.yaml was updated. Existing generated/ artifacts and live resources are "
-        "unchanged until you run render and then follow the Soperator next steps below."
+        "unchanged until you run ext-soperator upgrade --execute --approve."
     )
 
 
@@ -22764,6 +23135,7 @@ def _soperator_target_jail_rootfs_versions(
         or _mapping_path_value(values, "cudaVersion")
     )
     source = "chart-values" if values_define_image else "pinned-chart-defaults"
+    cuda_version = _soperator_chart_value(values, defaults, ("cudaVersion",)) or "12.9.0"
     if not image:
         repository = _soperator_chart_value(
             values,
@@ -22771,13 +23143,24 @@ def _soperator_target_jail_rootfs_versions(
             ("images", "populateJailRepository"),
         )
         tag = _soperator_chart_value(values, defaults, ("images", "populateJailTag"))
-        cuda_version = _soperator_chart_value(values, defaults, ("cudaVersion",)) or "12.9.0"
         if repository and tag:
             image = f"{repository}:{tag}-cuda{cuda_version}"
+    image_cuda_match = re.search(r"(?:^|[-_])cuda(?P<version>[0-9]+(?:\.[0-9]+){1,2})", image)
+    if image_cuda_match is not None:
+        cuda_version = image_cuda_match.group("version")
+    _image_name, digest_separator, digest = image.partition("@")
+    target_digest = digest if digest_separator and digest.startswith("sha256:") else ""
     return {
         "target_image": image,
         "target_version": _soperator_container_image_version(image),
         "target_source": source if image else "",
+        "target_cuda_version": cuda_version if image else "",
+        "target_digest": target_digest,
+        "target_identity_warning": (
+            ""
+            if target_digest or not image
+            else "Artifact digest unavailable; campaign pins the exact repository/tag and catalog identity."
+        ),
     }
 
 
@@ -22796,69 +23179,23 @@ def _soperator_onboarding_target_app_version_for_chart(chart_version: str) -> st
     return ""
 
 
-def _soperator_target_chart_source() -> tuple[str, str]:
-    chart = helm_chart_source_by_id(_SOPERATOR_APP_ID)
-    if chart is None:
-        raise RuntimeError("Soperator chart source is not declared in component_sources.yaml.")
-    portable = getattr(chart, "portable_source", None)
-    chart_name = (
-        _non_empty_text(getattr(portable, "chart_name", ""))
-        or _non_empty_text(getattr(chart, "chart_name", ""))
-        or _SOPERATOR_APP_ID
-    )
-    chart_repo = _non_empty_text(getattr(portable, "repo", "")) or _non_empty_text(
-        getattr(chart, "repo", "")
-    )
-    if not chart_repo:
-        raise RuntimeError("Soperator chart source is missing source.portable.repo.")
-    return chart_name, chart_repo
-
-
 def _validate_soperator_onboarding_target_chart_version(
     value: object,
     *,
     validate_sources: bool,
 ) -> str:
+    del validate_sources
     version = _validate_helm_chart_version_value(
         str(value or ""),
         option_name="--to-chart-version",
     )
-    if not validate_sources:
-        return version
     default_version = _soperator_onboarding_target_version_default()
-    if version == default_version:
-        return version
-    chart_name, chart_repo = _soperator_target_chart_source()
-    issues = _resolve_helm_chart_validation_issues(
-        chart_name=chart_name,
-        chart_repo=chart_repo,
-        chart_version=version,
-        chart_meta_cache={},
-    )
-    if issues:
+    if version != default_version:
         raise RuntimeError(
-            "Soperator target chart version validation failed for "
-            f"'{version}':\n  - " + "\n  - ".join(issues)
+            "External Soperator onboarding requires the exact catalog-pinned chart "
+            f"version {default_version}; received {version}."
         )
     return version
-
-
-def _warn_if_soperator_onboarding_target_appears_lower(
-    *,
-    target_version: str,
-    default_version: str,
-) -> None:
-    comparison = _compare_chart_versions(target_version, default_version)
-    if comparison is None or comparison >= 0:
-        return
-    console.print(
-        f"{warning_markup('WARNING:', bold=True)} selected Soperator target chart version "
-        f"{target_version} appears lower than the catalog default {default_version}. "
-        "cxcli will record this accepted onboarding target, but Helm/Soperator "
-        "downgrades are not guaranteed safe; review release notes, CRDs/schema "
-        "migrations, application state, and backups before executing.",
-        soft_wrap=True,
-    )
 
 
 def _resolve_soperator_onboarding_target_chart_version(
@@ -22873,33 +23210,15 @@ def _resolve_soperator_onboarding_target_chart_version(
             "Soperator onboarding could not determine the catalog-pinned target "
             "chart version from component_sources.yaml."
         )
-    raw_version = _non_empty_text(to_chart_version)
-    if not raw_version and interactive:
-        raw_version = str(
-            _prompt_soperator_validated_value(
-                "deploy.targets[].soperator_onboarding.target_version",
-                default_version,
-                validator=lambda value: _validate_soperator_onboarding_target_chart_version(
-                    value,
-                    validate_sources=validate_sources,
-                ),
-                prompt_hint="catalog default",
-                type_hint="string",
-                required=True,
-            )
+    if _non_empty_text(to_chart_version):
+        raise RuntimeError(
+            "External Soperator onboarding does not accept a chart override; the exact "
+            "Soperator chart/app target is resolved from component_sources.yaml."
         )
-        if _wizard_backtrack_requested(raw_version):
-            raw_version = default_version
-    selected_version = raw_version or default_version
-    version = _validate_soperator_onboarding_target_chart_version(
-        selected_version,
+    return _validate_soperator_onboarding_target_chart_version(
+        default_version,
         validate_sources=validate_sources,
     )
-    _warn_if_soperator_onboarding_target_appears_lower(
-        target_version=version,
-        default_version=default_version,
-    )
-    return version
 
 
 def _validate_soperator_onboarding_target_k8s_version(value: object) -> str:
@@ -22942,10 +23261,71 @@ def _soperator_onboarding_next_k8s_minor(current_version: str, max_version: str)
 def _soperator_onboarding_target_k8s_version_default(
     snapshot: Mapping[str, Any] | None = None,
 ) -> str:
-    latest_supported = ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION
+    if snapshot is None:
+        return ""
+    supported_versions = provider_control_plane_versions(snapshot)
+    if not supported_versions:
+        raise RuntimeError(
+            "External Soperator onboarding requires the live Nebius MK8s control-plane "
+            "version list; no static Kubernetes target fallback is supported."
+        )
     current_version = _soperator_onboarding_snapshot_control_plane_k8s_version(snapshot)
-    next_minor = _soperator_onboarding_next_k8s_minor(current_version, latest_supported)
-    return next_minor or latest_supported
+    if not current_version:
+        raise RuntimeError(
+            "External Soperator onboarding requires the live current MK8s control-plane "
+            "version before it can recommend a Kubernetes endpoint."
+        )
+    current = parse_k8s_version(current_version)
+    _soperator_onboarding_next_k8s_minor(
+        current.minor_text,
+        supported_versions[-1],
+    )
+    candidates = tuple(
+        version
+        for version in supported_versions
+        if _soperator_discovery_k8s_version_tuple(version) >= (current.major, current.minor)
+    )
+    if not candidates:
+        raise RuntimeError(
+            "The live Nebius MK8s control-plane version list does not contain the "
+            f"cluster's current Kubernetes version {current.minor_text}."
+        )
+    preferred_drivers, preferred_os = _soperator_campaign_image_preferences()
+    jail_target = _soperator_target_jail_rootfs_versions()
+    compatible_provider_presets = soperator_provider_driver_presets_for_jail_cuda(
+        _non_empty_text(jail_target.get("target_cuda_version"))
+    )
+    preferred_drivers = tuple(
+        preset for preset in preferred_drivers if preset in compatible_provider_presets
+    )
+    if compatible_provider_presets and not preferred_drivers:
+        raise RuntimeError(
+            "No Kubernetes endpoint is reachable under the committed host-driver/Jail-CUDA "
+            "policy because none of its compatible provider presets are present in the "
+            "ordered component preferences."
+        )
+    failures: list[str] = []
+    for candidate in reversed(candidates):
+        try:
+            path = validated_control_plane_path(
+                snapshot,
+                current_version=current.minor_text,
+                target_version=candidate,
+            )
+            compile_node_group_hop_targets(
+                snapshot,
+                control_plane_path=path,
+                preferred_os=preferred_os,
+                preferred_drivers_presets=preferred_drivers,
+            )
+        except ValueError as exc:
+            failures.append(f"{candidate}: {exc}")
+            continue
+        return candidate
+    raise RuntimeError(
+        "No Kubernetes endpoint is reachable for every concrete MK8s node group under "
+        "the committed OS/driver policy. " + "; ".join(failures)
+    )
 
 
 def _validate_soperator_onboarding_target_k8s_hop(
@@ -22956,37 +23336,35 @@ def _validate_soperator_onboarding_target_k8s_hop(
     target_k8s = _validate_soperator_onboarding_target_k8s_version(target_k8s_version)
     if not target_k8s:
         return ""
-    latest_supported = _validate_soperator_onboarding_target_k8s_version(
-        ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION
-    )
-    try:
-        target_version = parse_k8s_version(target_k8s)
-        latest_version = parse_k8s_version(latest_supported)
-    except ValueError as exc:
-        raise RuntimeError(str(exc)) from exc
-    if (target_version.major, target_version.minor) > (
-        latest_version.major,
-        latest_version.minor,
-    ):
+    if snapshot is None:
         raise RuntimeError(
-            "Invalid external Soperator onboarding Kubernetes target: requested "
-            f"target {target_k8s} is newer than the cxcli-supported external "
-            f"onboarding target {latest_supported}. Upgrade cxcli before running "
-            "external Soperator onboarding for this target; cxcli will not lock "
-            "an external node-template path that it cannot validate."
+            "External Soperator onboarding requires live Nebius MK8s capability data "
+            "to validate --to-k8s-version."
         )
     current_k8s = _soperator_onboarding_snapshot_control_plane_k8s_version(snapshot)
     if not current_k8s:
-        return target_k8s
+        raise RuntimeError(
+            "External Soperator onboarding could not detect the live MK8s control-plane version."
+        )
     try:
-        minor_version_hops(current_k8s, target_k8s)
+        path = validated_control_plane_path(
+            snapshot,
+            current_version=current_k8s,
+            target_version=target_k8s,
+        )
+        preferred_drivers, preferred_os = _soperator_campaign_image_preferences()
+        compile_node_group_hop_targets(
+            snapshot,
+            control_plane_path=path,
+            preferred_os=preferred_os,
+            preferred_drivers_presets=preferred_drivers,
+        )
     except ValueError as exc:
         current_text = _validate_soperator_onboarding_target_k8s_version(current_k8s)
-        message = str(exc).replace("--to-version", "--to-k8s-version")
         raise RuntimeError(
             "Invalid external Soperator onboarding Kubernetes target: "
             f"Current Kubernetes version: {current_text}; requested target: {target_k8s}. "
-            f"{message}"
+            f"{exc}"
         ) from exc
     return target_k8s
 
@@ -23002,7 +23380,11 @@ def _resolve_soperator_onboarding_target_k8s_version(
     raw_version = _non_empty_text(to_k8s_version)
     if not raw_version and interactive and required:
         current_version = _soperator_onboarding_snapshot_control_plane_k8s_version(snapshot)
-        prompt_hint = "next supported minor" if current_version else "Nebius latest supported minor"
+        prompt_hint = (
+            "final provider-supported target; cxcli locks every validated intermediate hop"
+            if current_version
+            else "Nebius latest supported minor"
+        )
         raw_version = str(
             _prompt_soperator_validated_value(
                 "deploy.targets[].soperator_onboarding.node_template_upgrade.target_k8s_version",
@@ -23021,7 +23403,7 @@ def _resolve_soperator_onboarding_target_k8s_version(
     if not raw_version and required:
         raise RuntimeError(
             "External Soperator onboarding selected an external MK8s node-template upgrade. "
-            f"Pass --to-k8s-version with the next Kubernetes minor target, for example {default_version}. "
+            f"Pass --to-k8s-version with the final Kubernetes target, for example {default_version}. "
             "cxcli will not silently choose a Kubernetes target for this accepted upgrade plan."
         )
     return _validate_soperator_onboarding_target_k8s_hop(
@@ -23058,11 +23440,19 @@ def _soperator_support_policy_failure_message(
         if status not in SOPERATOR_UPGRADE_SUPPORT_REJECT_STATUSES:
             continue
         message = _non_empty_text(finding.get("message"))
-        return (
+        base = (
             "Unsupported Soperator/Kubernetes upgrade path for "
             f"{command_name}: {_soperator_support_finding_label(finding)}. "
             f"Reason: {message or 'the path is not in the committed cxcli upgrade-path policy'}. "
-            "Use the cxcli-pinned Soperator target with provider-supported Kubernetes "
+        )
+        if command_name.startswith("ext-soperator"):
+            return (
+                base + "External campaigns fail closed and have no support-policy override. "
+                "Keep the cxcli catalog pin and choose a provider-supported contiguous "
+                "Kubernetes target, or rerun onboarding after the committed policy changes."
+            )
+        return (
+            base + "Use the cxcli-pinned Soperator target with provider-supported Kubernetes "
             "minor hops, or rerun with --allow-unsupported-soperator-upgrade-path for "
             "an explicit advanced/testing override after validation. This override "
             "does not bypass Kubernetes minor-version hop validation, Nebius API "
@@ -23128,6 +23518,7 @@ def _soperator_support_policy_plan_lines(
     label: str = "Soperator upgrade path",
     rejection_subject: str = "Soperator upgrade-path rejection",
     include_messages: bool = True,
+    override_available: bool = True,
 ) -> tuple[str, ...]:
     lines: list[str] = []
     for finding in soperator_upgrade_support_findings(report):
@@ -23144,12 +23535,18 @@ def _soperator_support_policy_plan_lines(
         if message and include_messages:
             lines.append(f"  - {message}")
         if _non_empty_text(finding.get("status")) in SOPERATOR_UPGRADE_SUPPORT_REJECT_STATUSES:
-            lines.append(
-                "  - Override scope: --allow-unsupported-soperator-upgrade-path only "
-                f"bypasses this {rejection_subject}; Kubernetes minor-hop "
-                "validation, backup, quota, protected-state, and other safety preflights "
-                "still apply."
-            )
+            if override_available:
+                lines.append(
+                    "  - Override scope: --allow-unsupported-soperator-upgrade-path only "
+                    f"bypasses this {rejection_subject}; Kubernetes minor-hop "
+                    "validation, backup, quota, protected-state, and other safety preflights "
+                    "still apply."
+                )
+            else:
+                lines.append(
+                    "  - External campaigns fail closed; no support-policy override is "
+                    "available. Re-run onboarding after provider/catalog policy changes."
+                )
     return tuple(lines)
 
 
@@ -23482,9 +23879,114 @@ def _locked_upgrade_path_stable_json(value: Any) -> str:
 
 
 def _locked_upgrade_path_fingerprint(upgrade_path: Mapping[str, Any]) -> str:
-    return hashlib.sha256(
-        _locked_upgrade_path_stable_json(upgrade_path).encode("utf-8")
-    ).hexdigest()
+    embedded = _non_empty_text(upgrade_path.get("fingerprint"))
+    return embedded or soperator_upgrade_campaign_fingerprint(upgrade_path)
+
+
+def _soperator_campaign_image_preferences() -> tuple[tuple[str, ...], tuple[str, ...]]:
+    settings = tf_module_source_by_id("mk8s", sources=load_component_sources())
+    if settings is None:
+        raise RuntimeError("The mk8s component catalog entry is required for campaign planning.")
+    preferences = settings.mk8s_gpu.image_preferences
+    if not preferences.preferred_os:
+        raise RuntimeError(
+            "The mk8s component policy must define ordered preferred_os values for "
+            "external Soperator campaign planning."
+        )
+    return preferences.preferred_gpu_stack_presets, preferences.preferred_os
+
+
+def _soperator_campaign_managed_operator_targets() -> dict[str, dict[str, str]]:
+    entries = {entry.id: entry for entry in component_entries("apps")}
+    result: dict[str, dict[str, str]] = {}
+    for role, component_id in (
+        ("gpu", "nvidia-gpu-operator"),
+        ("network", "nvidia-network-operator"),
+    ):
+        entry = entries.get(component_id)
+        if entry is None or not _non_empty_text(entry.version):
+            raise RuntimeError(
+                f"The {component_id} component catalog pin is required for campaign planning."
+            )
+        result[role] = {
+            "component_id": component_id,
+            "chart_version": _non_empty_text(entry.version),
+            "chart": _non_empty_text(entry.chart_name) or component_id,
+            "repository": _non_empty_text(entry.chart_repo),
+            "release_name": _non_empty_text(entry.default_release_name) or component_id,
+            "namespace": _non_empty_text(entry.default_namespace),
+        }
+    return result
+
+
+def _soperator_campaign_gpu_targets_for_compatibility_policy(
+    *,
+    snapshot: Mapping[str, Any],
+    segments: Sequence[Mapping[str, Any]],
+) -> tuple[Mapping[str, Any], ...]:
+    planned: list[Mapping[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for segment in segments:
+        mk8s = segment.get("mk8s")
+        node_groups = mk8s.get("node_groups") if isinstance(mk8s, Mapping) else None
+        if not isinstance(node_groups, Sequence) or isinstance(
+            node_groups, (str, bytes, bytearray)
+        ):
+            continue
+        for node_group in node_groups:
+            if not isinstance(node_group, Mapping):
+                continue
+            mode = _non_empty_text(node_group.get("gpu_software_mode"))
+            if mode == "none":
+                continue
+            target = node_group.get("target")
+            preset = (
+                _non_empty_text(target.get("drivers_preset")) if isinstance(target, Mapping) else ""
+            )
+            key = (
+                _non_empty_text(node_group.get("id")) or _non_empty_text(node_group.get("name")),
+                mode,
+                preset,
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            planned.append(node_group)
+    if planned:
+        return tuple(planned)
+
+    live_targets: list[Mapping[str, Any]] = []
+    node_groups = snapshot.get("node_groups")
+    if not isinstance(node_groups, Mapping):
+        return ()
+    for group_name, raw_group in sorted(node_groups.items(), key=lambda item: str(item[0])):
+        if not isinstance(raw_group, Mapping):
+            continue
+        provider = raw_group.get("provider")
+        template = provider.get("node_template") if isinstance(provider, Mapping) else None
+        if not isinstance(template, Mapping):
+            template = {}
+        platform = _non_empty_text(template.get("platform"))
+        is_gpu = raw_group.get("gpu") is True or platform.startswith("gpu-")
+        if not is_gpu:
+            continue
+        drivers_preset = _non_empty_text(
+            template.get("gpu_stack_preset") or template.get("drivers_preset")
+        )
+        live_targets.append(
+            {
+                "id": _non_empty_text(
+                    provider.get("node_group_id") if isinstance(provider, Mapping) else ""
+                ),
+                "name": _non_empty_text(
+                    provider.get("node_group_name") if isinstance(provider, Mapping) else ""
+                )
+                or str(group_name),
+                "gpu_software_mode": ("provider-managed" if drivers_preset else "operator-managed"),
+                "target": {"drivers_preset": drivers_preset},
+            }
+        )
+    return tuple(live_targets)
 
 
 def _locked_upgrade_path_segment_slug(value: str) -> str:
@@ -23544,15 +24046,6 @@ def _locked_upgrade_path_record_value(
     return _non_empty_text(record.get(key))
 
 
-def _locked_upgrade_path_bool_value(
-    owner: Mapping[str, Any],
-    record_name: str,
-    key: str,
-) -> bool:
-    record = owner.get(record_name)
-    return isinstance(record, Mapping) and record.get(key) is True
-
-
 def _locked_upgrade_path_version_record(
     *,
     current_version: str,
@@ -23580,6 +24073,13 @@ def _locked_upgrade_path_jail_rootfs_record(
             "current_version": "",
             "current_source": "not-detected",
             "current_job_name": "",
+            "current_job_uid": "",
+            "current_slot": "",
+            "current_pvc_name": "",
+            "current_pvc_uid": "",
+            "current_jail_filesystem_id": "",
+            "current_evidence_status": "unverified",
+            "current_evidence_reason": "active Jail rootfs evidence is unavailable",
             "live_desired_image": "",
             "live_desired_version": "",
             "live_desired_source": "",
@@ -23655,10 +24155,54 @@ def _locked_upgrade_path_segment(
     }
 
 
+def _locked_upgrade_path_node_group_inventory(
+    *,
+    node_group_targets: Mapping[tuple[str, str], Sequence[Mapping[str, Any]]],
+    control_plane_path: Sequence[str],
+) -> list[dict[str, Any]]:
+    """Collapse per-hop tuples into immutable campaign source/final inventory."""
+
+    hop_pairs = tuple(zip(control_plane_path, control_plane_path[1:], strict=False))
+    if not hop_pairs and control_plane_path:
+        hop_pairs = ((control_plane_path[0], control_plane_path[0]),)
+    if not hop_pairs:
+        return []
+    first_groups = node_group_targets.get(hop_pairs[0], ())
+    final_groups = node_group_targets.get(hop_pairs[-1], ())
+    final_by_id = {
+        _non_empty_text(group.get("id")): group
+        for group in final_groups
+        if _non_empty_text(group.get("id"))
+    }
+    inventory: list[dict[str, Any]] = []
+    for source_group in first_groups:
+        group_id = _non_empty_text(source_group.get("id"))
+        final_group = final_by_id.get(group_id)
+        if final_group is None:
+            raise RuntimeError(
+                "External Soperator campaign node-group inventory changed while "
+                f"compiling its hops: {group_id or '<missing-id>'}."
+            )
+        row = copy.deepcopy(to_plain_data(dict(source_group)))
+        if not isinstance(row, dict):
+            raise RuntimeError("External Soperator campaign node-group tuple is invalid.")
+        row["target"] = copy.deepcopy(to_plain_data(final_group.get("target")))
+        inventory.append(row)
+    if set(final_by_id) != {_non_empty_text(group.get("id")) for group in first_groups}:
+        raise RuntimeError(
+            "External Soperator campaign node-group inventory is not stable across all hops."
+        )
+    return inventory
+
+
 def _locked_upgrade_path_from_report(
     *,
     report: Mapping[str, Any] | Any,
     onboarding: Mapping[str, Any],
+    snapshot: Mapping[str, Any] | None = None,
+    project_id: str = "",
+    cluster_id: str = "",
+    target_ref: str = "",
 ) -> dict[str, Any]:
     action_ids = tuple(
         str(action or "").strip()
@@ -23670,9 +24214,7 @@ def _locked_upgrade_path_from_report(
     if not isinstance(jail_rootfs, Mapping):
         jail_rootfs = {}
     jail_refresh_required = jail_rootfs.get("refresh_required") is True
-    if not (set(action_ids) & _SOPERATOR_MIGRATION_ACTIONS):
-        if not jail_refresh_required:
-            return {}
+    if not (set(action_ids) & _SOPERATOR_MIGRATION_ACTIONS) and jail_refresh_required:
         action_ids = (*action_ids, ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE)
     source_soperator, target_soperator, current_k8s, target_k8s = (
         _soperator_discovery_support_path_values(report)
@@ -23706,8 +24248,86 @@ def _locked_upgrade_path_from_report(
         and ONBOARDING_ACTION_UPGRADE_SOPERATOR not in set(action_ids)
     ):
         action_ids = (*action_ids, ONBOARDING_ACTION_UPGRADE_SOPERATOR)
-    k8s_hops = _soperator_discovery_k8s_hops(current_k8s, target_k8s)
+    if current_k8s and target_k8s:
+        try:
+            k8s_hops = validated_control_plane_path(
+                snapshot or {},
+                current_version=current_k8s,
+                target_version=target_k8s,
+            )
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
+    else:
+        k8s_hops = _soperator_discovery_k8s_hops(current_k8s, target_k8s)
     k8s_pairs = tuple(zip(k8s_hops, k8s_hops[1:], strict=False))
+    node_group_targets: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    preferred_gpu_stack_presets: tuple[str, ...] = ()
+    preferred_os: tuple[str, ...] = ()
+    host_driver_jail_cuda_policy = soperator_host_driver_jail_cuda_policy()
+    compatible_provider_presets = soperator_provider_driver_presets_for_jail_cuda(
+        _non_empty_text(jail_rootfs.get("target_cuda_version"))
+    )
+    if k8s_pairs or current_k8s:
+        preferred_gpu_stack_presets, preferred_os = _soperator_campaign_image_preferences()
+        preferred_gpu_stack_presets = tuple(
+            preset
+            for preset in preferred_gpu_stack_presets
+            if preset in compatible_provider_presets
+        )
+        if compatible_provider_presets and not preferred_gpu_stack_presets:
+            raise RuntimeError(
+                "External Soperator campaign cannot be locked because no committed "
+                "host-driver/Jail-CUDA-compatible preset is present in the ordered "
+                "component policy preferences."
+            )
+        planning_path = k8s_hops if k8s_pairs else (current_k8s, current_k8s)
+        try:
+            node_group_targets = compile_node_group_hop_targets(
+                snapshot or {},
+                control_plane_path=planning_path,
+                preferred_os=preferred_os,
+                preferred_drivers_presets=preferred_gpu_stack_presets,
+            )
+        except ValueError as exc:
+            driver_rules = host_driver_jail_cuda_policy.get("driver_presets")
+            jail_rules = host_driver_jail_cuda_policy.get("jail_cuda")
+            jail_cuda_version = _non_empty_text(jail_rootfs.get("target_cuda_version"))
+            jail_rule = (
+                jail_rules.get(jail_cuda_version) if isinstance(jail_rules, Mapping) else None
+            )
+            if isinstance(driver_rules, Mapping) and isinstance(jail_rule, Mapping):
+                driver_summary = ", ".join(
+                    f"{preset} uses branch {rule.get('driver_branch', 'unknown')}"
+                    for preset, rule in sorted(driver_rules.items(), key=lambda item: str(item[0]))
+                    if isinstance(rule, Mapping)
+                )
+                raise RuntimeError(
+                    "External Soperator campaign cannot be locked: "
+                    f"{exc} Committed provider presets: {driver_summary or 'none'}; "
+                    f"Jail CUDA {jail_cuda_version or 'missing'} requires minimum branch "
+                    f"{jail_rule.get('minimum_driver_branch', 'unknown')}."
+                ) from exc
+            raise RuntimeError(str(exc)) from exc
+    same_minor_targets = node_group_targets.get((current_k8s, current_k8s), [])
+    campaign_node_groups = _locked_upgrade_path_node_group_inventory(
+        node_group_targets=node_group_targets,
+        control_plane_path=k8s_hops or ((current_k8s,) if current_k8s else ()),
+    )
+    if any(
+        isinstance(group.get("source"), Mapping)
+        and isinstance(group.get("target"), Mapping)
+        and (
+            _non_empty_text(group["source"].get("os")) != _non_empty_text(group["target"].get("os"))
+            or _non_empty_text(group["source"].get("drivers_preset"))
+            != _non_empty_text(group["target"].get("drivers_preset"))
+        )
+        for group in same_minor_targets
+    ) and ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE not in set(action_ids):
+        action_ids = (
+            *action_ids,
+            ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
+            ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
+        )
     soperator_change_required = ONBOARDING_ACTION_UPGRADE_SOPERATOR in set(action_ids)
     jail_refresh_required = jail_refresh_required or soperator_change_required
     if soperator_change_required:
@@ -23743,6 +24363,9 @@ def _locked_upgrade_path_from_report(
             one_time_hop_index = 1
     segments: list[dict[str, Any]] = []
     segment_index = 1
+    current_jail_image = _non_empty_text(jail_rootfs.get("current_image"))
+    current_jail_version = _non_empty_text(jail_rootfs.get("current_version"))
+    current_jail_source = _non_empty_text(jail_rootfs.get("current_source"))
 
     def _append_segment(
         *,
@@ -23755,7 +24378,7 @@ def _locked_upgrade_path_from_report(
         include_soperator_change: bool,
         include_k8s_change: bool,
     ) -> None:
-        nonlocal segment_index
+        nonlocal current_jail_image, current_jail_source, current_jail_version, segment_index
         segment_actions = _locked_upgrade_path_action_ids(
             action_ids,
             include_one_time_actions=include_one_time_actions,
@@ -23764,6 +24387,10 @@ def _locked_upgrade_path_from_report(
         )
         if not segment_actions:
             return
+        segment_jail_rootfs = dict(copy.deepcopy(to_plain_data(jail_rootfs)))
+        segment_jail_rootfs["current_image"] = current_jail_image
+        segment_jail_rootfs["current_version"] = current_jail_version
+        segment_jail_rootfs["current_source"] = current_jail_source
         segments.append(
             _locked_upgrade_path_segment(
                 index=segment_index,
@@ -23775,13 +24402,30 @@ def _locked_upgrade_path_from_report(
                 or target_app,
                 source_chart_version=source_version,
                 target_chart_version=target_version,
-                jail_rootfs=jail_rootfs,
+                jail_rootfs=segment_jail_rootfs,
                 action_ids=segment_actions,
                 include_soperator_change=include_soperator_change,
                 include_jail_refresh=include_one_time_actions and jail_refresh_required,
                 include_k8s_change=include_k8s_change,
             )
         )
+        segment = segments[-1]
+        segment["depends_on"] = (
+            [_non_empty_text(segments[-2].get("id"))] if len(segments) > 1 else []
+        )
+        segment["mk8s"] = {
+            "control_plane": {
+                "source_version": current_k8s_version,
+                "target_version": target_k8s_version,
+            },
+            "node_groups": copy.deepcopy(
+                node_group_targets.get((current_k8s_version, target_k8s_version), [])
+            ),
+        }
+        if include_one_time_actions and jail_refresh_required:
+            current_jail_image = _non_empty_text(jail_rootfs.get("target_image"))
+            current_jail_version = _non_empty_text(jail_rootfs.get("target_version"))
+            current_jail_source = _non_empty_text(jail_rootfs.get("target_source"))
         segment_index += 1
 
     if k8s_pairs:
@@ -23849,8 +24493,6 @@ def _locked_upgrade_path_from_report(
             include_soperator_change=soperator_change_required,
             include_k8s_change=bool(include_node_template and current_version != target_k8s),
         )
-    if not segments:
-        return {}
     recommended_steps = tuple(
         line.removeprefix("  - Recommended order: ").removesuffix(".")
         for line in _soperator_discovery_upgrade_order_steps(
@@ -23866,11 +24508,105 @@ def _locked_upgrade_path_from_report(
             soperator_after_k8s_min=soperator_after_k8s_min,
         )
     )
-    return {
+    gpu_compatibility_targets = _soperator_campaign_gpu_targets_for_compatibility_policy(
+        snapshot=snapshot or {},
+        segments=segments,
+    )
+    managed_operator_targets: dict[str, dict[str, str]] = {}
+    if gpu_compatibility_targets:
+        managed_operator_targets = _soperator_campaign_managed_operator_targets()
+        validate_soperator_host_driver_jail_cuda_compatibility(
+            jail_cuda_version=_non_empty_text(jail_rootfs.get("target_cuda_version")),
+            node_group_targets=gpu_compatibility_targets,
+            managed_gpu_operator_target=managed_operator_targets["gpu"],
+        )
+    catalog_material = {
+        "soperator_chart": target_chart,
+        "soperator_app": target_app,
+        "jail_rootfs_image": _non_empty_text(jail_rootfs.get("target_image")),
+        "jail_rootfs_version": _non_empty_text(jail_rootfs.get("target_version")),
+        "support_rule_id": support_rule_id,
+        "preferred_os": list(preferred_os),
+        "preferred_gpu_stack_presets": list(preferred_gpu_stack_presets),
+        "managed_operators": copy.deepcopy(to_plain_data(managed_operator_targets)),
+        "host_driver_jail_cuda_policy": to_plain_data(host_driver_jail_cuda_policy),
+    }
+    catalog_fingerprint = hashlib.sha256(
+        _locked_upgrade_path_stable_json(catalog_material).encode("utf-8")
+    ).hexdigest()
+    campaign_node_template = onboarding.get("node_template_upgrade")
+    campaign_rollout = resolve_external_node_template_rollout(onboarding).to_manifest_dict()
+    slurm_scheduling_quiesce = bool(
+        campaign_node_template.get("slurm_scheduling_quiesce", True)
+        if isinstance(campaign_node_template, Mapping)
+        else True
+    )
+    rollout_contract = dict(copy.deepcopy(to_plain_data(campaign_rollout)))
+    worker_strategy = normalize_component_token(rollout_contract.get("strategy"))
+    worker_group_strategy = rollout_contract.get("worker_group_strategy")
+    worker_max_surge = (
+        worker_group_strategy.get("max_surge_count")
+        if isinstance(worker_group_strategy, Mapping)
+        else None
+    )
+    if slurm_scheduling_quiesce and (
+        worker_strategy != SOPERATOR_WORKER_ROLLOUT_STRATEGY_ZERO_SURGE or worker_max_surge != 0
+    ):
+        raise RuntimeError(
+            "External Soperator campaign cannot lock a quiesced worker rollout with "
+            "surge: rollout.strategy must be zero-surge and "
+            "rollout.worker_group_strategy.max_surge_count must be 0 when "
+            "slurm_scheduling_quiesce is true. Service-role rollout remains independent."
+        )
+    rollout_contract.update(
+        {
+            "slurm_scheduling_quiesce": slurm_scheduling_quiesce,
+            "global_unavailable_percent": 5,
+            "per_group_unavailable_percent": 5,
+            "per_group_unavailable_cap": 25,
+            "max_concurrent_worker_groups": 8,
+            "hard_concurrent_worker_group_ceiling": 32,
+            "failure_domain_budgeting": ["partition", "zone", "gpu"],
+            "service_role_mode": "serial",
+            "quiesced_worker_max_surge": 0,
+            "provider_drain_timeout": "unset",
+        }
+    )
+    jail_target_image = _non_empty_text(jail_rootfs.get("target_image"))
+    jail_target_digest = _non_empty_text(jail_rootfs.get("target_digest"))
+    jail_identity_warning = _non_empty_text(jail_rootfs.get("target_identity_warning"))
+    if jail_target_image and not jail_target_digest and not jail_identity_warning:
+        jail_identity_warning = (
+            "Artifact digest unavailable; campaign pins the exact repository/tag and "
+            "catalog identity."
+        )
+    campaign = {
         "schema": _SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA,
         "locked": True,
+        "identity": snapshot_campaign_identity(
+            snapshot or {},
+            project_id=project_id,
+            cluster_id=cluster_id,
+            target_ref=target_ref,
+        ),
+        "source_provenance": {
+            "discovery": "live-kubernetes-and-nebius-sdk",
+            "provider_capabilities": "nebius-sdk-list-versions-and-compatibility-matrix",
+            "component_catalog": "component_sources.yaml",
+            "support_policy": "committed-soperator-upgrade-support-policy",
+            "source_contract": "campaign-source-waypoints",
+        },
+        "catalog_fingerprint": catalog_fingerprint,
+        "capabilities_source": "nebius-sdk",
         "source_k8s_version": current_k8s,
         "target_k8s_version": target_k8s,
+        "mk8s": {
+            "control_plane": {
+                "source_version": current_k8s,
+                "target_version": target_k8s,
+            },
+            "node_groups": campaign_node_groups,
+        },
         "soperator_app": _locked_upgrade_path_version_record(
             current_version=source_app,
             target_version=target_app,
@@ -23887,8 +24623,24 @@ def _locked_upgrade_path_from_report(
         "support_rule_id": support_rule_id,
         "recommended_order": list(recommended_steps),
         "recommended_order_policy": copy.deepcopy(to_plain_data(recommended_order)),
+        "final_targets": {
+            "kubernetes": target_k8s,
+            "soperator_app": target_app,
+            "soperator_chart": target_chart,
+            "jail_rootfs_image": jail_target_image,
+            "jail_rootfs_version": _non_empty_text(jail_rootfs.get("target_version")),
+            "jail_cuda_version": _non_empty_text(jail_rootfs.get("target_cuda_version")),
+            "jail_artifact_digest": jail_target_digest,
+            "jail_artifact_identity_warning": jail_identity_warning,
+        },
+        "managed_operators": managed_operator_targets,
+        "rollout": rollout_contract,
         "segments": segments,
     }
+    return finalize_soperator_upgrade_campaign(
+        campaign,
+        created_at=datetime.now(UTC).isoformat(),
+    )
 
 
 def _soperator_discovery_upgrade_path_lines(
@@ -23929,9 +24681,10 @@ def _soperator_discovery_upgrade_guidance_lines(
     lines.extend(
         _soperator_support_policy_plan_lines(
             report,
-            reject_disposition="execute requires override",
+            reject_disposition="blocked by committed policy",
             label="Soperator upgrade path",
             rejection_subject="Soperator upgrade-path rejection",
+            override_available=False,
         )
     )
     if lines:
@@ -24353,7 +25106,8 @@ def _print_soperator_onboarding_decision_summary(target_row: Mapping[str, Any]) 
         )
     for line in _soperator_support_policy_plan_lines(
         report,
-        reject_disposition="accepted plan requires override",
+        reject_disposition="blocked by committed policy",
+        override_available=False,
     ):
         console.print(f"[dim]{line}[/dim]", soft_wrap=True)
 
@@ -24702,26 +25456,10 @@ def _prompt_soperator_onboarding_rollout_manifest(
             required=True,
         )
     )
-    _print_soperator_rollout_field_guidance("drain_timeout")
-    drain_timeout = str(
-        _prompt_soperator_rollout_value(
-            "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.worker_group_strategy.drain_timeout",
-            selected_current.strategy_drain_timeout,
-            validator=lambda value: _soperator_rollout_manifest_from_options(
-                onboarding,
-                worker_rollout_strategy=strategy,
-                service_role_rollout_strategy=service_role_strategy,
-                worker_wave_groups=worker_wave_groups,
-                worker_wave_percent=worker_wave_percent,
-                max_parallel_worker_groups=max_parallel,
-                strategy_max_surge_count=max_surge,
-                strategy_max_unavailable_count=max_unavailable,
-                strategy_drain_timeout=str(value or ""),
-            ),
-            type_hint="string",
-            required=True,
-        )
-    )
+    # V3 deliberately leaves the provider drain timeout unset. This is not a
+    # customer choice: cxcli owns a separate bounded observation timeout and
+    # returns the segment as pending instead of allowing forced node deletion.
+    drain_timeout = "none"
     return _soperator_rollout_manifest_from_options(
         onboarding,
         worker_rollout_strategy=strategy,
@@ -24795,6 +25533,16 @@ def _soperator_rollout_manifest_from_options(
         strategy_max_unavailable_count=strategy_max_unavailable_count,
         strategy_drain_timeout=strategy_drain_timeout,
     ).to_manifest_dict()
+
+
+def _soperator_onboarding_default_slurm_scheduling_quiesce(
+    rollout_manifest: Mapping[str, Any],
+) -> bool:
+    """Derive the compatible scheduling default before campaign fingerprinting."""
+
+    return normalize_component_token(rollout_manifest.get("strategy")) != (
+        SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE
+    )
 
 
 def _soperator_target_row_requires_external_node_template_rollout(
@@ -24936,6 +25684,7 @@ def _soperator_onboarding_target_defaults(
     target_ref: str,
     *,
     kube_context: str,
+    project_id: str = "",
     cluster_id: str = "",
     storage_mode: str | None = None,
     compute_mode: str | None = None,
@@ -24985,6 +25734,11 @@ def _soperator_onboarding_target_defaults(
         storage_mode=effective_storage_mode,
         compute_mode=effective_compute_mode,
     )
+    resolved_rollout_manifest = copy.deepcopy(
+        dict(rollout_manifest)
+        if rollout_manifest is not None
+        else _soperator_rollout_manifest_from_options()
+    )
     target_row: dict[str, Any] = {
         "instance_id": normalized_target,
         DEPLOY_TARGET_KIND_FIELD: EXTERNAL_MK8S_TARGET_KIND,
@@ -25017,12 +25771,10 @@ def _soperator_onboarding_target_defaults(
             ),
             "target_os": ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS,
             "target_gpu_stack_preset": ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_GPU_STACK_PRESET,
-            "slurm_scheduling_quiesce": True,
-            "rollout": copy.deepcopy(
-                dict(rollout_manifest)
-                if rollout_manifest is not None
-                else _soperator_rollout_manifest_from_options()
+            "slurm_scheduling_quiesce": (
+                _soperator_onboarding_default_slurm_scheduling_quiesce(resolved_rollout_manifest)
             ),
+            "rollout": resolved_rollout_manifest,
         }
     onboarding = target_row["soperator_onboarding"]
     enriched_report, _target_versions = _soperator_onboarding_enriched_report_payload(
@@ -25042,6 +25794,10 @@ def _soperator_onboarding_target_defaults(
         locked_upgrade_path = _locked_upgrade_path_from_report(
             report=enriched_report,
             onboarding=onboarding,
+            snapshot=snapshot,
+            project_id=project_id,
+            cluster_id=cluster_id,
+            target_ref=normalized_target,
         )
         if locked_upgrade_path:
             onboarding["upgrade_path"] = locked_upgrade_path
@@ -25056,6 +25812,83 @@ def _soperator_onboarding_target_defaults(
     if normalized_cluster_id:
         target_row["cluster_id"] = normalized_cluster_id
     return target_row
+
+
+def _rebuild_soperator_onboarding_campaign(
+    target_row: dict[str, Any],
+    *,
+    project_id: str,
+) -> dict[str, Any]:
+    onboarding = target_row.get("soperator_onboarding")
+    report_material = target_row.get(_SOPERATOR_DISCOVERY_REPORT_PRIVATE_KEY)
+    snapshot = report_material.get("snapshot") if isinstance(report_material, Mapping) else None
+    report = report_material.get("report") if isinstance(report_material, Mapping) else None
+    if (
+        not isinstance(onboarding, dict)
+        or not isinstance(snapshot, Mapping)
+        or not isinstance(report, Mapping)
+    ):
+        raise RuntimeError("External Soperator onboarding campaign inputs are incomplete.")
+    campaign = _locked_upgrade_path_from_report(
+        report=report,
+        onboarding=onboarding,
+        snapshot=snapshot,
+        project_id=project_id,
+        cluster_id=_non_empty_text(target_row.get("cluster_id")),
+        target_ref=component_instance_id(target_row),
+    )
+    onboarding["upgrade_path"] = campaign
+    if isinstance(report_material, dict):
+        report_payload = report_material.get("report")
+        if isinstance(report_payload, dict):
+            report_payload["upgrade_path"] = copy.deepcopy(campaign)
+    return campaign
+
+
+def _print_soperator_campaign_acceptance(
+    target_row: Mapping[str, Any],
+    *,
+    interactive: bool,
+) -> None:
+    campaign = _external_soperator_campaign(target_row)
+    console.print("[bold cyan]Complete external Soperator upgrade campaign:[/bold cyan]")
+    console.print(f"Campaign ID: {_non_empty_text(campaign.get('campaign_id'))}")
+    console.print(f"Campaign fingerprint: {_non_empty_text(campaign.get('fingerprint'))}")
+    console.print(
+        "Final targets: Kubernetes "
+        f"{_non_empty_text(campaign.get('target_k8s_version'))}; Soperator chart "
+        f"{_locked_upgrade_path_record_value(campaign, 'soperator_chart', 'target_version')}; "
+        "Jail rootfs "
+        f"{_non_empty_text(_mapping_path_value(campaign, 'jail_rootfs.target_version')) or 'unchanged'}"
+    )
+    segments = _locked_upgrade_path_segments(campaign)
+    if not segments:
+        console.print("- No mutation segments; live state already satisfies all accepted targets.")
+    for segment in segments:
+        console.print(
+            f"- {_non_empty_text(segment.get('id'))}: {_non_empty_text(segment.get('title'))}"
+        )
+        mk8s = segment.get("mk8s")
+        node_groups = mk8s.get("node_groups") if isinstance(mk8s, Mapping) else None
+        for node_group in node_groups if isinstance(node_groups, list) else []:
+            if not isinstance(node_group, Mapping):
+                continue
+            target = node_group.get("target")
+            if not isinstance(target, Mapping):
+                continue
+            console.print(
+                "  - node group "
+                f"{_non_empty_text(node_group.get('id')) or _non_empty_text(node_group.get('name'))}: "
+                f"Kubernetes {_non_empty_text(target.get('kubernetes_version'))}, "
+                f"OS {_non_empty_text(target.get('os'))}, drivers_preset "
+                f"{_non_empty_text(target.get('drivers_preset')) or 'operator-managed'}"
+            )
+    if interactive and not typer.confirm(
+        "Accept this exact campaign fingerprint in config.yaml?",
+        default=False,
+        show_default=True,
+    ):
+        raise _WizardQuitRequested
 
 
 def _soperator_onboarding_empty_snapshot() -> dict[str, Any]:
@@ -25073,9 +25906,7 @@ def _soperator_onboard_bundle_command_args(
     storage_mode: str | None = None,
     compute_mode: str | None = None,
     source_version: str | None = None,
-    to_chart_version: str | None = None,
     to_k8s_version: str | None = None,
-    allow_unsupported_soperator_upgrade_path: bool | None = None,
     worker_rollout_strategy: str | None = None,
     service_role_rollout_strategy: str | None = None,
     worker_wave_groups: int | None = None,
@@ -25126,13 +25957,6 @@ def _soperator_onboard_bundle_command_args(
         compute_mode if compute_mode is not None else accepted_compute_mode,
     )
     _append_text_option("--source-version", source_version)
-    accepted_target_version = ""
-    if isinstance(onboarding, Mapping) and use_accepted_row:
-        accepted_target_version = _non_empty_text(onboarding.get("target_version"))
-    _append_text_option(
-        "--to-chart-version",
-        to_chart_version if to_chart_version is not None else accepted_target_version,
-    )
     accepted_target_k8s_version = ""
     if isinstance(onboarding, Mapping) and use_accepted_row:
         node_template_upgrade = onboarding.get("node_template_upgrade")
@@ -25144,8 +25968,6 @@ def _soperator_onboard_bundle_command_args(
         "--to-k8s-version",
         to_k8s_version if to_k8s_version is not None else accepted_target_k8s_version,
     )
-    if allow_unsupported_soperator_upgrade_path is True:
-        args.append("--allow-unsupported-soperator-upgrade-path")
     _append_text_option("--worker-rollout-strategy", worker_rollout_strategy)
     _append_text_option("--service-role-rollout-strategy", service_role_rollout_strategy)
     if worker_wave_groups is not None:
@@ -25215,6 +26037,7 @@ def _soperator_onboarding_enriched_report_payload(
     raw_report = report.to_dict() if hasattr(report, "to_dict") else dict(report)
     plain_report = to_plain_data(raw_report)
     report_payload = dict(plain_report) if isinstance(plain_report, Mapping) else {}
+    report_payload["onboard_description"] = EXT_SOPERATOR_ONBOARD_DESCRIPTION
     target_versions = _soperator_onboarding_report_target_versions(
         report=report_payload,
         onboarding=onboarding,
@@ -25889,13 +26712,98 @@ def _sdk_resource_text(value: Any) -> str:
     return _non_empty_text(value)
 
 
+def _sdk_resource_version(value: Any) -> int | str | None:
+    raw = _sdk_field(value, "resource_version")
+    if raw in (None, "", 0):
+        raw = _sdk_field(value, "resourceVersion")
+    if raw in (None, "", 0) or isinstance(raw, bool):
+        return None
+    return raw
+
+
+def _sdk_int(value: Any, *keys: str) -> int | None:
+    for key in keys:
+        raw = _sdk_field(value, key)
+        if isinstance(raw, bool):
+            continue
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _sdk_provider_status_snapshot(raw_resource: Any, *, node_group: bool) -> dict[str, Any]:
+    status = _sdk_field(raw_resource, "status")
+    raw_state = _sdk_field(status, "state")
+    state = _non_empty_text(getattr(raw_state, "name", None) or raw_state).upper()
+    if "." in state:
+        state = state.rsplit(".", 1)[-1]
+    reconciling = bool(_sdk_field(status, "reconciling"))
+    terminal = bool(status is not None and state == "RUNNING" and not reconciling)
+    result: dict[str, Any] = {
+        "provider_state": state,
+        "provider_reconciling": reconciling,
+        "operation_terminal": terminal,
+    }
+    if not node_group:
+        return result
+    target = _sdk_int(status, "target_node_count", "targetNodeCount")
+    current = _sdk_int(status, "node_count", "nodeCount")
+    ready = _sdk_int(status, "ready_node_count", "readyNodeCount")
+    outdated = _sdk_int(status, "outdated_node_count", "outdatedNodeCount")
+    if outdated is None and terminal and target is not None and target == current == ready:
+        outdated = 0
+    result.update(
+        {
+            "target_node_count": target,
+            "node_count": current,
+            "ready_node_count": ready,
+            "outdated_node_count": outdated,
+            "operation_terminal": bool(
+                terminal and target is not None and target == current == ready and outdated == 0
+            ),
+        }
+    )
+    return result
+
+
+def _sdk_mk8s_filesystem_attachment_snapshot(raw_attachment: Any) -> dict[str, Any]:
+    existing_filesystem = _sdk_field(raw_attachment, "existing_filesystem") or _sdk_field(
+        raw_attachment,
+        "existingFilesystem",
+    )
+    filesystem_id = _sdk_first_text(
+        raw_attachment,
+        "filesystem_id",
+        "filesystemId",
+    ) or _sdk_first_text(existing_filesystem, "id")
+    mount_tag = _sdk_first_text(raw_attachment, "mount_tag", "mountTag")
+    attach_mode = _sdk_resource_text(
+        _sdk_field(raw_attachment, "attach_mode") or _sdk_field(raw_attachment, "attachMode")
+    )
+    result: dict[str, Any] = {}
+    if filesystem_id:
+        result["existing_filesystem"] = {"id": filesystem_id}
+    if mount_tag:
+        result["mount_tag"] = mount_tag
+    if attach_mode:
+        result["attach_mode"] = attach_mode
+    return result
+
+
 def _sdk_mk8s_cluster_template_snapshot(raw_cluster: Any, *, cluster_id: str) -> dict[str, Any]:
     metadata = _sdk_field(raw_cluster, "metadata")
     spec = _sdk_field(raw_cluster, "spec")
     control_plane = _sdk_field(spec, "control_plane") or _sdk_field(spec, "controlPlane")
+    resource_id = _sdk_first_text(metadata, "id") or cluster_id
     return {
-        "id": _sdk_first_text(metadata, "id") or cluster_id,
+        "id": resource_id,
         "name": _sdk_first_text(metadata, "name"),
+        "parent_id": _sdk_first_text(metadata, "parent_id", "parentId"),
+        "resource_uid": resource_id,
+        "resource_version": _sdk_resource_version(metadata),
+        **_sdk_provider_status_snapshot(raw_cluster, node_group=False),
         "control_plane_version": _sdk_first_text(control_plane, "version")
         or _sdk_first_text(spec, "version"),
     }
@@ -25921,12 +26829,31 @@ def _sdk_mk8s_node_group_template_snapshot(raw_group: Any) -> dict[str, Any]:
             "driversPreset",
         ),
     }
+    raw_filesystems = _sdk_field(template, "filesystems")
+    if isinstance(raw_filesystems, Sequence) and not isinstance(
+        raw_filesystems,
+        (str, bytes, bytearray),
+    ):
+        filesystems = [
+            attachment
+            for raw_attachment in raw_filesystems
+            if (attachment := _sdk_mk8s_filesystem_attachment_snapshot(raw_attachment))
+        ]
+        if filesystems:
+            node_template["filesystems"] = filesystems
+    provider_status = _sdk_provider_status_snapshot(raw_group, node_group=True)
     return {
         "node_group_id": node_group_id,
         "node_group_name": node_group_name,
+        "resource_uid": node_group_id,
+        "resource_version": _sdk_resource_version(metadata),
+        **provider_status,
         "provider": {
             "node_group_id": node_group_id,
             "node_group_name": node_group_name,
+            "resource_uid": node_group_id,
+            "resource_version": _sdk_resource_version(metadata),
+            **provider_status,
             "node_template": node_template,
         },
         "labels": {
@@ -25941,7 +26868,7 @@ def _sdk_mk8s_node_group_template_snapshot(raw_group: Any) -> dict[str, Any]:
         if node_group_id
         else {},
         "gpu": normalize_component_token(platform).startswith("gpu"),
-        "node_count": 0,
+        "node_count": provider_status.get("node_count") or 0,
     }
 
 
@@ -25973,8 +26900,6 @@ def _collect_provider_mk8s_template_snapshot(
     *,
     cluster_id: str,
 ) -> dict[str, Any]:
-    from nebius.api.nebius.mk8s.v1 import ClusterServiceClient, GetClusterRequest
-
     _client_name, _tenant_id, project_id, _region_id, _email = _identity_values_from_payload(
         payload
     )
@@ -25983,19 +26908,65 @@ def _collect_provider_mk8s_template_snapshot(
         context="Soperator onboarding MK8s node-template inventory",
     )
     try:
-        cluster = ClusterServiceClient(sdk).get(GetClusterRequest(id=cluster_id)).wait()
-        node_groups = _list_provider_mk8s_node_group_template_snapshots(
-            sdk=sdk,
+        executor = Mk8sKubernetesVersionExecutor(sdk)
+        cluster = executor.get_cluster(cluster_id)
+        cluster_snapshot = _sdk_mk8s_cluster_template_snapshot(
+            cluster,
             cluster_id=cluster_id,
         )
+        cluster_parent_id = _non_empty_text(cluster_snapshot.get("parent_id"))
+        if not project_id or not cluster_parent_id or cluster_parent_id != project_id:
+            raise RuntimeError(
+                "External Soperator onboarding could not prove that MK8s cluster "
+                f"{cluster_id} belongs to config project {project_id or '<missing>'}; "
+                f"provider parent is {cluster_parent_id or '<missing>'}. No campaign "
+                "was written."
+            )
+        raw_node_groups = executor.list_node_groups(cluster_id)
+        node_groups = tuple(
+            _sdk_mk8s_node_group_template_snapshot(item) for item in raw_node_groups
+        )
+        control_plane_versions = executor.control_plane_versions()
+        current_version = cluster_snapshot.get("control_plane_version", "")
+        try:
+            current_key = parse_k8s_version(str(current_version or "")).minor
+        except ValueError:
+            current_key = -1
+        candidate_versions = tuple(
+            version
+            for version in control_plane_versions
+            if parse_k8s_version(version).minor >= current_key
+        )
+        platforms = tuple(
+            sorted(
+                {
+                    _non_empty_text(_mapping_path_value(item, "provider.node_template.platform"))
+                    for item in node_groups
+                }
+            )
+        )
+        compatibility_matrix: dict[str, dict[str, list[dict[str, str]]]] = {}
+        for version in candidate_versions:
+            version_matrix: dict[str, list[dict[str, str]]] = {}
+            for platform in platforms:
+                choices = executor.compatibility_choices(
+                    target_version=version,
+                    platform=platform,
+                )
+                version_matrix[platform or "_"] = [
+                    {
+                        "platform": choice.platform,
+                        "os": choice.os,
+                        "drivers_preset": choice.drivers_preset,
+                    }
+                    for choice in choices
+                ]
+            compatibility_matrix[version] = version_matrix
     finally:
         with suppress(Exception):
             sdk.sync_close()
     return {
-        "mk8s_cluster": _sdk_mk8s_cluster_template_snapshot(
-            cluster,
-            cluster_id=cluster_id,
-        ),
+        "mk8s_cluster": cluster_snapshot,
         "node_groups": {
             (
                 normalize_component_token(item.get("node_group_id"))
@@ -26005,7 +26976,120 @@ def _collect_provider_mk8s_template_snapshot(
             if normalize_component_token(item.get("node_group_id"))
             or normalize_component_token(item.get("node_group_name"))
         },
+        "control_plane_versions": list(control_plane_versions),
+        "compatibility_matrix": compatibility_matrix,
+        "capabilities_source": "nebius-sdk",
     }
+
+
+def _require_complete_provider_mk8s_campaign_snapshot(
+    provider_snapshot: Mapping[str, Any],
+    *,
+    cluster_id: str,
+) -> None:
+    """Fail closed unless fresh SDK inventory can validate a campaign edge."""
+
+    cluster = provider_snapshot.get("mk8s_cluster")
+    observed_cluster_id = _non_empty_text(cluster.get("id") if isinstance(cluster, Mapping) else "")
+    if not observed_cluster_id or observed_cluster_id != _non_empty_text(cluster_id):
+        raise RuntimeError(
+            "Nebius SDK provider inventory did not return the requested MK8s cluster identity."
+        )
+    current_control_plane_version = _non_empty_text(
+        cluster.get("control_plane_version") if isinstance(cluster, Mapping) else ""
+    )
+    if not current_control_plane_version:
+        raise RuntimeError(
+            "Nebius SDK provider inventory did not return the current MK8s control-plane "
+            "Kubernetes version."
+        )
+    _validate_soperator_onboarding_target_k8s_version(current_control_plane_version)
+    node_groups = provider_snapshot.get("node_groups")
+    if not isinstance(node_groups, Mapping) or not node_groups:
+        raise RuntimeError("Nebius SDK provider inventory returned no MK8s node groups.")
+    for group_key, raw_group in node_groups.items():
+        if not isinstance(raw_group, Mapping):
+            raise RuntimeError(
+                "Nebius SDK provider inventory returned an invalid node-group record for "
+                f"{group_key}."
+            )
+        provider = raw_group.get("provider")
+        if not isinstance(provider, Mapping):
+            raise RuntimeError(
+                "Nebius SDK provider inventory returned no provider identity for node group "
+                f"{group_key}."
+            )
+        template = provider.get("node_template")
+        if not isinstance(template, Mapping):
+            raise RuntimeError(
+                "Nebius SDK provider inventory returned no node-template tuple for node group "
+                f"{group_key}."
+            )
+        node_group_id = _non_empty_text(provider.get("node_group_id")) or _non_empty_text(
+            raw_group.get("node_group_id")
+        )
+        required_tuple = {
+            "stable provider id": node_group_id,
+            "source Kubernetes version": _non_empty_text(template.get("k8s_version")),
+            "source OS": _non_empty_text(template.get("os")),
+            "platform": _non_empty_text(template.get("platform")),
+            "hardware preset": _non_empty_text(template.get("preset")),
+        }
+        missing_tuple_fields = [label for label, value in required_tuple.items() if not value]
+        if missing_tuple_fields:
+            raise RuntimeError(
+                "Nebius SDK provider inventory returned an incomplete source tuple for node "
+                f"group {group_key}: missing " + ", ".join(missing_tuple_fields) + "."
+            )
+        _validate_soperator_onboarding_target_k8s_version(
+            required_tuple["source Kubernetes version"]
+        )
+    control_plane_versions = provider_snapshot.get("control_plane_versions")
+    if not isinstance(control_plane_versions, Sequence) or isinstance(
+        control_plane_versions,
+        (str, bytes, bytearray),
+    ):
+        raise RuntimeError(
+            "Nebius SDK provider inventory returned no control-plane version capability list."
+        )
+    normalized_versions = tuple(
+        _validate_soperator_onboarding_target_k8s_version(version)
+        for version in control_plane_versions
+        if _non_empty_text(version)
+    )
+    if not normalized_versions:
+        raise RuntimeError(
+            "Nebius SDK provider inventory returned no control-plane version capability list."
+        )
+    compatibility_matrix = provider_snapshot.get("compatibility_matrix")
+    if not isinstance(compatibility_matrix, Mapping) or not compatibility_matrix:
+        raise RuntimeError(
+            "Nebius SDK provider inventory returned no node-group compatibility matrix."
+        )
+    if _non_empty_text(provider_snapshot.get("capabilities_source")) != "nebius-sdk":
+        raise RuntimeError(
+            "Nebius SDK provider inventory lacks its authoritative capabilities source marker."
+        )
+
+
+def _snapshot_has_complete_provider_mk8s_campaign_capabilities(
+    snapshot: Mapping[str, Any],
+    *,
+    cluster_id: str,
+) -> bool:
+    provider = snapshot.get("provider")
+    if not isinstance(provider, Mapping):
+        return False
+    provider_snapshot = dict(provider)
+    provider_snapshot["node_groups"] = snapshot.get("node_groups")
+    try:
+        _require_complete_provider_mk8s_campaign_snapshot(
+            provider_snapshot,
+            cluster_id=cluster_id,
+        )
+    except RuntimeError:
+        return False
+    return True
 
 
 def _snapshot_node_group_aliases(group_key: str, raw_group: Mapping[str, Any]) -> set[str]:
@@ -26045,6 +27129,14 @@ def _merge_provider_mk8s_template_snapshot(
     cluster = provider_snapshot.get("mk8s_cluster")
     if isinstance(cluster, Mapping):
         provider["mk8s_cluster"] = copy.deepcopy(to_plain_data(cluster))
+    for key in (
+        "control_plane_versions",
+        "compatibility_matrix",
+        "capabilities_source",
+    ):
+        value = provider_snapshot.get(key)
+        if value not in (None, "", [], {}):
+            provider[key] = copy.deepcopy(to_plain_data(value))
     node_groups = merged.setdefault("node_groups", {})
     if not isinstance(node_groups, dict):
         node_groups = {}
@@ -26095,6 +27187,18 @@ def _merge_provider_mk8s_template_snapshot(
         provider_details = provider_group.get("provider")
         if isinstance(provider_details, Mapping):
             current["provider"] = copy.deepcopy(to_plain_data(provider_details))
+    cluster_identity = merged.get("cluster_identity")
+    if isinstance(cluster_identity, dict):
+        from .soperator_onboarding import (
+            soperator_jail_filesystem_identity_from_provider_node_groups,
+        )
+
+        cluster_identity["jail_filesystem_id"] = (
+            soperator_jail_filesystem_identity_from_provider_node_groups(
+                node_groups,
+                kubernetes_identity=_non_empty_text(cluster_identity.get("jail_filesystem_id")),
+            )
+        )
     return merged
 
 
@@ -26158,16 +27262,163 @@ def _collect_soperator_snapshot_for_nebius_mk8s_cluster(
             payload,
             cluster_id=cluster_id,
         )
-    except Exception as exc:
-        snapshot.setdefault("provider_collection_errors", []).append(
-            {
-                "command": "Nebius MK8s SDK/API inventory",
-                "message": str(exc),
-            }
+        _require_complete_provider_mk8s_campaign_snapshot(
+            provider_snapshot,
+            cluster_id=cluster_id,
         )
+    except Exception as exc:
+        raise RuntimeError(
+            "External Soperator onboarding could not collect the live Nebius MK8s "
+            "control-plane versions and node-group compatibility matrices. No campaign "
+            f"was written: {exc}"
+        ) from exc
     else:
         snapshot = _merge_provider_mk8s_template_snapshot(snapshot, provider_snapshot)
     return snapshot, spec.context_name
+
+
+def _soperator_snapshot_kubernetes_uid(
+    snapshot: Mapping[str, Any],
+    *,
+    source_label: str,
+) -> str:
+    cluster_identity = snapshot.get("cluster_identity")
+    kubernetes_uid = _non_empty_text(
+        cluster_identity.get("kubernetes_uid") if isinstance(cluster_identity, Mapping) else ""
+    )
+    if not kubernetes_uid:
+        raise RuntimeError(
+            "External Soperator onboarding could not validate "
+            f"{source_label}: the kube-system namespace UID is unknown. "
+            "No target or campaign was written."
+        )
+    return kubernetes_uid
+
+
+def _read_kube_system_namespace_uid(
+    *,
+    kube_context: str,
+    extra_env: Mapping[str, str] | None = None,
+) -> str:
+    """Read the immutable Kubernetes cluster UID from one active context."""
+
+    result = _run_soperator_upgrade_kubectl_cluster(
+        ["get", "namespace", "kube-system", "-o", "json"],
+        kube_context=kube_context,
+        extra_env=extra_env,
+    )
+    try:
+        namespace = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return ""
+    metadata = namespace.get("metadata") if isinstance(namespace, Mapping) else None
+    return _non_empty_text(metadata.get("uid") if isinstance(metadata, Mapping) else "")
+
+
+def _provider_generated_mk8s_kubernetes_uid(
+    payload: Mapping[str, Any],
+    *,
+    cluster_id: str,
+    access: str,
+) -> str:
+    """Read the Kubernetes UID through access generated for one Nebius MK8s id."""
+
+    client_name, _tenant_id, project_id, _region_id, _email = _identity_values_from_payload(payload)
+    if not _runtime_auth_env_available():
+        _runtime_auth_cache_load(project_id=project_id, client_name=client_name)
+    try:
+        spec = _mk8s_cluster_handoff_spec_for_identity(
+            project_id=project_id,
+            client_name=client_name,
+            cluster_id=cluster_id,
+            access=access,
+        )
+        with tempfile.TemporaryDirectory(prefix="nebius-cxcli-kube-") as kube_root:
+            kubeconfig_path = Path(kube_root) / "config"
+            _write_kubeconfig_file(kubeconfig_path, spec)
+            return _read_kube_system_namespace_uid(
+                kube_context=spec.context_name,
+                extra_env={"KUBECONFIG": str(kubeconfig_path)},
+            )
+    except Exception as exc:
+        raise RuntimeError(
+            "External Soperator onboarding could not validate the requested Nebius MK8s "
+            f"cluster '{cluster_id}' through provider-generated Kubernetes access. "
+            "No target or campaign was written."
+        ) from exc
+
+
+def _validate_external_soperator_kubernetes_uid_before_lease(
+    *,
+    campaign: Mapping[str, Any],
+    kube_context: str | None,
+) -> str:
+    """Fail closed unless the active Kubernetes endpoint matches the campaign."""
+
+    context = _non_empty_text(kube_context)
+    identity = campaign.get("identity")
+    expected_uid = _non_empty_text(
+        identity.get("kubernetes_uid") if isinstance(identity, Mapping) else ""
+    )
+    if not context or not expected_uid:
+        raise RuntimeError(
+            "recovery-required: the active Kubernetes context or locked campaign "
+            "kubernetes_uid is unknown. The Kubernetes Lease was not created or mutated."
+        )
+    try:
+        observed_uid = _read_kube_system_namespace_uid(kube_context=context)
+    except Exception as exc:
+        raise RuntimeError(
+            "recovery-required: cxcli could not read the kube-system namespace UID "
+            f"through active Kubernetes context '{context}'. The Kubernetes Lease was "
+            "not created or mutated."
+        ) from exc
+    if not observed_uid:
+        raise RuntimeError(
+            "recovery-required: the kube-system namespace UID is unknown through active "
+            f"Kubernetes context '{context}'. The Kubernetes Lease was not created or mutated."
+        )
+    if observed_uid != expected_uid:
+        raise RuntimeError(
+            "recovery-required: active Kubernetes context "
+            f"'{context}' exposes kube-system namespace UID '{observed_uid}', but the "
+            f"locked campaign requires '{expected_uid}'. The Kubernetes Lease was not "
+            "created or mutated."
+        )
+    return context
+
+
+def _validate_explicit_soperator_kube_context_identity(
+    *,
+    payload: Mapping[str, Any],
+    cluster_id: str,
+    kube_context: str,
+    access: str,
+    explicit_snapshot: Mapping[str, Any],
+) -> None:
+    """Bind an explicit context to the requested MK8s cluster before campaign planning."""
+
+    explicit_uid = _soperator_snapshot_kubernetes_uid(
+        explicit_snapshot,
+        source_label=f"explicit --kube-context '{kube_context}'",
+    )
+    provider_uid = _provider_generated_mk8s_kubernetes_uid(
+        payload,
+        cluster_id=cluster_id,
+        access=access,
+    )
+    if not provider_uid:
+        raise RuntimeError(
+            "External Soperator onboarding could not validate the requested Nebius MK8s "
+            f"cluster '{cluster_id}' through provider-generated Kubernetes access: "
+            "the kube-system namespace UID is unknown. No target or campaign was written."
+        )
+    if explicit_uid != provider_uid:
+        raise RuntimeError(
+            "recovery-required: explicit --kube-context "
+            f"'{kube_context}' resolves to a different Kubernetes cluster than requested "
+            f"Nebius MK8s cluster '{cluster_id}'. No target or campaign was written."
+        )
 
 
 def _prompt_soperator_onboarding_target_row(
@@ -26191,6 +27442,16 @@ def _prompt_soperator_onboarding_target_row(
     strategy_max_unavailable_count: int | None = None,
     strategy_drain_timeout: str | None = None,
 ) -> dict[str, Any]:
+    if _non_empty_text(to_chart_version):
+        raise RuntimeError(
+            "External Soperator onboarding does not accept a chart override; the exact "
+            "Soperator chart/app target is resolved from component_sources.yaml."
+        )
+    if allow_unsupported_soperator_upgrade_path:
+        raise RuntimeError(
+            "External Soperator onboarding is fail-closed and does not support a "
+            "support-policy override."
+        )
     explicit_storage_mode = storage_mode is not None
     explicit_compute_mode = compute_mode is not None
     explicit_rollout_options = _soperator_rollout_options_provided(
@@ -26329,6 +27590,7 @@ def _prompt_soperator_onboarding_target_row(
     target_row = _soperator_onboarding_target_defaults(
         target_ref,
         kube_context="",
+        project_id=resolved_project_id,
         cluster_id=cluster_id,
         storage_mode=normalized_storage_mode,
         compute_mode=normalized_compute_mode,
@@ -26364,6 +27626,10 @@ def _prompt_soperator_onboarding_target_row(
         target_row,
         allow_unsupported_soperator_upgrade_path=allow_unsupported_soperator_upgrade_path,
         command_name="ext-soperator onboard",
+    )
+    _rebuild_soperator_onboarding_campaign(
+        target_row,
+        project_id=resolved_project_id,
     )
     _print_soperator_onboarding_decision_summary(target_row)
     return target_row
@@ -26451,6 +27717,16 @@ def _soperator_onboarding_target_row_from_options(
     strategy_max_unavailable_count: int | None = None,
     strategy_drain_timeout: str | None = None,
 ) -> dict[str, Any]:
+    if _non_empty_text(to_chart_version):
+        raise RuntimeError(
+            "External Soperator onboarding does not accept a chart override; the exact "
+            "Soperator chart/app target is resolved from component_sources.yaml."
+        )
+    if allow_unsupported_soperator_upgrade_path:
+        raise RuntimeError(
+            "External Soperator onboarding is fail-closed and does not support a "
+            "support-policy override."
+        )
     explicit_storage_mode = storage_mode is not None
     explicit_compute_mode = compute_mode is not None
     explicit_rollout_options = _soperator_rollout_options_provided(
@@ -26471,6 +27747,12 @@ def _soperator_onboarding_target_row_from_options(
             "to choose from the project's live MK8s cluster list."
         )
     normalized_access = _normalize_mk8s_handoff_access(access)
+    requested_target_ref = normalize_component_token(target_id)
+    if isinstance(payload, Mapping) and requested_target_ref:
+        _ensure_external_soperator_target_ref_available(
+            payload,
+            target_ref=requested_target_ref,
+        )
     context = _non_empty_text(kube_context)
     normalized_storage_mode = _normalize_soperator_onboarding_storage_mode(storage_mode)
     normalized_compute_mode = _normalize_soperator_onboarding_compute_mode(compute_mode)
@@ -26481,6 +27763,29 @@ def _soperator_onboarding_target_row_from_options(
             f"Discovering Soperator components on {normalized_cluster_id} ({snapshot_label})..."
         ):
             snapshot = collect_kubectl_soperator_snapshot(kube_context=context)
+        if payload is None:
+            raise RuntimeError(
+                "Soperator onboarding by --kube-context still requires config identity "
+                "for live Nebius MK8s campaign planning."
+            )
+        _validate_explicit_soperator_kube_context_identity(
+            payload=payload,
+            cluster_id=normalized_cluster_id,
+            kube_context=context,
+            access=normalized_access,
+            explicit_snapshot=snapshot,
+        )
+        try:
+            provider_snapshot = _collect_provider_mk8s_template_snapshot(
+                payload,
+                cluster_id=normalized_cluster_id,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "External Soperator onboarding could not collect the live Nebius MK8s "
+                "capability graph. No campaign was written: " + str(exc)
+            ) from exc
+        snapshot = _merge_provider_mk8s_template_snapshot(snapshot, provider_snapshot)
     else:
         if payload is None:
             raise RuntimeError(
@@ -26514,6 +27819,14 @@ def _soperator_onboarding_target_row_from_options(
     app_version = _soperator_onboarding_target_app_version_for_chart(chart_version)
     default_target_k8s_version = _soperator_onboarding_target_k8s_version_default(snapshot)
     explicit_target_k8s_version = _non_empty_text(to_k8s_version)
+    if not interactive and not explicit_target_k8s_version:
+        console.print(
+            "Recommended final Kubernetes target: "
+            f"{default_target_k8s_version}. Re-run with "
+            f"--to-k8s-version {default_target_k8s_version} to accept and lock the "
+            "complete campaign; config.yaml was not changed."
+        )
+        raise typer.Exit(code=0)
     if explicit_target_k8s_version:
         explicit_target_k8s_version = _validate_soperator_onboarding_target_k8s_hop(
             snapshot=snapshot,
@@ -26602,6 +27915,9 @@ def _soperator_onboarding_target_row_from_options(
     target_row = _soperator_onboarding_target_defaults(
         normalized_target,
         kube_context=context,
+        project_id=(
+            _identity_values_from_payload(payload)[2] if isinstance(payload, Mapping) else ""
+        ),
         cluster_id=normalized_cluster_id,
         storage_mode=normalized_storage_mode,
         compute_mode=normalized_compute_mode,
@@ -26639,21 +27955,23 @@ def _soperator_onboarding_target_row_from_options(
         allow_unsupported_soperator_upgrade_path=allow_unsupported_soperator_upgrade_path,
         command_name="ext-soperator onboard",
     )
+    resolved_project_id = (
+        _identity_values_from_payload(payload)[2] if isinstance(payload, Mapping) else ""
+    )
+    _rebuild_soperator_onboarding_campaign(
+        target_row,
+        project_id=resolved_project_id,
+    )
     _print_soperator_onboarding_decision_summary(target_row)
     return target_row
 
 
-def _upsert_soperator_onboarding_target(
-    payload: dict[str, Any],
+def _ensure_external_soperator_target_ref_available(
+    payload: Mapping[str, Any],
     *,
-    target_row: dict[str, Any],
-) -> bool:
-    target_ref = component_instance_id(target_row)
-    if not target_ref:
-        raise RuntimeError("Soperator onboarding target requires a non-empty instance_id.")
-
-    infra_rows = _scope_rows(payload, scope="infra")
-    for row in infra_rows:
+    target_ref: str,
+) -> None:
+    for row in _scope_rows(payload, scope="infra"):
         if (
             isinstance(row, Mapping)
             and bool(row.get("enabled", False))
@@ -26665,6 +27983,18 @@ def _upsert_soperator_onboarding_target(
                 "Terraform-managed infra:mk8s row. Use create/component add for managed "
                 "production clusters, or choose a different external target id."
             )
+
+
+def _upsert_soperator_onboarding_target(
+    payload: dict[str, Any],
+    *,
+    target_row: dict[str, Any],
+) -> bool:
+    target_ref = component_instance_id(target_row)
+    if not target_ref:
+        raise RuntimeError("Soperator onboarding target requires a non-empty instance_id.")
+
+    _ensure_external_soperator_target_ref_available(payload, target_ref=target_ref)
 
     deploy = payload.setdefault("deploy", {})
     if not isinstance(deploy, dict):
@@ -51273,8 +52603,7 @@ def _raise_if_deploy_would_bypass_soperator_migration(
             f"target(s): {target_list}."
         ),
         (
-            "Run `nebius-cxcli render` first if config.yaml changed, then use "
-            "`ext-soperator upgrade`; deploy only applies the rendered Terraform/Flux "
+            "Use `ext-soperator upgrade`; deploy only applies rendered Terraform/Flux "
             "desired state and cannot perform the required Nebius SDK/API upgrade "
             "phases."
         ),
@@ -51298,13 +52627,10 @@ def _raise_if_deploy_would_bypass_soperator_migration(
         )
     lines.append(
         "Use `ext-soperator upgrade` for reruns/resume while these actions remain "
-        "selected. If the locked path still has remaining segments, repeat the same "
-        "`ext-soperator upgrade --execute --approve` command; cxcli keeps accepted "
-        "onboarding in place until the final locked segment completes. After the "
-        "final locked segment, cxcli refreshes config.yaml from live post-upgrade "
-        "discovery when possible; if that final refresh was skipped, rerun "
-        "`ext-soperator onboard` only as an intentional repair path, rerun render, "
-        "then deploy only for normal rendered reconciliation if needed."
+        "selected. Repeat the same `ext-soperator upgrade --execute --approve` "
+        "command for each remaining campaign segment. The completed campaign stays "
+        "in config.yaml; rerun `ext-soperator onboard` only to report it or propose "
+        "and accept a later campaign when provider support or catalog pins advance."
     )
     raise RuntimeError("\n".join(lines))
 
@@ -54222,18 +55548,2212 @@ def _write_runtime_payload_config(
     payload: dict[str, Any],
     *,
     overwrite: bool = False,
+    expected_bytes: bytes | None = None,
 ) -> bool:
     normalize_runtime_config_payload(payload, base_dir=config_path.parent)
     next_config_text = yaml.safe_dump(payload, sort_keys=False)
     current_config_text = None
     if config_path.exists():
-        current_config_text = config_path.read_text(encoding="utf-8")
+        current_bytes = config_path.read_bytes()
+        if expected_bytes is not None and current_bytes != expected_bytes:
+            raise RuntimeError(
+                "recovery-required: config.yaml changed after campaign planning; the "
+                "compare-and-swap was refused and no campaign was replaced."
+            )
+        current_config_text = current_bytes.decode("utf-8")
+    elif expected_bytes is not None:
+        raise RuntimeError(
+            "recovery-required: config.yaml disappeared after campaign planning; no "
+            "campaign was written."
+        )
     if current_config_text == next_config_text:
         if not overwrite:
             return False
-        config_path.write_text(next_config_text, encoding="utf-8")
+        _write_text_atomic(config_path, next_config_text)
         return True
-    config_path.write_text(next_config_text, encoding="utf-8")
+    _write_text_atomic(config_path, next_config_text)
+    return True
+
+
+def _external_soperator_target_row(
+    payload: Mapping[str, Any],
+    *,
+    target_ref: str,
+) -> Mapping[str, Any] | None:
+    deploy = payload.get("deploy")
+    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    if not isinstance(targets, list):
+        return None
+    for row in targets:
+        if (
+            isinstance(row, Mapping)
+            and component_instance_id(row) == target_ref
+            and deploy_target_is_external_mk8s(row)
+        ):
+            return row
+    return None
+
+
+def _external_soperator_campaign(target_row: Mapping[str, Any] | None) -> dict[str, Any]:
+    onboarding = target_row.get("soperator_onboarding") if isinstance(target_row, Mapping) else None
+    campaign = onboarding.get("upgrade_path") if isinstance(onboarding, Mapping) else None
+    if not isinstance(campaign, Mapping):
+        return {}
+    schema = _non_empty_text(campaign.get("schema"))
+    if schema != _SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA:
+        raise RuntimeError(
+            "recovery-required: external Soperator target contains unsupported campaign "
+            f"schema {schema or 'missing'}; this cxcli requires "
+            f"{_SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA}. No conversion is supported."
+        )
+    embedded = _non_empty_text(campaign.get("fingerprint"))
+    calculated = soperator_upgrade_campaign_fingerprint(campaign)
+    if not embedded or embedded != calculated:
+        raise RuntimeError(
+            "recovery-required: external Soperator campaign fingerprint does not match "
+            "its immutable desired content; config.yaml was not changed."
+        )
+    campaign_id = _non_empty_text(campaign.get("campaign_id"))
+    if campaign_id != f"campaign-{embedded[:16]}":
+        raise RuntimeError(
+            "recovery-required: external Soperator campaign_id does not match its "
+            "fingerprint; config.yaml was not changed."
+        )
+    plain = to_plain_data(dict(campaign))
+    return dict(plain) if isinstance(plain, Mapping) else {}
+
+
+def _external_soperator_campaign_identity_conflicts(
+    existing: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+) -> tuple[str, ...]:
+    existing_identity = existing.get("identity")
+    candidate_identity = candidate.get("identity")
+    if not isinstance(existing_identity, Mapping) or not isinstance(candidate_identity, Mapping):
+        return ("identity",)
+    keys = (
+        "project_id",
+        "cluster_id",
+        "target_ref",
+        "kubernetes_uid",
+        "soperator_uid",
+        "slurmcluster_uid",
+        "jail_filesystem_id",
+    )
+    return tuple(
+        key
+        for key in keys
+        if _non_empty_text(existing_identity.get(key))
+        != _non_empty_text(candidate_identity.get(key))
+    )
+
+
+def _external_soperator_campaign_final_targets(
+    campaign: Mapping[str, Any],
+) -> dict[str, Any]:
+    final_targets = campaign.get("final_targets")
+    managed_operators = campaign.get("managed_operators")
+    return {
+        "final_targets": copy.deepcopy(
+            to_plain_data(final_targets) if isinstance(final_targets, Mapping) else {}
+        ),
+        "managed_operators": copy.deepcopy(
+            to_plain_data(managed_operators) if isinstance(managed_operators, Mapping) else {}
+        ),
+        "mk8s": _external_soperator_campaign_mk8s_waypoint(campaign, waypoint="target"),
+        "catalog_fingerprint": _non_empty_text(campaign.get("catalog_fingerprint")),
+        "support_rule_id": _non_empty_text(campaign.get("support_rule_id")),
+        "support_status": _non_empty_text(campaign.get("support_status")),
+    }
+
+
+def _external_soperator_campaign_final_targets_with_transitions(
+    campaign: Mapping[str, Any],
+    node_group_transitions: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    result = _external_soperator_campaign_final_targets(campaign)
+    transitions = node_group_transitions if isinstance(node_group_transitions, Mapping) else {}
+    if (
+        not transitions.get("added")
+        and not transitions.get("bindings")
+        and not transitions.get("retired_ids")
+    ):
+        return result
+    mk8s = result.get("mk8s")
+    if not isinstance(mk8s, Mapping):
+        raise RuntimeError(
+            "recovery-required: completed campaign cannot apply journal-bound node-group "
+            "transitions to an invalid final MK8s waypoint."
+        )
+    result["mk8s"] = _external_soperator_mk8s_waypoint_with_transitions(
+        mk8s,
+        transitions,
+    )
+    return result
+
+
+def _external_soperator_campaign_mk8s_waypoint(
+    campaign: Mapping[str, Any],
+    *,
+    waypoint: str,
+) -> dict[str, Any]:
+    if waypoint not in {"source", "target"}:
+        raise ValueError(f"Unsupported MK8s campaign waypoint: {waypoint}")
+    mk8s = campaign.get("mk8s")
+    control_plane = mk8s.get("control_plane") if isinstance(mk8s, Mapping) else None
+    raw_groups = mk8s.get("node_groups") if isinstance(mk8s, Mapping) else None
+    groups: list[dict[str, Any]] = []
+    for group in raw_groups if isinstance(raw_groups, list) else []:
+        if not isinstance(group, Mapping):
+            continue
+        node_template = group.get(waypoint)
+        groups.append(
+            {
+                "id": _non_empty_text(group.get("id")),
+                "name": _non_empty_text(group.get("name")),
+                "role": _non_empty_text(group.get("role")),
+                "platform": _non_empty_text(group.get("platform")),
+                "preset": _non_empty_text(group.get("preset")),
+                "gpu_software_mode": _non_empty_text(group.get("gpu_software_mode")),
+                "node_template": copy.deepcopy(
+                    to_plain_data(node_template) if isinstance(node_template, Mapping) else {}
+                ),
+            }
+        )
+    groups.sort(key=lambda group: (group["id"], group["name"]))
+    version_key = "source_version" if waypoint == "source" else "target_version"
+    return {
+        "control_plane_version": _non_empty_text(
+            control_plane.get(version_key) if isinstance(control_plane, Mapping) else ""
+        ),
+        "node_groups": groups,
+    }
+
+
+def _external_soperator_completed_campaign_source_conflicts(
+    existing: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+) -> tuple[str, ...]:
+    """Return live-source fields that no longer match a completed campaign target."""
+
+    existing_final = existing.get("final_targets")
+    if not isinstance(existing_final, Mapping):
+        return ("final_targets",)
+    candidate_app = candidate.get("soperator_app")
+    candidate_chart = candidate.get("soperator_chart")
+    candidate_jail = candidate.get("jail_rootfs")
+    comparisons = {
+        "kubernetes": (
+            existing_final.get("kubernetes"),
+            candidate.get("source_k8s_version"),
+        ),
+        "soperator_app": (
+            existing_final.get("soperator_app"),
+            candidate_app.get("current_version") if isinstance(candidate_app, Mapping) else "",
+        ),
+        "soperator_chart": (
+            existing_final.get("soperator_chart"),
+            candidate_chart.get("current_version") if isinstance(candidate_chart, Mapping) else "",
+        ),
+        "jail_rootfs_image": (
+            existing_final.get("jail_rootfs_image"),
+            candidate_jail.get("current_image") if isinstance(candidate_jail, Mapping) else "",
+        ),
+        "jail_rootfs_version": (
+            existing_final.get("jail_rootfs_version"),
+            candidate_jail.get("current_version") if isinstance(candidate_jail, Mapping) else "",
+        ),
+    }
+    conflicts = [
+        field
+        for field, (expected, observed) in comparisons.items()
+        if not _non_empty_text(expected) or _non_empty_text(expected) != _non_empty_text(observed)
+    ]
+    existing_final_mk8s = _external_soperator_campaign_mk8s_waypoint(
+        existing,
+        waypoint="target",
+    )
+    candidate_source_mk8s = _external_soperator_campaign_mk8s_waypoint(
+        candidate,
+        waypoint="source",
+    )
+    if existing_final_mk8s != candidate_source_mk8s:
+        conflicts.append("mk8s")
+    return tuple(conflicts)
+
+
+def _external_soperator_unstarted_campaign_source_conflicts(
+    existing: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+) -> tuple[str, ...]:
+    comparisons = {
+        "kubernetes": (
+            existing.get("source_k8s_version"),
+            candidate.get("source_k8s_version"),
+        ),
+        "soperator_app": (
+            _locked_upgrade_path_record_value(existing, "soperator_app", "current_version"),
+            _locked_upgrade_path_record_value(candidate, "soperator_app", "current_version"),
+        ),
+        "soperator_chart": (
+            _locked_upgrade_path_record_value(existing, "soperator_chart", "current_version"),
+            _locked_upgrade_path_record_value(candidate, "soperator_chart", "current_version"),
+        ),
+        "jail_rootfs_image": (
+            _locked_upgrade_path_record_value(existing, "jail_rootfs", "current_image"),
+            _locked_upgrade_path_record_value(candidate, "jail_rootfs", "current_image"),
+        ),
+        "jail_rootfs_version": (
+            _locked_upgrade_path_record_value(existing, "jail_rootfs", "current_version"),
+            _locked_upgrade_path_record_value(candidate, "jail_rootfs", "current_version"),
+        ),
+    }
+    conflicts = [
+        field
+        for field, (expected, observed) in comparisons.items()
+        if not _non_empty_text(expected) or _non_empty_text(expected) != _non_empty_text(observed)
+    ]
+    if _external_soperator_campaign_mk8s_waypoint(
+        existing,
+        waypoint="source",
+    ) != _external_soperator_campaign_mk8s_waypoint(candidate, waypoint="source"):
+        conflicts.append("mk8s")
+    return tuple(conflicts)
+
+
+def _external_soperator_candidate_live_report(
+    candidate_target: Mapping[str, Any],
+) -> dict[str, Any]:
+    campaign = _external_soperator_campaign(candidate_target)
+    report_material = candidate_target.get(_SOPERATOR_DISCOVERY_REPORT_PRIVATE_KEY)
+    snapshot = report_material.get("snapshot") if isinstance(report_material, Mapping) else None
+    return {
+        "cluster_id": _non_empty_text(candidate_target.get("cluster_id")),
+        "current_k8s_version": _non_empty_text(campaign.get("source_k8s_version")),
+        "app_version": _locked_upgrade_path_record_value(
+            campaign,
+            "soperator_app",
+            "current_version",
+        ),
+        "chart_version": _locked_upgrade_path_record_value(
+            campaign,
+            "soperator_chart",
+            "current_version",
+        ),
+        "jail_rootfs": copy.deepcopy(
+            to_plain_data(campaign.get("jail_rootfs"))
+            if isinstance(campaign.get("jail_rootfs"), Mapping)
+            else {}
+        ),
+        "snapshot": copy.deepcopy(to_plain_data(snapshot) if isinstance(snapshot, Mapping) else {}),
+    }
+
+
+def _external_soperator_live_mk8s_waypoint(
+    source_report: Mapping[str, Any],
+) -> dict[str, Any]:
+    snapshot = source_report.get("snapshot")
+    provider = snapshot.get("provider") if isinstance(snapshot, Mapping) else None
+    cluster = provider.get("mk8s_cluster") if isinstance(provider, Mapping) else None
+    control_plane_version = _non_empty_text(source_report.get("current_k8s_version"))
+    if isinstance(cluster, Mapping):
+        control_plane_version = control_plane_version or _non_empty_text(
+            cluster.get("control_plane_version")
+            or cluster.get("k8s_version")
+            or cluster.get("version")
+        )
+    raw_groups = snapshot.get("node_groups") if isinstance(snapshot, Mapping) else None
+    if not isinstance(raw_groups, Mapping):
+        return {"control_plane_version": control_plane_version, "node_groups": None}
+    groups: list[dict[str, Any]] = []
+    for group_key, group in raw_groups.items():
+        if not isinstance(group, Mapping):
+            return {"control_plane_version": control_plane_version, "node_groups": None}
+        group_provider = group.get("provider")
+        template = (
+            group_provider.get("node_template") if isinstance(group_provider, Mapping) else None
+        )
+        if not isinstance(template, Mapping):
+            return {"control_plane_version": control_plane_version, "node_groups": None}
+        groups.append(
+            {
+                "id": _non_empty_text(
+                    group_provider.get("node_group_id")
+                    if isinstance(group_provider, Mapping)
+                    else group.get("node_group_id")
+                ),
+                "name": _non_empty_text(
+                    group_provider.get("node_group_name")
+                    if isinstance(group_provider, Mapping)
+                    else group.get("node_group_name")
+                )
+                or str(group_key),
+                "role": campaign_node_group_role(str(group_key), group),
+                "platform": _non_empty_text(template.get("platform")),
+                "preset": _non_empty_text(template.get("preset")),
+                "gpu_software_mode": campaign_node_group_gpu_software_mode(group),
+                "node_template": {
+                    "kubernetes_version": _non_empty_text(
+                        template.get("k8s_version") or template.get("kubernetes_version")
+                    ),
+                    "os": _non_empty_text(template.get("os")),
+                    "drivers_preset": _non_empty_text(
+                        template.get("gpu_stack_preset") or template.get("drivers_preset")
+                    ),
+                },
+            }
+        )
+    groups.sort(key=lambda group: (group["id"], group["name"]))
+    return {"control_plane_version": control_plane_version, "node_groups": groups}
+
+
+def _external_soperator_mk8s_waypoint_with_transitions(
+    waypoint: Mapping[str, Any],
+    node_group_transitions: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Project a campaign waypoint onto exact journal-bound live identities."""
+
+    result = dict(copy.deepcopy(to_plain_data(dict(waypoint))))
+    transitions = node_group_transitions if isinstance(node_group_transitions, Mapping) else {}
+    raw_bindings = transitions.get("bindings")
+    raw_retired = transitions.get("retired_ids")
+    if not raw_bindings and not raw_retired:
+        return result
+    groups = result.get("node_groups")
+    if not isinstance(groups, list):
+        raise RuntimeError(
+            "recovery-required: journal-bound node-group transitions cannot be applied "
+            "to an invalid campaign MK8s waypoint."
+        )
+    if any(not isinstance(group, Mapping) for group in groups):
+        raise RuntimeError(
+            "recovery-required: immutable campaign MK8s waypoint contains an invalid "
+            "node-group record."
+        )
+    if not isinstance(raw_bindings, list) or any(
+        not isinstance(binding, Mapping) for binding in raw_bindings
+    ):
+        raise RuntimeError(
+            "recovery-required: journal-bound replacement bindings must be an array of "
+            "identity mappings."
+        )
+    if not isinstance(raw_retired, list) or any(
+        not isinstance(group_id, str) for group_id in raw_retired
+    ):
+        raise RuntimeError(
+            "recovery-required: journal-bound retired node-group identities must be an array."
+        )
+    raw_added = transitions.get("added")
+    if raw_added:
+        if not isinstance(raw_added, list) or any(
+            not isinstance(group, Mapping) for group in raw_added
+        ):
+            raise RuntimeError(
+                "recovery-required: journal-bound replacement waypoints must be an array."
+            )
+        added_ids = {_non_empty_text(group.get("id")) for group in raw_added}
+        binding_ids = {
+            _non_empty_text(binding.get("replacement_node_group_id")) for binding in raw_bindings
+        }
+        if not added_ids or added_ids != binding_ids:
+            raise RuntimeError(
+                "recovery-required: replacement waypoints do not match the journal's "
+                "original-to-live ID bindings."
+            )
+    try:
+        result["node_groups"] = project_campaign_node_groups_for_replacements(
+            [group for group in groups if isinstance(group, Mapping)],
+            replacement_bindings=[
+                binding for binding in raw_bindings if isinstance(binding, Mapping)
+            ],
+            retired_node_group_ids=raw_retired,
+        )
+    except ValueError as exc:
+        raise RuntimeError(f"recovery-required: {exc}") from exc
+    return result
+
+
+def _external_soperator_mk8s_waypoint_matches_with_transitions(
+    *,
+    observed: Mapping[str, Any],
+    expected: Mapping[str, Any],
+    node_group_transitions: Mapping[str, Any] | None,
+    alternate: Mapping[str, Any] | None = None,
+) -> bool:
+    """Match immutable campaign groups plus exact journal-bound replacements/retirements."""
+
+    expected_control_planes = {_non_empty_text(expected.get("control_plane_version"))}
+    if isinstance(alternate, Mapping):
+        expected_control_planes.add(_non_empty_text(alternate.get("control_plane_version")))
+    if _non_empty_text(observed.get("control_plane_version")) not in expected_control_planes:
+        return False
+
+    def _groups_by_id(owner: Mapping[str, Any]) -> dict[str, Mapping[str, Any]] | None:
+        groups = owner.get("node_groups")
+        if not isinstance(groups, list):
+            return None
+        result: dict[str, Mapping[str, Any]] = {}
+        for group in groups:
+            if not isinstance(group, Mapping):
+                return None
+            group_id = _non_empty_text(group.get("id"))
+            if not group_id or group_id in result:
+                return None
+            result[group_id] = group
+        return result
+
+    transitions = node_group_transitions if isinstance(node_group_transitions, Mapping) else {}
+    expected_effective = _external_soperator_mk8s_waypoint_with_transitions(
+        expected,
+        transitions,
+    )
+    alternate_effective = (
+        _external_soperator_mk8s_waypoint_with_transitions(alternate, transitions)
+        if isinstance(alternate, Mapping)
+        else expected_effective
+    )
+    observed_groups = _groups_by_id(observed)
+    expected_groups = _groups_by_id(expected_effective)
+    alternate_groups = (
+        _groups_by_id(alternate_effective)
+        if isinstance(alternate_effective, Mapping)
+        else expected_groups
+    )
+    if observed_groups is None or expected_groups is None or alternate_groups is None:
+        return False
+    if set(expected_groups) != set(alternate_groups):
+        return False
+    if set(observed_groups) != set(expected_groups):
+        return False
+
+    for group_id in expected_groups:
+        observed_group = observed_groups[group_id]
+        expected_group = expected_groups[group_id]
+        alternate_group = alternate_groups[group_id]
+        for key in ("id", "name", "role", "platform", "preset", "gpu_software_mode"):
+            observed_value = _non_empty_text(observed_group.get(key))
+            if observed_value != _non_empty_text(expected_group.get(key)) or observed_value != (
+                _non_empty_text(alternate_group.get(key))
+            ):
+                return False
+        observed_template = _locked_upgrade_path_stable_json(observed_group.get("node_template"))
+        if observed_template not in {
+            _locked_upgrade_path_stable_json(expected_group.get("node_template")),
+            _locked_upgrade_path_stable_json(alternate_group.get("node_template")),
+        }:
+            return False
+    return True
+
+
+def _external_soperator_live_managed_operator_conflicts(
+    campaign: Mapping[str, Any],
+    source_report: Mapping[str, Any],
+) -> tuple[str, ...]:
+    """Compare catalog-pinned operator releases with authoritative live Helm rows.
+
+    ``helm list -o json`` does not expose a chart repository. Release name,
+    namespace, chart/version, and deployed status are therefore the required live
+    identity. When another collector does provide repository evidence, it must
+    still match the immutable catalog pin.
+    """
+
+    managed = campaign.get("managed_operators")
+    if isinstance(managed, Mapping) and not managed:
+        return ()
+    snapshot = source_report.get("snapshot")
+    gpu_stack = snapshot.get("gpu_stack") if isinstance(snapshot, Mapping) else None
+    releases = gpu_stack.get("helm_releases") if isinstance(gpu_stack, Mapping) else None
+    if not isinstance(managed, Mapping) or not isinstance(releases, list):
+        return ("managed_operators",)
+    conflicts: list[str] = []
+    for role in ("gpu", "network"):
+        pin = managed.get(role)
+        if not isinstance(pin, Mapping):
+            conflicts.append(f"managed_operators.{role}")
+            continue
+        expected_release_name = _non_empty_text(pin.get("release_name"))
+        expected_namespace = _non_empty_text(pin.get("namespace"))
+        expected_chart_name = _non_empty_text(pin.get("chart"))
+        expected_chart_version = _non_empty_text(pin.get("chart_version"))
+        expected_chart = (
+            f"{expected_chart_name}-{expected_chart_version}"
+            if expected_chart_name and expected_chart_version
+            else ""
+        )
+        expected_repository = _non_empty_text(pin.get("repository")).rstrip("/")
+        matching = [
+            release
+            for release in releases
+            if isinstance(release, Mapping)
+            and _non_empty_text(release.get("name")) == expected_release_name
+            and _non_empty_text(release.get("namespace")) == expected_namespace
+        ]
+        if len(matching) != 1:
+            conflicts.append(f"managed_operators.{role}.release_identity")
+            continue
+        release = matching[0]
+        if _non_empty_text(release.get("chart")) != expected_chart:
+            conflicts.append(f"managed_operators.{role}.chart_version")
+        if _non_empty_text(release.get("status")).lower() != "deployed":
+            conflicts.append(f"managed_operators.{role}.status")
+        observed_repository = _non_empty_text(
+            release.get("repository") or release.get("repo") or release.get("chart_ref")
+        ).rstrip("/")
+        if observed_repository and observed_repository != expected_repository:
+            conflicts.append(f"managed_operators.{role}.repository")
+    return tuple(dict.fromkeys(conflicts))
+
+
+def _external_soperator_live_managed_operators_match(
+    campaign: Mapping[str, Any],
+    source_report: Mapping[str, Any],
+) -> bool:
+    return not _external_soperator_live_managed_operator_conflicts(campaign, source_report)
+
+
+def _external_soperator_jail_evidence_waypoint(jail: Any) -> str:
+    if not isinstance(jail, Mapping):
+        return ""
+    source = _non_empty_text(jail.get("current_source"))
+    if not source:
+        return ""
+    status = _non_empty_text(jail.get("current_evidence_status")) or "unverified"
+    return f"{source}:{status}"
+
+
+def _external_soperator_campaign_live_waypoint_index(
+    *,
+    campaign: Mapping[str, Any],
+    source_report: Mapping[str, Any],
+    completed_segment_ids: Sequence[str],
+    resume_current_segment: bool = False,
+    node_group_transitions: Mapping[str, Any] | None = None,
+) -> int:
+    """Return the exact live campaign waypoint, rejecting journal/live contradictions."""
+
+    segments = _locked_upgrade_path_segments(campaign)
+    segment_ids = [_non_empty_text(segment.get("id")) for segment in segments]
+    completed = [_non_empty_text(segment_id) for segment_id in completed_segment_ids]
+    if completed != segment_ids[: len(completed)] or len(set(completed)) != len(completed):
+        raise RuntimeError(
+            "recovery-required: completed campaign segment ids are not an ordered prefix "
+            "of the config-owned campaign."
+        )
+    jail = campaign.get("jail_rootfs")
+    source_state: dict[str, Any] = {
+        "kubernetes": _non_empty_text(campaign.get("source_k8s_version")),
+        "soperator_app": _locked_upgrade_path_record_value(
+            campaign,
+            "soperator_app",
+            "current_version",
+        ),
+        "soperator_chart": _locked_upgrade_path_record_value(
+            campaign,
+            "soperator_chart",
+            "current_version",
+        ),
+        "jail_rootfs_image": _non_empty_text(
+            jail.get("current_image") if isinstance(jail, Mapping) else ""
+        ),
+        "jail_rootfs_version": _non_empty_text(
+            jail.get("current_version") if isinstance(jail, Mapping) else ""
+        ),
+        "jail_evidence": _external_soperator_jail_evidence_waypoint(jail),
+        "mk8s": _external_soperator_campaign_mk8s_waypoint(campaign, waypoint="source"),
+        "managed_operators_required": False,
+    }
+    waypoints: list[dict[str, Any]] = [source_state]
+    current_state = copy.deepcopy(source_state)
+    for segment in segments:
+        current_state = copy.deepcopy(current_state)
+        current_state["kubernetes"] = _non_empty_text(segment.get("target_k8s_version"))
+        current_state["soperator_app"] = _locked_upgrade_path_record_value(
+            segment,
+            "soperator_app",
+            "target_version",
+        )
+        current_state["soperator_chart"] = _locked_upgrade_path_record_value(
+            segment,
+            "soperator_chart",
+            "target_version",
+        )
+        segment_jail = segment.get("jail_rootfs")
+        if isinstance(segment_jail, Mapping) and segment_jail.get("refresh_required") is True:
+            current_state["jail_rootfs_image"] = _non_empty_text(segment_jail.get("target_image"))
+            current_state["jail_rootfs_version"] = _non_empty_text(
+                segment_jail.get("target_version")
+            )
+            current_state["jail_evidence"] = "completed-populate-jail-job:active-slot-verified"
+        segment_mk8s = segment.get("mk8s")
+        segment_groups = (
+            segment_mk8s.get("node_groups") if isinstance(segment_mk8s, Mapping) else None
+        )
+        if isinstance(segment_groups, list) and segment_groups:
+            current_state["mk8s"] = {
+                "control_plane_version": _non_empty_text(segment.get("target_k8s_version")),
+                "node_groups": _external_soperator_campaign_mk8s_waypoint(
+                    {"mk8s": segment_mk8s},
+                    waypoint="target",
+                )["node_groups"],
+            }
+        else:
+            current_state["mk8s"]["control_plane_version"] = _non_empty_text(
+                segment.get("target_k8s_version")
+            )
+        actions = set(_locked_upgrade_path_segment_actions(segment))
+        if segment.get("soperator_upgrade_required") is True or (
+            ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK in actions
+        ):
+            current_state["managed_operators_required"] = True
+        waypoints.append(current_state)
+
+    observed_jail = source_report.get("jail_rootfs")
+    observed = {
+        "kubernetes": _non_empty_text(source_report.get("current_k8s_version")),
+        "soperator_app": _non_empty_text(
+            source_report.get("app_version") or source_report.get("source_version")
+        ),
+        "soperator_chart": _non_empty_text(source_report.get("chart_version")),
+        "jail_rootfs_image": _non_empty_text(
+            observed_jail.get("current_image") if isinstance(observed_jail, Mapping) else ""
+        ),
+        "jail_rootfs_version": _non_empty_text(
+            observed_jail.get("current_version") if isinstance(observed_jail, Mapping) else ""
+        ),
+        "jail_evidence": _external_soperator_jail_evidence_waypoint(observed_jail),
+        "mk8s": _external_soperator_live_mk8s_waypoint(source_report),
+    }
+
+    def _matches_current_transition() -> bool:
+        if len(completed) >= len(segments):
+            return False
+        source_waypoint = waypoints[len(completed)]
+        target_waypoint = waypoints[len(completed) + 1]
+        observed_evidence = _non_empty_text(observed.get("jail_evidence"))
+        expected_evidence = {
+            _non_empty_text(source_waypoint.get("jail_evidence")),
+            _non_empty_text(target_waypoint.get("jail_evidence")),
+        }
+        if not observed_evidence or observed_evidence not in expected_evidence:
+            return False
+        for key in (
+            "kubernetes",
+            "soperator_app",
+            "soperator_chart",
+            "jail_rootfs_image",
+            "jail_rootfs_version",
+        ):
+            observed_value = _non_empty_text(observed.get(key))
+            if not observed_value or observed_value not in {
+                _non_empty_text(source_waypoint.get(key)),
+                _non_empty_text(target_waypoint.get(key)),
+            }:
+                return False
+        observed_mk8s = observed.get("mk8s")
+        source_mk8s = source_waypoint.get("mk8s")
+        target_mk8s = target_waypoint.get("mk8s")
+        if not all(isinstance(item, Mapping) for item in (observed_mk8s, source_mk8s, target_mk8s)):
+            return False
+        if _non_empty_text(observed_mk8s.get("control_plane_version")) not in {
+            _non_empty_text(source_mk8s.get("control_plane_version")),
+            _non_empty_text(target_mk8s.get("control_plane_version")),
+        }:
+            return False
+
+        return _external_soperator_mk8s_waypoint_matches_with_transitions(
+            observed=observed_mk8s,
+            expected=source_mk8s,
+            alternate=target_mk8s,
+            node_group_transitions=node_group_transitions,
+        )
+
+    matching_indices: list[int] = []
+    for index, waypoint in enumerate(waypoints):
+        scalar_match = all(
+            _non_empty_text(waypoint.get(key))
+            and _non_empty_text(waypoint.get(key)) == _non_empty_text(observed.get(key))
+            for key in (
+                "kubernetes",
+                "soperator_app",
+                "soperator_chart",
+                "jail_rootfs_image",
+                "jail_rootfs_version",
+            )
+        )
+        if (
+            scalar_match
+            and _non_empty_text(waypoint.get("jail_evidence"))
+            == _non_empty_text(observed.get("jail_evidence"))
+            and isinstance(waypoint.get("mk8s"), Mapping)
+            and isinstance(observed.get("mk8s"), Mapping)
+            and _external_soperator_mk8s_waypoint_matches_with_transitions(
+                observed=observed["mk8s"],
+                expected=waypoint["mk8s"],
+                node_group_transitions=node_group_transitions,
+            )
+            and (
+                not waypoint.get("managed_operators_required")
+                or _external_soperator_live_managed_operators_match(campaign, source_report)
+            )
+        ):
+            matching_indices.append(index)
+    if resume_current_segment:
+        if matching_indices:
+            live_index = max(matching_indices)
+            if live_index < len(completed):
+                raise RuntimeError(
+                    "recovery-required: fresh live state regressed behind the operation "
+                    "journal's completed campaign waypoint. No segment was started."
+                )
+            if live_index > len(completed) + 1:
+                raise RuntimeError(
+                    "recovery-required: fresh live state advanced beyond the journaled "
+                    "current segment. Reconcile the journal before continuing."
+                )
+            return len(completed)
+        if _matches_current_transition():
+            return len(completed)
+    if not matching_indices:
+        raise RuntimeError(
+            "recovery-required: fresh live state does not match any exact source or "
+            "segment waypoint in the config-owned campaign. No segment was started. "
+            "Observed waypoint evidence: " + json.dumps(observed, sort_keys=True, default=str)
+        )
+    live_index = max(matching_indices)
+    if live_index < len(completed):
+        raise RuntimeError(
+            "recovery-required: fresh live state regressed behind the operation journal's "
+            "completed campaign waypoint. No segment was started."
+        )
+    return live_index
+
+
+def _external_soperator_live_provider_observations_for_segment(
+    *,
+    campaign: Mapping[str, Any],
+    segment: Mapping[str, Any],
+    source_report: Mapping[str, Any],
+) -> tuple[dict[str, Any], ...]:
+    """Build exact live provider evidence for one already-satisfied segment."""
+
+    action_conflicts = _external_soperator_observation_only_action_conflicts(segment)
+    if action_conflicts:
+        raise RuntimeError(
+            "recovery-required: live versions are ahead of the operation journal, but "
+            "the first unmet segment contains postconditions that fresh discovery cannot "
+            "prove observation-only: "
+            + ", ".join(action_conflicts)
+            + ". Resume or recover that segment; it was not marked complete."
+        )
+
+    snapshot = source_report.get("snapshot")
+    provider = snapshot.get("provider") if isinstance(snapshot, Mapping) else None
+    cluster = provider.get("mk8s_cluster") if isinstance(provider, Mapping) else None
+    if not isinstance(cluster, Mapping):
+        raise RuntimeError(
+            "External Soperator live reconciliation requires the Nebius MK8s cluster "
+            "resource identity and version from fresh SDK discovery."
+        )
+    identity = campaign.get("identity")
+    cluster_id = _non_empty_text(
+        identity.get("cluster_id") if isinstance(identity, Mapping) else ""
+    )
+    mk8s = segment.get("mk8s")
+    if not isinstance(mk8s, Mapping):
+        mk8s = {}
+    observations: list[dict[str, Any]] = []
+    control_plane = mk8s.get("control_plane")
+    if isinstance(control_plane, Mapping):
+        source_version = _non_empty_text(control_plane.get("source_version"))
+        target_version = _non_empty_text(control_plane.get("target_version"))
+        if source_version and target_version and source_version != target_version:
+            if cluster.get("operation_terminal") is not True:
+                raise RuntimeError(
+                    "recovery-required: live MK8s control-plane desired version is ahead, "
+                    "but the provider operation is not proven terminal. No segment was "
+                    "marked complete."
+                )
+            observations.append(
+                {
+                    "operation_kind": "mk8s-control-plane-update",
+                    "resource_id": cluster_id,
+                    "resource_uid": _non_empty_text(
+                        cluster.get("resource_uid") or cluster.get("id")
+                    ),
+                    "resource_version": cluster.get("resource_version"),
+                    "observed_postcondition": {
+                        "control_plane_version": _non_empty_text(
+                            cluster.get("control_plane_version")
+                            or cluster.get("k8s_version")
+                            or cluster.get("version")
+                        )
+                    },
+                }
+            )
+
+    raw_groups = snapshot.get("node_groups") if isinstance(snapshot, Mapping) else None
+    live_groups: dict[str, Mapping[str, Any]] = {}
+    if isinstance(raw_groups, Mapping):
+        for raw_group in raw_groups.values():
+            if not isinstance(raw_group, Mapping):
+                continue
+            group_provider = raw_group.get("provider")
+            group_id = _non_empty_text(
+                group_provider.get("node_group_id")
+                if isinstance(group_provider, Mapping)
+                else raw_group.get("node_group_id")
+            )
+            if not group_id:
+                continue
+            if group_id in live_groups:
+                raise RuntimeError(
+                    "External Soperator live reconciliation found duplicate Nebius "
+                    f"node-group identity {group_id}."
+                )
+            live_groups[group_id] = raw_group
+
+    for planned_group in mk8s.get("node_groups", []) or []:
+        if not isinstance(planned_group, Mapping):
+            raise RuntimeError(
+                "External Soperator campaign contains an invalid MK8s node-group record."
+            )
+        source_tuple = planned_group.get("source")
+        target_tuple = planned_group.get("target")
+        if not isinstance(source_tuple, Mapping) or not isinstance(target_tuple, Mapping):
+            raise RuntimeError(
+                "External Soperator campaign node-group record lacks exact source/target tuples."
+            )
+        if to_plain_data(source_tuple) == to_plain_data(target_tuple):
+            continue
+        group_id = _non_empty_text(planned_group.get("id"))
+        live_group = live_groups.get(group_id)
+        if live_group is None:
+            raise RuntimeError(
+                "External Soperator live reconciliation could not observe the campaign "
+                f"node group {group_id or '<missing-id>'}."
+            )
+        group_provider = live_group.get("provider")
+        if not isinstance(group_provider, Mapping):
+            raise RuntimeError(
+                f"External Soperator live node group {group_id} lacks provider evidence."
+            )
+        if group_provider.get("operation_terminal") is not True:
+            raise RuntimeError(
+                "recovery-required: live MK8s node-group desired state is ahead for "
+                f"{group_id}, but provider readiness is not terminal. No segment was "
+                "marked complete."
+            )
+        template = group_provider.get("node_template")
+        if not isinstance(template, Mapping):
+            raise RuntimeError(
+                f"External Soperator live node group {group_id} lacks node-template evidence."
+            )
+        observations.append(
+            {
+                "operation_kind": "mk8s-node-group-update",
+                "resource_id": group_id,
+                "resource_uid": _non_empty_text(
+                    group_provider.get("resource_uid") or live_group.get("resource_uid") or group_id
+                ),
+                "resource_version": (
+                    group_provider.get("resource_version")
+                    if group_provider.get("resource_version") not in (None, "")
+                    else live_group.get("resource_version")
+                ),
+                "observed_postcondition": {
+                    "kubernetes": _non_empty_text(
+                        template.get("k8s_version") or template.get("kubernetes_version")
+                    ),
+                    "os": _non_empty_text(template.get("os")),
+                    "drivers_preset": _non_empty_text(
+                        template.get("gpu_stack_preset") or template.get("drivers_preset")
+                    ),
+                },
+            }
+        )
+    if not observations:
+        raise RuntimeError(
+            "recovery-required: the first unmet segment has no exact terminal Nebius "
+            "provider operation that can be recorded observation-only. Resume or recover "
+            "the segment instead."
+        )
+    return tuple(observations)
+
+
+def _external_soperator_campaign_journal(
+    *,
+    config_path: Path,
+    target_ref: str,
+    payload: Mapping[str, Any],
+) -> tuple[Path, dict[str, Any] | None]:
+    path = soperator_migration_checkpoint_path(
+        config_path,
+        target_ref,
+        payload_or_config=payload,
+    )
+    if not path.exists():
+        return path, None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"recovery-required: external Soperator operation journal is invalid: {path}: {exc}"
+        ) from exc
+    if not isinstance(raw, dict):
+        raise RuntimeError(
+            f"recovery-required: external Soperator operation journal must be an object: {path}"
+        )
+    schema = _non_empty_text(raw.get("schema"))
+    if schema != SOPERATOR_MIGRATION_EXECUTION_SCHEMA:
+        raise RuntimeError(
+            "recovery-required: unsupported external Soperator operation journal schema "
+            f"{schema or 'missing'} in {path}; this cxcli requires "
+            f"{SOPERATOR_MIGRATION_EXECUTION_SCHEMA}. No conversion is supported."
+        )
+    try:
+        _validate_checkpoint_journal_contract(raw)
+    except RuntimeError as exc:
+        raise RuntimeError(
+            "recovery-required: external Soperator operation journal does not satisfy "
+            f"the strict v3 contract in {path}: {exc}"
+        ) from exc
+    return path, raw
+
+
+def _external_soperator_onboarding_checkpoint_payload(
+    *,
+    payload: Mapping[str, Any],
+    candidate_target: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return a path-resolution payload containing the candidate target.
+
+    A first-time onboarding candidate is not present in config.yaml yet, but its
+    immutable cluster identity must still select the cluster-scoped checkpoint
+    tree.  This helper is path-only; it never normalizes or writes config.
+    """
+
+    resolved = copy.deepcopy(to_plain_data(dict(payload)))
+    if not isinstance(resolved, dict):
+        resolved = {}
+    deploy = resolved.get("deploy")
+    if not isinstance(deploy, dict):
+        deploy = {}
+        resolved["deploy"] = deploy
+    raw_targets = deploy.get("targets")
+    targets = list(raw_targets) if isinstance(raw_targets, list) else []
+    target_ref = component_instance_id(candidate_target)
+    replaced = False
+    for index, row in enumerate(targets):
+        if isinstance(row, Mapping) and component_instance_id(row) == target_ref:
+            targets[index] = copy.deepcopy(to_plain_data(dict(candidate_target)))
+            replaced = True
+            break
+    if not replaced:
+        targets.append(copy.deepcopy(to_plain_data(dict(candidate_target))))
+    deploy["targets"] = targets
+    return resolved
+
+
+def _reject_unsupported_external_soperator_onboarding_checkpoints(
+    *,
+    config_path: Path,
+    payload: Mapping[str, Any],
+    candidate_target: Mapping[str, Any],
+) -> None:
+    """Fail closed on every known retired or non-v3 journal for this cluster.
+
+    Onboarding is the campaign authority, but it is not a checkpoint migration
+    command.  A retired checkpoint location or a non-v3 campaign journal is an
+    explicit recovery boundary and must be handled by the operator without any
+    config/archive mutation.
+    """
+
+    target_ref = component_instance_id(candidate_target)
+    if not target_ref:
+        raise RuntimeError("External Soperator onboarding requires a stable target id.")
+
+    for retired_path in (
+        legacy_soperator_migration_checkpoint_path(config_path, target_ref),
+        old_soperator_migration_checkpoint_path(config_path, target_ref),
+    ):
+        if retired_path.exists():
+            raise RuntimeError(
+                "recovery-required: unsupported external Soperator operation journal "
+                f"location {retired_path}; this cxcli accepts only campaign-scoped "
+                f"{SOPERATOR_MIGRATION_EXECUTION_SCHEMA} journals. No conversion or "
+                "automatic deletion is supported, and config.yaml was not changed."
+            )
+
+    path_payloads: list[Mapping[str, Any]] = [
+        _external_soperator_onboarding_checkpoint_payload(
+            payload=payload,
+            candidate_target=candidate_target,
+        )
+    ]
+    if _external_soperator_target_row(payload, target_ref=target_ref) is not None:
+        path_payloads.append(payload)
+
+    active_paths: set[Path] = set()
+    cluster_campaign_roots: set[Path] = set()
+    for path_payload in path_payloads:
+        active_path = soperator_migration_checkpoint_path(
+            config_path,
+            target_ref,
+            payload_or_config=path_payload,
+        )
+        active_paths.add(active_path)
+        # .../ext-soperator-upgrade/campaigns/<campaign-id>/checkpoint.json
+        campaign_root = active_path.parent.parent
+        cluster_campaign_roots.add(campaign_root)
+        retired_cluster_path = campaign_root.parent / active_path.name
+        if retired_cluster_path.exists():
+            raise RuntimeError(
+                "recovery-required: unsupported external Soperator operation journal "
+                f"location {retired_cluster_path}; this cxcli accepts only "
+                f"campaign-scoped {SOPERATOR_MIGRATION_EXECUTION_SCHEMA} journals under "
+                f"{campaign_root}. No conversion or automatic deletion is supported, "
+                "and config.yaml was not changed."
+            )
+
+    journal_paths = {
+        journal_path
+        for campaign_root in cluster_campaign_roots
+        if campaign_root.exists()
+        for journal_path in campaign_root.glob("*/checkpoint.json")
+        if journal_path.is_file()
+    }
+    for journal_path in sorted(journal_paths):
+        try:
+            raw = json.loads(journal_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                "recovery-required: external Soperator operation journal is invalid: "
+                f"{journal_path}: {exc}. No conversion is supported, and config.yaml "
+                "was not changed."
+            ) from exc
+        schema = _non_empty_text(raw.get("schema")) if isinstance(raw, Mapping) else ""
+        if schema != SOPERATOR_MIGRATION_EXECUTION_SCHEMA:
+            raise RuntimeError(
+                "recovery-required: unsupported external Soperator operation journal "
+                f"schema {schema or 'missing'} in {journal_path}; this cxcli requires "
+                f"{SOPERATOR_MIGRATION_EXECUTION_SCHEMA}. No conversion is supported, "
+                "and config.yaml was not changed."
+            )
+
+    existing_target = _external_soperator_target_row(payload, target_ref=target_ref)
+    orphaned_active_paths = active_paths.intersection(journal_paths)
+    if existing_target is None and orphaned_active_paths:
+        orphaned = sorted(orphaned_active_paths)[0]
+        raise RuntimeError(
+            "recovery-required: a v3 external Soperator operation journal exists for an "
+            f"unregistered target at {orphaned}. Restore the matching config-owned "
+            "campaign or archive the orphan after review; onboarding did not mutate "
+            "config.yaml."
+        )
+
+
+def _external_soperator_campaign_is_complete(
+    campaign: Mapping[str, Any],
+    journal: Mapping[str, Any] | None,
+) -> bool:
+    segment_ids = [
+        _non_empty_text(segment.get("id"))
+        for segment in campaign.get("segments", []) or []
+        if isinstance(segment, Mapping) and _non_empty_text(segment.get("id"))
+    ]
+    if len(set(segment_ids)) != len(segment_ids):
+        raise RuntimeError(
+            "recovery-required: config-owned campaign contains duplicate segment ids."
+        )
+    if not segment_ids:
+        return True
+    if journal is None:
+        return False
+    journal_fingerprint = _non_empty_text(journal.get("campaign_fingerprint"))
+    if journal_fingerprint != _non_empty_text(campaign.get("fingerprint")):
+        raise RuntimeError(
+            "recovery-required: config campaign and operation journal fingerprints "
+            "differ; neither was rewritten."
+        )
+    completed = [
+        _non_empty_text(segment_id)
+        for segment_id in journal.get("completed_segment_ids", []) or []
+        if _non_empty_text(segment_id)
+    ]
+    if completed != segment_ids[: len(completed)] or len(completed) > len(segment_ids):
+        raise RuntimeError(
+            "recovery-required: operation journal completed_segment_ids are not an exact "
+            "ordered prefix of the config-owned campaign."
+        )
+    segment_by_id = {
+        _non_empty_text(segment.get("id")): segment
+        for segment in campaign.get("segments", []) or []
+        if isinstance(segment, Mapping) and _non_empty_text(segment.get("id"))
+    }
+    segment_state = journal.get("segment_state")
+    if not isinstance(segment_state, Mapping):
+        return False
+
+    def _provider_operation_id_is_real(value: Any) -> bool:
+        normalized = _non_empty_text(value).lower()
+        return normalized not in {"", "unavailable", "unknown", "none", "n/a"}
+
+    def _segment_requires_provider_operation(segment: Mapping[str, Any]) -> bool:
+        mk8s = segment.get("mk8s")
+        control_plane = mk8s.get("control_plane") if isinstance(mk8s, Mapping) else None
+        if isinstance(control_plane, Mapping) and _non_empty_text(
+            control_plane.get("source_version")
+        ) != _non_empty_text(control_plane.get("target_version")):
+            return True
+        groups = mk8s.get("node_groups") if isinstance(mk8s, Mapping) else None
+        return any(
+            isinstance(group, Mapping)
+            and to_plain_data(group.get("source")) != to_plain_data(group.get("target"))
+            for group in (groups if isinstance(groups, list) else [])
+        )
+
+    operation_evidence_complete = True
+    for segment_id, segment in segment_by_id.items():
+        state = segment_state.get(segment_id)
+        intent = state.get("operation_intent") if isinstance(state, Mapping) else None
+        if (
+            not isinstance(intent, Mapping)
+            or _non_empty_text(intent.get("segment_id")) != segment_id
+            or _non_empty_text(intent.get("attempt_state")) != "verified"
+        ):
+            operation_evidence_complete = False
+            break
+        provider_operations = intent.get("provider_operations")
+        if not isinstance(provider_operations, list):
+            operation_evidence_complete = False
+            break
+        if _segment_requires_provider_operation(segment) and not provider_operations:
+            operation_evidence_complete = False
+            break
+        if not all(
+            isinstance(operation, Mapping)
+            and _non_empty_text(operation.get("attempt_state")) == "verified"
+            and _provider_operation_id_is_real(operation.get("provider_operation_id"))
+            for operation in provider_operations
+        ):
+            operation_evidence_complete = False
+            break
+    return (
+        completed == segment_ids
+        and _non_empty_text(journal.get("pending_phase")) in {"", "none"}
+        and not journal.get("compensation_obligations")
+        and operation_evidence_complete
+    )
+
+
+def _external_soperator_journal_requires_protected_validation(
+    journal: Mapping[str, Any] | None,
+) -> bool:
+    """Require before/after protection unless every completed segment was observation-only."""
+
+    if journal is None:
+        return False
+    completed = [
+        _non_empty_text(segment_id)
+        for segment_id in journal.get("completed_segment_ids", []) or []
+        if _non_empty_text(segment_id)
+    ]
+    if not completed:
+        return False
+    segment_state = journal.get("segment_state")
+    if not isinstance(segment_state, Mapping):
+        return True
+    return any(
+        not (
+            isinstance(segment_state.get(segment_id), Mapping)
+            and segment_state[segment_id].get("completion_source") == "live-observation"
+            and segment_state[segment_id].get("mutation_performed") is False
+        )
+        for segment_id in completed
+    )
+
+
+def _validate_external_soperator_live_campaign_identity(
+    *,
+    campaign: Mapping[str, Any],
+    source_report: Mapping[str, Any],
+) -> None:
+    expected = campaign.get("identity")
+    snapshot = source_report.get("snapshot")
+    observed = snapshot.get("cluster_identity") if isinstance(snapshot, Mapping) else None
+    if not isinstance(expected, Mapping) or not isinstance(observed, Mapping):
+        raise RuntimeError(
+            "recovery-required: live discovery did not return immutable external "
+            "Soperator cluster identity; upgrade did not continue."
+        )
+    conflicts = tuple(
+        key
+        for key in (
+            "kubernetes_uid",
+            "soperator_uid",
+            "slurmcluster_uid",
+            "jail_filesystem_id",
+        )
+        if _non_empty_text(expected.get(key)) != _non_empty_text(observed.get(key))
+    )
+    observed_cluster_id = _non_empty_text(source_report.get("cluster_id"))
+    if observed_cluster_id and observed_cluster_id != _non_empty_text(expected.get("cluster_id")):
+        conflicts = (*conflicts, "cluster_id")
+    if conflicts:
+        raise RuntimeError(
+            "recovery-required: live external Soperator identity differs from the locked "
+            "campaign: "
+            + ", ".join(conflicts)
+            + ". No provider or Kubernetes mutation was attempted."
+        )
+
+
+def _validate_external_soperator_config_campaign_identity(
+    *,
+    campaign: Mapping[str, Any],
+    payload: Mapping[str, Any],
+    target_ref: str,
+) -> None:
+    expected = campaign.get("identity")
+    target = _external_soperator_target_row(payload, target_ref=target_ref)
+    if not isinstance(expected, Mapping) or not isinstance(target, Mapping):
+        raise RuntimeError(
+            "recovery-required: config is missing the external Soperator campaign or "
+            "target identity; upgrade did not continue."
+        )
+    _client, _tenant, project_id, _region, _email = _identity_values_from_payload(payload)
+    comparisons = {
+        "project_id": (expected.get("project_id"), project_id),
+        "cluster_id": (expected.get("cluster_id"), target.get("cluster_id")),
+        "target_ref": (expected.get("target_ref"), component_instance_id(target)),
+    }
+    conflicts = tuple(
+        key
+        for key, (locked, configured) in comparisons.items()
+        if not _non_empty_text(locked) or _non_empty_text(locked) != _non_empty_text(configured)
+    )
+    if conflicts:
+        raise RuntimeError(
+            "recovery-required: config project/target identity differs from the locked "
+            "external Soperator campaign: "
+            + ", ".join(conflicts)
+            + ". No provider or Kubernetes API call was attempted."
+        )
+
+
+def _external_soperator_live_campaign_postcondition_conflicts(
+    *,
+    campaign: Mapping[str, Any],
+    source_report: Mapping[str, Any],
+    node_group_transitions: Mapping[str, Any] | None = None,
+    journal: Mapping[str, Any] | None = None,
+) -> tuple[str, ...]:
+    """Compare the complete campaign target with a fresh live discovery bundle."""
+
+    final_targets = campaign.get("final_targets")
+    if not isinstance(final_targets, Mapping):
+        return ("final_targets",)
+    jail = source_report.get("jail_rootfs")
+    comparisons = {
+        "kubernetes": (
+            final_targets.get("kubernetes"),
+            source_report.get("current_k8s_version"),
+        ),
+        "soperator_app": (
+            final_targets.get("soperator_app"),
+            source_report.get("app_version") or source_report.get("source_version"),
+        ),
+        "soperator_chart": (
+            final_targets.get("soperator_chart"),
+            source_report.get("chart_version"),
+        ),
+        "jail_rootfs_image": (
+            final_targets.get("jail_rootfs_image"),
+            jail.get("current_image") if isinstance(jail, Mapping) else "",
+        ),
+        "jail_rootfs_version": (
+            final_targets.get("jail_rootfs_version"),
+            jail.get("current_version") if isinstance(jail, Mapping) else "",
+        ),
+    }
+    conflicts = [
+        field
+        for field, (expected, observed) in comparisons.items()
+        if _non_empty_text(expected) and _non_empty_text(expected) != _non_empty_text(observed)
+    ]
+    campaign_identity = campaign.get("identity")
+    expected_jail_filesystem_id = _non_empty_text(
+        campaign_identity.get("jail_filesystem_id")
+        if isinstance(campaign_identity, Mapping)
+        else ""
+    )
+    active_jail_evidence_valid = isinstance(jail, Mapping) and all(
+        (
+            _non_empty_text(jail.get("current_source")) == "completed-populate-jail-job",
+            _non_empty_text(jail.get("current_evidence_status")) == "active-slot-verified",
+            _non_empty_text(jail.get("current_job_name")),
+            _non_empty_text(jail.get("current_job_uid")),
+            _non_empty_text(jail.get("current_slot")) in {"slot-a", "slot-b"},
+            _non_empty_text(jail.get("current_pvc_name")),
+            _non_empty_text(jail.get("current_pvc_uid")),
+            _non_empty_text(jail.get("current_image")),
+            expected_jail_filesystem_id,
+            _non_empty_text(jail.get("current_jail_filesystem_id")) == expected_jail_filesystem_id,
+        )
+    )
+    if not active_jail_evidence_valid:
+        conflicts.append("jail_rootfs.active_evidence")
+    refresh_segments = [
+        segment
+        for segment in campaign.get("segments", []) or []
+        if isinstance(segment, Mapping)
+        and isinstance(segment.get("jail_rootfs"), Mapping)
+        and segment["jail_rootfs"].get("refresh_required") is True
+    ]
+    if refresh_segments:
+        refresh_segment_id = _non_empty_text(refresh_segments[-1].get("id"))
+        segment_state = journal.get("segment_state") if isinstance(journal, Mapping) else None
+        segment_entry = (
+            segment_state.get(refresh_segment_id)
+            if isinstance(segment_state, Mapping) and refresh_segment_id
+            else None
+        )
+        operation_evidence = (
+            segment_entry.get("operation_evidence") if isinstance(segment_entry, Mapping) else None
+        )
+        phase_state = (
+            operation_evidence.get("phase_state")
+            if isinstance(operation_evidence, Mapping)
+            else None
+        )
+        populate_phase = (
+            phase_state.get(POPULATE_JAIL_REFRESH_PHASE_ID)
+            if isinstance(phase_state, Mapping)
+            else None
+        )
+        passive_job = (
+            populate_phase.get("passive_slot_populate_job")
+            if isinstance(populate_phase, Mapping)
+            else None
+        )
+        handoff = (
+            populate_phase.get("rootfs_handoff_verification")
+            if isinstance(populate_phase, Mapping)
+            else None
+        )
+        alias = (
+            populate_phase.get("jail_volume_source_alias_reconciliation")
+            if isinstance(populate_phase, Mapping)
+            else None
+        )
+        result = populate_phase.get("result") if isinstance(populate_phase, Mapping) else None
+        journaled_jail_evidence_valid = (
+            isinstance(jail, Mapping)
+            and isinstance(populate_phase, Mapping)
+            and _non_empty_text(populate_phase.get("job_completed_at"))
+            and isinstance(passive_job, Mapping)
+            and _non_empty_text(passive_job.get("name"))
+            == _non_empty_text(jail.get("current_job_name"))
+            and _non_empty_text(passive_job.get("uid"))
+            == _non_empty_text(jail.get("current_job_uid"))
+            and _non_empty_text(passive_job.get("slot"))
+            == _non_empty_text(jail.get("current_slot"))
+            and _non_empty_text(passive_job.get("pvc"))
+            == _non_empty_text(jail.get("current_pvc_name"))
+            and _non_empty_text(passive_job.get("pvc_uid"))
+            == _non_empty_text(jail.get("current_pvc_uid"))
+            and _non_empty_text(passive_job.get("image"))
+            == _non_empty_text(jail.get("current_image"))
+            and isinstance(handoff, Mapping)
+            and _non_empty_text(handoff.get("status")) == "verified"
+            and _non_empty_text(handoff.get("active_slot"))
+            == _non_empty_text(jail.get("current_slot"))
+            and isinstance(alias, Mapping)
+            and _non_empty_text(alias.get("status")) == "verified"
+            and _non_empty_text(alias.get("expected_pvc"))
+            == _non_empty_text(jail.get("current_pvc_name"))
+            and _non_empty_text(alias.get("observed_pvc"))
+            == _non_empty_text(jail.get("current_pvc_name"))
+            and isinstance(result, Mapping)
+            and _non_empty_text(result.get("status")) == "refreshed"
+        )
+        if not journaled_jail_evidence_valid:
+            conflicts.append("jail_rootfs.journal_evidence")
+
+    conflicts.extend(_external_soperator_live_managed_operator_conflicts(campaign, source_report))
+
+    snapshot = source_report.get("snapshot")
+    node_groups = snapshot.get("node_groups") if isinstance(snapshot, Mapping) else None
+    campaign_mk8s = campaign.get("mk8s")
+    raw_locked_groups = (
+        campaign_mk8s.get("node_groups") if isinstance(campaign_mk8s, Mapping) else None
+    )
+    locked_groups = (
+        [group for group in raw_locked_groups if isinstance(group, Mapping)]
+        if isinstance(raw_locked_groups, list)
+        else []
+    )
+    transitions = node_group_transitions if isinstance(node_group_transitions, Mapping) else {}
+    if transitions.get("added") or transitions.get("retired_ids"):
+        expected_mk8s = _external_soperator_campaign_mk8s_waypoint(
+            campaign,
+            waypoint="target",
+        )
+        observed_mk8s = _external_soperator_live_mk8s_waypoint(source_report)
+        if not _external_soperator_mk8s_waypoint_matches_with_transitions(
+            observed=observed_mk8s,
+            expected=expected_mk8s,
+            node_group_transitions=transitions,
+        ):
+            conflicts.append("mk8s.node_groups.transitions")
+        return tuple(dict.fromkeys(conflicts))
+    if not isinstance(raw_locked_groups, list):
+        conflicts.append("mk8s.node_groups")
+    else:
+        if not isinstance(node_groups, Mapping):
+            conflicts.append("mk8s.node_groups")
+        else:
+            locked_by_id: dict[str, Mapping[str, Any]] = {}
+            for locked in locked_groups:
+                group_id = _non_empty_text(locked.get("id"))
+                if not group_id:
+                    conflicts.append("mk8s.node_groups.locked-id")
+                    continue
+                if group_id in locked_by_id:
+                    # The same group is expected in successive Kubernetes hops; its
+                    # last occurrence carries the campaign's final target tuple.
+                    locked_by_id[group_id] = locked
+                    continue
+                locked_by_id[group_id] = locked
+
+            observed_by_id: dict[str, Mapping[str, Any]] = {}
+            observed_key_by_id: dict[str, str] = {}
+            for name, row in node_groups.items():
+                if not isinstance(row, Mapping):
+                    conflicts.append(f"mk8s.node_groups[{_non_empty_text(name) or 'unknown'}]")
+                    continue
+                provider = row.get("provider")
+                group_id = _non_empty_text(
+                    provider.get("node_group_id") if isinstance(provider, Mapping) else ""
+                ) or _non_empty_text(row.get("node_group_id"))
+                if not group_id:
+                    conflicts.append(f"mk8s.node_groups[{_non_empty_text(name) or 'unknown'}].id")
+                    continue
+                if group_id in observed_by_id:
+                    conflicts.append(f"mk8s.node_groups[{group_id}].duplicate-id")
+                    continue
+                observed_by_id[group_id] = row
+                observed_key_by_id[group_id] = str(name)
+
+            locked_ids = set(locked_by_id)
+            observed_ids = set(observed_by_id)
+            for group_id in sorted(locked_ids - observed_ids):
+                conflicts.append(f"mk8s.node_groups[{group_id}].missing")
+            for group_id in sorted(observed_ids - locked_ids):
+                conflicts.append(f"mk8s.node_groups[{group_id}].unexpected")
+
+            for group_id in sorted(locked_ids & observed_ids):
+                locked = locked_by_id[group_id]
+                observed = observed_by_id.get(group_id)
+                provider = observed.get("provider") if isinstance(observed, Mapping) else None
+                template = provider.get("node_template") if isinstance(provider, Mapping) else None
+                target = locked.get("target")
+                if not isinstance(template, Mapping) or not isinstance(target, Mapping):
+                    conflicts.append(f"mk8s.node_groups[{group_id or 'unknown'}]")
+                    continue
+                observed_tuple = {
+                    "kubernetes_version": template.get("k8s_version"),
+                    "os": template.get("os"),
+                    "drivers_preset": template.get("gpu_stack_preset")
+                    or template.get("drivers_preset"),
+                }
+                observed_identity = {
+                    "role": campaign_node_group_role(
+                        observed_key_by_id[group_id],
+                        observed,
+                    ),
+                    "platform": template.get("platform"),
+                    "preset": template.get("preset"),
+                    "gpu_software_mode": campaign_node_group_gpu_software_mode(observed),
+                }
+                for field in ("role", "platform", "preset", "gpu_software_mode"):
+                    if _non_empty_text(locked.get(field)) != _non_empty_text(
+                        observed_identity.get(field)
+                    ):
+                        conflicts.append(f"mk8s.node_groups[{group_id}].{field}")
+                for field, expected in (
+                    ("kubernetes_version", target.get("kubernetes_version")),
+                    ("os", target.get("os")),
+                    ("drivers_preset", target.get("drivers_preset")),
+                ):
+                    if _non_empty_text(expected) != _non_empty_text(observed_tuple.get(field)):
+                        conflicts.append(f"mk8s.node_groups[{group_id or 'unknown'}].{field}")
+    return tuple(dict.fromkeys(conflicts))
+
+
+def _external_soperator_completed_campaign_final_health_conflicts(
+    *,
+    campaign: Mapping[str, Any],
+    journal: Mapping[str, Any],
+    source_report: Mapping[str, Any],
+) -> tuple[str, ...]:
+    snapshot = source_report.get("snapshot")
+    if not isinstance(snapshot, Mapping):
+        return ("final-health.discovery-snapshot",)
+    campaign_mk8s = campaign.get("mk8s")
+    raw_groups = campaign_mk8s.get("node_groups") if isinstance(campaign_mk8s, Mapping) else None
+    planned_groups = list(_soperator_onboarding_sequence_of_mappings(raw_groups))
+    if not planned_groups:
+        segments = _soperator_onboarding_sequence_of_mappings(campaign.get("segments"))
+        if segments:
+            planned_groups = list(
+                _soperator_onboarding_sequence_of_mappings(
+                    segments[-1]["mk8s"].get("node_groups")
+                    if isinstance(segments[-1].get("mk8s"), Mapping)
+                    else None
+                )
+            )
+    planned_by_id = {
+        _non_empty_text(group.get("id")): group
+        for group in planned_groups
+        if _non_empty_text(group.get("id"))
+    }
+    transitions = journal_node_group_replacement_transitions(journal)
+    try:
+        effective_groups = project_campaign_node_groups_for_replacements(
+            tuple(planned_by_id.values()),
+            replacement_bindings=_soperator_onboarding_sequence_of_mappings(
+                transitions.get("bindings")
+            ),
+            retired_node_group_ids=tuple(
+                _non_empty_text(item)
+                for item in transitions.get("retired_ids", []) or []
+                if _non_empty_text(item)
+            ),
+        )
+    except ValueError as exc:
+        raise RuntimeError(
+            f"recovery-required: completed campaign final-health projection failed: {exc}"
+        ) from exc
+    return external_soperator_final_health_conflicts(
+        campaign=campaign,
+        snapshot=snapshot,
+        effective_node_groups=effective_groups,
+    )
+
+
+def _archive_external_soperator_campaign(
+    *,
+    config_path: Path,
+    payload: Mapping[str, Any],
+    target_ref: str,
+    campaign: Mapping[str, Any],
+    journal: Mapping[str, Any] | None,
+) -> Path:
+    identity = soperator_cluster_artifact_identity_from_payload(
+        payload,
+        target_ref=target_ref,
+    )
+    campaign_id = _non_empty_text(campaign.get("campaign_id"))
+    if not campaign_id:
+        raise RuntimeError("recovery-required: campaign archive requires campaign_id.")
+    archive_dir = (
+        soperator_cluster_report_dir(
+            config_path.parent,
+            identity,
+            "ext-soperator-upgrade",
+        )
+        / "campaigns"
+        / campaign_id
+    )
+    archive_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    archive_dir.chmod(0o700)
+    campaign_path = archive_dir / "campaign.json"
+    content = json.dumps(to_plain_data(dict(campaign)), indent=2, sort_keys=True) + "\n"
+    if campaign_path.exists() and campaign_path.read_text(encoding="utf-8") != content:
+        raise RuntimeError(
+            f"recovery-required: immutable campaign archive conflicts at {campaign_path}."
+        )
+    if not campaign_path.exists():
+        _write_text_atomic(campaign_path, content)
+    if journal is not None:
+        journal_path = archive_dir / "journal.json"
+        journal_content = json.dumps(to_plain_data(dict(journal)), indent=2, sort_keys=True) + "\n"
+        if journal_path.exists() and journal_path.read_text(encoding="utf-8") != journal_content:
+            raise RuntimeError(
+                f"recovery-required: immutable campaign journal archive conflicts at {journal_path}."
+            )
+        if not journal_path.exists():
+            _write_text_atomic(journal_path, journal_content, file_mode=0o600)
+        journal_path.chmod(0o600)
+    return campaign_path
+
+
+def _reconcile_external_soperator_onboarding_campaign(
+    *,
+    config_path: Path,
+    payload: Mapping[str, Any],
+    candidate_target: Mapping[str, Any],
+) -> tuple[dict[str, Any], bool, str, Mapping[str, Any] | None, Mapping[str, Any] | None]:
+    """Resolve one target's immutable campaign without mutating payload or files."""
+
+    deploy = payload.get("deploy")
+    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    if isinstance(targets, list):
+        for row in targets:
+            if not isinstance(row, Mapping) or not deploy_target_is_external_mk8s(row):
+                continue
+            existing_ref = component_instance_id(row) or "<missing-target-ref>"
+            if not _external_soperator_campaign(row):
+                raise RuntimeError(
+                    "recovery-required: existing external Soperator target "
+                    f"'{existing_ref}' has no v3 campaign; automatic adoption or "
+                    "conversion is not supported."
+                )
+
+    target_ref = component_instance_id(candidate_target)
+    candidate_campaign = _external_soperator_campaign(candidate_target)
+    if not candidate_campaign:
+        raise RuntimeError(
+            "External Soperator onboarding did not compile a v3 campaign; config.yaml "
+            "was not changed."
+        )
+    _reject_unsupported_external_soperator_onboarding_checkpoints(
+        config_path=config_path,
+        payload=payload,
+        candidate_target=candidate_target,
+    )
+    existing_target = _external_soperator_target_row(payload, target_ref=target_ref)
+    if existing_target is None:
+        candidate_identity = candidate_campaign.get("identity")
+        if isinstance(candidate_identity, Mapping) and isinstance(targets, list):
+            candidate_cluster_id = _non_empty_text(candidate_identity.get("cluster_id"))
+            candidate_kubernetes_uid = _non_empty_text(candidate_identity.get("kubernetes_uid"))
+            for row in targets:
+                if not isinstance(row, Mapping) or not deploy_target_is_external_mk8s(row):
+                    continue
+                existing_ref = component_instance_id(row)
+                if not existing_ref or existing_ref == target_ref:
+                    continue
+                row_campaign = _external_soperator_campaign(row)
+                row_identity = row_campaign.get("identity")
+                if not isinstance(row_identity, Mapping):
+                    continue
+                same_cluster_id = bool(
+                    candidate_cluster_id
+                    and candidate_cluster_id == _non_empty_text(row_identity.get("cluster_id"))
+                )
+                same_kubernetes_uid = bool(
+                    candidate_kubernetes_uid
+                    and candidate_kubernetes_uid
+                    == _non_empty_text(row_identity.get("kubernetes_uid"))
+                )
+                if same_cluster_id or same_kubernetes_uid:
+                    raise RuntimeError(
+                        "recovery-required: this external Soperator cluster identity is "
+                        f"already registered as target '{existing_ref}'. Rerun onboarding "
+                        "without a different --target-id so cxcli reconciles the existing "
+                        "target; config.yaml was not changed."
+                    )
+        return dict(copy.deepcopy(candidate_target)), False, "registered", None, None
+    existing_campaign = _external_soperator_campaign(existing_target)
+    if not existing_campaign:
+        raise RuntimeError(
+            "recovery-required: the existing external Soperator target has no v3 campaign; "
+            "automatic adoption or conversion is not supported."
+        )
+    conflicts = _external_soperator_campaign_identity_conflicts(
+        existing_campaign,
+        candidate_campaign,
+    )
+    if conflicts:
+        raise RuntimeError(
+            "recovery-required: immutable external Soperator cluster identity changed: "
+            + ", ".join(conflicts)
+            + ". Register the recreated cluster as a new target."
+        )
+    _journal_path, journal = _external_soperator_campaign_journal(
+        config_path=config_path,
+        target_ref=target_ref,
+        payload=payload,
+    )
+    existing_fingerprint = _non_empty_text(existing_campaign.get("fingerprint"))
+    if journal is not None:
+        journal_fingerprint = _non_empty_text(journal.get("campaign_fingerprint"))
+        if journal_fingerprint != existing_fingerprint:
+            raise RuntimeError(
+                "recovery-required: config campaign and operation journal fingerprints "
+                "differ; onboarding did not rewrite either one."
+            )
+    complete = _external_soperator_campaign_is_complete(existing_campaign, journal)
+    candidate_fingerprint = _non_empty_text(candidate_campaign.get("fingerprint"))
+    if complete:
+        candidate_live_report = _external_soperator_candidate_live_report(candidate_target)
+        live_source_conflicts = _external_soperator_live_campaign_postcondition_conflicts(
+            campaign=existing_campaign,
+            source_report=candidate_live_report,
+            node_group_transitions=_external_soperator_journal_node_group_transitions(
+                _state_mapping(journal)
+            ),
+            journal=_state_mapping(journal),
+        )
+        if live_source_conflicts:
+            raise RuntimeError(
+                "recovery-required: live cluster state no longer satisfies the completed "
+                "external Soperator campaign: "
+                + ", ".join(live_source_conflicts)
+                + ". Onboarding did not archive or replace the campaign; reconcile the "
+                "contradictory live state before planning another campaign."
+            )
+        final_health_conflicts = _external_soperator_completed_campaign_final_health_conflicts(
+            campaign=existing_campaign,
+            journal=_state_mapping(journal),
+            source_report=candidate_live_report,
+        )
+        if final_health_conflicts:
+            raise RuntimeError(
+                "recovery-required: completed campaign fresh final health is not ready: "
+                + ", ".join(final_health_conflicts)
+                + ". Onboarding did not archive or replace the campaign."
+            )
+        if _external_soperator_journal_requires_protected_validation(
+            journal
+        ) and not external_soperator_upgrade_protected_comparison_passed(
+            config_path=config_path,
+            target_ref=target_ref,
+            payload_or_config=payload,
+        ):
+            raise RuntimeError(
+                "recovery-required: the completed campaign has no successful protected-state "
+                "validation evidence; onboarding did not archive or replace it."
+            )
+    if candidate_fingerprint == existing_fingerprint:
+        report_target = dict(copy.deepcopy(candidate_target))
+        report_onboarding = report_target.get("soperator_onboarding")
+        if isinstance(report_onboarding, dict):
+            report_onboarding["upgrade_path"] = copy.deepcopy(existing_campaign)
+        state = "complete" if complete else ("executing" if journal is not None else "planned")
+        return report_target, True, state, None, None
+    journal_transitions = _external_soperator_journal_node_group_transitions(
+        _state_mapping(journal)
+    )
+    if complete and _external_soperator_campaign_final_targets(
+        candidate_campaign
+    ) == _external_soperator_campaign_final_targets_with_transitions(
+        existing_campaign,
+        journal_transitions,
+    ):
+        report_target = dict(copy.deepcopy(candidate_target))
+        report_onboarding = report_target.get("soperator_onboarding")
+        if isinstance(report_onboarding, dict):
+            report_onboarding["upgrade_path"] = copy.deepcopy(existing_campaign)
+        return report_target, True, "complete", None, None
+    if journal is not None and not complete:
+        report_target = dict(copy.deepcopy(candidate_target))
+        report_onboarding = report_target.get("soperator_onboarding")
+        if isinstance(report_onboarding, dict):
+            report_onboarding["upgrade_path"] = copy.deepcopy(existing_campaign)
+        return report_target, True, "segment-pending", None, None
+    if not complete:
+        source_conflicts = _external_soperator_unstarted_campaign_source_conflicts(
+            existing_campaign,
+            candidate_campaign,
+        )
+        if source_conflicts:
+            raise RuntimeError(
+                "recovery-required: the operation journal is absent, but live state no longer "
+                "matches the original campaign source waypoint: "
+                + ", ".join(source_conflicts)
+                + ". Run ext-soperator upgrade to reconcile the existing campaign; onboarding "
+                "did not replace it."
+            )
+    transition = "next-campaign" if complete else "replaced-unstarted"
+    return (
+        dict(copy.deepcopy(candidate_target)),
+        False,
+        transition,
+        existing_campaign,
+        journal,
+    )
+
+
+def _reobserve_external_soperator_onboarding_target(
+    *,
+    payload: Mapping[str, Any],
+    candidate_target: Mapping[str, Any],
+    source_version: str | None,
+) -> dict[str, Any]:
+    onboarding = candidate_target.get("soperator_onboarding")
+    if not isinstance(onboarding, Mapping):
+        raise RuntimeError("External Soperator candidate has no onboarding state.")
+    node_template = onboarding.get("node_template_upgrade")
+    target_k8s_version = (
+        _non_empty_text(node_template.get("target_k8s_version"))
+        if isinstance(node_template, Mapping)
+        else ""
+    )
+    campaign = _external_soperator_campaign(candidate_target)
+    final_targets = campaign.get("final_targets")
+    target_k8s_version = target_k8s_version or _non_empty_text(
+        final_targets.get("kubernetes") if isinstance(final_targets, Mapping) else ""
+    )
+    accepted_source_version = _non_empty_text(source_version) or _non_empty_text(
+        onboarding.get("source_version")
+    )
+    rollout = _soperator_rollout_command_options_from_target_row(candidate_target)
+    return _soperator_onboarding_target_row_from_options(
+        payload=payload,
+        target_id=component_instance_id(candidate_target),
+        cluster_id=_non_empty_text(candidate_target.get("cluster_id")),
+        kube_context=_non_empty_text(candidate_target.get("kube_context")),
+        access=_non_empty_text(candidate_target.get("access")) or "external",
+        storage_mode=_non_empty_text(onboarding.get("storage_mode")),
+        compute_mode=_non_empty_text(onboarding.get("compute_mode")),
+        source_version=accepted_source_version,
+        to_chart_version=None,
+        to_k8s_version=target_k8s_version,
+        allow_unsupported_soperator_upgrade_path=False,
+        interactive=False,
+        validate_sources=False,
+        worker_rollout_strategy=cast(str | None, rollout.get("worker_rollout_strategy")),
+        service_role_rollout_strategy=cast(
+            str | None,
+            rollout.get("service_role_rollout_strategy"),
+        ),
+        worker_wave_groups=cast(int | None, rollout.get("worker_wave_groups")),
+        worker_wave_percent=cast(int | None, rollout.get("worker_wave_percent")),
+        max_parallel_worker_groups=cast(
+            int | None,
+            rollout.get("max_parallel_worker_groups"),
+        ),
+        strategy_max_surge_count=cast(
+            int | None,
+            rollout.get("strategy_max_surge_count"),
+        ),
+        strategy_max_unavailable_count=cast(
+            int | None,
+            rollout.get("strategy_max_unavailable_count"),
+        ),
+        strategy_drain_timeout=cast(str | None, rollout.get("strategy_drain_timeout")),
+    )
+
+
+def _collect_external_soperator_active_campaign_observation(
+    *,
+    payload: Mapping[str, Any],
+    target: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Observe an executing campaign without compiling a replacement campaign."""
+
+    target_ref = component_instance_id(target)
+    cluster_id = _non_empty_text(target.get("cluster_id"))
+    access = _normalize_mk8s_handoff_access(_non_empty_text(target.get("access")) or "external")
+    context = _non_empty_text(target.get("kube_context"))
+    if not target_ref or not cluster_id:
+        raise RuntimeError(
+            "recovery-required: the active external Soperator target has incomplete identity."
+        )
+    if context:
+        snapshot = collect_kubectl_soperator_snapshot(kube_context=context)
+        _validate_explicit_soperator_kube_context_identity(
+            payload=payload,
+            cluster_id=cluster_id,
+            kube_context=context,
+            access=access,
+            explicit_snapshot=snapshot,
+        )
+        provider_snapshot = _collect_provider_mk8s_template_snapshot(
+            payload,
+            cluster_id=cluster_id,
+        )
+        snapshot = _merge_provider_mk8s_template_snapshot(snapshot, provider_snapshot)
+    else:
+        snapshot, _generated_context = _collect_soperator_snapshot_for_nebius_mk8s_cluster(
+            payload,
+            cluster_id=cluster_id,
+            access=access,
+        )
+
+    campaign = _external_soperator_campaign(target)
+    onboarding = target.get("soperator_onboarding")
+    if not campaign or not isinstance(onboarding, Mapping):
+        raise RuntimeError(
+            "recovery-required: the active external Soperator target has no v3 campaign."
+        )
+    final_targets = campaign.get("final_targets")
+    if not isinstance(final_targets, Mapping):
+        raise RuntimeError("recovery-required: the active v3 campaign has no final targets.")
+    target_chart = _non_empty_text(final_targets.get("soperator_chart"))
+    target_app = _non_empty_text(final_targets.get("soperator_app"))
+    target_k8s = _non_empty_text(final_targets.get("kubernetes"))
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref=target_ref,
+        pinned_chart_version=target_chart,
+        pinned_app_version=target_app,
+        approved_target_chart_version=target_chart,
+        target_k8s_version=target_k8s,
+    )
+    report_payload = report.to_dict()
+
+    locked_jail = campaign.get("jail_rootfs")
+    target_versions = {
+        "jail_rootfs": {
+            "target_image": _non_empty_text(
+                locked_jail.get("target_image") if isinstance(locked_jail, Mapping) else ""
+            ),
+            "target_source": _non_empty_text(
+                locked_jail.get("target_source") if isinstance(locked_jail, Mapping) else ""
+            ),
+            "target_cuda_version": _non_empty_text(
+                locked_jail.get("target_cuda_version") if isinstance(locked_jail, Mapping) else ""
+            ),
+            "target_digest": _non_empty_text(
+                locked_jail.get("target_digest") if isinstance(locked_jail, Mapping) else ""
+            ),
+            "target_identity_warning": _non_empty_text(
+                locked_jail.get("target_identity_warning")
+                if isinstance(locked_jail, Mapping)
+                else ""
+            ),
+        }
+    }
+    jail_rootfs = soperator_discovery_jail_rootfs_record(
+        snapshot=snapshot,
+        report=report_payload,
+        target_versions=target_versions,
+    )
+    report_payload["jail_rootfs"] = copy.deepcopy(jail_rootfs)
+    report_payload["upgrade_path"] = copy.deepcopy(to_plain_data(campaign))
+
+    release = _soperator_discovery_soperator_release(snapshot)
+    live_chart = _non_empty_text(release.get("chart_version"))
+    if not live_chart:
+        chart_label = _non_empty_text(release.get("chart"))
+        known_versions = {
+            _locked_upgrade_path_record_value(campaign, "soperator_chart", "current_version"),
+            _locked_upgrade_path_record_value(campaign, "soperator_chart", "target_version"),
+        }
+        live_chart = next(
+            (
+                version
+                for version in sorted(filter(None, known_versions), key=len, reverse=True)
+                if chart_label.endswith(f"-{version}")
+            ),
+            "",
+        )
+    live_chart = live_chart or _soperator_discovery_live_chart_version(report_payload)
+    live_app = normalize_soperator_release_version(
+        _non_empty_text(release.get("app_version") or release.get("appVersion"))
+    )
+
+    observed_target = dict(copy.deepcopy(target))
+    observed_target["inventory"] = {"node_groups": copy.deepcopy(snapshot.get("node_groups", {}))}
+    observed_target[_SOPERATOR_DISCOVERY_REPORT_PRIVATE_KEY] = {
+        "snapshot": copy.deepcopy(to_plain_data(snapshot)),
+        "report": copy.deepcopy(report_payload),
+    }
+    source_report = {
+        "cluster_id": cluster_id,
+        "current_k8s_version": soperator_discovery_snapshot_control_plane_k8s_version(snapshot),
+        "app_version": live_app,
+        "source_version": live_app,
+        "chart_version": live_chart,
+        "jail_rootfs": copy.deepcopy(jail_rootfs),
+        "snapshot": copy.deepcopy(to_plain_data(snapshot)),
+    }
+    return observed_target, source_report
+
+
+def _external_soperator_existing_target_for_onboard_rerun(
+    payload: Mapping[str, Any],
+    *,
+    target_id: str | None,
+    cluster_id: str | None,
+    kube_context: str | None,
+) -> Mapping[str, Any] | None:
+    deploy = payload.get("deploy")
+    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    if not isinstance(targets, list):
+        return None
+    candidates = [
+        row for row in targets if isinstance(row, Mapping) and deploy_target_is_external_mk8s(row)
+    ]
+    normalized_target = normalize_component_token(target_id)
+    normalized_cluster = _non_empty_text(cluster_id)
+    normalized_context = _non_empty_text(kube_context)
+    if normalized_target:
+        candidates = [row for row in candidates if component_instance_id(row) == normalized_target]
+    if normalized_cluster:
+        candidates = [
+            row
+            for row in candidates
+            if _non_empty_text(row.get("cluster_id")) == normalized_cluster
+        ]
+    if normalized_context and not (normalized_target or normalized_cluster):
+        candidates = [
+            row
+            for row in candidates
+            if _non_empty_text(row.get("kube_context")) == normalized_context
+        ]
+    if (
+        not any((normalized_target, normalized_cluster, normalized_context))
+        and len(candidates) != 1
+    ):
+        return None
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _report_active_external_soperator_onboard_rerun(
+    *,
+    config_path: Path,
+    target_id: str | None,
+    cluster_id: str | None,
+    kube_context: str | None,
+    source_version: str | None,
+    validate_sources: bool,
+    no_interactive: bool,
+) -> bool:
+    """Report a journaled campaign under its locks and bypass campaign planning."""
+
+    config_lock_path = config_path.parent / ".nebius-cxcli" / "config.lock"
+    observed_target: dict[str, Any] | None = None
+    latest_payload: dict[str, Any] | None = None
+    campaign_state = ""
+    with SoperatorMigrationExecutionLock(config_lock_path):
+        latest_payload = _load_config_payload(config_path)
+        existing_target = _external_soperator_existing_target_for_onboard_rerun(
+            latest_payload,
+            target_id=target_id,
+            cluster_id=cluster_id,
+            kube_context=kube_context,
+        )
+        if existing_target is None:
+            return False
+        target_ref = component_instance_id(existing_target)
+        campaign = _external_soperator_campaign(existing_target)
+        if not target_ref or not campaign:
+            raise RuntimeError(
+                "recovery-required: the existing external Soperator target has no v3 campaign."
+            )
+        _reject_unsupported_external_soperator_onboarding_checkpoints(
+            config_path=config_path,
+            payload=latest_payload,
+            candidate_target=existing_target,
+        )
+        _validate_external_soperator_config_campaign_identity(
+            campaign=campaign,
+            payload=latest_payload,
+            target_ref=target_ref,
+        )
+        identity = campaign.get("identity")
+        if not isinstance(identity, Mapping):
+            raise RuntimeError("recovery-required: the active campaign has no identity.")
+        with ExitStack() as active_stack:
+            runtime_payload = active_stack.enter_context(
+                _soperator_migration_execute_payload(latest_payload, target_ref=target_ref)
+            )
+            active_stack.enter_context(
+                SoperatorMigrationExecutionLock(
+                    soperator_migration_lock_path(
+                        config_path,
+                        target_ref,
+                        payload_or_config=runtime_payload,
+                    )
+                )
+            )
+            _journal_path, journal = _external_soperator_campaign_journal(
+                config_path=config_path,
+                target_ref=target_ref,
+                payload=latest_payload,
+            )
+            if journal is None or _external_soperator_campaign_is_complete(campaign, journal):
+                return False
+            observation_target = dict(copy.deepcopy(existing_target))
+            if _non_empty_text(kube_context):
+                observation_target["kube_context"] = _non_empty_text(kube_context)
+            lease_kube_context = _validate_external_soperator_kubernetes_uid_before_lease(
+                campaign=campaign,
+                kube_context=_external_soperator_backup_kube_context(
+                    runtime_payload,
+                    target_ref=target_ref,
+                    kube_context=_non_empty_text(kube_context) or None,
+                ),
+            )
+            cluster_lease = active_stack.enter_context(
+                SoperatorMigrationClusterLease(
+                    kube_context=lease_kube_context,
+                    cluster_id=_non_empty_text(identity.get("cluster_id")),
+                    campaign_fingerprint=_non_empty_text(campaign.get("fingerprint")),
+                )
+            )
+            cluster_lease.assert_held()
+            observed_target, source_report = (
+                _collect_external_soperator_active_campaign_observation(
+                    payload=latest_payload,
+                    target=observation_target,
+                )
+            )
+            _validate_external_soperator_live_campaign_identity(
+                campaign=campaign,
+                source_report=source_report,
+            )
+            completed_ids = [
+                _non_empty_text(segment_id)
+                for segment_id in journal.get("completed_segment_ids", []) or []
+                if _non_empty_text(segment_id)
+            ]
+            _external_soperator_campaign_live_waypoint_index(
+                campaign=campaign,
+                source_report=source_report,
+                completed_segment_ids=completed_ids,
+                resume_current_segment=True,
+                node_group_transitions=_external_soperator_journal_node_group_transitions(
+                    _state_mapping(journal)
+                ),
+            )
+            cluster_lease.assert_held()
+            campaign_state = (
+                "segment-pending"
+                if _non_empty_text(journal.get("pending_phase")) not in {"", "none"}
+                else "executing"
+            )
+
+    if observed_target is None or latest_payload is None:
+        return False
+    target_ref = component_instance_id(observed_target)
+    _print_soperator_campaign_acceptance(observed_target, interactive=False)
+    source_report_path = _write_soperator_source_discovery_report_from_target_row(
+        config_path=config_path,
+        target_row=observed_target,
+        command=_soperator_onboard_bundle_command_args(
+            config_path=config_path,
+            target_row=observed_target,
+            source_version=source_version,
+            validate_sources=validate_sources,
+            no_interactive=no_interactive,
+        ),
+    )
+    console.print(f"Config up-to-date: {config_path}")
+    if source_report_path is not None:
+        console.print(f"Wrote Soperator discovery bundle: {source_report_path.parent}")
+    console.print(
+        f"Reconciled external MK8s target: {target_ref} (campaign state: {campaign_state})"
+    )
+    console.print(
+        "Active campaign preserved unchanged; use ext-soperator upgrade to resume or "
+        "finish its current segment."
+    )
+    onboarding = observed_target.get("soperator_onboarding")
+    if not isinstance(onboarding, Mapping):
+        onboarding = {}
+    _print_soperator_onboard_next_steps(
+        config_path,
+        payload=latest_payload,
+        target_ref=target_ref,
+        migration_required=_soperator_migration_action_flags(onboarding)["migration_required"],
+        onboarding=onboarding,
+    )
     return True
 
 
@@ -57248,20 +60768,23 @@ def ext_soperator_discover_command(
 
 @ext_soperator_app.command(
     "onboard",
-    short_help="Register/adopt an existing Nebius MK8s target for Soperator.",
+    short_help=(
+        "Register a new target, report its active campaign, or propose the next "
+        "campaign after completion."
+    ),
     epilog=(
         "Examples: "
         "nebius-cxcli ext-soperator onboard ./deployments/tenant/project/config.yaml; "
         "nebius-cxcli ext-soperator onboard ./deployments --client-name acme "
         "--tenant-id TENANT --project-id PROJECT --region-id eu-north1 "
-        "--cluster-id mk8scluster-... --target-id external-cluster --no-interactive; "
+        "--cluster-id mk8scluster-... --target-id external-cluster "
+        "--to-k8s-version <major.minor> --no-interactive; "
         "nebius-cxcli ext-soperator onboard ./deployments --client-name acme "
         "--tenant-id TENANT --project-id PROJECT --region-id eu-north1 "
         "--cluster-id mk8scluster-... --target-id external-cluster "
         "--storage-mode keep-existing-storage --compute-mode keep-existing-compute "
-        "--to-chart-version <chart-version> --to-k8s-version <major.minor> "
-        "--worker-rollout-strategy safe-surge --worker-wave-groups 1 --no-interactive; "
-        "nebius-cxcli validate <config.yaml>; nebius-cxcli render <config.yaml>. "
+        "--to-k8s-version <major.minor> "
+        "--worker-rollout-strategy safe-surge --worker-wave-groups 1 --no-interactive. "
         "Pass a config path to update an existing project, or pass a deployments root "
         "to create a project config under the deployments root, then choose one existing "
         "Nebius MK8s cluster from the project. "
@@ -57273,20 +60796,20 @@ def ext_soperator_discover_command(
         "into login or worker nodes. "
         "The command updates config.yaml and writes "
         f"generated/reports/{SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME}/<target>/manifest.json; "
-        "reruns refresh read-only source discovery and Nebius provider node-template "
-        "inventory by node group before deciding whether external node-template "
-        "upgrade is still needed, then locks the accepted full upgrade path under "
-        "deploy.targets[].soperator_onboarding.upgrade_path. When Soperator chart/rootfs "
-        "work is accepted, the locked path includes Jail Upgrade before validation. "
-        "For install/adopt-only targets "
-        "with no external-upgrade-owned actions, "
-        "run nebius-cxcli deploy <config.yaml> to reconcile the generated desired "
-        "state and produce deploy-report.md; use deploy --target <target-id> only "
-        "to narrow a run. For external-upgrade-required targets, "
-        "do not deploy first; run nebius-cxcli ext-soperator upgrade <config.yaml> "
+        "the first run registers immutable cluster identity and locks a complete v3 "
+        "campaign under deploy.targets[].soperator_onboarding.upgrade_path. Reruns "
+        "report the active campaign without replacing it, or propose a later complete "
+        "campaign after live-verified completion. Non-interactive mode requires the "
+        "exact final --to-k8s-version; when omitted it prints the recommended reachable "
+        "target and writes no target or campaign. The campaign contains every SDK-validated Kubernetes "
+        "hop, exact node-group OS/driver tuple, Soperator/chart target, and Jail Upgrade. "
+        "Soperator app/chart, managed operator, and Jail targets are resolved only from "
+        "the exact catalog-pinned component sources; unsupported paths fail closed. "
+        "After onboarding, run nebius-cxcli ext-soperator upgrade <config.yaml> "
         "--target <target> --dry-run, "
         "then nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> "
-        "--execute --approve."
+        "--execute --approve. Repeat those upgrade commands for each remaining "
+        "campaign segment; do not render, deploy, or onboard again between segments."
     ),
 )
 def soperator_onboard_command(
@@ -57365,7 +60888,10 @@ def soperator_onboard_command(
             "--kube-context",
             help=(
                 "Optional kubectl context override for discovery. By default cxcli uses "
-                "--cluster-id to generate temporary access through the Nebius API."
+                "--cluster-id to generate temporary access through the Nebius API. When "
+                "provided, cxcli binds the context to --cluster-id by comparing the "
+                "kube-system namespace UID through both access paths, and fails closed "
+                "when either identity is unknown or they differ."
             ),
         ),
     ] = None,
@@ -57412,39 +60938,19 @@ def soperator_onboard_command(
             ),
         ),
     ] = None,
-    to_chart_version: Annotated[
-        str | None,
-        typer.Option(
-            "--to-chart-version",
-            help=(
-                "Target Soperator chart version for onboarding analysis. Defaults to "
-                "the component_sources.yaml Soperator chart pin."
-            ),
-        ),
-    ] = None,
     to_k8s_version: Annotated[
         str | None,
         typer.Option(
             "--to-k8s-version",
             help=(
                 "Target Kubernetes major.minor version for external node-template upgrade "
-                "analysis. Interactive onboarding defaults to the next discovered minor hop; "
-                "non-interactive runs can pass the final supported target to lock every "
-                "sequential hop when onboarding selects external MK8s node-template work."
+                "analysis. Interactive onboarding recommends the highest endpoint reachable "
+                "by every concrete node group and locks every contiguous hop. Non-interactive "
+                "runs must pass the exact final target; omission prints the recommendation "
+                "without writing a campaign."
             ),
         ),
     ] = None,
-    allow_unsupported_soperator_upgrade_path: Annotated[
-        bool,
-        typer.Option(
-            "--allow-unsupported-soperator-upgrade-path/--no-allow-unsupported-soperator-upgrade-path",
-            help=(
-                "Allow accepted onboarding for an unsupported or not-validated Soperator "
-                "upgrade path. This does not bypass Kubernetes minor-hop, backup, "
-                "quota, protected-state, or other safety checks."
-            ),
-        ),
-    ] = False,
     worker_rollout_strategy: Annotated[
         str | None,
         typer.Option(
@@ -57452,7 +60958,9 @@ def soperator_onboard_command(
             help=(
                 "External node-template rollout strategy to persist in config.yaml: "
                 "safe-surge or zero-surge. Worker wave flags control worker-group "
-                "parallelism when safe-surge is selected."
+                "parallelism when safe-surge is selected. Non-interactive onboarding "
+                "deterministically leaves Slurm scheduling active for safe-surge and "
+                "quiesces scheduling for zero-surge; both values are fingerprinted."
             ),
         ),
     ] = None,
@@ -57524,7 +61032,8 @@ def soperator_onboard_command(
             "--strategy-drain-timeout",
             help=(
                 "Nebius node-group strategy drain timeout for each active worker group: "
-                "none or an explicit Go-style duration such as 30m. Default: 30m."
+                "must be none. The provider timeout stays unset so cxcli never "
+                "force-deletes draining nodes."
             ),
         ),
     ] = None,
@@ -57550,7 +61059,7 @@ def soperator_onboard_command(
         ),
     ] = False,
 ) -> None:
-    """Register/adopt an existing Nebius MK8s target for Soperator."""
+    """Register a new target, report its active campaign, or propose the next campaign after completion."""
     try:
         interactive_mode = not no_interactive
         infra_entries = _with_infra_provider_groups(component_entries("infra"))
@@ -57573,6 +61082,16 @@ def soperator_onboard_command(
         )
         config_path = resolved_target.config_path
         payload = _load_config_payload(config_path)
+        if _report_active_external_soperator_onboard_rerun(
+            config_path=config_path,
+            target_id=target_id_opt,
+            cluster_id=cluster_id_opt,
+            kube_context=kube_context_opt,
+            source_version=source_version_opt,
+            validate_sources=validate_sources,
+            no_interactive=no_interactive,
+        ):
+            return
 
         if interactive_mode and not cluster_id_opt and not target_id_opt and not kube_context_opt:
             _client_name, _tenant_id, resolved_project_id, _region_id, _email = (
@@ -57585,11 +61104,9 @@ def soperator_onboard_command(
                     project_id=resolved_project_id,
                     provider_lookup=provider_lookup,
                     source_version=source_version_opt,
-                    to_chart_version=to_chart_version,
+                    to_chart_version=None,
                     to_k8s_version=to_k8s_version,
-                    allow_unsupported_soperator_upgrade_path=(
-                        allow_unsupported_soperator_upgrade_path
-                    ),
+                    allow_unsupported_soperator_upgrade_path=False,
                     validate_sources=validate_sources,
                     compute_mode=compute_mode_opt,
                     worker_rollout_strategy=worker_rollout_strategy,
@@ -57609,11 +61126,9 @@ def soperator_onboard_command(
                     storage_mode=storage_mode_opt,
                     compute_mode=compute_mode_opt,
                     source_version=source_version_opt,
-                    to_chart_version=to_chart_version,
+                    to_chart_version=None,
                     to_k8s_version=to_k8s_version,
-                    allow_unsupported_soperator_upgrade_path=(
-                        allow_unsupported_soperator_upgrade_path
-                    ),
+                    allow_unsupported_soperator_upgrade_path=False,
                     validate_sources=validate_sources,
                     worker_rollout_strategy=worker_rollout_strategy,
                     service_role_rollout_strategy=service_role_rollout_strategy,
@@ -57634,9 +61149,9 @@ def soperator_onboard_command(
                 storage_mode=storage_mode_opt,
                 compute_mode=compute_mode_opt,
                 source_version=source_version_opt,
-                to_chart_version=to_chart_version,
+                to_chart_version=None,
                 to_k8s_version=to_k8s_version,
-                allow_unsupported_soperator_upgrade_path=allow_unsupported_soperator_upgrade_path,
+                allow_unsupported_soperator_upgrade_path=False,
                 interactive=interactive_mode,
                 validate_sources=validate_sources,
                 worker_rollout_strategy=worker_rollout_strategy,
@@ -57652,12 +61167,10 @@ def soperator_onboard_command(
         accepted_onboarding = target_row.get("soperator_onboarding")
         accepted_storage_mode = ""
         accepted_compute_mode = ""
-        accepted_to_chart_version = ""
         accepted_to_k8s_version = ""
         if isinstance(accepted_onboarding, Mapping):
             accepted_storage_mode = _non_empty_text(accepted_onboarding.get("storage_mode"))
             accepted_compute_mode = _non_empty_text(accepted_onboarding.get("compute_mode"))
-            accepted_to_chart_version = _non_empty_text(accepted_onboarding.get("target_version"))
             accepted_node_template = accepted_onboarding.get("node_template_upgrade")
             if isinstance(accepted_node_template, Mapping):
                 accepted_to_k8s_version = _non_empty_text(
@@ -57674,9 +61187,7 @@ def soperator_onboard_command(
             storage_mode=_non_empty_text(storage_mode_opt) or accepted_storage_mode,
             compute_mode=_non_empty_text(compute_mode_opt) or accepted_compute_mode,
             source_version=source_version_opt,
-            to_chart_version=_non_empty_text(to_chart_version) or accepted_to_chart_version,
             to_k8s_version=_non_empty_text(to_k8s_version) or accepted_to_k8s_version,
-            allow_unsupported_soperator_upgrade_path=allow_unsupported_soperator_upgrade_path,
             worker_rollout_strategy=worker_rollout_strategy
             if worker_rollout_strategy is not None
             else cast(str | None, accepted_rollout_options.get("worker_rollout_strategy")),
@@ -57704,46 +61215,174 @@ def soperator_onboard_command(
             no_interactive=no_interactive,
             use_accepted_row=False,
         )
+        target_ref = component_instance_id(target_row)
+        if not target_ref:
+            raise RuntimeError("External Soperator onboarding requires a stable target id.")
+        (
+            preview_target_row,
+            preview_preserves_existing,
+            _preview_state,
+            _preview_archive,
+            _preview_journal,
+        ) = _reconcile_external_soperator_onboarding_campaign(
+            config_path=config_path,
+            payload=payload,
+            candidate_target=target_row,
+        )
+        _print_soperator_campaign_acceptance(
+            preview_target_row,
+            interactive=interactive_mode and not preview_preserves_existing,
+        )
+        config_lock_path = config_path.parent / ".nebius-cxcli" / "config.lock"
+        archive_path: Path | None = None
+        # This is a cooperative cross-process lock for cxcli config writers. The
+        # expected-bytes check below remains the drift guard for external editors
+        # that do not participate in the lock protocol.
+        with SoperatorMigrationExecutionLock(config_lock_path):
+            expected_config_bytes = config_path.read_bytes()
+            latest_payload = _load_config_payload(config_path)
+            existing_latest_target = _external_soperator_target_row(
+                latest_payload,
+                target_ref=target_ref,
+            )
+            lease_payload: dict[str, Any] = latest_payload
+            if existing_latest_target is None:
+                lease_payload = copy.deepcopy(latest_payload)
+                lease_deploy = lease_payload.setdefault("deploy", {})
+                if not isinstance(lease_deploy, dict):
+                    raise RuntimeError("config payload deploy section must be a mapping")
+                lease_targets = lease_deploy.setdefault("targets", [])
+                if not isinstance(lease_targets, list):
+                    raise RuntimeError("config payload deploy.targets must be a list")
+                lease_targets.append(copy.deepcopy(target_row))
+            lease_campaign = _external_soperator_campaign(target_row)
+            lease_identity = lease_campaign.get("identity")
+            if not isinstance(lease_identity, Mapping):
+                raise RuntimeError("External Soperator campaign has no immutable identity.")
+            with ExitStack() as lease_stack:
+                runtime_lease_payload = lease_stack.enter_context(
+                    _soperator_migration_execute_payload(
+                        lease_payload,
+                        target_ref=target_ref,
+                    )
+                )
+                lease_stack.enter_context(
+                    SoperatorMigrationExecutionLock(
+                        soperator_migration_lock_path(
+                            config_path,
+                            target_ref,
+                            payload_or_config=runtime_lease_payload,
+                        )
+                    )
+                )
+                lease_kube_context = _validate_external_soperator_kubernetes_uid_before_lease(
+                    campaign=lease_campaign,
+                    kube_context=_external_soperator_backup_kube_context(
+                        runtime_lease_payload,
+                        target_ref=target_ref,
+                        kube_context=None,
+                    ),
+                )
+                cluster_lease = lease_stack.enter_context(
+                    SoperatorMigrationClusterLease(
+                        kube_context=lease_kube_context,
+                        cluster_id=_non_empty_text(lease_identity.get("cluster_id")),
+                        campaign_fingerprint=_non_empty_text(lease_campaign.get("fingerprint")),
+                    )
+                )
+                cluster_lease.assert_held()
+                leased_target_row = _reobserve_external_soperator_onboarding_target(
+                    payload=latest_payload,
+                    candidate_target=target_row,
+                    source_version=source_version_opt,
+                )
+                initial_fingerprint = _locked_upgrade_path_fingerprint(lease_campaign)
+                leased_fingerprint = _locked_upgrade_path_fingerprint(
+                    _external_soperator_campaign(leased_target_row)
+                )
+                if leased_fingerprint != initial_fingerprint:
+                    _print_soperator_campaign_acceptance(leased_target_row, interactive=False)
+                    raise RuntimeError(
+                        "recovery-required: live state or provider capabilities changed "
+                        "while the campaign awaited acceptance. No config was written; "
+                        "rerun ext-soperator onboard and accept the newly displayed fingerprint."
+                    )
+                target_row = leased_target_row
+                (
+                    report_target_row,
+                    preserve_existing,
+                    campaign_state,
+                    campaign_to_archive,
+                    journal_to_archive,
+                ) = _reconcile_external_soperator_onboarding_campaign(
+                    config_path=config_path,
+                    payload=latest_payload,
+                    candidate_target=target_row,
+                )
+                next_payload = copy.deepcopy(latest_payload)
+                target_added = False
+                app_added = False
+                dependency_labels: tuple[str, ...] = ()
+                if preserve_existing:
+                    wrote_config = False
+                else:
+                    before_enabled_app_ids = _enabled_ids_from_runtime_payload(
+                        payload=next_payload,
+                        entries=app_entries,
+                    )
+                    target_ref, target_added, app_added, dependency_labels = (
+                        _apply_soperator_onboarding_to_payload(
+                            next_payload,
+                            target_row=report_target_row,
+                            app_entries=app_entries,
+                        )
+                    )
+                    adoption_values = _soperator_onboarding_adoption_values_from_target_row(
+                        report_target_row
+                    )
+                    added_app_ids = (
+                        _enabled_ids_from_runtime_payload(
+                            payload=next_payload,
+                            entries=app_entries,
+                        )
+                        - before_enabled_app_ids
+                    )
+                    if validate_sources and added_app_ids:
+                        _validate_component_sources_or_raise(
+                            selected_app_ids=added_app_ids,
+                            include_infra=False,
+                        )
+                    _prune_redundant_app_chart_default_values(
+                        payload=next_payload,
+                        app_entries=app_entries,
+                    )
+                    _merge_soperator_onboarding_adoption_values_for_target(
+                        next_payload,
+                        target_ref=target_ref,
+                        adoption_values=adoption_values,
+                    )
+                    _refresh_soperator_onboarding_fingerprints(next_payload)
+                    cluster_lease.assert_held()
+                    if campaign_to_archive is not None:
+                        archive_path = _archive_external_soperator_campaign(
+                            config_path=config_path,
+                            payload=latest_payload,
+                            target_ref=target_ref,
+                            campaign=campaign_to_archive,
+                            journal=journal_to_archive,
+                        )
+                    cluster_lease.assert_held()
+                    wrote_config = _write_runtime_payload_config(
+                        config_path,
+                        next_payload,
+                        expected_bytes=expected_config_bytes,
+                    )
+
         source_report_path = _write_soperator_source_discovery_report_from_target_row(
             config_path=config_path,
-            target_row=target_row,
+            target_row=report_target_row,
             command=onboard_command_args,
         )
-
-        next_payload = copy.deepcopy(payload)
-        before_enabled_app_ids = _enabled_ids_from_runtime_payload(
-            payload=next_payload,
-            entries=app_entries,
-        )
-        target_ref, target_added, app_added, dependency_labels = (
-            _apply_soperator_onboarding_to_payload(
-                next_payload,
-                target_row=target_row,
-                app_entries=app_entries,
-            )
-        )
-        adoption_values = _soperator_onboarding_adoption_values_from_target_row(target_row)
-        added_app_ids = (
-            _enabled_ids_from_runtime_payload(payload=next_payload, entries=app_entries)
-            - before_enabled_app_ids
-        )
-        if validate_sources and added_app_ids:
-            _validate_component_sources_or_raise(
-                selected_app_ids=added_app_ids,
-                include_infra=False,
-            )
-        _prune_redundant_app_chart_default_values(
-            payload=next_payload,
-            app_entries=app_entries,
-        )
-        _merge_soperator_onboarding_adoption_values_for_target(
-            next_payload,
-            target_ref=target_ref,
-            adoption_values=adoption_values,
-        )
-        _refresh_soperator_onboarding_fingerprints(next_payload)
-
-        wrote_config = _write_runtime_payload_config(config_path, next_payload)
         gitignore_result = resolved_target.gitignore_result
         if resolved_target.bootstrap_result is not None:
             console.print(f"Deployments root: {resolved_target.bootstrap_result.deployments_root}")
@@ -57759,8 +61398,17 @@ def soperator_onboard_command(
             console.print(f"Config up-to-date: {config_path}")
         if source_report_path is not None:
             console.print(f"Wrote Soperator discovery bundle: {source_report_path.parent}")
-        target_action = "Registered" if target_added else "Refreshed"
-        console.print(f"{target_action} external MK8s target: {target_ref}")
+        if archive_path is not None:
+            archived_state = (
+                "previous unstarted campaign"
+                if campaign_state == "replaced-unstarted"
+                else "completed campaign"
+            )
+            console.print(f"Archived {archived_state}: {archive_path}")
+        target_action = "Registered" if target_added else "Reconciled"
+        console.print(
+            f"{target_action} external MK8s target: {target_ref} (campaign state: {campaign_state})"
+        )
         if app_added:
             console.print(f"Added apps component: apps:soperator@{target_ref}")
         if dependency_labels:
@@ -58308,9 +61956,12 @@ def _require_soperator_migration_actions(
     target_ref: str,
     onboarding: Mapping[str, Any],
 ) -> None:
+    _ = config_path, target_ref
+    locked_path = _locked_upgrade_path_from_onboarding(onboarding)
+    if locked_path and locked_path.get("schema") == _SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA:
+        return
     if _soperator_migration_action_flags(onboarding)["migration_required"]:
         return
-    locked_path = _locked_upgrade_path_from_onboarding(onboarding)
     locked_jail_rootfs = locked_path.get("jail_rootfs") if locked_path else None
     if (
         isinstance(locked_jail_rootfs, Mapping)
@@ -58331,22 +61982,10 @@ def _require_soperator_migration_actions(
         if selected_actions
         else "No onboarding actions are selected."
     )
-    raise _SoperatorDeployOwnedRoute(
-        (
-            f"Soperator target '{target_ref}' has no external-upgrade-owned onboarding actions.",
-            "`ext-soperator upgrade` is only for accepted onboarding plans that contain "
-            "storage remediation, compute replacement, Soperator Helm upgrade, or "
-            "external MK8s node-template upgrade actions.",
-            selected_detail,
-            "",
-            "Run these commands to reconcile deploy-owned work:",
-            f"nebius-cxcli validate {config_path}",
-            f"nebius-cxcli render {config_path}",
-            f"nebius-cxcli deploy {config_path}",
-            "",
-            "Use this only to narrow one deliberate run:",
-            f"nebius-cxcli deploy {config_path} --target {target_ref}",
-        )
+    raise RuntimeError(
+        "External Soperator upgrade requires at least one action in the config-owned "
+        f"v3 campaign. {selected_detail} Rerun ext-soperator onboard to inspect the "
+        "active campaign."
     )
 
 
@@ -58624,54 +62263,16 @@ def _locked_upgrade_path_from_onboarding(onboarding: Mapping[str, Any]) -> dict[
         raise RuntimeError(
             "External Soperator upgrade path schema is "
             f"{schema}, but this cxcli requires {_SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA}. "
-            "Rerun `nebius-cxcli ext-soperator onboard` as an intentional repair/replan path."
+            "No conversion, deletion, or checkpoint fallback is supported."
         )
     if schema != _SOPERATOR_LOCKED_UPGRADE_PATH_SCHEMA:
         return {}
     if upgrade_path.get("locked") is not True:
         return {}
     segments = upgrade_path.get("segments")
-    if not isinstance(segments, list) or not segments:
+    if not isinstance(segments, list):
         return {}
     return copy.deepcopy(to_plain_data(dict(upgrade_path)))
-
-
-def _locked_upgrade_checkpoint_repair_message(checkpoint_path: Path) -> str:
-    return (
-        "External Soperator upgrade checkpoint cannot resume from "
-        f"{checkpoint_path} because it does not contain a full locked_upgrade_path "
-        "snapshot. Old progress-only checkpoints are not supported; rerun "
-        "`nebius-cxcli ext-soperator onboard` only as an intentional repair/replan "
-        "path, or remove the checkpoint after reviewing recovery state."
-    )
-
-
-def _locked_upgrade_checkpoint_has_progress_only_path(
-    checkpoint: Mapping[str, Any],
-) -> bool:
-    locked_path = checkpoint.get("locked_upgrade_path")
-    if isinstance(locked_path, Mapping):
-        return False
-    path_state = checkpoint.get("upgrade_path")
-    if isinstance(path_state, Mapping) and any(
-        key in path_state
-        for key in (
-            "fingerprint",
-            "current_segment_id",
-            "completed_segment_ids",
-            "segment_state",
-        )
-    ):
-        return True
-    return any(
-        key in checkpoint
-        for key in (
-            "upgrade_path_fingerprint",
-            "current_segment_id",
-            "completed_segment_ids",
-            "segment_state",
-        )
-    )
 
 
 def _locked_upgrade_checkpoint_payload(
@@ -58699,35 +62300,32 @@ def _locked_upgrade_checkpoint_payload(
         )
     if checkpoint.get("schema") != SOPERATOR_MIGRATION_EXECUTION_SCHEMA:
         raise RuntimeError(
-            "Unsupported external Soperator upgrade checkpoint schema in "
-            f"{checkpoint_path}. This cxcli version requires checkpoint schema "
-            f"{SOPERATOR_MIGRATION_EXECUTION_SCHEMA} with a full locked_upgrade_path "
-            "snapshot. Old progress-only checkpoints cannot be resumed; rerun "
-            "`nebius-cxcli ext-soperator onboard` only as an intentional repair/replan "
-            "path, or remove the checkpoint after reviewing recovery state."
+            "Unsupported external Soperator upgrade operation journal schema in "
+            f"{checkpoint_path}. This cxcli version requires "
+            f"{SOPERATOR_MIGRATION_EXECUTION_SCHEMA}; no conversion or path fallback "
+            "is supported."
         )
-    if _locked_upgrade_checkpoint_has_progress_only_path(checkpoint):
-        raise RuntimeError(_locked_upgrade_checkpoint_repair_message(checkpoint_path))
+    forbidden_desired_keys = {
+        "campaign",
+        "locked_upgrade_path",
+        "upgrade_path",
+        "upgrade_path_fingerprint",
+    }.intersection(checkpoint)
+    if forbidden_desired_keys:
+        raise RuntimeError(
+            "External Soperator v3 operation journal contains forbidden desired-campaign "
+            "field(s): "
+            + ", ".join(sorted(forbidden_desired_keys))
+            + ". config.yaml is the only campaign authority."
+        )
+    try:
+        _validate_checkpoint_journal_contract(checkpoint)
+    except RuntimeError as exc:
+        raise RuntimeError(
+            "recovery-required: external Soperator operation journal does not satisfy "
+            f"the strict v3 contract in {checkpoint_path}: {exc}"
+        ) from exc
     return checkpoint
-
-
-def _locked_upgrade_path_from_checkpoint(
-    *,
-    config_path: Path,
-    target_ref: str,
-    payload_or_config: Any = None,
-) -> dict[str, Any]:
-    checkpoint = _locked_upgrade_checkpoint_payload(
-        config_path=config_path,
-        target_ref=target_ref,
-        payload_or_config=payload_or_config,
-    )
-    if checkpoint is None:
-        return {}
-    locked_path = checkpoint.get("locked_upgrade_path")
-    if not isinstance(locked_path, Mapping):
-        return {}
-    return _locked_upgrade_path_from_onboarding({"upgrade_path": locked_path})
 
 
 def _locked_upgrade_path_segments(upgrade_path: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
@@ -58735,6 +62333,13 @@ def _locked_upgrade_path_segments(upgrade_path: Mapping[str, Any]) -> tuple[Mapp
     if not isinstance(segments, list):
         return ()
     return tuple(segment for segment in segments if isinstance(segment, Mapping))
+
+
+def _external_soperator_journal_node_group_transitions(
+    checkpoint: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return exact journal-bound replacement and retirement identities."""
+    return journal_node_group_replacement_transitions(checkpoint)
 
 
 def _locked_upgrade_path_progress(
@@ -58756,6 +62361,7 @@ def _locked_upgrade_path_progress(
         "current_segment_id": "",
         "checkpoint_path": str(checkpoint_path),
         "pending_phase": "",
+        "journal_present": False,
     }
     checkpoint = _locked_upgrade_checkpoint_payload(
         config_path=config_path,
@@ -58764,13 +62370,12 @@ def _locked_upgrade_path_progress(
     )
     if checkpoint is None:
         return progress
-    checkpoint_fingerprint = _non_empty_text(checkpoint.get("upgrade_path_fingerprint"))
-    if checkpoint_fingerprint and checkpoint_fingerprint != fingerprint:
+    progress["journal_present"] = True
+    checkpoint_fingerprint = _non_empty_text(checkpoint.get("campaign_fingerprint"))
+    if checkpoint_fingerprint != fingerprint:
         raise RuntimeError(
-            "External Soperator upgrade checkpoint was started with a different locked "
-            "upgrade path. Live/config state has diverged from the accepted path; rerun "
-            "`nebius-cxcli ext-soperator onboard` only as an intentional repair path, "
-            "or review and remove the checkpoint before restarting."
+            "recovery-required: external Soperator operation journal belongs to a "
+            "different config-owned campaign; neither config nor journal was rewritten."
         )
     completed = checkpoint.get("completed_segment_ids")
     progress["completed_segment_ids"] = [
@@ -58783,6 +62388,9 @@ def _locked_upgrade_path_progress(
     segment_state = checkpoint.get("segment_state")
     if isinstance(segment_state, Mapping):
         progress["segment_state"] = copy.deepcopy(to_plain_data(segment_state))
+    progress["node_group_transitions"] = _external_soperator_journal_node_group_transitions(
+        checkpoint
+    )
     return progress
 
 
@@ -58797,20 +62405,36 @@ def _locked_upgrade_path_current_segment(
         for segment in segments
         if _non_empty_text(segment.get("id"))
     }
-    completed = {
+    segment_ids = [
+        _non_empty_text(segment.get("id"))
+        for segment in segments
+        if _non_empty_text(segment.get("id"))
+    ]
+    completed = [
         str(segment_id or "").strip()
         for segment_id in progress.get("completed_segment_ids", []) or []
         if str(segment_id or "").strip()
-    }
+    ]
+    if completed != segment_ids[: len(completed)] or len(set(completed)) != len(completed):
+        raise RuntimeError(
+            "recovery-required: completed campaign segment ids are not an ordered prefix "
+            "of the config-owned campaign."
+        )
+    first_unmet = segments[len(completed)] if len(completed) < len(segments) else None
     current_segment_id = _non_empty_text(progress.get("current_segment_id"))
     pending_phase = _non_empty_text(progress.get("pending_phase"))
-    if pending_phase and pending_phase != "none" and current_segment_id in by_id:
+    if pending_phase and pending_phase != "none":
+        first_unmet_id = _non_empty_text(
+            first_unmet.get("id") if isinstance(first_unmet, Mapping) else ""
+        )
+        if not first_unmet_id or current_segment_id != first_unmet_id:
+            raise RuntimeError(
+                "recovery-required: pending operation journal current_segment_id must "
+                "equal the first unmet config-owned campaign segment; journaled work "
+                "cannot skip campaign dependencies."
+            )
         return by_id[current_segment_id]
-    for segment in segments:
-        segment_id = _non_empty_text(segment.get("id"))
-        if segment_id and segment_id not in completed:
-            return segment
-    return None
+    return first_unmet
 
 
 def _locked_upgrade_path_segment_actions(segment: Mapping[str, Any]) -> tuple[str, ...]:
@@ -58818,6 +62442,25 @@ def _locked_upgrade_path_segment_actions(segment: Mapping[str, Any]) -> tuple[st
     if not isinstance(actions, list):
         return ()
     return tuple(str(action or "").strip() for action in actions if str(action or "").strip())
+
+
+_EXTERNAL_SOPERATOR_OBSERVATION_ONLY_ACTIONS = frozenset(
+    {
+        ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
+        ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
+    }
+)
+
+
+def _external_soperator_observation_only_action_conflicts(
+    segment: Mapping[str, Any],
+) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            set(_locked_upgrade_path_segment_actions(segment))
+            - _EXTERNAL_SOPERATOR_OBSERVATION_ONLY_ACTIONS
+        )
+    )
 
 
 def _mutable_payload_target(
@@ -58837,6 +62480,88 @@ def _mutable_payload_target(
         ):
             return row
     return None
+
+
+def _project_campaign_managed_operator_rows(
+    payload: MutableMapping[str, Any],
+    *,
+    target_ref: str,
+    upgrade_path: Mapping[str, Any],
+) -> None:
+    managed_operators = upgrade_path.get("managed_operators")
+    if not isinstance(managed_operators, Mapping):
+        raise RuntimeError(
+            "recovery-required: the v3 campaign is missing immutable managed GPU/network "
+            "operator targets. config.yaml was not changed."
+        )
+    if not managed_operators:
+        return
+    apps = payload.get("apps")
+    charts = apps.get("charts") if isinstance(apps, MutableMapping) else None
+    if not isinstance(charts, list):
+        raise RuntimeError(
+            "recovery-required: the accepted v3 campaign requires target-scoped managed "
+            "GPU/network operator app rows, but apps.charts is missing."
+        )
+    normalized_target = normalize_component_token(target_ref)
+    rows_by_component: dict[str, MutableMapping[str, Any]] = {}
+    for row in charts:
+        if not isinstance(row, MutableMapping):
+            continue
+        component_id = normalize_component_token(row.get("id"))
+        if component_id not in {"nvidia-gpu-operator", "nvidia-network-operator"}:
+            continue
+        if normalize_component_token(row.get("instance_id")) != normalized_target:
+            continue
+        if component_id in rows_by_component:
+            raise RuntimeError(
+                "recovery-required: duplicate target-scoped managed operator app row for "
+                f"{component_id}@{target_ref}; execution did not continue."
+            )
+        rows_by_component[component_id] = row
+
+    component_by_role = {
+        "gpu": "nvidia-gpu-operator",
+        "network": "nvidia-network-operator",
+    }
+    for role, expected_component_id in component_by_role.items():
+        pin = managed_operators.get(role)
+        if not isinstance(pin, Mapping):
+            raise RuntimeError(
+                "recovery-required: the v3 campaign is missing its immutable "
+                f"managed_operators.{role} target."
+            )
+        component_id = _non_empty_text(pin.get("component_id"))
+        chart_version = _non_empty_text(pin.get("chart_version"))
+        chart_name = _non_empty_text(pin.get("chart"))
+        repository = _non_empty_text(pin.get("repository"))
+        release_name = _non_empty_text(pin.get("release_name"))
+        namespace = _non_empty_text(pin.get("namespace"))
+        if not all((component_id, chart_version, chart_name, repository, release_name, namespace)):
+            raise RuntimeError(
+                "recovery-required: the v3 campaign managed operator target is incomplete: "
+                f"managed_operators.{role}."
+            )
+        if normalize_component_token(component_id) != expected_component_id:
+            raise RuntimeError(
+                "recovery-required: the v3 campaign managed operator identity conflicts "
+                f"with its role: managed_operators.{role}.component_id={component_id}."
+            )
+        row = rows_by_component.get(normalize_component_token(component_id))
+        if row is None:
+            raise RuntimeError(
+                "recovery-required: the accepted v3 campaign requires the target-scoped "
+                f"app row {component_id}@{target_ref}. Rerun ext-soperator onboard only "
+                "after resolving the config conflict."
+            )
+        row["id"] = component_id
+        row["instance_id"] = target_ref
+        row["enabled"] = True
+        row["version"] = chart_version
+        row["chart"] = chart_name
+        row["repo"] = repository
+        row["release-name"] = release_name
+        row["namespace"] = namespace
 
 
 def _soperator_effective_upgrade_payload_for_segment(
@@ -58869,13 +62594,48 @@ def _soperator_effective_upgrade_payload_for_segment(
     node_template = onboarding.get("node_template_upgrade")
     if not isinstance(node_template, MutableMapping):
         node_template = {}
+    campaign_rollout = upgrade_path.get("rollout")
+    if isinstance(campaign_rollout, Mapping):
+        node_template = dict(node_template)
+        node_template["rollout"] = copy.deepcopy(to_plain_data(campaign_rollout))
+        node_template["slurm_scheduling_quiesce"] = bool(
+            campaign_rollout.get("slurm_scheduling_quiesce", True)
+        )
     if ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE in segment_actions:
         node_template = dict(node_template)
         node_template["target_k8s_version"] = _non_empty_text(segment.get("target_k8s_version"))
-        node_template.setdefault("target_os", ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS)
-        node_template.setdefault(
-            "target_gpu_stack_preset",
-            ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_GPU_STACK_PRESET,
+        segment_mk8s = segment.get("mk8s")
+        planned_groups = (
+            segment_mk8s.get("node_groups") if isinstance(segment_mk8s, Mapping) else None
+        )
+        if not isinstance(planned_groups, list):
+            raise RuntimeError(
+                "External Soperator campaign segment is missing exact MK8s node-group targets."
+            )
+        node_template["node_group_targets"] = copy.deepcopy(to_plain_data(planned_groups))
+        target_os_values = {
+            _non_empty_text(target.get("os"))
+            for group in planned_groups
+            if isinstance(group, Mapping)
+            for target in [group.get("target")]
+            if isinstance(target, Mapping) and _non_empty_text(target.get("os"))
+        }
+        target_driver_values = {
+            _non_empty_text(target.get("drivers_preset"))
+            for group in planned_groups
+            if isinstance(group, Mapping)
+            for target in [group.get("target")]
+            if isinstance(target, Mapping) and _non_empty_text(target.get("drivers_preset"))
+        }
+        node_template["target_os"] = (
+            next(iter(target_os_values)) if len(target_os_values) == 1 else "per-node-group"
+        )
+        node_template["target_gpu_stack_preset"] = (
+            next(iter(target_driver_values))
+            if len(target_driver_values) == 1
+            else "per-node-group"
+            if target_driver_values
+            else ""
         )
         onboarding["node_template_upgrade"] = node_template
     elif isinstance(node_template, MutableMapping):
@@ -58886,6 +62646,11 @@ def _soperator_effective_upgrade_payload_for_segment(
         if segment_k8s:
             node_template["target_k8s_version"] = segment_k8s
         onboarding["node_template_upgrade"] = node_template
+    _project_campaign_managed_operator_rows(
+        effective_payload,
+        target_ref=target_ref,
+        upgrade_path=upgrade_path,
+    )
     return dict(effective_payload)
 
 
@@ -59003,11 +62768,12 @@ def _locked_upgrade_path_plan_lines(
     jail_line = _soperator_discovery_jail_rootfs_line(upgrade_path).removeprefix("  - ")
     lines = [
         "",
-        "Locked upgrade path:",
-        f"Path source: {path_source or 'config.yaml onboarding'}",
-        f"Path schema: {_non_empty_text(upgrade_path.get('schema')) or 'unknown'}",
-        "Path locked: yes",
-        f"Path fingerprint: {fingerprint}",
+        "Locked upgrade campaign:",
+        f"Campaign source: {path_source or 'config.yaml onboarding'}",
+        f"Campaign schema: {_non_empty_text(upgrade_path.get('schema')) or 'unknown'}",
+        f"Campaign ID: {_non_empty_text(upgrade_path.get('campaign_id')) or 'unknown'}",
+        "Campaign locked: yes",
+        f"Campaign fingerprint: {fingerprint}",
         "Kubernetes path: "
         f"{_non_empty_text(upgrade_path.get('source_k8s_version')) or 'unknown'} -> "
         f"{_non_empty_text(upgrade_path.get('target_k8s_version')) or 'unknown'}",
@@ -59052,8 +62818,22 @@ def _locked_upgrade_path_plan_lines(
     lines.append(
         "Completed segments: " + (", ".join(completed_titles) if completed_titles else "none")
     )
+    lines.append("Campaign segments:")
+    for segment in segments:
+        segment_id = _non_empty_text(segment.get("id"))
+        segment_title = _non_empty_text(segment.get("title")) or segment_id
+        segment_status = (
+            "complete"
+            if segment_id in completed
+            else "current"
+            if segment_id == current_segment_id
+            else "pending"
+        )
+        lines.append(f"- {segment_id}: {segment_status}; {segment_title}")
+    if not segments:
+        lines.append("- none; all accepted targets already match live state")
     if current_segment is None:
-        lines.append("Current segment: none; locked upgrade path is complete.")
+        lines.append("Current segment: none; locked upgrade campaign is complete.")
     else:
         lines.append(
             "Current segment: "
@@ -59079,6 +62859,11 @@ def _locked_upgrade_path_plan_lines(
             f"{login_policy_options}--execute --approve"
         )
         lines.append(f"Next command: {next_command}")
+    else:
+        lines.append(
+            "Next action: rerun ext-soperator onboard to check for and explicitly accept "
+            "a later provider-supported campaign."
+        )
     return lines
 
 
@@ -59335,6 +63120,7 @@ def _format_soperator_migration_plan_lines(
     support_policy_lines = _soperator_support_policy_plan_lines(
         report,
         include_messages=not bool(upgrade_path),
+        override_available=False,
     )
     if support_policy_lines:
         lines.extend(["", "Support policy:"])
@@ -59553,233 +63339,6 @@ def _external_soperator_execute_snapshot_collector(
 
             return _collect_with_provider_inventory
     return collect_kubectl_soperator_snapshot
-
-
-def _soperator_post_migration_provider_snapshot(
-    source_report: Mapping[str, Any],
-) -> dict[str, Any]:
-    snapshot = source_report.get("snapshot")
-    if not isinstance(snapshot, Mapping):
-        return {}
-    provider = snapshot.get("provider")
-    provider_snapshot: dict[str, Any] = {}
-    if isinstance(provider, Mapping) and isinstance(provider.get("mk8s_cluster"), Mapping):
-        provider_snapshot["mk8s_cluster"] = copy.deepcopy(to_plain_data(provider["mk8s_cluster"]))
-    node_groups = snapshot.get("node_groups")
-    if not isinstance(node_groups, Mapping):
-        return provider_snapshot
-    provider_groups: dict[str, Any] = {}
-    for raw_key, raw_group in node_groups.items():
-        if not isinstance(raw_group, Mapping):
-            continue
-        provider_details = raw_group.get("provider")
-        if not isinstance(provider_details, Mapping):
-            continue
-        group_key = normalize_component_token(raw_key)
-        node_group_id = (
-            _non_empty_text(provider_details.get("node_group_id"))
-            or _non_empty_text(raw_group.get("node_group_id"))
-            or group_key
-        )
-        node_group_name = (
-            _non_empty_text(provider_details.get("node_group_name"))
-            or _non_empty_text(raw_group.get("node_group_name"))
-            or group_key
-        )
-        provider_group: dict[str, Any] = {
-            "node_group_id": node_group_id,
-            "node_group_name": node_group_name,
-            "provider": copy.deepcopy(to_plain_data(provider_details)),
-            "gpu": bool(raw_group.get("gpu", False)),
-            "node_count": raw_group.get("node_count", 0),
-        }
-        for key in ("labels", "selector"):
-            value = raw_group.get(key)
-            if isinstance(value, Mapping):
-                provider_group[key] = copy.deepcopy(to_plain_data(value))
-        provider_groups[group_key or node_group_id or node_group_name] = provider_group
-    if provider_groups:
-        provider_snapshot["node_groups"] = provider_groups
-    return provider_snapshot
-
-
-def _soperator_snapshot_has_provider_inventory(snapshot: Mapping[str, Any]) -> bool:
-    provider = snapshot.get("provider")
-    has_cluster = isinstance(provider, Mapping) and isinstance(
-        provider.get("mk8s_cluster"),
-        Mapping,
-    )
-    node_groups = snapshot.get("node_groups")
-    has_node_group_template = False
-    if isinstance(node_groups, Mapping):
-        has_node_group_template = any(
-            isinstance(raw_group, Mapping) and isinstance(raw_group.get("provider"), Mapping)
-            for raw_group in node_groups.values()
-        )
-    return has_cluster and has_node_group_template
-
-
-def _refresh_soperator_onboarding_after_completed_migration(
-    *,
-    config_path: Path,
-    payload: Mapping[str, Any],
-    execution_payload: Mapping[str, Any],
-    source_report: Mapping[str, Any],
-    target_ref: str,
-    upgrade_path: Mapping[str, Any] | None = None,
-) -> tuple[str, ...]:
-    if upgrade_path:
-        progress = _locked_upgrade_path_progress(
-            config_path=config_path,
-            target_ref=target_ref,
-            upgrade_path=upgrade_path,
-            payload_or_config=execution_payload,
-        )
-        next_segment = _locked_upgrade_path_current_segment(
-            upgrade_path=upgrade_path,
-            progress=progress,
-        )
-        if next_segment is not None:
-            next_command = (
-                "nebius-cxcli ext-soperator upgrade "
-                f"{shlex.quote(str(config_path))} --target {shlex.quote(target_ref)} "
-                "--execute --approve"
-            )
-            remaining = [
-                _non_empty_text(segment.get("title")) or _non_empty_text(segment.get("id"))
-                for segment in _locked_upgrade_path_segments(upgrade_path)
-                if _non_empty_text(segment.get("id"))
-                not in set(progress.get("completed_segment_ids", []) or [])
-            ]
-            return (
-                "Post-upgrade config refresh: kept accepted external Soperator onboarding "
-                "because the locked upgrade path still has remaining segment(s).",
-                "Next locked upgrade segment: "
-                + (
-                    _non_empty_text(next_segment.get("title"))
-                    or _non_empty_text(next_segment.get("id"))
-                ),
-                "Remaining locked upgrade path: " + ", ".join(remaining),
-                f"Next command: {next_command}",
-            )
-    source_target = soperator_onboarding_target(payload, target_ref=target_ref)
-    execution_target = soperator_onboarding_target(execution_payload, target_ref=target_ref)
-    if not isinstance(source_target, Mapping):
-        return (
-            "Post-upgrade config refresh skipped: source config no longer contains "
-            f"Soperator target '{target_ref}'. Rerun `ext-soperator onboard` before "
-            "render/deploy reconciliation.",
-        )
-    if not isinstance(execution_target, Mapping):
-        execution_target = source_target
-
-    cluster_id = _non_empty_text(source_target.get("cluster_id"))
-    access = _non_empty_text(source_target.get("access")) or "external"
-    persisted_context = _non_empty_text(source_target.get("kube_context"))
-    collection_context = _non_empty_text(execution_target.get("kube_context")) or persisted_context
-    try:
-        if cluster_id:
-            snapshot, _generated_context = _collect_soperator_snapshot_for_nebius_mk8s_cluster(
-                payload,
-                cluster_id=cluster_id,
-                access=access,
-            )
-        else:
-            if not collection_context:
-                return (
-                    "Post-upgrade config refresh skipped: no kube_context or cluster_id is "
-                    f"available for Soperator target '{target_ref}'. Rerun "
-                    "`ext-soperator onboard` before render/deploy reconciliation.",
-                )
-            snapshot = collect_kubectl_soperator_snapshot(kube_context=collection_context)
-            provider_snapshot = _soperator_post_migration_provider_snapshot(source_report)
-            if provider_snapshot and not _soperator_snapshot_has_provider_inventory(snapshot):
-                snapshot = _merge_provider_mk8s_template_snapshot(snapshot, provider_snapshot)
-    except Exception as exc:
-        return (
-            "Post-upgrade config refresh skipped: live rediscovery failed: "
-            f"{exc}. Rerun `ext-soperator onboard` before render/deploy reconciliation.",
-        )
-
-    chart_version, app_version = _soperator_catalog_pinned_versions()
-    accepted_target_k8s_version = ""
-    for candidate_target in (execution_target, source_target):
-        candidate_onboarding = candidate_target.get("soperator_onboarding")
-        if not isinstance(candidate_onboarding, Mapping):
-            continue
-        node_template_upgrade = candidate_onboarding.get("node_template_upgrade")
-        if not isinstance(node_template_upgrade, Mapping):
-            continue
-        accepted_target_k8s_version = _non_empty_text(
-            node_template_upgrade.get("target_k8s_version")
-        )
-        if accepted_target_k8s_version:
-            break
-    target_row = _soperator_onboarding_target_defaults(
-        target_ref,
-        kube_context=persisted_context,
-        cluster_id=cluster_id,
-        snapshot=snapshot,
-        pinned_chart_version=chart_version,
-        pinned_app_version=app_version,
-        target_k8s_version=accepted_target_k8s_version or None,
-    )
-    target_row["access"] = access
-    onboarding = target_row.get("soperator_onboarding")
-    if not isinstance(onboarding, Mapping):
-        return (
-            "Post-upgrade config refresh skipped: live rediscovery did not produce "
-            "Soperator onboarding details. Rerun `ext-soperator onboard` before "
-            "render/deploy reconciliation.",
-        )
-    if _soperator_migration_action_flags(onboarding)["migration_required"]:
-        actions = ", ".join(
-            str(action or "").strip()
-            for action in onboarding.get("actions", []) or []
-            if str(action or "").strip()
-        )
-        return (
-            "Post-upgrade config refresh skipped: live rediscovery still reports "
-            f"external-upgrade-owned action(s): {actions or 'unknown'}. Keep using "
-            "`ext-soperator upgrade` for resume/rerun or rerun `ext-soperator onboard` "
-            "only as an intentional repair path after verifying the live cluster.",
-        )
-
-    next_payload = copy.deepcopy(to_plain_data(payload))
-    target_ref, _target_added, _app_added, _dependency_labels = (
-        _apply_soperator_onboarding_to_payload(
-            next_payload,
-            target_row=target_row,
-            app_entries=component_entries("apps"),
-        )
-    )
-    adoption_values = _soperator_onboarding_adoption_values_from_target_row(target_row)
-    _prune_redundant_app_chart_default_values(
-        payload=next_payload,
-        app_entries=component_entries("apps"),
-    )
-    _merge_soperator_onboarding_adoption_values_for_target(
-        next_payload,
-        target_ref=target_ref,
-        adoption_values=adoption_values,
-    )
-    _refresh_soperator_onboarding_fingerprints(next_payload)
-    wrote_config = _write_runtime_payload_config(config_path, next_payload)
-    source_report_path = _write_soperator_source_discovery_report_from_target_row(
-        config_path=config_path,
-        target_row=target_row,
-    )
-    lines = [
-        (
-            "Post-upgrade config refresh: "
-            + ("updated" if wrote_config else "already up to date")
-            + f" {config_path} from live discovery; future reconciliation should use "
-            "render -> deploy unless onboarding is rerun and selects new external upgrade work."
-        )
-    ]
-    if source_report_path is not None:
-        lines.append(f"Post-upgrade Soperator discovery bundle: {source_report_path.parent}")
-    return tuple(lines)
 
 
 @ext_soperator_app.command(
@@ -60031,13 +63590,15 @@ def ext_soperator_scale_up_command(
         "API/kubectl exec for cloud, cluster, and Slurm actions; it does not SSH "
         "from the operator workstation into login or worker nodes. "
         "--execute --approve refreshes discovery, creates a restore-capable backup, "
-        "then runs exactly one locked upgrade-path segment: one external MK8s "
+        "then reconciles and runs at most one locked campaign segment: one external MK8s "
         "control-plane/node-template hop plus any Soperator/storage/compute/GPU-stack/"
         "Jail Upgrade work assigned to that segment, validation, and reports. If the accepted "
-        "locked path still contains more segments, repeat the same ext-soperator "
-        "upgrade --execute --approve command until the path is complete; use a "
-        "fresh ext-soperator onboard decision only to plan a new later path or "
-        "intentionally repair/replan."
+        "campaign still contains more segments, repeat the same ext-soperator "
+        "upgrade --execute --approve command until it is complete. The v3 operation "
+        "journal never supplies a missing desired path. Unsupported campaigns and "
+        "non-v3 journals fail closed; external upgrade has no support-policy override. "
+        "After completion, rerun the "
+        "idempotent onboard command only to check for and accept a later campaign."
     ),
 )
 def soperator_external_upgrade_command(
@@ -60174,20 +63735,30 @@ def soperator_external_upgrade_command(
         ),
     ] = "30m",
     dry_run: Annotated[
-        bool | None,
+        bool,
         typer.Option(
-            "--dry-run/--execute",
+            "--dry-run",
             help=(
                 "Required execution mode. Use --dry-run for discovery refresh and "
-                "the read-only plan. Use --execute only after accepting that plan; "
-                "it performs checkpointed live preflight and "
+                "the read-only plan. Mutually exclusive with --execute."
+            ),
+        ),
+    ] = False,
+    execute: Annotated[
+        bool,
+        typer.Option(
+            "--execute",
+            help=(
+                "Execute one accepted campaign segment after live reconciliation. "
+                "Mutually exclusive with --dry-run; use with --approve. It performs "
+                "journaled live preflight and "
                 "advances the accepted external MK8s control-plane/node-template hop, "
                 "target GPU stack, storage, copy, compute, cutover, Jail Upgrade, "
                 "validation, and retirement phases with guarded resume checkpoints. Kubernetes "
                 "node-template work is one minor hop per external upgrade run."
             ),
         ),
-    ] = None,
+    ] = False,
     approve: Annotated[
         bool,
         typer.Option(
@@ -60208,14 +63779,16 @@ def soperator_external_upgrade_command(
             ),
         ),
     ] = False,
-    allow_unsupported_soperator_upgrade_path: Annotated[
+    approve_service_role_downtime: Annotated[
         bool,
         typer.Option(
-            "--allow-unsupported-soperator-upgrade-path/--no-allow-unsupported-soperator-upgrade-path",
+            "--approve-service-role-downtime",
             help=(
-                "Allow execution of an unsupported or not-validated accepted Soperator "
-                "upgrade path. This does not bypass Kubernetes minor-hop, backup, "
-                "quota, protected-state, or other safety checks."
+                "Explicitly accept temporary loss of all live capacity in each "
+                "nonredundant zero-surge service-role node group. Requires --execute; "
+                "the operation journal binds acceptance to the exact campaign fingerprint "
+                "and affected provider node-group identities. Generic --approve remains "
+                "required for mutation."
             ),
         ),
     ] = False,
@@ -60255,8 +63828,8 @@ def soperator_external_upgrade_command(
             "--worker-wave-groups",
             help=(
                 "Fixed number of worker groups to update per safe-surge wave. "
-                "Overrides config.yaml. Mutually exclusive with --worker-wave-percent "
-                "and --max-parallel-worker-groups."
+                "Must match the accepted v3 campaign. Mutually exclusive with "
+                "--worker-wave-percent and --max-parallel-worker-groups."
             ),
         ),
     ] = None,
@@ -60267,7 +63840,8 @@ def soperator_external_upgrade_command(
             help=(
                 "Worker rollout wave budget as a percentage of worker groups, rounded "
                 "up to at least one. Can be capped with --max-parallel-worker-groups. "
-                "Overrides config.yaml. Mutually exclusive with --worker-wave-groups."
+                "Must match the accepted v3 campaign. Mutually exclusive with "
+                "--worker-wave-groups."
             ),
         ),
     ] = None,
@@ -60278,8 +63852,7 @@ def soperator_external_upgrade_command(
             help=(
                 "Optional upper cap for percent-based safe-surge waves. Use "
                 "--worker-wave-groups instead for an exact fixed group count. "
-                "Overrides deploy.targets[].soperator_onboarding.node_template_upgrade."
-                "rollout.max_parallel_worker_groups for this run."
+                "Must match the accepted v3 campaign."
             ),
         ),
     ] = None,
@@ -60309,19 +63882,26 @@ def soperator_external_upgrade_command(
             "--strategy-drain-timeout",
             help=(
                 "Nebius node-group strategy drain timeout for each active worker group: "
-                "none or an explicit Go-style duration such as 30m. Default comes from "
-                "config.yaml, or 30m."
+                "must be none and must match the accepted v3 campaign. The provider timeout "
+                "stays unset so draining nodes are never force-deleted by cxcli."
             ),
         ),
     ] = None,
 ) -> None:
     """Plan or execute an accepted external Soperator upgrade."""
+    lease_stack = ExitStack()
+    cluster_lease: SoperatorMigrationClusterLease | None = None
     try:
-        if dry_run is None:
+        if dry_run == execute:
             raise RuntimeError(
                 "ext-soperator upgrade requires an explicit execution mode: pass "
-                "--dry-run to inspect the accepted plan, or pass --execute to enter "
-                "checkpointed execution. Use --execute --approve for approved mutation."
+                "exactly one of --dry-run or --execute. Use --execute --approve for "
+                "approved mutation; the two mode flags are mutually exclusive."
+            )
+        if approve_service_role_downtime and not execute:
+            raise RuntimeError(
+                "--approve-service-role-downtime requires --execute. It cannot be accepted "
+                "during --dry-run, and generic --approve remains required for mutation."
             )
         payload = _load_source_payload(config_path)
         target_ref = _resolve_soperator_migration_target_ref(
@@ -60348,58 +63928,53 @@ def soperator_external_upgrade_command(
                 f"under {checkpoint_path.parent}. Review or remove the old checkpoint before "
                 "rerunning ext-soperator upgrade; it is not resumed automatically."
             )
-        checkpoint_locked_upgrade_path = _locked_upgrade_path_from_checkpoint(
-            config_path=config_path,
-            target_ref=target_ref,
-            payload_or_config=payload,
-        )
-        try:
-            validate_soperator_onboarding_acceptance(payload, target_ref=target_ref)
-        except ValueError as exc:
-            validation_message = str(exc)
-            target_for_checkpoint_resume = soperator_onboarding_target(
-                payload,
-                target_ref=target_ref,
-            )
-            onboarding_for_checkpoint_resume = (
-                target_for_checkpoint_resume.get("soperator_onboarding")
-                if isinstance(target_for_checkpoint_resume, Mapping)
-                else {}
-            )
-            checkpoint_resume_allowed = (
-                checkpoint_locked_upgrade_path
-                and isinstance(onboarding_for_checkpoint_resume, Mapping)
-                and onboarding_for_checkpoint_resume.get("accepted") is True
-                and "does not have a current accepted" in validation_message
-            )
-            if not checkpoint_resume_allowed:
-                raise
+        validate_soperator_onboarding_acceptance(payload, target_ref=target_ref)
         target = soperator_onboarding_target(payload, target_ref=target_ref)
         onboarding = target.get("soperator_onboarding") if isinstance(target, Mapping) else {}
         if not isinstance(onboarding, Mapping):
             onboarding = {}
-        locked_upgrade_path = _locked_upgrade_path_from_onboarding(onboarding)
-        locked_upgrade_path_source = "config.yaml onboarding"
+        locked_upgrade_path = _external_soperator_campaign(target)
+        locked_upgrade_path_source = "config.yaml campaign"
         if not locked_upgrade_path:
-            locked_upgrade_path = checkpoint_locked_upgrade_path
-            locked_upgrade_path_source = "checkpoint"
-        if (
-            not locked_upgrade_path
-            and _soperator_migration_action_flags(onboarding)["migration_required"]
-        ):
-            checkpoint_path = soperator_migration_checkpoint_path(
-                config_path,
-                target_ref,
-                payload_or_config=payload,
-            )
             raise RuntimeError(
-                "External Soperator upgrade requires a full locked upgrade path, but none "
-                "exists in deploy.targets[].soperator_onboarding.upgrade_path or the "
-                f"checkpoint at {checkpoint_path}. Rerun `nebius-cxcli ext-soperator onboard` "
-                "only as an intentional repair/replan path."
+                "External Soperator upgrade requires a locked v3 campaign in "
+                "deploy.targets[].soperator_onboarding.upgrade_path. The operation journal "
+                "is never an upgrade-path authority. Run `nebius-cxcli ext-soperator onboard` "
+                "for this cluster before upgrade."
             )
+        lease_identity = locked_upgrade_path.get("identity")
+        if not isinstance(lease_identity, Mapping):
+            raise RuntimeError("External Soperator campaign has no immutable identity.")
+        _validate_external_soperator_config_campaign_identity(
+            campaign=locked_upgrade_path,
+            payload=payload,
+            target_ref=target_ref,
+        )
+        payload = lease_stack.enter_context(
+            _soperator_migration_execute_payload(
+                payload,
+                target_ref=target_ref,
+            )
+        )
+        lease_kube_context = _validate_external_soperator_kubernetes_uid_before_lease(
+            campaign=locked_upgrade_path,
+            kube_context=_external_soperator_backup_kube_context(
+                payload,
+                target_ref=target_ref,
+                kube_context=None,
+            ),
+        )
+        cluster_lease = lease_stack.enter_context(
+            SoperatorMigrationClusterLease(
+                kube_context=lease_kube_context,
+                cluster_id=_non_empty_text(lease_identity.get("cluster_id")),
+                campaign_fingerprint=_non_empty_text(locked_upgrade_path.get("fingerprint")),
+            )
+        )
         upgrade_path_progress: dict[str, Any] = {}
         current_segment: Mapping[str, Any] | None = None
+        effective_current_segment: Mapping[str, Any] | None = None
+        node_group_transitions: Mapping[str, Any] = {}
         effective_payload: Mapping[str, Any] = payload
         effective_onboarding: Mapping[str, Any] = onboarding
         if locked_upgrade_path:
@@ -60409,27 +63984,36 @@ def soperator_external_upgrade_command(
                 upgrade_path=locked_upgrade_path,
                 payload_or_config=payload,
             )
+            node_group_transitions = _state_mapping(
+                upgrade_path_progress.get("node_group_transitions")
+            )
             current_segment = _locked_upgrade_path_current_segment(
                 upgrade_path=locked_upgrade_path,
                 progress=upgrade_path_progress,
             )
-            if current_segment is None:
-                for line in _locked_upgrade_path_plan_lines(
-                    config_path=config_path,
+            if current_segment is not None:
+                try:
+                    effective_current_segment = effective_campaign_segment_for_replacements(
+                        current_segment,
+                        replacement_bindings=[
+                            binding
+                            for binding in node_group_transitions.get("bindings", []) or []
+                            if isinstance(binding, Mapping)
+                        ],
+                        retired_node_group_ids=[
+                            _non_empty_text(group_id)
+                            for group_id in node_group_transitions.get("retired_ids", []) or []
+                            if _non_empty_text(group_id)
+                        ],
+                    )
+                except ValueError as exc:
+                    raise RuntimeError(f"recovery-required: {exc}") from exc
+                effective_payload = _soperator_effective_upgrade_payload_for_segment(
+                    payload=payload,
                     target_ref=target_ref,
                     upgrade_path=locked_upgrade_path,
-                    progress=upgrade_path_progress,
-                    current_segment=None,
-                    path_source=locked_upgrade_path_source,
-                ):
-                    console.print(_style_soperator_migration_plan_line(line), soft_wrap=True)
-                return
-            effective_payload = _soperator_effective_upgrade_payload_for_segment(
-                payload=payload,
-                target_ref=target_ref,
-                upgrade_path=locked_upgrade_path,
-                segment=current_segment,
-            )
+                    segment=effective_current_segment,
+                )
             effective_target = soperator_onboarding_target(
                 effective_payload,
                 target_ref=target_ref,
@@ -60441,6 +64025,36 @@ def soperator_external_upgrade_command(
             )
             if not isinstance(effective_onboarding, Mapping):
                 effective_onboarding = {}
+        locked_rollout = resolve_external_node_template_rollout(effective_onboarding)
+        requested_rollout = resolve_external_node_template_rollout(
+            effective_onboarding,
+            strategy=worker_rollout_strategy,
+            service_role_strategy=service_role_rollout_strategy,
+            worker_wave_groups=worker_wave_groups,
+            worker_wave_percent=worker_wave_percent,
+            max_parallel_worker_groups=max_parallel_worker_groups,
+            strategy_max_surge_count=strategy_max_surge_count,
+            strategy_max_unavailable_count=strategy_max_unavailable_count,
+            strategy_drain_timeout=strategy_drain_timeout,
+        )
+        if requested_rollout.to_manifest_dict() != locked_rollout.to_manifest_dict():
+            raise RuntimeError(
+                "recovery-required: external Soperator rollout settings are immutable "
+                "inside the accepted v3 campaign. Rerun `ext-soperator onboard` only "
+                "while the campaign is unstarted to accept a different fingerprint."
+            )
+        locked_slurm_scheduling_quiesce = _soperator_onboarding_slurm_scheduling_quiesce(
+            effective_onboarding
+        )
+        if (
+            slurm_scheduling_quiesce is not None
+            and bool(slurm_scheduling_quiesce) != locked_slurm_scheduling_quiesce
+        ):
+            raise RuntimeError(
+                "recovery-required: --slurm-scheduling-quiesce cannot override the "
+                "accepted v3 campaign. Replan an unstarted campaign with "
+                "`ext-soperator onboard`."
+            )
         node_template_target = effective_onboarding.get("node_template_upgrade")
         if not isinstance(node_template_target, Mapping):
             node_template_target = {}
@@ -60485,28 +64099,228 @@ def soperator_external_upgrade_command(
             target_ref=target_ref,
             payload_or_config=effective_payload,
         )
+        _validate_external_soperator_live_campaign_identity(
+            campaign=locked_upgrade_path,
+            source_report=source_report,
+        )
+        live_waypoint_index = _external_soperator_campaign_live_waypoint_index(
+            campaign=locked_upgrade_path,
+            source_report=source_report,
+            completed_segment_ids=upgrade_path_progress.get("completed_segment_ids", []),
+            resume_current_segment=(
+                bool(upgrade_path_progress.get("journal_present"))
+                and isinstance(current_segment, Mapping)
+                and _non_empty_text(upgrade_path_progress.get("pending_phase")) not in {"", "none"}
+                and _non_empty_text(upgrade_path_progress.get("current_segment_id"))
+                == _non_empty_text(current_segment.get("id"))
+                and _non_empty_text(current_segment.get("id"))
+                not in {
+                    _non_empty_text(segment_id)
+                    for segment_id in upgrade_path_progress.get("completed_segment_ids", [])
+                }
+            ),
+            node_group_transitions=node_group_transitions,
+        )
+        completed_waypoint_index = len(upgrade_path_progress.get("completed_segment_ids", []) or [])
+        live_ahead_segment_count = live_waypoint_index - completed_waypoint_index
+        if live_ahead_segment_count > 0:
+            console.print(
+                "Live reconciliation: cluster state is already at campaign waypoint "
+                f"{live_waypoint_index}; this invocation will reconcile only the first "
+                "unmet segment and stop.",
+                soft_wrap=True,
+            )
+            if not isinstance(current_segment, Mapping):
+                raise RuntimeError(
+                    "recovery-required: live state is ahead of the operation journal, "
+                    "but the config-owned campaign has no first unmet segment."
+                )
+            segment_id = _non_empty_text(current_segment.get("id"))
+            provider_observations = _external_soperator_live_provider_observations_for_segment(
+                campaign=locked_upgrade_path,
+                segment=effective_current_segment or current_segment,
+                source_report=source_report,
+            )
+            if dry_run:
+                for line in _locked_upgrade_path_plan_lines(
+                    config_path=config_path,
+                    target_ref=target_ref,
+                    upgrade_path=locked_upgrade_path,
+                    progress=upgrade_path_progress,
+                    current_segment=current_segment,
+                    path_source=locked_upgrade_path_source,
+                ):
+                    console.print(_style_soperator_migration_plan_line(line), soft_wrap=True)
+                console.print(
+                    "Dry-run: the current segment already satisfies its exact live "
+                    "postcondition. Run the approved execute command to record this one "
+                    "observation-only completion; no backup or cluster mutation will run.",
+                    soft_wrap=True,
+                )
+                return
+            if not approve:
+                raise RuntimeError(
+                    "ext-soperator upgrade --execute requires --approve before recording "
+                    "an observation-only campaign completion."
+                )
+            if cluster_lease is None:
+                raise RuntimeError("External Soperator cluster lease was not acquired.")
+            with SoperatorMigrationExecutionLock(
+                config_path.parent / ".nebius-cxcli" / "config.lock"
+            ):
+                cluster_lease.assert_held()
+                _revalidate_config_campaign_under_shared_lease(
+                    config_path=config_path,
+                    config_was_present=True,
+                    target_ref=target_ref,
+                    campaign=locked_upgrade_path,
+                    campaign_fingerprint=_locked_upgrade_path_fingerprint(locked_upgrade_path),
+                    campaign_segment_id=segment_id,
+                )
+                cluster_lease.assert_held()
+                journal_path = record_live_satisfied_soperator_upgrade_campaign_segment(
+                    config_path=config_path,
+                    target_ref=target_ref,
+                    payload=payload,
+                    source_report=source_report,
+                    campaign=locked_upgrade_path,
+                    campaign_segment_id=segment_id,
+                    provider_observations=provider_observations,
+                    replacement_bindings=[
+                        binding
+                        for binding in node_group_transitions.get("bindings", []) or []
+                        if isinstance(binding, Mapping)
+                    ],
+                    retired_node_group_ids=[
+                        _non_empty_text(group_id)
+                        for group_id in node_group_transitions.get("retired_ids", []) or []
+                        if _non_empty_text(group_id)
+                    ],
+                )
+            reconciled_progress = _locked_upgrade_path_progress(
+                config_path=config_path,
+                target_ref=target_ref,
+                upgrade_path=locked_upgrade_path,
+                payload_or_config=payload,
+            )
+            console.print(
+                "Campaign segment recorded from exact fresh live observations: "
+                f"{segment_id}. No backup was created and no cluster mutation was "
+                f"performed. Operation journal: {journal_path}",
+                soft_wrap=True,
+            )
+            next_segment = _locked_upgrade_path_current_segment(
+                upgrade_path=locked_upgrade_path,
+                progress=reconciled_progress,
+            )
+            for line in _locked_upgrade_path_plan_lines(
+                config_path=config_path,
+                target_ref=target_ref,
+                upgrade_path=locked_upgrade_path,
+                progress=reconciled_progress,
+                current_segment=next_segment,
+                path_source=locked_upgrade_path_source,
+            ):
+                console.print(_style_soperator_migration_plan_line(line), soft_wrap=True)
+            return
+        if current_segment is None:
+            _journal_path, completion_journal = _external_soperator_campaign_journal(
+                config_path=config_path,
+                target_ref=target_ref,
+                payload=payload,
+            )
+            if not _external_soperator_campaign_is_complete(
+                locked_upgrade_path,
+                completion_journal,
+            ):
+                raise RuntimeError(
+                    "recovery-required: segment completion ids exist, but provider operation, "
+                    "compensation, or journal terminal postconditions are incomplete. Rerun "
+                    "the same execute command; no new campaign segment was started."
+                )
+            live_conflicts = _external_soperator_live_campaign_postcondition_conflicts(
+                campaign=locked_upgrade_path,
+                source_report=source_report,
+                node_group_transitions=_external_soperator_journal_node_group_transitions(
+                    _state_mapping(completion_journal)
+                ),
+                journal=_state_mapping(completion_journal),
+            )
+            if live_conflicts:
+                raise RuntimeError(
+                    "recovery-required: operation journal reports the external Soperator "
+                    "campaign complete, but fresh live state does not satisfy its final "
+                    "postconditions: "
+                    + ", ".join(live_conflicts)
+                    + ". No mutation was attempted and the campaign was not rewritten."
+                )
+            final_health_conflicts = _external_soperator_completed_campaign_final_health_conflicts(
+                campaign=locked_upgrade_path,
+                journal=_state_mapping(completion_journal),
+                source_report=source_report,
+            )
+            if final_health_conflicts:
+                raise RuntimeError(
+                    "recovery-required: operation journal reports the campaign complete, "
+                    "but fresh final health is not ready: "
+                    + ", ".join(final_health_conflicts)
+                    + ". No mutation was attempted."
+                )
+            if _external_soperator_journal_requires_protected_validation(
+                completion_journal
+            ) and not external_soperator_upgrade_protected_comparison_passed(
+                config_path=config_path,
+                target_ref=target_ref,
+                payload_or_config=payload,
+            ):
+                raise RuntimeError(
+                    "recovery-required: operation journal reports the campaign complete, "
+                    "but protected-state validation is absent or did not pass. No mutation "
+                    "was attempted and the campaign was not rewritten."
+                )
+            for line in _locked_upgrade_path_plan_lines(
+                config_path=config_path,
+                target_ref=target_ref,
+                upgrade_path=locked_upgrade_path,
+                progress=upgrade_path_progress,
+                current_segment=None,
+                path_source=locked_upgrade_path_source,
+            ):
+                console.print(_style_soperator_migration_plan_line(line), soft_wrap=True)
+            return
+        if current_segment is not None:
+            source_snapshot = source_report.get("snapshot")
+            if not isinstance(source_snapshot, Mapping):
+                raise RuntimeError(
+                    "External Soperator discovery did not return the live provider "
+                    "capability snapshot required to reconcile the campaign segment."
+                )
+            try:
+                validate_campaign_segment_capabilities(
+                    source_snapshot,
+                    segment=effective_current_segment or current_segment,
+                )
+            except ValueError as exc:
+                raise RuntimeError(
+                    "External Soperator campaign is blocked because live Nebius "
+                    f"capabilities changed: {exc}"
+                ) from exc
         if locked_upgrade_path and current_segment is not None:
             source_report = _source_report_for_locked_upgrade_segment(
                 source_report=source_report,
                 upgrade_path=locked_upgrade_path,
-                segment=current_segment,
+                segment=effective_current_segment or current_segment,
             )
         report = source_report.get("report")
         if isinstance(report, Mapping):
             has_reject_status = _soperator_support_policy_has_reject_status(report)
-            if not dry_run and has_reject_status and not allow_unsupported_soperator_upgrade_path:
+            if not dry_run and has_reject_status:
                 raise RuntimeError(
                     _soperator_support_policy_failure_message(
                         report,
                         command_name="ext-soperator upgrade --execute",
                     )
                 )
-            if has_reject_status and (
-                allow_unsupported_soperator_upgrade_path
-                or bool(effective_onboarding.get("support_override_used") is True)
-            ):
-                source_report = dict(source_report)
-                source_report["report"] = _soperator_support_override_report_mapping(report)
         _require_soperator_migration_actions(
             config_path=config_path,
             target_ref=target_ref,
@@ -60577,6 +64391,8 @@ def soperator_external_upgrade_command(
         ):
             console.print(_style_soperator_migration_plan_line(line), soft_wrap=True)
         if not dry_run:
+            if cluster_lease is None:
+                raise RuntimeError("External Soperator cluster lease was not acquired.")
             post_migration_config_lines: tuple[str, ...] = ()
             execution_result: SoperatorMigrationExecutionResult | None = None
             with (
@@ -60645,13 +64461,53 @@ def soperator_external_upgrade_command(
                     dry_run=False,
                     approve=approve,
                     approve_remediation=approve_remediation,
-                    allow_unsupported_soperator_upgrade_path=(
-                        allow_unsupported_soperator_upgrade_path
-                    ),
+                    approve_service_role_downtime=approve_service_role_downtime,
+                    allow_unsupported_soperator_upgrade_path=False,
                     interactive=interactive,
                 )
                 backup_metadata: dict[str, Any] | None = None
                 if approve:
+                    cluster_lease.assert_held()
+                    if current_segment is None:
+                        raise RuntimeError(
+                            "External Soperator execution requires one current campaign segment."
+                        )
+                    segment_id = _non_empty_text(current_segment.get("id"))
+                    with SoperatorMigrationExecutionLock(
+                        config_path.parent / ".nebius-cxcli" / "config.lock"
+                    ):
+                        _revalidate_config_campaign_under_shared_lease(
+                            config_path=config_path,
+                            config_was_present=True,
+                            target_ref=target_ref,
+                            campaign=locked_upgrade_path,
+                            campaign_fingerprint=_locked_upgrade_path_fingerprint(
+                                locked_upgrade_path
+                            ),
+                            campaign_segment_id=segment_id,
+                        )
+                        cluster_lease.assert_held()
+                        initialize_soperator_migration_operation_journal(
+                            config_path=config_path,
+                            target_ref=target_ref,
+                            payload=execution_payload,
+                            source_report=source_report,
+                            campaign=locked_upgrade_path,
+                            campaign_segment_id=segment_id,
+                        )
+                    cluster_lease.assert_held()
+                    effective_kube_context = _external_soperator_backup_kube_context(
+                        execution_payload,
+                        target_ref=target_ref,
+                        kube_context=None,
+                    )
+                    _reconcile_external_soperator_backup_compensation(
+                        config_path=config_path,
+                        payload=execution_payload,
+                        target_ref=target_ref,
+                        kube_context=effective_kube_context,
+                        mutation_guard=cluster_lease.assert_held,
+                    )
                     emit_status(
                         "External Soperator upgrade backup guard: checking for reusable "
                         "restore-capable backup metadata."
@@ -60672,11 +64528,6 @@ def soperator_external_upgrade_command(
                             soft_wrap=True,
                         )
                     else:
-                        effective_kube_context = _external_soperator_backup_kube_context(
-                            execution_payload,
-                            target_ref=target_ref,
-                            kube_context=None,
-                        )
                         backup_transition = _external_soperator_upgrade_backup_transition(
                             source_report=source_report,
                             onboarding=effective_onboarding,
@@ -60697,7 +64548,28 @@ def soperator_external_upgrade_command(
                             target_chart_version=backup_transition.target_chart_version,
                             source_k8s_version=backup_transition.source_k8s_version,
                             target_k8s_version=backup_transition.target_k8s_version,
+                            checkpoint_compensation=(
+                                lambda required, state: (
+                                    record_soperator_migration_backup_compensation(
+                                        config_path=config_path,
+                                        target_ref=target_ref,
+                                        payload=execution_payload,
+                                        required=required,
+                                        state=state,
+                                    )
+                                )
+                            ),
+                            mutation_guard=cluster_lease.assert_held,
                         )
+                    if backup_metadata is None:
+                        raise RuntimeError("External Soperator backup guard returned no metadata.")
+                    record_soperator_migration_backup_binding(
+                        config_path=config_path,
+                        target_ref=target_ref,
+                        payload=execution_payload,
+                        backup_metadata=backup_metadata,
+                    )
+                cluster_lease.assert_held()
                 execution_result = execute_soperator_migration(
                     config_path=config_path,
                     target_ref=target_ref,
@@ -60710,6 +64582,7 @@ def soperator_external_upgrade_command(
                     ),
                     approved=approve,
                     status_callback=emit_status,
+                    mutation_guard=cluster_lease.assert_held,
                     job_policy=resolved_job_policy,
                     populate_jail_refresh=resolved_populate_jail_refresh,
                     jail_persistent_mounts=tuple(jail_persistent_mount or ()),
@@ -60722,6 +64595,7 @@ def soperator_external_upgrade_command(
                     login_session_policy=resolved_login_session_policy,
                     login_session_drain_timeout_seconds=login_session_drain_timeout_seconds,
                     approve_remediation=approve_remediation,
+                    approve_service_role_downtime=approve_service_role_downtime,
                     worker_rollout_strategy=worker_rollout_strategy,
                     service_role_rollout_strategy=service_role_rollout_strategy,
                     worker_wave_groups=worker_wave_groups,
@@ -60730,17 +64604,17 @@ def soperator_external_upgrade_command(
                     strategy_max_surge_count=strategy_max_surge_count,
                     strategy_max_unavailable_count=strategy_max_unavailable_count,
                     strategy_drain_timeout=strategy_drain_timeout,
-                    upgrade_path_fingerprint=(
+                    campaign_fingerprint=(
                         _locked_upgrade_path_fingerprint(locked_upgrade_path)
                         if locked_upgrade_path
                         else ""
                     ),
-                    upgrade_path_segment_id=(
+                    campaign_segment_id=(
                         _non_empty_text(current_segment.get("id"))
                         if isinstance(current_segment, Mapping)
                         else ""
                     ),
-                    locked_upgrade_path=locked_upgrade_path or None,
+                    campaign=locked_upgrade_path,
                 )
                 if execution_result.pending_phase == "none":
                     if not external_soperator_upgrade_protected_comparison_passed(
@@ -60749,19 +64623,13 @@ def soperator_external_upgrade_command(
                         payload_or_config=execution_payload,
                     ):
                         raise RuntimeError(
-                            "Post-upgrade config refresh is blocked because shared protected-state "
+                            "Campaign segment completion is blocked because shared protected-state "
                             "verification did not complete successfully. Review "
                             "ext-soperator-upgrade/report.json before accepting the new live state."
                         )
                     post_migration_config_lines = (
-                        _refresh_soperator_onboarding_after_completed_migration(
-                            config_path=config_path,
-                            payload=payload,
-                            execution_payload=execution_payload,
-                            source_report=source_report,
-                            target_ref=target_ref,
-                            upgrade_path=locked_upgrade_path or None,
-                        )
+                        "Campaign segment reconciled successfully; config.yaml remains the "
+                        "immutable desired-campaign authority.",
                     )
             if execution_result is None:
                 raise RuntimeError("External Soperator upgrade execution did not return a result.")
@@ -60780,6 +64648,8 @@ def soperator_external_upgrade_command(
         raise typer.Exit(code=130) from None
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
+    finally:
+        lease_stack.close()
 
 
 @component_app.command(
@@ -63953,13 +67823,11 @@ def deploy_command(
     replacement, deploy refuses before preflight and directs the operator to
     `ext-soperator upgrade`; deploy cannot perform those Nebius SDK/API
     upgrade phases. Use `ext-soperator upgrade` for reruns/resume while those
-    actions remain selected. If the locked path still has remaining segments,
-    repeat the same `ext-soperator upgrade --execute --approve` command; cxcli
-    keeps accepted onboarding in place until the final locked segment completes.
-    After that final segment, cxcli refreshes config.yaml from live post-upgrade
-    discovery when possible; if that final refresh was skipped, rerun
-    `ext-soperator onboard` only as an intentional repair path, then rerender
-    and deploy for normal rendered reconciliation if needed.
+    actions remain selected. Repeat the same
+    `ext-soperator upgrade --execute --approve` command for each remaining
+    campaign segment. A completed campaign remains in config.yaml; rerun
+    `ext-soperator onboard` only to report it or to propose and accept a later
+    campaign when provider support or catalog pins advance.
     When more than one built-in cluster target is present, deploy reconciles
     every target by default. Use `--target <target-id>` to narrow Flux/app work
     and deploy-time validations to one target, or `--all-targets` to spell out

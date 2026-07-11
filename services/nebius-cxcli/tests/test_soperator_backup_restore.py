@@ -421,7 +421,16 @@ def test_soperator_backup_archive_contains_restore_material(
         if args[:2] == ["get", "deployment/accounting"]:
             return _command_result(
                 args,
-                json.dumps({"spec": {"replicas": 1}, "metadata": {"name": "accounting"}}),
+                json.dumps(
+                    {
+                        "spec": {"replicas": 1},
+                        "metadata": {
+                            "name": "accounting",
+                            "uid": "accounting-uid",
+                            "resourceVersion": "17",
+                        },
+                    }
+                ),
             )
         if args[:1] == ["scale"]:
             return _command_result(args)
@@ -626,7 +635,16 @@ def test_soperator_backup_archive_deduplicates_chart_named_recreation_pvcs(
         if args[:2] == ["get", "deployment/accounting"]:
             return _command_result(
                 args,
-                json.dumps({"spec": {"replicas": 1}, "metadata": {"name": "accounting"}}),
+                json.dumps(
+                    {
+                        "spec": {"replicas": 1},
+                        "metadata": {
+                            "name": "accounting",
+                            "uid": "accounting-uid",
+                            "resourceVersion": "17",
+                        },
+                    }
+                ),
             )
         if args[:1] == ["scale"]:
             return _command_result(args)
@@ -1555,7 +1573,18 @@ def test_soperator_restore_execute_applies_manifests_and_imports_db(
                 ),
             )
         if args[:2] == ["get", "deployment/accounting"]:
-            return _command_result(args, json.dumps({"spec": {"replicas": 1}}))
+            return _command_result(
+                args,
+                json.dumps(
+                    {
+                        "spec": {"replicas": 1},
+                        "metadata": {
+                            "uid": "accounting-uid",
+                            "resourceVersion": "17",
+                        },
+                    }
+                ),
+            )
         return _command_result(args)
 
     monkeypatch.setattr(cli, "_run_soperator_upgrade_kubectl_cluster", fake_cluster)

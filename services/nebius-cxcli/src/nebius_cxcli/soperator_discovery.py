@@ -456,11 +456,236 @@ def _job_is_complete(resource: Mapping[str, Any]) -> bool:
     return False
 
 
-def _populate_jail_completed_job_image(snapshot: Mapping[str, Any]) -> tuple[str, str]:
-    candidates: list[tuple[str, str, str]] = []
+def _job_is_failed(resource: Mapping[str, Any]) -> bool:
+    status = resource.get("status")
+    if not isinstance(status, Mapping):
+        return False
+    failed = status.get("failed")
+    if (isinstance(failed, int) and not isinstance(failed, bool) and failed > 0) or (
+        isinstance(failed, str) and failed.isdigit() and int(failed) > 0
+    ):
+        return True
+    conditions = status.get("conditions")
+    if not isinstance(conditions, Sequence) or isinstance(conditions, (str, bytes, bytearray)):
+        return False
+    return any(
+        isinstance(condition, Mapping)
+        and _text(condition.get("type")).lower() == "failed"
+        and _text(condition.get("status")).lower() == "true"
+        for condition in conditions
+    )
+
+
+def _pvc_claim_name(reference: Any) -> str:
+    if not isinstance(reference, Mapping):
+        return ""
+    persistent_volume_claim = reference.get("persistentVolumeClaim")
+    if not isinstance(persistent_volume_claim, Mapping):
+        return ""
+    return _text(persistent_volume_claim.get("claimName"))
+
+
+def _jail_volume_source_claims(spec: Mapping[str, Any]) -> tuple[dict[str, str], str]:
+    raw_sources = spec.get("volumeSources")
+    if not isinstance(raw_sources, Sequence) or isinstance(raw_sources, (str, bytes, bytearray)):
+        return {}, "SlurmCluster spec.volumeSources is unavailable"
+    claims: dict[str, str] = {}
+    for raw_source in raw_sources:
+        if not isinstance(raw_source, Mapping):
+            continue
+        name = _text(raw_source.get("name"))
+        claim_name = _pvc_claim_name(raw_source)
+        if not name or not claim_name:
+            continue
+        if name in claims and claims[name] != claim_name:
+            return {}, f"SlurmCluster volume source {name!r} resolves to multiple PVCs"
+        claims[name] = claim_name
+    if not claims.get("jail"):
+        return claims, "canonical SlurmCluster volume source 'jail' has no PVC binding"
+    return claims, ""
+
+
+def _jail_consumer_claim_name(
+    jail: Any,
+    *,
+    volume_source_claims: Mapping[str, str],
+) -> str:
+    if not isinstance(jail, Mapping):
+        return ""
+    direct_claim = _pvc_claim_name(jail)
+    if direct_claim:
+        return direct_claim
+    source_name = _text(jail.get("volumeSourceName"))
+    return _text(volume_source_claims.get(source_name)) if source_name else ""
+
+
+def _active_jail_pvc_binding(snapshot: Mapping[str, Any]) -> dict[str, str]:
+    evidence = {
+        "status": "unverified",
+        "reason": "active Jail rootfs binding is unavailable",
+        "slurmcluster_name": "",
+        "namespace": "",
+        "pvc_name": "",
+        "pvc_uid": "",
+        "jail_filesystem_id": "",
+    }
+    slurmclusters = _resource_items(snapshot, "slurmclusters")
+    if len(slurmclusters) != 1:
+        evidence["reason"] = (
+            "active Jail rootfs evidence requires exactly one live SlurmCluster; "
+            f"observed {len(slurmclusters)}"
+        )
+        return evidence
+    slurmcluster = slurmclusters[0]
+    metadata = slurmcluster.get("metadata")
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    evidence["slurmcluster_name"] = _text(metadata.get("name"))
+    namespace = _text(metadata.get("namespace")) or "soperator"
+    evidence["namespace"] = namespace
+    spec = slurmcluster.get("spec")
+    spec = spec if isinstance(spec, Mapping) else {}
+    volume_source_claims, binding_error = _jail_volume_source_claims(spec)
+    active_pvc = _text(volume_source_claims.get("jail"))
+    evidence["pvc_name"] = active_pvc
+    if binding_error:
+        evidence["reason"] = binding_error
+        return evidence
+
+    consumer_claims: list[tuple[str, str]] = []
+    unresolved_consumers: list[str] = []
+    slurm_nodes = spec.get("slurmNodes")
+    if isinstance(slurm_nodes, Mapping):
+        for role_name, raw_role in sorted(slurm_nodes.items(), key=lambda item: str(item[0])):
+            if not isinstance(raw_role, Mapping):
+                continue
+            volumes = raw_role.get("volumes")
+            volumes = volumes if isinstance(volumes, Mapping) else {}
+            if "jail" not in volumes:
+                continue
+            consumer = f"SlurmCluster role {role_name}"
+            claim_name = _jail_consumer_claim_name(
+                volumes.get("jail"),
+                volume_source_claims=volume_source_claims,
+            )
+            if claim_name:
+                consumer_claims.append((consumer, claim_name))
+            else:
+                unresolved_consumers.append(consumer)
+    for nodeset in _resource_items(snapshot, "nodesets"):
+        nodeset_metadata = nodeset.get("metadata")
+        nodeset_metadata = nodeset_metadata if isinstance(nodeset_metadata, Mapping) else {}
+        nodeset_name = _text(nodeset_metadata.get("name")) or "<unnamed>"
+        nodeset_spec = nodeset.get("spec")
+        nodeset_spec = nodeset_spec if isinstance(nodeset_spec, Mapping) else {}
+        slurmd = nodeset_spec.get("slurmd")
+        slurmd = slurmd if isinstance(slurmd, Mapping) else {}
+        volumes = slurmd.get("volumes")
+        volumes = volumes if isinstance(volumes, Mapping) else {}
+        if "jail" not in volumes:
+            continue
+        consumer = f"NodeSet {nodeset_name}"
+        claim_name = _jail_consumer_claim_name(
+            volumes.get("jail"),
+            volume_source_claims=volume_source_claims,
+        )
+        if claim_name:
+            consumer_claims.append((consumer, claim_name))
+        else:
+            unresolved_consumers.append(consumer)
+    if unresolved_consumers:
+        evidence["reason"] = "Jail rootfs consumers have unresolved PVC bindings: " + ", ".join(
+            unresolved_consumers
+        )
+        return evidence
+    if not consumer_claims:
+        evidence["reason"] = "no live SlurmCluster or NodeSet Jail rootfs consumers were found"
+        return evidence
+    drifted_consumers = [
+        f"{consumer}={claim_name}"
+        for consumer, claim_name in consumer_claims
+        if claim_name != active_pvc
+    ]
+    if drifted_consumers:
+        evidence["reason"] = (
+            f"canonical Jail PVC {active_pvc!r} is not used by all live consumers: "
+            + ", ".join(drifted_consumers)
+        )
+        return evidence
+
+    pvc_matches: list[Mapping[str, Any]] = []
+    raw_pvcs = snapshot.get("pvcs")
+    if isinstance(raw_pvcs, Sequence) and not isinstance(raw_pvcs, (str, bytes, bytearray)):
+        for pvc in raw_pvcs:
+            if not isinstance(pvc, Mapping):
+                continue
+            pvc_metadata = pvc.get("metadata")
+            pvc_metadata = pvc_metadata if isinstance(pvc_metadata, Mapping) else {}
+            if (
+                _text(pvc_metadata.get("name")) == active_pvc
+                and (_text(pvc_metadata.get("namespace")) or "default") == namespace
+            ):
+                pvc_matches.append(pvc)
+    if len(pvc_matches) != 1:
+        evidence["reason"] = (
+            f"canonical Jail PVC {namespace}/{active_pvc} resolved to "
+            f"{len(pvc_matches)} live PVC objects"
+        )
+        return evidence
+    pvc = pvc_matches[0]
+    pvc_metadata = pvc.get("metadata")
+    pvc_metadata = pvc_metadata if isinstance(pvc_metadata, Mapping) else {}
+    pvc_status = pvc.get("status")
+    pvc_status = pvc_status if isinstance(pvc_status, Mapping) else {}
+    pvc_uid = _text(pvc_metadata.get("uid"))
+    evidence["pvc_uid"] = pvc_uid
+    if not pvc_uid or _text(pvc_status.get("phase")) != "Bound":
+        evidence["reason"] = (
+            f"canonical Jail PVC {namespace}/{active_pvc} is not Bound with an immutable UID"
+        )
+        return evidence
+    cluster_identity = snapshot.get("cluster_identity")
+    cluster_identity = cluster_identity if isinstance(cluster_identity, Mapping) else {}
+    jail_filesystem_id = _text(cluster_identity.get("jail_filesystem_id"))
+    evidence["jail_filesystem_id"] = jail_filesystem_id
+    if not jail_filesystem_id:
+        evidence["reason"] = "immutable Jail filesystem identity is unavailable"
+        return evidence
+    evidence["status"] = "bound"
+    evidence["reason"] = "canonical alias and all discovered Jail consumers use the same PVC"
+    return evidence
+
+
+def _job_pvc_claim_names(resource: Mapping[str, Any]) -> tuple[str, ...]:
+    sanitized = resource.get("pvc_claim_names")
+    if isinstance(sanitized, Sequence) and not isinstance(sanitized, (str, bytes, bytearray)):
+        return tuple(sorted({_text(item) for item in sanitized if _text(item)}))
+    volumes = _nested_container_sequence(resource, ("spec", "template", "spec", "volumes"))
+    return tuple(sorted({_pvc_claim_name(volume) for volume in volumes if _pvc_claim_name(volume)}))
+
+
+def _populate_jail_active_job_evidence(snapshot: Mapping[str, Any]) -> dict[str, str]:
+    active_binding = _active_jail_pvc_binding(snapshot)
+    evidence = {
+        "status": "unverified",
+        "reason": active_binding["reason"],
+        "job_name": "",
+        "job_uid": "",
+        "slot": "",
+        "image": "",
+        "pvc_name": active_binding["pvc_name"],
+        "pvc_uid": active_binding["pvc_uid"],
+        "jail_filesystem_id": active_binding["jail_filesystem_id"],
+        "slurmcluster_name": active_binding["slurmcluster_name"],
+    }
+    if active_binding["status"] != "bound":
+        return evidence
+
+    candidates: list[tuple[str, str, str, str, str]] = []
+    wrong_pvc_jobs: list[str] = []
     resources = snapshot.get("soperator_namespace_resources")
     if not isinstance(resources, Sequence) or isinstance(resources, (str, bytes, bytearray)):
-        return "", ""
+        evidence["reason"] = "Soperator namespace Job discovery is unavailable"
+        return evidence
     for resource in resources:
         if not isinstance(resource, Mapping):
             continue
@@ -469,18 +694,56 @@ def _populate_jail_completed_job_image(snapshot: Mapping[str, Any]) -> tuple[str
         name = _object_name(resource)
         if "populate-jail" not in name:
             continue
-        if not _job_is_complete(resource):
+        metadata = resource.get("metadata")
+        metadata = metadata if isinstance(metadata, Mapping) else {}
+        labels = metadata.get("labels")
+        labels = labels if isinstance(labels, Mapping) else {}
+        if _text(labels.get("slurm.nebius.ai/jail-rootfs-refresh")) != "active-passive":
+            continue
+        slot = _text(labels.get("slurm.nebius.ai/jail-rootfs-slot"))
+        if slot not in {"slot-a", "slot-b"}:
+            continue
+        if not _job_is_complete(resource) or _job_is_failed(resource):
             continue
         image = _pod_template_container_image(resource)
         if not image:
             continue
+        job_uid = _text(metadata.get("uid"))
+        if not job_uid:
+            continue
+        pvc_claim_names = _job_pvc_claim_names(resource)
+        if active_binding["pvc_name"] not in pvc_claim_names:
+            wrong_pvc_jobs.append(name)
+            continue
         completed_at = _nested_text(resource, ("status", "completionTime"))
         created_at = _nested_text(resource, ("metadata", "creationTimestamp"))
-        candidates.append((completed_at or created_at, name, image))
+        candidates.append((completed_at or created_at, name, job_uid, slot, image))
     if not candidates:
-        return "", ""
-    _timestamp, name, image = sorted(candidates, key=lambda item: item[0], reverse=True)[0]
-    return name, image
+        evidence["reason"] = (
+            "completed active/passive populate Jobs do not target the canonical active PVC"
+            if wrong_pvc_jobs
+            else "no completed active/passive populate Job is bound to the canonical active PVC"
+        )
+        return evidence
+    _timestamp, name, job_uid, slot, image = sorted(
+        candidates,
+        key=lambda item: item[0],
+        reverse=True,
+    )[0]
+    evidence.update(
+        {
+            "status": "active-slot-verified",
+            "reason": (
+                "completed populate Job, canonical alias, immutable PVC, and all discovered "
+                "Jail consumers agree on the active slot"
+            ),
+            "job_name": name,
+            "job_uid": job_uid,
+            "slot": slot,
+            "image": image,
+        }
+    )
+    return evidence
 
 
 def _live_populate_jail_image(snapshot: Mapping[str, Any]) -> tuple[str, str]:
@@ -525,7 +788,9 @@ def _jail_rootfs_record(
     report: Mapping[str, Any],
     target_versions: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    job_name, job_image = _populate_jail_completed_job_image(snapshot)
+    active_evidence = _populate_jail_active_job_evidence(snapshot)
+    job_name = active_evidence["job_name"]
+    job_image = active_evidence["image"]
     slurmcluster_name, live_desired_image = _live_populate_jail_image(snapshot)
     current_image = job_image or live_desired_image
     current_source = (
@@ -536,11 +801,24 @@ def _jail_rootfs_record(
         else "not-detected"
     )
     target_image, target_source = _target_jail_rootfs_image(target_versions)
+    target_jail_rootfs = (
+        target_versions.get("jail_rootfs")
+        if isinstance(target_versions, Mapping)
+        and isinstance(target_versions.get("jail_rootfs"), Mapping)
+        else {}
+    )
     action_ids = _report_selected_action_ids(report)
     chart_upgrade_selected = "upgrade-soperator" in action_ids
     if current_image and target_image and current_image != target_image:
         refresh_required = True
         reason = "target populate-jail image differs from current jail rootfs image"
+    elif current_source != "completed-populate-jail-job" and target_image:
+        refresh_required = True
+        reason = (
+            "active Jail rootfs evidence is incomplete: "
+            f"{active_evidence['reason']}; the SlurmCluster desired image does not prove "
+            "a completed active-slot population"
+        )
     elif chart_upgrade_selected:
         refresh_required = True
         reason = "Soperator chart upgrade is selected; jail rootfs compatibility is unproven"
@@ -555,6 +833,13 @@ def _jail_rootfs_record(
         "current_version": _container_image_version(current_image),
         "current_source": current_source,
         "current_job_name": job_name,
+        "current_job_uid": active_evidence["job_uid"],
+        "current_slot": active_evidence["slot"],
+        "current_pvc_name": active_evidence["pvc_name"],
+        "current_pvc_uid": active_evidence["pvc_uid"],
+        "current_jail_filesystem_id": active_evidence["jail_filesystem_id"],
+        "current_evidence_status": active_evidence["status"],
+        "current_evidence_reason": active_evidence["reason"],
         "live_desired_image": live_desired_image,
         "live_desired_version": _container_image_version(live_desired_image),
         "live_desired_source": "slurmcluster.spec.populateJail.image" if live_desired_image else "",
@@ -562,6 +847,9 @@ def _jail_rootfs_record(
         "target_image": target_image,
         "target_version": _container_image_version(target_image),
         "target_source": target_source,
+        "target_cuda_version": _text(target_jail_rootfs.get("target_cuda_version")),
+        "target_digest": _text(target_jail_rootfs.get("target_digest")),
+        "target_identity_warning": _text(target_jail_rootfs.get("target_identity_warning")),
         "refresh_required": refresh_required,
         "reason": reason,
     }
