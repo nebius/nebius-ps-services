@@ -6,6 +6,90 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Fixed Soperator protected-state comparison so a Slurm runtime field whose
+  pre-upgrade probe was unavailable but whose post-upgrade probe succeeds is
+  recorded as non-comparable audit evidence instead of false policy drift.
+  Comparable partition, QOS, and association changes remain approval-gated,
+  and failed post-upgrade probes remain blocking.
+- Fixed external Soperator first-adoption Jail Upgrade and login continuity.
+  The one-time persistent-data writer hold now checkpoints the immutable target
+  SlurmCluster identity and uses Soperator's declarative
+  `spec.maintenance=downscale` mode instead of directly scaling the rendered
+  login workload or changing worker NodeSet replica intent. The hold remains in
+  place through passive-slot population, the slot switch restores the recorded
+  maintenance value, and resume fails closed on cluster replacement or foreign
+  maintenance drift. Pre-copy hold drift restores steady-state writers for a
+  fresh retry; drift after a completed copy marks that copy stale and blocks
+  automatic completion-marker reuse until the source, shared target, markers,
+  and checkpoint are reconciled. Controller-spool cleanup also defers the controller
+  restart to the controlled Jail Upgrade handoff instead of deleting the
+  controller Pod immediately after the cleanup Job.
+  Persistent-path source probes now use unique operation-scoped Jobs without
+  deleting same-name workloads. The one-time copy Job is checkpointed by exact
+  contract plus PVC and Job UIDs. Schema-v2 copies now fail closed without GNU
+  tar, a digest-pinned image, and delayed Job-Pod replacement; refuse sockets;
+  and use a neutral same-PVC `cp -a` stage so shared-parent
+  default ACLs cannot alter descendants, verify deterministic tree and root
+  digests including ACLs and all xattrs, promote by same-filesystem rename, and
+  atomically publish an operation-bound versioned marker. A retained schema-v1
+  Job is recoverable only for its exact UID-bound, controller-owned Pod exit 19:
+  a separately tokenized and UID-bound recovery Job binds one successful Pod,
+  freezes probed source presence, verifies and quarantines only a log-proven
+  first-entry failure without deleting the failed Job or target evidence, lets later
+  untouched mounts use fresh neutral staging, then requires the full schema-v2
+  comparison and post-log identity revalidation before completion. Missing,
+  stale, unreadable, duplicate, foreign, or identity-drifted copy evidence
+  blocks the slot switch instead of being treated as completed.
+  Copy and recovery Pods now run explicitly as UID/GID 0 and retain only
+  `CHOWN`, `DAC_OVERRIDE`, `DAC_READ_SEARCH`, `FOWNER`, `FSETID`, and `SETFCAP`
+  after dropping all other Linux capabilities. `DAC_OVERRIDE` permits the
+  same-PVC cross-parent rename when `cp -a` preserves a user-owned mount root;
+  the Pods still keep RuntimeDefault seccomp, no privilege escalation, no
+  service-account token, and a read-only image root. External resume also treats
+  every checkpointed Jail Upgrade mutation window—from writer-hold intent
+  through copy/recovery, passive population, switch, handoff, and Slurm
+  smoke—as a cross-phase fence. Policy-bearing quota/job preflight and all
+  predecessor reconciliation or rerun are deferred. A historically demoted
+  rolling/final phase is restored only from paired completion and passed
+  fast-verification evidence recorded before the fence began; missing evidence
+  blocks before Jail Upgrade rather than mutating a predecessor. The fence is
+  released only after maintenance restoration, handoff, Slurm smoke, and
+  durable Jail Upgrade completion.
+  Execute preflight now rejects the default `target-ready` policy before any
+  upgrade mutation when a one-time writer hold is required, and tells the
+  operator to rerun the exact original command with `wait-active` added. The
+  upgrade keeps all consumers on the discovered legacy jail PVC until the first
+  successful slot switch, copies persistent paths from that source PVC, delays
+  shared submounts until the switch, preserves discovered login public keys and
+  fingerprint-verified SSH server host keys in a distinct target Secret, and
+  reports/verifies the checkpointed passive-slot Job, rootfs handoff, exact
+  every desired Ready target-owned login and target-NodeSet `/home` Pod volume, identical
+  `/mnt/jail.upper/home` to `/mnt/jail/home` live filesystem identity, and
+  post-Jail Slurm smoke. SSH continuity now copies only the six host-key fields, rejects
+  conflicting Secret owners, and binds source-unavailable verification to the
+  independent checkpoint digest. Verified-backup recovery now derives that
+  canonical six-field digest from the hash-checked archive and refuses a
+  same-name live Secret whose contents differ. Approved mutation requires the complete
+  immutable source SlurmCluster/SSH-Secret binding. Resume now
+  binds source SlurmCluster, SSH Secret, jail PVC, cluster, transition, and
+  locked-segment identity to the verified pre-mutation backup, corroborates an
+  already-switched live slot instead of repopulating it, and accepts a garbage-
+  collected historical populate Job only after current consumer-slot, `/home`,
+  `scontrol`, and `sbatch --test-only` probes revalidate durable evidence. The
+  live smoke submits one checkpointed job,
+  polls it to completion, and cancels it on a bounded failure. Handoff now runs
+  `scontrol`, `sbatch --test-only`, and accounting/QOS checks while user
+  partitions remain controlled/DOWN; `MetricsType`, `PluginDir`, or other Slurm
+  configuration failures keep scheduling quiesced. Partitions reopen only after
+  those pre-release checks pass, before the bounded live submission check.
+  Passive-slot populate Jobs now use a checkpointed per-attempt token and bind
+  the exact Job contract, Job UID, and passive PVC UID before reuse.
+  Completed-compute
+  values reconciliation also drains login sessions as requested and
+  checkpoint-quiesces Slurm before recreating worker StatefulSets. Controller-
+  spool cleanup now checkpoints the exact target-values PVC before applying its
+  Job and fails closed on claim drift; Jail Upgrade status reports a missing
+  historical passive Job as unknown until execute-time live revalidation.
 - Added internal Nebius API resume reconciliation for managed `soperator
   upgrade` MK8s node-template phases. Reruns now compare the checkpointed
   target, current command target, and live MK8s control-plane/node-group state
@@ -100,9 +184,11 @@ All notable changes to this project are tracked here. This changelog follows
   address, automatically converts an existing dynamic login LoadBalancer
   allocation to reusable Nebius allocation state, persists
   `nebius.com/load-balancer-allocation-id` under
-  `slurmNodes.login.sshdServiceAnnotations`, fails before chart handoff if that
-  allocation cannot be uniquely resolved or updated, warms target login pods before
-  source login retirement, and exposes
+  `slurmNodes.login.sshdServiceAnnotations`, and restores that checkpointed
+  value into every later target Helm and Jail Upgrade values reapply so
+  server-side apply cannot remove the retained allocation. It fails before
+  chart handoff if that allocation cannot be uniquely resolved or updated,
+  warms target login pods before source login retirement, and exposes
   `--login-session-policy target-ready|wait-active|grace-period` plus
   `--login-session-drain-timeout`. First-adoption persistent mount migration
   now refuses its temporary login writer hold under the default `target-ready`
@@ -115,9 +201,25 @@ All notable changes to this project are tracked here. This changelog follows
   values revision so reruns reapply corrected values. Login Slurm smoke can
   defer only across a planned Jail Upgrade chart/rootfs boundary when the
   failure matches known old-rootfs/target-config markers; post-Jail `scontrol`,
-  `sbatch`, and accounting/QOS smoke is fail-closed. Execute output now
-  de-duplicates repeated phase/preflight lines and prints a resume command in
-  pending footers.
+  `sbatch` dry-run and live-job completion, and accounting/QOS smoke are
+  fail-closed. Execute output now de-duplicates repeated phase/preflight lines
+  and prints a next action to rerun the exact original command in pending
+  footers. First-adoption switch-over also keeps the legacy jail PV/PVC only as
+  rollback storage while moving the active `jail` volume-source alias to the
+  populated slot, so SConfigController and REST cannot remain
+  blocked on the old rootfs. Fresh switch and post-switch resume now verify the
+  exact live alias plus Ready rollouts for the enabled controller,
+  SConfigController, and REST workloads before reopening Slurm
+  partitions. The controller check follows Soperator's OpenKruise StatefulSet,
+  and the convergence wait tolerates the operator's asynchronous generation of
+  updated workload templates while requiring a regular workload container to
+  mount the active PVC at `/mnt/jail` within one shared timeout.
+  Resume reapplies only switched Helm values for alias or
+  maintenance drift and proves both values converged without repopulating the
+  slot. Completed-phase reruns revalidate the live alias, all consumers,
+  persistent `/home` mounts, and Slurm admission even while the historical
+  populate Job still exists. Persistent-copy paths also reject symlinks in any
+  `/store` path component before copy, staging, quarantine, or promotion.
 - Changed external service-role node-template rollout to default to serial
   zero-surge, with `max_surge=0`, `max_unavailable=1`, and `drain_timeout=30m`.
   `ext-soperator onboard` and `ext-soperator upgrade` now expose

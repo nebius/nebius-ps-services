@@ -196,8 +196,18 @@ Default storage expectations:
 - `jailPersistentMounts` renders writable PVC-backed jail submounts for
   customer-owned paths that stay outside rootfs generation slots. Managed
   greenfield defaults `/home` to `/mnt/jail-store/shared/home`; external
-  single-SFS adoption can point `/home` at `/mnt/jail/home` and add explicit
-  customer paths such as `/data` without copying data.
+  single-SFS adoption stages known and explicit paths under the shared area.
+  While `jailRootfs.adoption.activeSource=legacy-rootfs`, the chart derives all
+  controller, login, and worker jail references from `legacyPvcName` and
+  withholds those shared submounts. cxcli holds writers, performs the one-time
+  legacy-to-shared copy, populates the passive rootfs slot, and switches
+  `activeSource` to `slot` before the chart attaches shared paths such as
+  `/home` and `/data`. The chart always derives the canonical `jail` volume
+  source from the active source and slot because SConfigController and REST
+  consume that alias. Accounting keeps an alias-backed volume declaration, but
+  the current operator workload does not mount the jail.
+  `rollbackSource=legacy-rootfs` retains the old
+  PV/PVC for rollback without changing the active alias.
 - Nodes that should mount the jail must match
   `storage.jail.matchExpressions`, which defaults to
   `slurm.nebius.ai/jail=true`.
@@ -391,7 +401,7 @@ The Nebius production profile uses SFS for the shared Slurm filesystems:
 
 | Filesystem | Mount Tag | Host Path | Main Consumers |
 | --- | --- | --- | --- |
-| `jail` | `jail` | `/mnt/jail` | `populateJail`, controller, login, accounting, and workers. |
+| `jail` | `jail` | `/mnt/jail` | `populateJail`, controller, login, SConfigController, REST, and workers. |
 | `controller-spool` | `controller-spool` | `/mnt/controller-spool` | Slurm controller pods and `slurmctld` state/spool. |
 | `accounting` | `accounting` | `/mnt/accounting` | Accounting/database persistence when the production profile enables accounting storage. |
 
@@ -423,6 +433,11 @@ like this:
 | `login` | Login pods | `jail` |
 | `accounting` | `slurmdbd`, accounting MUNGE, MariaDB database workload | `jail`, `accounting` |
 | `worker` or worker shards | Worker `NodeSet` pods and user jobs | `jail` |
+
+The production profile still attaches `jail` to the accounting node group and
+the accounting workload retains an alias-backed volume declaration. The current
+operator workload does not mount that volume, so accounting is not a jail
+rootfs consumer in the cutover convergence gate.
 
 In an onboarded or compact cluster, several Soperator roles may map to the same
 CPU node group. In that case the node group must attach the union of the SFS

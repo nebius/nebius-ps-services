@@ -466,9 +466,11 @@ from .soperator_jail_mounts import (
     jail_persistent_mount_exclude_paths,
     jail_persistent_mount_status,
     jail_rootfs_uses_legacy_active_source,
+    legacy_jail_pvc_name,
     parse_jail_persistent_mount_specs,
 )
 from .soperator_migration import (
+    _ROOTFS_HANDOFF_VERIFICATION_REVISION,
     EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
     SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
     SOPERATOR_WORKER_ROLLOUT_DEFAULT_WAVE_PERCENT,
@@ -477,18 +479,38 @@ from .soperator_migration import (
     SoperatorMigrationCommandResult,
     SoperatorMigrationExecutionResult,
     SoperatorMigrationPhasePending,
+    _bind_passive_populate_job_checkpoint,
+    _bind_passive_populate_pvc_uid,
+    _ensure_passive_populate_job,
     _ensure_persistent_migration_login_hold_allowed,
+    _ensure_persistent_migration_writer_hold_intact_after_copy,
+    _ensure_post_jail_slurm_pre_release_checks,
+    _ensure_post_jail_slurm_smoke,
     _execute_legacy_persistent_mount_migration,
     _external_node_template_rollout_plan_lines,
+    _fast_verification_failed,
     _hold_persistent_migration_writers,
     _legacy_persistent_mount_migration_entries,
+    _live_home_mount_pending_reason,
+    _live_home_mount_probe_checks,
+    _persistent_migration_original_maintenance,
+    _persistent_migration_writer_hold_drift,
+    _persistent_migration_writer_hold_values,
+    _preflight_persistent_migration_writer_restore_identity,
     _probe_legacy_persistent_mount_sources,
+    _require_persistent_mount_reprobe_binding,
     _restore_persistent_migration_writers,
     _retire_stale_source_soperator_helm_releases,
+    _rootfs_handoff_pending_reason,
     _SdkSoperatorMigrationNebiusApi,
     _source_worker_nodeset_values,
     _source_worker_partition_configuration,
     _sync_persistent_mount_decisions_from_migration_entries,
+    _target_worker_nodeset_names,
+    _validate_completed_passive_populate_job_checkpoint,
+    _verify_target_rootfs_handoff_consumers,
+    _wait_for_target_slurmcluster_available,
+    _wait_for_target_worker_nodesets_ready,
     execute_soperator_migration,
     external_soperator_upgrade_protected_comparison_passed,
     external_soperator_upgrade_resume_backup_metadata,
@@ -545,6 +567,7 @@ from .soperator_onboarding import (
 )
 from .soperator_populate_jail import (
     POPULATE_JAIL_REFRESH_PHASE_ID,
+    PopulateJailSnapshot,
     active_passive_jail_rootfs_slots,
     active_passive_populate_jail_job_manifest,
     active_passive_populate_jail_job_scheduling,
@@ -2642,9 +2665,7 @@ class _SdkExternalJailSfsApi:
         from nebius.api.nebius.compute.v1 import GetFilesystemRequest
 
         with suppress_expected_refresh_logs():
-            filesystem = self._filesystem_client.get(
-                GetFilesystemRequest(id=filesystem_id)
-            ).wait()
+            filesystem = self._filesystem_client.get(GetFilesystemRequest(id=filesystem_id)).wait()
         return sdk_message_to_mapping(filesystem)
 
     def resize_filesystem(
@@ -5124,9 +5145,7 @@ def _soperator_backup_clean_metadata(
     labels = metadata.get("labels")
     if isinstance(labels, Mapping) and labels:
         cleaned["labels"] = copy.deepcopy(to_plain_data(labels))
-    cleaned_annotations = _soperator_backup_clean_metadata_annotations(
-        metadata.get("annotations")
-    )
+    cleaned_annotations = _soperator_backup_clean_metadata_annotations(metadata.get("annotations"))
     if cleaned_annotations:
         cleaned["annotations"] = cleaned_annotations
     return cleaned
@@ -5140,9 +5159,7 @@ def _soperator_backup_clean_cluster_metadata(metadata: Mapping[str, Any]) -> dic
     labels = metadata.get("labels")
     if isinstance(labels, Mapping) and labels:
         cleaned["labels"] = copy.deepcopy(to_plain_data(labels))
-    cleaned_annotations = _soperator_backup_clean_metadata_annotations(
-        metadata.get("annotations")
-    )
+    cleaned_annotations = _soperator_backup_clean_metadata_annotations(metadata.get("annotations"))
     if cleaned_annotations:
         cleaned["annotations"] = cleaned_annotations
     return cleaned
@@ -5201,9 +5218,7 @@ def _soperator_backup_sanitized_persistentvolume_for_recreation_restore(
         return {}
     metadata = sanitized.get("metadata")
     sanitized["metadata"] = (
-        _soperator_backup_clean_cluster_metadata(metadata)
-        if isinstance(metadata, Mapping)
-        else {}
+        _soperator_backup_clean_cluster_metadata(metadata) if isinstance(metadata, Mapping) else {}
     )
     sanitized.pop("status", None)
     spec = sanitized.get("spec")
@@ -5501,8 +5516,7 @@ def _soperator_backup_required_pvc_candidates(
             labels = metadata.get("labels") if isinstance(metadata, Mapping) else None
             name = _soperator_backup_metadata_name(item)
             if (
-                isinstance(labels, Mapping)
-                and labels.get("pvc.k8s.mariadb.com/role") == "storage"
+                isinstance(labels, Mapping) and labels.get("pvc.k8s.mariadb.com/role") == "storage"
             ) or (name.startswith("storage-") and name.endswith("-acct-db-0")):
                 candidates.append(name)
     candidates.append(required_name)
@@ -5649,9 +5663,7 @@ def _soperator_upgrade_collect_recreation_material(
     volume_names = sorted(
         {
             volume_name
-            for volume_name in (
-                _soperator_backup_pvc_volume_name(item) for item in pvc_items
-            )
+            for volume_name in (_soperator_backup_pvc_volume_name(item) for item in pvc_items)
             if volume_name
         }
     )
@@ -5930,15 +5942,11 @@ def _soperator_upgrade_collect_recreation_material(
     ]
     worker_volume_names = {
         volume_name
-        for volume_name in (
-            _soperator_backup_pvc_volume_name(item) for item in worker_local_pvcs
-        )
+        for volume_name in (_soperator_backup_pvc_volume_name(item) for item in worker_local_pvcs)
         if volume_name
     }
     worker_pvs = [
-        item
-        for item in pv_items
-        if _soperator_backup_metadata_name(item) in worker_volume_names
+        item for item in pv_items if _soperator_backup_metadata_name(item) in worker_volume_names
     ]
     worker_local_path = output_dir / "worker-local-pvc-pv-evidence.json"
     _soperator_upgrade_write_json(
@@ -5994,8 +6002,7 @@ def _soperator_upgrade_collect_recreation_material(
     included.append("recreation/recreation-coverage.json")
     if missing_required:
         raise RuntimeError(
-            "Soperator backup missing required recreation material: "
-            + ", ".join(missing_required)
+            "Soperator backup missing required recreation material: " + ", ".join(missing_required)
         )
     return tuple(included), coverage
 
@@ -6513,9 +6520,7 @@ def _create_restore_capable_soperator_upgrade_backup(
                 else ()
             )
             required_recreation_warnings = tuple(
-                str(item)
-                for item in recreation_coverage.get("warnings", ())
-                if str(item).strip()
+                str(item) for item in recreation_coverage.get("warnings", ()) if str(item).strip()
             )
             kubernetes_material = _SoperatorBackupKubernetesMaterial(
                 included_paths=kubernetes_material.included_paths,
@@ -6827,9 +6832,7 @@ def _soperator_restore_validate_recreation_coverage(
             f"Soperator backup archive {coverage_relative} must contain a JSON object."
         )
     items = coverage.get("items")
-    required = (
-        items.get("required_recreation_material") if isinstance(items, Mapping) else None
-    )
+    required = items.get("required_recreation_material") if isinstance(items, Mapping) else None
     if not isinstance(required, Mapping):
         raise RuntimeError(
             "Soperator restore recreation coverage is missing required_recreation_material."
@@ -6844,11 +6847,15 @@ def _soperator_restore_validate_recreation_coverage(
         )
     apply_paths = set(_soperator_restore_apply_paths(restore_plan))
     required_paths = required.get("paths")
-    missing_apply_paths = [
-        str(path)
-        for path in required_paths
-        if str(path or "").strip() and str(path) not in apply_paths
-    ] if isinstance(required_paths, list) else []
+    missing_apply_paths = (
+        [
+            str(path)
+            for path in required_paths
+            if str(path or "").strip() and str(path) not in apply_paths
+        ]
+        if isinstance(required_paths, list)
+        else []
+    )
     if missing_apply_paths:
         raise RuntimeError(
             "Soperator restore plan does not apply required recreation material: "
@@ -7056,8 +7063,7 @@ def _soperator_restore_validate_api_availability(
             missing.append(crd)
     if missing:
         raise RuntimeError(
-            "Soperator restore target is missing required Soperator CRD(s): "
-            + ", ".join(missing)
+            "Soperator restore target is missing required Soperator CRD(s): " + ", ".join(missing)
         )
 
 
@@ -7175,16 +7181,10 @@ def _format_soperator_restore_plan_lines(
     cluster_apply_paths = _soperator_restore_cluster_apply_paths(restore_plan)
     restore_material = restore_plan.get("restore_material")
     recreation_apply = (
-        restore_material.get("recreation_apply")
-        if isinstance(restore_material, Mapping)
-        else ()
+        restore_material.get("recreation_apply") if isinstance(restore_material, Mapping) else ()
     )
     recreation_runbook = restore_plan.get("recreation_runbook")
-    warnings = (
-        recreation_runbook.get("warnings")
-        if isinstance(recreation_runbook, Mapping)
-        else ()
-    )
+    warnings = recreation_runbook.get("warnings") if isinstance(recreation_runbook, Mapping) else ()
     accounting = manifest.get("accounting_db")
     accounting_bytes = accounting.get("dump_bytes") if isinstance(accounting, Mapping) else None
     lines = [
@@ -10162,9 +10162,9 @@ def _write_soperator_upgrade_report(
     populate_state_map = populate_state if isinstance(populate_state, Mapping) else {}
     populate_result = populate_state_map.get("result")
     populate_result_map = populate_result if isinstance(populate_result, Mapping) else {}
-    jail_target_image = _non_empty_text(
-        populate_result_map.get("target_image")
-    ) or _non_empty_text(target_jail_rootfs.get("target_image"))
+    jail_target_image = _non_empty_text(populate_result_map.get("target_image")) or _non_empty_text(
+        target_jail_rootfs.get("target_image")
+    )
     jail_rootfs_record = {
         "current_image": "",
         "current_version": "",
@@ -10352,13 +10352,9 @@ def _write_soperator_upgrade_report(
     manual_command = _non_empty_text(slurm_map.get("restore_manual_command"))
     if manual_command:
         slurm_lines.append(f"- Manual recovery command: `{manual_command}`")
-    partition_manual_command = _non_empty_text(
-        slurm_map.get("partition_restore_manual_command")
-    )
+    partition_manual_command = _non_empty_text(slurm_map.get("partition_restore_manual_command"))
     if partition_manual_command:
-        slurm_lines.append(
-            f"- Manual partition recovery command: `{partition_manual_command}`"
-        )
+        slurm_lines.append(f"- Manual partition recovery command: `{partition_manual_command}`")
 
     populate_jail = checkpoint.get("populate_jail_refresh")
     populate_jail_map = populate_jail if isinstance(populate_jail, Mapping) else {}
@@ -15459,7 +15455,9 @@ def _managed_soperator_mk8s_reconcile_live(
             tuple(group.raw for group in plan.all_node_groups)
         )
         if plan.compatibility_failures:
-            details = "; ".join(f"{item.node_group}: {item.reason}" for item in plan.compatibility_failures)
+            details = "; ".join(
+                f"{item.node_group}: {item.reason}" for item in plan.compatibility_failures
+            )
             return _ManagedMk8sResumeReconciliation(
                 _MANAGED_MK8S_RECONCILIATION_DRIFT_CONFLICT,
                 "Managed MK8s node-template target is no longer compatible with live "
@@ -15858,7 +15856,8 @@ def _run_managed_soperator_cluster_upgrade(
     _write_soperator_upgrade_checkpoint(checkpoint_path, checkpoint)
 
     restore_required = bool(
-        lifecycle.required and _soperator_upgrade_checkpoint_has_pending_activechecks_restore(checkpoint)
+        lifecycle.required
+        and _soperator_upgrade_checkpoint_has_pending_activechecks_restore(checkpoint)
     )
     existing_slurm_nodes = _state_mapping(checkpoint.get("slurm")).get("drained_nodes")
     slurm_restore_nodes: tuple[str, ...] = tuple(
@@ -15876,9 +15875,7 @@ def _run_managed_soperator_cluster_upgrade(
             applied_state=str(item.get("applied_state", "DOWN") or "DOWN").strip(),
         )
         for item in (
-            existing_quiesced_partitions
-            if isinstance(existing_quiesced_partitions, list)
-            else []
+            existing_quiesced_partitions if isinstance(existing_quiesced_partitions, list) else []
         )
         if isinstance(item, Mapping)
         and str(item.get("partition", "") or "").strip()
@@ -16030,10 +16027,9 @@ def _run_managed_soperator_cluster_upgrade(
             check=check,
         )
 
-    managed_kube_context = (
-        _manifest_kube_context_for_target(manifest, target.target_ref)
-        or _kube_context_name_for_target(target.target_ref)
-    )
+    managed_kube_context = _manifest_kube_context_for_target(
+        manifest, target.target_ref
+    ) or _kube_context_name_for_target(target.target_ref)
 
     def _managed_migration_runner(
         args: Sequence[str],
@@ -16052,6 +16048,13 @@ def _run_managed_soperator_cluster_upgrade(
                 and index + 1 < len(raw_args)
                 and not _non_empty_text(raw_args[index + 1])
             ):
+                index += 2
+                continue
+            if item in {"-n", "--namespace"} and index + 1 < len(raw_args):
+                namespace = raw_args[index + 1]
+                if namespace == "soperator":
+                    namespace = plan.namespace or "default"
+                command.extend((item, namespace))
                 index += 2
                 continue
             command.append(item)
@@ -16120,6 +16123,211 @@ def _run_managed_soperator_cluster_upgrade(
             expected_plan,
         )
         return staged_config, staged_paths, staged_manifest
+
+    def _restore_managed_stale_persistent_copy_writers(
+        *,
+        phase_state: dict[str, Any],
+        writer_state: dict[str, Any],
+    ) -> list[str]:
+        cleanup_errors: list[str] = []
+        cleanup_state = phase_state.setdefault("stale_persistent_copy_cleanup", {})
+        if not isinstance(cleanup_state, dict):
+            raise RuntimeError(
+                "populate-jail-refresh.stale_persistent_copy_cleanup must be a mapping."
+            )
+        try:
+            _preflight_persistent_migration_writer_restore_identity(
+                command_runner=_managed_migration_runner,
+                kube_context=managed_kube_context,
+                namespace=plan.namespace or "default",
+                state=writer_state,
+            )
+        except SoperatorMigrationPhasePending as exc:
+            cleanup_errors.append(f"persistent writer restore preflight failed: {exc}")
+            cleanup_state.update(
+                {
+                    "status": "pending",
+                    "checked_at": _soperator_upgrade_now_iso(),
+                    "identity_drift": [
+                        {
+                            "kind": "slurmcluster-maintenance",
+                            "reason": str(exc),
+                        }
+                    ],
+                    "errors": list(cleanup_errors),
+                }
+            )
+            populate_checkpoint = checkpoint.setdefault("populate_jail_refresh", {})
+            if not isinstance(populate_checkpoint, dict):
+                raise RuntimeError(
+                    "populate_jail_refresh checkpoint state must be a mapping."
+                ) from exc
+            populate_checkpoint["stale_persistent_copy_cleanup"] = copy.deepcopy(
+                to_plain_data(cleanup_state)
+            )
+            _checkpoint("populate-jail-refresh-stale-persistent-copy-identity-blocked")
+            return cleanup_errors
+        binding_drift = _persistent_migration_writer_hold_drift(
+            command_runner=_managed_migration_runner,
+            kube_context=managed_kube_context,
+            namespace=plan.namespace or "default",
+            state=writer_state,
+        )
+        identity_drift = [
+            item
+            for item in binding_drift
+            if str(item.get("kind") or "").strip() == "slurmcluster-maintenance"
+            and str(item.get("reason") or "").strip()
+            in {
+                "resource identity missing",
+                "checkpointed writer resource is missing",
+                "checkpointed writer SlurmCluster UID changed",
+            }
+        ]
+        if identity_drift:
+            cleanup_errors.append(
+                "persistent writer restore failed: immutable target SlurmCluster "
+                "identity no longer matches the checkpoint"
+            )
+            cleanup_state.update(
+                {
+                    "status": "pending",
+                    "checked_at": _soperator_upgrade_now_iso(),
+                    "identity_drift": [dict(item) for item in identity_drift],
+                    "errors": list(cleanup_errors),
+                }
+            )
+            populate_checkpoint = checkpoint.setdefault("populate_jail_refresh", {})
+            if not isinstance(populate_checkpoint, dict):
+                raise RuntimeError("populate_jail_refresh checkpoint state must be a mapping.")
+            populate_checkpoint["stale_persistent_copy_cleanup"] = copy.deepcopy(
+                to_plain_data(cleanup_state)
+            )
+            _checkpoint("populate-jail-refresh-stale-persistent-copy-identity-blocked")
+            return cleanup_errors
+        original_maintenance = _persistent_migration_original_maintenance(writer_state)
+        original_values = _soperator_row_values_snapshot()
+        original_jail_rootfs = copy.deepcopy(original_values.get("jailRootfs"))
+        cleanup_state.update(
+            {
+                "status": "restoring-desired-maintenance",
+                "checked_at": _soperator_upgrade_now_iso(),
+                "desired_state": {
+                    "status": "pending",
+                    "maintenance": original_maintenance,
+                },
+            }
+        )
+        cleanup_state.pop("errors", None)
+        populate_checkpoint = checkpoint.setdefault("populate_jail_refresh", {})
+        if not isinstance(populate_checkpoint, dict):
+            raise RuntimeError("populate_jail_refresh checkpoint state must be a mapping.")
+        populate_checkpoint["stale_persistent_copy_cleanup"] = copy.deepcopy(
+            to_plain_data(cleanup_state)
+        )
+        _checkpoint("populate-jail-refresh-stale-persistent-copy-desired-restore-started")
+        try:
+            restored_values = copy.deepcopy(original_values)
+            restored_values["maintenance"] = original_maintenance
+            _set_soperator_row_values(restored_values)
+            _render_validate_apply_soperator_stage(
+                update_message="stale persistent-migration steady-state writer restoration",
+                validation_title="Validate restored Soperator steady-state writer configuration",
+                expected_plan=plan,
+            )
+            persisted_payload = _load_source_payload(config_path)
+            persisted_values = _state_mapping(
+                _source_helm_chart_row(persisted_payload, target).get("values")
+            )
+            persisted_maintenance = str(persisted_values.get("maintenance") or "none").strip()
+            if persisted_maintenance != original_maintenance:
+                raise RuntimeError(
+                    "persisted Soperator maintenance did not restore the checkpointed "
+                    "steady-state value"
+                )
+            if to_plain_data(persisted_values.get("jailRootfs")) != to_plain_data(
+                original_jail_rootfs
+            ):
+                raise RuntimeError(
+                    "persisted Soperator writer cleanup changed the checkpointed jail "
+                    "rootfs slot configuration"
+                )
+            cleanup_state["desired_state"] = {
+                "status": "restored",
+                "maintenance": original_maintenance,
+                "verified_at": _soperator_upgrade_now_iso(),
+            }
+        except Exception as exc:
+            cleanup_errors.append(f"persistent desired-state writer restore failed: {exc}")
+            cleanup_state["desired_state"] = {
+                "status": "pending",
+                "maintenance": original_maintenance,
+                "error": str(exc),
+            }
+        if not cleanup_errors and writer_state.get("status") in {"holding", "held", "restored"}:
+            try:
+                _restore_persistent_migration_writers(
+                    command_runner=_managed_migration_runner,
+                    kube_context=managed_kube_context,
+                    namespace=plan.namespace or "default",
+                    state=writer_state,
+                )
+                phase_state["persistent_migration_writer_hold"] = dict(writer_state)
+                _wait_for_target_slurmcluster_available(
+                    command_runner=_managed_migration_runner,
+                    kube_context=managed_kube_context,
+                    target_ref=target.target_ref,
+                    namespace=plan.namespace or "default",
+                    timeout_seconds=900,
+                )
+                _wait_for_target_worker_nodesets_ready(
+                    command_runner=_managed_migration_runner,
+                    kube_context=managed_kube_context,
+                    values=_soperator_row_values_snapshot(),
+                    namespace=plan.namespace or "default",
+                    timeout_seconds=1800,
+                )
+                wait_for_login_statefulset_rollout_with_ready_endpoint_guard(
+                    _populate_jail_runner,
+                    namespace=plan.namespace or "default",
+                    target_ref=target.target_ref,
+                    kube_context=managed_kube_context or None,
+                )
+                consumer_checks = _verify_target_rootfs_handoff_consumers(
+                    command_runner=_managed_migration_runner,
+                    kube_context=managed_kube_context,
+                    values=restored_values,
+                    namespace=plan.namespace or "default",
+                )
+                cleanup_state["consumer_checks"] = consumer_checks
+                if any(check.get("status") != "verified" for check in consumer_checks):
+                    raise SoperatorMigrationPhasePending(
+                        _rootfs_handoff_pending_reason(consumer_checks)
+                    )
+                cleanup_state["readiness_verified_at"] = _soperator_upgrade_now_iso()
+            except Exception as exc:
+                cleanup_errors.append(f"persistent writer restore failed: {exc}")
+        elif not cleanup_errors:
+            cleanup_errors.append(
+                "persistent writer restore failed: checkpointed writer hold state is not restorable"
+            )
+        cleanup_state.update(
+            {
+                "status": "pending" if cleanup_errors else "restored",
+                "checked_at": _soperator_upgrade_now_iso(),
+                **({"errors": cleanup_errors} if cleanup_errors else {}),
+            }
+        )
+        if not cleanup_errors:
+            cleanup_state.pop("errors", None)
+        populate_checkpoint["persistent_migration_writer_hold"] = copy.deepcopy(
+            to_plain_data(writer_state)
+        )
+        populate_checkpoint["stale_persistent_copy_cleanup"] = copy.deepcopy(
+            to_plain_data(cleanup_state)
+        )
+        _checkpoint("populate-jail-refresh-stale-persistent-copy-cleanup-checked")
+        return cleanup_errors
 
     def _activechecks_source_value_checks(*, suspended: bool) -> list[Mapping[str, str]]:
         row = _source_helm_chart_row(source_payload, target)
@@ -16319,6 +16527,50 @@ def _run_managed_soperator_cluster_upgrade(
             slurm_state["held_job_release_manual_command"] = None
         _write_soperator_upgrade_checkpoint(checkpoint_path, checkpoint)
 
+    def _restore_managed_slurm_before_post_jail_smoke(
+        *,
+        phase_state: dict[str, Any],
+    ) -> list[str]:
+        nonlocal slurm_quiesce_records, slurm_restore_nodes
+        restored_partitions = tuple(slurm_quiesce_records)
+        restored_nodes = tuple(slurm_restore_nodes)
+        lines: list[str] = []
+        if restored_partitions:
+            _soperator_upgrade_restore_slurm_partitions(
+                namespace=plan.namespace or "default",
+                records=restored_partitions,
+                kube_context=managed_kube_context or None,
+            )
+            _record_slurm_decision(
+                {
+                    "at": _soperator_upgrade_now_iso(),
+                    "action": "scheduling-quiesce-restored",
+                    "partitions": [record.as_payload() for record in restored_partitions],
+                    "reason": "post-Jail managed Slurm submission smoke",
+                }
+            )
+            lines.append("Slurm partitions restored before post-Jail live submission smoke.")
+        if restored_nodes:
+            _soperator_upgrade_restore_slurm_nodes(
+                namespace=plan.namespace or "default",
+                node_names=restored_nodes,
+                kube_context=managed_kube_context or None,
+            )
+            slurm_restore_nodes = ()
+            slurm_state = checkpoint.setdefault("slurm", {})
+            if isinstance(slurm_state, dict):
+                slurm_state["drained_nodes"] = []
+                slurm_state["restore_manual_command"] = None
+            lines.append("Slurm nodes resumed before post-Jail live submission smoke.")
+        if restored_partitions or restored_nodes:
+            phase_state["slurm_restored_before_smoke_at"] = _soperator_upgrade_now_iso()
+            phase_state["slurm_restored_before_smoke"] = {
+                "partitions": [record.partition for record in restored_partitions],
+                "nodes": list(restored_nodes),
+            }
+            _checkpoint("populate-jail-refresh-slurm-restored-before-smoke")
+        return lines
+
     soperator_worker_job_policy_checked = False
     staged_config, staged_paths, staged_manifest = generated_config, paths, manifest
     pre_fingerprint: _SoperatorUpgradeConfigFingerprint | None = None
@@ -16343,6 +16595,7 @@ def _run_managed_soperator_cluster_upgrade(
         _set_phase("soperator-worker-job-policy", phase_comment)
         worker_slurm_nodes = _soperator_upgrade_slurm_nodes_for_worker_nodesets(
             namespace=plan.namespace or "default",
+            kube_context=managed_kube_context or None,
         )
         if worker_slurm_nodes:
             drained_nodes = _handle_soperator_upgrade_running_jobs(
@@ -16354,6 +16607,7 @@ def _run_managed_soperator_cluster_upgrade(
                 wait_timeout_seconds=job_wait_timeout_seconds,
                 refresh_interval_seconds=job_refresh_interval_seconds,
                 checkpoint_id=checkpoint_id,
+                kube_context=managed_kube_context or None,
                 decision_recorder=_record_slurm_decision,
             )
             _record_slurm_restore_nodes(
@@ -16571,7 +16825,9 @@ def _run_managed_soperator_cluster_upgrade(
                     ),
                     stage_fast_verification_check(
                         "Backup archive SHA256",
-                        "passed" if _non_empty_text(checkpoint["backup"].get("sha256")) else "failed",
+                        "passed"
+                        if _non_empty_text(checkpoint["backup"].get("sha256"))
+                        else "failed",
                         str(checkpoint["backup"].get("sha256") or "missing"),
                     ),
                     stage_fast_verification_check(
@@ -16715,6 +16971,7 @@ def _run_managed_soperator_cluster_upgrade(
                     wait_timeout_seconds=job_wait_timeout_seconds,
                     refresh_interval_seconds=job_refresh_interval_seconds,
                     checkpoint_id=checkpoint_id,
+                    kube_context=managed_kube_context or None,
                     slurm_scheduling_quiesce=slurm_scheduling_quiesce,
                     decision_recorder=_record_slurm_decision,
                 )
@@ -16744,9 +17001,7 @@ def _run_managed_soperator_cluster_upgrade(
                             if bool(slurm_map.get("scheduling_quiesce"))
                             == bool(slurm_scheduling_quiesce)
                             else "failed",
-                            "enabled"
-                            if slurm_scheduling_quiesce
-                            else "disabled",
+                            "enabled" if slurm_scheduling_quiesce else "disabled",
                         ),
                     ],
                 )
@@ -16887,8 +17142,7 @@ def _run_managed_soperator_cluster_upgrade(
                 _run_stage_fast_verification(
                     phase_id="post-mk8s-validation",
                     summary=(
-                        "Post-MK8s Soperator validation and protected config "
-                        "comparison completed."
+                        "Post-MK8s Soperator validation and protected config comparison completed."
                     ),
                     checks=[
                         stage_fast_verification_check(
@@ -16907,7 +17161,9 @@ def _run_managed_soperator_cluster_upgrade(
         else:
             _skip_checkpoint_phase("slurm-job-drain", "MK8s node-template change not requested")
             _skip_checkpoint_phase("mk8s-node-template", "MK8s node-template change not requested")
-            _skip_checkpoint_phase("post-mk8s-validation", "MK8s node-template change not requested")
+            _skip_checkpoint_phase(
+                "post-mk8s-validation", "MK8s node-template change not requested"
+            )
 
         chart_state = _soperator_upgrade_phase_state(checkpoint, "soperator-chart")
         populate_jail_before = _inspect_populate_jail()
@@ -17037,6 +17293,59 @@ def _run_managed_soperator_cluster_upgrade(
                     include_default_shared_mounts=managed_first_adoption,
                     legacy_active_source=managed_first_adoption,
                 )
+                managed_legacy_jail_pvc = legacy_jail_pvc_name(steady_values)
+                if managed_first_adoption:
+                    pvc_result = _managed_migration_runner(
+                        _managed_kubectl_command(
+                            "-n",
+                            plan.namespace or "default",
+                            "get",
+                            f"pvc/{managed_legacy_jail_pvc}",
+                            "-o",
+                            "json",
+                        ),
+                        timeout_seconds=120,
+                        check=False,
+                    )
+                    if pvc_result.returncode != 0:
+                        raise SoperatorMigrationPhasePending(
+                            "managed first-adoption Jail Upgrade could not read the resolved "
+                            f"legacy jail PVC {managed_legacy_jail_pvc!r}."
+                        )
+                    try:
+                        pvc_payload = json.loads(pvc_result.stdout or "{}")
+                    except json.JSONDecodeError as exc:
+                        raise SoperatorMigrationPhasePending(
+                            "managed first-adoption legacy jail PVC lookup returned invalid JSON."
+                        ) from exc
+                    managed_legacy_jail_pvc_uid = str(
+                        _state_mapping(pvc_payload.get("metadata")).get("uid") or ""
+                    ).strip()
+                    if not managed_legacy_jail_pvc_uid:
+                        raise SoperatorMigrationPhasePending(
+                            "managed first-adoption legacy jail PVC has no immutable UID."
+                        )
+                    checkpointed_legacy_jail_pvc_uid = str(
+                        phase_state.get("legacy_jail_pvc_uid") or ""
+                    ).strip()
+                    if (
+                        checkpointed_legacy_jail_pvc_uid
+                        and checkpointed_legacy_jail_pvc_uid != managed_legacy_jail_pvc_uid
+                    ):
+                        raise SoperatorMigrationPhasePending(
+                            "managed first-adoption legacy jail PVC identity changed after "
+                            "it was checkpointed. Refusing source probe or copy."
+                        )
+                    phase_state["legacy_jail_pvc"] = managed_legacy_jail_pvc
+                    phase_state["legacy_jail_pvc_uid"] = managed_legacy_jail_pvc_uid
+                    checkpoint["populate_jail_refresh"]["legacy_jail_pvc"] = managed_legacy_jail_pvc
+                    checkpoint["populate_jail_refresh"]["legacy_jail_pvc_uid"] = (
+                        managed_legacy_jail_pvc_uid
+                    )
+                    _checkpoint(
+                        "populate-jail-refresh-legacy-jail-pvc-bound",
+                        pvc=managed_legacy_jail_pvc,
+                    )
                 mount_status = jail_persistent_mount_status(steady_values)
                 decisions = [
                     dict(decision)
@@ -17062,6 +17371,14 @@ def _run_managed_soperator_cluster_upgrade(
                     "first_adoption": managed_first_adoption,
                     "decisions": decisions,
                 }
+                checkpointed_persistent_mount_state = dict(
+                    _state_mapping(phase_state.get("persistent_jail_mounts"))
+                )
+                if checkpointed_persistent_mount_state.get("first_adoption") is True:
+                    persistent_mount_state["first_adoption"] = True
+                    checkpointed_decisions = checkpointed_persistent_mount_state.get("decisions")
+                    if isinstance(checkpointed_decisions, list):
+                        persistent_mount_state["decisions"] = copy.deepcopy(checkpointed_decisions)
                 checkpoint["persistent_jail_mounts"] = persistent_mount_state
                 phase_state["persistent_jail_mounts"] = copy.deepcopy(
                     to_plain_data(persistent_mount_state)
@@ -17083,28 +17400,66 @@ def _run_managed_soperator_cluster_upgrade(
                     )
                 refreshed_snapshot = None
                 maintenance_restored = True
+                checkpointed_rootfs_slots = dict(_state_mapping(phase_state.get("rootfs_slots")))
+                checkpointed_legacy_active_rootfs = bool(phase_state.get("legacy_active_rootfs"))
                 slots = active_passive_jail_rootfs_slots(steady_values)
                 job_scheduling = active_passive_populate_jail_job_scheduling(
                     steady_values,
                     target_ref=target.target_ref,
                 )
                 phase_state["rootfs_strategy"] = "activePassive"
-                phase_state["rootfs_slots"] = slots.as_payload()
-                phase_state["legacy_active_rootfs"] = managed_first_adoption
+                if not checkpointed_rootfs_slots:
+                    checkpointed_rootfs_slots = slots.as_payload()
+                    phase_state["rootfs_slots"] = copy.deepcopy(checkpointed_rootfs_slots)
+                phase_state.setdefault(
+                    "legacy_active_rootfs",
+                    managed_first_adoption,
+                )
                 phase_state["login_session_policy"] = login_session_policy
                 phase_state["login_session_drain_timeout_seconds"] = (
                     login_session_drain_timeout_seconds
                 )
-                checkpoint["populate_jail_refresh"]["rootfs_slots"] = slots.as_payload()
-
-                legacy_migration_entries = _legacy_persistent_mount_migration_entries(
-                    steady_values
+                checkpoint["populate_jail_refresh"]["rootfs_slots"] = copy.deepcopy(
+                    checkpointed_rootfs_slots
                 )
+
+                legacy_migration_entries = _legacy_persistent_mount_migration_entries(steady_values)
+                maintenance_restored = not legacy_migration_entries
                 existing_migration_state = dict(
                     _state_mapping(phase_state.get("legacy_persistent_mount_migration"))
                 )
                 migration_status = str(existing_migration_state.get("status") or "").strip()
-                if migration_status == "completed":
+                if migration_status == "stale-after-writer-drift":
+                    stale_writer_state = phase_state.setdefault(
+                        "persistent_migration_writer_hold", {}
+                    )
+                    if not isinstance(stale_writer_state, dict):
+                        raise RuntimeError(
+                            "populate-jail-refresh.persistent_migration_writer_hold must "
+                            "be a mapping."
+                        )
+                    cleanup_errors = _restore_managed_stale_persistent_copy_writers(
+                        phase_state=phase_state,
+                        writer_state=stale_writer_state,
+                    )
+                    if cleanup_errors:
+                        raise SoperatorMigrationPhasePending(
+                            "managed persistent mount migration copy is stale after "
+                            "writer-hold drift, and steady-state writer cleanup remains "
+                            "pending: "
+                            + "; ".join(cleanup_errors)
+                            + ". Rerun the same command to retry cleanup before manual "
+                            "reconciliation."
+                        )
+                    raise SoperatorMigrationPhasePending(
+                        "managed persistent mount migration copy may be stale after "
+                        "checkpointed writer-hold drift. cxcli restored steady-state "
+                        "writers but will not reuse or overwrite the shared copy "
+                        "automatically. Reconcile the legacy source, shared target, "
+                        "completion markers, and checkpoint under an approved maintenance "
+                        "window before rerunning."
+                    )
+                if migration_status in {"completed", "running"}:
                     completed_entries = existing_migration_state.get("entries")
                     legacy_migration_entries = tuple(
                         dict(entry)
@@ -17126,26 +17481,340 @@ def _run_managed_soperator_cluster_upgrade(
                     "status": migration_status,
                     "entries": (
                         existing_migration_state.get("entries")
-                        if migration_status == "completed"
+                        if migration_status in {"completed", "running"}
                         else [dict(to_plain_data(entry)) for entry in legacy_migration_entries]
                     ),
                 }
-                checkpoint["populate_jail_refresh"]["legacy_active_rootfs"] = (
-                    managed_first_adoption
+                checkpoint["populate_jail_refresh"]["legacy_active_rootfs"] = bool(
+                    phase_state.get("legacy_active_rootfs")
                 )
                 checkpoint["populate_jail_refresh"]["legacy_persistent_mount_migration"] = (
-                    copy.deepcopy(
-                        to_plain_data(phase_state["legacy_persistent_mount_migration"])
-                    )
+                    copy.deepcopy(to_plain_data(phase_state["legacy_persistent_mount_migration"]))
                 )
+                writer_hold_state = phase_state.setdefault(
+                    "persistent_migration_writer_hold",
+                    {},
+                )
+                if not isinstance(writer_hold_state, dict):
+                    raise RuntimeError(
+                        "populate-jail-refresh.persistent_migration_writer_hold must be a mapping."
+                    )
+                checkpointed_passive_slot = str(
+                    checkpointed_rootfs_slots.get("passive_slot") or ""
+                ).strip()
+                managed_switch_checkpointed = bool(
+                    str(phase_state.get("consumer_switch_applied_at") or "").strip()
+                    or (
+                        checkpointed_passive_slot
+                        and str(phase_state.get("active_slot") or "").strip()
+                        == checkpointed_passive_slot
+                    )
+                    or _state_mapping(phase_state.get("rootfs_handoff_verification"))
+                )
+                managed_attempt_started = bool(
+                    _state_mapping(phase_state.get("passive_slot_populate_job"))
+                    or str(phase_state.get("job_completed_at") or "").strip()
+                    or managed_switch_checkpointed
+                    or _state_mapping(phase_state.get("post_jail_slurm_smoke"))
+                )
+                managed_resume_binding_error = ""
+                managed_resume_consumer_state = "not-started"
+                managed_resume_switched_values: dict[str, Any] | None = None
+                managed_resume_pre_switch_values: dict[str, Any] | None = None
+                managed_resume_switched_checks: list[dict[str, Any]] = []
+                managed_completed_job_snapshot: PopulateJailSnapshot | None = None
+                recorded_slots_binding = {
+                    key: str(checkpointed_rootfs_slots.get(key) or "").strip()
+                    for key in (
+                        "active_slot",
+                        "passive_slot",
+                        "active_volume_source",
+                        "passive_volume_source",
+                        "active_pvc",
+                        "passive_pvc",
+                    )
+                }
+                current_slots_for_binding = active_passive_jail_rootfs_slots(steady_values)
+                current_slots_binding = {
+                    key: str(current_slots_for_binding.as_payload().get(key) or "").strip()
+                    for key in recorded_slots_binding
+                }
+                if current_slots_for_binding.active_slot == recorded_slots_binding["active_slot"]:
+                    expected_current_slots_binding = recorded_slots_binding
+                elif (
+                    managed_attempt_started
+                    and current_slots_for_binding.active_slot
+                    == recorded_slots_binding["passive_slot"]
+                ):
+                    expected_current_slots_binding = {
+                        "active_slot": recorded_slots_binding["passive_slot"],
+                        "passive_slot": recorded_slots_binding["active_slot"],
+                        "active_volume_source": recorded_slots_binding["passive_volume_source"],
+                        "passive_volume_source": recorded_slots_binding["active_volume_source"],
+                        "active_pvc": recorded_slots_binding["passive_pvc"],
+                        "passive_pvc": recorded_slots_binding["active_pvc"],
+                    }
+                else:
+                    expected_current_slots_binding = {}
+                if (
+                    not all(recorded_slots_binding.values())
+                    or not expected_current_slots_binding
+                    or current_slots_binding != expected_current_slots_binding
+                ):
+                    raise SoperatorMigrationPhasePending(
+                        "managed Jail Upgrade found PVC or volume-source drift inside the "
+                        "checkpointed active/passive slot binding. No source probe, capacity "
+                        "resize, populate Job, or slot switch was attempted."
+                    )
+                if managed_attempt_started:
+                    recorded_active_slot = str(
+                        checkpointed_rootfs_slots.get("active_slot") or ""
+                    ).strip()
+                    recorded_passive_slot = str(
+                        checkpointed_rootfs_slots.get("passive_slot") or ""
+                    ).strip()
+                    current_slots = active_passive_jail_rootfs_slots(steady_values)
+                    recorded_slots_payload = {
+                        key: str(checkpointed_rootfs_slots.get(key) or "").strip()
+                        for key in (
+                            "active_slot",
+                            "passive_slot",
+                            "active_volume_source",
+                            "passive_volume_source",
+                            "active_pvc",
+                            "passive_pvc",
+                        )
+                    }
+                    current_slots_payload = {
+                        key: str(current_slots.as_payload().get(key) or "").strip()
+                        for key in recorded_slots_payload
+                    }
+                    if (
+                        not recorded_active_slot
+                        or not recorded_passive_slot
+                        or recorded_active_slot == recorded_passive_slot
+                        or not all(recorded_slots_payload.values())
+                    ):
+                        managed_resume_binding_error = (
+                            "managed Jail Upgrade resume lacks its immutable active/passive "
+                            "slot binding"
+                        )
+                    elif current_slots.active_slot == recorded_active_slot:
+                        expected_slots_payload = recorded_slots_payload
+                        managed_resume_pre_switch_values = copy.deepcopy(steady_values)
+                        managed_resume_switched_values = switch_active_passive_jail_rootfs_values(
+                            steady_values
+                        )
+                    elif current_slots.active_slot == recorded_passive_slot:
+                        expected_slots_payload = {
+                            "active_slot": recorded_slots_payload["passive_slot"],
+                            "passive_slot": recorded_slots_payload["active_slot"],
+                            "active_volume_source": recorded_slots_payload["passive_volume_source"],
+                            "passive_volume_source": recorded_slots_payload["active_volume_source"],
+                            "active_pvc": recorded_slots_payload["passive_pvc"],
+                            "passive_pvc": recorded_slots_payload["active_pvc"],
+                        }
+                        managed_resume_switched_values = copy.deepcopy(steady_values)
+                        managed_resume_pre_switch_values = switch_active_passive_jail_rootfs_values(
+                            steady_values
+                        )
+                    else:
+                        expected_slots_payload = {}
+                    if not managed_resume_binding_error and (
+                        not expected_slots_payload
+                        or current_slots_payload != expected_slots_payload
+                    ):
+                        managed_resume_binding_error = (
+                            "managed Jail Upgrade resume found PVC or volume-source drift "
+                            "inside the checkpointed active/passive slot binding"
+                        )
+                    if (
+                        not managed_resume_binding_error
+                        and managed_resume_switched_values is not None
+                        and managed_resume_pre_switch_values is not None
+                    ):
+                        managed_resume_switched_checks = _verify_target_rootfs_handoff_consumers(
+                            command_runner=_managed_migration_runner,
+                            kube_context=managed_kube_context,
+                            values=managed_resume_switched_values,
+                            namespace=plan.namespace or "default",
+                        )
+                        managed_resume_pre_switch_checks = _verify_target_rootfs_handoff_consumers(
+                            command_runner=_managed_migration_runner,
+                            kube_context=managed_kube_context,
+                            values=managed_resume_pre_switch_values,
+                            namespace=plan.namespace or "default",
+                        )
+                        switched_rootfs = tuple(
+                            bool(check.get("rootfs_observed"))
+                            for check in managed_resume_switched_checks
+                        )
+                        pre_switch_rootfs = tuple(
+                            bool(check.get("rootfs_observed"))
+                            for check in managed_resume_pre_switch_checks
+                        )
+                        live_switched = (
+                            bool(managed_resume_switched_checks)
+                            and all(switched_rootfs)
+                            and not any(pre_switch_rootfs)
+                        )
+                        live_pre_switch = (
+                            bool(managed_resume_pre_switch_checks)
+                            and all(pre_switch_rootfs)
+                            and not any(switched_rootfs)
+                        )
+                        managed_resume_consumer_state = (
+                            "switched"
+                            if live_switched
+                            else "pre-switch"
+                            if live_pre_switch
+                            else "uncertain"
+                        )
+                        phase_state["post_switch_resume_detection"] = {
+                            "status": managed_resume_consumer_state,
+                            "checkpointed_switch": managed_switch_checkpointed,
+                            "switched_consumer_count": sum(switched_rootfs),
+                            "pre_switch_consumer_count": sum(pre_switch_rootfs),
+                            "consumer_count": len(managed_resume_switched_checks),
+                            "checked_at": _soperator_upgrade_now_iso(),
+                        }
+                        _checkpoint("populate-jail-refresh-post-switch-resume-detected")
+                hold_failure_reason = ""
+                if (
+                    migration_status in {"running", "completed"}
+                    and managed_resume_consumer_state != "switched"
+                ):
+                    if writer_hold_state.get("status") != "held":
+                        hold_failure_reason = (
+                            "a checkpointed persistent copy no longer has a continuously held "
+                            "writer boundary"
+                        )
+                    else:
+                        resume_hold_drift = _persistent_migration_writer_hold_drift(
+                            command_runner=_managed_migration_runner,
+                            kube_context=managed_kube_context,
+                            namespace=plan.namespace or "default",
+                            state=writer_hold_state,
+                        )
+                        if resume_hold_drift:
+                            writer_hold_state["drift_detected_at"] = _soperator_upgrade_now_iso()
+                            writer_hold_state["drift_boundary"] = "resume before source probe"
+                            writer_hold_state["drift"] = [dict(item) for item in resume_hold_drift]
+                            hold_failure_reason = (
+                                "checkpointed writers were not continuously held when the "
+                                "upgrade resumed"
+                            )
+                if hold_failure_reason:
+                    migration_state = phase_state.setdefault(
+                        "legacy_persistent_mount_migration", {}
+                    )
+                    if not isinstance(migration_state, dict):
+                        raise RuntimeError(
+                            "populate-jail-refresh.legacy_persistent_mount_migration must be "
+                            "a mapping."
+                        )
+                    migration_state["status"] = "stale-after-writer-drift"
+                    migration_state["stale_at"] = _soperator_upgrade_now_iso()
+                    migration_state["stale_boundary"] = "resume before source probe"
+                    migration_state["stale_reason"] = hold_failure_reason
+                    phase_state["persistent_migration_failure_boundary"] = {
+                        "status": "manual-reconciliation-required",
+                        "boundary": "resume before source probe",
+                        "reason": (
+                            "persistent copy may be stale after writer-hold drift; source "
+                            "probe, capacity resize, and automatic marker reuse are blocked"
+                        ),
+                    }
+                    checkpoint["populate_jail_refresh"]["legacy_persistent_mount_migration"] = (
+                        copy.deepcopy(to_plain_data(migration_state))
+                    )
+                    checkpoint["populate_jail_refresh"]["persistent_migration_writer_hold"] = (
+                        copy.deepcopy(to_plain_data(writer_hold_state))
+                    )
+                    _checkpoint("populate-jail-refresh-persistent-migration-resume-hold-drifted")
+                    cleanup_errors = _restore_managed_stale_persistent_copy_writers(
+                        phase_state=phase_state,
+                        writer_state=writer_hold_state,
+                    )
+                    raise SoperatorMigrationPhasePending(
+                        "checkpointed managed persistent-migration writers were not "
+                        "continuously held when the upgrade resumed. Source probing, "
+                        "capacity resize, and automatic marker reuse were blocked pending "
+                        "manual reconciliation."
+                        + (
+                            " Steady-state cleanup remains pending: " + "; ".join(cleanup_errors)
+                            if cleanup_errors
+                            else ""
+                        )
+                    )
+                managed_job_completed = bool(str(phase_state.get("job_completed_at") or "").strip())
+                if managed_attempt_started:
+                    if managed_resume_binding_error:
+                        raise SoperatorMigrationPhasePending(
+                            managed_resume_binding_error
+                            + "; no source probe, capacity resize, populate Job, or slot "
+                            "switch was attempted."
+                        )
+                    if managed_resume_consumer_state == "uncertain":
+                        raise SoperatorMigrationPhasePending(
+                            "managed Jail Upgrade resume found mixed or uncertain live "
+                            "login/worker rootfs consumers. No source probe, capacity resize, "
+                            "populate Job, or slot switch was attempted."
+                        )
+                    if managed_resume_pre_switch_values is None:
+                        raise SoperatorMigrationPhasePending(
+                            "managed Jail Upgrade resume could not reconstruct the immutable "
+                            "pre-switch values."
+                        )
+                    recovery_slots = active_passive_jail_rootfs_slots(
+                        managed_resume_pre_switch_values
+                    )
+                    recovery_manifest = active_passive_populate_jail_job_manifest(
+                        namespace=plan.namespace or "default",
+                        target_ref=target.target_ref,
+                        image=populate_image,
+                        passive_slot=recovery_slots.passive_slot,
+                        passive_pvc=recovery_slots.passive_pvc,
+                        image_pull_policy=str(
+                            _state_mapping(steady_values.get("populateJail")).get("imagePullPolicy")
+                            or "IfNotPresent"
+                        ),
+                        scheduling=job_scheduling,
+                    )
+                    if managed_resume_consumer_state == "switched" or managed_job_completed:
+                        recovery_job = _state_mapping(phase_state.get("passive_slot_populate_job"))
+                        managed_completed_job_snapshot = (
+                            _validate_completed_passive_populate_job_checkpoint(
+                                command_runner=_managed_migration_runner,
+                                kube_context=managed_kube_context,
+                                namespace=plan.namespace or "default",
+                                existing=recovery_job,
+                                manifest=recovery_manifest,
+                                slot=recovery_slots.passive_slot,
+                                pvc=recovery_slots.passive_pvc,
+                                image=populate_image,
+                                completed_at=phase_state.get("job_completed_at"),
+                                target_ref=target.target_ref,
+                                expected_pvc_uid=str(recovery_job.get("pvc_uid") or ""),
+                            )
+                        )
                 if legacy_migration_entries and migration_status != "completed":
+                    checkpointed_migration_entries = tuple(
+                        item
+                        for item in _state_list(
+                            _state_mapping(
+                                phase_state.get("legacy_persistent_mount_migration")
+                            ).get("entries")
+                        )
+                        if isinstance(item, Mapping)
+                    )
                     source_probe_entries = _probe_legacy_persistent_mount_sources(
                         command_runner=_managed_migration_runner,
                         kube_context=managed_kube_context,
                         target_ref=target.target_ref,
                         namespace=plan.namespace or "default",
                         image=populate_image,
-                        jail_pvc="jail-pvc",
+                        jail_pvc=managed_legacy_jail_pvc,
                         entries=legacy_migration_entries,
                         scheduling=job_scheduling,
                     )
@@ -17170,32 +17839,65 @@ def _run_managed_soperator_cluster_upgrade(
                             next_entry["source_status"] = "unknown"
                         updated_entries.append(next_entry)
                     legacy_migration_entries = tuple(updated_entries)
+                    _require_persistent_mount_reprobe_binding(
+                        migration_status=migration_status,
+                        checkpointed_entries=checkpointed_migration_entries,
+                        probed_entries=legacy_migration_entries,
+                    )
                     phase_state["legacy_persistent_mount_source_probe"] = {
                         "status": "completed",
                         "probed_at": _soperator_upgrade_now_iso(),
                         "entries": [dict(entry) for entry in source_probe_entries],
                     }
                     phase_state["legacy_persistent_mount_migration"] = {
-                        **dict(_state_mapping(phase_state.get("legacy_persistent_mount_migration"))),
+                        **dict(
+                            _state_mapping(phase_state.get("legacy_persistent_mount_migration"))
+                        ),
                         "entries": [dict(entry) for entry in legacy_migration_entries],
                     }
                     _sync_persistent_mount_decisions_from_migration_entries(
                         checkpoint,
                         legacy_migration_entries,
                     )
-                    checkpoint["populate_jail_refresh"][
-                        "legacy_persistent_mount_source_probe"
-                    ] = copy.deepcopy(
-                        to_plain_data(phase_state["legacy_persistent_mount_source_probe"])
+                    checkpoint["populate_jail_refresh"]["legacy_persistent_mount_source_probe"] = (
+                        copy.deepcopy(
+                            to_plain_data(phase_state["legacy_persistent_mount_source_probe"])
+                        )
                     )
-                    checkpoint["populate_jail_refresh"][
-                        "legacy_persistent_mount_migration"
-                    ] = copy.deepcopy(
-                        to_plain_data(phase_state["legacy_persistent_mount_migration"])
+                    checkpoint["populate_jail_refresh"]["legacy_persistent_mount_migration"] = (
+                        copy.deepcopy(
+                            to_plain_data(phase_state["legacy_persistent_mount_migration"])
+                        )
                     )
                     _checkpoint("populate-jail-refresh-persistent-source-probed")
 
                 legacy_active_rootfs = bool(managed_first_adoption or legacy_migration_entries)
+                managed_live_switch_recovered_before_capacity = bool(
+                    managed_attempt_started
+                    and managed_resume_consumer_state == "switched"
+                    and managed_completed_job_snapshot is not None
+                )
+                managed_config_ahead_live_pre_switch = bool(
+                    managed_attempt_started
+                    and managed_resume_consumer_state == "pre-switch"
+                    and managed_completed_job_snapshot is not None
+                )
+                managed_switch_recovery_snapshot = managed_completed_job_snapshot
+                managed_resume_incomplete_pre_switch = bool(
+                    managed_attempt_started
+                    and managed_resume_consumer_state == "pre-switch"
+                    and managed_completed_job_snapshot is None
+                )
+                if (
+                    managed_resume_incomplete_pre_switch
+                    and managed_resume_pre_switch_values is not None
+                ):
+                    steady_values = copy.deepcopy(managed_resume_pre_switch_values)
+                    slots = active_passive_jail_rootfs_slots(steady_values)
+                    job_scheduling = active_passive_populate_jail_job_scheduling(
+                        steady_values,
+                        target_ref=target.target_ref,
+                    )
 
                 def _probe_managed_jail_capacity() -> JailCapacityPreflight:
                     copy_required_entries = tuple(
@@ -17217,8 +17919,12 @@ def _run_managed_soperator_cluster_upgrade(
                         namespace=plan.namespace or "default",
                         target_ref=target.target_ref,
                         image=populate_image,
-                        active_pvc="jail-pvc" if legacy_active_rootfs else slots.active_pvc,
-                        passive_pvc="jail-pvc" if legacy_active_rootfs else slots.passive_pvc,
+                        active_pvc=(
+                            managed_legacy_jail_pvc if legacy_active_rootfs else slots.active_pvc
+                        ),
+                        passive_pvc=(
+                            managed_legacy_jail_pvc if legacy_active_rootfs else slots.passive_pvc
+                        ),
                         active_rootfs_path=(
                             JAIL_MANAGED_STORE_PATH if legacy_active_rootfs else ""
                         ),
@@ -17244,9 +17950,9 @@ def _run_managed_soperator_cluster_upgrade(
                 def _record_managed_jail_capacity(
                     preflight: JailCapacityPreflight,
                 ) -> None:
-                    checkpoint["populate_jail_refresh"][
-                        "capacity_preflight"
-                    ] = preflight.as_payload()
+                    checkpoint["populate_jail_refresh"]["capacity_preflight"] = (
+                        preflight.as_payload()
+                    )
                     phase_state["capacity_preflight"] = preflight.as_payload()
                     _checkpoint(
                         "populate-jail-refresh-capacity-preflight",
@@ -17261,27 +17967,45 @@ def _run_managed_soperator_cluster_upgrade(
                         policy=str(payload.get("policy") or jail_sfs_resize_policy),
                     )
 
-                capacity_preflight = _ensure_jail_sfs_capacity_or_resize(
-                    config_path=config_path,
-                    source_payload=source_payload,
-                    target_ref=target.target_ref,
-                    policy=jail_sfs_resize_policy,
-                    resize_to_gib=jail_sfs_resize_to_gib,
-                    preflight=_probe_managed_jail_capacity(),
-                    probe_capacity=_probe_managed_jail_capacity,
-                    record_capacity=_record_managed_jail_capacity,
-                    record_resize=_record_managed_jail_resize,
-                    stage_label=POPULATE_JAIL_REFRESH_PHASE_ID,
-                )
+                if (
+                    managed_live_switch_recovered_before_capacity
+                    or managed_config_ahead_live_pre_switch
+                ):
+                    capacity_preflight = JailCapacityPreflight(
+                        status="passed",
+                        active_used_bytes=None,
+                        active_used_source="live-corroborated-switch",
+                        passive_available_bytes=0,
+                        required_bytes=0,
+                        shortage_bytes=0,
+                        degraded=False,
+                        reason=(
+                            "capacity mutation skipped because live consumers already use "
+                            "the checkpointed populated slot"
+                        ),
+                    )
+                else:
+                    capacity_preflight = _ensure_jail_sfs_capacity_or_resize(
+                        config_path=config_path,
+                        source_payload=source_payload,
+                        target_ref=target.target_ref,
+                        policy=jail_sfs_resize_policy,
+                        resize_to_gib=jail_sfs_resize_to_gib,
+                        preflight=_probe_managed_jail_capacity(),
+                        probe_capacity=_probe_managed_jail_capacity,
+                        record_capacity=_record_managed_jail_capacity,
+                        record_resize=_record_managed_jail_resize,
+                        stage_label=POPULATE_JAIL_REFRESH_PHASE_ID,
+                    )
                 _run_stage_fast_verification(
                     phase_id=POPULATE_JAIL_REFRESH_PHASE_ID,
                     summary="Passive jail rootfs slot capacity preflight completed.",
                     checks=[capacity_preflight_check_payload(capacity_preflight)],
                     report_paths=staged_paths,
                 )
-                checkpoint["populate_jail_refresh"][
-                    "capacity_preflight"
-                ] = capacity_preflight.as_payload()
+                checkpoint["populate_jail_refresh"]["capacity_preflight"] = (
+                    capacity_preflight.as_payload()
+                )
                 phase_state["capacity_preflight"] = capacity_preflight.as_payload()
                 steady_values = apply_jail_persistent_mount_values(
                     _soperator_row_values_snapshot(),
@@ -17291,13 +18015,20 @@ def _run_managed_soperator_cluster_upgrade(
                     include_default_shared_mounts=managed_first_adoption,
                     legacy_active_source=managed_first_adoption,
                 )
+                if (
+                    managed_resume_incomplete_pre_switch
+                    and managed_resume_pre_switch_values is not None
+                ):
+                    steady_values = copy.deepcopy(managed_resume_pre_switch_values)
                 slots = active_passive_jail_rootfs_slots(steady_values)
                 job_scheduling = active_passive_populate_jail_job_scheduling(
                     steady_values,
                     target_ref=target.target_ref,
                 )
-                phase_state["rootfs_slots"] = slots.as_payload()
-                checkpoint["populate_jail_refresh"]["rootfs_slots"] = slots.as_payload()
+                phase_state["rootfs_slots"] = copy.deepcopy(checkpointed_rootfs_slots)
+                checkpoint["populate_jail_refresh"]["rootfs_slots"] = copy.deepcopy(
+                    checkpointed_rootfs_slots
+                )
                 migration_lines: list[str] = []
                 writer_hold_state = phase_state.setdefault(
                     "persistent_migration_writer_hold",
@@ -17314,6 +18045,7 @@ def _run_managed_soperator_cluster_upgrade(
                         "persistent_migration_login_hold_policy",
                         "persistent_migration_writer_hold",
                         "persistent_migration_failure_boundary",
+                        "stale_persistent_copy_cleanup",
                     ):
                         if key in phase_state:
                             checkpoint["populate_jail_refresh"][key] = copy.deepcopy(
@@ -17321,21 +18053,92 @@ def _run_managed_soperator_cluster_upgrade(
                             )
                     _checkpoint(event)
 
+                def _mark_managed_migration_copy_stale(*, reason: str) -> None:
+                    migration_state = phase_state.setdefault(
+                        "legacy_persistent_mount_migration", {}
+                    )
+                    if not isinstance(migration_state, dict):
+                        raise RuntimeError(
+                            "populate-jail-refresh.legacy_persistent_mount_migration "
+                            "must be a mapping."
+                        )
+                    migration_state["status"] = "stale-after-writer-drift"
+                    migration_state["stale_at"] = _soperator_upgrade_now_iso()
+                    migration_state["stale_reason"] = reason
+                    phase_state["persistent_migration_failure_boundary"] = {
+                        "status": "manual-reconciliation-required",
+                        "reason": (
+                            "persistent copy may be stale after writer-hold drift; "
+                            "automatic Job and marker reuse is blocked"
+                        ),
+                    }
+                    _checkpoint_populate_migration_state(
+                        "populate-jail-refresh-persistent-migration-copy-stale"
+                    )
+
+                if migration_status == "running" and writer_hold_state.get("status") != "held":
+                    _mark_managed_migration_copy_stale(
+                        reason=(
+                            "a checkpointed running copy no longer has a continuously "
+                            "held writer boundary"
+                        )
+                    )
+                    cleanup_errors = _restore_managed_stale_persistent_copy_writers(
+                        phase_state=phase_state,
+                        writer_state=writer_hold_state,
+                    )
+                    raise SoperatorMigrationPhasePending(
+                        "checkpointed managed persistent-migration copy was running "
+                        "without a continuously held writer boundary. The copy may be "
+                        "stale, so cxcli blocks automatic Job and marker reuse pending "
+                        "manual reconciliation."
+                        + (
+                            " Steady-state cleanup remains pending: " + "; ".join(cleanup_errors)
+                            if cleanup_errors
+                            else ""
+                        )
+                    )
+
                 def _restore_after_refresh_failure() -> None:
                     cleanup_errors: list[str] = []
-                    migration_completed = (
-                        str(
-                            _state_mapping(
-                                phase_state.get("legacy_persistent_mount_migration")
-                            ).get("status")
-                            or ""
-                        ).strip()
-                        == "completed"
+                    current_migration_status = str(
+                        _state_mapping(phase_state.get("legacy_persistent_mount_migration")).get(
+                            "status"
+                        )
+                        or ""
+                    ).strip()
+                    if current_migration_status == "stale-after-writer-drift":
+                        try:
+                            cleanup_errors.extend(
+                                _restore_managed_stale_persistent_copy_writers(
+                                    phase_state=phase_state,
+                                    writer_state=writer_hold_state,
+                                )
+                            )
+                        except Exception as exc:  # pragma: no cover - cleanup checkpoint guard
+                            cleanup_errors.append(f"stale persistent-copy cleanup failed: {exc}")
+                        if cleanup_errors:
+                            phase_state["refresh_failure_cleanup_errors"] = cleanup_errors
+                        else:
+                            phase_state.pop("refresh_failure_cleanup_errors", None)
+                        _checkpoint_populate_migration_state(
+                            "populate-jail-refresh-failure-boundary-recorded"
+                        )
+                        return
+                    migration_completed = current_migration_status == "completed"
+                    migration_job = _state_mapping(
+                        _state_mapping(phase_state.get("legacy_persistent_mount_migration")).get(
+                            "job"
+                        )
+                    )
+                    migration_copy_may_be_active = current_migration_status == "running" and any(
+                        str(migration_job.get(key) or "").strip()
+                        for key in ("apply_started_at", "applied_at", "uid")
                     )
                     keep_writers_held = bool(
                         legacy_migration_entries
                         and writer_hold_state.get("status") == "held"
-                        and migration_completed
+                        and (migration_completed or migration_copy_may_be_active)
                     )
                     if keep_writers_held:
                         phase_state["persistent_migration_failure_boundary"] = {
@@ -17343,11 +18146,15 @@ def _run_managed_soperator_cluster_upgrade(
                             "reason": (
                                 "persistent mount migration already completed; keeping "
                                 "legacy writers stopped so the shared copy cannot become stale"
+                                if migration_completed
+                                else "persistent mount migration started; keeping legacy "
+                                "writers stopped until the UID-bound copy Job and durable proof "
+                                "are reconciled"
                             ),
                         }
                     if (
                         legacy_migration_entries
-                        and writer_hold_state.get("status") == "held"
+                        and writer_hold_state.get("status") in {"holding", "held"}
                         and not keep_writers_held
                     ):
                         try:
@@ -17382,7 +18189,7 @@ def _run_managed_soperator_cluster_upgrade(
                                 timeout_seconds=login_session_drain_timeout_seconds,
                             )
                         )
-                    except Exception:
+                    except (Exception, KeyboardInterrupt):
                         _checkpoint_populate_migration_state(
                             "populate-jail-refresh-persistent-migration-login-hold-blocked"
                         )
@@ -17398,29 +18205,61 @@ def _run_managed_soperator_cluster_upgrade(
                             "Applying the configured Slurm affected-job policy before "
                             "populate-jail rootfs refresh."
                         ),
-                        summary=(
-                            "Slurm job policy completed before populate-jail rootfs refresh."
-                        ),
+                        summary=("Slurm job policy completed before populate-jail rootfs refresh."),
                     )
                     _set_phase(
                         POPULATE_JAIL_REFRESH_PHASE_ID,
                         "Refreshing the shared Soperator jail rootfs when the target chart requires it.",
                     )
                 if legacy_migration_entries and migration_status != "completed":
-                    migration_lines.extend(
-                        _hold_persistent_migration_writers(
+                    try:
+                        migration_lines.extend(
+                            _hold_persistent_migration_writers(
+                                command_runner=_managed_migration_runner,
+                                kube_context=managed_kube_context,
+                                target_ref=target.target_ref,
+                                namespace=plan.namespace or "default",
+                                values=steady_values,
+                                state=writer_hold_state,
+                                checkpoint_writer=lambda: _checkpoint_populate_migration_state(
+                                    "populate-jail-refresh-persistent-migration-writer-hold-checkpoint"
+                                ),
+                            )
+                        )
+                        phase_state["persistent_migration_writer_hold"] = dict(writer_hold_state)
+                        _checkpoint_populate_migration_state(
+                            "populate-jail-refresh-persistent-migration-writers-held"
+                        )
+                        hold_drift = _persistent_migration_writer_hold_drift(
                             command_runner=_managed_migration_runner,
                             kube_context=managed_kube_context,
                             namespace=plan.namespace or "default",
-                            values=steady_values,
                             state=writer_hold_state,
                         )
-                    )
-                    phase_state["persistent_migration_writer_hold"] = dict(writer_hold_state)
-                    _checkpoint_populate_migration_state(
-                        "populate-jail-refresh-persistent-migration-writers-held"
-                    )
-                    try:
+                        if hold_drift:
+                            writer_hold_state["drift_detected_at"] = _soperator_upgrade_now_iso()
+                            writer_hold_state["drift"] = [dict(item) for item in hold_drift]
+                            if migration_status == "running":
+                                _mark_managed_migration_copy_stale(
+                                    reason=(
+                                        "checkpointed writers were not continuously held "
+                                        "after the persistent copy started"
+                                    )
+                                )
+                                raise SoperatorMigrationPhasePending(
+                                    "checkpointed managed persistent-migration writers "
+                                    "drifted after the copy started. The copy may be stale, "
+                                    "so cxcli blocks automatic Job and marker reuse pending "
+                                    "manual reconciliation."
+                                )
+                            _checkpoint_populate_migration_state(
+                                "populate-jail-refresh-persistent-migration-writer-hold-drifted"
+                            )
+                            raise SoperatorMigrationPhasePending(
+                                "checkpointed managed persistent-migration writers drifted "
+                                "before the copy started. cxcli will restore steady-state "
+                                "writers; rerun to establish a fresh hold."
+                            )
                         _mutation_performed, lines = _execute_legacy_persistent_mount_migration(
                             checkpoint=checkpoint,
                             phase=phase_state,
@@ -17429,132 +18268,490 @@ def _run_managed_soperator_cluster_upgrade(
                             target_ref=target.target_ref,
                             namespace=plan.namespace or "default",
                             image="ubuntu:24.04",
-                            jail_pvc="jail-pvc",
+                            jail_pvc=managed_legacy_jail_pvc,
                             entries=legacy_migration_entries,
                             scheduling=job_scheduling,
                             checkpoint_writer=lambda: _checkpoint_populate_migration_state(
                                 "populate-jail-refresh-persistent-migration-checkpoint"
                             ),
                         )
-                    except Exception:
+                        _ensure_persistent_migration_writer_hold_intact_after_copy(
+                            checkpoint=checkpoint,
+                            phase=phase_state,
+                            command_runner=_managed_migration_runner,
+                            kube_context=managed_kube_context,
+                            namespace=plan.namespace or "default",
+                            state=writer_hold_state,
+                            boundary="persistent copy completion",
+                            checkpoint_writer=lambda: _checkpoint_populate_migration_state(
+                                "populate-jail-refresh-persistent-migration-copy-stale"
+                            ),
+                        )
+                    except (Exception, KeyboardInterrupt):
                         _restore_after_refresh_failure()
                         raise
                     del _mutation_performed
                     migration_lines.extend(lines)
                     migration_status = "completed"
-                    checkpoint["populate_jail_refresh"][
-                        "legacy_persistent_mount_migration"
-                    ] = copy.deepcopy(
-                        to_plain_data(phase_state["legacy_persistent_mount_migration"])
+                    checkpoint["populate_jail_refresh"]["legacy_persistent_mount_migration"] = (
+                        copy.deepcopy(
+                            to_plain_data(phase_state["legacy_persistent_mount_migration"])
+                        )
                     )
                     _checkpoint_populate_migration_state(
                         "populate-jail-refresh-persistent-migration-completed"
                     )
                 try:
-                    _set_soperator_row_values(populate_jail_refresh_values(steady_values))
-                    staged_config, staged_paths, staged_manifest = (
-                        _render_validate_apply_soperator_stage(
-                            update_message="Soperator active/passive jail rootfs refresh",
-                            validation_title=(
-                                "Validate rendered Soperator active/passive jail rootfs refresh"
+                    if (
+                        legacy_migration_entries
+                        and migration_status == "completed"
+                        and writer_hold_state.get("status") == "held"
+                        and not managed_live_switch_recovered_before_capacity
+                    ):
+                        _ensure_persistent_migration_writer_hold_intact_after_copy(
+                            checkpoint=checkpoint,
+                            phase=phase_state,
+                            command_runner=_managed_migration_runner,
+                            kube_context=managed_kube_context,
+                            namespace=plan.namespace or "default",
+                            state=writer_hold_state,
+                            boundary="passive rootfs refresh start",
+                            checkpoint_writer=lambda: _checkpoint_populate_migration_state(
+                                "populate-jail-refresh-persistent-migration-copy-stale"
                             ),
-                            expected_plan=plan,
                         )
+
+                    checkpointed_passive_slot = str(
+                        checkpointed_rootfs_slots.get("passive_slot") or ""
+                    ).strip()
+                    switch_checkpointed = bool(
+                        str(phase_state.get("consumer_switch_applied_at") or "").strip()
+                        or (
+                            checkpointed_passive_slot
+                            and str(phase_state.get("active_slot") or "").strip()
+                            == checkpointed_passive_slot
+                        )
+                        or _state_mapping(phase_state.get("rootfs_handoff_verification"))
                     )
-                    _checkpoint(
-                        "populate-jail-refresh-passive-slot-values-applied",
-                        passive_slot=slots.passive_slot,
+                    switch_crash_window_possible = bool(
+                        switch_checkpointed
+                        or str(phase_state.get("job_completed_at") or "").strip()
+                        or _state_mapping(phase_state.get("passive_slot_populate_job"))
+                        or _state_mapping(phase_state.get("post_jail_slurm_smoke"))
                     )
-                    manifest = active_passive_populate_jail_job_manifest(
-                        namespace=plan.namespace or "default",
-                        target_ref=target.target_ref,
-                        image=populate_image,
-                        passive_slot=slots.passive_slot,
-                        passive_pvc=slots.passive_pvc,
-                        image_pull_policy=str(
-                            _state_mapping(steady_values.get("populateJail")).get(
-                                "imagePullPolicy"
+                    recovered_live_switch = managed_live_switch_recovered_before_capacity
+                    resume_switch_without_population = managed_config_ahead_live_pre_switch
+                    switched_values: dict[str, Any]
+                    switched_checks: list[dict[str, Any]] = []
+                    if recovered_live_switch or resume_switch_without_population:
+                        if (
+                            managed_resume_switched_values is None
+                            or managed_switch_recovery_snapshot is None
+                        ):
+                            raise SoperatorMigrationPhasePending(
+                                "managed Jail Upgrade resume lacks its read-only validated "
+                                "switched values or completed passive-slot Job binding."
                             )
-                            or "IfNotPresent"
-                        ),
-                        scheduling=job_scheduling,
-                    )
-                    job_name = str(_state_mapping(manifest.get("metadata")).get("name") or "")
-                    if job_name:
-                        _populate_jail_runner(
-                            _managed_kubectl_command(
-                                "-n",
-                                plan.namespace or "default",
-                                "delete",
-                                "job",
-                                job_name,
-                                "--ignore-not-found",
-                                "--wait=false",
-                            ),
-                            timeout_seconds=300,
+                        switched_values = copy.deepcopy(managed_resume_switched_values)
+                    if switch_crash_window_possible and not (
+                        recovered_live_switch or resume_switch_without_population
+                    ):
+                        recorded_active_slot = str(
+                            checkpointed_rootfs_slots.get("active_slot") or ""
+                        ).strip()
+                        recorded_passive_slot = str(
+                            checkpointed_rootfs_slots.get("passive_slot") or ""
+                        ).strip()
+                        if (
+                            not recorded_active_slot
+                            or not recorded_passive_slot
+                            or recorded_active_slot == recorded_passive_slot
+                        ):
+                            raise SoperatorMigrationPhasePending(
+                                "managed Jail Upgrade resume lacks a valid checkpointed "
+                                "active/passive slot binding; no populate or switch action "
+                                "was retried."
+                            )
+                        current_slots = active_passive_jail_rootfs_slots(steady_values)
+                        if current_slots.active_slot == recorded_passive_slot:
+                            switched_values = copy.deepcopy(steady_values)
+                            pre_switch_values = switch_active_passive_jail_rootfs_values(
+                                steady_values
+                            )
+                        elif current_slots.active_slot == recorded_active_slot:
+                            pre_switch_values = copy.deepcopy(steady_values)
+                            switched_values = switch_active_passive_jail_rootfs_values(
+                                steady_values
+                            )
+                        else:
+                            raise SoperatorMigrationPhasePending(
+                                "managed Jail Upgrade resume found target values outside the "
+                                "checkpointed active/passive slot pair; no populate or switch "
+                                "action was retried."
+                            )
+                        switched_checks = _verify_target_rootfs_handoff_consumers(
+                            command_runner=_managed_migration_runner,
+                            kube_context=managed_kube_context,
+                            values=switched_values,
+                            namespace=plan.namespace or "default",
                         )
-                    _populate_jail_runner(
-                        _managed_kubectl_command("apply", "-f", "-"),
-                        input_text=yaml.safe_dump(
-                            {"apiVersion": "v1", "kind": "List", "items": [manifest]},
-                            sort_keys=False,
-                        ),
-                        timeout_seconds=300,
-                    )
-                    _checkpoint(
-                        "populate-jail-refresh-passive-slot-job-applied",
-                        job=job_name,
-                        passive_slot=slots.passive_slot,
-                    )
-                    refreshed_snapshot = wait_for_active_passive_populate_jail_job(
-                        _populate_jail_runner,
-                        namespace=plan.namespace or "default",
-                        job_name=job_name,
-                        expected_image=populate_image,
-                        kube_context=managed_kube_context or None,
-                    )
-                    _checkpoint(
-                        "populate-jail-refresh-job-completed",
-                        job=refreshed_snapshot.job_name,
-                        image=refreshed_snapshot.job_image,
-                    )
-                    if legacy_migration_entries:
-                        login_baseline = {
-                            "status": "skipped",
-                            "reason": (
-                                "login consumers are held during one-time persistent "
-                                "mount migration"
+                        pre_switch_checks = _verify_target_rootfs_handoff_consumers(
+                            command_runner=_managed_migration_runner,
+                            kube_context=managed_kube_context,
+                            values=pre_switch_values,
+                            namespace=plan.namespace or "default",
+                        )
+                        switched_rootfs = tuple(
+                            bool(check.get("rootfs_observed")) for check in switched_checks
+                        )
+                        pre_switch_rootfs = tuple(
+                            bool(check.get("rootfs_observed")) for check in pre_switch_checks
+                        )
+                        live_switched = (
+                            bool(switched_checks)
+                            and all(check.get("status") == "verified" for check in switched_checks)
+                            and not any(pre_switch_rootfs)
+                        )
+                        live_pre_switch = (
+                            bool(pre_switch_checks)
+                            and all(pre_switch_rootfs)
+                            and not any(switched_rootfs)
+                        )
+                        phase_state["post_switch_resume_detection"] = {
+                            "status": (
+                                "switched"
+                                if live_switched
+                                else "pre-switch"
+                                if live_pre_switch
+                                else "uncertain"
                             ),
+                            "checkpointed_switch": switch_checkpointed,
+                            "switched_consumer_count": sum(switched_rootfs),
+                            "pre_switch_consumer_count": sum(pre_switch_rootfs),
+                            "consumer_count": len(switched_checks),
+                            "checked_at": _soperator_upgrade_now_iso(),
                         }
-                    else:
-                        login_baseline = wait_for_login_service_ready_endpoints(
-                            _populate_jail_runner,
+                        _checkpoint("populate-jail-refresh-post-switch-resume-detected")
+                        if not live_switched and (switch_checkpointed or not live_pre_switch):
+                            raise SoperatorMigrationPhasePending(
+                                "managed Jail Upgrade resume found mixed or uncertain live "
+                                "login/worker rootfs consumer slots. No populate Job or slot "
+                                "switch was retried; reconcile the live consumers to one "
+                                "checkpointed slot and rerun."
+                            )
+                        recovered_live_switch = live_switched
+
+                    def _validate_passive_job_at_switch_boundary() -> PopulateJailSnapshot:
+                        boundary_values = managed_resume_pre_switch_values or steady_values
+                        accepted_passive_slot = str(
+                            checkpointed_rootfs_slots.get("passive_slot") or slots.passive_slot
+                        ).strip()
+                        accepted_passive_pvc = str(
+                            checkpointed_rootfs_slots.get("passive_pvc") or slots.passive_pvc
+                        ).strip()
+                        boundary_manifest = active_passive_populate_jail_job_manifest(
                             namespace=plan.namespace or "default",
                             target_ref=target.target_ref,
+                            image=populate_image,
+                            passive_slot=accepted_passive_slot,
+                            passive_pvc=accepted_passive_pvc,
+                            image_pull_policy=str(
+                                _state_mapping(boundary_values.get("populateJail")).get(
+                                    "imagePullPolicy"
+                                )
+                                or "IfNotPresent"
+                            ),
+                            scheduling=active_passive_populate_jail_job_scheduling(
+                                boundary_values,
+                                target_ref=target.target_ref,
+                            ),
+                        )
+                        boundary_job = _state_mapping(phase_state.get("passive_slot_populate_job"))
+                        return _validate_completed_passive_populate_job_checkpoint(
+                            command_runner=_managed_migration_runner,
+                            kube_context=managed_kube_context,
+                            namespace=plan.namespace or "default",
+                            existing=boundary_job,
+                            manifest=boundary_manifest,
+                            slot=accepted_passive_slot,
+                            pvc=accepted_passive_pvc,
+                            image=populate_image,
+                            completed_at=phase_state.get("job_completed_at"),
+                            target_ref=target.target_ref,
+                            expected_pvc_uid=str(boundary_job.get("pvc_uid") or ""),
+                        )
+
+                    if not recovered_live_switch and not resume_switch_without_population:
+                        refresh_values = populate_jail_refresh_values(steady_values)
+                        if legacy_migration_entries:
+                            refresh_values = _persistent_migration_writer_hold_values(
+                                refresh_values
+                            )
+                        _set_soperator_row_values(refresh_values)
+                        staged_config, staged_paths, staged_manifest = (
+                            _render_validate_apply_soperator_stage(
+                                update_message="Soperator active/passive jail rootfs refresh",
+                                validation_title=(
+                                    "Validate rendered Soperator active/passive jail rootfs refresh"
+                                ),
+                                expected_plan=plan,
+                            )
+                        )
+                        phase_state["passive_slot_refresh_values_applied_at"] = (
+                            _soperator_upgrade_now_iso()
+                        )
+                        _checkpoint(
+                            "populate-jail-refresh-passive-slot-values-applied",
+                            passive_slot=slots.passive_slot,
+                        )
+                        manifest = active_passive_populate_jail_job_manifest(
+                            namespace=plan.namespace or "default",
+                            target_ref=target.target_ref,
+                            image=populate_image,
+                            passive_slot=slots.passive_slot,
+                            passive_pvc=slots.passive_pvc,
+                            image_pull_policy=str(
+                                _state_mapping(steady_values.get("populateJail")).get(
+                                    "imagePullPolicy"
+                                )
+                                or "IfNotPresent"
+                            ),
+                            scheduling=job_scheduling,
+                        )
+                        completion_validation_manifest = copy.deepcopy(manifest)
+                        existing_populate_job = _state_mapping(
+                            phase_state.get("passive_slot_populate_job")
+                        )
+                        phase_state["passive_slot_populate_job"] = (
+                            _bind_passive_populate_job_checkpoint(
+                                existing=existing_populate_job,
+                                manifest=manifest,
+                                slot=slots.passive_slot,
+                                pvc=slots.passive_pvc,
+                                image=populate_image,
+                            )
+                        )
+                        _bind_passive_populate_pvc_uid(
+                            command_runner=_managed_migration_runner,
+                            kube_context=managed_kube_context,
+                            namespace=plan.namespace or "default",
+                            state=phase_state["passive_slot_populate_job"],
+                            pvc=slots.passive_pvc,
+                            allow_initial_binding=not bool(
+                                existing_populate_job.get("uid")
+                                or existing_populate_job.get("action")
+                                or phase_state.get("job_completed_at")
+                            ),
+                        )
+                        job_name = str(phase_state["passive_slot_populate_job"].get("name") or "")
+                        _checkpoint("populate-jail-refresh-passive-slot-job-checkpointed")
+                        job_action = _ensure_passive_populate_job(
+                            command_runner=_managed_migration_runner,
+                            kube_context=managed_kube_context,
+                            namespace=plan.namespace or "default",
+                            manifest=manifest,
+                            expected_uid=str(
+                                phase_state["passive_slot_populate_job"].get("uid") or ""
+                            ),
+                            expected_pvc_uid=str(
+                                phase_state["passive_slot_populate_job"].get("pvc_uid") or ""
+                            ),
+                            state=phase_state["passive_slot_populate_job"],
+                        )
+                        phase_state["passive_slot_populate_job"]["action"] = job_action
+                        _checkpoint(
+                            "populate-jail-refresh-passive-slot-job-applied",
+                            job=job_name,
+                            passive_slot=slots.passive_slot,
+                        )
+                        wait_for_active_passive_populate_jail_job(
+                            _populate_jail_runner,
+                            namespace=plan.namespace or "default",
+                            job_name=job_name,
+                            expected_image=populate_image,
                             kube_context=managed_kube_context or None,
                         )
-                    checkpoint["populate_jail_refresh"][
-                        "login_service_ready_before_switch"
-                    ] = copy.deepcopy(to_plain_data(login_baseline))
-                    phase_state["login_service_ready_before_switch"] = copy.deepcopy(
-                        to_plain_data(login_baseline)
-                    )
-                    _checkpoint(
-                        "populate-jail-refresh-login-service-ready-before-switch",
-                        **login_baseline,
-                    )
-                    switched_values = switch_active_passive_jail_rootfs_values(steady_values)
-                    _set_soperator_row_values(switched_values)
-                    staged_config, staged_paths, staged_manifest = (
-                        _render_validate_apply_soperator_stage(
-                            update_message="Soperator jail rootfs active slot switch",
-                            validation_title=(
-                                "Validate rendered Soperator jail rootfs active slot switch"
+                        job_completed_at = _soperator_upgrade_now_iso()
+                        refreshed_snapshot = _validate_completed_passive_populate_job_checkpoint(
+                            command_runner=_managed_migration_runner,
+                            kube_context=managed_kube_context,
+                            namespace=plan.namespace or "default",
+                            existing=_state_mapping(phase_state.get("passive_slot_populate_job")),
+                            manifest=completion_validation_manifest,
+                            slot=slots.passive_slot,
+                            pvc=slots.passive_pvc,
+                            image=populate_image,
+                            completed_at=job_completed_at,
+                            target_ref=target.target_ref,
+                            expected_pvc_uid=str(
+                                _state_mapping(phase_state.get("passive_slot_populate_job")).get(
+                                    "pvc_uid"
+                                )
+                                or ""
                             ),
-                            expected_plan=plan,
                         )
+                        phase_state["job_completed_at"] = job_completed_at
+                        _checkpoint(
+                            "populate-jail-refresh-job-completed",
+                            job=refreshed_snapshot.job_name,
+                            image=refreshed_snapshot.job_image,
+                        )
+                        if legacy_migration_entries:
+                            _ensure_persistent_migration_writer_hold_intact_after_copy(
+                                checkpoint=checkpoint,
+                                phase=phase_state,
+                                command_runner=_managed_migration_runner,
+                                kube_context=managed_kube_context,
+                                namespace=plan.namespace or "default",
+                                state=writer_hold_state,
+                                boundary="passive rootfs population completion",
+                                checkpoint_writer=lambda: _checkpoint_populate_migration_state(
+                                    "populate-jail-refresh-persistent-migration-copy-stale"
+                                ),
+                            )
+                        if legacy_migration_entries:
+                            login_baseline = {
+                                "status": "skipped",
+                                "reason": (
+                                    "login consumers are held during one-time persistent "
+                                    "mount migration"
+                                ),
+                            }
+                        else:
+                            login_baseline = wait_for_login_service_ready_endpoints(
+                                _populate_jail_runner,
+                                namespace=plan.namespace or "default",
+                                target_ref=target.target_ref,
+                                kube_context=managed_kube_context or None,
+                            )
+                        checkpoint["populate_jail_refresh"]["login_service_ready_before_switch"] = (
+                            copy.deepcopy(to_plain_data(login_baseline))
+                        )
+                        phase_state["login_service_ready_before_switch"] = copy.deepcopy(
+                            to_plain_data(login_baseline)
+                        )
+                        _checkpoint(
+                            "populate-jail-refresh-login-service-ready-before-switch",
+                            **login_baseline,
+                        )
+                        switched_values = switch_active_passive_jail_rootfs_values(steady_values)
+                        if legacy_migration_entries:
+                            switched_values["maintenance"] = (
+                                _persistent_migration_original_maintenance(writer_hold_state)
+                            )
+                        refreshed_snapshot = _validate_passive_job_at_switch_boundary()
+                        _set_soperator_row_values(switched_values)
+                        staged_config, staged_paths, staged_manifest = (
+                            _render_validate_apply_soperator_stage(
+                                update_message="Soperator jail rootfs active slot switch",
+                                validation_title=(
+                                    "Validate rendered Soperator jail rootfs active slot switch"
+                                ),
+                                expected_plan=plan,
+                            )
+                        )
+                        phase_state["consumer_switch_applied_at"] = _soperator_upgrade_now_iso()
+                        phase_state["rollback_slot"] = (
+                            "legacy-rootfs" if legacy_active_rootfs else slots.active_slot
+                        )
+                        phase_state["active_slot"] = slots.passive_slot
+                        _checkpoint("populate-jail-refresh-consumer-switch-applied")
+                    elif resume_switch_without_population:
+                        if legacy_migration_entries:
+                            switched_values["maintenance"] = (
+                                _persistent_migration_original_maintenance(writer_hold_state)
+                            )
+                        refreshed_snapshot = _validate_passive_job_at_switch_boundary()
+                        _set_soperator_row_values(switched_values)
+                        staged_config, staged_paths, staged_manifest = (
+                            _render_validate_apply_soperator_stage(
+                                update_message=(
+                                    "Resume managed Soperator jail rootfs slot switch from "
+                                    "checkpointed populated state"
+                                ),
+                                validation_title=(
+                                    "Validate resumed managed Soperator jail rootfs slot switch"
+                                ),
+                                expected_plan=plan,
+                            )
+                        )
+                        desired_slots = active_passive_jail_rootfs_slots(switched_values)
+                        if managed_switch_recovery_snapshot is None:
+                            raise SoperatorMigrationPhasePending(
+                                "managed Jail Upgrade config-ahead recovery did not prove "
+                                "the completed passive-slot Job and PVC identities."
+                            )
+                        refreshed_snapshot = managed_switch_recovery_snapshot
+                        phase_state["consumer_switch_applied_at"] = _soperator_upgrade_now_iso()
+                        phase_state["consumer_switch_recovered_from_config_ahead"] = True
+                        phase_state["rollback_slot"] = (
+                            "legacy-rootfs"
+                            if checkpointed_legacy_active_rootfs or legacy_active_rootfs
+                            else str(checkpointed_rootfs_slots.get("active_slot") or "")
+                        )
+                        phase_state["active_slot"] = desired_slots.active_slot
+                        _checkpoint(
+                            "populate-jail-refresh-consumer-switch-resumed-from-config-ahead"
+                        )
+                    else:
+                        desired_slots = active_passive_jail_rootfs_slots(switched_values)
+                        if slots.active_slot != desired_slots.active_slot:
+                            refreshed_snapshot = _validate_passive_job_at_switch_boundary()
+                            _set_soperator_row_values(switched_values)
+                            staged_config, staged_paths, staged_manifest = (
+                                _render_validate_apply_soperator_stage(
+                                    update_message=(
+                                        "Reconcile managed Soperator values to the "
+                                        "live-corroborated jail rootfs slot"
+                                    ),
+                                    validation_title=(
+                                        "Validate managed Soperator live-corroborated "
+                                        "jail rootfs slot"
+                                    ),
+                                    expected_plan=plan,
+                                )
+                            )
+                        if managed_switch_recovery_snapshot is None:
+                            raise SoperatorMigrationPhasePending(
+                                "managed Jail Upgrade live-switch recovery did not prove "
+                                "the completed passive-slot Job and PVC identities."
+                            )
+                        refreshed_snapshot = managed_switch_recovery_snapshot
+                        phase_state["consumer_switch_applied_at"] = (
+                            phase_state.get("consumer_switch_applied_at")
+                            or _soperator_upgrade_now_iso()
+                        )
+                        phase_state["consumer_switch_recovered_from_live_state"] = True
+                        phase_state["rollback_slot"] = (
+                            "legacy-rootfs"
+                            if checkpointed_legacy_active_rootfs or legacy_active_rootfs
+                            else str(checkpointed_rootfs_slots.get("active_slot") or "")
+                        )
+                        phase_state["active_slot"] = desired_slots.active_slot
+                        _checkpoint("populate-jail-refresh-consumer-switch-recovered")
+
+                    maintenance_binding = next(
+                        (
+                            item
+                            for item in writer_hold_state.get("resources", [])
+                            if isinstance(item, Mapping)
+                            and str(item.get("kind") or "").strip() == "slurmcluster-maintenance"
+                        ),
+                        {},
                     )
-                    if legacy_migration_entries and writer_hold_state.get("status") == "held":
+                    if (
+                        legacy_migration_entries
+                        and writer_hold_state.get("status")
+                        in {
+                            "holding",
+                            "held",
+                            "restored",
+                        }
+                        and (
+                            maintenance_binding
+                            or writer_hold_state.get("status") in {"holding", "held"}
+                        )
+                    ):
                         migration_lines.extend(
                             _restore_persistent_migration_writers(
                                 command_runner=_managed_migration_runner,
@@ -17563,33 +18760,135 @@ def _run_managed_soperator_cluster_upgrade(
                                 state=writer_hold_state,
                             )
                         )
-                        phase_state["persistent_migration_writer_hold"] = dict(
-                            writer_hold_state
-                        )
+                        phase_state["persistent_migration_writer_hold"] = dict(writer_hold_state)
+                        maintenance_restored = True
                         _checkpoint_populate_migration_state(
                             "populate-jail-refresh-persistent-migration-writers-restored"
                         )
-                    login_rollout = (
-                        wait_for_login_statefulset_rollout_with_ready_endpoint_guard(
-                            _populate_jail_runner,
-                            namespace=plan.namespace or "default",
-                            target_ref=target.target_ref,
-                            kube_context=managed_kube_context or None,
-                        )
+
+                    _wait_for_target_worker_nodesets_ready(
+                        command_runner=_managed_migration_runner,
+                        kube_context=managed_kube_context,
+                        values=switched_values,
+                        namespace=plan.namespace or "default",
+                        timeout_seconds=1800,
+                    )
+                    login_rollout = wait_for_login_statefulset_rollout_with_ready_endpoint_guard(
+                        _populate_jail_runner,
+                        namespace=plan.namespace or "default",
+                        target_ref=target.target_ref,
+                        kube_context=managed_kube_context or None,
                     )
                     phase_state["login_service_ready_after_switch"] = copy.deepcopy(
                         to_plain_data(login_rollout)
                     )
-                    checkpoint["populate_jail_refresh"][
-                        "login_service_ready_after_switch"
-                    ] = copy.deepcopy(to_plain_data(login_rollout))
+                    checkpoint["populate_jail_refresh"]["login_service_ready_after_switch"] = (
+                        copy.deepcopy(to_plain_data(login_rollout))
+                    )
+
+                    handoff_mount_status = jail_persistent_mount_status(switched_values)
+                    handoff_slots = active_passive_jail_rootfs_slots(switched_values)
+                    handoff_verification: dict[str, Any] = {
+                        "status": "checking",
+                        "active_slot": handoff_slots.active_slot,
+                        "active_volume_source": handoff_slots.active_volume_source,
+                        "active_pvc": handoff_slots.active_pvc,
+                        "rollback_slot": phase_state["rollback_slot"],
+                        "worker_nodesets": list(_target_worker_nodeset_names(switched_values)),
+                        "persistent_mounts": [
+                            mount.as_payload() for mount in handoff_mount_status.mounts
+                        ],
+                        "persistent_mount_status": handoff_mount_status.status,
+                        "persistent_mount_reason": handoff_mount_status.reason,
+                        "verification_revision": _ROOTFS_HANDOFF_VERIFICATION_REVISION,
+                        "recovered_from_live_state": recovered_live_switch,
+                    }
+                    phase_state["rootfs_handoff_verification"] = handoff_verification
+                    _checkpoint("populate-jail-refresh-rootfs-handoff-checking")
+                    consumer_checks = _verify_target_rootfs_handoff_consumers(
+                        command_runner=_managed_migration_runner,
+                        kube_context=managed_kube_context,
+                        values=switched_values,
+                        namespace=plan.namespace or "default",
+                    )
+                    handoff_verification["consumer_checks"] = consumer_checks
+                    if any(check.get("status") != "verified" for check in consumer_checks):
+                        raise SoperatorMigrationPhasePending(
+                            _rootfs_handoff_pending_reason(consumer_checks)
+                        )
+                    live_home_mount_checks = _live_home_mount_probe_checks(
+                        command_runner=_managed_migration_runner,
+                        kube_context=managed_kube_context,
+                        values=switched_values,
+                        target_ref=target.target_ref,
+                        namespace=plan.namespace or "default",
+                    )
+                    handoff_verification["live_home_mount_checks"] = list(live_home_mount_checks)
+                    if _fast_verification_failed(live_home_mount_checks):
+                        raise SoperatorMigrationPhasePending(
+                            _live_home_mount_pending_reason(live_home_mount_checks)
+                        )
+                    handoff_verification["status"] = "verified"
+                    handoff_verification["verified_at"] = _soperator_upgrade_now_iso()
+                    phase_state["rootfs_handoff_verification"] = handoff_verification
+                    _checkpoint("populate-jail-refresh-rootfs-handoff-verified")
+                    _populate_jail_runner(
+                        _managed_kubectl_command(
+                            "-n",
+                            plan.namespace or "default",
+                            "rollout",
+                            "status",
+                            "deployment/soperator-manager",
+                            "--timeout=15m",
+                        ),
+                        timeout_seconds=960,
+                    )
+                    migration_lines.extend(
+                        _ensure_post_jail_slurm_pre_release_checks(
+                            phase=phase_state,
+                            command_runner=_managed_migration_runner,
+                            kube_context=managed_kube_context,
+                            checkpoint_writer=lambda: _checkpoint(
+                                "populate-jail-refresh-post-jail-pre-release-checks"
+                            ),
+                            namespace=plan.namespace or "default",
+                        )
+                    )
+                    migration_lines.extend(
+                        _restore_managed_slurm_before_post_jail_smoke(
+                            phase_state=phase_state,
+                        )
+                    )
+                    smoke_state = _state_mapping(phase_state.get("post_jail_slurm_smoke"))
+                    if str(smoke_state.get("status") or "").strip() != "passed":
+                        migration_lines.extend(
+                            _ensure_post_jail_slurm_smoke(
+                                phase=phase_state,
+                                command_runner=_managed_migration_runner,
+                                kube_context=managed_kube_context,
+                                checkpoint_writer=lambda: _checkpoint(
+                                    "populate-jail-refresh-post-jail-slurm-smoke"
+                                ),
+                                namespace=plan.namespace or "default",
+                            )
+                        )
                     _checkpoint(
                         "populate-jail-refresh-consumers-switched",
-                        active_slot=slots.passive_slot,
-                        rollback_slot="legacy-rootfs" if legacy_active_rootfs else slots.active_slot,
+                        active_slot=handoff_slots.active_slot,
+                        rollback_slot=phase_state["rollback_slot"],
+                        recovered_from_live_state=recovered_live_switch,
                         **login_rollout,
                     )
-                except Exception:
+                except (Exception, KeyboardInterrupt) as exc:
+                    handoff_verification = _state_mapping(
+                        phase_state.get("rootfs_handoff_verification")
+                    )
+                    if handoff_verification.get("status") == "checking":
+                        phase_state["rootfs_handoff_verification"] = {
+                            **dict(handoff_verification),
+                            "status": "pending",
+                            "reason": str(exc),
+                        }
                     _restore_after_refresh_failure()
                     raise
                 if refreshed_snapshot is None:
@@ -17624,7 +18923,8 @@ def _run_managed_soperator_cluster_upgrade(
                     ),
                     stage_fast_verification_check(
                         "Jail Upgrade target image",
-                        "passed" if populate_jail_result.status != "refreshed"
+                        "passed"
+                        if populate_jail_result.status != "refreshed"
                         or not populate_jail_result.target_image
                         or populate_jail_result.job_image == populate_jail_result.target_image
                         else "failed",
@@ -17742,6 +19042,7 @@ def _run_managed_soperator_cluster_upgrade(
                     _soperator_upgrade_restore_slurm_partitions(
                         namespace=plan.namespace or "default",
                         records=slurm_quiesce_records,
+                        kube_context=managed_kube_context or None,
                     )
                 _record_slurm_decision(
                     {
@@ -17749,9 +19050,7 @@ def _run_managed_soperator_cluster_upgrade(
                         .isoformat(timespec="seconds")
                         .replace("+00:00", "Z"),
                         "action": "scheduling-quiesce-restored",
-                        "partitions": [
-                            record.as_payload() for record in slurm_quiesce_records
-                        ],
+                        "partitions": [record.as_payload() for record in slurm_quiesce_records],
                     }
                 )
             if slurm_restore_nodes:
@@ -17759,6 +19058,7 @@ def _run_managed_soperator_cluster_upgrade(
                     _soperator_upgrade_restore_slurm_nodes(
                         namespace=plan.namespace or "default",
                         node_names=slurm_restore_nodes,
+                        kube_context=managed_kube_context or None,
                     )
             slurm_state = checkpoint.setdefault("slurm", {})
             if isinstance(slurm_state, dict):
@@ -17782,14 +19082,10 @@ def _run_managed_soperator_cluster_upgrade(
                     stage_fast_verification_check(
                         "Slurm partition restore command",
                         "passed"
-                        if not _non_empty_text(
-                            slurm_map.get("partition_restore_manual_command")
-                        )
+                        if not _non_empty_text(slurm_map.get("partition_restore_manual_command"))
                         else "failed",
                         "manual partition restore command cleared"
-                        if not _non_empty_text(
-                            slurm_map.get("partition_restore_manual_command")
-                        )
+                        if not _non_empty_text(slurm_map.get("partition_restore_manual_command"))
                         else "manual partition restore command is still recorded",
                     ),
                     stage_fast_verification_check(
@@ -17880,16 +19176,13 @@ def _run_managed_soperator_cluster_upgrade(
                 _soperator_upgrade_release_jobs(
                     plan.namespace or "default",
                     held_job_ids,
-                    kube_context=plan.request.kube_context,
+                    kube_context=managed_kube_context or None,
                 )
             except Exception as exc:
                 checkpoint["pending_phase"] = "slurm-held-job-release"
                 checkpoint["pending_reason"] = (
                     "cxcli could not release Slurm jobs it requeue-held during the upgrade. "
-                    "Run: "
-                    + release_command
-                    + ". Release error: "
-                    + str(exc)
+                    "Run: " + release_command + ". Release error: " + str(exc)
                 )
                 slurm_state["held_job_release_manual_command"] = release_command
                 _checkpoint("slurm-held-job-release-failed", error=str(exc))
@@ -17922,9 +19215,7 @@ def _run_managed_soperator_cluster_upgrade(
     except (Exception, KeyboardInterrupt, EOFError, typer.Abort) as exc:
         interrupted = isinstance(exc, (KeyboardInterrupt, EOFError, typer.Abort))
         failure_reason = (
-            "interrupted by user"
-            if interrupted
-            else (str(exc).strip() or exc.__class__.__name__)
+            "interrupted by user" if interrupted else (str(exc).strip() or exc.__class__.__name__)
         )
         failed_phase = _current_pending_phase()
         if not failed_phase:
@@ -17979,9 +19270,23 @@ def _run_managed_soperator_cluster_upgrade(
                 console.print(
                     "[yellow]Could not restore Soperator ActiveChecks after the failed "
                     f"upgrade attempt:[/yellow] {restore_exc}",
-                        soft_wrap=True,
+                    soft_wrap=True,
+                )
+        populate_phase_state = _state_mapping(
+            _state_mapping(checkpoint.get("phase_state")).get(POPULATE_JAIL_REFRESH_PHASE_ID)
+        )
+        post_jail_pre_release_failed = (
+            str(
+                _state_mapping(
+                    _state_mapping(populate_phase_state.get("post_jail_slurm_smoke")).get(
+                        "pre_release"
                     )
-        if slurm_quiesce_records:
+                ).get("status")
+                or ""
+            ).strip()
+            == "failed"
+        )
+        if slurm_quiesce_records and not post_jail_pre_release_failed:
             try:
                 with _phase_spinner(
                     "slurm-partition-restore-after-failure",
@@ -17990,6 +19295,7 @@ def _run_managed_soperator_cluster_upgrade(
                     _soperator_upgrade_restore_slurm_partitions(
                         namespace=plan.namespace or "default",
                         records=slurm_quiesce_records,
+                        kube_context=managed_kube_context or None,
                     )
                 _record_slurm_decision(
                     {
@@ -17997,9 +19303,7 @@ def _run_managed_soperator_cluster_upgrade(
                         .isoformat(timespec="seconds")
                         .replace("+00:00", "Z"),
                         "action": "scheduling-quiesce-restored",
-                        "partitions": [
-                            record.as_payload() for record in slurm_quiesce_records
-                        ],
+                        "partitions": [record.as_payload() for record in slurm_quiesce_records],
                         "reason": "managed upgrade failed before normal Slurm restore phase",
                     }
                 )
@@ -18015,6 +19319,14 @@ def _run_managed_soperator_cluster_upgrade(
                     f"upgrade attempt:[/yellow] {restore_exc}",
                     soft_wrap=True,
                 )
+        elif slurm_quiesce_records:
+            _checkpoint(
+                "slurm-partitions-kept-quiesced-after-pre-release-failure",
+                reason=(
+                    "post-Jail pre-release Slurm validation failed before user "
+                    "scheduling was reopened"
+                ),
+            )
         if slurm_restore_nodes:
             slurm_state = checkpoint.setdefault("slurm", {})
             if isinstance(slurm_state, dict):
@@ -18037,9 +19349,7 @@ def _run_managed_soperator_cluster_upgrade(
             "pending_phase": checkpoint.get("pending_phase") or "none",
             "activechecks_restore": activechecks_restore_status,
             "slurm_restore": (
-                "left-changed"
-                if (slurm_restore_nodes or slurm_quiesce_records)
-                else "not-required"
+                "left-changed" if (slurm_restore_nodes or slurm_quiesce_records) else "not-required"
             ),
         }
         _write_soperator_upgrade_checkpoint(checkpoint_path, checkpoint)
@@ -21976,7 +23286,9 @@ def _soperator_discovery_chart_hops(report: Mapping[str, Any] | Any) -> tuple[st
         return ()
     source_chart = live_chart or _soperator_discovery_report_value(report, "source_version")
     if not source_chart:
-        source_chart = _non_empty_text(_soperator_discovery_support_evidence(report).get("source_version"))
+        source_chart = _non_empty_text(
+            _soperator_discovery_support_evidence(report).get("source_version")
+        )
     values = [_non_empty_text(source_chart), _non_empty_text(target_chart)]
     return tuple(dict.fromkeys(value for value in values if value))
 
@@ -22282,9 +23594,7 @@ def _locked_upgrade_path_segment(
     if include_k8s_change and current_k8s_version and target_k8s_version:
         title_parts.append(f"Kubernetes {current_k8s_version} -> {target_k8s_version}")
     if include_soperator_change and source_chart_version and target_chart_version:
-        title_parts.append(
-            f"Soperator chart {source_chart_version} -> {target_chart_version}"
-        )
+        title_parts.append(f"Soperator chart {source_chart_version} -> {target_chart_version}")
     if include_jail_refresh:
         jail_target = _non_empty_text(jail_rootfs.get("target_version"))
         title_parts.append(f"Jail rootfs {jail_target}" if jail_target else "Jail rootfs refresh")
@@ -29862,7 +31172,9 @@ def _external_jail_sfs_resize_state(
             "non-Nebius storage, and opaque custom submounts must be resized manually."
         )
     if len(candidates) > 1:
-        details = ", ".join(f"{filesystem_id} from {source}" for filesystem_id, source in candidates.items())
+        details = ", ".join(
+            f"{filesystem_id} from {source}" for filesystem_id, source in candidates.items()
+        )
         raise RuntimeError(
             "Cannot resize external jail rootfs storage because multiple candidate Nebius "
             f"filesystems were found: {details}."
@@ -29875,7 +31187,9 @@ def _external_jail_sfs_resize_state(
     except Exception as exc:
         if owned_api:
             active_api.close()
-        raise RuntimeError(f"Could not read external jail SFS filesystem {filesystem_id}: {exc}") from exc
+        raise RuntimeError(
+            f"Could not read external jail SFS filesystem {filesystem_id}: {exc}"
+        ) from exc
     if owned_api:
         active_api.close()
     if not isinstance(payload, Mapping):
@@ -50200,22 +51514,18 @@ def _stabilize_deploy_soperator_login_load_balancer(
                 "Cannot stabilize the Soperator login LoadBalancer allocation: "
                 "no Kubernetes context is available."
             )
-        deadline = (
-            time.monotonic() + _DEPLOY_SOPERATOR_LOGIN_LB_ALLOCATION_TIMEOUT_SECONDS
-        )
+        deadline = time.monotonic() + _DEPLOY_SOPERATOR_LOGIN_LB_ALLOCATION_TIMEOUT_SECONDS
         announced_wait = False
         last_lines: tuple[str, ...] = ()
         while True:
             service_identity_missing = False
             try:
-                _identities, decisions, lines = (
-                    stabilize_soperator_login_load_balancer_allocations(
-                        command_runner=command_runner,
-                        kube_context=kube_context,
-                        project_id=project_id,
-                        nebius_api=api,
-                        values=values,
-                    )
+                _identities, decisions, lines = stabilize_soperator_login_load_balancer_allocations(
+                    command_runner=command_runner,
+                    kube_context=kube_context,
+                    project_id=project_id,
+                    nebius_api=api,
+                    values=values,
                 )
             except SoperatorMigrationPhasePending as exc:
                 if "no login Service identity was detected" not in str(exc):
@@ -50266,9 +51576,7 @@ def _stabilize_deploy_soperator_login_load_balancer(
         return config, dict(manifest)
     paths.config_path.write_text(after, encoding="utf-8")
     allocation_ids = ", ".join(
-        decision.allocation_id
-        for decision in decisions
-        if decision.allocation_id
+        decision.allocation_id for decision in decisions if decision.allocation_id
     )
     console.print(
         "Persisted Soperator login LoadBalancer allocation"
@@ -56655,7 +57963,9 @@ def _style_soperator_migration_group_display_names(message: str) -> str:
         ready_style = _soperator_migration_ready_style(match.group("ready"), match.group("total"))
         display_name = match.group("display").strip("()")
         display_degraded = (normalize_component_token(display_name) or "") in degraded_rollout_names
-        display_style = "bold blue" if ready_style == "green" and not display_degraded else "bold red"
+        display_style = (
+            "bold blue" if ready_style == "green" and not display_degraded else "bold red"
+        )
         return (
             f"{match.group('label')} [{display_style}]{match.group('display')}[/{display_style}]:"
             f"{match.group('ready')}/{match.group('total')} Ready"
@@ -56975,7 +58285,10 @@ def _require_soperator_migration_actions(
         return
     locked_path = _locked_upgrade_path_from_onboarding(onboarding)
     locked_jail_rootfs = locked_path.get("jail_rootfs") if locked_path else None
-    if isinstance(locked_jail_rootfs, Mapping) and locked_jail_rootfs.get("refresh_required") is True:
+    if (
+        isinstance(locked_jail_rootfs, Mapping)
+        and locked_jail_rootfs.get("refresh_required") is True
+    ):
         return
     selected_actions = sorted(
         {
@@ -57053,7 +58366,8 @@ def _soperator_migration_output_phases(
         not output_phases
         and (flags["migration_required"] or jail_rootfs_refresh_required)
         and (
-            flags["external_node_template_upgrade_required"] or flags["soperator_upgrade_required"]
+            flags["external_node_template_upgrade_required"]
+            or flags["soperator_upgrade_required"]
             or jail_rootfs_refresh_required
         )
     ):
@@ -57787,10 +59101,7 @@ def _external_soperator_persistent_mount_plan_lines(
     if not status.mounts:
         lines.append("Resolved paths: none; existing customer-owned submounts provide /home.")
         return lines
-    mount_parts = [
-        f"{mount.mount_path} -> {mount.local_path}"
-        for mount in status.mounts
-    ]
+    mount_parts = [f"{mount.mount_path} -> {mount.local_path}" for mount in status.mounts]
     lines.append("Resolved paths: " + "; ".join(mount_parts) + ".")
     return lines
 
@@ -59058,16 +60369,12 @@ def soperator_external_upgrade_command(
             target_ref=target_ref,
             onboarding=effective_onboarding,
         )
-        resolved_populate_jail_refresh = normalize_populate_jail_refresh_mode(
-            populate_jail_refresh
-        )
+        resolved_populate_jail_refresh = normalize_populate_jail_refresh_mode(populate_jail_refresh)
         resolved_jail_sfs_resize_policy = _soperator_jail_sfs_resize_policy(
             policy=jail_sfs_resize_policy,
             interactive=interactive,
         )
-        resolved_jail_sfs_resize_to_gib = _soperator_jail_sfs_resize_to_gib(
-            jail_sfs_resize_to_gib
-        )
+        resolved_jail_sfs_resize_to_gib = _soperator_jail_sfs_resize_to_gib(jail_sfs_resize_to_gib)
         resolved_job_policy = _soperator_upgrade_job_policy(
             policy=job_policy,
             interactive=interactive,
@@ -59135,6 +60442,7 @@ def soperator_external_upgrade_command(
                     effective_payload, target_ref=target_ref
                 ) as execution_payload,
             ):
+
                 def _external_jail_sfs_resize_handler(
                     preflight: JailCapacityPreflight,
                     probe_capacity: Callable[[], JailCapacityPreflight],

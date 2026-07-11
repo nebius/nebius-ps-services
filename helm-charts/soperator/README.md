@@ -312,8 +312,28 @@ Common direct Helm settings:
   `nodesets[]`.
 - `volume.*` and `storage.*`: jail, controller spool, optional accounting
   storage, and mount placement.
+- `jailRootfs.adoption.activeSource: legacy-rootfs`: first-adoption staging.
+  Set `jailRootfs.adoption.legacyPvcName` to the discovered legacy PVC. The
+  chart derives `volumeSources[name=jail]`, every configured service-role jail
+  reference, and every worker NodeSet jail claim from that value. While this
+  value is active, those consumers remain on the legacy PVC and generated
+  `jailPersistentMounts` submounts are not attached. After the external copy and
+  passive-slot population complete, cxcli changes `activeSource` to `slot`,
+  selects the refreshed slot, and the chart moves the canonical `jail` alias to
+  that slot before attaching the shared submounts. SConfigController and REST
+  consume this alias even when controller, login, and workers use explicit slot
+  references. Accounting retains an alias-backed volume declaration, but the
+  current operator workload does not mount the jail. Retaining `rollbackSource:
+  legacy-rootfs` keeps the old PV/PVC only; it never pins the active alias. An
+  explicitly configured canonical `legacyPvcName: jail-pvc` keeps the
+  chart-owned legacy PV/PVC rendered; a different pre-existing claim name is
+  referenced without generating an unrelated default `jail-pv`/`jail-pvc`.
 - `slurmNodes.login.sshRootPublicKeys`: public keys for login SSH access.
   Prefer Helm `--set-file`.
+- `secrets.sshdKeysName`: existing Secret containing SSH server host keys.
+  Upgrade automation should preserve this Secret identity or copy verified key
+  data into a distinct target-owned Secret; do not rotate it implicitly during
+  chart takeover.
 - `certManager.enabled`: Soperator admission webhook certificates. Requires
   cert-manager CRDs when enabled. The chart defaults
   `certManager.privateKey.rotationPolicy` to `Always`, matching cert-manager

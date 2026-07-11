@@ -186,11 +186,12 @@ def populate_jail_manual_instruction(*, namespace: str, slurmcluster_name: str) 
     target = slurmcluster_name or "<slurmcluster>"
     return (
         "Refresh the jail rootfs by populating the passive active/passive slot with "
-        "the target populate-jail image, switching login and worker consumers to that "
-        f"slot, and keeping the previous slot available for rollback. Wait for "
+        "the target populate-jail image, switching the canonical jail volume-source "
+        "alias plus controller, SConfigController, login, worker, and REST "
+        f"consumers to that slot, and keeping the previous slot available for rollback. Wait for "
         f"job/{target}-{POPULATE_JAIL_JOB_SUFFIX}-passive-<slot> to complete in "
-        f"namespace {namespace}, then roll consumers without letting the login Service "
-        "reach zero ready endpoints."
+        f"namespace {namespace}, then require every enabled alias consumer to roll out "
+        "Ready without letting the login Service reach zero ready endpoints."
     )
 
 
@@ -344,8 +345,7 @@ def switch_active_passive_jail_rootfs_values(values: Mapping[str, Any]) -> dict[
     for role in ("controller", "login", "rest"):
         role_values = _mutable_mapping(slurm_nodes, role)
         volumes = _mutable_mapping(role_values, "volumes")
-        jail = _mutable_mapping(volumes, "jail")
-        jail["volumeSourceName"] = slots.passive_volume_source
+        volumes["jail"] = {"volumeSourceName": slots.passive_volume_source}
 
     nodesets = patched.get("nodesets")
     if isinstance(nodesets, list):
@@ -354,9 +354,7 @@ def switch_active_passive_jail_rootfs_values(values: Mapping[str, Any]) -> dict[
                 continue
             slurmd = _mutable_mapping(nodeset, "slurmd")
             volumes = _mutable_mapping(slurmd, "volumes")
-            jail = _mutable_mapping(volumes, "jail")
-            pvc = _mutable_mapping(jail, "persistentVolumeClaim")
-            pvc["claimName"] = slots.passive_pvc
+            volumes["jail"] = {"persistentVolumeClaim": {"claimName": slots.passive_pvc}}
     return sync_jail_volume_sources(patched)
 
 
@@ -460,7 +458,9 @@ def plan_populate_jail_refresh(
     )
 
 
-def skipped_populate_jail_refresh_result(plan: PopulateJailRefreshPlan) -> PopulateJailRefreshResult:
+def skipped_populate_jail_refresh_result(
+    plan: PopulateJailRefreshPlan,
+) -> PopulateJailRefreshResult:
     return PopulateJailRefreshResult(
         mode=plan.mode,
         status="skipped",
@@ -607,7 +607,9 @@ def _job_failed(resource: Mapping[str, Any]) -> bool:
     backoff_limit = 6
     if isinstance(spec, Mapping):
         try:
-            backoff_limit = int(spec.get("backoffLimit") if spec.get("backoffLimit") is not None else 6)
+            backoff_limit = int(
+                spec.get("backoffLimit") if spec.get("backoffLimit") is not None else 6
+            )
         except (TypeError, ValueError):
             backoff_limit = 6
     try:

@@ -149,7 +149,13 @@ spec:
 
       {{- with (required ".Values.nodesets[*].slurmd.volumes.jail is required" .jail) }}
       jail:
+        {{- if eq (include "slurm-cluster-storage.jailRootfs.legacyActive" $) "true" }}
+        persistentVolumeClaim:
+          claimName: {{ include "slurm-cluster-storage.jailRootfs.legacyPvc" $ | quote }}
+          readOnly: false
+        {{- else }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
 
       {{- $jailSubMounts := (.jailSubMounts | default list) }}
@@ -163,12 +169,13 @@ spec:
       {{- if $.Values.externalNfs.enabled }}
       {{- $_ := set $existingMounts (trimSuffix "/" (required ".Values.externalNfs.mountPath is required when externalNfs.enabled=true." $.Values.externalNfs.mountPath)) true }}
       {{- end }}
-      {{- if or $jailSubMounts $.Values.jailPersistentMounts }}
+      {{- $attachPersistentJailMounts := and (eq (include "slurm-cluster-storage.jailRootfs.activePassive.enabled" $) "true") (ne (include "slurm-cluster-storage.jailRootfs.legacyActive" $) "true") }}
+      {{- if or $jailSubMounts (and $attachPersistentJailMounts $.Values.jailPersistentMounts) $.Values.externalNfs.enabled }}
       jailSubMounts:
         {{- if $jailSubMounts }}
         {{- toYaml $jailSubMounts | nindent 8 }}
         {{- end }}
-        {{- if eq (include "slurm-cluster-storage.jailRootfs.activePassive.enabled" $) "true" }}
+        {{- if $attachPersistentJailMounts }}
         {{- range $mount := $.Values.jailPersistentMounts }}
         {{- $mountPath := trimSuffix "/" (required "jailPersistentMounts[].mountPath is required." $mount.mountPath) }}
         {{- if not (hasKey $existingMounts $mountPath) }}
@@ -182,9 +189,6 @@ spec:
         {{- end }}
       {{- end }}
       {{- if $.Values.externalNfs.enabled }}
-      {{- if and (not $jailSubMounts) (not $.Values.jailPersistentMounts) }}
-      jailSubMounts:
-      {{- end }}
         - name: external-home
           mountPath: {{ required ".Values.externalNfs.mountPath is required when externalNfs.enabled=true." $.Values.externalNfs.mountPath | quote }}
           volumeSourceName: external-home

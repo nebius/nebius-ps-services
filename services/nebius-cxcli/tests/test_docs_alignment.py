@@ -70,17 +70,11 @@ def test_design_architecture_summary_matches_upgrade_surface() -> None:
     assert "### Jail Upgrade" in design
     assert "active/passive rootfs slots" in design_flat
     assert "shared persistent-mount area on the same physical jail SFS" in design_flat
-    assert "backup is a restore precondition around mutation, not an upgrade phase" in (
-        design_flat
-    )
+    assert "backup is a restore precondition around mutation, not an upgrade phase" in (design_flat)
     assert (
-        "a compatible rerun reuses the checkpointed `UP -> DOWN` partition records"
-        in design_flat
+        "a compatible rerun reuses the checkpointed `UP -> DOWN` partition records" in design_flat
     )
-    assert (
-        "Slurm worker status reports deferred/upgrading from checkpoint state"
-        in design_flat
-    )
+    assert "Slurm worker status reports deferred/upgrading from checkpoint state" in design_flat
     assert "markerless checkpoints must probe Slurm first" in design_flat
     assert "falls back to the controller `slurmctld` container" in design_flat
     assert "replacement login and worker pod evidence" in design_flat
@@ -89,9 +83,7 @@ def test_design_architecture_summary_matches_upgrade_surface() -> None:
     )
     assert "/mnt/jail-store/shared/data" in design_flat
     assert "The one-time migration runs only while" in design_flat
-    assert "permissions, symlinks, ACLs, and xattrs preserved where supported" in (
-        design_flat
-    )
+    assert "permissions, symlinks, ACLs, and xattrs preserved where supported" in (design_flat)
     assert (
         "The switch-over is not a live bind-mount flip inside an already-running "
         "login or worker container"
@@ -569,8 +561,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
         "[Soperator Commands](#soperator-commands) |"
     ) in toc
     assert (
-        "| Jail rootfs refresh or active/passive switch-over | "
-        "[Jail Upgrade](#jail-upgrade) |"
+        "| Jail rootfs refresh or active/passive switch-over | [Jail Upgrade](#jail-upgrade) |"
     ) in toc
     assert (
         "| Post-deploy smoke or benchmark validation | [Acceptance Testing](#acceptance-testing) |"
@@ -636,12 +627,8 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
         "### External Soperator Upgrade",
     )
     assert "For external Soperator clusters" not in managed_upgrade_section
-    assert "`ext-soperator onboard` plus `ext-soperator upgrade`" not in (
-        managed_upgrade_section
-    )
-    assert "For external Soperator clusters, start with onboarding" in (
-        external_onboarding_section
-    )
+    assert "`ext-soperator onboard` plus `ext-soperator upgrade`" not in (managed_upgrade_section)
+    assert "For external Soperator clusters, start with onboarding" in (external_onboarding_section)
     assert "Underlying MK8s upgrade ownership is different" in external_onboarding_section
     assert "`nebius-cxcli soperator` is for Soperator app rows that cxcli already manages" in (
         soperator_flat
@@ -691,8 +678,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     )
     assert (
         "The command has no implicit execution mode: pass `--dry-run` to inspect the "
-        "plan, or pass `--execute --approve` for an approved mutating run."
-        in soperator_flat
+        "plan, or pass `--execute --approve` for an approved mutating run." in soperator_flat
     )
     assert "`nebius-cxcli soperator backup <config.yaml> --target <target>`" in soperator
     assert "`nebius-cxcli soperator restore <backup.tar.gz> --execute --approve`" in (soperator)
@@ -715,18 +701,15 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert (
         "`ext-soperator onboard`, `ext-soperator backup`, and `ext-soperator upgrade` "
         "use project-scoped Nebius API access for cloud resources and Kubernetes "
-        "API/kubeconfig access for cluster, Soperator, and Slurm work"
-        in soperator_flat
+        "API/kubeconfig access for cluster, Soperator, and Slurm work" in soperator_flat
     )
     assert (
         "Slurm commands such as `scontrol`, `squeue`, and `sacctmgr` run through "
-        "`kubectl exec` into the Soperator login or controller pods"
-        in soperator_flat
+        "`kubectl exec` into the Soperator login or controller pods" in soperator_flat
     )
     assert (
         "Login-node SSH keys remain a separate human access contract for operator "
-        "sessions and manual smoke checks"
-        in soperator_flat
+        "sessions and manual smoke checks" in soperator_flat
     )
     assert (
         "nebius-cxcli ext-soperator backup \\ --project-id <project-id> \\ "
@@ -757,9 +740,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert soperator.index("### External Soperator Onboarding") < soperator.index(
         "### External Soperator Upgrade"
     )
-    assert soperator.index("### External Soperator Upgrade") < soperator.index(
-        "### Jail Upgrade"
-    )
+    assert soperator.index("### External Soperator Upgrade") < soperator.index("### Jail Upgrade")
     assert soperator.index("### Jail Upgrade") < soperator.index(
         "### Soperator Slurm Scheduling And Command Examples"
     )
@@ -841,11 +822,13 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "Validation hold: verify external MK8s control-plane and node-group readiness" in (
         soperator_flat
     )
-    assert "Segment completion: write the latest `ext-soperator-upgrade/report.md` / `report.json`" in (
-        soperator_flat
+    assert (
+        "Segment completion: write the latest `ext-soperator-upgrade/report.md` / `report.json`"
+        in (soperator_flat)
     )
-    assert "write the segment snapshot under `generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/segments/<segment-id>/`" in (
-        soperator_flat
+    assert (
+        "write the segment snapshot under `generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/segments/<segment-id>/`"
+        in (soperator_flat)
     )
     assert "Final handoff: after the last locked segment reports `Pending phase: none`" in (
         soperator_flat
@@ -874,13 +857,9 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "Preflight and backup: validate the current bundle" in soperator_flat
     assert "Slurm and MK8s rollout: when MK8s target flags are supplied" in soperator_flat
     assert "Jail Upgrade: when the target populate-jail image changed" in soperator_flat
-    assert "require post-rootfs `scontrol`, `sbatch`, and accounting/QOS smoke" in (
-        soperator_flat
-    )
+    assert "require post-rootfs `scontrol`, `sbatch`, and accounting/QOS smoke" in (soperator_flat)
     assert "The Soperator jail is the shared Linux root filesystem" in soperator_flat
-    assert "Jail Upgrade follows the Soperator chart/rootfs activation boundary" in (
-        soperator_flat
-    )
+    assert "Jail Upgrade follows the Soperator chart/rootfs activation boundary" in (soperator_flat)
     assert "then later Kubernetes-only hops after Slurm has passed post-Jail smoke" in (
         soperator_flat
     )
@@ -890,8 +869,9 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     )
     assert "/mnt/jail-store/shared/data" in soperator_flat
     assert "/mnt/jail-store/shared/scripts" in soperator_flat
-    assert "requires enough space on the same physical jail SFS for both the passive rootfs slot" in (
-        soperator_flat
+    assert (
+        "requires enough space on the same physical jail SFS for both the passive rootfs slot"
+        in (soperator_flat)
     )
     assert "Completion markers live under `/store/.cxcli/persistent-migrations/`" in (
         soperator_flat
@@ -899,10 +879,14 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "instead of reopening legacy-rootfs writes that would make the shared copy stale" in (
         soperator_flat
     )
-    assert "creates a Kubernetes Job named like `<target>-populate-jail-passive-<slot>`" in (
-        soperator_flat
-    )
-    assert "an `sbatch` CLI parse/submit-dry-run check" in soperator_flat
+    assert (
+        "creates a Kubernetes Job named like "
+        "`<target>-populate-jail-passive-<slot>-<attempt-token>`"
+    ) in soperator_flat
+    assert "an `sbatch --test-only` configuration parse" in soperator_flat
+    assert "keep the partitions DOWN" in soperator_flat
+    assert "submits a bounded live `sbatch` job exactly once" in soperator_flat
+    assert "resumes the same smoke state without repopulating the active PVC" in soperator_flat
     assert "the cluster can briefly contain old pods using the old slot" in soperator_flat
     assert (
         "A single login or worker pod is not expected to run with both slot-a and "
@@ -912,9 +896,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "Create a multi-step technical infographic as six sequential panels" not in (
         soperator_flat
     )
-    assert "![Soperator jail upgrade workflow](docs/jail-upgrade-workflow.png)" in (
-        soperator
-    )
+    assert "![Soperator jail upgrade workflow](docs/jail-upgrade-workflow.png)" in (soperator)
     assert (
         "operator-facing top-level stage (`MK8s Node Upgrades`, `Soperator Upgrade`, "
         "or `Jail Upgrade`)"
@@ -1700,7 +1682,10 @@ def test_docs_define_component_selector_contract() -> None:
         "Each `ext-soperator upgrade --execute --approve` run advances one locked segment"
         in readme_flat
     )
-    assert "keeps onboarding in place and prints the next same-command invocation" in readme_flat
+    assert (
+        "keeps onboarding in place and prints a next action to rerun the exact original "
+        "command with every option unchanged"
+    ) in readme_flat
     assert (
         "`generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/report.md` shows `Pending phase: none`"
         in readme_flat
@@ -1732,10 +1717,13 @@ def test_docs_define_component_selector_contract() -> None:
         "Checkpoint refresh preserves the original ordered plan, including `Jail Upgrade` / `populate-jail-refresh`"
         in readme_flat
     )
-    assert "Existing locked-path resumption stays on the same upgrade command until all locked segments are complete" in (
-        readme_flat
+    assert (
+        "Existing locked-path resumption stays on the same upgrade command until all locked segments are complete"
+        in (readme_flat)
     )
-    assert "use a fresh `ext-soperator onboard` decision only to plan a new later path" in readme_flat
+    assert (
+        "use a fresh `ext-soperator onboard` decision only to plan a new later path" in readme_flat
+    )
     assert "`ext-soperator onboard` is read-only against live cluster state" in readme_flat
     assert "The initial discovery summary is read-only" in readme_flat
     assert "does not list future upgrade phases as live onboarding actions" in readme_flat
@@ -1758,8 +1746,7 @@ def test_docs_define_component_selector_contract() -> None:
     assert "does not jump straight to the latest supported minor" in readme_flat
     assert "`summary.md` includes `Upgrade Guidance` without gating discovery" in readme_flat
     assert (
-        "that section shows Kubernetes minor hops, the current/target Soperator "
-        "chart package state"
+        "that section shows Kubernetes minor hops, the current/target Soperator chart package state"
     ) in readme_flat
     assert "Support-policy evidence validates the path but does not by itself mean" in readme_flat
     assert "canonical ordering across the Kubernetes `1.33+` boundary" in readme_flat
@@ -1893,16 +1880,15 @@ def test_docs_define_component_selector_contract() -> None:
     assert "cxcli fails fast rather than assuming a vanilla cluster is safe to adopt" in readme_flat
     assert "ignored by cxcli-managed deployments `.gitignore` files" in readme_flat
     assert "creates or reuses aligned controller-spool and accounting SFS" in readme_flat
-    assert "keeps the existing physical jail SFS for single-SFS active/passive rootfs adoption" in readme_flat
     assert (
-        "automatically models `/home`, `/data`, `/scripts`, and `/models` "
-        "as persistent jail mounts"
-    ) in readme_flat
-    assert "if `/models` did not exist before first adoption" in readme_flat
-    assert (
-        "future files written under `/models` land in `/mnt/jail/shared/models`"
+        "keeps the existing physical jail SFS for single-SFS active/passive rootfs adoption"
         in readme_flat
     )
+    assert (
+        "automatically models `/home`, `/data`, `/scripts`, and `/models` as persistent jail mounts"
+    ) in readme_flat
+    assert "if `/models` did not exist before first adoption" in readme_flat
+    assert "future files written under `/models` land in `/mnt/jail/shared/models`" in readme_flat
     assert "First adoption migrates data out of legacy in-rootfs directories" in readme_flat
     assert (
         "Quota must cover spare target storage for non-jail storage while source storage remains mounted"
@@ -1943,7 +1929,10 @@ def test_docs_define_component_selector_contract() -> None:
     assert "Explicit `acceptance-test smoke --suite slurm` runs the Slurm CLI" in readme_flat
     assert "Slurm nodes reported as `inval` remain unhealthy there" in readme_flat
     assert "same catalog-owned post-render patches that Flux would apply" in readme_flat
-    assert "`generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/report.md`" in readme
+    assert (
+        "`generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/report.md`"
+        in readme
+    )
     assert (
         "Phases complete only when their live prerequisites are absent or satisfied" in readme_flat
     )
@@ -2068,8 +2057,7 @@ def test_docs_define_component_selector_contract() -> None:
     )
     assert (
         "`ext-soperator upgrade` requires an explicit mode flag; omitting both "
-        "`--dry-run` and `--execute` fails before discovery or mutation."
-        in design_flat
+        "`--dry-run` and `--execute` fails before discovery or mutation." in design_flat
     )
     assert (
         "dry-run plan groups target discovery, versions, the full locked path, completed/current/remaining segments"
@@ -2092,13 +2080,9 @@ def test_docs_define_component_selector_contract() -> None:
         "execute preflight refreshes live discovery, verifies source release/fingerprint"
         in design_flat
     )
-    assert "Jail Upgrade follows the Soperator chart/rootfs activation boundary" in (
-        design_flat
-    )
+    assert "Jail Upgrade follows the Soperator chart/rootfs activation boundary" in (design_flat)
     assert "handoff plus Jail rootfs refresh in that same segment" in design_flat
-    assert "requires post-Jail `scontrol`, `sbatch`, and accounting/QOS smoke" in (
-        design_flat
-    )
+    assert "requires post-Jail `scontrol`, `sbatch`, and accounting/QOS smoke" in (design_flat)
     assert "validation hold verifies MK8s, target Soperator" in design_flat
     assert "every executed stage runs a fast stage-scoped verification" in design_flat
     assert "including the post-MK8s validation and Jail Upgrade boundaries" in design_flat
@@ -2113,18 +2097,15 @@ def test_docs_define_component_selector_contract() -> None:
     assert "controller-safe `reserveOrdinals` path" in design_flat
     assert (
         "keeps the core external onboarding/backup/upgrade path SSH-free from the "
-        "operator workstation"
-        in design_flat
+        "operator workstation" in design_flat
     )
     assert (
         "using Nebius SDK/API calls for cloud resources and Kubernetes API/kubeconfig "
-        "access for cluster, Soperator, and Slurm operations"
-        in design_flat
+        "access for cluster, Soperator, and Slurm operations" in design_flat
     )
     assert (
         "Slurm CLI probes and decisions run through `kubectl exec` into the login or "
-        "controller pods"
-        in design_flat
+        "controller pods" in design_flat
     )
     assert "The managed stage model is explicit" in design_flat
     assert "planning/dry-run resolves chart and MK8s target intent" in design_flat
@@ -2137,7 +2118,7 @@ def test_docs_define_component_selector_contract() -> None:
         in design_flat
     )
     assert (
-        "records managed MK8s reconciliation diagnostics under `mk8s` and `phase_state[\"mk8s-node-template\"]`"
+        'records managed MK8s reconciliation diagnostics under `mk8s` and `phase_state["mk8s-node-template"]`'
         in design_flat
     )
     assert "Kubernetes minor upgrades must follow provider-supported hops" in design_flat
@@ -2153,8 +2134,9 @@ def test_docs_define_component_selector_contract() -> None:
         "External node-template work is one Kubernetes minor hop per accepted locked-path segment and `ext-soperator upgrade` run"
         in (design_flat)
     )
-    assert "repeat the same `ext-soperator upgrade --execute --approve` command until the path is complete" in (
-        design_flat
+    assert (
+        "repeat the same `ext-soperator upgrade --execute --approve` command until the path is complete"
+        in (design_flat)
     )
     assert "a fresh `ext-soperator onboard` decision is only for planning a new later path" in (
         design_flat
@@ -2190,8 +2172,7 @@ def test_docs_define_component_selector_contract() -> None:
         in design_flat
     )
     assert (
-        ".nebius-cxcli/soperator-clusters/<cluster-key>/soperator-upgrade/checkpoint.json"
-        in design
+        ".nebius-cxcli/soperator-clusters/<cluster-key>/soperator-upgrade/checkpoint.json" in design
     )
     assert (
         "finish `ext-soperator upgrade` and checkpointed `soperator upgrade` runs from the same laptop"
@@ -2235,13 +2216,8 @@ def test_docs_define_component_selector_contract() -> None:
         "models `/home`, `/data`, `/scripts`, `/models`, plus explicitly declared "
         "additional customer paths as persistent jail mounts"
     ) in design_flat
-    assert (
-        "missing `/models` is recorded with a `source_missing` marker" in design_flat
-    )
-    assert (
-        "later user writes under `/models` land in `/mnt/jail/shared/models`"
-        in design_flat
-    )
+    assert "missing `/models` is recorded with a `source_missing` marker" in design_flat
+    assert "later user writes under `/models` land in `/mnt/jail/shared/models`" in design_flat
     assert "provides ad hoc `ext-soperator scale-up` and `ext-soperator scale-down`" in (
         design_flat
     )
@@ -2301,16 +2277,10 @@ def test_docs_define_component_selector_contract() -> None:
     assert "Service-role groups are serial zero-surge by default" in design_flat
     assert "`drain_timeout=10m`) by default" in design_flat
     assert "`upgrading` is provider-active rollout nodes" in design_flat
-    assert (
-        "`min(25, max(2, ceil(largest_worker_group_node_count * 0.05)))`" in design_flat
-    )
-    assert (
-        "requires spare surge capacity for active service groups by default"
-        not in design_flat
-    )
+    assert "`min(25, max(2, ceil(largest_worker_group_node_count * 0.05)))`" in design_flat
+    assert "requires spare surge capacity for active service groups by default" not in design_flat
     stale_service_role_safe_surge_default = (
-        "uses safe-surge (`max_surge=1`, `max_unavailable=0`, "
-        "`drain_timeout=30m`) by default"
+        "uses safe-surge (`max_surge=1`, `max_unavailable=0`, `drain_timeout=30m`) by default"
     )
     assert stale_service_role_safe_surge_default not in design_flat
     assert "worker_wave_percent: 1" in readme
@@ -2338,9 +2308,16 @@ def test_docs_define_component_selector_contract() -> None:
     assert "migrates legacy in-rootfs data into those shared mount paths during first adoption" in (
         design_flat
     )
-    assert "With the default `target-ready` policy, this step stops before login is scaled down" in (
-        readme_flat
+    assert (
+        "With the default `target-ready` policy, cxcli stops in execute preflight before any "
+        "upgrade mutation and prints a next action to rerun the exact original command "
+        "with `--login-session-policy wait-active` added" in readme_flat
     )
+    assert "records it as `jailRootfs.adoption.legacyPvcName`" in readme_flat
+    assert "keeps service and worker consumers on that PVC" in readme_flat
+    assert "preserves both sides of SSH identity" in readme_flat
+    assert "secret-bearing last-applied annotation" in readme_flat
+    assert "checkpointed passive-slot Job" in readme_flat
     assert "instead of reopening legacy-rootfs writes that would make the shared copy stale" in (
         design_flat
     )
@@ -2371,7 +2348,10 @@ def test_docs_define_component_selector_contract() -> None:
     assert "Explicit `acceptance-test smoke --suite slurm` runs the Slurm CLI" in readme_flat
     assert "Slurm nodes reported as `inval` remain unhealthy there" in readme_flat
     assert "same catalog-owned post-render patches that Flux would apply" in design_flat
-    assert "`generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/report.md`" in design
+    assert (
+        "`generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/report.md`"
+        in design
+    )
     assert "resume relies on phase checkpoints" in design_flat
     assert "interactive spinner backed by phase-aware status snapshots" in design_flat
     assert (

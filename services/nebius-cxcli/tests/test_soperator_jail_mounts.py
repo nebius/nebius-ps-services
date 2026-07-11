@@ -35,9 +35,7 @@ def test_apply_external_persistent_mount_values_adds_home_in_shared_area() -> No
     assert volume_sources["controller-spool"]["persistentVolumeClaim"]["claimName"] == (
         "controller-spool-pvc"
     )
-    assert volume_sources["jail"]["persistentVolumeClaim"]["claimName"] == (
-        "jail-rootfs-slot-a-pvc"
-    )
+    assert volume_sources["jail"]["persistentVolumeClaim"]["claimName"] == ("jail-pvc")
     assert "jail_home" not in values
     assert "home" not in values["jailRootfs"]
 
@@ -71,9 +69,7 @@ def test_external_persistent_mount_decisions_record_auto_explicit_and_existing_s
         "/scripts": "pending-probe",
         "/models": "pending-probe",
     }
-    assert {
-        item["mount_path"]: item["copy_required"] for item in decisions
-    } == {
+    assert {item["mount_path"]: item["copy_required"] for item in decisions} == {
         "/home": False,
         "/data": True,
         "/scripts": True,
@@ -86,6 +82,11 @@ def test_apply_persistent_mount_values_removes_chart_rendered_volume_source_dupl
         {
             "volumeSources": [
                 {"name": "controller-spool", "persistentVolumeClaim": {"claimName": "spool"}},
+                {
+                    "name": "jail",
+                    "csi": {"driver": "legacy.example.invalid"},
+                    "glusterfs": {"endpoints": "legacy"},
+                },
                 {
                     "name": "jail-rootfs-slot-a",
                     "persistentVolumeClaim": {"claimName": "stale-a"},
@@ -103,9 +104,9 @@ def test_apply_persistent_mount_values_removes_chart_rendered_volume_source_dupl
     volume_sources = {item["name"]: item for item in values["volumeSources"]}
     assert set(volume_sources) == {"controller-spool", "jail"}
     assert volume_sources["controller-spool"]["persistentVolumeClaim"]["claimName"] == "spool"
-    assert volume_sources["jail"]["persistentVolumeClaim"]["claimName"] == (
-        "jail-rootfs-slot-a-pvc"
-    )
+    assert volume_sources["jail"]["persistentVolumeClaim"]["claimName"] == ("jail-pvc")
+    assert "csi" not in volume_sources["jail"]
+    assert "glusterfs" not in volume_sources["jail"]
 
 
 def test_apply_persistent_mount_values_adds_referenced_controller_spool_source() -> None:
@@ -129,9 +130,47 @@ def test_apply_persistent_mount_values_adds_referenced_controller_spool_source()
     assert volume_sources["controller-spool"]["persistentVolumeClaim"]["claimName"] == (
         "controller-spool-pvc"
     )
-    assert volume_sources["jail"]["persistentVolumeClaim"]["claimName"] == (
-        "jail-rootfs-slot-a-pvc"
+    assert volume_sources["jail"]["persistentVolumeClaim"]["claimName"] == ("jail-pvc")
+
+
+def test_external_first_adoption_keeps_all_consumers_on_legacy_jail_pvc() -> None:
+    service_roles = ("controller", "login", "exporter", "rest")
+    values = apply_jail_persistent_mount_values(
+        {
+            "slurmNodes": {
+                "controller": {
+                    "volumes": {
+                        "jail": {"persistentVolumeClaim": {"claimName": "stale-direct-pvc"}}
+                    }
+                },
+                "login": {
+                    "volumes": {
+                        "jail": {
+                            "volumeClaimTemplateSpec": {"resources": {}},
+                        }
+                    }
+                },
+                "exporter": {"volumes": {"jail": {"volumeSourceName": "jail-rootfs-slot-a"}}},
+                "rest": {"volumes": {"jail": {"volumeSourceName": "jail-rootfs-slot-a"}}},
+            },
+            "nodesets": [
+                {
+                    "name": "worker",
+                    "slurmd": {"volumes": {"jail": {"volumeSourceName": "jail-rootfs-slot-a"}}},
+                }
+            ],
+        },
+        target_ref="external-cluster",
+        layout="external",
     )
+
+    volume_sources = {item["name"]: item for item in values["volumeSources"]}
+    assert volume_sources["jail"]["persistentVolumeClaim"]["claimName"] == "jail-pvc"
+    for role in service_roles:
+        assert values["slurmNodes"][role]["volumes"]["jail"] == {"volumeSourceName": "jail"}
+    assert values["nodesets"][0]["slurmd"]["volumes"]["jail"] == {
+        "persistentVolumeClaim": {"claimName": "jail-pvc"}
+    }
 
 
 def test_apply_managed_persistent_mount_values_uses_same_store_home() -> None:
@@ -151,7 +190,14 @@ def test_apply_managed_persistent_mount_values_uses_same_store_home() -> None:
 
 def test_apply_managed_first_adoption_adds_customer_shared_paths() -> None:
     values = apply_jail_persistent_mount_values(
-        {},
+        {
+            "jailRootfs": {
+                "adoption": {
+                    "activeSource": "slot",
+                    "rollbackSource": "slot",
+                }
+            }
+        },
         target_ref="cxcli-slurm",
         layout="managed",
         include_default_shared_mounts=True,
@@ -165,6 +211,7 @@ def test_apply_managed_first_adoption_adds_customer_shared_paths() -> None:
         {"mountPath": "/models", "localPath": "/mnt/jail-store/shared/models"},
     ]
     assert values["jailRootfs"]["adoption"]["activeSource"] == "legacy-rootfs"
+    assert values["jailRootfs"]["adoption"]["rollbackSource"] == "legacy-rootfs"
 
 
 def test_parse_explicit_persistent_mount_spec() -> None:

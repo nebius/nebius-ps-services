@@ -1298,6 +1298,14 @@ jailRootfs:
   strategy: activePassive
   activeSlot: slot-a
   passiveSlot: slot-b
+  adoption:
+    # slot selects activeSlot for normal operation. legacy-rootfs makes every
+    # rendered controller/login/worker consumer use legacyPvcName and withholds
+    # jailPersistentMounts until the one-time copy and slot switch complete.
+    activeSource: slot
+    # Existing legacy claim used during first adoption and retained when
+    # rollbackSource is set to legacy-rootfs by the upgrade workflow.
+    legacyPvcName: jail-pvc
   store:
     mountPath: /mnt/jail-store
     rootfsPath: /mnt/jail-store/rootfs

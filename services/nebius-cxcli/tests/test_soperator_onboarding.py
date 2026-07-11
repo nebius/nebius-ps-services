@@ -7,6 +7,7 @@ from collections.abc import Callable
 import pytest
 
 import nebius_cxcli.soperator_onboarding as soperator_onboarding_module
+from nebius_cxcli import soperator_migration as soperator_migration_module
 from nebius_cxcli.runtime_validation import validate_runtime_payload
 from nebius_cxcli.soperator_discovery import (
     load_soperator_discovery_bundle,
@@ -886,10 +887,10 @@ def test_soperator_onboarding_skips_external_node_template_when_provider_invento
     assert finding.evidence["matched_node_group_count"] == 6
 
 
-def test_soperator_onboarding_plans_external_node_template_for_same_soperator_version_k8s_hop() -> None:
-    snapshot = _with_provider_node_template_inventory(
-        _target_compatible_legacy_snapshot()
-    )
+def test_soperator_onboarding_plans_external_node_template_for_same_soperator_version_k8s_hop() -> (
+    None
+):
+    snapshot = _with_provider_node_template_inventory(_target_compatible_legacy_snapshot())
     snapshot["helm_releases"] = [
         {
             "name": "soperator",
@@ -1403,17 +1404,12 @@ def test_soperator_support_policy_supports_122_plus_before_k8s_133() -> None:
 
     finding = _single_support_finding(report)
     assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_SUPPORTED
-    assert (
-        finding["evidence"]["rule_id"]
-        == "k8s-before-1-33-soperator-1-22-plus-supported"
-    )
+    assert finding["evidence"]["rule_id"] == "k8s-before-1-33-soperator-1-22-plus-supported"
     assert finding["evidence"]["target_version"] == "4.0.2-ps.3"
     assert finding["evidence"]["target_app_version"] == "4.0.2"
     assert finding["evidence"]["target_chart_version"] == "4.0.2-ps.3"
     assert finding["evidence"]["approved_target_chart_version"] == "4.0.2-ps.3"
-    assert finding["evidence"]["recommended_order"] == {
-        "soperator_after_k8s_min": "1.32"
-    }
+    assert finding["evidence"]["recommended_order"] == {"soperator_after_k8s_min": "1.32"}
     assert not soperator_upgrade_support_requires_override(report)
 
 
@@ -1461,9 +1457,7 @@ def test_soperator_support_policy_accepts_v4_target_on_k8s_133() -> None:
     assert finding["evidence"]["rule_id"] == "k8s-1-33-soperator-4-supported"
     assert finding["evidence"]["target_version"] == "4.0.2-ps.3"
     assert finding["evidence"]["target_app_version"] == "4.0.2"
-    assert finding["evidence"]["recommended_order"] == {
-        "soperator_after_k8s_min": "1.32"
-    }
+    assert finding["evidence"]["recommended_order"] == {"soperator_after_k8s_min": "1.32"}
     assert not soperator_upgrade_support_requires_override(report)
 
 
@@ -1490,10 +1484,7 @@ def test_soperator_support_policy_marks_same_app_non_pin_target_not_validated(
     finding = _single_support_finding(report)
     assert finding["status"] == SOPERATOR_UPGRADE_SUPPORT_STATUS_NOT_VALIDATED
     assert finding["severity"] == "required"
-    assert (
-        finding["evidence"]["rule_id"]
-        == "soperator-target-same-app-non-cxcli-pin-not-validated"
-    )
+    assert finding["evidence"]["rule_id"] == "soperator-target-same-app-non-cxcli-pin-not-validated"
     assert finding["evidence"]["target_version"] == target_chart_version
     assert finding["evidence"]["target_app_version"] == "4.0.2"
     assert finding["evidence"]["approved_target_chart_version"] == "4.0.2-ps.3"
@@ -2507,7 +2498,9 @@ def test_runtime_validation_rejects_soperator_onboarding_unknown_key() -> None:
         validate_runtime_payload(payload)
 
 
-def test_runtime_validation_rejects_soperator_onboarding_actions_string_even_when_fingerprinted() -> None:
+def test_runtime_validation_rejects_soperator_onboarding_actions_string_even_when_fingerprinted() -> (
+    None
+):
     payload = _onboarding_payload()
     target = payload["deploy"]["targets"][0]  # type: ignore[index]
     onboarding = target["soperator_onboarding"]  # type: ignore[index]
@@ -2723,10 +2716,7 @@ def test_source_discovery_report_writer_persists_full_snapshot(tmp_path) -> None
 
 def test_source_discovery_report_writer_treats_output_dir_as_root(tmp_path) -> None:
     output_root = tmp_path / "custom-root"
-    jail_image = (
-        "cr.eu-north1.nebius.cloud/soperator/populate_jail:"
-        "4.0.2-slurm25.11.3-cuda12.9.0"
-    )
+    jail_image = "cr.eu-north1.nebius.cloud/soperator/populate_jail:4.0.2-slurm25.11.3-cuda12.9.0"
     snapshot = _snapshot(
         release={
             "name": "soperator",
@@ -2807,13 +2797,9 @@ def test_source_discovery_report_writer_marks_jail_refresh_when_target_image_cha
     tmp_path,
 ) -> None:
     current_image = (
-        "cr.eu-north1.nebius.cloud/soperator/populate_jail:"
-        "4.0.2-slurm25.11.3-cuda12.8.0"
+        "cr.eu-north1.nebius.cloud/soperator/populate_jail:4.0.2-slurm25.11.3-cuda12.8.0"
     )
-    target_image = (
-        "cr.eu-north1.nebius.cloud/soperator/populate_jail:"
-        "4.0.2-slurm25.11.3-cuda12.9.0"
-    )
+    target_image = "cr.eu-north1.nebius.cloud/soperator/populate_jail:4.0.2-slurm25.11.3-cuda12.9.0"
     snapshot = _snapshot(
         release={
             "name": "soperator",
@@ -2861,16 +2847,69 @@ def test_source_discovery_report_writer_marks_jail_refresh_when_target_image_cha
     assert "- Target Jail rootfs version: `4.0.2-slurm25.11.3-cuda12.9.0`" in summary
 
 
+def test_source_discovery_round_trip_preserves_sshd_secret_reference(
+    tmp_path,
+) -> None:
+    snapshot = _snapshot(
+        release={
+            "name": "soperator",
+            "namespace": "soperator",
+            "chart": "soperator-4.0.2-ps.3",
+            "app_version": "4.0.2",
+        }
+    )
+    snapshot["soperator_resources"] = [
+        {
+            "kind": "SlurmCluster",
+            "metadata": {
+                "name": "legacy-source",
+                "namespace": "soperator",
+                "uid": "source-uid",
+            },
+            "spec": {
+                "secrets": {"sshdKeysName": "customer-host-identity"},
+            },
+        }
+    ]
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref="target-cluster",
+        pinned_chart_version="4.0.2-ps.3",
+        pinned_app_version="4.0.2",
+    )
+
+    path = write_source_soperator_discovery_report(
+        tmp_path,
+        target_ref="target-cluster",
+        snapshot=snapshot,
+        report=report,
+    )
+    loaded = load_soperator_discovery_bundle(path)
+    persisted_snapshot = loaded["snapshot"]
+
+    assert persisted_snapshot["soperator_resources"][0]["spec"]["secrets"] == "[redacted]"
+    assert loaded["source_slurmcluster_ref"] == {
+        "status": "resolved",
+        "namespace": "soperator",
+        "name": "legacy-source",
+        "uid": "source-uid",
+        "sshd_host_key_secret_name": "customer-host-identity",
+    }
+    assert (
+        soperator_migration_module._source_sshd_host_key_secret_name(  # noqa: SLF001
+            loaded,
+            target_ref="target-cluster",
+        )
+        == "customer-host-identity"
+    )
+
+
 def test_source_discovery_report_writer_prefers_completed_populate_jail_job_image(
     tmp_path,
 ) -> None:
-    live_image = (
-        "cr.eu-north1.nebius.cloud/soperator/populate_jail:"
-        "4.0.2-slurm25.11.3-cuda12.8.0"
-    )
+    live_image = "cr.eu-north1.nebius.cloud/soperator/populate_jail:4.0.2-slurm25.11.3-cuda12.8.0"
     completed_job_image = (
-        "cr.eu-north1.nebius.cloud/soperator/populate_jail:"
-        "4.0.2-slurm25.11.3-cuda12.9.0"
+        "cr.eu-north1.nebius.cloud/soperator/populate_jail:4.0.2-slurm25.11.3-cuda12.9.0"
     )
     snapshot = _snapshot(
         release={

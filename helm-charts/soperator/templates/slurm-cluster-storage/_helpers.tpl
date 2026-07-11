@@ -53,6 +53,25 @@
     {{- if eq (include "slurm-cluster-storage.jailRootfs.strategy" .) "activePassive" -}}true{{- else -}}false{{- end -}}
 {{- end }}
 
+{{/* Whether first adoption still has login and worker consumers on the legacy rootfs. */}}
+{{- define "slurm-cluster-storage.jailRootfs.legacyActive" -}}
+    {{- $adoption := default dict .Values.jailRootfs.adoption -}}
+    {{- if eq (default "" $adoption.activeSource) "legacy-rootfs" -}}true{{- else -}}false{{- end -}}
+{{- end }}
+
+{{/* Whether the active or rollback contract still references the legacy rootfs. */}}
+{{- define "slurm-cluster-storage.jailRootfs.legacyReferenced" -}}
+    {{- $adoption := default dict .Values.jailRootfs.adoption -}}
+    {{- if or (eq (default "" $adoption.activeSource) "legacy-rootfs") (eq (default "" $adoption.rollbackSource) "legacy-rootfs") -}}true{{- else -}}false{{- end -}}
+{{- end }}
+
+{{/* Legacy jail PVC selected for first adoption and rollback. */}}
+{{- define "slurm-cluster-storage.jailRootfs.legacyPvc" -}}
+    {{- $adoption := default dict .Values.jailRootfs.adoption -}}
+    {{- $managedDefault := include "slurm-cluster-storage.volume.jail.pvc" . | trimAll "\"" -}}
+    {{- default $managedDefault $adoption.legacyPvcName | trim -}}
+{{- end }}
+
 {{/* Active/passive jail store mount path on Kubernetes hosts. */}}
 {{- define "slurm-cluster-storage.jailRootfs.store.path" -}}
     {{- default "/mnt/jail-store" .Values.jailRootfs.store.mountPath | trim -}}

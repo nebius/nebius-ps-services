@@ -4,6 +4,23 @@ All notable changes to this chart are tracked here.
 
 ## [Unreleased]
 
+- Fixed first-adoption switch-over so retaining the legacy jail PV/PVC for
+  rollback does not keep the active `jail` volume source pointed at that legacy
+  claim. Once `activeSource=slot`, the alias follows the populated active slot,
+  allowing SConfigController and other alias consumers to complete handoff.
+- Direct Helm first adoption now derives the legacy jail volume source and all
+  controller, login, and worker consumer references from
+  `jailRootfs.adoption.legacyPvcName` while `activeSource=legacy-rootfs`.
+  Adoption enums and persistent-mount shapes are schema/template validated, so
+  typos fail closed instead of silently leaving consumers on a rootfs slot.
+- Fixed first-adoption active/passive jail rendering. While
+  `jailRootfs.adoption.activeSource=legacy-rootfs`, service roles and worker
+  NodeSets remain on the configured legacy jail PVC and chart-generated shared
+  persistent submounts stay detached; they are attached only after cxcli
+  selects a populated rootfs slot. Explicitly selecting the canonical
+  `jail-pvc` keeps its chart-owned PV/PVC rendered, while a different
+  pre-existing legacy claim avoids an unrelated generated duplicate.
+
 ## [soperator-chart-v4.0.2-ps.4] - 2026-07-07
 
 - Added the active/passive jail rootfs storage contract. The chart now renders

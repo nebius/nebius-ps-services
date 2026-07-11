@@ -422,8 +422,7 @@ def _classify_managed_chart_upgrade_deltas(comparison: Mapping[str, Any]) -> dic
         _delta_resource_key(item) for item in raw_deltas if _is_managed_chart_metadata_delta(item)
     }
     managed_runtime_touched = any(
-        _is_managed_chart_runtime_source_delta(item, chart_touched_resources)
-        for item in raw_deltas
+        _is_managed_chart_runtime_source_delta(item, chart_touched_resources) for item in raw_deltas
     )
     deltas: list[dict[str, Any]] = []
     for item in raw_deltas:
@@ -543,7 +542,9 @@ def _is_external_intentional_migration_delta(
             and after == "absent"
         ):
             return True
-        return (name in _EXTERNAL_MIGRATION_WORKLOAD_NAMES or name.startswith(f"{target_ref}-")) and field in {
+        return (
+            name in _EXTERNAL_MIGRATION_WORKLOAD_NAMES or name.startswith(f"{target_ref}-")
+        ) and field in {
             "presence",
             "labels",
             "annotation_sha256_by_key",
@@ -638,7 +639,10 @@ def _is_managed_chart_runtime_source_delta(
     chart_touched_resources: set[tuple[str, str]],
 ) -> bool:
     kind = str(delta.get("kind", "") or "")
-    return kind in {"nodesets", "slurmclusters"} and _delta_resource_key(delta) in chart_touched_resources
+    return (
+        kind in {"nodesets", "slurmclusters"}
+        and _delta_resource_key(delta) in chart_touched_resources
+    )
 
 
 _MANAGED_CHART_WORKLOAD_NAMES = frozenset(
@@ -667,10 +671,10 @@ def _is_managed_chart_upgrade_delta(
     if _is_managed_chart_metadata_delta(delta):
         return True
     if kind in {"nodesets", "slurmclusters"}:
-        return (
-            _delta_resource_key(delta) in chart_touched_resources
-            and field in {"spec_hash", "spec_keys"}
-        )
+        return _delta_resource_key(delta) in chart_touched_resources and field in {
+            "spec_hash",
+            "spec_keys",
+        }
     if kind == "slurm_runtime":
         return field in {"slurm_config", "slurm_nodes"}
     if kind in {"workloads.deployments", "workloads.daemonsets", "workloads.statefulsets"}:
@@ -685,7 +689,9 @@ def _is_managed_chart_upgrade_delta(
 def build_remediation_approval_plan(
     comparison: Mapping[str, Any],
 ) -> dict[str, Any]:
-    deltas = [dict(item) for item in comparison.get("deltas", []) or [] if isinstance(item, Mapping)]
+    deltas = [
+        dict(item) for item in comparison.get("deltas", []) or [] if isinstance(item, Mapping)
+    ]
     blocked = [item for item in deltas if item.get("classification") == "blocked"]
     remediation = [
         item
@@ -695,7 +701,9 @@ def build_remediation_approval_plan(
     ]
     return {
         "schema": SOPERATOR_UPGRADE_SAFETY_SCHEMA,
-        "status": "blocked" if blocked else ("approval-required" if remediation else "not-required"),
+        "status": "blocked"
+        if blocked
+        else ("approval-required" if remediation else "not-required"),
         "blocked": blocked,
         "remediation_required": remediation,
         "requires_approval": bool(remediation),
@@ -952,7 +960,9 @@ def update_safety_payload_with_verification(
         "passed": result.passed,
         "checks": [to_plain_data(item) for item in result.checks],
     }
-    payload["heavy_validation_followups"] = [to_plain_data(item) for item in result.heavy_validation_followups]
+    payload["heavy_validation_followups"] = [
+        to_plain_data(item) for item in result.heavy_validation_followups
+    ]
     payload["zero_downtime_eligibility"] = to_plain_data(result.zero_downtime_eligibility)
     approval_plan = build_remediation_approval_plan(comparison)
     remediation_items = approval_plan.get("remediation_required", [])
@@ -1087,7 +1097,9 @@ def _run_readonly(
     input_text: str | None = None,
 ) -> SafetyCommandResult:
     if _is_mutating_command(args):
-        raise RuntimeError(f"Refusing mutating command during Soperator safety verification: {shlex.join(args)}")
+        raise RuntimeError(
+            f"Refusing mutating command during Soperator safety verification: {shlex.join(args)}"
+        )
     return command_runner(
         args,
         input_text=input_text,
@@ -1168,7 +1180,9 @@ def _metadata(payload: Mapping[str, Any]) -> Mapping[str, Any]:
 def _resource_identity(item: Mapping[str, Any], *, kind: str | None = None) -> dict[str, Any]:
     metadata = _metadata(item)
     labels = metadata.get("labels") if isinstance(metadata.get("labels"), Mapping) else {}
-    annotations = metadata.get("annotations") if isinstance(metadata.get("annotations"), Mapping) else {}
+    annotations = (
+        metadata.get("annotations") if isinstance(metadata.get("annotations"), Mapping) else {}
+    )
     return {
         "kind": kind or str(item.get("kind", "") or ""),
         "namespace": str(metadata.get("namespace", "") or ""),
@@ -1227,7 +1241,9 @@ def _sanitize_pvcs(payload: Mapping[str, Any]) -> dict[str, Any]:
         spec = item.get("spec") if isinstance(item.get("spec"), Mapping) else {}
         status = item.get("status") if isinstance(item.get("status"), Mapping) else {}
         resources = spec.get("resources") if isinstance(spec.get("resources"), Mapping) else {}
-        requests = resources.get("requests") if isinstance(resources.get("requests"), Mapping) else {}
+        requests = (
+            resources.get("requests") if isinstance(resources.get("requests"), Mapping) else {}
+        )
         capacity = status.get("capacity") if isinstance(status.get("capacity"), Mapping) else {}
         items.append(
             {
@@ -1295,8 +1311,7 @@ def _sanitize_configmaps(payload: Mapping[str, Any]) -> dict[str, Any]:
                     str(key): _sha256_text(str(value)) for key, value in sorted(data.items())
                 },
                 "binary_data_sha256_by_key": {
-                    str(key): _sha256_text(str(value))
-                    for key, value in sorted(binary_data.items())
+                    str(key): _sha256_text(str(value)) for key, value in sorted(binary_data.items())
                 },
             }
         )
@@ -1324,8 +1339,7 @@ def _sanitize_secrets(payload: Mapping[str, Any]) -> dict[str, Any]:
                     str(key): _sha256_text(str(value)) for key, value in sorted(data.items())
                 },
                 "string_data_sha256_by_key": {
-                    str(key): _sha256_text(str(value))
-                    for key, value in sorted(string_data.items())
+                    str(key): _sha256_text(str(value)) for key, value in sorted(string_data.items())
                 },
             }
         )
@@ -1567,7 +1581,9 @@ def _redact_secrets(value: Any) -> Any:
         result: dict[str, Any] = {}
         for key, item in value.items():
             key_text = str(key)
-            if re.search(r"(password|secret|token|private[_-]?key|certificate|credential)", key_text, re.I):
+            if re.search(
+                r"(password|secret|token|private[_-]?key|certificate|credential)", key_text, re.I
+            ):
                 result[key_text] = "<redacted>"
             else:
                 result[key_text] = _redact_secrets(item)
@@ -1603,7 +1619,11 @@ def _nested_named_deltas(section: str, before: Any, after: Any) -> list[Protecte
     after_map = after if isinstance(after, Mapping) else {}
     deltas: list[ProtectedStateDelta] = []
     for child in sorted(set(before_map) | set(after_map)):
-        deltas.extend(_named_resource_deltas(f"{section}.{child}", before_map.get(child), after_map.get(child)))
+        deltas.extend(
+            _named_resource_deltas(
+                f"{section}.{child}", before_map.get(child), after_map.get(child)
+            )
+        )
     return deltas
 
 
@@ -1706,7 +1726,9 @@ def _delta(
     before: Any,
     after: Any,
 ) -> ProtectedStateDelta:
-    classification, approval_required, remediation = _classify_delta(section, resource, field, before, after)
+    classification, approval_required, remediation = _classify_delta(
+        section, resource, field, before, after
+    )
     return ProtectedStateDelta(
         kind=section,
         resource=resource,
@@ -1727,12 +1749,26 @@ def _classify_delta(
     after: Any,
 ) -> tuple[str, bool, str]:
     if section == "source_payload":
-        return "intentional_upgrade", False, "Generated config changed as part of the requested upgrade."
+        return (
+            "intentional_upgrade",
+            False,
+            "Generated config changed as part of the requested upgrade.",
+        )
     if section.endswith("pvcs"):
         if field == "presence" and before == "present" and after == "absent":
-            return "blocked", False, "Protected PVC disappeared after upgrade; restore before continuing."
-        if field in {"request_storage", "capacity_storage"} and _storage_quantity_gib(after) < _storage_quantity_gib(before):
-            return "blocked", False, "Protected PVC storage shrank after upgrade; restore before continuing."
+            return (
+                "blocked",
+                False,
+                "Protected PVC disappeared after upgrade; restore before continuing.",
+            )
+        if field in {"request_storage", "capacity_storage"} and _storage_quantity_gib(
+            after
+        ) < _storage_quantity_gib(before):
+            return (
+                "blocked",
+                False,
+                "Protected PVC storage shrank after upgrade; restore before continuing.",
+            )
     if section == "slurm_runtime" and field in {
         "accounting_associations",
         "accounting_qos",
@@ -1741,9 +1777,27 @@ def _classify_delta(
         "slurm_nodes",
         "slurm_partitions",
     }:
+        if (
+            isinstance(before, Mapping)
+            and before.get("available") is False
+            and isinstance(after, Mapping)
+            and after.get("available") is True
+        ):
+            return (
+                "preserve",
+                False,
+                "Pre-upgrade Slurm runtime evidence was unavailable; post-upgrade capture succeeded, "
+                "so no comparable baseline exists.",
+            )
         return "remediation_required", True, "Review and approve this Slurm protected-state drift."
-    if section in {"configmaps", "secrets", "nodesets", "slurmclusters"} or section.startswith("flux"):
-        return "remediation_required", True, "Review and approve this protected Kubernetes resource drift."
+    if section in {"configmaps", "secrets", "nodesets", "slurmclusters"} or section.startswith(
+        "flux"
+    ):
+        return (
+            "remediation_required",
+            True,
+            "Review and approve this protected Kubernetes resource drift.",
+        )
     if section.startswith("workloads"):
         return "remediation_required", True, "Review and approve this workload template drift."
     if section == "nodes":
@@ -1787,7 +1841,11 @@ def _pod_phase_check(state: ProtectedCustomerState) -> dict[str, Any]:
     for name, pod in items.items():
         phase = str(pod.get("phase", "") or "").lower()
         reasons = {str(reason) for reason in pod.get("waiting_reasons", []) or []}
-        if phase in _UNAVAILABLE_STATUSES or phase not in {"running", "succeeded"} or reasons & _BAD_WAITING_REASONS:
+        if (
+            phase in _UNAVAILABLE_STATUSES
+            or phase not in {"running", "succeeded"}
+            or reasons & _BAD_WAITING_REASONS
+        ):
             failed.append(name)
         if int(pod.get("restart_count") or 0) >= 10:
             high_restarts.append(name)
@@ -1953,7 +2011,9 @@ def _observability_check(state: ProtectedCustomerState) -> dict[str, Any]:
         for section in workloads.values():
             for item in _items_by_name(section).values():
                 labels = item.get("labels") if isinstance(item.get("labels"), Mapping) else {}
-                workload_text.extend([str(item.get("name", "") or ""), *[str(value) for value in labels.values()]])
+                workload_text.extend(
+                    [str(item.get("name", "") or ""), *[str(value) for value in labels.values()]]
+                )
     observability_enabled = any(
         "observability" in item.lower() or "nebius-observability-agent" in item.lower()
         for item in workload_text
@@ -2018,7 +2078,9 @@ def _zero_downtime_eligibility(
     if not after_state.complete:
         reasons.append("post-upgrade protected-state capture is incomplete")
     nodes = _items_by_name(after_state.sections.get("nodes"))
-    ready_count = sum(1 for item in nodes.values() if str(item.get("ready", "") or "").lower() == "true")
+    ready_count = sum(
+        1 for item in nodes.values() if str(item.get("ready", "") or "").lower() == "true"
+    )
     if nodes and ready_count == 0:
         reasons.append("no Ready Kubernetes nodes were captured")
     slurm_problem_nodes = _slurm_runtime_problem_nodes(after_state)
@@ -2114,7 +2176,9 @@ def _protected_pvc_names(pvcs: Mapping[str, Mapping[str, Any]]) -> tuple[str, ..
     for name, item in pvcs.items():
         basename = name.rsplit("/", 1)[-1].lower()
         labels = item.get("labels") if isinstance(item.get("labels"), Mapping) else {}
-        haystack = " ".join([basename, *[str(key) for key in labels], *[str(value) for value in labels.values()]])
+        haystack = " ".join(
+            [basename, *[str(key) for key in labels], *[str(value) for value in labels.values()]]
+        )
         if any(key in haystack for key in _PROTECTED_PVC_KEYS):
             names.append(name)
     return tuple(sorted(names))

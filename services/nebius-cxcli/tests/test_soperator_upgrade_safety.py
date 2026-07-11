@@ -399,6 +399,86 @@ def test_configmap_and_nodeset_drift_are_protected_deltas() -> None:
     assert ("nodesets", "soperator/worker", "remediation_required") in resources
 
 
+def test_recovered_slurm_runtime_probes_are_noncomparable_audit_evidence() -> None:
+    fields = (
+        "accounting_associations",
+        "accounting_qos",
+        "home_mount",
+        "slurm_config",
+        "slurm_nodes",
+        "slurm_partitions",
+    )
+    before = ProtectedCustomerState(
+        target_ref="gpu",
+        namespace="soperator",
+        captured_at="before",
+        sections={
+            "slurm_runtime": {
+                field: {"available": False, "error": "pre-upgrade probe unavailable"}
+                for field in fields
+            }
+        },
+    )
+    after = ProtectedCustomerState(
+        target_ref="gpu",
+        namespace="soperator",
+        captured_at="after",
+        sections={
+            "slurm_runtime": {
+                field: {
+                    "available": True,
+                    "stdout_sha256": f"post-upgrade-{field}",
+                    "line_count": 1,
+                }
+                for field in fields
+            }
+        },
+    )
+
+    comparison = compare_protected_customer_state(before=before, after=after)
+
+    assert comparison["approval_required_count"] == 0
+    by_field = {delta["field"]: delta for delta in comparison["deltas"]}
+    assert set(by_field) == set(fields)
+    for field in fields:
+        assert by_field[field]["classification"] == "preserve"
+        assert by_field[field]["approval_required"] is False
+        assert "no comparable baseline exists" in by_field[field]["remediation"]
+
+
+def test_comparable_slurm_policy_drift_still_requires_remediation_approval() -> None:
+    fields = ("accounting_associations", "accounting_qos", "slurm_partitions")
+    before = ProtectedCustomerState(
+        target_ref="gpu",
+        namespace="soperator",
+        captured_at="before",
+        sections={
+            "slurm_runtime": {
+                field: {"available": True, "stdout_sha256": f"before-{field}"} for field in fields
+            }
+        },
+    )
+    after = ProtectedCustomerState(
+        target_ref="gpu",
+        namespace="soperator",
+        captured_at="after",
+        sections={
+            "slurm_runtime": {
+                field: {"available": True, "stdout_sha256": f"after-{field}"} for field in fields
+            }
+        },
+    )
+
+    comparison = compare_protected_customer_state(before=before, after=after)
+
+    assert comparison["approval_required_count"] == len(fields)
+    by_field = {delta["field"]: delta for delta in comparison["deltas"]}
+    assert set(by_field) == set(fields)
+    for field in fields:
+        assert by_field[field]["classification"] == "remediation_required"
+        assert by_field[field]["approval_required"] is True
+
+
 def test_managed_chart_upgrade_classifies_chart_owned_deltas_as_intentional() -> None:
     before = _capture(_ManagedChartRunner("4.0.1-ps.2"))
     result = run_post_upgrade_fast_verification(
@@ -859,9 +939,15 @@ def test_external_migration_classifier_allows_owned_cleanup_and_keeps_config_dri
     )
 
     by_resource = {item["resource"]: item for item in classified["deltas"]}
-    assert by_resource["soperator/cxcli-ext-upg-1223b-slurm-configs"]["classification"] == "intentional_upgrade"
+    assert (
+        by_resource["soperator/cxcli-ext-upg-1223b-slurm-configs"]["classification"]
+        == "intentional_upgrade"
+    )
     assert by_resource["soperator/cxcli-ext-upg-1223b-slurm-configs"]["approval_required"] is False
-    assert by_resource["soperator/sh.helm.release.v1.soperator.v2"]["classification"] == "intentional_upgrade"
+    assert (
+        by_resource["soperator/sh.helm.release.v1.soperator.v2"]["classification"]
+        == "intentional_upgrade"
+    )
     assert by_resource["soperator/cxcli-ext-upg-1223b"]["classification"] == "intentional_upgrade"
     assert by_resource["flux-system/flux-system"]["classification"] == "intentional_upgrade"
     assert by_resource["soperator/soperator-acct-db"]["classification"] == "intentional_upgrade"
@@ -869,7 +955,9 @@ def test_external_migration_classifier_allows_owned_cleanup_and_keeps_config_dri
     assert classified["approval_required_count"] == 1
 
 
-def test_external_migration_classifier_keeps_unowned_flux_and_slurm_policy_drift_protected() -> None:
+def test_external_migration_classifier_keeps_unowned_flux_and_slurm_policy_drift_protected() -> (
+    None
+):
     comparison: dict[str, object] = {
         "schema": "nebius-cxcli-soperator-upgrade-safety/v1",
         "status": "drift-detected",

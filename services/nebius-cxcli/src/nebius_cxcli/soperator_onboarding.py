@@ -349,7 +349,9 @@ def source_soperator_discovery_report_path(
             target_ref,
             artifact_identity=identity,
         )
-    return project_dir / "generated" / ONBOARDING_REPORT_DIR / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
+    return (
+        project_dir / "generated" / ONBOARDING_REPORT_DIR / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
+    )
 
 
 def soperator_onboarding_target(
@@ -1042,9 +1044,7 @@ def _soperator_upgrade_support_rule_matches(
             return False
     if target_k8s_min and not _support_k8s_at_least(target_k8s_version, target_k8s_min):
         return False
-    return not (
-        target_k8s_max and _support_k8s_at_least(target_k8s_version, target_k8s_max)
-    )
+    return not (target_k8s_max and _support_k8s_at_least(target_k8s_version, target_k8s_max))
 
 
 def _soperator_upgrade_support_status_finding(
@@ -1175,10 +1175,7 @@ def _soperator_support_finding_with_override(
     return replace(
         finding,
         severity="recommended",
-        message=(
-            "Override accepted for unsupported Soperator upgrade path. "
-            + finding.message
-        ),
+        message=("Override accepted for unsupported Soperator upgrade path. " + finding.message),
         evidence=evidence,
     )
 
@@ -1467,9 +1464,11 @@ def _default_soperator_migration_plan(
                             notes=(
                                 "Populate the passive jail rootfs slot with the target image.",
                                 "Keep persistent jail mounts outside the rootfs slots before "
-                                "switching login and worker consumers.",
-                                "Switch consumers only after the login Service has ready "
-                                "endpoints, and keep the previous slot available for rollback.",
+                                "switching the canonical jail alias and all enabled consumers.",
+                                "Require controller, SConfigController, login, worker, and REST "
+                                "consumers to use the active slot and be "
+                                "Ready before restoring Slurm partitions; keep the previous "
+                                "slot available for rollback.",
                             ),
                         ),
                     )
@@ -2484,9 +2483,7 @@ def analyze_soperator_onboarding_snapshot(
     manual_source_version = normalize_soperator_release_version(source_version_override)
     target_version = normalize_soperator_release_version(pinned_chart_version or pinned_app_version)
     target_chart_version = str(pinned_chart_version or pinned_app_version or "").strip()
-    approved_target_chart = str(
-        approved_target_chart_version or target_chart_version
-    ).strip()
+    approved_target_chart = str(approved_target_chart_version or target_chart_version).strip()
     target_k8s = str(node_template_inventory.get("target_k8s_version", "") or "").strip()
     external_node_template_required = not bool(node_template_inventory.get("complete"))
 
@@ -3090,9 +3087,7 @@ def analyze_soperator_onboarding_snapshot(
                             )
                         ),
                         action_id=ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
-                        evidence=_node_template_inventory_finding_evidence(
-                            node_template_inventory
-                        ),
+                        evidence=_node_template_inventory_finding_evidence(node_template_inventory),
                     )
                 )
                 actions.append(
@@ -3379,8 +3374,10 @@ def analyze_soperator_onboarding_snapshot(
             )
         )
 
-    if source_version and target_version and not any(
-        finding.layer == SOPERATOR_UPGRADE_SUPPORT_LAYER for finding in findings
+    if (
+        source_version
+        and target_version
+        and not any(finding.layer == SOPERATOR_UPGRADE_SUPPORT_LAYER for finding in findings)
     ):
         control_plane_inventory = node_template_inventory.get("control_plane")
         current_k8s = (
@@ -3813,11 +3810,15 @@ def collect_kubectl_soperator_snapshot(
         errors=collection_errors,
         extra_env=extra_env,
     )
-    helm_releases = [
-        release
-        for release in all_helm_releases
-        if isinstance(release, Mapping) and _is_soperator_release_candidate(release)
-    ] if isinstance(all_helm_releases, list) else []
+    helm_releases = (
+        [
+            release
+            for release in all_helm_releases
+            if isinstance(release, Mapping) and _is_soperator_release_candidate(release)
+        ]
+        if isinstance(all_helm_releases, list)
+        else []
+    )
     gpu_stack_helm_releases = []
     for namespace in GPU_STACK_HELM_DISCOVERY_NAMESPACES:
         namespace_releases = _helm_json(

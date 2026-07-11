@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+import inspect
 import json
 import os
 import re
@@ -55,9 +57,7 @@ from nebius_cxcli.soperator_populate_jail import PopulateJailSnapshot
 
 runner = CliRunner()
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
-_COPY_PASTE_COMMAND_STYLE_RE = re.compile(
-    r"\x1b\[(?:1;38;2;0;215;255|1;96)m(?P<text>.*?)\x1b\[0m"
-)
+_COPY_PASTE_COMMAND_STYLE_RE = re.compile(r"\x1b\[(?:1;38;2;0;215;255|1;96)m(?P<text>.*?)\x1b\[0m")
 _RICH_BOX_RE = re.compile(r"[\u2500-\u257f]")
 _RUNTIME_AUTH_ENV_KEYS = (
     "NEBIUS_AUTH_CREDENTIALS_FILE",
@@ -441,6 +441,53 @@ def _stub_soperator_upgrade_runtime(
             "ready_endpoints": 1,
         },
     )
+    monkeypatch.setattr(
+        cli,
+        "_verify_target_rootfs_handoff_consumers",
+        lambda **_kwargs: [
+            {
+                "kind": "login-statefulset",
+                "name": "login",
+                "status": "verified",
+                "rootfs_observed": True,
+                "missing_mounts": [],
+            },
+            {
+                "kind": "worker-nodeset",
+                "name": "worker",
+                "status": "verified",
+                "rootfs_observed": True,
+                "missing_mounts": [],
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        cli,
+        "_live_home_mount_probe_checks",
+        lambda **_kwargs: (
+            {"name": "live /home mount", "status": "passed", "summary": "verified"},
+        ),
+    )
+
+    def _post_jail_smoke(**kwargs: Any) -> list[str]:
+        kwargs["phase"]["post_jail_slurm_smoke"] = {"status": "passed"}
+        return ["post-jail Slurm smoke passed"]
+
+    monkeypatch.setattr(cli, "_ensure_post_jail_slurm_smoke", _post_jail_smoke)
+    runtime_state: dict[str, Any] = {
+        "maintenance": "none",
+        "live_jobs": {},
+        "pods": [
+            {
+                "metadata": {
+                    "name": "login-0",
+                    "labels": {"app.kubernetes.io/component": "login"},
+                },
+                "status": {"phase": "Running"},
+            }
+        ],
+    }
+    running_pods = copy.deepcopy(runtime_state["pods"])
 
     def _run_upgrade_process(
         args: Sequence[str],
@@ -455,26 +502,189 @@ def _stub_soperator_upgrade_runtime(
         if command_calls is not None:
             command_calls.append((arg_text, input_text))
         stdout = ""
-        if "get" in arg_text and any(
-            arg.startswith("job/") and "jail-persistent" in arg for arg in arg_text
-        ):
-            stdout = json.dumps(
-                {"status": {"conditions": [{"type": "Complete", "status": "True"}]}}
-            )
-        elif "get" in arg_text and "pods" in arg_text:
+        slurmcluster_resource = next(
+            (item for item in arg_text if item.startswith("slurmcluster/")),
+            "",
+        )
+        if "get" in arg_text and slurmcluster_resource:
             stdout = json.dumps(
                 {
-                    "items": [
-                        {
-                            "metadata": {
-                                "name": "login-0",
-                                "labels": {"app.kubernetes.io/component": "login"},
-                            },
-                            "status": {"phase": "Running"},
-                        }
-                    ]
+                    "metadata": {
+                        "name": slurmcluster_resource.split("/", 1)[1],
+                        "namespace": "soperator-prod",
+                        "uid": "managed-slurmcluster-uid",
+                    },
+                    "spec": {"maintenance": runtime_state["maintenance"]},
+                    "status": {"phase": "Available"},
                 }
             )
+        elif "get" in arg_text and "slurmcluster" in arg_text:
+            cluster_name = arg_text[arg_text.index("slurmcluster") + 1]
+            stdout = json.dumps(
+                {
+                    "metadata": {
+                        "name": cluster_name,
+                        "namespace": "soperator-prod",
+                        "uid": "managed-slurmcluster-uid",
+                    },
+                    "spec": {"maintenance": runtime_state["maintenance"]},
+                    "status": {"phase": "Available"},
+                }
+            )
+        elif "patch" in arg_text and slurmcluster_resource and "-p" in arg_text:
+            patch = json.loads(arg_text[arg_text.index("-p") + 1])
+            maintenance = str(
+                patch.get("spec", {}).get("maintenance") or runtime_state["maintenance"]
+            )
+            runtime_state["maintenance"] = maintenance
+            runtime_state["pods"] = (
+                [] if maintenance == "downscale" else copy.deepcopy(running_pods)
+            )
+            stdout = "{}"
+        elif "get" in arg_text and "persistentvolumeclaim" in arg_text:
+            pvc_name = arg_text[arg_text.index("persistentvolumeclaim") + 1]
+            stdout = json.dumps(
+                {
+                    "metadata": {
+                        "name": pvc_name,
+                        "namespace": "soperator-prod",
+                        "uid": f"{pvc_name}-uid",
+                    },
+                    "status": {"phase": "Bound"},
+                }
+            )
+        elif "get" in arg_text and any(item.startswith("pvc/") for item in arg_text):
+            pvc_name = next(item.split("/", 1)[1] for item in arg_text if item.startswith("pvc/"))
+            stdout = json.dumps(
+                {
+                    "metadata": {
+                        "name": pvc_name,
+                        "namespace": "soperator-prod",
+                        "uid": f"{pvc_name}-uid",
+                    },
+                    "status": {"phase": "Bound"},
+                }
+            )
+        elif "get" in arg_text and "nodeset" in arg_text:
+            nodeset_name = arg_text[arg_text.index("nodeset") + 1]
+            stdout = json.dumps(
+                {
+                    "metadata": {
+                        "name": nodeset_name,
+                        "namespace": "soperator-prod",
+                        "annotations": {
+                            "cxcli.test/rootfs-tokens": (
+                                "jail-rootfs-slot-b jail-rootfs-slot-b-pvc "
+                                "/home /data /scripts /models"
+                            )
+                        },
+                    },
+                    "spec": {"replicas": 1},
+                    "status": {
+                        "phase": "Ready",
+                        "readyReplicas": 1,
+                        "conditions": [{"type": "PodsReady", "status": "True"}],
+                    },
+                }
+            )
+        elif (
+            "get" in arg_text and "statefulsets.apps.kruise.io" in arg_text and "login" in arg_text
+        ):
+            stdout = json.dumps(
+                {
+                    "metadata": {
+                        "name": "login",
+                        "namespace": "soperator-prod",
+                        "annotations": {
+                            "cxcli.test/rootfs-tokens": (
+                                "jail-rootfs-slot-b jail-rootfs-slot-b-pvc "
+                                "/home /data /scripts /models"
+                            )
+                        },
+                    }
+                }
+            )
+        elif arg_text[-3:] == ("apply", "-f", "-") and input_text:
+            try:
+                applied = json.loads(input_text)
+            except json.JSONDecodeError:
+                applied = yaml.safe_load(input_text) or {}
+            for item in applied.get("items", []):
+                if not isinstance(item, Mapping) or item.get("kind") != "Job":
+                    continue
+                live_job = copy.deepcopy(dict(item))
+                metadata = live_job.setdefault("metadata", {})
+                name = str(metadata.get("name") or "")
+                namespace = str(metadata.get("namespace") or "soperator-prod")
+                job_uid = str(metadata.setdefault("uid", f"job-uid-{name}"))
+                job_spec = live_job.setdefault("spec", {})
+                job_spec.setdefault("selector", {}).setdefault("matchLabels", {}).update(
+                    {"batch.kubernetes.io/controller-uid": job_uid}
+                )
+                template = job_spec.setdefault("template", {})
+                template_labels = template.setdefault("metadata", {}).setdefault("labels", {})
+                template_labels.update(
+                    {
+                        "batch.kubernetes.io/controller-uid": job_uid,
+                        "batch.kubernetes.io/job-name": name,
+                    }
+                )
+                live_job.setdefault("status", {}).update(
+                    {
+                        "succeeded": 1,
+                        "conditions": [{"type": "Complete", "status": "True"}],
+                    }
+                )
+                runtime_state["live_jobs"][(namespace, name)] = live_job
+                containers = template.get("spec", {}).get("containers", [])
+                container_name = str(
+                    containers[0].get("name")
+                    if containers and isinstance(containers[0], Mapping)
+                    else ""
+                )
+                if container_name == "persistent-mount-migration":
+                    runtime_state["pods"].append(
+                        {
+                            "metadata": {
+                                "name": f"{name}-pod",
+                                "namespace": namespace,
+                                "uid": f"pod-uid-{name}",
+                                "ownerReferences": [
+                                    {
+                                        "apiVersion": "batch/v1",
+                                        "kind": "Job",
+                                        "name": name,
+                                        "uid": job_uid,
+                                        "controller": True,
+                                    }
+                                ],
+                            },
+                            "status": {
+                                "phase": "Succeeded",
+                                "containerStatuses": [
+                                    {
+                                        "name": container_name,
+                                        "state": {"terminated": {"exitCode": 0}},
+                                    }
+                                ],
+                            },
+                        }
+                    )
+            stdout = "{}"
+        elif "get" in arg_text and any(arg.startswith("job/") for arg in arg_text):
+            job_name = next(arg.split("/", 1)[1] for arg in arg_text if arg.startswith("job/"))
+            namespace = arg_text[arg_text.index("-n") + 1] if "-n" in arg_text else "soperator-prod"
+            live_job = runtime_state["live_jobs"].get((namespace, job_name))
+            if live_job is None:
+                return cli._SoperatorUpgradeCommandResult(
+                    args=arg_text,
+                    returncode=1,
+                    stdout="",
+                    stderr="NotFound",
+                )
+            stdout = json.dumps(live_job)
+        elif "get" in arg_text and "pods" in arg_text:
+            stdout = json.dumps({"items": runtime_state["pods"]})
         elif "exec" in arg_text and "login-0" in arg_text:
             stdout = "0\n"
         elif "logs" in arg_text and any("jail-capacity-probe" in arg for arg in arg_text):
@@ -595,9 +805,7 @@ def test_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path) -> 
 
     assert "--cancel-job" in args
     assert "--preserve-jail-home" not in args
-    assert args[args.index("--jail-persistent-mount") + 1] == (
-        "/data=/mnt/jail-store/shared/data"
-    )
+    assert args[args.index("--jail-persistent-mount") + 1] == ("/data=/mnt/jail-store/shared/data")
     assert "--jail-sfs-resize-policy" in args
     assert args[args.index("--jail-sfs-resize-policy") + 1] == "fail"
     assert "--home-sfs-size-multiplier" not in args
@@ -3572,6 +3780,7 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
     manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
     calls: list[object] = []
     command_calls: list[tuple[tuple[str, ...], str | None]] = []
+    rendered_maintenance: list[object] = []
 
     monkeypatch.setattr(
         cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
@@ -3584,7 +3793,15 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
         "_run_generated_bundle_validation",
         lambda *_args, **kwargs: calls.append(("validate", kwargs["title"])) or {},
     )
-    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: calls.append("render"))
+
+    def _record_render(*_args: object, **_kwargs: object) -> None:
+        calls.append("render")
+        rendered = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
+        rendered_maintenance.append(
+            rendered["apps"]["charts"][0].get("values", {}).get("maintenance")
+        )
+
+    monkeypatch.setattr(cli, "render_command", _record_render)
     monkeypatch.setattr(
         cli,
         "flux_apply_command",
@@ -3629,6 +3846,7 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
     ]
     assert values["jailRootfs"]["adoption"]["activeSource"] == "slot"
     assert values["jailRootfs"]["adoption"]["rollbackSource"] == "legacy-rootfs"
+    assert rendered_maintenance[-2:] == ["downscale", "none"]
     assert "jail_home" not in values
     assert "home" not in values["jailRootfs"]
     assert calls == [
@@ -3673,6 +3891,8 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
             "jail-persistent" in " ".join(command)
             or "statefulsets.apps.kruise.io/login" in command
             or ("get" in command and "pods" in command)
+            or ("get" in command and "nodeset" in command)
+            or ("get" in command and "slurmcluster" in command)
             or ("exec" in command and "login-0" in command)
         )
     ]
@@ -3680,6 +3900,20 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
     assert {_command_namespace(command) for command in namespace_sensitive_commands} == {
         "soperator-prod"
     }
+    maintenance_patches = [
+        json.loads(command[command.index("-p") + 1])["spec"]["maintenance"]
+        for command, _input_text in command_calls
+        if "patch" in command and "slurmcluster/mk8s" in command and "-p" in command
+    ]
+    assert maintenance_patches == ["downscale", "none"]
+    assert not any(
+        "scale" in command and "statefulsets.apps.kruise.io/login" in command
+        for command, _input_text in command_calls
+    )
+    assert not any(
+        "patch" in command and any(item.startswith("nodeset/") for item in command)
+        for command, _input_text in command_calls
+    )
 
     applied_jobs: dict[str, Mapping[str, Any]] = {}
     for command, input_text in command_calls:
@@ -3693,9 +3927,7 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
             if not isinstance(item, Mapping) or item.get("kind") != "Job":
                 continue
             component = str(
-                item.get("metadata", {})
-                .get("labels", {})
-                .get("app.kubernetes.io/component", "")
+                item.get("metadata", {}).get("labels", {}).get("app.kubernetes.io/component", "")
             )
             if component:
                 applied_jobs[component] = item
@@ -3706,9 +3938,7 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
     ):
         assert applied_jobs[component]["metadata"]["namespace"] == "soperator-prod"
 
-    report = json.loads(
-        _soperator_upgrade_report_json_path(paths).read_text(encoding="utf-8")
-    )
+    report = json.loads(_soperator_upgrade_report_json_path(paths).read_text(encoding="utf-8"))
     assert report["upgrade_safety"]["post_upgrade_verification"]["status"] == "passed"
     assert report["protected_customer_state"]["before_hash"]
     assert report["protected_customer_state"]["after_hash"]
@@ -3728,12 +3958,13 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
     ]
     assert report["persistent_jail_mounts"]["first_adoption"] is True
     assert report["populate_jail_refresh"]["legacy_active_rootfs"] is True
-    assert report["populate_jail_refresh"]["legacy_persistent_mount_migration"][
-        "status"
-    ] == "completed"
-    assert report["populate_jail_refresh"]["persistent_migration_writer_hold"][
-        "status"
-    ] == "restored"
+    assert (
+        report["populate_jail_refresh"]["legacy_persistent_mount_migration"]["status"]
+        == "completed"
+    )
+    assert (
+        report["populate_jail_refresh"]["persistent_migration_writer_hold"]["status"] == "restored"
+    )
     phase_state = report["phase_state"]
     for phase_id in cli._SOPERATOR_UPGRADE_PLANNED_PHASE_IDS:
         verification = phase_state[phase_id]["fast_verification"]
@@ -3753,9 +3984,7 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
         for item in report["phase_history"]
     )
     assert any(item["id"] == "shared-safety-verification" for item in report["phase_history"])
-    markdown_report = _soperator_upgrade_report_path(paths).read_text(
-        encoding="utf-8"
-    )
+    markdown_report = _soperator_upgrade_report_path(paths).read_text(encoding="utf-8")
     assert "- Current phase: `completed`" in markdown_report
     assert "top-level stage: `Soperator Upgrade`" in markdown_report
     assert "for `apps:soperator" in markdown_report
@@ -3771,6 +4000,941 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
     assert "Phase validation backup: PASS" in rendered
     assert "Phase validation mk8s-node-template: SKIP" in rendered
     assert "Phase validation shared-safety-verification: PASS" in rendered
+
+
+@pytest.mark.parametrize("replacement_boundary", ["during-wait", "before-switch"])
+def test_soperator_upgrade_rejects_passive_job_replaced_before_switch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    replacement_boundary: str,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    paths.infra_dir.mkdir(parents=True)
+    paths.flux_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
+    paths.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "infra": {
+                    "components": [
+                        {
+                            "id": "mk8s",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "inputs": {},
+                        }
+                    ]
+                },
+                "apps": {
+                    "charts": [
+                        {
+                            "id": "soperator",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "namespace": "soperator-prod",
+                            "release-name": "soperator",
+                            "target_ref": "mk8s",
+                            "version": "0.25.0",
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    generated_config = SimpleNamespace()
+    deploy_manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    calls: list[object] = []
+    command_calls: list[tuple[tuple[str, ...], str | None]] = []
+    rendered_active_slots: list[str] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_load_deploy_context_readonly",
+        lambda _path: (generated_config, paths, deploy_manifest),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_load_deploy_context",
+        lambda _path: (generated_config, paths, deploy_manifest),
+    )
+    monkeypatch.setattr(cli, "_run_generated_bundle_validation", lambda *_a, **_k: {})
+
+    def _record_render(*_args: object, **_kwargs: object) -> None:
+        payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
+        values = payload["apps"]["charts"][0].get("values", {})
+        rendered_active_slots.append(cli.active_passive_jail_rootfs_slots(values).active_slot)
+
+    monkeypatch.setattr(cli, "render_command", _record_render)
+    monkeypatch.setattr(cli, "flux_apply_command", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        cli,
+        "_verify_soperator_static_upgrade_ready",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_raise_if_soperator_upgrade_would_bypass_migration",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_soperator_upgrade_validation_phase",
+        lambda *_args, **_kwargs: (),
+    )
+    _stub_soperator_upgrade_runtime(
+        monkeypatch,
+        paths,
+        calls,
+        command_calls=command_calls,
+    )
+    run_upgrade_process = cli._run_soperator_upgrade_process
+    expected_job: dict[str, Any] = {}
+    replacement_active = False
+    expected_job_complete = False
+
+    def _run_with_passive_job_replacement(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 120,
+        check: bool = True,
+        extra_env: Mapping[str, str] | None = None,
+    ) -> cli._SoperatorUpgradeCommandResult:
+        command = tuple(str(item) for item in args)
+        if command[-3:] == ("apply", "-f", "-") and input_text:
+            try:
+                payload = json.loads(input_text)
+            except json.JSONDecodeError:
+                payload = yaml.safe_load(input_text) or {}
+            for item in payload.get("items", []):
+                if (
+                    item.get("kind") == "Job"
+                    and item.get("metadata", {})
+                    .get("labels", {})
+                    .get("app.kubernetes.io/component")
+                    == "populate-jail"
+                ):
+                    expected_job.clear()
+                    expected_job.update(copy.deepcopy(item))
+        if expected_job and "get" in command:
+            job_name = str(expected_job["metadata"]["name"])
+            if f"job/{job_name}" in command:
+                live_job = copy.deepcopy(expected_job)
+                live_job["metadata"]["uid"] = (
+                    "foreign-passive-job-uid" if replacement_active else f"job-uid-{job_name}"
+                )
+                if replacement_active:
+                    live_job["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"][
+                        "claimName"
+                    ] = "foreign-passive-pvc"
+                    live_job["status"] = {
+                        "succeeded": 1,
+                        "conditions": [{"type": "Complete", "status": "True"}],
+                    }
+                else:
+                    live_job["status"] = (
+                        {
+                            "succeeded": 1,
+                            "conditions": [{"type": "Complete", "status": "True"}],
+                        }
+                        if expected_job_complete
+                        else {"active": 1}
+                    )
+                return cli._SoperatorUpgradeCommandResult(
+                    args=command,
+                    returncode=0,
+                    stdout=json.dumps(live_job),
+                    stderr="",
+                )
+        return run_upgrade_process(
+            args,
+            input_text=input_text,
+            timeout_seconds=timeout_seconds,
+            check=check,
+            extra_env=extra_env,
+        )
+
+    def _replace_during_wait(*_args: object, **kwargs: object) -> PopulateJailSnapshot:
+        nonlocal expected_job_complete, replacement_active
+        expected_job_complete = True
+        replacement_active = replacement_boundary == "during-wait"
+        return PopulateJailSnapshot(
+            slurmcluster_name="mk8s",
+            image="registry.example/populate-jail:new",
+            job_name=str(kwargs["job_name"]),
+            job_uid=(
+                "foreign-passive-job-uid" if replacement_active else f"job-uid-{kwargs['job_name']}"
+            ),
+            job_complete=True,
+            job_image="registry.example/populate-jail:new",
+            status="collected",
+        )
+
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_process", _run_with_passive_job_replacement)
+    monkeypatch.setattr(
+        cli,
+        "wait_for_active_passive_populate_jail_job",
+        _replace_during_wait,
+    )
+    ensure_writer_hold = cli._ensure_persistent_migration_writer_hold_intact_after_copy
+
+    def _replace_after_completion_validation(**kwargs: Any) -> None:
+        nonlocal replacement_active
+        ensure_writer_hold(**kwargs)
+        if (
+            replacement_boundary == "before-switch"
+            and kwargs.get("boundary") == "passive rootfs population completion"
+        ):
+            replacement_active = True
+
+    monkeypatch.setattr(
+        cli,
+        "_ensure_persistent_migration_writer_hold_intact_after_copy",
+        _replace_after_completion_validation,
+    )
+
+    def _reraise_upgrade_error(exc: Exception) -> None:
+        raise exc
+
+    monkeypatch.setattr(cli, "_exit_with_error", _reraise_upgrade_error)
+
+    with pytest.raises(cli.SoperatorMigrationPhasePending, match="UID no longer matches"):
+        cli.soperator_upgrade_command(
+            paths.config_path,
+            target_ref="mk8s",
+            to_chart_version="0.26.0",
+            login_session_policy="wait-active",
+        )
+
+    checkpoint_path = cli._soperator_upgrade_checkpoint_path(paths.config_path, "mk8s")
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    phase = checkpoint["phase_state"]["populate-jail-refresh"]
+    assert phase["passive_slot_populate_job"]["uid"].startswith("job-uid-")
+    if replacement_boundary == "during-wait":
+        assert "job_completed_at" not in phase
+    else:
+        assert "job_completed_at" in phase
+    assert "consumer_switch_applied_at" not in phase
+    assert "slot-b" not in rendered_active_slots
+
+
+def test_soperator_upgrade_stale_copy_restores_managed_desired_maintenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    paths.infra_dir.mkdir(parents=True)
+    paths.flux_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
+    paths.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "infra": {
+                    "components": [
+                        {
+                            "id": "mk8s",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "inputs": {},
+                        }
+                    ]
+                },
+                "apps": {
+                    "charts": [
+                        {
+                            "id": "soperator",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "namespace": "soperator-prod",
+                            "release-name": "soperator",
+                            "target_ref": "mk8s",
+                            "version": "0.25.0",
+                            "values": {"volume": {"jail": {"name": "customer-jail"}}},
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    generated_config = SimpleNamespace()
+    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    calls: list[object] = []
+    command_calls: list[tuple[tuple[str, ...], str | None]] = []
+    rendered_maintenance: list[object] = []
+
+    monkeypatch.setattr(
+        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(cli, "_run_generated_bundle_validation", lambda *_args, **_kwargs: {})
+
+    def _record_render(*_args: object, **_kwargs: object) -> None:
+        rendered = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
+        rendered_maintenance.append(
+            rendered["apps"]["charts"][0].get("values", {}).get("maintenance")
+        )
+
+    monkeypatch.setattr(cli, "render_command", _record_render)
+    monkeypatch.setattr(cli, "flux_apply_command", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        cli, "_verify_soperator_static_upgrade_ready", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        cli, "_raise_if_soperator_upgrade_would_bypass_migration", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        cli, "_run_soperator_upgrade_validation_phase", lambda *_args, **_kwargs: ()
+    )
+    _stub_soperator_upgrade_runtime(
+        monkeypatch,
+        paths,
+        calls,
+        command_calls=command_calls,
+    )
+    ensure_writer_hold = cli._ensure_persistent_migration_writer_hold_intact_after_copy
+    drift_injected = False
+
+    def _inject_post_refresh_drift(**kwargs: Any) -> None:
+        nonlocal drift_injected
+        if kwargs["boundary"] == "passive rootfs population completion" and not drift_injected:
+            drift_injected = True
+            kwargs["command_runner"](
+                (
+                    "kubectl",
+                    "-n",
+                    "soperator-prod",
+                    "patch",
+                    "slurmcluster/mk8s",
+                    "--type=merge",
+                    "-p",
+                    json.dumps({"spec": {"maintenance": "none"}}),
+                ),
+                timeout_seconds=300,
+            )
+        ensure_writer_hold(**kwargs)
+
+    monkeypatch.setattr(
+        cli,
+        "_ensure_persistent_migration_writer_hold_intact_after_copy",
+        _inject_post_refresh_drift,
+    )
+
+    with pytest.raises(
+        cli.SoperatorMigrationPhasePending,
+        match="passive rootfs population completion",
+    ):
+        _run_soperator_upgrade_for_test(config_path=paths.config_path)
+
+    assert drift_injected is True
+    payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
+    values = payload["apps"]["charts"][0]["values"]
+    assert values["maintenance"] == "none"
+    assert values["jailRootfs"]["adoption"]["activeSource"] == "legacy-rootfs"
+    assert values["jailRootfs"]["adoption"]["legacyPvcName"] == "customer-jail-pvc"
+    assert values["jailRootfs"]["refresh"]["status"] == "planned"
+    assert rendered_maintenance[-2:] == ["downscale", "none"]
+
+    checkpoint = json.loads(
+        cli._soperator_upgrade_checkpoint_path(paths.config_path, "mk8s").read_text(
+            encoding="utf-8"
+        )
+    )
+    phase = checkpoint["phase_state"]["populate-jail-refresh"]
+    cleanup = phase["stale_persistent_copy_cleanup"]
+    assert cleanup["status"] == "restored"
+    assert cleanup["desired_state"]["status"] == "restored"
+    assert cleanup["desired_state"]["maintenance"] == "none"
+    assert phase["persistent_migration_writer_hold"]["status"] == "restored"
+    assert phase["legacy_persistent_mount_migration"]["status"] == ("stale-after-writer-drift")
+    assert phase["legacy_jail_pvc"] == "customer-jail-pvc"
+    assert phase["legacy_jail_pvc_uid"] == "customer-jail-pvc-uid"
+    migration_inputs = "\n".join(
+        input_text or "" for _command, input_text in command_calls if input_text
+    )
+    assert "customer-jail-pvc" in migration_inputs
+    assert not re.search(r'claimName["\s:]+jail-pvc(?:"|\s|$)', migration_inputs)
+
+
+def _prepare_managed_stale_copy_resume_case(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[
+    ProjectPaths,
+    Path,
+    list[tuple[tuple[str, ...], str | None]],
+    list[object],
+    list[object],
+]:
+    paths = _fake_paths(tmp_path)
+    paths.infra_dir.mkdir(parents=True)
+    paths.flux_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
+    paths.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "infra": {
+                    "components": [
+                        {
+                            "id": "mk8s",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "inputs": {},
+                        }
+                    ]
+                },
+                "apps": {
+                    "charts": [
+                        {
+                            "id": "soperator",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "namespace": "soperator-prod",
+                            "release-name": "soperator",
+                            "target_ref": "mk8s",
+                            "version": "0.25.0",
+                            "values": {"volume": {"jail": {"name": "customer-jail"}}},
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    generated_config = SimpleNamespace()
+    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    calls: list[object] = []
+    command_calls: list[tuple[tuple[str, ...], str | None]] = []
+    render_calls: list[object] = []
+    flux_calls: list[object] = []
+
+    monkeypatch.setattr(
+        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(cli, "_run_generated_bundle_validation", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        cli,
+        "render_command",
+        lambda *_args, **_kwargs: render_calls.append(
+            yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "flux_apply_command",
+        lambda *args, **kwargs: flux_calls.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        cli, "_verify_soperator_static_upgrade_ready", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        cli, "_raise_if_soperator_upgrade_would_bypass_migration", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        cli, "_run_soperator_upgrade_validation_phase", lambda *_args, **_kwargs: ()
+    )
+    _stub_soperator_upgrade_runtime(
+        monkeypatch,
+        paths,
+        calls,
+        command_calls=command_calls,
+    )
+    ensure_writer_hold = cli._ensure_persistent_migration_writer_hold_intact_after_copy
+    drift_injected = False
+
+    def _inject_post_refresh_drift(**kwargs: Any) -> None:
+        nonlocal drift_injected
+        if kwargs["boundary"] == "passive rootfs population completion" and not drift_injected:
+            drift_injected = True
+            kwargs["command_runner"](
+                (
+                    "kubectl",
+                    "-n",
+                    "soperator-prod",
+                    "patch",
+                    "slurmcluster/mk8s",
+                    "--type=merge",
+                    "-p",
+                    json.dumps({"spec": {"maintenance": "none"}}),
+                ),
+                timeout_seconds=300,
+            )
+        ensure_writer_hold(**kwargs)
+
+    monkeypatch.setattr(
+        cli,
+        "_ensure_persistent_migration_writer_hold_intact_after_copy",
+        _inject_post_refresh_drift,
+    )
+
+    with pytest.raises(
+        cli.SoperatorMigrationPhasePending,
+        match="passive rootfs population completion",
+    ):
+        _run_soperator_upgrade_for_test(config_path=paths.config_path)
+
+    checkpoint_path = cli._soperator_upgrade_checkpoint_path(paths.config_path, "mk8s")
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    phase = checkpoint["phase_state"]["populate-jail-refresh"]
+    assert phase["legacy_persistent_mount_migration"]["status"] == ("stale-after-writer-drift")
+    return paths, checkpoint_path, command_calls, render_calls, flux_calls
+
+
+def _managed_live_pre_switch_checks(
+    *,
+    values: Mapping[str, Any],
+    recorded_active_slot: str,
+) -> list[dict[str, Any]]:
+    active_slot = cli.active_passive_jail_rootfs_slots(values).active_slot
+    observed = active_slot == recorded_active_slot
+    return [
+        {
+            "kind": kind,
+            "name": name,
+            "status": "verified" if observed else "pending",
+            "rootfs_observed": observed,
+            "missing_mounts": [],
+            **({} if observed else {"reason": "active rootfs slot reference not found"}),
+        }
+        for kind, name in (
+            ("login-statefulset", "login"),
+            ("worker-nodeset", "worker"),
+        )
+    ]
+
+
+def _managed_completed_copy_resume_checkpoint(
+    checkpoint_path: Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    phase = checkpoint["phase_state"]["populate-jail-refresh"]
+    migration_state = phase["legacy_persistent_mount_migration"]
+    migration_state["status"] = "completed"
+    for key in ("stale_at", "stale_boundary", "stale_reason"):
+        migration_state.pop(key, None)
+    writer_state = phase["persistent_migration_writer_hold"]
+    writer_state["status"] = "held"
+    for key in ("drift", "drift_boundary", "drift_detected_at", "restored_at"):
+        writer_state.pop(key, None)
+    phase.pop("stale_persistent_copy_cleanup", None)
+    phase.pop("persistent_migration_failure_boundary", None)
+    phase.pop("refresh_failure_cleanup_errors", None)
+    checkpoint["populate_jail_refresh"]["legacy_persistent_mount_migration"] = copy.deepcopy(
+        migration_state
+    )
+    checkpoint["populate_jail_refresh"]["persistent_migration_writer_hold"] = copy.deepcopy(
+        writer_state
+    )
+    return checkpoint, phase
+
+
+@pytest.mark.parametrize(
+    ("identity_failure", "expected_error"),
+    [
+        pytest.param(
+            "missing-binding",
+            "requires exactly one checkpointed SlurmCluster maintenance binding",
+            id="missing-maintenance-binding",
+        ),
+        pytest.param(
+            "uid-mismatch",
+            "target SlurmCluster identity changed after it was checkpointed",
+            id="uid-mismatch",
+        ),
+    ],
+)
+def test_soperator_upgrade_stale_copy_cleanup_identity_preflight_blocks_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    identity_failure: str,
+    expected_error: str,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    paths.infra_dir.mkdir(parents=True)
+    paths.flux_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
+    paths.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "infra": {
+                    "components": [
+                        {
+                            "id": "mk8s",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "inputs": {},
+                        }
+                    ]
+                },
+                "apps": {
+                    "charts": [
+                        {
+                            "id": "soperator",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "namespace": "soperator-prod",
+                            "release-name": "soperator",
+                            "target_ref": "mk8s",
+                            "version": "0.25.0",
+                            "values": {"volume": {"jail": {"name": "customer-jail"}}},
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    generated_config = SimpleNamespace()
+    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    calls: list[object] = []
+    command_calls: list[tuple[tuple[str, ...], str | None]] = []
+    render_calls: list[object] = []
+    flux_calls: list[object] = []
+
+    monkeypatch.setattr(
+        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(cli, "_run_generated_bundle_validation", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        cli,
+        "render_command",
+        lambda *_args, **_kwargs: render_calls.append(
+            yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "flux_apply_command",
+        lambda *args, **kwargs: flux_calls.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        cli, "_verify_soperator_static_upgrade_ready", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        cli, "_raise_if_soperator_upgrade_would_bypass_migration", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        cli, "_run_soperator_upgrade_validation_phase", lambda *_args, **_kwargs: ()
+    )
+    _stub_soperator_upgrade_runtime(
+        monkeypatch,
+        paths,
+        calls,
+        command_calls=command_calls,
+    )
+    ensure_writer_hold = cli._ensure_persistent_migration_writer_hold_intact_after_copy
+    drift_injected = False
+
+    def _inject_post_refresh_drift(**kwargs: Any) -> None:
+        nonlocal drift_injected
+        if kwargs["boundary"] == "passive rootfs population completion" and not drift_injected:
+            drift_injected = True
+            kwargs["command_runner"](
+                (
+                    "kubectl",
+                    "-n",
+                    "soperator-prod",
+                    "patch",
+                    "slurmcluster/mk8s",
+                    "--type=merge",
+                    "-p",
+                    json.dumps({"spec": {"maintenance": "none"}}),
+                ),
+                timeout_seconds=300,
+            )
+        ensure_writer_hold(**kwargs)
+
+    monkeypatch.setattr(
+        cli,
+        "_ensure_persistent_migration_writer_hold_intact_after_copy",
+        _inject_post_refresh_drift,
+    )
+
+    with pytest.raises(
+        cli.SoperatorMigrationPhasePending,
+        match="passive rootfs population completion",
+    ):
+        _run_soperator_upgrade_for_test(config_path=paths.config_path)
+
+    checkpoint_path = cli._soperator_upgrade_checkpoint_path(paths.config_path, "mk8s")
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    phase = checkpoint["phase_state"]["populate-jail-refresh"]
+    assert phase["legacy_persistent_mount_migration"]["status"] == ("stale-after-writer-drift")
+    writer_state = phase["persistent_migration_writer_hold"]
+    if identity_failure == "missing-binding":
+        writer_state["resources"] = []
+    else:
+        maintenance_binding = next(
+            item
+            for item in writer_state["resources"]
+            if item.get("kind") == "slurmcluster-maintenance"
+        )
+        maintenance_binding["uid"] = "replacement-slurmcluster-uid"
+    checkpoint_path.write_text(json.dumps(checkpoint, indent=2) + "\n", encoding="utf-8")
+
+    config_before_retry = paths.config_path.read_text(encoding="utf-8")
+    render_calls.clear()
+    flux_calls.clear()
+    command_calls.clear()
+    config_write_calls: list[Path] = []
+    write_text_atomic = cli._write_text_atomic
+
+    def _track_atomic_write(
+        path: Path,
+        content: str,
+        *,
+        encoding: str = "utf-8",
+    ) -> None:
+        if path.resolve() == paths.config_path.resolve():
+            config_write_calls.append(path)
+        write_text_atomic(path, content, encoding=encoding)
+
+    monkeypatch.setattr(cli, "_write_text_atomic", _track_atomic_write)
+
+    with pytest.raises(
+        cli.SoperatorMigrationPhasePending,
+        match="steady-state writer cleanup remains pending",
+    ):
+        _run_soperator_upgrade_for_test(config_path=paths.config_path)
+
+    assert paths.config_path.read_text(encoding="utf-8") == config_before_retry
+    assert config_write_calls == []
+    assert render_calls == []
+    assert flux_calls == []
+    mutating_verbs = {"apply", "create", "delete", "patch", "replace", "scale"}
+    assert not [
+        command for command, _input_text in command_calls if mutating_verbs.intersection(command)
+    ]
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    cleanup = checkpoint["phase_state"]["populate-jail-refresh"]["stale_persistent_copy_cleanup"]
+    assert cleanup["status"] == "pending"
+    assert expected_error in cleanup["errors"][0]
+
+
+def test_soperator_upgrade_switch_marker_without_live_handoff_checks_hold_before_jobs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths, checkpoint_path, command_calls, render_calls, flux_calls = (
+        _prepare_managed_stale_copy_resume_case(tmp_path, monkeypatch)
+    )
+    checkpoint, phase = _managed_completed_copy_resume_checkpoint(checkpoint_path)
+    recorded_active_slot = str(phase["rootfs_slots"]["active_slot"])
+    phase["consumer_switch_applied_at"] = "2026-07-10T00:00:00Z"
+    phase.pop("active_slot", None)
+    phase.pop("rootfs_handoff_verification", None)
+    checkpoint_path.write_text(json.dumps(checkpoint, indent=2) + "\n", encoding="utf-8")
+    monkeypatch.setattr(
+        cli,
+        "_verify_target_rootfs_handoff_consumers",
+        lambda *, values, **_kwargs: _managed_live_pre_switch_checks(
+            values=values,
+            recorded_active_slot=recorded_active_slot,
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_ensure_passive_populate_job",
+        lambda **_kwargs: pytest.fail(
+            "marker-only resume must not reconcile the passive Job before hold cleanup"
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "wait_for_active_passive_populate_jail_job",
+        lambda *_args, **_kwargs: pytest.fail(
+            "marker-only resume must not wait for the passive Job before hold cleanup"
+        ),
+    )
+    command_calls.clear()
+    render_calls.clear()
+    flux_calls.clear()
+
+    with pytest.raises(cli.SoperatorMigrationPhasePending) as raised:
+        _run_soperator_upgrade_for_test(config_path=paths.config_path)
+
+    assert "mixed or uncertain live login/worker consumers" not in str(raised.value)
+    job_mutations: list[tuple[str, ...]] = []
+    mutating_verbs = {"apply", "create", "delete", "patch", "replace"}
+    for command, input_text in command_calls:
+        command_and_input = " ".join((*command, input_text or "")).lower()
+        if mutating_verbs.intersection(command) and "job" in command_and_input:
+            job_mutations.append(command)
+    assert job_mutations == []
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    phase = checkpoint["phase_state"]["populate-jail-refresh"]
+    assert phase["legacy_persistent_mount_migration"]["status"] == ("stale-after-writer-drift")
+    assert phase["stale_persistent_copy_cleanup"]["status"] == "restored"
+    assert phase["persistent_migration_writer_hold"]["status"] == "restored"
+
+
+@pytest.mark.parametrize(
+    ("job_drift", "drift_on_lookup", "expected_error"),
+    [
+        pytest.param(
+            "uid",
+            1,
+            "UID no longer matches",
+            id="uid-mismatch",
+        ),
+        pytest.param(
+            "contract",
+            1,
+            "exact contract",
+            id="contract-mismatch",
+        ),
+        pytest.param(
+            "uid",
+            2,
+            "UID no longer matches",
+            id="uid-replaced-at-switch-boundary",
+        ),
+    ],
+)
+def test_soperator_upgrade_config_ahead_validates_completed_job_before_desired_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    job_drift: str,
+    drift_on_lookup: int,
+    expected_error: str,
+) -> None:
+    paths, checkpoint_path, command_calls, render_calls, flux_calls = (
+        _prepare_managed_stale_copy_resume_case(tmp_path, monkeypatch)
+    )
+    checkpoint, phase = _managed_completed_copy_resume_checkpoint(checkpoint_path)
+    for key in (
+        "consumer_switch_applied_at",
+        "active_slot",
+        "rootfs_handoff_verification",
+    ):
+        phase.pop(key, None)
+    recorded_active_slot = str(phase["rootfs_slots"]["active_slot"])
+    checkpoint_path.write_text(json.dumps(checkpoint, indent=2) + "\n", encoding="utf-8")
+
+    cli._run_soperator_upgrade_process(
+        (
+            "kubectl",
+            "-n",
+            "soperator-prod",
+            "patch",
+            "slurmcluster/mk8s",
+            "--type=merge",
+            "-p",
+            json.dumps({"spec": {"maintenance": "downscale"}}),
+        ),
+        timeout_seconds=300,
+    )
+    payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
+    switched_values = cli.switch_active_passive_jail_rootfs_values(
+        payload["apps"]["charts"][0]["values"]
+    )
+    switched_values["maintenance"] = "downscale"
+    payload["apps"]["charts"][0]["values"] = switched_values
+    paths.config_path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+
+    checkpointed_job = phase["passive_slot_populate_job"]
+    job_name = str(checkpointed_job["name"])
+    run_upgrade_process = cli._run_soperator_upgrade_process
+    live_job_result = run_upgrade_process(
+        (
+            "kubectl",
+            "-n",
+            "soperator-prod",
+            "get",
+            f"job/{job_name}",
+            "-o",
+            "json",
+        ),
+        check=False,
+    )
+    assert live_job_result.returncode == 0
+    live_job = json.loads(live_job_result.stdout)
+    assert live_job["metadata"]["uid"] == checkpointed_job["uid"]
+    drifted_live_job = copy.deepcopy(live_job)
+    if job_drift == "uid":
+        drifted_live_job["metadata"]["uid"] = "replacement-passive-job-uid"
+    else:
+        drifted_live_job["spec"]["template"]["spec"]["containers"][0]["image"] = (
+            "registry.example/populate-jail:tampered"
+        )
+    job_lookups = 0
+
+    def _run_with_live_passive_job(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 120,
+        check: bool = True,
+        extra_env: Mapping[str, str] | None = None,
+    ) -> cli._SoperatorUpgradeCommandResult:
+        nonlocal job_lookups
+        command = tuple(str(arg) for arg in args)
+        if "get" in command and f"job/{job_name}" in command:
+            job_lookups += 1
+            command_calls.append((command, input_text))
+            return cli._SoperatorUpgradeCommandResult(
+                args=command,
+                returncode=0,
+                stdout=json.dumps(drifted_live_job if job_lookups >= drift_on_lookup else live_job),
+                stderr="",
+            )
+        return run_upgrade_process(
+            args,
+            input_text=input_text,
+            timeout_seconds=timeout_seconds,
+            check=check,
+            extra_env=extra_env,
+        )
+
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_process", _run_with_live_passive_job)
+    monkeypatch.setattr(
+        cli,
+        "_verify_target_rootfs_handoff_consumers",
+        lambda *, values, **_kwargs: _managed_live_pre_switch_checks(
+            values=values,
+            recorded_active_slot=recorded_active_slot,
+        ),
+    )
+    config_before_retry = paths.config_path.read_text(encoding="utf-8")
+    command_calls.clear()
+    render_calls.clear()
+    flux_calls.clear()
+    config_write_calls: list[Path] = []
+    write_text_atomic = cli._write_text_atomic
+
+    def _track_atomic_write(
+        path: Path,
+        content: str,
+        *,
+        encoding: str = "utf-8",
+    ) -> None:
+        if path.resolve() == paths.config_path.resolve():
+            config_write_calls.append(path)
+        write_text_atomic(path, content, encoding=encoding)
+
+    monkeypatch.setattr(cli, "_write_text_atomic", _track_atomic_write)
+
+    with pytest.raises(cli.SoperatorMigrationPhasePending, match=expected_error):
+        _run_soperator_upgrade_for_test(config_path=paths.config_path)
+
+    assert paths.config_path.read_text(encoding="utf-8") == config_before_retry
+    assert config_write_calls == []
+    assert render_calls == []
+    assert flux_calls == []
+    assert job_lookups == drift_on_lookup
+    mutating_verbs = {"apply", "create", "delete", "patch", "replace", "scale"}
+    assert not [
+        command for command, _input_text in command_calls if mutating_verbs.intersection(command)
+    ]
 
 
 def test_soperator_upgrade_target_ready_refuses_managed_first_adoption_hold(
@@ -3813,9 +4977,15 @@ def test_soperator_upgrade_target_ready_refuses_managed_first_adoption_hold(
     monkeypatch.setattr(cli, "_run_generated_bundle_validation", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "flux_apply_command", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "_verify_soperator_static_upgrade_ready", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "_raise_if_soperator_upgrade_would_bypass_migration", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "_run_soperator_upgrade_validation_phase", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(
+        cli, "_verify_soperator_static_upgrade_ready", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        cli, "_raise_if_soperator_upgrade_would_bypass_migration", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        cli, "_run_soperator_upgrade_validation_phase", lambda *_args, **_kwargs: ()
+    )
     _stub_soperator_upgrade_runtime(monkeypatch, paths, [])
 
     with pytest.raises(RuntimeError, match="target-ready login session policy refuses"):
@@ -3939,9 +5109,7 @@ def test_soperator_upgrade_fast_stage_failure_blocks_next_stage(
     assert checkpoint["status"] == "failed"
     assert checkpoint["pending_phase"] == "soperator-chart"
 
-    report = json.loads(
-        _soperator_upgrade_report_json_path(paths).read_text(encoding="utf-8")
-    )
+    report = json.loads(_soperator_upgrade_report_json_path(paths).read_text(encoding="utf-8"))
     stage_verification = {item["phase_id"]: item for item in report["stage_verification"]}
     assert stage_verification["soperator-chart"]["status"] == "failed"
     assert stage_verification["soperator-chart"]["verified_at"]
@@ -4346,16 +5514,12 @@ def test_soperator_upgrade_mk8s_only_runs_node_template_phase_without_raw_kubect
         checkpoint_stage_verification["post-mk8s-validation"]["fast_verification"]["status"]
         == "passed"
     )
-    report = json.loads(
-        _soperator_upgrade_report_json_path(paths).read_text(encoding="utf-8")
-    )
+    report = json.loads(_soperator_upgrade_report_json_path(paths).read_text(encoding="utf-8"))
     report_stage_verification = {item["phase_id"]: item for item in report["stage_verification"]}
     assert report_stage_verification["mk8s-node-template"]["status"] == "passed"
     assert report_stage_verification["post-mk8s-validation"]["status"] == "passed"
     assert report_stage_verification["soperator-chart"]["status"] == "passed"
-    markdown_report = _soperator_upgrade_report_path(paths).read_text(
-        encoding="utf-8"
-    )
+    markdown_report = _soperator_upgrade_report_path(paths).read_text(encoding="utf-8")
     assert "`mk8s-node-template` (top-level stage: `MK8s Node Upgrades`)" in markdown_report
     assert "`soperator-chart` (top-level stage: `Soperator Upgrade`)" in markdown_report
 
@@ -5378,6 +6542,268 @@ def test_soperator_upgrade_quiesce_treats_pending_jobs_as_queued(
     assert decisions[0]["pending_jobs"] == "queued-not-blocking"
 
 
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "scontrol: error: _parse_next_key: Parsing error at unrecognized key: MetricsType",
+        "scontrol: error: PluginDir: bad value",
+    ],
+)
+def test_post_jail_pre_release_rejects_slurm_config_errors_while_quiesced(
+    monkeypatch: pytest.MonkeyPatch,
+    stderr: str,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+    checkpoints: list[str] = []
+
+    def _exec_login(**kwargs: object) -> soperator_migration.SoperatorMigrationCommandResult:
+        args = tuple(str(item) for item in kwargs["args"])  # type: ignore[index]
+        calls.append(args)
+        if args[0] == "scontrol":
+            return soperator_migration.SoperatorMigrationCommandResult(args, 0, "ok\n", "")
+        if args[0] == "sbatch":
+            return soperator_migration.SoperatorMigrationCommandResult(args, 1, "", stderr)
+        pytest.fail(f"pre-release checks continued after the config error: {args}")
+
+    monkeypatch.setattr(soperator_migration, "_kubectl_exec_login_once", _exec_login)
+    phase: dict[str, Any] = {
+        "slurm_quiet_at": "2026-07-10T12:00:00Z",
+        "slurm_quiesced_partitions": [
+            {"partition": "main", "previous_state": "UP", "applied_state": "DOWN"}
+        ],
+    }
+
+    with pytest.raises(
+        soperator_migration.SoperatorMigrationPhasePending,
+        match="pre-release check failed",
+    ):
+        soperator_migration._ensure_post_jail_slurm_pre_release_checks(  # noqa: SLF001
+            phase=phase,
+            command_runner=lambda *_args, **_kwargs: pytest.fail("unexpected runner"),
+            kube_context="external-context",
+            checkpoint_writer=lambda: checkpoints.append("checkpoint"),
+        )
+
+    pre_release = phase["post_jail_slurm_smoke"]["pre_release"]
+    assert pre_release["status"] == "failed"
+    assert pre_release["failed_check"] == "sbatch-test-only"
+    assert "accepted_quiesced_scheduling_result" not in pre_release["checks"][-1]
+    assert phase["slurm_quiesced_partitions"][0]["applied_state"] == "DOWN"
+    assert "slurm_resumed_at" not in phase
+    assert calls == [
+        ("scontrol", "ping"),
+        ("sbatch", "--test-only", "--wrap=/bin/true"),
+    ]
+    assert checkpoints == ["checkpoint"]
+
+
+def test_managed_pre_release_config_failure_keeps_slurm_quiesced_without_restore(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    paths.infra_dir.mkdir(parents=True)
+    paths.flux_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
+    paths.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "infra": {
+                    "components": [
+                        {
+                            "id": "mk8s",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "inputs": {},
+                        }
+                    ]
+                },
+                "apps": {
+                    "charts": [
+                        {
+                            "id": "soperator",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "namespace": "soperator-prod",
+                            "release-name": "soperator",
+                            "target_ref": "mk8s",
+                            "version": "0.25.0",
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    generated_config = SimpleNamespace()
+    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    calls: list[object] = []
+    restore_mutations: list[str] = []
+    quiesce_record = cli.SlurmPartitionQuiesceRecord(
+        partition="main",
+        previous_state="UP",
+        applied_state="DOWN",
+    )
+
+    monkeypatch.setattr(
+        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli, "_raise_if_soperator_upgrade_would_bypass_migration", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(cli, "_run_generated_bundle_validation", lambda *_a, **_k: {})
+    monkeypatch.setattr(cli, "render_command", lambda *_a, **_k: None)
+    monkeypatch.setattr(cli, "flux_apply_command", lambda *_a, **_k: None)
+    monkeypatch.setattr(cli, "_verify_soperator_static_upgrade_ready", lambda *_a, **_k: None)
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_validation_phase", lambda *_a, **_k: ())
+    _stub_soperator_upgrade_runtime(monkeypatch, paths, calls)
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_slurm_nodes_for_worker_nodesets",
+        lambda **_kwargs: ("worker-0",),
+    )
+
+    def _quiesce_running_jobs(**kwargs: Any) -> tuple[str, ...]:
+        kwargs["decision_recorder"](
+            {
+                "at": "2026-07-10T12:00:00Z",
+                "action": "scheduling-quiesce-applied",
+                "partitions": [quiesce_record.as_payload()],
+                "pending_jobs": "queued-not-blocking",
+            }
+        )
+        return ("worker-0",)
+
+    monkeypatch.setattr(cli, "_handle_soperator_upgrade_running_jobs", _quiesce_running_jobs)
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_restore_slurm_partitions",
+        lambda **_kwargs: restore_mutations.append("partition"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_restore_slurm_nodes",
+        lambda **_kwargs: restore_mutations.append("node"),
+    )
+
+    def _exec_login(**kwargs: object) -> soperator_migration.SoperatorMigrationCommandResult:
+        args = tuple(str(item) for item in kwargs["args"])  # type: ignore[index]
+        if args[0] == "scontrol":
+            return soperator_migration.SoperatorMigrationCommandResult(args, 0, "ok\n", "")
+        if args[0] == "sbatch":
+            return soperator_migration.SoperatorMigrationCommandResult(
+                args,
+                1,
+                "",
+                "scontrol: error: Parsing error at unrecognized key: MetricsType",
+            )
+        pytest.fail(f"pre-release checks continued after MetricsType failed: {args}")
+
+    monkeypatch.setattr(soperator_migration, "_kubectl_exec_login_once", _exec_login)
+
+    with pytest.raises(
+        soperator_migration.SoperatorMigrationPhasePending,
+        match="pre-release check failed",
+    ):
+        _run_soperator_upgrade_for_test(
+            config_path=paths.config_path,
+            job_policy="fail",
+        )
+
+    checkpoint = json.loads(_soperator_upgrade_checkpoint_path(paths).read_text(encoding="utf-8"))
+    pre_release = checkpoint["phase_state"]["populate-jail-refresh"]["post_jail_slurm_smoke"][
+        "pre_release"
+    ]
+    assert pre_release["status"] == "failed"
+    assert restore_mutations == []
+    assert checkpoint["slurm"]["quiesced_partitions"] == [quiesce_record.as_payload()]
+    assert checkpoint["failure"]["slurm_restore"] == "left-changed"
+    assert "slurm-partitions-kept-quiesced-after-pre-release-failure" in {
+        event["event"] for event in checkpoint["events"]
+    }
+
+
+def test_post_jail_pre_release_accepts_partition_down_sbatch_test_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def _exec_login(**kwargs: object) -> soperator_migration.SoperatorMigrationCommandResult:
+        args = tuple(str(item) for item in kwargs["args"])  # type: ignore[index]
+        calls.append(args)
+        if args[0] == "sbatch":
+            return soperator_migration.SoperatorMigrationCommandResult(
+                args,
+                1,
+                "",
+                "sbatch: error: Batch job submission failed: Nodes required for job are DOWN",
+            )
+        return soperator_migration.SoperatorMigrationCommandResult(args, 0, "ok\n", "")
+
+    monkeypatch.setattr(soperator_migration, "_kubectl_exec_login_once", _exec_login)
+    phase: dict[str, Any] = {}
+
+    lines = soperator_migration._ensure_post_jail_slurm_pre_release_checks(  # noqa: SLF001
+        phase=phase,
+        command_runner=lambda *_args, **_kwargs: pytest.fail("unexpected runner"),
+        kube_context="external-context",
+    )
+
+    pre_release = phase["post_jail_slurm_smoke"]["pre_release"]
+    assert pre_release["status"] == "passed"
+    sbatch_check = next(
+        check for check in pre_release["checks"] if check["name"] == "sbatch-test-only"
+    )
+    assert sbatch_check["status"] == "passed"
+    assert sbatch_check["returncode"] == 1
+    assert sbatch_check["accepted_quiesced_scheduling_result"] is True
+    assert calls == [
+        ("scontrol", "ping"),
+        ("sbatch", "--test-only", "--wrap=/bin/true"),
+        ("sacctmgr", "-nP", "show", "qos", "format=name"),
+    ]
+    assert "user scheduling remained quiesced" in " ".join(lines)
+
+
+def test_post_jail_slurm_release_order_is_static_then_restore_then_live_job() -> None:
+    external_source = inspect.getsource(
+        soperator_migration._execute_populate_jail_refresh_phase  # noqa: SLF001
+    )
+    pre_release_token = "_ensure_post_jail_slurm_pre_release_checks("
+    external_restore_token = "_restore_external_upgrade_slurm_partitions("
+    full_smoke_token = "_ensure_post_jail_slurm_smoke("
+    pre_release_positions = [
+        match.start() for match in re.finditer(re.escape(pre_release_token), external_source)
+    ]
+
+    assert len(pre_release_positions) == 2
+    for pre_release_position in pre_release_positions:
+        restore_position = external_source.find(external_restore_token, pre_release_position)
+        smoke_position = external_source.find(full_smoke_token, pre_release_position)
+        assert pre_release_position < restore_position < smoke_position
+    assert "if pre_release_failed:" in external_source
+    assert "user partitions remain controlled/DOWN" in external_source
+
+    managed_source = inspect.getsource(cli._run_managed_soperator_cluster_upgrade)  # noqa: SLF001
+    managed_pre_release_position = managed_source.find(pre_release_token)
+    managed_restore_position = managed_source.find(
+        "_restore_managed_slurm_before_post_jail_smoke(",
+        managed_pre_release_position,
+    )
+    managed_smoke_position = managed_source.find(full_smoke_token, managed_pre_release_position)
+    assert managed_pre_release_position < managed_restore_position < managed_smoke_position
+    assert "if slurm_quiesce_records and not post_jail_pre_release_failed:" in managed_source
+    assert "slurm-partitions-kept-quiesced-after-pre-release-failure" in managed_source
+
+    full_smoke_source = inspect.getsource(
+        soperator_migration._ensure_post_jail_slurm_smoke  # noqa: SLF001
+    )
+    assert "_run_post_jail_live_job_smoke(" in full_smoke_source
+
+
 def test_soperator_upgrade_quiesce_restores_partial_partition_on_apply_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -6009,7 +7435,9 @@ def test_soperator_upgrade_interactive_callback_cancels_in_tui_without_reprompt(
         jobs: Sequence[cli.AffectedSlurmJob],
         **kwargs: object,
     ) -> tuple[str, tuple[str, ...]]:
-        action_handler = cast(Callable[..., tuple[cli.AffectedSlurmJob, ...]], kwargs["action_handler"])
+        action_handler = cast(
+            Callable[..., tuple[cli.AffectedSlurmJob, ...]], kwargs["action_handler"]
+        )
         assert action_handler("cancel-selected", ("42",), tuple(jobs)) == ()
         return cli.SLURM_JOB_CONTROL_JOBS_CLEARED, ()
 
@@ -6066,7 +7494,9 @@ def test_soperator_upgrade_interactive_callback_requeue_holds_in_tui(
         jobs: Sequence[cli.AffectedSlurmJob],
         **kwargs: object,
     ) -> tuple[str, tuple[str, ...]]:
-        action_handler = cast(Callable[..., tuple[cli.AffectedSlurmJob, ...]], kwargs["action_handler"])
+        action_handler = cast(
+            Callable[..., tuple[cli.AffectedSlurmJob, ...]], kwargs["action_handler"]
+        )
         assert action_handler("requeue-hold-selected", ("42",), tuple(jobs)) == ()
         return cli.SLURM_JOB_CONTROL_JOBS_CLEARED, ()
 
@@ -6685,9 +8115,7 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
     }
     assert report_stage_verification["activechecks-suspend"]["status"] == "passed"
     assert report_stage_verification["activechecks-restore"]["status"] == "passed"
-    upgrade_report = _soperator_upgrade_report_path(paths).read_text(
-        encoding="utf-8"
-    )
+    upgrade_report = _soperator_upgrade_report_path(paths).read_text(encoding="utf-8")
     assert "checkpointed suspend/restore was required" in upgrade_report
     assert "## Stage Fast Verification" in upgrade_report
     assert "`activechecks-suspend`: `PASS`" in upgrade_report
@@ -6824,9 +8252,7 @@ def test_soperator_upgrade_resume_late_pending_phase_skips_completed_late_phases
     checkpoint_path = _soperator_upgrade_checkpoint_path(paths)
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     checkpoint["completed_phases"] = [
-        phase
-        for phase in checkpoint["completed_phases"]
-        if phase != "shared-safety-verification"
+        phase for phase in checkpoint["completed_phases"] if phase != "shared-safety-verification"
     ]
     checkpoint["pending_phase"] = "shared-safety-verification"
     checkpoint["pending_reason"] = "simulated interruption"
@@ -6983,9 +8409,7 @@ def test_soperator_upgrade_resume_demotes_completed_phase_missing_fast_verificat
     assert checkpoint["completed_phases"] == list(cli._SOPERATOR_UPGRADE_PLANNED_PHASE_IDS)
     verification = checkpoint["phase_state"]["shared-safety-verification"]["fast_verification"]
     assert verification["status"] == "passed"
-    assert "completed-phase-reverify-required" in {
-        event["event"] for event in checkpoint["events"]
-    }
+    assert "completed-phase-reverify-required" in {event["event"] for event in checkpoint["events"]}
 
     discovery_path = Path(checkpoint["discovery"]["path"])
     discovery_path.unlink()
@@ -7132,9 +8556,7 @@ def test_soperator_upgrade_restores_activechecks_after_failed_upgrade(
     assert "activechecks-restored-after-failure" in [
         event["event"] for event in checkpoint["events"]
     ]
-    upgrade_report = _soperator_upgrade_report_path(paths).read_text(
-        encoding="utf-8"
-    )
+    upgrade_report = _soperator_upgrade_report_path(paths).read_text(encoding="utf-8")
     assert "- Status: `failed`" in upgrade_report
     assert "`activechecks-restored-after-failure`" in upgrade_report
 
@@ -7583,9 +9005,7 @@ def test_soperator_upgrade_resumed_activechecks_restore_survives_preflight_failu
     event_names = [event["event"] for event in checkpoint["events"]]
     assert "resumed" in event_names
     assert "activechecks-restored-after-failure" in event_names
-    upgrade_report = _soperator_upgrade_report_path(paths).read_text(
-        encoding="utf-8"
-    )
+    upgrade_report = _soperator_upgrade_report_path(paths).read_text(encoding="utf-8")
     assert "- Status: `failed`" in upgrade_report
     assert "`activechecks-restored-after-failure`" in upgrade_report
 
@@ -10257,7 +11677,9 @@ def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_by_terminal_m
         "external_soperator_upgrade_resume_backup_metadata",
         lambda *_args, **_kwargs: None,
     )
-    monkeypatch.setattr(cli, "_external_soperator_backup_kube_context", lambda *_args, **_kwargs: "ctx")
+    monkeypatch.setattr(
+        cli, "_external_soperator_backup_kube_context", lambda *_args, **_kwargs: "ctx"
+    )
     monkeypatch.setattr(
         cli,
         "_create_external_soperator_upgrade_backup",
@@ -10454,7 +11876,9 @@ def test_ext_soperator_upgrade_execute_prints_final_output_after_status_exits(
         "external_soperator_upgrade_resume_backup_metadata",
         lambda *_args, **_kwargs: None,
     )
-    monkeypatch.setattr(cli, "_external_soperator_backup_kube_context", lambda *_args, **_kwargs: "ctx")
+    monkeypatch.setattr(
+        cli, "_external_soperator_backup_kube_context", lambda *_args, **_kwargs: "ctx"
+    )
     monkeypatch.setattr(
         cli,
         "_create_external_soperator_upgrade_backup",
@@ -12072,9 +13496,7 @@ def test_render_command_force_allows_noninteractive_overwrite(
     onboard_report = soperator_cluster_report_dir / "discovery"
     ext_upgrade_report = soperator_cluster_report_dir / "ext-soperator-upgrade" / "report.md"
     ext_upgrade_detail_report = (
-        soperator_cluster_report_dir
-        / "ext-soperator-upgrade"
-        / "deploy-smoke-report-external.json"
+        soperator_cluster_report_dir / "ext-soperator-upgrade" / "deploy-smoke-report-external.json"
     )
     node_template_report = fake_paths.reports_dir / "upgrade-node-template-report.md"
     node_template_report_json = fake_paths.reports_dir / "upgrade-node-template-report.json"
@@ -24278,9 +25700,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "Use target-version flags to preview upgrade findings" in (
         normalized_managed_soperator_discover_help
     )
-    assert "Jail Upgrade rootfs-refresh boundary" in (
-        normalized_managed_soperator_discover_help
-    )
+    assert "Jail Upgrade rootfs-refresh boundary" in (normalized_managed_soperator_discover_help)
     assert "--execute" in normalized_managed_soperator_restore_help
     assert "--approve" in normalized_managed_soperator_restore_help
     assert "--restore-accounting-db" in normalized_managed_soperator_restore_help
@@ -24712,11 +26132,11 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--job-refresh-interval" in normalized_ext_soperator_upgrade_help
     assert "--login-session-policy" in normalized_ext_soperator_upgrade_help
     assert "--login-session-drain-timeout" in normalized_ext_soperator_upgrade_help
-    assert "target-ready keeps source login retirement gated" in normalized_ext_soperator_upgrade_help
-    assert "wait-active also waits for active SSH sessions" in normalized_ext_soperator_upgrade_help
-    assert "stops before its temporary login writer hold" in (
-        normalized_ext_soperator_upgrade_help
+    assert (
+        "target-ready keeps source login retirement gated" in normalized_ext_soperator_upgrade_help
     )
+    assert "wait-active also waits for active SSH sessions" in normalized_ext_soperator_upgrade_help
+    assert "stops before its temporary login writer hold" in (normalized_ext_soperator_upgrade_help)
     assert "--jail-persistent-mount" in normalized_ext_soperator_upgrade_help
     assert "--preserve-jail-home" not in normalized_ext_soperator_upgrade_help
     assert "--no-preserve-jail-home" not in normalized_ext_soperator_upgrade_help
@@ -24768,8 +26188,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         normalized_ext_soperator_upgrade_help
     )
     assert (
-        "--worker-rollout-strategy safe-surge --worker-wave-groups 1 "
-        "--job-policy wait-to-finish"
+        "--worker-rollout-strategy safe-surge --worker-wave-groups 1 --job-policy wait-to-finish"
     ) in normalized_ext_soperator_upgrade_help
     assert "The target must already be onboarded and accepted through ext-soperator onboard" in (
         normalized_ext_soperator_upgrade_help
@@ -24779,8 +26198,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     )
     assert (
         "Core external Soperator execution uses Nebius API and Kubernetes API/kubectl "
-        "exec for cloud, cluster, and Slurm actions"
-        in normalized_ext_soperator_upgrade_help
+        "exec for cloud, cluster, and Slurm actions" in normalized_ext_soperator_upgrade_help
     )
     assert "it does not SSH from the operator workstation into login or worker nodes" in (
         normalized_ext_soperator_upgrade_help
@@ -24792,12 +26210,12 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "Soperator/storage/compute/GPU-stack/Jail Upgrade work" in (
         normalized_ext_soperator_upgrade_help
     )
-    assert (
-        "If the accepted locked path still contains more segments"
-        in (normalized_ext_soperator_upgrade_help)
-    )
-    assert "repeat the same ext-soperator upgrade --execute --approve command until the path is complete" in (
+    assert "If the accepted locked path still contains more segments" in (
         normalized_ext_soperator_upgrade_help
+    )
+    assert (
+        "repeat the same ext-soperator upgrade --execute --approve command until the path is complete"
+        in (normalized_ext_soperator_upgrade_help)
     )
     assert "use a fresh ext-soperator onboard decision only to plan a new later path" in (
         normalized_ext_soperator_upgrade_help
@@ -24821,9 +26239,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "safe-surge uses temporary worker surge capacity" in (
         normalized_ext_soperator_upgrade_help
     )
-    assert "zero-surge is the service-role default" in (
-        normalized_ext_soperator_upgrade_help
-    )
+    assert "zero-surge is the service-role default" in (normalized_ext_soperator_upgrade_help)
     assert "safe-surge uses temporary service-role surge capacity" in (
         normalized_ext_soperator_upgrade_help
     )

@@ -2,7 +2,9 @@
 {{- $adoption := default dict .Values.jailRootfs.adoption }}
 {{- $legacyActive := eq (default "" $adoption.activeSource) "legacy-rootfs" }}
 {{- $legacyRollback := eq (default "" $adoption.rollbackSource) "legacy-rootfs" }}
-{{- if or (not $activePassive) $legacyActive $legacyRollback }}
+{{- $managedLegacyPvc := include "slurm-cluster-storage.volume.jail.pvc" . | trimAll "\"" }}
+{{- $legacyPvcName := default $managedLegacyPvc $adoption.legacyPvcName }}
+{{- if and (or (not $activePassive) $legacyActive $legacyRollback) (eq $legacyPvcName $managedLegacyPvc) }}
 apiVersion: v1
 kind: PersistentVolume
 metadata:

@@ -15,6 +15,7 @@ from .runtime_config import to_plain_data
 JAIL_PERSISTENT_MOUNTS_VALUES_KEY = "jailPersistentMounts"
 JAIL_PERSISTENT_HOME_MOUNT_PATH = "/home"
 JAIL_LEGACY_ROOT_PATH = "/mnt/jail"
+JAIL_LEGACY_PVC_NAME = "jail-pvc"
 JAIL_MANAGED_STORE_PATH = "/mnt/jail-store"
 JAIL_MANAGED_ROOTFS_PATH = "/mnt/jail-store/rootfs"
 JAIL_MANAGED_SYSTEM_PATH = "/mnt/jail-store/.cxcli"
@@ -36,6 +37,24 @@ JAIL_EXTERNAL_AUTO_PERSISTENT_MOUNT_PATHS = (
 )
 JAIL_MANAGED_DEFAULT_SHARED_MOUNT_PATHS = JAIL_EXTERNAL_DEFAULT_SHARED_MOUNT_PATHS
 JAIL_MANAGED_AUTO_PERSISTENT_MOUNT_PATHS = JAIL_EXTERNAL_AUTO_PERSISTENT_MOUNT_PATHS
+
+
+def _mashed_kebab(value: Any) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"([a-z])([A-Z])", r"\1-\2", text)
+    text = re.sub(r"([A-Z])([A-Z][a-z])", r"\1-\2", text).lower()
+    return re.sub(r"-{2,}", "-", re.sub(r"[^a-z0-9]+", "-", text)).strip("-")
+
+
+def legacy_jail_pvc_name(values: Mapping[str, Any]) -> str:
+    jail_rootfs = _mapping(values.get("jailRootfs"))
+    adoption = _mapping(jail_rootfs.get("adoption"))
+    explicit = str(adoption.get("legacyPvcName") or "").strip()
+    if explicit:
+        return explicit
+    jail_volume = _mapping(_mapping(values.get("volume")).get("jail"))
+    volume_name = _mashed_kebab(jail_volume.get("name") or "jail") or "jail"
+    return f"{volume_name}-pvc"
 
 
 @dataclass(frozen=True)
@@ -186,7 +205,9 @@ def parse_jail_persistent_mount_spec(value: str) -> JailPersistentMount:
     )
 
 
-def parse_jail_persistent_mount_specs(values: Sequence[str] | None) -> tuple[JailPersistentMount, ...]:
+def parse_jail_persistent_mount_specs(
+    values: Sequence[str] | None,
+) -> tuple[JailPersistentMount, ...]:
     if not values:
         return ()
     return tuple(parse_jail_persistent_mount_spec(value) for value in values)
@@ -213,7 +234,9 @@ def jail_persistent_mount_decisions(
         mount_path = str(item.get("mountPath") or "").strip()
         if not mount_path:
             continue
-        configured_by_path[_normalize_path(mount_path, field="jailPersistentMount.mountPath")] = item
+        configured_by_path[_normalize_path(mount_path, field="jailPersistentMount.mountPath")] = (
+            item
+        )
 
     ordered_paths: list[str] = []
     for path in (
@@ -325,10 +348,7 @@ def normalize_jail_persistent_mounts(
         _normalize_path(mount.mount_path, field="jailPersistentMount.mountPath"): mount
         for mount in explicit_mounts
     }
-    if (
-        include_home
-        and JAIL_PERSISTENT_HOME_MOUNT_PATH not in existing_paths
-    ):
+    if include_home and JAIL_PERSISTENT_HOME_MOUNT_PATH not in existing_paths:
         normalized.append(
             explicit_by_path.pop(
                 JAIL_PERSISTENT_HOME_MOUNT_PATH,
@@ -359,6 +379,7 @@ def normalize_jail_persistent_mounts(
         emitted_paths.add(mount_path)
 
     seen: set[str] = set()
+    seen_names: set[str] = set()
     result: list[JailPersistentMount] = []
     store_path = _normalize_path(store_path, field="jailRootfs.store.mountPath")
     system_paths = (
@@ -384,7 +405,14 @@ def normalize_jail_persistent_mounts(
                     "jailPersistentMounts.localPath must not overlap active/passive "
                     f"rootfs or cxcli system paths; got {local_path!r} overlapping {blocked_path!r}."
                 )
-        result.append(JailPersistentMount(mount_path=mount_path, local_path=local_path))
+        normalized_mount = JailPersistentMount(mount_path=mount_path, local_path=local_path)
+        if normalized_mount.name in seen_names:
+            raise ValueError(
+                "jailPersistentMounts paths must generate distinct volume/PVC names; "
+                f"{mount_path!r} collides at {normalized_mount.name!r}."
+            )
+        seen_names.add(normalized_mount.name)
+        result.append(normalized_mount)
     return tuple(result)
 
 
@@ -417,22 +445,23 @@ def _upsert_pvc_volume_source(
         entry = {}
         volume_sources.append(entry)
 
-    entry["name"] = name
-    entry["persistentVolumeClaim"] = {"claimName": pvc_name, "readOnly": False}
-    entry["createPVC"] = False
-    entry["size"] = ""
-    entry["storageClassName"] = ""
-    for source_key in ("configMap", "emptyDir", "hostPath", "nfs", "secret"):
-        entry.pop(source_key, None)
+    entry.clear()
+    entry.update(
+        {
+            "name": name,
+            "persistentVolumeClaim": {"claimName": pvc_name, "readOnly": False},
+            "createPVC": False,
+            "size": "",
+            "storageClassName": "",
+        }
+    )
 
 
 def _existing_pvc_volume_source_claim_name(volume_sources: Sequence[Any], name: str) -> str:
     for item in volume_sources:
         if not isinstance(item, Mapping) or str(item.get("name") or "").strip() != name:
             continue
-        claim_name = str(
-            _mapping(item.get("persistentVolumeClaim")).get("claimName") or ""
-        ).strip()
+        claim_name = str(_mapping(item.get("persistentVolumeClaim")).get("claimName") or "").strip()
         if claim_name:
             return claim_name
     return ""
@@ -472,6 +501,12 @@ def sync_jail_volume_sources(values: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError(f"jailRootfs.passiveSlot must be slot-a or slot-b; got {passive_slot!r}.")
     jail_rootfs["activeSlot"] = active_slot
     jail_rootfs["passiveSlot"] = passive_slot
+
+    adoption = _mapping(jail_rootfs.get("adoption"))
+    legacy_active = str(adoption.get("activeSource") or "").strip() == JAIL_LEGACY_ACTIVE_SOURCE
+    legacy_pvc_name = legacy_jail_pvc_name(patched)
+    if legacy_active and not legacy_pvc_name:
+        raise ValueError("jailRootfs.adoption.legacyPvcName must not be empty.")
 
     store = _mutable_mapping(jail_rootfs, "store")
     store_path = str(store.get("mountPath") or JAIL_LEGACY_ROOT_PATH).strip()
@@ -515,8 +550,10 @@ def sync_jail_volume_sources(values: Mapping[str, Any]) -> dict[str, Any]:
         chart_rendered_source_names.add(mount.name)
 
     # The chart renders active/passive slot and persistent-mount volumeSources
-    # from jailRootfs/jailPersistentMounts. Values only need the legacy `jail`
-    # alias consumed by populate-jail before the active slot switch.
+    # from jailRootfs/jailPersistentMounts. During first adoption, the legacy
+    # `jail` alias and all login/worker consumers must remain on the discovered
+    # legacy PVC until the one-time persistent copy and passive-slot population
+    # have both completed. After the switch, the active slot becomes canonical.
     volume_sources[:] = [
         item
         for item in volume_sources
@@ -529,8 +566,43 @@ def sync_jail_volume_sources(values: Mapping[str, Any]) -> dict[str, Any]:
     _upsert_pvc_volume_source(
         volume_sources,
         name=volume_key,
-        pvc_name=slot_pvcs[active_slot],
+        pvc_name=legacy_pvc_name if legacy_active else slot_pvcs[active_slot],
     )
+
+    active_volume_source = (
+        volume_key
+        if legacy_active
+        else str(
+            _mapping(slots.get(active_slot)).get("volumeSourceName") or f"jail-rootfs-{active_slot}"
+        ).strip()
+    )
+    active_pvc_name = legacy_pvc_name if legacy_active else slot_pvcs[active_slot]
+    slurm_nodes = patched.get("slurmNodes")
+    if isinstance(slurm_nodes, MutableMapping):
+        for role_values in slurm_nodes.values():
+            if not isinstance(role_values, MutableMapping):
+                continue
+            volumes = role_values.get("volumes")
+            if not isinstance(volumes, MutableMapping):
+                continue
+            jail = volumes.get("jail")
+            if isinstance(jail, MutableMapping):
+                volumes["jail"] = {"volumeSourceName": active_volume_source}
+    nodesets = patched.get("nodesets")
+    if isinstance(nodesets, Sequence) and not isinstance(nodesets, (str, bytes, bytearray)):
+        for nodeset in nodesets:
+            if not isinstance(nodeset, MutableMapping):
+                continue
+            slurmd = nodeset.get("slurmd")
+            if not isinstance(slurmd, MutableMapping):
+                continue
+            volumes = slurmd.get("volumes")
+            if not isinstance(volumes, MutableMapping):
+                continue
+            jail = volumes.get("jail")
+            if not isinstance(jail, MutableMapping):
+                continue
+            volumes["jail"] = {"persistentVolumeClaim": {"claimName": active_pvc_name}}
     for source_name in _referenced_controller_spool_volume_sources(patched):
         _upsert_pvc_volume_source(
             volume_sources,
@@ -587,18 +659,23 @@ def apply_jail_persistent_mount_values(
         slot_values.update(_slot_values(rootfs_path, slot))
     if legacy_active_source:
         adoption = _mutable_mapping(jail_rootfs, "adoption")
-        adoption.setdefault("activeSource", JAIL_LEGACY_ACTIVE_SOURCE)
-        adoption.setdefault("rollbackSource", JAIL_LEGACY_ACTIVE_SOURCE)
+        adoption["activeSource"] = JAIL_LEGACY_ACTIVE_SOURCE
+        adoption["rollbackSource"] = JAIL_LEGACY_ACTIVE_SOURCE
+        adoption["legacyPvcName"] = legacy_jail_pvc_name(patched)
     elif "adoption" in jail_rootfs:
         adoption = jail_rootfs.get("adoption")
         if isinstance(adoption, MutableMapping) and not adoption:
             jail_rootfs.pop("adoption", None)
 
     default_mounts = (
-        managed_default_jail_persistent_mounts()
-        if managed
-        else external_default_jail_persistent_mounts()
-    ) if include_default_shared_mounts else ()
+        (
+            managed_default_jail_persistent_mounts()
+            if managed
+            else external_default_jail_persistent_mounts()
+        )
+        if include_default_shared_mounts
+        else ()
+    )
     configured_mounts = _sequence_of_mappings(patched.get(JAIL_PERSISTENT_MOUNTS_VALUES_KEY))
     mounts = normalize_jail_persistent_mounts(
         (*configured_mounts, *persistent_mounts),

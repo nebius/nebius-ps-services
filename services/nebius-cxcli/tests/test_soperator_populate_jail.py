@@ -223,6 +223,9 @@ def test_populate_jail_force_and_manual_modes() -> None:
     assert forced.required is True
     assert manual.required is True
     assert "passive active/passive slot" in manual.manual_instruction
+    assert "canonical jail volume-source alias" in manual.manual_instruction
+    assert "SConfigController" in manual.manual_instruction
+    assert "every enabled alias consumer" in manual.manual_instruction
 
 
 def test_populate_jail_refresh_values_set_temporary_and_steady_state_modes() -> None:
@@ -265,7 +268,10 @@ def test_active_passive_slot_selection_and_switch_values() -> None:
         "slurmNodes": {
             "controller": {
                 "volumes": {
-                    "jail": {"volumeSourceName": "jail-rootfs-slot-a"},
+                    "jail": {
+                        "volumeSourceName": "jail-rootfs-slot-a",
+                        "persistentVolumeClaim": {"claimName": "stale-controller-pvc"},
+                    },
                     "spool": {"volumeSourceName": "controller-spool"},
                 }
             },
@@ -277,7 +283,10 @@ def test_active_passive_slot_selection_and_switch_values() -> None:
                 "name": "worker",
                 "slurmd": {
                     "volumes": {
-                        "jail": {"persistentVolumeClaim": {"claimName": "jail-rootfs-slot-a-pvc"}}
+                        "jail": {
+                            "volumeSourceName": "jail-rootfs-slot-a",
+                            "persistentVolumeClaim": {"claimName": "jail-rootfs-slot-a-pvc"},
+                        }
                     }
                 },
             }
@@ -300,13 +309,13 @@ def test_active_passive_slot_selection_and_switch_values() -> None:
     assert slots.passive_slot == "slot-b"
     assert switched["jailRootfs"]["activeSlot"] == "slot-b"
     assert switched["jailRootfs"]["passiveSlot"] == "slot-a"
-    assert switched["slurmNodes"]["login"]["volumes"]["jail"]["volumeSourceName"] == (
-        "jail-rootfs-slot-b"
-    )
-    assert (
-        switched["nodesets"][0]["slurmd"]["volumes"]["jail"]["persistentVolumeClaim"]["claimName"]
-        == "jail-rootfs-slot-b-pvc"
-    )
+    for role in ("controller", "login", "rest"):
+        assert switched["slurmNodes"][role]["volumes"]["jail"] == {
+            "volumeSourceName": "jail-rootfs-slot-b"
+        }
+    assert switched["nodesets"][0]["slurmd"]["volumes"]["jail"] == {
+        "persistentVolumeClaim": {"claimName": "jail-rootfs-slot-b-pvc"}
+    }
     volume_sources = {item["name"]: item for item in switched["volumeSources"]}
     assert set(volume_sources) == {"controller-spool", "jail"}
     assert volume_sources["controller-spool"]["persistentVolumeClaim"]["claimName"] == (

@@ -22,6 +22,56 @@
         "skipPopulateJail"
       ]
     },
+    "jailRootfs": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "strategy": {
+          "type": "string",
+          "enum": ["activePassive"]
+        },
+        "activeSlot": {
+          "type": "string",
+          "enum": ["slot-a", "slot-b"]
+        },
+        "passiveSlot": {
+          "type": "string",
+          "enum": ["slot-a", "slot-b"]
+        },
+        "adoption": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "activeSource": {
+              "type": "string",
+              "enum": ["slot", "legacy-rootfs"]
+            },
+            "rollbackSource": {
+              "type": "string",
+              "enum": ["legacy-rootfs"]
+            },
+            "legacyPvcName": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 253,
+              "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+            }
+          }
+        }
+      }
+    },
+    "jailPersistentMounts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mountPath", "localPath"],
+        "properties": {
+          "mountPath": { "type": "string", "minLength": 2 },
+          "localPath": { "type": "string", "minLength": 2 }
+        }
+      }
+    },
     "gpuDriverJail": {
       "type": "object",
       "additionalProperties": false,

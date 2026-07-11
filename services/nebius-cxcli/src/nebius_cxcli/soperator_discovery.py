@@ -230,6 +230,53 @@ def _metadata_labels(resource: Mapping[str, Any]) -> Mapping[str, Any]:
     return labels if isinstance(labels, Mapping) else {}
 
 
+def _source_slurmcluster_ref(
+    snapshot: Mapping[str, Any],
+    *,
+    target_ref: str,
+) -> dict[str, Any]:
+    candidates: list[dict[str, str]] = []
+    for item in _sequence_of_mappings(snapshot.get("soperator_resources")):
+        if _text(item.get("kind")).lower() != "slurmcluster":
+            continue
+        metadata = _metadata(item)
+        name = _text(metadata.get("name"))
+        if not name:
+            continue
+        spec = item.get("spec", {})
+        raw_secrets = spec.get("secrets", {}) if isinstance(spec, Mapping) else {}
+        secrets = raw_secrets if isinstance(raw_secrets, Mapping) else {}
+        sshd_keys_name = _text(secrets.get("sshdKeysName"))
+        if not sshd_keys_name and raw_secrets != "[redacted]":
+            sshd_keys_name = f"{name}-sshd-keys"
+        candidates.append(
+            {
+                "namespace": _text(metadata.get("namespace")) or "soperator",
+                "name": name,
+                "uid": _text(metadata.get("uid")),
+                "sshd_host_key_secret_name": sshd_keys_name,
+            }
+        )
+    normalized_target = _normalized_token(target_ref)
+    non_target = [
+        item for item in candidates if _normalized_token(item["name"]) != normalized_target
+    ]
+    selected = non_target if non_target else candidates
+    if len(selected) == 1:
+        return {"status": "resolved", **selected[0]}
+    return {
+        "status": "ambiguous" if selected else "missing",
+        "candidates": [
+            {
+                "namespace": item["namespace"],
+                "name": item["name"],
+                "uid": item["uid"],
+            }
+            for item in selected
+        ],
+    }
+
+
 def _soperator_resource_release(
     snapshot: Mapping[str, Any],
     *,
@@ -285,7 +332,9 @@ def _soperator_resource_release(
     )[0]
 
 
-def _soperator_release(snapshot: Mapping[str, Any], *, namespace: str = "", release_name: str = "") -> Mapping[str, Any]:
+def _soperator_release(
+    snapshot: Mapping[str, Any], *, namespace: str = "", release_name: str = ""
+) -> Mapping[str, Any]:
     releases = _sequence_of_mappings(snapshot.get("helm_releases"))
     requested_namespace = str(namespace or "").strip().lower()
     requested_release = str(release_name or "").strip().lower()
@@ -301,7 +350,11 @@ def _soperator_release(snapshot: Mapping[str, Any], *, namespace: str = "", rele
     for release in releases:
         chart = str(release.get("chart", "") or release.get("chart_name", "") or "").lower()
         name = str(release.get("name", "") or "").strip().lower()
-        if "soperator" in chart or "slurm-operator" in chart or name in {"soperator", "slurm-operator"}:
+        if (
+            "soperator" in chart
+            or "slurm-operator" in chart
+            or name in {"soperator", "slurm-operator"}
+        ):
             return release
     return {}
 
@@ -314,8 +367,11 @@ def _soperator_status(identity: Mapping[str, Any]) -> str:
     chart_version = str(identity.get("chart_version", "") or "").strip()
     app_version = str(identity.get("app_version", "") or "").strip()
     release = identity.get("helm_release")
-    if source_version or chart_version or app_version or (
-        isinstance(release, Mapping) and bool(release)
+    if (
+        source_version
+        or chart_version
+        or app_version
+        or (isinstance(release, Mapping) and bool(release))
     ):
         return "installed"
     if state.startswith("existing-soperator"):
@@ -347,7 +403,9 @@ def _container_image_version(image: Any) -> str:
 def _pod_template_container_image(resource: Mapping[str, Any]) -> str:
     containers = resource.get("containers")
     if not isinstance(containers, Sequence) or isinstance(containers, (str, bytes, bytearray)):
-        containers = _nested_container_sequence(resource, ("spec", "template", "spec", "containers"))
+        containers = _nested_container_sequence(
+            resource, ("spec", "template", "spec", "containers")
+        )
     for container in containers:
         if not isinstance(container, Mapping):
             continue
@@ -390,9 +448,10 @@ def _job_is_complete(resource: Mapping[str, Any]) -> bool:
     for condition in conditions:
         if not isinstance(condition, Mapping):
             continue
-        if _text(condition.get("type")).lower() == "complete" and _text(
-            condition.get("status")
-        ).lower() == "true":
+        if (
+            _text(condition.get("type")).lower() == "complete"
+            and _text(condition.get("status")).lower() == "true"
+        ):
             return True
     return False
 
@@ -622,6 +681,10 @@ def _identity_section(
         "fingerprint": str(report.get("fingerprint", "") or "").strip(),
         "helm_release": _redact(release),
         "crd_versions": _redact(snapshot.get("crds", [])),
+        "source_slurmcluster_ref": _source_slurmcluster_ref(
+            snapshot,
+            target_ref=target_ref,
+        ),
     }
     jail_rootfs = report.get("jail_rootfs")
     if isinstance(jail_rootfs, Mapping):
@@ -651,9 +714,12 @@ def _kubernetes_section(snapshot: Mapping[str, Any], *, redaction: str) -> dict[
     return {
         "snapshot": sanitized_snapshot,
         "resource_counts": resource_counts,
-        "nodesets": [_redact(item, redaction=redaction) for item in _resource_items(snapshot, "nodesets")],
+        "nodesets": [
+            _redact(item, redaction=redaction) for item in _resource_items(snapshot, "nodesets")
+        ],
         "slurmclusters": [
-            _redact(item, redaction=redaction) for item in _resource_items(snapshot, "slurmclusters")
+            _redact(item, redaction=redaction)
+            for item in _resource_items(snapshot, "slurmclusters")
         ],
         "activechecks": [
             _redact(item, redaction=redaction) for item in _resource_items(snapshot, "activechecks")
@@ -687,7 +753,9 @@ def _accounting_section(
 ) -> dict[str, Any]:
     values = chart_values if isinstance(chart_values, Mapping) else {}
     external_db = _nested_bool(values, ("slurmNodes", "accounting", "externalDB", "enabled"))
-    managed_mariadb = _nested_bool(values, ("slurmNodes", "accounting", "mariadbOperator", "enabled"))
+    managed_mariadb = _nested_bool(
+        values, ("slurmNodes", "accounting", "mariadbOperator", "enabled")
+    )
     section: dict[str, Any] = {
         "external_db_enabled": external_db,
         "chart_managed_mariadb": bool(managed_mariadb and not external_db),
@@ -755,7 +823,9 @@ def _configmap_refs(snapshot: Mapping[str, Any]) -> list[dict[str, Any]]:
     for namespace, resources in namespace_resources.items():
         if not isinstance(resources, Mapping):
             continue
-        for item in resources.get("configmaps", []) if isinstance(resources.get("configmaps"), list) else []:
+        for item in (
+            resources.get("configmaps", []) if isinstance(resources.get("configmaps"), list) else []
+        ):
             if not isinstance(item, Mapping):
                 continue
             metadata = item.get("metadata") if isinstance(item.get("metadata"), Mapping) else {}
@@ -777,7 +847,9 @@ def _secret_refs(snapshot: Mapping[str, Any]) -> list[dict[str, Any]]:
     for namespace, resources in namespace_resources.items():
         if not isinstance(resources, Mapping):
             continue
-        for item in resources.get("secrets", []) if isinstance(resources.get("secrets"), list) else []:
+        for item in (
+            resources.get("secrets", []) if isinstance(resources.get("secrets"), list) else []
+        ):
             if not isinstance(item, Mapping):
                 continue
             metadata = item.get("metadata") if isinstance(item.get("metadata"), Mapping) else {}
@@ -838,7 +910,9 @@ def _finding_classification(severity: str) -> str:
     return "info"
 
 
-def _findings_section(report: Mapping[str, Any], *, slurm: Mapping[str, Any], accounting: Mapping[str, Any]) -> dict[str, Any]:
+def _findings_section(
+    report: Mapping[str, Any], *, slurm: Mapping[str, Any], accounting: Mapping[str, Any]
+) -> dict[str, Any]:
     findings: list[dict[str, Any]] = []
     for item in report.get("findings", []) if isinstance(report.get("findings"), list) else []:
         if not isinstance(item, Mapping):
@@ -862,7 +936,9 @@ def _findings_section(report: Mapping[str, Any], *, slurm: Mapping[str, Any], ac
                     "status": "partial-discovery",
                     "severity": severity,
                     "classification": _finding_classification(severity),
-                    "message": str(error.get("message", "") or "Optional discovery collector failed."),
+                    "message": str(
+                        error.get("message", "") or "Optional discovery collector failed."
+                    ),
                     "requires_customer_approval": False,
                     "evidence": _redact(error),
                 }
@@ -877,9 +953,7 @@ def _findings_section(report: Mapping[str, Any], *, slurm: Mapping[str, Any], ac
         )
         actions.append(action)
     remediation = [
-        dict(item)
-        for item in report.get("remediation", [])
-        if isinstance(item, Mapping)
+        dict(item) for item in report.get("remediation", []) if isinstance(item, Mapping)
     ]
     return {
         "onboarding_report": copy.deepcopy(dict(report)),
@@ -1073,15 +1147,18 @@ def soperator_discovery_manifest_path(
     kube_context: str = "",
     artifact_identity: SoperatorClusterArtifactIdentity | None = None,
 ) -> Path:
-    return soperator_discovery_bundle_dir(
-        project_dir,
-        target_ref,
-        output_dir=output_dir,
-        cluster_id=cluster_id,
-        cluster_name=cluster_name,
-        kube_context=kube_context,
-        artifact_identity=artifact_identity,
-    ) / SOPERATOR_DISCOVERY_MANIFEST_NAME
+    return (
+        soperator_discovery_bundle_dir(
+            project_dir,
+            target_ref,
+            output_dir=output_dir,
+            cluster_id=cluster_id,
+            cluster_name=cluster_name,
+            kube_context=kube_context,
+            artifact_identity=artifact_identity,
+        )
+        / SOPERATOR_DISCOVERY_MANIFEST_NAME
+    )
 
 
 def write_soperator_discovery_bundle(
@@ -1257,6 +1334,7 @@ def load_soperator_discovery_bundle(path: Path) -> dict[str, Any]:
             "state",
             "soperator_status",
             "jail_rootfs",
+            "source_slurmcluster_ref",
         ):
             payload[key] = identity.get(key, "")
     payload.update(
