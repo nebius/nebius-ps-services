@@ -1388,7 +1388,12 @@ smoke after consumers switch,
 refuses the later first-adoption persistent-mount login writer hold under the
 default `target-ready` session policy because that hold temporarily removes
 continuous login endpoints; operators must explicitly choose `wait-active` or
-`grace-period` for that maintenance window,
+`grace-period` for that maintenance window; onboard and render next-step output
+uses `wait-active` in the generated execute command when the current locked
+segment contains that first-adoption migration. The generated execute command
+in dry-run output substitutes it for the default `target-ready` plan and
+preserves an explicit compatible policy plus its drain timeout on any locked
+segment, while the dry-run screen reports the policy used to produce the plan,
 provides ad hoc `ext-soperator scale-up` and `ext-soperator scale-down`
 commands for external maintenance without onboarding, requiring both Nebius
 `--project-id`/`--cluster-id` for node-group lookup and `--kube-context` for
@@ -1517,7 +1522,9 @@ source for current infrastructure reality.
 If the operator interrupts the run after a node group is checkpointed as
 `updating`, resume treats that checkpoint as in-progress external rollout
 state, reports that an upgrade mutation was performed, and waits on live
-readback rather than retrying the Nebius node-group update.
+readback rather than retrying the Nebius node-group update. A zero-surge
+service role quiesced before that provider call is restored and checkpointed
+before the interrupt propagates.
 The executor-owned live status surface uses concise
 `External Soperator upgrade phase ...` comments for preflight, Slurm job
 preflight, protected-state capture, final post-upgrade checks, and report
@@ -1538,7 +1545,10 @@ refresh. The table starts with aggregate totals, then lists one row per node
 group with provider state, API-reported Kubernetes version, total, upgraded,
 upgrading, remaining, ready/current, and latest event columns. `upgraded` is
 `total - outdated_node_count`, `remaining` is `outdated_node_count`, and
-`upgrading` is provider-active rollout nodes: readiness deficit plus at least
+the latest event is selected by `last_occurrence.occurred_at` because provider
+event-array order is not chronological. When no event has a parseable
+timestamp, the final coded event is the deterministic fallback. `upgrading` is
+provider-active rollout nodes: readiness deficit plus at least
 `remaining` when state/event signals active rollout such as `PROVISIONING`,
 `Draining`, or `NodeProvisioning`. This keeps large groups such as 1000-node
 worker pools scan-friendly without mixing in Kubernetes registered-node counts
@@ -1553,14 +1563,27 @@ The external node-template phase label covers both the MK8s control-plane hop
 and node-template rollout, and live status reports a separate `MK8s Control
 Plane` signal while a control-plane hop is active. Terminal output highlights provider
 table labels and states while preserving the same plain-text table in
-non-interactive logs. Slurm worker names/states, queue health, and Soperator
+non-interactive logs. Slurm worker names/states deduplicate `sinfo -N` rows by
+node name because Slurm emits one row per node-partition membership; conflicting
+duplicate rows retain the least healthy state. Maintenance and
+performance-counter states are degraded/non-serving, while reboot, power-up,
+and similar transitional states are upgrading rather than serving. Interrupts
+from either status probe propagate before phase mutation. Queue health and Soperator
 SlurmCluster reconciliation remain adjacent component details. The checkpoint
 records compact status snapshots at phase start, phase end, and pending gates.
 These status lines describe best-effort service continuity and degradation
 during external upgrade; they do not promise that downtime cannot occur. During
 checkpointed rolling-compute target handoff, Slurm worker status reports
 deferred/upgrading from checkpoint state instead of probing old Slurm clients
-with `sinfo` after target-era config has started applying.
+with `sinfo` after target-era config has started applying. A recognized config
+mismatch uses the durable target-apply marker even when this phase recorded no
+new partition transition because admission was already quiesced.
+Before the passive-slot Job exists, Jail Upgrade status follows persistent-copy
+state: active or completed copy work is `upgrading`, failed or writer-drift-stale
+evidence is `degraded`, and planned work remains `not-started`.
+While the durable writer hold is `holding` or `held`, Slurm status is
+deferred/upgrading because the target SlurmCluster maintenance contract
+intentionally downscales login, controller, and worker workloads.
 Existing projects can pass `config.yaml`
 or the project directory containing it. Deployments-root onboarding resolves
 the tenant/project folder from identity inputs; if that resolved project
@@ -1694,6 +1717,14 @@ one-node controller/accounting workloads, and known drain-blocking webhook
 replicas only for lower-continuity zero-surge service-role rollouts, and
 requires spare surge capacity for active service groups or worker waves only
 when the operator explicitly chooses safe-surge for that role.
+Checkpoint-write and post-update readiness failures restore any quiesced
+service role before the phase exits. On resume, an older durable `quiesced`
+record is restored and checkpointed before reconciliation; cxcli reapplies
+quiesce from that restored baseline only if provider dispatch still needs to
+run. The `wait-active` source-Pod probe treats only an exact Pod-specific
+Kubernetes NotFound response as retirement; all namespace, wrong-Pod,
+unrelated-resource, and ambiguous probe failures remain unknown and fail
+closed before provider mutation.
 Interactive external onboarding asks `slurm_scheduling_quiesce` before rollout
 pacing. With the default `true`, cxcli skips normal worker wave and worker
 `max_unavailable_count` prompts because Slurm-clear workers dispatch as soon as
@@ -1788,9 +1819,26 @@ definitions, QOS/accounting policy inputs, accounting storage settings, and the
 chart-managed MariaDB accounting dump when live accounting exists. Target render
 must preserve those values through typed chart fields or explicit raw config
 escape hatches; profile defaults must not erase customer partitions,
-associations, QOS, or accounting enforcement. Post-cutover validation compares
-protected-state hashes and verifies live partitions, selected Slurm config keys,
-and SlurmDBD/accounting reachability before old rootfs/storage resources can be
+associations, QOS, or accounting enforcement. The pre-mutation backup is a DR
+restore point, not the transactional handoff image: after affected jobs finish
+and Slurm admission is quiet, rolling compute quiesces source accounting and
+captures a fresh `slurm_acct_db`-only dump under the cluster-scoped checkpoint
+directory with mode `0600`. Target accounting remains quiesced while that dump
+is imported into the new chart-managed MariaDB. The import preserves target
+cluster and internal schema metadata, reconciles source-prefixed and shared
+global tables only through additive changes against a private checksum-bound
+target-current schema snapshot, and registers the old source name as a
+controller-free historical cluster. Exact source job, step,
+completed-job, maximum job-id, and submission-time evidence must match on the
+target and be readable through target-version `sacct`; target-version
+`sacctmgr` must show the live target controller and historical source
+registration before source Slurm resources may be retired. A missing dump, changed
+Pod/PVC identity, failed import, or count mismatch leaves the phase pending,
+keeps Slurm scheduling quiesced, and does not resume target accounting after it
+has been quiesced for import. SQL and credentials are never written to reports
+or terminal output. Post-cutover validation compares protected-state hashes
+and verifies live partitions, selected Slurm config keys, and
+SlurmDBD/accounting reachability before old rootfs/storage resources can be
 retired.
 Protected Slurm runtime fields are comparable only when both field probes
 succeeded. A failed pre-upgrade field probe followed by a successful
@@ -3437,11 +3485,16 @@ The refresh sequence is deliberately ordered:
    Soperator-owned hold scales rendered login and worker workloads to zero
    without changing NodeSet replica intent or removing workers from declarative
    Slurm topology. With the default `target-ready` policy, cxcli stops during
-   execute preflight before
-   any upgrade mutation and tells the operator to rerun the exact original
-   command with `wait-active` added because
-   continuous SSH endpoints cannot be preserved during that writer hold. After
-   the gate, cxcli runs a Kubernetes persistent migration Job before
+   execute preflight before any upgrade mutation because continuous SSH
+   endpoints cannot be preserved during that writer hold. After onboarding or
+   rendering a current locked segment with this migration, the generated
+   execute command already includes `--login-session-policy wait-active`.
+   The generated execute command in dry-run output substitutes that policy for
+   the default `target-ready` plan and preserves an explicit `wait-active` or
+   `grace-period` together with its drain timeout, including on later locked
+   segments; the dry-run screen itself reports the policy used to produce the
+   plan, and a manually composed `target-ready` command still fails closed.
+   After the gate, cxcli runs a Kubernetes persistent migration Job before
    passive-slot population. The Job mounts the existing
    jail PVC once at `/store`, copies only present known or explicit paths such
    as `/store/home`, `/store/data`, `/store/scripts`, and `/store/models` into
@@ -3631,6 +3684,10 @@ Canonical `client_info` keys:
 - `notifications.email`
 - `notifications.email_enabled` is the single per-client enable/disable switch for deploy-report email delivery across local runs and CI.
 - In `create`, leaving the optional notifications email blank writes `notifications.email_enabled: false` and `notifications.email: null`.
+- `nebius.region_id` uses one canonical supported id: `eu-north1`, `eu-west1`,
+  `me-west1`, `us-central1`, `eu-north2`, or `uk-south1`. Explicit unsupported
+  or empty `--region-id` input fails before config persistence; aliases such as
+  `eu-north` are not accepted.
 
 Legacy `client_info.env` and `client_info.cluster_name` are not supported.
 

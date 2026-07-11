@@ -2316,6 +2316,22 @@ human access contract for operator sessions and manual smoke checks.
 | `nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --execute --approve` | Execute one approved locked external-upgrade segment: one MK8s control-plane/node-template hop plus any target GPU stack, storage, compute, Soperator Helm cutover, persistent jail mount adoption, Jail Upgrade active/passive rootfs refresh when required, configured MK8s GPU deployment testing, and required Soperator/Slurm smoke validation assigned to that segment. | Creates a restore-capable backup before mutation for DR restore to a new/replacement cluster only, rejects sparse reused backup metadata before mutation, captures protected customer state before approved mutation, fails unsupported or not-validated Soperator upgrade paths unless the run also passes `--allow-unsupported-soperator-upgrade-path`, mutates only supported external upgrade surfaces, handles affected Slurm jobs, including running, completing, and pending jobs in affected partitions or requested/scheduled on affected nodes, through `--job-policy`, writes a local v2 checkpoint with immutable `locked_upgrade_path`, `upgrade_path_fingerprint`, `current_segment_id`, `completed_segment_ids`, `pending_phase`, top-level `segment_state`, persistent jail mount evidence, and segment report/backup metadata, rejects old progress-only checkpoints, enforces one Kubernetes minor hop per run, rechecks completed selected actions against live state on rerun, runs a fast stage-scoped verification after each executed stage before advancing within the segment, verifies external MK8s node-template state, normalizes target `kube-rbac-proxy` image values to `registry.k8s.io/kubebuilder/kube-rbac-proxy:v0.15.0`, verifies target Helm chart workloads, models `/home`, `/data`, `/scripts`, `/models`, and declared additional customer paths as persistent jail mounts on the same physical jail SFS, migrates legacy in-rootfs data into those shared mount paths during first adoption, refreshes the jail rootfs by populating the passive active/passive slot on the existing jail SFS and switching consumers when the target populate-jail image or selected chart/rootfs evidence requires it, suspends old source-family Flux Kustomization desired state, deletes suspended old source-family Flux HelmRelease records, retires stale profile-derived source-family Helm release records while preserving shared/storage resources, writes validation detail reports under the same cluster-scoped upgrade directory, runs the shared bounded read-only fast safety checks in validation hold, writes stage verification, locked-path progress, MK8s GPU deployment-testing, Soperator/Slurm validation, and protected-state rollups into `generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/report.md` and `report.json`, writes segment snapshots under `generated/reports/soperator-clusters/<cluster-key>/ext-soperator-upgrade/segments/<segment-id>/`, refreshes `deploy-report.md` as a secondary deploy-compatible MK8s GPU summary only after protected comparison passes, keeps accepted onboarding while locked segments remain, prints a next action to rerun the exact original command with every option unchanged, and stops at guarded pending gates. |
 | `nebius-cxcli upgrade node-template` and `upgrade node-group` | Upgrade Terraform-managed MK8s infrastructure underneath a cxcli-managed deployment. | `node-template` owns Kubernetes version, OS, and Nebius-image GPU stack rolling updates and writes `generated/reports/upgrade-node-template-report.md` / `.json` after verification. Node-group hardware, preset, CPU/GPU kind, GPU cluster, or fabric changes require the approved `upgrade node-group` planner; current execute writes `generated/reports/upgrade-node-group-report.md` / `.json` with the approved pre-mutation checkpoint and then stops before live replacement/cutover/retirement. |
 
+For chart-managed accounting, the restore-capable backup is the DR restore
+point, not the later transfer image. Once affected jobs finish and scheduling
+is quiet, rolling compute quiesces source accounting, writes a fresh
+`slurm_acct_db`-only dump with mode `0600` below the cluster checkpoint, imports
+it while target accounting is quiesced, and compares exact source history
+counts before deleting source Slurm resources. SQL and credentials are never
+printed or copied into reports. The transfer excludes Slurm's internal schema
+metadata and target cluster registry, snapshots the target-current global
+schema, reconciles older source/global tables only through additive compatible
+changes, creates a controller-free historical source registration, and
+requires the live target registration plus source history to be readable
+through target-version `sacctmgr` and `sacct`. Missing or mismatched evidence leaves the same
+phase pending with Slurm scheduling still quiesced and does not resume target
+accounting after it has been stopped for import; clusters without chart-managed
+accounting skip this handoff.
+
 Operationally, finish a running `ext-soperator upgrade` or `soperator upgrade`
 from the same laptop, workdir, and operator account that started it. The resume
 checkpoints are local operational state, not deploy input and not Git-tracked
@@ -2738,8 +2754,16 @@ as the guarded upgrade/adoption workflow:
 
 ```bash
 nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run
-nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --execute --approve
+nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> \
+  --login-session-policy wait-active --execute --approve
 ```
+
+The `wait-active` option is required only when the current locked segment
+performs first-adoption persistent-mount migration. Onboard and render output
+include it automatically. The generated execute command in dry-run output
+substitutes it for the default `target-ready` policy while preserving an
+explicitly selected `wait-active` or `grace-period` policy; the dry-run screen
+still reports the policy used to produce that plan.
 
 Use `ext-soperator onboard` plus `ext-soperator upgrade` when the source cluster
 is not yet under cxcli Soperator management or when onboarding found a source
@@ -2808,6 +2832,10 @@ nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>
 - a deployments root. In that case pass or answer `--client-name`,
   `--tenant-id`, `--project-id`, and `--region-id` so cxcli can create or
   resolve the canonical tenant/project `config.yaml`.
+
+Canonical region ids are `eu-north1`, `eu-west1`, `me-west1`, `us-central1`,
+`eu-north2`, and `uk-south1`. Explicit unsupported or empty values fail before
+config persistence; `eu-north` is not an alias for `eu-north1`.
 
 Interactive onboarding lists existing Nebius MK8s clusters in the selected
 project and onboards one cluster per run. It records the selected Nebius
@@ -3449,7 +3477,13 @@ Important external upgrade flags:
   first-adoption persistent mount migration, cxcli must temporarily stop login
   writers before copying legacy rootfs paths; the default `target-ready` policy
   stops before that login writer hold, and the operator must choose
-  `wait-active` or `grace-period` for an approved maintenance window.
+  `wait-active` or `grace-period` for an approved maintenance window. Onboard
+  and render output use `wait-active` in the generated execute command when the
+  current locked segment requires this migration. Dry-run output uses it for
+  the default `target-ready` plan and preserves an explicit compatible policy.
+  The copy/paste next command also preserves the paired drain timeout whenever
+  it emits `wait-active` or `grace-period`, including explicit policies on
+  later locked segments.
 - `--login-session-drain-timeout <duration>`: maximum active-session drain or
   grace wait for `wait-active` and `grace-period`. The default is `30m`.
 
@@ -3644,7 +3678,9 @@ group instead of submitting a duplicate node-group update. If the operator
 interrupts the command after cxcli has checkpointed a control-plane hop or node
 group as `updating`, the next run treats that record as in-progress rollout
 state, reports `Upgrade performed: yes`, and keeps waiting for live state
-instead of issuing another Nebius update. Checkpoints still own phase order,
+instead of issuing another Nebius update. If a zero-surge service role was
+quiesced before the interrupted provider call, cxcli restores that role and
+checkpoints the restore before propagating the interrupt. Checkpoints still own phase order,
 approval, backup, and mutation-attempt facts; live Nebius state only proves
 whether the phase should complete, wait, retry, or fail on drift.
 
@@ -3837,6 +3873,8 @@ The table starts with aggregate totals, then lists one row per node group with
 provider state, API-reported Kubernetes version, total, upgraded, upgrading,
 remaining, ready/current, and latest event columns. `upgraded` is
 `total - outdated_node_count`, `remaining` is `outdated_node_count`, and
+latest event uses the provider occurrence timestamp rather than event-array
+order. When no timestamp is parseable, the final coded event is the fallback.
 `upgrading` is provider-active rollout nodes: readiness deficit plus at least
 `remaining` when state/event signals active rollout such as `PROVISIONING`,
 `Draining`, or `NodeProvisioning`. This keeps 1000-node worker pools
@@ -3854,9 +3892,25 @@ reports a separate `MK8s Control Plane` signal while a control-plane hop is
 active.
 Terminal output highlights provider table labels and states while preserving the
 same plain-text table in non-interactive logs.
-Slurm worker names/states, queue health, and Soperator SlurmCluster
-reconciliation stay adjacent component details. These signals are best-effort
-progress and degradation indicators, not a no-downtime guarantee.
+Slurm worker names/states deduplicate `sinfo -N` rows by node name because one
+node can appear once per partition; conflicting rows retain the least healthy
+state. Maintenance and performance-counter states report degraded with named
+unavailable workers; reboot, power-up, and other transitional states report
+upgrading instead of serving. Ctrl-C during either status probe propagates to
+the executor instead of becoming a best-effort warning before mutation. Queue
+health and Soperator SlurmCluster reconciliation stay adjacent component
+details. These signals are best-effort progress and degradation
+indicators, not a no-downtime guarantee.
+During a planned rolling-compute/Jail handoff, a recognized old-client versus
+target-era Slurm config mismatch reports as deferred/upgrading once the durable
+target-apply marker exists. This does not require a new partition-transition
+record when admission was already quiesced before the phase.
+Jail Upgrade status also treats an active persistent migration as `upgrading`
+before the passive-slot population Job exists; failed or stale copy evidence is
+`degraded`, while a merely planned migration remains `not-started`.
+While the checkpointed writer hold is `holding` or `held`, Slurm worker status
+is deferred/upgrading because login, controller, and worker workloads are
+intentionally downscaled for the persistent copy and passive-slot handoff.
 Phases complete only when their live prerequisites are absent or satisfied;
 otherwise cxcli writes the pending phase and reason to the checkpoint for the
 next explicit action.
@@ -3940,10 +3994,15 @@ The Jail Upgrade rootfs-refresh process is:
    login and worker consumers without changing worker NodeSet replica intent or
    removing worker names from Slurm topology. cxcli enters that hold only after
    an explicit `wait-active` or `grace-period` login-session policy gate. With
-   the default `target-ready` policy, cxcli stops in execute preflight
-   before any upgrade mutation and prints a next action to rerun the exact
-   original command with `--login-session-policy wait-active` added, because continuous SSH endpoints cannot
-   be preserved during that writer hold. After the gate, cxcli runs a Kubernetes migration Job before
+   the default `target-ready` policy, cxcli stops in execute preflight before
+   any upgrade mutation and prints a next action to rerun the exact original
+   command with `--login-session-policy wait-active` added, because continuous
+   SSH endpoints cannot be preserved during that writer hold. Onboard and
+   render output already add `--login-session-policy wait-active` to the
+   generated execute command for the current first-adoption segment. Dry-run
+   output uses that policy for a default `target-ready` plan and preserves an
+   explicit `wait-active` or `grace-period`; a manually composed `target-ready`
+   command still fails closed. After the gate, cxcli runs a Kubernetes migration Job before
    passive-slot population. The Job
    mounts the existing jail PVC once at `/store`, copies only present known or
    explicit paths such as `/store/home`, `/store/data`, `/store/scripts`, and

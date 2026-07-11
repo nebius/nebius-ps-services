@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -319,6 +320,37 @@ def test_format_mk8s_provider_node_group_status_counts_active_ready_rollout() ->
         "worker-0-0  PROVISIONING  1.32  2      1         1          1          "
         "2/2            NodeProvisioning"
     ) in rendered
+
+
+def test_format_mk8s_provider_node_group_status_selects_latest_event_by_time() -> None:
+    rolling = _node_group(id="ng-system", name="system", version="1.32")
+    rolling.status = SimpleNamespace(
+        state="PROVISIONING",
+        ready_node_count=2,
+        target_node_count=3,
+        node_count=3,
+        outdated_node_count=1,
+        reconciling=True,
+        events=[
+            SimpleNamespace(
+                last_occurrence=SimpleNamespace(
+                    code="Deleting",
+                    occurred_at=datetime(2026, 7, 11, 7, 59, 12, tzinfo=UTC),
+                )
+            ),
+            SimpleNamespace(
+                last_occurrence=SimpleNamespace(
+                    code="NodeProvisioning",
+                    occurred_at=datetime(2026, 7, 11, 7, 56, 56, tzinfo=UTC),
+                )
+            ),
+        ],
+    )
+
+    rendered = "\n".join(upgrade.format_mk8s_provider_node_group_status((rolling,)))
+
+    assert "Deleting" in rendered
+    assert "NodeProvisioning" not in rendered
 
 
 def test_verify_mk8s_upgrade_plan_ready_fails_when_live_os_does_not_match() -> None:

@@ -50,9 +50,7 @@ def _source_payload() -> dict[str, Any]:
             },
         },
         "infra": {
-            "components": [
-                {"id": "mk8s", "instance_id": "mk8s", "enabled": True, "inputs": {}}
-            ]
+            "components": [{"id": "mk8s", "instance_id": "mk8s", "enabled": True, "inputs": {}}]
         },
         "apps": {
             "charts": [
@@ -63,11 +61,7 @@ def _source_payload() -> dict[str, Any]:
                     "version": "0.26.0",
                     "namespace": "soperator",
                     "release-name": "soperator",
-                    "values": {
-                        "slurmNodes": {
-                            "accounting": {"externalDB": {"enabled": False}}
-                        }
-                    },
+                    "values": {"slurmNodes": {"accounting": {"externalDB": {"enabled": False}}}},
                 }
             ]
         },
@@ -281,10 +275,7 @@ def test_soperator_backup_filename_uses_external_prefix_without_upgrade_transiti
         include_transitions=False,
     )
 
-    assert (
-        filename
-        == "external-soperator-backup-20260629T203459Z-chart-1.22.3.tar.gz"
-    )
+    assert filename == "external-soperator-backup-20260629T203459Z-chart-1.22.3.tar.gz"
 
 
 def test_ext_soperator_upgrade_backup_filename_includes_source_transitions() -> None:
@@ -298,8 +289,7 @@ def test_ext_soperator_upgrade_backup_filename_includes_source_transitions() -> 
     )
 
     assert (
-        filename
-        == "ext-soperator-upgrade-20260702T225335Z-chart-1.22.3-to-4.0.2-ps.3-"
+        filename == "ext-soperator-upgrade-20260702T225335Z-chart-1.22.3-to-4.0.2-ps.3-"
         "k8s-1.31-to-1.32.tar.gz"
     )
     assert "unknown" not in filename
@@ -545,19 +535,13 @@ def test_soperator_backup_archive_contains_restore_material(
             archive.extractfile("kubernetes/restore/deployments.yaml").read().decode()
         )
         generic_pvc_restore = (
-            archive.extractfile("kubernetes/restore/persistentvolumeclaims.yaml")
-            .read()
-            .decode()
+            archive.extractfile("kubernetes/restore/persistentvolumeclaims.yaml").read().decode()
         )
         required_pv_restore = yaml.safe_load_all(
-            archive.extractfile("recreation/restore/persistentvolumes.yaml")
-            .read()
-            .decode()
+            archive.extractfile("recreation/restore/persistentvolumes.yaml").read().decode()
         )
         required_pvc_restore = yaml.safe_load_all(
-            archive.extractfile("recreation/restore/persistentvolumeclaims.yaml")
-            .read()
-            .decode()
+            archive.extractfile("recreation/restore/persistentvolumeclaims.yaml").read().decode()
         )
         required_pvs = list(required_pv_restore)
         required_pvcs = list(required_pvc_restore)
@@ -574,12 +558,13 @@ def test_soperator_backup_archive_contains_restore_material(
     assert manifest["recreation_runbook_material"]["coverage_path"] == (
         "recreation/recreation-coverage.json"
     )
-    assert manifest["recreation_runbook_material"][
-        "retained_pv_bindings_are_command_restored"
-    ] is True
-    assert "recreation/restore/persistentvolumes.yaml" in manifest[
-        "recreation_runbook_material"
-    ]["restore_paths"]
+    assert (
+        manifest["recreation_runbook_material"]["retained_pv_bindings_are_command_restored"] is True
+    )
+    assert (
+        "recreation/restore/persistentvolumes.yaml"
+        in manifest["recreation_runbook_material"]["restore_paths"]
+    )
     assert "recreation/restore/persistentvolumes.yaml" in names
     assert "recreation/restore/persistentvolumeclaims.yaml" in names
     assert restore_plan["cluster_apply_order"] == ["recreation/restore/persistentvolumes.yaml"]
@@ -591,9 +576,9 @@ def test_soperator_backup_archive_contains_restore_material(
     ]
     assert "kubernetes/restore/deployments.yaml" in restore_plan["apply_order"]
     assert restore_plan["recreation_runbook"]["retained_pv_bindings_are_command_restored"] is True
-    assert "recreation/recreation-coverage.json" in restore_plan["restore_material"][
-        "recreation_raw"
-    ]
+    assert (
+        "recreation/recreation-coverage.json" in restore_plan["restore_material"]["recreation_raw"]
+    )
     assert coverage["items"]["bound_persistentvolumes"]["status"] == "collected"
     assert coverage["items"]["required_recreation_material"]["status"] == "collected"
     assert "clusterIP" not in service_restore
@@ -709,9 +694,7 @@ def test_soperator_backup_archive_deduplicates_chart_named_recreation_pvcs(
 
     with tarfile.open(backup.path, "r:gz") as archive:
         generic_pvc_restore = (
-            archive.extractfile("kubernetes/restore/persistentvolumeclaims.yaml")
-            .read()
-            .decode()
+            archive.extractfile("kubernetes/restore/persistentvolumeclaims.yaml").read().decode()
         )
         required_pvcs = list(
             yaml.safe_load_all(
@@ -861,9 +844,7 @@ def test_soperator_backup_fails_when_required_recreation_material_missing(
     kubernetes_dir.mkdir()
     required_items = _required_recreation_items()
     required_items["secrets"] = [
-        item
-        for item in required_items["secrets"]
-        if item["metadata"]["name"] != "mariadb-root"
+        item for item in required_items["secrets"] if item["metadata"]["name"] != "mariadb-root"
     ]
     for label, items in required_items.items():
         (kubernetes_dir / f"{label}.json").write_text(
@@ -1091,7 +1072,7 @@ def test_soperator_backup_recreation_material_records_pv_reclaim_warnings(
                     {
                         "metadata": {"name": "image-storage-worker-0"},
                         "spec": {"volumeName": "pv-worker-0"},
-                    }
+                    },
                 ]
             }
         ),
@@ -1131,7 +1112,7 @@ def test_soperator_backup_recreation_material_records_pv_reclaim_warnings(
                                 "persistentVolumeReclaimPolicy": "Delete",
                                 "claimRef": {"name": "image-storage-worker-0"},
                             },
-                        }
+                        },
                     ]
                 }
             ),
@@ -1192,7 +1173,9 @@ def test_soperator_backup_uses_portable_wckey_snapshot_fields(
     assert "slurm/sacctmgr-wckeys.txt" in included
     assert discovery["commands"]["sacctmgr_wckeys"]["returncode"] == 0
     assert "sacctmgr -nP show wckey format=Cluster,User,WCKey" in commands
-    assert all("show wckey format=Cluster,Account,User,WCKey" not in command for command in commands)
+    assert all(
+        "show wckey format=Cluster,Account,User,WCKey" not in command for command in commands
+    )
 
 
 def test_soperator_backup_derives_sacctmgr_dump_cluster_from_slurm_conf(
@@ -1262,11 +1245,13 @@ def test_soperator_backup_resolves_target_mariadb_pod(monkeypatch) -> None:
     )
 
 
-def test_soperator_backup_uses_mariadb_root_password_env(
+def test_soperator_backup_long_cluster_dump_is_replay_safe_and_uses_password_env(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     exec_commands: list[str] = []
+    cluster_name = "soperator-long-customer-cluster-name-with-many-characters"
+    mariadb_pod = f"{cluster_name}-acct-db-0"
 
     def fake_kubectl(
         namespace: str,
@@ -1282,13 +1267,13 @@ def test_soperator_backup_uses_mariadb_root_password_env(
                         {
                             "apiVersion": "v1",
                             "kind": "Pod",
-                            "metadata": {"name": "mk8s-acct-db-0"},
+                            "metadata": {"name": mariadb_pod},
                             "status": {"phase": "Running"},
                         }
                     ]
                 ),
             )
-        if args[:2] == ["exec", "mk8s-acct-db-0"]:
+        if args[:2] == ["exec", mariadb_pod]:
             command = args[-1]
             exec_commands.append(command)
             if "mariadb-dump" in command or "mysqldump" in command:
@@ -1301,13 +1286,20 @@ def test_soperator_backup_uses_mariadb_root_password_env(
     cli._soperator_upgrade_dump_accounting_db(
         namespace="soperator",
         output_dir=tmp_path,
-        target_ref="mk8s",
+        target_ref=cluster_name,
     )
 
     assert len(exec_commands) == 2
     assert all("MARIADB_ROOT_PASSWORD" in command for command in exec_commands)
-    assert all("--defaults-extra-file=\"$defaults_file\"" in command for command in exec_commands)
+    assert all('--defaults-extra-file="$defaults_file"' in command for command in exec_commands)
     assert all("--password" not in command for command in exec_commands)
+    dump_command = next(
+        command for command in exec_commands if "mariadb-dump" in command or "mysqldump" in command
+    )
+    assert "--skip-extended-insert" in dump_command
+    assert "--ignore-table=slurm_acct_db.table_defs_table" in dump_command
+    assert "--ignore-table=slurm_acct_db.convert_version_table" in dump_command
+    assert "--all-databases" in dump_command
 
 
 def test_standalone_soperator_backup_does_not_require_generated_context(

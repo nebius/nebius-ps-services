@@ -146,6 +146,15 @@ def _stub_soperator_migration_quota(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+def _stub_soperator_migration_accounting_handoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep CLI orchestration fakes focused on approval/output, not MariaDB emulation."""
+    monkeypatch.setattr(
+        soperator_migration_module,
+        "_source_accounting_handoff_required",
+        lambda **_kwargs: False,
+    )
+
+
 def test_node_group_migration_quota_report_uses_project_without_tenant(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1078,7 +1087,8 @@ def _assert_soperator_onboard_next_steps(
         )
         assert (
             "nebius-cxcli ext-soperator upgrade "
-            f"{config_arg} --target {target_arg} --execute --approve" in lines
+            f"{config_arg} --target {target_arg} --login-session-policy wait-active "
+            "--execute --approve" in lines
         )
         assert "After the dry run is accepted:" in output
         assert "Do not run `nebius-cxcli deploy` before `ext-soperator upgrade`" not in output
@@ -1093,6 +1103,30 @@ def _assert_soperator_onboard_next_steps(
         assert (
             f"`nebius-cxcli ext-soperator upgrade {config_arg} --target {target_arg} --dry-run`"
             not in output
+        )
+
+
+def test_region_or_prompt_rejects_unsupported_explicit_region(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="Unsupported region id 'eu-north'"):
+        cli_module._region_or_prompt("eu-north", interactive=False)
+    with pytest.raises(RuntimeError, match="Unsupported region id '<empty>'"):
+        cli_module._region_or_prompt("", interactive=False)
+
+    assert cli_module._region_or_prompt(" eu-north1 ", interactive=False) == "eu-north1"
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("{}\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="Unsupported region id 'eu-north'"):
+        cli_module._resolve_soperator_onboard_config_target(
+            config_path,
+            interactive=False,
+            client_name=None,
+            tenant_id=None,
+            project_id=None,
+            region_id="eu-north",
+            email=None,
+            infra_entries=(),
+            app_entries=(),
         )
 
 
@@ -2014,17 +2048,107 @@ def test_render_deploy_hint_lists_execute_for_multiple_migration_targets(
     assert "After accepting each dry-run plan, execute that target:" in lines
     assert (
         cli_module.copy_paste_command_markup(
-            f"nebius-cxcli ext-soperator upgrade {config_arg} --target external-cluster --execute --approve"
+            f"nebius-cxcli ext-soperator upgrade {config_arg} --target external-cluster "
+            "--login-session-policy wait-active --execute --approve"
         )
         in lines
     )
     assert (
         cli_module.copy_paste_command_markup(
-            f"nebius-cxcli ext-soperator upgrade {config_arg} --target second-cluster --execute --approve"
+            f"nebius-cxcli ext-soperator upgrade {config_arg} --target second-cluster "
+            "--login-session-policy wait-active --execute --approve"
         )
         in lines
     )
     assert "Do not run `nebius-cxcli deploy` before `ext-soperator upgrade`" not in output
+
+
+def test_external_upgrade_guidance_handles_empty_soperator_values(tmp_path: Path) -> None:
+    config_path = _write_old_soperator_migration_config(tmp_path)
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    soperator = next(row for row in payload["apps"]["charts"] if row["id"] == "soperator")
+    soperator["values"] = {}
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]
+
+    assert (
+        cli_module._external_soperator_execute_login_policy_suffix(
+            config_path=config_path,
+            payload=payload,
+            target_ref="external-cluster",
+            onboarding=onboarding,
+        )
+        == " --login-session-policy wait-active"
+    )
+
+    soperator.pop("values")
+    assert (
+        cli_module._external_soperator_execute_login_policy_suffix(
+            config_path=config_path,
+            payload=payload,
+            target_ref="external-cluster",
+            onboarding=onboarding,
+        )
+        == " --login-session-policy wait-active"
+    )
+
+
+def test_external_upgrade_guidance_distinguishes_missing_chart_from_empty_values(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_old_soperator_migration_config(tmp_path)
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]
+    payload["apps"].pop("charts")
+
+    assert (
+        cli_module._external_soperator_execute_login_policy_suffix(
+            config_path=config_path,
+            payload=payload,
+            target_ref="external-cluster",
+            onboarding=onboarding,
+        )
+        == ""
+    )
+
+
+def test_external_upgrade_guidance_stays_non_throwing_for_stale_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = _write_old_soperator_migration_config(tmp_path)
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]
+    upgrade_path = onboarding["upgrade_path"]
+    checkpoint_path = _write_locked_ext_soperator_checkpoint(
+        config_path=config_path,
+        target_ref="external-cluster",
+        upgrade_path=upgrade_path,
+        current_segment_id=upgrade_path["segments"][0]["id"],
+        completed_segment_ids=[],
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    checkpoint["upgrade_path_fingerprint"] = "stale-fingerprint"
+    checkpoint_path.write_text(json.dumps(checkpoint), encoding="utf-8")
+
+    printed: list[str] = []
+
+    class FakeConsole:
+        def print(self, *args: object, **_kwargs: object) -> None:
+            printed.append(" ".join(str(arg) for arg in args))
+
+    monkeypatch.setattr(cli_module, "console", FakeConsole())
+
+    cli_module._print_soperator_onboard_next_steps(
+        config_path,
+        payload=payload,
+        target_ref="external-cluster",
+        migration_required=True,
+        onboarding=onboarding,
+    )
+    cli_module._print_render_deploy_hint(config_path)
+
+    assert "\n".join(printed).count("--login-session-policy wait-active") >= 2
 
 
 def test_deploy_blocks_migration_required_soperator_onboarding_target(
@@ -2525,6 +2649,7 @@ spec:
         )
         self.slurmcluster_uid = "slurmcluster-uid-external-cluster"
         self.slurmcluster_maintenance = "none"
+        self.slurmcluster_jail_pvc = "jail-rootfs-slot-a-pvc"
         self.live_jobs: dict[str, dict[str, object]] = {}
         self.job_logs: dict[str, str] = {}
         self.login_replicas = 1
@@ -2617,6 +2742,20 @@ spec:
             },
         }
 
+    def _slurmcluster_spec(self) -> dict[str, object]:
+        return {
+            "maintenance": self.slurmcluster_maintenance,
+            "populateJail": {"image": self.populate_jail_image},
+            "volumeSources": [
+                {
+                    "name": "jail",
+                    "persistentVolumeClaim": {
+                        "claimName": self.slurmcluster_jail_pvc,
+                    },
+                }
+            ],
+        }
+
     def _hold_populate_jail_consumers(self, prefixes: tuple[str, ...]) -> None:
         if self._populate_jail_refresh_saved_pods is None:
             self._populate_jail_refresh_saved_pods = list(self.live_pods)
@@ -2705,10 +2844,7 @@ spec:
                             "namespace": "soperator",
                             "uid": self.slurmcluster_uid,
                         },
-                        "spec": {
-                            "maintenance": self.slurmcluster_maintenance,
-                            "populateJail": {"image": self.populate_jail_image},
-                        },
+                        "spec": self._slurmcluster_spec(),
                         "status": {"phase": "Available"},
                     }
                 ),
@@ -2949,10 +3085,7 @@ spec:
                             "namespace": "soperator",
                             "uid": self.slurmcluster_uid,
                         },
-                        "spec": {
-                            "maintenance": self.slurmcluster_maintenance,
-                            "populateJail": {"image": self.populate_jail_image},
-                        },
+                        "spec": self._slurmcluster_spec(),
                         "status": {"phase": "Available"},
                     }
                 ),
@@ -3159,6 +3292,15 @@ spec:
                         self._hold_populate_jail_consumers(("login-", "worker-"))
                     else:
                         self._restore_populate_jail_consumers()
+                for volume_source in values.get("volumeSources", []):
+                    if not isinstance(volume_source, dict) or volume_source.get("name") != "jail":
+                        continue
+                    persistent_volume_claim = volume_source.get("persistentVolumeClaim")
+                    if not isinstance(persistent_volume_claim, dict):
+                        continue
+                    claim_name = str(persistent_volume_claim.get("claimName") or "").strip()
+                    if claim_name:
+                        self.slurmcluster_jail_pvc = claim_name
             if (
                 release_name == "soperator"
                 and isinstance(values, dict)
@@ -3570,10 +3712,7 @@ spec:
                             "namespace": "soperator",
                             "uid": self.slurmcluster_uid,
                         },
-                        "spec": {
-                            "maintenance": self.slurmcluster_maintenance,
-                            "populateJail": {"image": self.populate_jail_image},
-                        },
+                        "spec": self._slurmcluster_spec(),
                         "status": {"phase": "Available"},
                     }
                 ),
@@ -3716,7 +3855,7 @@ spec:
                                     "name": "external-cluster",
                                     "uid": self.slurmcluster_uid,
                                 },
-                                "spec": {"maintenance": self.slurmcluster_maintenance},
+                                "spec": self._slurmcluster_spec(),
                                 "status": {"phase": "Available"},
                             }
                         ]
@@ -9819,6 +9958,10 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "Current segment: Kubernetes 1.31 -> 1.32 plus Soperator" in result.output
     assert "Remaining segments: none" in result.output
     assert "Next command: nebius-cxcli ext-soperator upgrade" in result.output
+    assert (
+        "--target external-cluster --login-session-policy wait-active "
+        "--login-session-drain-timeout 30m --execute --approve" in result.output
+    )
     assert "Accepted onboarding actions:" in result.output
     assert "Storage mode: create-aligned-sfs" in result.output
     assert "Compute mode: create-aligned-node-groups" in result.output
@@ -9899,6 +10042,12 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "Resume contract:" in result.output
     assert "Execution controls:" in result.output
     assert "Execution mode: dry-run; no cluster changes were made." in result.output
+    assert "Login SSH session policy: target-ready" in result.output
+    assert (
+        "First-adoption persistent mount migration requires an explicit login-session "
+        "drain policy before mutation; the generated execute command uses "
+        "--login-session-policy wait-active." in result.output
+    )
     assert "Slurm job policy: fail" in result.output
     assert "Slurm job policy: interactive" not in result.output
     assert "Backup: restore-capable archive" in result.output
@@ -9906,6 +10055,45 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "not back onto the original source cluster" not in result.output
     assert result.output.count("Slurm job policy:") == 1
     assert result.output.count("Backup: restore-capable archive") == 1
+
+    manual = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "upgrade",
+            str(config_path),
+            "--dry-run",
+            "--populate-jail-refresh",
+            "manual",
+        ],
+    )
+
+    assert manual.exit_code == 0, manual.output
+    assert "--login-session-policy wait-active" not in manual.output
+    assert "First-adoption persistent mount migration requires" not in manual.output
+
+    grace_period = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "upgrade",
+            str(config_path),
+            "--dry-run",
+            "--login-session-policy",
+            "grace-period",
+            "--login-session-drain-timeout",
+            "1m",
+        ],
+    )
+
+    assert grace_period.exit_code == 0, grace_period.output
+    assert (
+        "--login-session-policy grace-period --login-session-drain-timeout 1m --execute --approve"
+    ) in grace_period.output
+    assert (
+        "the generated execute command uses --login-session-policy grace-period."
+        in grace_period.output
+    )
 
     custom_zero_surge = runner.invoke(
         app,
@@ -10051,6 +10239,27 @@ def test_ext_soperator_upgrade_dry_run_advances_locked_path_from_checkpoint(
         "and node templates"
     ) in second.output
     assert "Soperator hop" not in second.output
+    assert "--login-session-policy wait-active" not in second.output
+    assert "First-adoption persistent mount migration requires" not in second.output
+
+    explicit_policy = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "upgrade",
+            str(config_path),
+            "--dry-run",
+            "--login-session-policy",
+            "grace-period",
+            "--login-session-drain-timeout",
+            "1m",
+        ],
+    )
+
+    assert explicit_policy.exit_code == 0, explicit_policy.output
+    assert (
+        "--login-session-policy grace-period --login-session-drain-timeout 1m --execute --approve"
+    ) in explicit_policy.output
 
     _write_locked_ext_soperator_checkpoint(
         config_path=config_path,
@@ -10073,6 +10282,8 @@ def test_ext_soperator_upgrade_dry_run_advances_locked_path_from_checkpoint(
     assert third.exit_code == 0, third.output
     assert "Current segment: Kubernetes 1.33 -> 1.34" in third.output
     assert "Remaining segments: none" in third.output
+    assert "--login-session-policy wait-active" not in third.output
+    assert "First-adoption persistent mount migration requires" not in third.output
 
 
 def test_ext_soperator_upgrade_rejects_progress_only_locked_checkpoint(
@@ -11536,6 +11747,7 @@ def test_ext_soperator_upgrade_execute_records_approval_and_worker_groups(
     config_path = _write_old_soperator_migration_config(tmp_path)
     _stub_soperator_migration_quota(monkeypatch)
     _stub_soperator_migration_gpu_validations(monkeypatch)
+    _stub_soperator_migration_accounting_handoff(monkeypatch)
     _stub_external_soperator_upgrade_backup(monkeypatch)
     monkeypatch.setattr(
         cli_module,
@@ -11560,6 +11772,7 @@ def test_ext_soperator_upgrade_execute_records_approval_and_worker_groups(
             "external-cluster",
             "--execute",
             "--approve",
+            "--approve-remediation",
             "--login-session-policy",
             "wait-active",
             "--login-session-drain-timeout",
@@ -11749,6 +11962,7 @@ def test_ext_soperator_upgrade_execute_auto_selects_worker_groups_for_approval(
     config_path = _write_old_soperator_migration_config(tmp_path)
     _stub_soperator_migration_quota(monkeypatch)
     _stub_soperator_migration_gpu_validations(monkeypatch)
+    _stub_soperator_migration_accounting_handoff(monkeypatch)
     _stub_external_soperator_upgrade_backup(monkeypatch)
     monkeypatch.setattr(
         cli_module,
@@ -11773,6 +11987,7 @@ def test_ext_soperator_upgrade_execute_auto_selects_worker_groups_for_approval(
             "external-cluster",
             "--execute",
             "--approve",
+            "--approve-remediation",
             "--login-session-policy",
             "wait-active",
             "--login-session-drain-timeout",
@@ -16640,6 +16855,30 @@ def test_runtime_validation_rejects_non_boolean_slurm_scheduling_quiesce() -> No
             r"deploy\.targets\[0\]\.soperator_onboarding\.node_template_upgrade"
             r"\.slurm_scheduling_quiesce must be true or false"
         ),
+    ):
+        validate_runtime_payload(payload)
+
+
+def test_runtime_validation_rejects_unsupported_region_id() -> None:
+    payload = {
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "project_id": "project-1",
+                "region_id": "eu-north",
+            },
+            "notifications": {
+                "email_enabled": False,
+                "email": None,
+            },
+        },
+        "infra": {"components": []},
+        "apps": {"charts": []},
+    }
+
+    with pytest.raises(
+        ValueError,
+        match=r"client_info\.nebius\.region_id must be one of: eu-north1",
     ):
         validate_runtime_payload(payload)
 

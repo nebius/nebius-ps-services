@@ -383,6 +383,7 @@ from .quota_checks import (
     plan_quota_request_changes,
     request_quota_changes,
 )
+from .regions import DEFAULT_REGION_ID, SUPPORTED_REGION_IDS
 from .render import (
     promote_staged_generated_paths,
     render_replaceable_generated_files,
@@ -472,6 +473,7 @@ from .soperator_jail_mounts import (
 from .soperator_migration import (
     _ROOTFS_HANDOFF_VERIFICATION_REVISION,
     EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
+    EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE,
     SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
     SOPERATOR_WORKER_ROLLOUT_DEFAULT_WAVE_PERCENT,
     SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE,
@@ -1805,15 +1807,6 @@ def _raise_on_generated_bundle_live_quota_issues(
     return report
 
 
-DEFAULT_REGION_ID = "eu-north1"
-SUPPORTED_REGION_IDS: tuple[str, ...] = (
-    "eu-north1",
-    "eu-west1",
-    "me-west1",
-    "us-central1",
-    "eu-north2",
-    "uk-south1",
-)
 NEBIUS_DEFAULT_PRIVATE_POOL_CIDRS_BY_REGION: dict[str, str] = {
     # Source: https://docs.nebius.com/vpc/addressing/available-addresses
     "eu-north1": "10.0.0.0/13",
@@ -6295,7 +6288,11 @@ def _soperator_upgrade_dump_accounting_db(
         "dump_bin=$(command -v mariadb-dump || command -v mysqldump); "
         'test -n "$dump_bin"; '
         '"$dump_bin" --defaults-extra-file="$defaults_file" '
-        "--single-transaction --quick --routines --events --triggers --all-databases"
+        "--single-transaction --quick --routines --events --triggers "
+        "--skip-extended-insert "
+        "--ignore-table=slurm_acct_db.table_defs_table "
+        "--ignore-table=slurm_acct_db.convert_version_table "
+        "--all-databases"
     )
     result = _run_soperator_upgrade_kubectl(
         namespace,
@@ -20345,8 +20342,14 @@ def _validate_tenant_project_ids_or_prompt(
 
 
 def _region_or_prompt(value: str | None, *, interactive: bool) -> str:
-    if value:
-        return value
+    if value is not None:
+        selected = value.strip()
+        if selected not in SUPPORTED_REGION_IDS:
+            available = ", ".join(SUPPORTED_REGION_IDS)
+            raise RuntimeError(
+                f"Unsupported region id {selected or '<empty>'!r}. Expected one of: {available}"
+            )
+        return selected
     if interactive:
         if _is_tty_session():
             try:
@@ -20633,6 +20636,12 @@ def _print_render_deploy_hint(config_path: Path) -> None:
         if len(migration_targets) == 1:
             target_ref, onboarding = migration_targets[0]
             target_arg = shlex.quote(target_ref)
+            login_policy_suffix = _external_soperator_execute_login_policy_suffix(
+                config_path=config_path,
+                payload=payload,
+                target_ref=target_ref,
+                onboarding=onboarding,
+            )
             for line in _soperator_route_guidance_lines(
                 onboarding=onboarding,
                 migration_required=True,
@@ -20645,7 +20654,7 @@ def _print_render_deploy_hint(config_path: Path) -> None:
             console.print("After accepting the dry-run plan, execute it:")
             _print_copy_paste_command(
                 "nebius-cxcli ext-soperator upgrade "
-                f"{config_arg} --target {target_arg} --execute --approve"
+                f"{config_arg} --target {target_arg}{login_policy_suffix} --execute --approve"
             )
         else:
             console.print("Accepted onboarding actions:")
@@ -20662,11 +20671,18 @@ def _print_render_deploy_hint(config_path: Path) -> None:
                     f"{config_arg} --target {target_arg} --dry-run"
                 )
             console.print("After accepting each dry-run plan, execute that target:")
-            for target_ref, _onboarding in migration_targets:
+            for target_ref, onboarding in migration_targets:
                 target_arg = shlex.quote(target_ref)
+                login_policy_suffix = _external_soperator_execute_login_policy_suffix(
+                    config_path=config_path,
+                    payload=payload,
+                    target_ref=target_ref,
+                    onboarding=onboarding,
+                )
                 _print_copy_paste_command(
                     "nebius-cxcli ext-soperator upgrade "
-                    f"{config_arg} --target {target_arg} --execute --approve"
+                    f"{config_arg} --target {target_arg}{login_policy_suffix} "
+                    "--execute --approve"
                 )
         return
     if install_targets:
@@ -20734,6 +20750,7 @@ def _print_component_edit_next_steps(config_path: Path) -> None:
 def _print_soperator_onboard_next_steps(
     config_path: Path,
     *,
+    payload: Mapping[str, Any],
     target_ref: str,
     migration_required: bool,
     onboarding: Mapping[str, Any],
@@ -20757,6 +20774,12 @@ def _print_soperator_onboard_next_steps(
         (f"nebius-cxcli render {config_arg}", ""),
     ]
     if migration_required:
+        login_policy_suffix = _external_soperator_execute_login_policy_suffix(
+            config_path=config_path,
+            payload=payload,
+            target_ref=target_ref,
+            onboarding=onboarding,
+        )
         commands.extend(
             [
                 (
@@ -20765,7 +20788,8 @@ def _print_soperator_onboard_next_steps(
                 ),
                 (
                     "nebius-cxcli ext-soperator upgrade "
-                    f"{config_arg} --target {target_arg} --execute --approve",
+                    f"{config_arg} --target {target_arg}{login_policy_suffix} "
+                    "--execute --approve",
                     "After the dry run is accepted:",
                 ),
             ]
@@ -54454,6 +54478,8 @@ def _resolve_soperator_onboard_config_target(
     infra_entries: tuple[ComponentEntry, ...],
     app_entries: tuple[ComponentEntry, ...],
 ) -> SoperatorOnboardConfigTarget:
+    if region_id is not None:
+        _region_or_prompt(region_id, interactive=False)
     resolved_path = target_path.resolve()
     if resolved_path.exists() and not resolved_path.is_dir():
         return SoperatorOnboardConfigTarget(config_path=resolved_path)
@@ -54535,7 +54561,7 @@ def _resolve_soperator_onboard_config_target(
         )
 
     resolved_client_name = _client_name_or_prompt(client_name, interactive=interactive)
-    resolved_region_id = _region_or_prompt(region_id or None, interactive=interactive)
+    resolved_region_id = _region_or_prompt(region_id, interactive=interactive)
     resolved_email = _optional_email_or_prompt(email, interactive=interactive)
     bootstrap_result = _scaffold_instance(
         base_path=deployments_root,
@@ -54874,7 +54900,7 @@ def create_command(
             interactive=interactive_mode,
         )
         resolved_region_id = _region_or_prompt(
-            region_id or None,
+            region_id,
             interactive=interactive_mode,
         )
         resolved_email = _optional_email_or_prompt(
@@ -57749,6 +57775,7 @@ def soperator_onboard_command(
             onboarding = {}
         _print_soperator_onboard_next_steps(
             config_path,
+            payload=next_payload,
             target_ref=target_ref,
             migration_required=_soperator_migration_action_flags(onboarding)["migration_required"],
             onboarding=onboarding,
@@ -58940,6 +58967,8 @@ def _locked_upgrade_path_plan_lines(
     progress: Mapping[str, Any],
     current_segment: Mapping[str, Any] | None,
     path_source: str = "",
+    execute_login_session_policy: str = "",
+    execute_login_session_drain_timeout: str = "30m",
 ) -> list[str]:
     segments = _locked_upgrade_path_segments(upgrade_path)
     completed = {
@@ -59037,10 +59066,17 @@ def _locked_upgrade_path_plan_lines(
         "Remaining segments: " + (", ".join(remaining_titles) if remaining_titles else "none")
     )
     if current_segment is not None:
+        login_policy_options = ""
+        if execute_login_session_policy:
+            login_policy_options = (
+                f"--login-session-policy {shlex.quote(execute_login_session_policy)} "
+                "--login-session-drain-timeout "
+                f"{shlex.quote(execute_login_session_drain_timeout)} "
+            )
         next_command = (
             "nebius-cxcli ext-soperator upgrade "
             f"{shlex.quote(str(config_path))} --target {shlex.quote(target_ref)} "
-            "--execute --approve"
+            f"{login_policy_options}--execute --approve"
         )
         lines.append(f"Next command: {next_command}")
     return lines
@@ -59049,11 +59085,11 @@ def _locked_upgrade_path_plan_lines(
 def _external_soperator_plan_values(
     payload: Mapping[str, Any],
     target_ref: str,
-) -> Mapping[str, Any]:
+) -> Mapping[str, Any] | None:
     apps = payload.get("apps")
     charts = apps.get("charts") if isinstance(apps, Mapping) else None
     if not isinstance(charts, Sequence) or isinstance(charts, (str, bytes, bytearray)):
-        return {}
+        return None
     normalized_target = normalize_component_token(target_ref)
     for row in charts:
         if not isinstance(row, Mapping):
@@ -59064,7 +59100,83 @@ def _external_soperator_plan_values(
             continue
         values = row.get("values")
         return values if isinstance(values, Mapping) else {}
-    return {}
+    return None
+
+
+def _external_soperator_first_adoption_login_policy_required(
+    *,
+    payload: Mapping[str, Any],
+    target_ref: str,
+    persistent_mount_migration_planned: bool,
+    jail_persistent_mounts: Sequence[str] = (),
+) -> bool:
+    if not persistent_mount_migration_planned:
+        return False
+    values = _external_soperator_plan_values(payload, target_ref)
+    if values is None:
+        return False
+    explicit_mounts = parse_jail_persistent_mount_specs(jail_persistent_mounts)
+    patched_values = apply_jail_persistent_mount_values(
+        values,
+        target_ref=target_ref,
+        persistent_mounts=explicit_mounts,
+        layout="external",
+    )
+    return bool(_legacy_persistent_mount_migration_entries(patched_values))
+
+
+def _soperator_onboarding_jail_refresh_required(
+    *,
+    config_path: Path,
+    payload: Mapping[str, Any],
+    target_ref: str,
+    onboarding: Mapping[str, Any],
+) -> bool:
+    upgrade_path = _locked_upgrade_path_from_onboarding(onboarding)
+    if not upgrade_path:
+        return False
+    try:
+        progress = _locked_upgrade_path_progress(
+            config_path=config_path,
+            target_ref=target_ref,
+            upgrade_path=upgrade_path,
+            payload_or_config=payload,
+        )
+    except RuntimeError:
+        # Next-step rendering happens after onboarding/render writes succeed. A stale
+        # checkpoint must not turn that successful mutation into an output-only
+        # failure; execute will still reject it with the full repair guidance.
+        progress = {}
+    current_segment = _locked_upgrade_path_current_segment(
+        upgrade_path=upgrade_path,
+        progress=progress,
+    )
+    jail_rootfs = (
+        current_segment.get("jail_rootfs") if isinstance(current_segment, Mapping) else None
+    )
+    return isinstance(jail_rootfs, Mapping) and jail_rootfs.get("refresh_required") is True
+
+
+def _external_soperator_execute_login_policy_suffix(
+    *,
+    config_path: Path,
+    payload: Mapping[str, Any],
+    target_ref: str,
+    onboarding: Mapping[str, Any],
+) -> str:
+    required = _external_soperator_first_adoption_login_policy_required(
+        payload=payload,
+        target_ref=target_ref,
+        persistent_mount_migration_planned=_soperator_onboarding_jail_refresh_required(
+            config_path=config_path,
+            payload=payload,
+            target_ref=target_ref,
+            onboarding=onboarding,
+        ),
+    )
+    if not required:
+        return ""
+    return f" --login-session-policy {EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE}"
 
 
 def _external_soperator_persistent_mount_plan_lines(
@@ -59074,7 +59186,7 @@ def _external_soperator_persistent_mount_plan_lines(
     jail_persistent_mounts: Sequence[str],
 ) -> list[str]:
     values = _external_soperator_plan_values(payload, target_ref)
-    if not values:
+    if values is None:
         return []
     explicit_mounts = parse_jail_persistent_mount_specs(jail_persistent_mounts)
     patched_values = apply_jail_persistent_mount_values(
@@ -59175,6 +59287,33 @@ def _format_soperator_migration_plan_lines(
             f"{current_k8s_version} -> {target_k8s_version}; one Kubernetes minor "
             "per external upgrade run"
         )
+    explicit_persistent_mount_requested = any(
+        str(item or "").strip() for item in jail_persistent_mounts
+    )
+    jail_rootfs = report.get("jail_rootfs")
+    jail_rootfs_refresh_required = (
+        isinstance(jail_rootfs, Mapping) and jail_rootfs.get("refresh_required") is True
+    )
+    resolved_populate_jail_refresh = normalize_populate_jail_refresh_mode(populate_jail_refresh)
+    explicit_populate_jail_refresh = resolved_populate_jail_refresh in {"force", "manual"}
+    persistent_mount_migration_planned = resolved_populate_jail_refresh != "manual" and (
+        explicit_persistent_mount_requested
+        or jail_rootfs_refresh_required
+        or resolved_populate_jail_refresh == "force"
+    )
+    first_adoption_login_policy_required = _external_soperator_first_adoption_login_policy_required(
+        payload=payload,
+        target_ref=target_ref,
+        persistent_mount_migration_planned=persistent_mount_migration_planned,
+        jail_persistent_mounts=jail_persistent_mounts,
+    )
+    execute_login_session_policy = (
+        login_session_policy
+        if login_session_policy != EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY
+        else ""
+    )
+    if first_adoption_login_policy_required and not execute_login_session_policy:
+        execute_login_session_policy = EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE
     lines = [
         "External Soperator upgrade plan:",
         "",
@@ -59209,6 +59348,10 @@ def _format_soperator_migration_plan_lines(
                 progress=upgrade_path_progress or {},
                 current_segment=current_segment,
                 path_source=upgrade_path_source,
+                execute_login_session_policy=execute_login_session_policy,
+                execute_login_session_drain_timeout=(
+                    login_session_drain_timeout if execute_login_session_policy else ""
+                ),
             )
         )
     lines.extend(
@@ -59230,16 +59373,6 @@ def _format_soperator_migration_plan_lines(
             + ("yes" if flags["target_gpu_reconciliation_required"] else "no"),
         ]
     )
-    explicit_persistent_mount_requested = any(
-        str(item or "").strip() for item in jail_persistent_mounts
-    )
-    jail_rootfs = report.get("jail_rootfs")
-    jail_rootfs_refresh_required = (
-        isinstance(jail_rootfs, Mapping) and jail_rootfs.get("refresh_required") is True
-    )
-    explicit_populate_jail_refresh = normalize_populate_jail_refresh_mode(
-        populate_jail_refresh
-    ) in {"force", "manual"}
     persistent_mount_plan_required = (
         explicit_persistent_mount_requested
         or explicit_populate_jail_refresh
@@ -59320,6 +59453,12 @@ def _format_soperator_migration_plan_lines(
     if job_policy:
         lines.append(f"Slurm job policy: {job_policy}")
     lines.append(f"Login SSH session policy: {login_session_policy}")
+    if first_adoption_login_policy_required:
+        lines.append(
+            "First-adoption persistent mount migration requires an explicit login-session "
+            "drain policy before mutation; the generated execute command uses "
+            f"--login-session-policy {execute_login_session_policy}."
+        )
     if login_session_policy != EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY:
         lines.append(f"Login SSH session drain timeout: {login_session_drain_timeout}")
     lines.append(
@@ -59874,7 +60013,7 @@ def ext_soperator_scale_up_command(
         "Examples: nebius-cxcli ext-soperator upgrade "
         "./deployments/tenant/project/config.yaml --target external-cluster --dry-run; "
         "nebius-cxcli ext-soperator upgrade ./deployments/tenant/project/config.yaml "
-        "--target external-cluster --execute --approve; "
+        "--target external-cluster --login-session-policy wait-active --execute --approve; "
         "nebius-cxcli ext-soperator upgrade ./deployments/tenant/project/config.yaml "
         "--target external-cluster --job-policy wait-to-finish --job-wait-timeout 2h --dry-run; "
         "nebius-cxcli ext-soperator upgrade ./deployments/tenant/project/config.yaml "
@@ -59884,6 +60023,10 @@ def ext_soperator_scale_up_command(
         "id saved as deploy.targets[].instance_id, not the Nebius cluster_id or "
         "display name. The target must already be onboarded and accepted through "
         "ext-soperator onboard. Dry-run refreshes discovery and prints the plan. "
+        "When first-adoption persistent-mount migration is planned, onboard and "
+        "render guidance add --login-session-policy wait-active to the generated "
+        "execute command. Dry-run substitutes wait-active for the default target-ready "
+        "plan and preserves an explicitly selected compatible policy. "
         "Core external Soperator execution uses Nebius API and Kubernetes "
         "API/kubectl exec for cloud, cluster, and Slurm actions; it does not SSH "
         "from the operator workstation into login or worker nodes. "

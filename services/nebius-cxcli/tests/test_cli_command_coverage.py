@@ -6784,7 +6784,7 @@ def test_post_jail_slurm_release_order_is_static_then_restore_then_live_job() ->
         restore_position = external_source.find(external_restore_token, pre_release_position)
         smoke_position = external_source.find(full_smoke_token, pre_release_position)
         assert pre_release_position < restore_position < smoke_position
-    assert "if pre_release_failed:" in external_source
+    assert "if pre_release_failed or consumer_switch_failed:" in external_source
     assert "user partitions remain controlled/DOWN" in external_source
 
     managed_source = inspect.getsource(cli._run_managed_soperator_cluster_upgrade)  # noqa: SLF001
@@ -25258,7 +25258,8 @@ def test_cli_help_examples_have_visual_separator_and_comments_block() -> None:
         "Examples: | nebius-cxcli ext-soperator upgrade "
         "./deployments/tenant/project/config.yaml --target external-cluster --dry-run; "
         "| nebius-cxcli ext-soperator upgrade "
-        "./deployments/tenant/project/config.yaml --target external-cluster --execute --approve"
+        "./deployments/tenant/project/config.yaml --target external-cluster "
+        "--login-session-policy wait-active --execute --approve"
     ) in normalized_ext_soperator_upgrade_help
     assert "--execute --approve. Comments: --target is the cxcli target id" in (
         normalized_ext_soperator_upgrade_help
@@ -26182,7 +26183,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "Maximum wait for Slurm jobs" in normalized_ext_soperator_upgrade_help
     assert (
         "nebius-cxcli ext-soperator upgrade ./deployments/tenant/project/config.yaml "
-        "--target external-cluster --execute --approve"
+        "--target external-cluster --login-session-policy wait-active --execute --approve"
     ) in normalized_ext_soperator_upgrade_help
     assert "--job-policy wait-to-finish --job-wait-timeout 2h --dry-run" in (
         normalized_ext_soperator_upgrade_help
@@ -26195,6 +26196,13 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     )
     assert (
         "Dry-run refreshes discovery and prints the plan" in normalized_ext_soperator_upgrade_help
+    )
+    assert (
+        "onboard and render guidance add --login-session-policy wait-active"
+        in normalized_ext_soperator_upgrade_help
+    )
+    assert "Dry-run substitutes wait-active for the default target-ready plan" in (
+        normalized_ext_soperator_upgrade_help
     )
     assert (
         "Core external Soperator execution uses Nebius API and Kubernetes API/kubectl "

@@ -504,6 +504,14 @@ _SOPERATOR_SOURCE_CHART_PREFIXES = (
 _TARGET_KUBE_RBAC_PROXY_REPOSITORY = "registry.k8s.io/kubebuilder/kube-rbac-proxy"
 _TARGET_KUBE_RBAC_PROXY_TAG = "v0.15.0"
 _ROLLING_COMPUTE_VALUES_REVISION = 16
+_ACCOUNTING_HANDOFF_DIRNAME = "accounting-handoff"
+_ACCOUNTING_HANDOFF_DUMP_FILENAME = "source-slurm-acct-db.sql"
+_ACCOUNTING_HANDOFF_TARGET_SCHEMA_FILENAME = "target-global-schema.json"
+_ACCOUNTING_HANDOFF_TARGET_SCHEMA = "nebius-cxcli-accounting-target-schema/v1"
+_ACCOUNTING_HANDOFF_INTERNAL_TABLES = (
+    "table_defs_table",
+    "convert_version_table",
+)
 _VALIDATION_HOLD_REVISION = 2
 _ROOTFS_HANDOFF_VERIFICATION_REVISION = 3
 _JAIL_ALIAS_CONSUMER_CONVERGENCE_TIMEOUT_SECONDS = 900
@@ -9424,10 +9432,21 @@ def _active_login_ssh_session_probe(
 ) -> dict[str, Any]:
     script = (
         "if command -v ss >/dev/null 2>&1; then "
-        "ss -Htn state established '( sport = :22 )' | wc -l; "
+        "ss_output=$(ss -Htn state established '( sport = :22 )') || "
+        "{ echo 'ss session probe failed' >&2; exit 43; }; "
+        "printf '%s\\n' \"$ss_output\" | awk 'NF {count++} END {print count+0}'; "
         "elif command -v netstat >/dev/null 2>&1; then "
-        'netstat -tn | awk \'$4 ~ /:22$/ && $6 == "ESTABLISHED" {count++} '
+        "netstat_output=$(netstat -tn) || "
+        "{ echo 'netstat session probe failed' >&2; exit 43; }; "
+        'printf \'%s\\n\' "$netstat_output" | awk \'$4 ~ /:22$/ && $6 == "ESTABLISHED" {count++} '
         "END {print count+0}'; "
+        "elif [ -r /proc/net/tcp ] || [ -r /proc/net/tcp6 ]; then "
+        "count=0; for table in /proc/net/tcp /proc/net/tcp6; do "
+        '[ -r "$table" ] || continue; '
+        'current=$(awk \'NR > 1 && $2 ~ /:0016$/ && $4 == "01" {count++} '
+        'END {print count+0}\' "$table") || '
+        "{ echo 'procfs session probe failed' >&2; exit 43; }; "
+        'count=$((count + current)); done; echo "$count"; '
         "else echo unsupported; exit 42; fi"
     )
     pods = (
@@ -9443,7 +9462,8 @@ def _active_login_ssh_session_probe(
     )
     pod_results: list[dict[str, Any]] = []
     total = 0
-    checked = False
+    resolved = False
+    unresolved_statuses: set[str] = set()
     for pod in pods:
         result = command_runner(
             [
@@ -9464,21 +9484,50 @@ def _active_login_ssh_session_probe(
         )
         output = str(result.stdout or "").strip().splitlines()
         raw_count = output[-1].strip() if output else ""
-        try:
-            active = int(raw_count)
-        except ValueError:
+        if result.returncode != 0:
+            if _kubectl_exec_pod_not_found(result, pod=pod, namespace=namespace):
+                resolved = True
+                pod_results.append(
+                    {
+                        "pod": pod,
+                        "status": "gone",
+                        "detail": "source login pod no longer exists",
+                    }
+                )
+                continue
+            status = "unsupported" if result.returncode == 42 else "unknown"
+            unresolved_statuses.add(status)
             pod_results.append(
                 {
                     "pod": pod,
-                    "status": "unsupported" if result.returncode == 42 else "unknown",
+                    "status": status,
                     "detail": result.stderr.strip() or raw_count,
                 }
             )
             continue
-        checked = True
+        try:
+            active = int(raw_count)
+        except ValueError:
+            unresolved_statuses.add("unknown")
+            pod_results.append(
+                {
+                    "pod": pod,
+                    "status": "unknown",
+                    "detail": result.stderr.strip() or raw_count,
+                }
+            )
+            continue
+        resolved = True
         total += max(active, 0)
         pod_results.append({"pod": pod, "status": "checked", "active_sessions": active})
-    status = "checked" if checked else ("no_login_pods" if not pods else "unsupported")
+    if "unknown" in unresolved_statuses:
+        status = "unknown"
+    elif "unsupported" in unresolved_statuses:
+        status = "unsupported"
+    elif resolved:
+        status = "checked"
+    else:
+        status = "no_login_pods" if not pods else "unsupported"
     return {"status": status, "active_sessions": total, "pods": pod_results}
 
 
@@ -9977,7 +10026,7 @@ def _cancel_post_jail_live_jobs(
             timeout_seconds=60,
             namespace=namespace,
         )
-    except (Exception, KeyboardInterrupt) as exc:
+    except Exception as exc:
         return {
             "status": "failed",
             "job_ids": list(selected),
@@ -10837,6 +10886,16 @@ def _rolling_compute_checkpoint_quiesce_records(
                 )
             )
     return tuple(records)
+
+
+def _merge_slurm_partition_quiesce_records(
+    *record_groups: Sequence[SlurmPartitionQuiesceRecord],
+) -> tuple[SlurmPartitionQuiesceRecord, ...]:
+    records_by_partition: dict[str, SlurmPartitionQuiesceRecord] = {}
+    for records in record_groups:
+        for record in records:
+            records_by_partition.setdefault(record.partition, record)
+    return tuple(records_by_partition.values())
 
 
 def _rolling_compute_target_handoff_started(phase: Mapping[str, Any]) -> bool:
@@ -12685,10 +12744,11 @@ def _updating_external_node_template_groups(
     labels: set[str] = set()
     for source_group, raw_state in node_groups.items():
         state = _mapping(raw_state)
-        if str(state.get("status", "") or "").strip().lower() not in {
-            "updating",
-            "waiting-rollout",
-        }:
+        status = str(state.get("status", "") or "").strip().lower()
+        if not (
+            status == "waiting-rollout"
+            or (status == "updating" and _external_node_template_group_dispatch_started(state))
+        ):
             continue
         for value in (
             source_group,
@@ -12701,6 +12761,21 @@ def _updating_external_node_template_groups(
                 labels.add(text)
                 labels.add(normalize_component_token(text) or text)
     return frozenset(labels)
+
+
+def _external_node_template_group_dispatch_started(state: Mapping[str, Any]) -> bool:
+    return (
+        _node_group_provider_update_attempted(state)
+        or bool(str(state.get("dispatch_started_at", "") or "").strip())
+        or state.get("worker_wave") is not None
+    )
+
+
+def _external_node_template_group_started(state: Mapping[str, Any]) -> bool:
+    status = str(state.get("status", "") or "").strip().lower()
+    return status in {"already-current", "completed", "waiting-rollout"} or (
+        _external_node_template_group_dispatch_started(state)
+    )
 
 
 def _external_node_template_control_plane_updating(
@@ -12727,10 +12802,106 @@ def _external_node_template_groups_not_started(
     if phase_id != _EXTERNAL_NODE_TEMPLATE_PHASE_ID:
         return False
     phase = _mapping(_mapping(checkpoint.get("phase_state")).get(phase_id))
-    return _external_node_template_control_plane_updating(
-        checkpoint=checkpoint,
-        phase_id=phase_id,
-    ) and not _mapping(phase.get("node_groups"))
+    node_groups = _mapping(phase.get("node_groups"))
+    pending_phase = str(checkpoint.get("pending_phase", "") or "").strip()
+    return not node_groups and (
+        pending_phase == phase_id
+        or _external_node_template_control_plane_updating(
+            checkpoint=checkpoint,
+            phase_id=phase_id,
+        )
+    )
+
+
+def _external_node_template_group_state(
+    phase: Mapping[str, Any],
+    group: str,
+) -> Mapping[str, Any]:
+    node_groups = _mapping(phase.get("node_groups"))
+    state = _mapping(node_groups.get(group))
+    if state:
+        return state
+    normalized_group = normalize_component_token(group) or group
+    for source_group, raw_state in node_groups.items():
+        source_group_text = str(source_group or "").strip()
+        if (normalize_component_token(source_group_text) or source_group_text) == normalized_group:
+            return _mapping(raw_state)
+    return {}
+
+
+def _external_node_template_planned_group_aliases(
+    *,
+    checkpoint: Mapping[str, Any],
+    phase_id: str,
+) -> dict[str, frozenset[str]]:
+    if phase_id != _EXTERNAL_NODE_TEMPLATE_PHASE_ID:
+        return {}
+    phase = _mapping(_mapping(checkpoint.get("phase_state")).get(phase_id))
+    planned_groups = _string_sequence(phase.get("service_groups")) + _string_sequence(
+        phase.get("worker_groups")
+    )
+    if not planned_groups:
+        return {}
+    planned_aliases = _mapping(phase.get("node_group_aliases"))
+    result: dict[str, frozenset[str]] = {}
+    for group in planned_groups:
+        state = _external_node_template_group_state(phase, group)
+        aliases: set[str] = set()
+        for value in (
+            group,
+            *_string_sequence(planned_aliases.get(group)),
+            state.get("source_group"),
+            state.get("node_group_name"),
+            state.get("node_group_id"),
+        ):
+            text = str(value or "").strip()
+            if not text:
+                continue
+            aliases.add(text)
+            aliases.add(normalize_component_token(text) or text)
+        result[group] = frozenset(aliases)
+    return result
+
+
+def _external_node_template_source_report_group_aliases(
+    source_report: Mapping[str, Any],
+) -> dict[str, frozenset[str]]:
+    result: dict[str, frozenset[str]] = {}
+    for raw_group_name, raw_group in sorted(_source_node_group_inventory(source_report).items()):
+        group_name = normalize_component_token(raw_group_name)
+        if not group_name or not isinstance(raw_group, Mapping):
+            continue
+        aliases: set[str] = set()
+        for raw_alias in (
+            group_name,
+            _source_group_node_group_id(raw_group),
+            _source_group_node_group_name(raw_group),
+        ):
+            text = str(raw_alias or "").strip()
+            if not text:
+                continue
+            aliases.add(text)
+            aliases.add(normalize_component_token(text) or text)
+        result[group_name] = frozenset(aliases)
+    return result
+
+
+def _external_node_template_not_started_group_aliases(
+    *,
+    checkpoint: Mapping[str, Any],
+    phase_id: str,
+) -> dict[str, frozenset[str]]:
+    phase = _mapping(_mapping(checkpoint.get("phase_state")).get(phase_id))
+    return {
+        group: aliases
+        for group, aliases in _external_node_template_planned_group_aliases(
+            checkpoint=checkpoint,
+            phase_id=phase_id,
+        ).items()
+        if not _external_node_template_group_started(
+            _external_node_template_group_state(phase, group)
+        )
+    }
 
 
 def _format_problem_node_details(
@@ -12787,12 +12958,29 @@ class _Mk8sNodeGroupStatusRow:
 
 
 def _node_group_latest_event_code(status: Mapping[str, Any]) -> str:
-    for event in reversed(_sequence_of_mappings(status.get("events"))):
-        occurrence = _mapping(event.get("last_occurrence", event.get("lastOccurrence")))
+    timestamped: list[tuple[datetime, int, str]] = []
+    fallback = "-"
+    for index, event in enumerate(_sequence_of_mappings(status.get("events"))):
+        occurrence = _mapping(event.get("last_occurrence") or event.get("lastOccurrence"))
         event_code = str(occurrence.get("code", "") or event.get("code", "") or "").strip()
-        if event_code:
-            return event_code
-    return "-"
+        if not event_code:
+            continue
+        fallback = event_code
+        raw_occurred_at = str(
+            occurrence.get("occurred_at", occurrence.get("occurredAt", "")) or ""
+        ).strip()
+        if not raw_occurred_at:
+            continue
+        try:
+            occurred_at = datetime.fromisoformat(raw_occurred_at.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if occurred_at.tzinfo is None:
+            occurred_at = occurred_at.replace(tzinfo=UTC)
+        timestamped.append((occurred_at.astimezone(UTC), index, event_code))
+    if timestamped:
+        return max(timestamped)[2]
+    return fallback
 
 
 def _mk8s_status_node_group_aliases(node_group: Mapping[str, Any]) -> frozenset[str]:
@@ -12839,8 +13027,11 @@ def _mk8s_status_node_group_row(
     active_group_labels: frozenset[str],
 ) -> _Mk8sNodeGroupStatusRow:
     group = _node_group_name(node_group) or _node_group_id(node_group) or "unknown"
-    k8s = _minor_version_text_or_empty(_node_group_version(node_group)) or "unknown"
     status = _mapping(node_group.get("status"))
+    k8s = _minor_version_text_or_empty(_node_group_version(node_group))
+    if not k8s:
+        k8s = _minor_version_text_or_empty(_first_mapping_value(status, "version", "Version"))
+    k8s = k8s or "unknown"
     aliases = _mk8s_status_node_group_aliases(node_group)
     active = any(alias in active_group_labels for alias in aliases)
     if not status:
@@ -12872,6 +13063,7 @@ def _mk8s_status_node_group_row(
     )
     if (
         remaining is None
+        and not active
         and state == "RUNNING"
         and not reconciling
         and total is not None
@@ -12907,6 +13099,7 @@ def _mk8s_status_node_group_row(
             )
         )
         or not raw_state
+        or k8s == "unknown"
     )
     ready_rollout, _readiness_summary = _node_group_readiness_summary(node_group)
     degraded = active or not ready_rollout or state not in {"RUNNING", "unknown"}
@@ -12944,6 +13137,7 @@ def _mk8s_status_not_started_row(row: _Mk8sNodeGroupStatusRow) -> _Mk8sNodeGroup
             )
         )
         or row.state == "unknown"
+        or row.unknown
     )
     return _Mk8sNodeGroupStatusRow(
         group=row.group,
@@ -13096,37 +13290,69 @@ def _collect_mk8s_status(
         checkpoint=checkpoint,
         phase_id=phase_id,
     )
-    rows = tuple(
-        sorted(
-            (
-                _mk8s_status_node_group_row(
-                    node_group=node_group,
-                    active_group_labels=active_group_labels,
-                )
-                for node_group in node_groups
-            ),
-            key=_mk8s_status_row_sort_key,
-        )
+    planned_group_aliases = _external_node_template_planned_group_aliases(
+        checkpoint=checkpoint,
+        phase_id=phase_id,
     )
-    if node_groups_not_started:
-        rows = tuple(_mk8s_status_not_started_row(row) for row in rows)
+    if phase_id == _EXTERNAL_NODE_TEMPLATE_PHASE_ID and not planned_group_aliases:
+        planned_group_aliases = _external_node_template_source_report_group_aliases(source_report)
+    not_started_group_aliases = _external_node_template_not_started_group_aliases(
+        checkpoint=checkpoint,
+        phase_id=phase_id,
+    )
+    not_started_group_labels = frozenset(
+        alias for aliases in not_started_group_aliases.values() for alias in aliases
+    )
+    status_rows: list[_Mk8sNodeGroupStatusRow] = []
+    not_started_row_count = 0
+    provider_aliases_seen: set[str] = set()
+    for node_group in node_groups:
+        row = _mk8s_status_node_group_row(
+            node_group=node_group,
+            active_group_labels=active_group_labels,
+        )
+        provider_aliases = _mk8s_status_node_group_aliases(node_group)
+        provider_aliases_seen.update(provider_aliases)
+        row_not_started = node_groups_not_started or bool(
+            provider_aliases.intersection(not_started_group_labels)
+        )
+        if row_not_started:
+            row = _mk8s_status_not_started_row(row)
+            not_started_row_count += 1
+        status_rows.append(row)
+    rows = tuple(sorted(status_rows, key=_mk8s_status_row_sort_key))
+    missing_planned_groups = tuple(
+        group
+        for group, aliases in planned_group_aliases.items()
+        if aliases.isdisjoint(provider_aliases_seen)
+    )
     summary_lines = [
         f"Provider node groups (source=Nebius API, groups={len(rows)})",
         _mk8s_status_totals_line(rows),
-        *_format_mk8s_status_table(rows),
     ]
+    if missing_planned_groups:
+        summary_lines.append(
+            "missing planned provider groups: " + ", ".join(missing_planned_groups)
+        )
+    summary_lines.extend(_format_mk8s_status_table(rows))
     if not rows:
         return SoperatorMigrationStatusSignal(
             "MK8s Node Groups",
             "down",
             "\n".join(summary_lines),
         )
-    if node_groups_not_started and not any(row.degraded or row.unknown for row in rows):
+    if (
+        not missing_planned_groups
+        and not_started_row_count == len(rows)
+        and not any(row.degraded or row.unknown for row in rows)
+    ):
         state = "not-started"
     elif any(row.degraded for row in rows):
         state = "degraded"
-    elif any(row.unknown for row in rows):
+    elif missing_planned_groups or any(row.unknown for row in rows):
         state = "unknown"
+    elif not_started_row_count:
+        state = "upgrading"
     else:
         state = "serving"
     return SoperatorMigrationStatusSignal(
@@ -13238,20 +13464,101 @@ def _collect_storage_status(
     return SoperatorMigrationStatusSignal("Storage", state, "; ".join(parts))
 
 
+_SLURM_NODE_UNAVAILABLE_STATES = frozenset(
+    {
+        "down",
+        "fail",
+        "failing",
+        "future",
+        "invalid",
+        "no_respond",
+        "power_down",
+        "powered_down",
+        "powering_down",
+        "unknown",
+    }
+)
+_SLURM_NODE_DRAINING_STATES = frozenset({"drained", "draining"})
+_SLURM_NODE_DEGRADED_STATES = frozenset({"blocked", "maint", "perfctrs"})
+_SLURM_NODE_TRANSITIONAL_STATES = frozenset(
+    {
+        "cloud",
+        "completing",
+        "planned",
+        "powering_up",
+        "reboot_issued",
+        "reboot_requested",
+    }
+)
+
+
 def _normalize_slurm_node_state(value: str) -> str:
     text = value.strip().lower()
-    while text and text[-1] in "*~#!%@^-+$":
+    suffix_states = {
+        "*": "no_respond",
+        "~": "powered_down",
+        "#": "powering_up",
+        "!": "power_down",
+        "%": "powering_down",
+        "$": "maint",
+        "@": "reboot_requested",
+        "^": "reboot_issued",
+        "-": "planned",
+        "+": "completing",
+    }
+    flags: list[str] = []
+    while text and text[-1] in suffix_states:
+        flags.append(suffix_states[text[-1]])
         text = text[:-1]
     aliases = {
         "alloc": "allocated",
+        "block": "blocked",
         "comp": "completing",
         "drain": "drained",
         "drng": "draining",
         "failg": "failing",
+        "futr": "future",
+        "inval": "invalid",
         "mix": "mixed",
+        "no_resp": "no_respond",
+        "npc": "perfctrs",
+        "power_up": "powering_up",
+        "resv": "reserved",
         "unk": "unknown",
     }
-    return aliases.get(text, text)
+    normalized = aliases.get(text, text)
+    known = {
+        "allocated",
+        "blocked",
+        "cloud",
+        "completing",
+        "down",
+        "drained",
+        "draining",
+        "fail",
+        "failing",
+        "future",
+        "idle",
+        "invalid",
+        "maint",
+        "mixed",
+        "no_respond",
+        "perfctrs",
+        "planned",
+        "power_down",
+        "powered_down",
+        "powering_down",
+        "powering_up",
+        "reboot_issued",
+        "reboot_requested",
+        "reserved",
+        "unknown",
+    }
+    base_state = normalized if normalized in known else "unknown"
+    return max(
+        (base_state, *flags),
+        key=_slurm_node_state_priority,
+    )
 
 
 def _state_counts(values: Sequence[str]) -> str:
@@ -13262,37 +13569,69 @@ def _state_counts(values: Sequence[str]) -> str:
     return ", ".join(f"{key}={value}" for key, value in sorted(counts.items()))
 
 
+def _slurm_node_state_priority(state: str) -> int:
+    if state in _SLURM_NODE_UNAVAILABLE_STATES:
+        return 5
+    if state in _SLURM_NODE_DRAINING_STATES:
+        return 4
+    if state in {
+        "blocked",
+        "cloud",
+        "completing",
+        "maint",
+        "perfctrs",
+        "planned",
+        "powering_up",
+        "reboot_issued",
+        "reboot_requested",
+        "reserved",
+    }:
+        return 3
+    if state in {"allocated", "mixed"}:
+        return 2
+    if state == "idle":
+        return 1
+    return 5
+
+
 def _parse_slurm_node_states(output: str) -> tuple[tuple[str, str], ...]:
-    nodes: list[tuple[str, str]] = []
+    named_states: dict[str, str] = {}
+    unnamed_states: list[tuple[str, str]] = []
     for line in output.splitlines():
         text = line.strip()
         if not text:
             continue
         parts = text.split()
         if len(parts) >= 2:
-            nodes.append((parts[0], _normalize_slurm_node_state(parts[-1])))
-        else:
-            nodes.append(("", _normalize_slurm_node_state(parts[0])))
-    return tuple(nodes)
+            name = parts[0]
+            state = _normalize_slurm_node_state(parts[-1])
+            previous = named_states.get(name)
+            if previous is None or _slurm_node_state_priority(state) > _slurm_node_state_priority(
+                previous
+            ):
+                named_states[name] = state
+            continue
+        unnamed_states.append(("", _normalize_slurm_node_state(parts[0])))
+    return (*tuple(named_states.items()), *unnamed_states)
 
 
 def _slurm_problem_worker_details(nodes: Sequence[tuple[str, str]]) -> tuple[str, ...]:
-    unavailable = {
-        "down",
-        "fail",
-        "failing",
-        "unknown",
-        "invalid",
-        "future",
-    }
-    draining = {"drained", "draining"}
     details: list[str] = []
     for index, (name, state) in enumerate(nodes, start=1):
-        if state not in unavailable and state not in draining:
+        if state not in (
+            _SLURM_NODE_UNAVAILABLE_STATES
+            | _SLURM_NODE_DRAINING_STATES
+            | _SLURM_NODE_DEGRADED_STATES
+            | _SLURM_NODE_TRANSITIONAL_STATES
+        ):
             continue
         label = name or f"worker-{index}"
-        if state in unavailable:
+        if state in _SLURM_NODE_UNAVAILABLE_STATES:
             details.append(f"{label}:{state} (down)")
+        elif state in _SLURM_NODE_DEGRADED_STATES:
+            details.append(f"{label}:{state} (unavailable)")
+        elif state in _SLURM_NODE_TRANSITIONAL_STATES:
+            details.append(f"{label}:{state} (transitioning)")
         else:
             details.append(f"{label}:{state}")
     return tuple(details)
@@ -13320,12 +13659,42 @@ def _slurm_status_has_checkpointed_quiesce(
     return bool(_rolling_compute_checkpoint_quiesce_records(phase))
 
 
+def _slurm_status_planned_handoff_may_defer(
+    checkpoint: Mapping[str, Any] | None,
+    phase_id: str,
+) -> bool:
+    if phase_id != "rolling-compute-migration" or checkpoint is None:
+        return False
+    phase = _mapping(_mapping(checkpoint.get("phase_state")).get("rolling-compute-migration"))
+    return _rolling_compute_slurm_smoke_may_defer(checkpoint=checkpoint, phase=phase)
+
+
+def _slurm_status_deferred_for_jail_writer_hold(
+    checkpoint: Mapping[str, Any] | None,
+    phase_id: str,
+) -> bool:
+    if phase_id != POPULATE_JAIL_REFRESH_PHASE_ID or checkpoint is None:
+        return False
+    phase = _mapping(_mapping(checkpoint.get("phase_state")).get(phase_id))
+    writer_hold = _mapping(phase.get("persistent_migration_writer_hold"))
+    return str(writer_hold.get("status", "") or "").strip() in {"holding", "held"}
+
+
 def _deferred_slurm_status_signal() -> SoperatorMigrationStatusSignal:
     return SoperatorMigrationStatusSignal(
         "Slurm Workers",
         "upgrading",
-        "status deferred during rolling compute handoff; checkpointed partition "
-        "quiesce remains in effect until cutover validation resumes Slurm",
+        "status deferred during planned rolling compute/Jail handoff; target-era "
+        "Slurm config may be unavailable until cutover validation resumes Slurm",
+    )
+
+
+def _deferred_jail_writer_hold_slurm_status_signal() -> SoperatorMigrationStatusSignal:
+    return SoperatorMigrationStatusSignal(
+        "Slurm Workers",
+        "upgrading",
+        "status deferred during Jail Upgrade writer hold; Slurm workloads are "
+        "intentionally downscaled until persistent copy and passive-slot handoff complete",
     )
 
 
@@ -13336,6 +13705,8 @@ def _collect_slurm_status(
     checkpoint: Mapping[str, Any] | None = None,
     phase_id: str = "",
 ) -> SoperatorMigrationStatusSignal:
+    if _slurm_status_deferred_for_jail_writer_hold(checkpoint, phase_id):
+        return _deferred_jail_writer_hold_slurm_status_signal()
     if _slurm_status_deferred_for_target_handoff(checkpoint, phase_id):
         return _deferred_slurm_status_signal()
     try:
@@ -13353,8 +13724,9 @@ def _collect_slurm_status(
             f"login or sinfo status failed: {exc}",
         )
     if sinfo.returncode != 0:
-        if _slurm_status_has_checkpointed_quiesce(
-            checkpoint, phase_id
+        if (
+            _slurm_status_has_checkpointed_quiesce(checkpoint, phase_id)
+            or _slurm_status_planned_handoff_may_defer(checkpoint, phase_id)
         ) and _slurm_cli_handoff_mismatch(sinfo):
             return _deferred_slurm_status_signal()
         return SoperatorMigrationStatusSignal(
@@ -13384,20 +13756,15 @@ def _collect_slurm_status(
         node_state = "degraded"
         node_summary = "no worker nodes returned by sinfo"
     else:
-        unavailable = {
-            "down",
-            "fail",
-            "failing",
-            "unknown",
-            "invalid",
-            "future",
-        }
-        draining = {"drained", "draining"}
         problem_workers = _slurm_problem_worker_details(node_states)
-        if any(item in unavailable for item in states):
+        if any(
+            item in _SLURM_NODE_UNAVAILABLE_STATES | _SLURM_NODE_DEGRADED_STATES for item in states
+        ):
             node_state = "degraded"
-        elif any(item in draining for item in states):
+        elif any(item in _SLURM_NODE_DRAINING_STATES for item in states):
             node_state = "draining"
+        elif any(item in _SLURM_NODE_TRANSITIONAL_STATES for item in states):
+            node_state = "upgrading"
         else:
             node_state = "serving"
         node_summary = "workers " + _state_counts(states)
@@ -13525,9 +13892,14 @@ def _collect_populate_jail_status(
             )
         migration = _mapping(phase.get("legacy_persistent_mount_migration"))
         migration_status = str(migration.get("status", "") or "not-started").strip()
+        state = "not-started"
+        if migration_status in {"running", "completed"}:
+            state = "upgrading"
+        elif migration_status in {"failed", "stale-after-writer-drift"}:
+            state = "degraded"
         return SoperatorMigrationStatusSignal(
             "Jail Upgrade",
-            "not-started",
+            state,
             "passive-slot populate job not started; persistent migration "
             f"status={migration_status}",
         )
@@ -17970,6 +18342,29 @@ def _command_not_found(result: SoperatorMigrationCommandResult) -> bool:
     )
 
 
+def _kubectl_exec_pod_not_found(
+    result: SoperatorMigrationCommandResult,
+    *,
+    pod: str,
+    namespace: str,
+) -> bool:
+    if result.returncode == 0:
+        return False
+    expected_args = ("-n", namespace, "exec", pod)
+    if not any(
+        result.args[index : index + len(expected_args)] == expected_args
+        for index in range(len(result.args) - len(expected_args) + 1)
+    ):
+        return False
+    not_found_lines = []
+    for raw_line in str(result.stderr or "").splitlines():
+        normalized = re.sub(r"\s+", " ", raw_line).strip().lower()
+        if "notfound" in normalized or "not found" in normalized:
+            not_found_lines.append(normalized)
+    expected_error = f'error from server (notfound): pods "{pod}" not found'.lower()
+    return not_found_lines == [expected_error]
+
+
 def _ensure_live_nodes_ready(snapshot: Mapping[str, Any]) -> None:
     groups = _mapping(snapshot.get("node_groups"))
     if not groups:
@@ -18219,6 +18614,24 @@ def _execute_external_node_template_upgrade_phase(
     phase["rollout"] = rollout.to_manifest_dict()
     phase["service_groups"] = [name for name, _raw_group in service_groups]
     phase["worker_groups"] = [name for name, _raw_group in worker_groups]
+    phase["node_group_aliases"] = {
+        group_name: sorted(
+            {
+                alias
+                for raw_alias in (
+                    group_name,
+                    _source_group_node_group_id(raw_group),
+                    _source_group_node_group_name(raw_group),
+                )
+                for alias in (
+                    str(raw_alias or "").strip(),
+                    normalize_component_token(raw_alias),
+                )
+                if alias
+            }
+        )
+        for group_name, raw_group in groups
+    }
     phase["worker_budget"] = _worker_rollout_budget(
         rollout,
         worker_group_count=len(worker_groups),
@@ -18237,6 +18650,25 @@ def _execute_external_node_template_upgrade_phase(
                 "External Soperator upgrade checkpoint external-node-template-upgrade "
                 f"node group {group_name} must be a mapping."
             )
+        raw_service_quiesce = group_state.get("service_quiesce")
+        if raw_service_quiesce is not None and not isinstance(raw_service_quiesce, dict):
+            raise RuntimeError(
+                "External Soperator upgrade checkpoint external-node-template-upgrade "
+                f"node group {group_name}.service_quiesce must be a mapping."
+            )
+        if (
+            isinstance(raw_service_quiesce, dict)
+            and raw_service_quiesce.get("status") == "quiesced"
+        ):
+            lines.extend(
+                _restore_external_service_role(
+                    command_runner=command_runner,
+                    kube_context=kube_context,
+                    state=raw_service_quiesce,
+                )
+            )
+            if checkpoint_writer is not None:
+                checkpoint_writer()
         previous_status = str(group_state.get("status", "") or "")
         checkpoint_target = _mapping(group_state.get("target"))
         node_group_id = _source_group_node_group_id(raw_group)
@@ -18513,6 +18945,34 @@ def _execute_external_node_template_upgrade_phase(
         work_lines: list[str] = []
         service_role = _source_group_service_quiesce_role(group_name, raw_group)
         service_quiesce_state: dict[str, Any] | None = None
+
+        def _write_progress_with_quiesce_guard() -> None:
+            if not write_progress or checkpoint_writer is None:
+                return
+            try:
+                checkpoint_writer()
+            except (Exception, KeyboardInterrupt, EOFError) as exc:
+                if (
+                    service_quiesce_state is not None
+                    and service_quiesce_state.get("status") == "quiesced"
+                ):
+                    try:
+                        work_lines.extend(
+                            _restore_external_service_role(
+                                command_runner=command_runner,
+                                kube_context=kube_context,
+                                state=service_quiesce_state,
+                            )
+                        )
+                    except Exception as restore_exc:
+                        group_state["restore_error"] = str(restore_exc)
+                        raise RuntimeError(
+                            f"External node-template checkpoint write failed for {group_name}; "
+                            "additionally, cxcli could not restore quiesced Soperator "
+                            f"{service_role} workloads."
+                        ) from exc
+                raise
+
         if (
             allow_service_quiesce
             and service_role
@@ -18533,46 +18993,65 @@ def _execute_external_node_template_upgrade_phase(
                     state=service_quiesce_state,
                 )
             )
-            if write_progress and checkpoint_writer is not None:
-                checkpoint_writer()
-        if write_progress and checkpoint_writer is not None:
-            checkpoint_writer()
-        if service_role == "login":
-            login_pods_before_update = _login_pod_names(
-                command_runner=command_runner,
-                kube_context=kube_context,
-            )
-            group_state["login_pods_before_node_update"] = list(login_pods_before_update)
-            group_state["login_service_ready_before_node_update"] = (
-                wait_for_login_service_ready_endpoints(
-                    command_runner,
-                    namespace=_SOPERATOR_NAMESPACE,
-                    target_ref=target_ref,
-                    kube_context=kube_context,
-                    timeout_seconds=300,
-                    poll_interval_seconds=5,
-                )
-            )
-            work_lines.append(
-                "External login node-template guard: login Service has ready endpoints "
-                "before node-group update."
-            )
-            work_lines.extend(
-                _wait_for_login_session_policy(
-                    phase=phase,
+            _write_progress_with_quiesce_guard()
+        _write_progress_with_quiesce_guard()
+        try:
+            if service_role == "login":
+                login_pods_before_update = _login_pod_names(
                     command_runner=command_runner,
                     kube_context=kube_context,
-                    policy=login_session_policy,
-                    timeout_seconds=login_session_drain_timeout_seconds,
-                    pod_names=login_pods_before_update,
                 )
-            )
-        if write_progress and checkpoint_writer is not None:
-            checkpoint_writer()
-        try:
-            group_state["provider_update_attempted"] = True
+                group_state["login_pods_before_node_update"] = list(login_pods_before_update)
+                group_state["login_service_ready_before_node_update"] = (
+                    wait_for_login_service_ready_endpoints(
+                        command_runner,
+                        namespace=_SOPERATOR_NAMESPACE,
+                        target_ref=target_ref,
+                        kube_context=kube_context,
+                        timeout_seconds=300,
+                        poll_interval_seconds=5,
+                    )
+                )
+                work_lines.append(
+                    "External login node-template guard: login Service has ready endpoints "
+                    "before node-group update."
+                )
+                work_lines.extend(
+                    _wait_for_login_session_policy(
+                        phase=phase,
+                        command_runner=command_runner,
+                        kube_context=kube_context,
+                        policy=login_session_policy,
+                        timeout_seconds=login_session_drain_timeout_seconds,
+                        pod_names=login_pods_before_update,
+                    )
+                )
+        except (Exception, KeyboardInterrupt, EOFError) as exc:
+            if service_quiesce_state is not None:
+                try:
+                    work_lines.extend(
+                        _restore_external_service_role(
+                            command_runner=command_runner,
+                            kube_context=kube_context,
+                            state=service_quiesce_state,
+                        )
+                    )
+                except Exception as restore_exc:
+                    group_state["restore_error"] = str(restore_exc)
+                    if checkpoint_writer is not None:
+                        checkpoint_writer()
+                    raise RuntimeError(
+                        f"External node-template pre-update guard failed for {group_name}; "
+                        "additionally, cxcli could not restore quiesced Soperator "
+                        f"{service_role} workloads."
+                    ) from exc
             if write_progress and checkpoint_writer is not None:
                 checkpoint_writer()
+            raise
+        _write_progress_with_quiesce_guard()
+        try:
+            group_state["provider_update_attempted"] = True
+            _write_progress_with_quiesce_guard()
             _update_node_group_with_temporary_strategy(
                 nebius_api=nebius_api,
                 node_group_id=str(work["node_group_id"]),
@@ -18589,12 +19068,14 @@ def _execute_external_node_template_upgrade_phase(
             group_state["status"] = "waiting-rollout"
             if write_progress and checkpoint_writer is not None:
                 checkpoint_writer()
-        except SoperatorMigrationPhasePending as exc:
+        except (SoperatorMigrationPhasePending, KeyboardInterrupt) as exc:
+            interrupted = isinstance(exc, KeyboardInterrupt)
             mutation_performed = True
             phase["mutation_performed"] = True
             group_state["mutation_performed"] = True
-            group_state["status"] = "waiting-rollout"
-            group_state["pending_reason"] = str(exc)
+            group_state["status"] = "updating" if interrupted else "waiting-rollout"
+            if not interrupted:
+                group_state["pending_reason"] = str(exc)
             if service_quiesce_state is not None:
                 try:
                     work_lines.extend(
@@ -18640,23 +19121,45 @@ def _execute_external_node_template_upgrade_phase(
             if write_progress and checkpoint_writer is not None:
                 checkpoint_writer()
             raise
-        if service_role == "login":
-            group_state["login_service_ready_after_node_update"] = (
-                wait_for_login_service_ready_endpoints(
-                    command_runner,
-                    namespace=_SOPERATOR_NAMESPACE,
-                    target_ref=target_ref,
-                    kube_context=kube_context,
-                    timeout_seconds=300,
-                    poll_interval_seconds=5,
+        try:
+            if service_role == "login":
+                group_state["login_service_ready_after_node_update"] = (
+                    wait_for_login_service_ready_endpoints(
+                        command_runner,
+                        namespace=_SOPERATOR_NAMESPACE,
+                        target_ref=target_ref,
+                        kube_context=kube_context,
+                        timeout_seconds=300,
+                        poll_interval_seconds=5,
+                    )
                 )
-            )
-            work_lines.append(
-                "External login node-template guard: login Service has ready endpoints "
-                "after node-group update."
-            )
+                work_lines.append(
+                    "External login node-template guard: login Service has ready endpoints "
+                    "after node-group update."
+                )
+                _write_progress_with_quiesce_guard()
+        except (Exception, KeyboardInterrupt, EOFError) as exc:
+            if service_quiesce_state is not None:
+                try:
+                    work_lines.extend(
+                        _restore_external_service_role(
+                            command_runner=command_runner,
+                            kube_context=kube_context,
+                            state=service_quiesce_state,
+                        )
+                    )
+                except Exception as restore_exc:
+                    group_state["restore_error"] = str(restore_exc)
+                    if checkpoint_writer is not None:
+                        checkpoint_writer()
+                    raise RuntimeError(
+                        f"External node-template post-update guard failed for {group_name}; "
+                        "additionally, cxcli could not restore quiesced Soperator "
+                        f"{service_role} workloads."
+                    ) from exc
             if write_progress and checkpoint_writer is not None:
                 checkpoint_writer()
+            raise
         if service_quiesce_state is not None:
             work_lines.extend(
                 _restore_external_service_role(
@@ -18713,18 +19216,25 @@ def _execute_external_node_template_upgrade_phase(
         else [[str(work["group_name"]) for work in wave] for wave in worker_waves]
     )
     phase["worker_provider_units"] = [str(work["group_name"]) for work in worker_work]
-    worker_slurm_quiesce_records: tuple[SlurmPartitionQuiesceRecord, ...] = ()
+    checkpointed_worker_slurm_quiesce_records = _rolling_compute_checkpoint_quiesce_records(phase)
+    worker_slurm_quiesce_records = checkpointed_worker_slurm_quiesce_records
     if worker_work and slurm_scheduling_quiesce:
         worker_group_names = tuple(str(work["group_name"]) for work in worker_work)
         worker_quiet_nodes = _nodes_for_worker_groups(
             source_report=source_report,
             worker_node_groups=worker_group_names,
         )
-        worker_slurm_quiesce_records = _external_upgrade_quiesce_slurm_partitions(
+        live_worker_slurm_quiesce_records = _external_upgrade_quiesce_slurm_partitions(
             command_runner=command_runner,
             kube_context=kube_context,
             node_names=worker_quiet_nodes,
         )
+        worker_slurm_quiesce_records = _merge_slurm_partition_quiesce_records(
+            checkpointed_worker_slurm_quiesce_records,
+            live_worker_slurm_quiesce_records,
+        )
+        if checkpointed_worker_slurm_quiesce_records and not live_worker_slurm_quiesce_records:
+            lines.append("Slurm scheduling quiesce: reused checkpointed partition restore state.")
         phase["slurm_quiesced_partitions"] = [
             record.as_payload() for record in worker_slurm_quiesce_records
         ]
@@ -18737,15 +19247,25 @@ def _execute_external_node_template_upgrade_phase(
             slurm_decision_recorder(
                 {
                     "at": _utc_now(),
-                    "action": "scheduling-quiesce-applied"
-                    if worker_slurm_quiesce_records
-                    else "scheduling-quiesce-skipped",
+                    "action": (
+                        "scheduling-quiesce-applied"
+                        if live_worker_slurm_quiesce_records
+                        else (
+                            "scheduling-quiesce-reused"
+                            if checkpointed_worker_slurm_quiesce_records
+                            else "scheduling-quiesce-skipped"
+                        )
+                    ),
                     "node_names": list(worker_quiet_nodes),
                     "partitions": [record.as_payload() for record in worker_slurm_quiesce_records],
                     "pending_jobs": "queued-not-blocking",
                     "reason": ""
-                    if worker_slurm_quiesce_records
-                    else "no affected UP partitions required cxcli changes",
+                    if live_worker_slurm_quiesce_records
+                    else (
+                        "checkpointed partition restore state reused"
+                        if checkpointed_worker_slurm_quiesce_records
+                        else "no affected UP partitions required cxcli changes"
+                    ),
                 }
             )
         if checkpoint_writer is not None:
@@ -18828,6 +19348,9 @@ def _execute_external_node_template_upgrade_phase(
                     group_state["worker_wave"] = worker_wave
                 group_state["worker_target_mode"] = "provider-unit"
                 group_state["started_at"] = group_state.get("started_at") or _utc_now()
+                group_state["dispatch_started_at"] = (
+                    group_state.get("dispatch_started_at") or _utc_now()
+                )
         if checkpoint_writer is not None:
             checkpoint_writer()
         results: list[tuple[bool, list[str]]] = []
@@ -18886,6 +19409,7 @@ def _execute_external_node_template_upgrade_phase(
             kube_context=kube_context,
             records=worker_slurm_quiesce_records,
         )
+        phase["slurm_quiesced_partitions"] = []
         phase["slurm_partition_restore_manual_command"] = None
         if slurm_decision_recorder is not None:
             slurm_decision_recorder(
@@ -19263,6 +19787,1660 @@ def _execute_online_bulk_data_sync_phase(
     return mutation_performed, lines
 
 
+def _accounting_handoff_state(phase: dict[str, Any]) -> dict[str, Any]:
+    state = phase.setdefault("accounting_handoff", {})
+    if not isinstance(state, dict):
+        state = {}
+        phase["accounting_handoff"] = state
+    return state
+
+
+def _source_accounting_handoff_required(
+    *,
+    checkpoint: Mapping[str, Any],
+    source_report: Mapping[str, Any],
+) -> bool:
+    backup = _mapping(checkpoint.get("backup"))
+    if backup.get("accounting_db_dump") is True:
+        return True
+    snapshot = _mapping(source_report.get("snapshot"))
+    for key in ("pvcs", "pods", "statefulsets", "soperator_namespace_resources"):
+        for resource in _sequence_of_mappings(snapshot.get(key)):
+            metadata = _mapping(resource.get("metadata"))
+            name = str(metadata.get("name", "") or "").strip()
+            kind = str(resource.get("kind", "") or "").strip().lower()
+            if name.startswith("storage-") and name.endswith("-acct-db-0"):
+                return True
+            if name.endswith("-acct-db-0") and kind in {"", "pod"}:
+                return True
+            if name.endswith("-acct-db") and kind in {"statefulset", "mariadb"}:
+                return True
+    return False
+
+
+def _accounting_handoff_cluster_name(value: Any, *, label: str) -> str:
+    name = str(value or "").strip()
+    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?", name):
+        raise SoperatorMigrationPhasePending(
+            f"accounting handoff cannot use the {label} cluster name {name!r}; "
+            "the name must be a DNS-compatible Slurm cluster identifier."
+        )
+    return name
+
+
+def _accounting_handoff_source_resource_name(
+    source_report: Mapping[str, Any],
+    *,
+    target_ref: str,
+) -> str:
+    source = _source_slurmcluster_resource(source_report, target_ref=target_ref)
+    return _accounting_handoff_cluster_name(
+        _mapping(source.get("metadata")).get("name"),
+        label="source SlurmCluster resource",
+    )
+
+
+def _accounting_handoff_target_cluster_name(
+    values: Mapping[str, Any],
+    *,
+    target_ref: str,
+) -> str:
+    return _accounting_handoff_cluster_name(
+        values.get("clusterName") or target_ref,
+        label="target",
+    )
+
+
+def _accounting_handoff_mariadb_pod_identity(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    pod_name: str,
+) -> dict[str, str]:
+    pod = _json_from_command(
+        command_runner,
+        [
+            "kubectl",
+            "--context",
+            kube_context,
+            "-n",
+            _SOPERATOR_NAMESPACE,
+            "get",
+            "pod",
+            pod_name,
+            "-o",
+            "json",
+        ],
+        timeout_seconds=120,
+        check=False,
+    )
+    metadata = _mapping(pod.get("metadata"))
+    if str(metadata.get("name", "") or "").strip() != pod_name:
+        raise SoperatorMigrationPhasePending(
+            f"accounting handoff requires MariaDB pod {_SOPERATOR_NAMESPACE}/{pod_name}, "
+            "but that exact pod is unavailable."
+        )
+    uid = str(metadata.get("uid", "") or "").strip()
+    if not uid:
+        raise SoperatorMigrationPhasePending(
+            f"accounting handoff could not bind MariaDB pod {_SOPERATOR_NAMESPACE}/{pod_name} "
+            "to an immutable UID."
+        )
+    claim_name = ""
+    for volume in _sequence_of_mappings(_mapping(pod.get("spec")).get("volumes")):
+        if str(volume.get("name", "") or "").strip() != "storage":
+            continue
+        claim_name = str(
+            _mapping(volume.get("persistentVolumeClaim")).get("claimName", "") or ""
+        ).strip()
+        if claim_name:
+            break
+    if not claim_name:
+        raise SoperatorMigrationPhasePending(
+            f"accounting handoff MariaDB pod {_SOPERATOR_NAMESPACE}/{pod_name} does not "
+            "have an exact storage PVC binding."
+        )
+    pvc = _json_from_command(
+        command_runner,
+        [
+            "kubectl",
+            "--context",
+            kube_context,
+            "-n",
+            _SOPERATOR_NAMESPACE,
+            "get",
+            "pvc",
+            claim_name,
+            "-o",
+            "json",
+        ],
+        timeout_seconds=120,
+        check=False,
+    )
+    pvc_metadata = _mapping(pvc.get("metadata"))
+    pvc_uid = str(pvc_metadata.get("uid", "") or "").strip()
+    if str(pvc_metadata.get("name", "") or "").strip() != claim_name or not pvc_uid:
+        raise SoperatorMigrationPhasePending(
+            f"accounting handoff could not bind MariaDB storage PVC "
+            f"{_SOPERATOR_NAMESPACE}/{claim_name} to an immutable UID."
+        )
+    return {
+        "pod": pod_name,
+        "pod_uid": uid,
+        "pvc": claim_name,
+        "pvc_uid": pvc_uid,
+    }
+
+
+def _accounting_handoff_deployment_state(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+) -> dict[str, Any]:
+    deployment = _json_from_command(
+        command_runner,
+        [
+            "kubectl",
+            "--context",
+            kube_context,
+            "-n",
+            _SOPERATOR_NAMESPACE,
+            "get",
+            "deployment",
+            "accounting",
+            "-o",
+            "json",
+        ],
+        timeout_seconds=120,
+        check=False,
+    )
+    metadata = _mapping(deployment.get("metadata"))
+    if str(metadata.get("name", "") or "").strip() != "accounting":
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff requires the chart-managed soperator/accounting "
+            "Deployment, but it is unavailable."
+        )
+    uid = str(metadata.get("uid", "") or "").strip()
+    if not uid:
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff could not bind the soperator/accounting Deployment "
+            "to an immutable UID."
+        )
+    return {
+        "uid": uid,
+        "replicas": _non_negative_int(_mapping(deployment.get("spec")).get("replicas"), fallback=1),
+    }
+
+
+def _accounting_handoff_scale_deployment(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    replicas: int,
+) -> None:
+    command_runner(
+        [
+            "kubectl",
+            "--context",
+            kube_context,
+            "-n",
+            _SOPERATOR_NAMESPACE,
+            "scale",
+            "deployment/accounting",
+            f"--replicas={replicas}",
+        ],
+        timeout_seconds=180,
+    )
+    _kubectl_rollout_status(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        namespace=_SOPERATOR_NAMESPACE,
+        resource="deployment/accounting",
+        timeout="10m",
+    )
+
+
+def _accounting_handoff_wait_for_mariadb_pod(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    pod_name: str,
+) -> None:
+    command_runner(
+        [
+            "kubectl",
+            "--context",
+            kube_context,
+            "-n",
+            _SOPERATOR_NAMESPACE,
+            "wait",
+            "--for=condition=Ready",
+            f"pod/{pod_name}",
+            "--timeout=15m",
+        ],
+        timeout_seconds=1020,
+    )
+
+
+_ACCOUNTING_HANDOFF_CLIENT_PREAMBLE = (
+    "set -euo pipefail; "
+    'test -n "${MARIADB_ROOT_PASSWORD:-}"; '
+    'defaults_file="$(mktemp)"; '
+    "trap 'rm -f \"$defaults_file\"' EXIT; "
+    'chmod 600 "$defaults_file"; '
+    'printf "[client]\\nuser=root\\npassword=%s\\n" "$MARIADB_ROOT_PASSWORD" > "$defaults_file"; '
+)
+
+
+def _accounting_handoff_database_query(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    pod_name: str,
+    sql: str,
+    timeout_seconds: int = 300,
+) -> str:
+    command = (
+        _ACCOUNTING_HANDOFF_CLIENT_PREAMBLE
+        + "client_bin=$(command -v mariadb || command -v mysql); "
+        + 'test -n "$client_bin"; '
+        + '"$client_bin" --defaults-extra-file="$defaults_file" --raw -N -B '
+        + f"-e {shlex.quote(sql)}"
+    )
+    result = command_runner(
+        [
+            "kubectl",
+            "--context",
+            kube_context,
+            "-n",
+            _SOPERATOR_NAMESPACE,
+            "exec",
+            pod_name,
+            "--",
+            "bash",
+            "-lc",
+            command,
+        ],
+        timeout_seconds=timeout_seconds,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff database query failed; SQL stdout/stderr was redacted "
+            f"(exit {result.returncode})."
+        )
+    return result.stdout
+
+
+def _accounting_handoff_registered_clusters(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    pod_name: str,
+) -> tuple[str, ...]:
+    output = _accounting_handoff_database_query(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        pod_name=pod_name,
+        sql=("SELECT name FROM slurm_acct_db.cluster_table WHERE deleted=0 ORDER BY name;"),
+    )
+    names = tuple(
+        _accounting_handoff_cluster_name(line, label="registered")
+        for raw_line in output.splitlines()
+        if (line := raw_line.strip())
+    )
+    if len(names) != len(set(names)):
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff found duplicate active Slurm cluster registrations."
+        )
+    return names
+
+
+def _accounting_handoff_source_cluster_name(
+    source_report: Mapping[str, Any],
+    *,
+    target_ref: str,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    source_pod: str,
+) -> str:
+    source = _source_slurmcluster_resource(source_report, target_ref=target_ref)
+    declared_raw = str(_mapping(source.get("spec")).get("clusterName", "") or "").strip()
+    declared = (
+        _accounting_handoff_cluster_name(declared_raw, label="source spec.clusterName")
+        if declared_raw
+        else ""
+    )
+    registered = _accounting_handoff_registered_clusters(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        pod_name=source_pod,
+    )
+    if declared:
+        if registered != (declared,):
+            observed = ", ".join(registered) if registered else "none"
+            raise SoperatorMigrationPhasePending(
+                "accounting handoff requires exactly one active source slurm_acct_db "
+                "registration matching SlurmCluster.spec.clusterName "
+                f"(declared={declared}; active={observed})."
+            )
+        return declared
+    if len(registered) != 1:
+        observed = ", ".join(registered) if registered else "none"
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff source SlurmCluster does not declare spec.clusterName, "
+            "and its database does not contain exactly one active cluster registration "
+            f"(active={observed})."
+        )
+    return registered[0]
+
+
+def _accounting_handoff_dump_source_database(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    pod_name: str,
+) -> str:
+    command = (
+        _ACCOUNTING_HANDOFF_CLIENT_PREAMBLE
+        + "dump_bin=$(command -v mariadb-dump || command -v mysqldump); "
+        + 'test -n "$dump_bin"; '
+        + '"$dump_bin" --defaults-extra-file="$defaults_file" '
+        + "--single-transaction --quick --routines --events --triggers "
+        + "--skip-extended-insert "
+        + "--ignore-table=slurm_acct_db.table_defs_table "
+        + "--ignore-table=slurm_acct_db.convert_version_table "
+        + "--ignore-table=slurm_acct_db.cluster_table "
+        + "--databases slurm_acct_db"
+    )
+    result = command_runner(
+        [
+            "kubectl",
+            "--context",
+            kube_context,
+            "-n",
+            _SOPERATOR_NAMESPACE,
+            "exec",
+            pod_name,
+            "--",
+            "bash",
+            "-lc",
+            command,
+        ],
+        timeout_seconds=1800,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff could not capture the final source slurm_acct_db dump; "
+            f"SQL stdout/stderr was redacted (exit {result.returncode})."
+        )
+    dump = result.stdout
+    if not dump.strip() or "slurm_acct_db" not in dump or "USE `slurm_acct_db`;" not in dump:
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff source dump is empty or is not bound to slurm_acct_db."
+        )
+    return dump
+
+
+def _accounting_handoff_history_evidence(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    pod_name: str,
+    source_cluster_name: str,
+) -> dict[str, int]:
+    source_cluster_name = _accounting_handoff_cluster_name(
+        source_cluster_name,
+        label="source",
+    )
+    job_table = f"`{source_cluster_name}_job_table`"
+    step_table = f"`{source_cluster_name}_step_table`"
+    sql = (
+        "SELECT "
+        f"(SELECT COUNT(*) FROM slurm_acct_db.{job_table}),"
+        f"(SELECT COUNT(*) FROM slurm_acct_db.{step_table}),"
+        f"(SELECT COUNT(*) FROM slurm_acct_db.{job_table} WHERE time_end > 0),"
+        f"(SELECT COALESCE(MAX(id_job),0) FROM slurm_acct_db.{job_table}),"
+        f"(SELECT COALESCE(MAX(time_submit),0) FROM slurm_acct_db.{job_table});"
+    )
+    command = (
+        _ACCOUNTING_HANDOFF_CLIENT_PREAMBLE
+        + "client_bin=$(command -v mariadb || command -v mysql); "
+        + 'test -n "$client_bin"; '
+        + f'"$client_bin" --defaults-extra-file="$defaults_file" -N -B -e {shlex.quote(sql)}'
+    )
+    result = command_runner(
+        [
+            "kubectl",
+            "--context",
+            kube_context,
+            "-n",
+            _SOPERATOR_NAMESPACE,
+            "exec",
+            pod_name,
+            "--",
+            "bash",
+            "-lc",
+            command,
+        ],
+        timeout_seconds=300,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff could not collect exact source-history evidence; "
+            f"SQL stdout/stderr was redacted (exit {result.returncode})."
+        )
+    fields = result.stdout.strip().split("\t")
+    if len(fields) != 5:
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff history evidence returned an unexpected result shape."
+        )
+    try:
+        jobs, steps, completed_jobs, max_job_id, max_time_submit = (int(field) for field in fields)
+    except ValueError as exc:
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff history evidence contains non-integer values."
+        ) from exc
+    return {
+        "jobs": jobs,
+        "steps": steps,
+        "completed_jobs": completed_jobs,
+        "max_job_id": max_job_id,
+        "max_time_submit": max_time_submit,
+    }
+
+
+def _accounting_handoff_mysql_identifier(value: str) -> str:
+    if not value or "\x00" in value:
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff encountered an invalid MariaDB identifier."
+        )
+    return "`" + value.replace("`", "``") + "`"
+
+
+def _accounting_handoff_create_table_clauses(create_sql: str) -> tuple[str, ...]:
+    start = -1
+    depth = 0
+    quote = ""
+    escaped = False
+    clause_start = -1
+    clauses: list[str] = []
+    for index, char in enumerate(create_sql):
+        if quote:
+            if escaped:
+                escaped = False
+                continue
+            if char == "\\" and quote != "`":
+                escaped = True
+                continue
+            if char == quote:
+                if index + 1 < len(create_sql) and create_sql[index + 1] == quote:
+                    escaped = True
+                    continue
+                quote = ""
+            continue
+        if char in {"'", '"', "`"}:
+            quote = char
+            continue
+        if char == "(":
+            depth += 1
+            if depth == 1:
+                start = index
+                clause_start = index + 1
+            continue
+        if char == ")":
+            if depth <= 0:
+                raise SoperatorMigrationPhasePending(
+                    "accounting handoff could not parse an unbalanced SHOW CREATE TABLE result."
+                )
+            depth -= 1
+            if depth == 0:
+                clause = create_sql[clause_start:index].strip()
+                if clause:
+                    clauses.append(clause)
+                if not clauses:
+                    raise SoperatorMigrationPhasePending(
+                        "accounting handoff found an empty SHOW CREATE TABLE definition."
+                    )
+                return tuple(clauses)
+            continue
+        if char == "," and depth == 1:
+            clause = create_sql[clause_start:index].strip()
+            if not clause:
+                raise SoperatorMigrationPhasePending(
+                    "accounting handoff found an empty SHOW CREATE TABLE clause."
+                )
+            clauses.append(clause)
+            clause_start = index + 1
+    if start < 0 or depth != 0 or quote:
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff could not parse the SHOW CREATE TABLE result safely."
+        )
+    raise SoperatorMigrationPhasePending(
+        "accounting handoff SHOW CREATE TABLE result ended before its definition closed."
+    )
+
+
+def _accounting_handoff_table_definition(create_sql: str) -> dict[str, str]:
+    definition: dict[str, str] = {}
+    for clause in _accounting_handoff_create_table_clauses(create_sql):
+        column = re.match(r"^`((?:``|[^`])+)`\s+", clause)
+        if column:
+            name = column.group(1).replace("``", "`")
+            key = f"column:{name}"
+        else:
+            primary = re.match(r"^PRIMARY\s+KEY\b", clause, flags=re.IGNORECASE)
+            named_key = re.match(
+                r"^(?:(?:UNIQUE|FULLTEXT|SPATIAL)\s+)?KEY\s+`((?:``|[^`])+)`(?:\s|\()",
+                clause,
+                flags=re.IGNORECASE,
+            )
+            if primary:
+                key = "index:PRIMARY"
+            elif named_key:
+                name = named_key.group(1).replace("``", "`")
+                key = f"index:{name}"
+            else:
+                raise SoperatorMigrationPhasePending(
+                    "accounting handoff found an unsupported SHOW CREATE TABLE clause; "
+                    "only columns and indexes can be reconciled automatically."
+                )
+        if key in definition:
+            raise SoperatorMigrationPhasePending(
+                f"accounting handoff found a duplicate SHOW CREATE TABLE definition for {key}."
+            )
+        definition[key] = clause
+    return definition
+
+
+def _accounting_handoff_cluster_tables(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    pod_name: str,
+    cluster_name: str,
+) -> tuple[str, ...]:
+    cluster_name = _accounting_handoff_cluster_name(cluster_name, label="schema")
+    prefix = f"{cluster_name}_"
+    output = _accounting_handoff_database_query(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        pod_name=pod_name,
+        sql=(
+            "SELECT TABLE_NAME FROM information_schema.TABLES "
+            "WHERE TABLE_SCHEMA='slurm_acct_db' "
+            f"AND LEFT(TABLE_NAME,{len(prefix)})='{prefix}' ORDER BY TABLE_NAME;"
+        ),
+    )
+    tables = tuple(line.strip() for line in output.splitlines() if line.strip())
+    if not tables or any(not table.startswith(prefix) for table in tables):
+        raise SoperatorMigrationPhasePending(
+            f"accounting handoff could not prove cluster-prefixed tables for {cluster_name}."
+        )
+    if len(tables) != len(set(tables)):
+        raise SoperatorMigrationPhasePending(
+            f"accounting handoff found duplicate table identities for {cluster_name}."
+        )
+    return tables
+
+
+def _accounting_handoff_database_tables(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    pod_name: str,
+) -> tuple[str, ...]:
+    output = _accounting_handoff_database_query(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        pod_name=pod_name,
+        sql=(
+            "SELECT TABLE_NAME FROM information_schema.TABLES "
+            "WHERE TABLE_SCHEMA='slurm_acct_db' AND TABLE_TYPE='BASE TABLE' "
+            "ORDER BY TABLE_NAME;"
+        ),
+    )
+    tables = tuple(line.strip() for line in output.splitlines() if line.strip())
+    if not tables or len(tables) != len(set(tables)):
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff could not prove a unique source database table inventory."
+        )
+    return tables
+
+
+def _accounting_handoff_show_create_table(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    pod_name: str,
+    table_name: str,
+) -> str:
+    table_identifier = _accounting_handoff_mysql_identifier(table_name)
+    output = _accounting_handoff_database_query(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        pod_name=pod_name,
+        sql=f"SHOW CREATE TABLE slurm_acct_db.{table_identifier};",
+    )
+    first_line, separator, create_sql = output.partition("\t")
+    if not separator or first_line.strip() != table_name or not create_sql.strip():
+        raise SoperatorMigrationPhasePending(
+            f"accounting handoff received an invalid SHOW CREATE TABLE result for {table_name}."
+        )
+    return create_sql.strip()
+
+
+def _accounting_handoff_reconcile_table_schema(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    pod_name: str,
+    table_name: str,
+    canonical_create_sql: str,
+) -> dict[str, int]:
+    observed_definition = _accounting_handoff_table_definition(
+        _accounting_handoff_show_create_table(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            pod_name=pod_name,
+            table_name=table_name,
+        )
+    )
+    canonical_definition = _accounting_handoff_table_definition(canonical_create_sql)
+    incompatible = sorted(
+        key
+        for key in observed_definition.keys() & canonical_definition.keys()
+        if observed_definition[key] != canonical_definition[key]
+    )
+    if incompatible:
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff found incompatible common schema definitions for "
+            f"{table_name}: {', '.join(incompatible)}."
+        )
+    missing = [
+        (key, clause)
+        for key, clause in canonical_definition.items()
+        if key not in observed_definition
+    ]
+    if missing:
+        additions = [
+            ("ADD COLUMN " if key.startswith("column:") else "ADD ") + clause
+            for key, clause in missing
+        ]
+        table_identifier = _accounting_handoff_mysql_identifier(table_name)
+        _accounting_handoff_database_query(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            pod_name=pod_name,
+            sql=f"ALTER TABLE slurm_acct_db.{table_identifier} " + ", ".join(additions) + ";",
+            timeout_seconds=1800,
+        )
+    return {
+        "changed": int(bool(missing)),
+        "columns_added": sum(key.startswith("column:") for key, _clause in missing),
+        "indexes_added": sum(key.startswith("index:") for key, _clause in missing),
+    }
+
+
+def _accounting_handoff_reconcile_source_schema(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    pod_name: str,
+    source_cluster_name: str,
+    target_cluster_name: str,
+) -> dict[str, int]:
+    if source_cluster_name == target_cluster_name:
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff refused to schema-reconcile one table prefix against itself."
+        )
+    source_prefix = f"{source_cluster_name}_"
+    target_prefix = f"{target_cluster_name}_"
+    source_tables = _accounting_handoff_cluster_tables(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        pod_name=pod_name,
+        cluster_name=source_cluster_name,
+    )
+    target_tables = _accounting_handoff_cluster_tables(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        pod_name=pod_name,
+        cluster_name=target_cluster_name,
+    )
+    source_by_suffix = {table.removeprefix(source_prefix): table for table in source_tables}
+    target_by_suffix = {table.removeprefix(target_prefix): table for table in target_tables}
+    if source_by_suffix.keys() != target_by_suffix.keys():
+        source_only = sorted(source_by_suffix.keys() - target_by_suffix.keys())
+        target_only = sorted(target_by_suffix.keys() - source_by_suffix.keys())
+        details = []
+        if source_only:
+            details.append("source-only=" + ",".join(source_only))
+        if target_only:
+            details.append("target-only=" + ",".join(target_only))
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff cannot reconcile different source/target cluster table sets"
+            + (": " + "; ".join(details) if details else ".")
+        )
+
+    added_columns = 0
+    added_indexes = 0
+    changed_tables = 0
+    for suffix in sorted(source_by_suffix):
+        source_table = source_by_suffix[suffix]
+        target_table = target_by_suffix[suffix]
+        result = _accounting_handoff_reconcile_table_schema(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            pod_name=pod_name,
+            table_name=source_table,
+            canonical_create_sql=_accounting_handoff_show_create_table(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                pod_name=pod_name,
+                table_name=target_table,
+            ),
+        )
+        changed_tables += result["changed"]
+        added_columns += result["columns_added"]
+        added_indexes += result["indexes_added"]
+    return {
+        "tables_verified": len(source_tables),
+        "tables_changed": changed_tables,
+        "columns_added": added_columns,
+        "indexes_added": added_indexes,
+    }
+
+
+def _accounting_handoff_global_table_names(
+    *,
+    source_tables: Sequence[str],
+    source_cluster_name: str,
+) -> tuple[str, ...]:
+    source_prefix = f"{source_cluster_name}_"
+    excluded = {*_ACCOUNTING_HANDOFF_INTERNAL_TABLES, "cluster_table"}
+    return tuple(
+        sorted(
+            table
+            for table in source_tables
+            if table not in excluded and not table.startswith(source_prefix)
+        )
+    )
+
+
+def _accounting_handoff_capture_target_global_schema(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    pod_name: str,
+    source_tables: Sequence[str],
+    source_cluster_name: str,
+    target_cluster_name: str,
+    path: Path,
+) -> dict[str, Any]:
+    global_tables = _accounting_handoff_global_table_names(
+        source_tables=source_tables,
+        source_cluster_name=source_cluster_name,
+    )
+    if not global_tables:
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff source dump does not contain any reconcilable global tables."
+        )
+    target_tables = _accounting_handoff_database_tables(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        pod_name=pod_name,
+    )
+    target_prefix = f"{target_cluster_name}_"
+    target_globals = {
+        table
+        for table in target_tables
+        if table not in {*_ACCOUNTING_HANDOFF_INTERNAL_TABLES, "cluster_table"}
+        and not table.startswith(target_prefix)
+    }
+    unexpected = sorted(set(global_tables) - target_globals)
+    if unexpected:
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff final source dump contains non-source-prefixed table(s) "
+            "that are not target-current global tables: " + ", ".join(unexpected)
+        )
+    definitions = {
+        table: _accounting_handoff_show_create_table(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            pod_name=pod_name,
+            table_name=table,
+        )
+        for table in global_tables
+    }
+    _write_sensitive_text_atomic(
+        path,
+        json.dumps(
+            {
+                "schema": _ACCOUNTING_HANDOFF_TARGET_SCHEMA,
+                "tables": definitions,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+    )
+    return _accounting_handoff_dump_metadata(path)
+
+
+def _accounting_handoff_load_target_global_schema(
+    *,
+    state: Mapping[str, Any],
+    source_cluster_name: str,
+) -> dict[str, str]:
+    metadata = _mapping(state.get("target_global_schema"))
+    path = Path(str(metadata.get("path", "") or ""))
+    observed = _accounting_handoff_dump_metadata(path)
+    if any(observed.get(key) != metadata.get(key) for key in ("size_bytes", "sha256")):
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff target global schema snapshot failed its size/SHA256 guard."
+        )
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff target global schema snapshot is invalid JSON."
+        ) from exc
+    if (
+        not isinstance(payload, Mapping)
+        or payload.get("schema") != _ACCOUNTING_HANDOFF_TARGET_SCHEMA
+    ):
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff target global schema snapshot has an unsupported schema."
+        )
+    raw_tables = payload.get("tables")
+    if not isinstance(raw_tables, Mapping) or not raw_tables:
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff target global schema snapshot has no table definitions."
+        )
+    definitions = {
+        str(table): str(create_sql)
+        for table, create_sql in raw_tables.items()
+        if str(table) and str(create_sql)
+    }
+    raw_source_tables = state.get("source_database_tables")
+    if not isinstance(raw_source_tables, Sequence) or isinstance(
+        raw_source_tables, (str, bytes, bytearray)
+    ):
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff checkpoint lacks a valid source database table inventory."
+        )
+    expected = set(
+        _accounting_handoff_global_table_names(
+            source_tables=tuple(str(item) for item in raw_source_tables),
+            source_cluster_name=source_cluster_name,
+        )
+    )
+    if set(definitions) != expected:
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff target global schema snapshot table inventory does not "
+            "match the final source dump inventory."
+        )
+    return definitions
+
+
+def _accounting_handoff_reconcile_global_schema(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    pod_name: str,
+    definitions: Mapping[str, str],
+) -> dict[str, int]:
+    result = {
+        "tables_verified": 0,
+        "tables_changed": 0,
+        "columns_added": 0,
+        "indexes_added": 0,
+    }
+    for table_name in sorted(definitions):
+        table_result = _accounting_handoff_reconcile_table_schema(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            pod_name=pod_name,
+            table_name=table_name,
+            canonical_create_sql=definitions[table_name],
+        )
+        result["tables_verified"] += 1
+        result["tables_changed"] += table_result["changed"]
+        result["columns_added"] += table_result["columns_added"]
+        result["indexes_added"] += table_result["indexes_added"]
+    return result
+
+
+def _accounting_handoff_slurm_registration_details(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+) -> dict[str, dict[str, str]]:
+    result = _kubectl_exec_login(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        args=(
+            "sacctmgr",
+            "-nP",
+            "show",
+            "cluster",
+            "format=Cluster,ControlHost,ControlPort,RPC",
+        ),
+        check=False,
+        timeout_seconds=300,
+    )
+    if result.returncode != 0:
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff could not verify cluster registrations through the "
+            f"target-version sacctmgr: {_command_detail(result)}"
+        )
+    registrations: dict[str, dict[str, str]] = {}
+    for raw_line in result.stdout.splitlines():
+        if not raw_line.strip():
+            continue
+        fields = raw_line.split("|")
+        if len(fields) < 4:
+            raise SoperatorMigrationPhasePending(
+                "accounting handoff target-version sacctmgr returned malformed cluster "
+                "registration data."
+            )
+        name = _accounting_handoff_cluster_name(fields[0].strip(), label="sacctmgr")
+        if name in registrations:
+            raise SoperatorMigrationPhasePending(
+                f"accounting handoff target-version sacctmgr returned duplicate {name} rows."
+            )
+        registrations[name] = {
+            "control_host": fields[1].strip(),
+            "control_port": fields[2].strip(),
+            "rpc": fields[3].strip(),
+        }
+    return registrations
+
+
+def _accounting_handoff_validate_registration_details(
+    *,
+    registrations: Mapping[str, Mapping[str, str]],
+    source_cluster_name: str,
+    target_cluster_name: str,
+) -> None:
+    missing = sorted({source_cluster_name, target_cluster_name} - set(registrations))
+    if missing:
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff target-version sacctmgr did not retain required cluster "
+            "registration(s): " + ", ".join(missing)
+        )
+    target_registration = registrations[target_cluster_name]
+    if (
+        str(target_registration.get("control_host", "")).lower() in {"", "(null)", "none"}
+        or _non_negative_int(target_registration.get("control_port"), fallback=0) <= 0
+        or _non_negative_int(target_registration.get("rpc"), fallback=0) <= 0
+    ):
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff target cluster registration is not bound to an active "
+            "controller host/port/RPC after accounting resumed."
+        )
+    if source_cluster_name != target_cluster_name:
+        source_registration = registrations[source_cluster_name]
+        if (
+            str(source_registration.get("control_host", "")).lower() not in {"", "(null)", "none"}
+            or _non_negative_int(source_registration.get("control_port"), fallback=0) != 0
+            or _non_negative_int(source_registration.get("rpc"), fallback=0) != 0
+        ):
+            raise SoperatorMigrationPhasePending(
+                "accounting handoff historical source registration still points at a "
+                "controller; source cleanup was blocked."
+            )
+
+
+def _accounting_handoff_ensure_slurm_registrations(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    source_cluster_name: str,
+    target_cluster_name: str,
+    timeout_seconds: int = 300,
+    poll_interval_seconds: int = 5,
+) -> tuple[str, ...]:
+    deadline = time.monotonic() + max(timeout_seconds, 0)
+    while True:
+        registrations = _accounting_handoff_slurm_registration_details(
+            command_runner=command_runner,
+            kube_context=kube_context,
+        )
+        target_registration = registrations.get(target_cluster_name)
+        target_active = bool(target_registration) and (
+            str(_mapping(target_registration).get("control_host", "")).lower()
+            not in {"", "(null)", "none"}
+            and _non_negative_int(_mapping(target_registration).get("control_port"), fallback=0) > 0
+            and _non_negative_int(_mapping(target_registration).get("rpc"), fallback=0) > 0
+        )
+        if target_active:
+            break
+        if time.monotonic() >= deadline:
+            raise SoperatorMigrationPhasePending(
+                "accounting handoff target cluster registration did not become bound to "
+                "an active controller host/port/RPC within the bounded wait."
+            )
+        time.sleep(max(poll_interval_seconds, 1))
+    if source_cluster_name not in registrations:
+        result = _kubectl_exec_login(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            args=("sacctmgr", "-i", "add", "cluster", source_cluster_name),
+            check=False,
+            timeout_seconds=300,
+        )
+        if result.returncode != 0:
+            raise SoperatorMigrationPhasePending(
+                "accounting handoff could not create a historical source registration "
+                f"through target-version sacctmgr: {_command_detail(result)}"
+            )
+    while True:
+        registrations = _accounting_handoff_slurm_registration_details(
+            command_runner=command_runner,
+            kube_context=kube_context,
+        )
+        if source_cluster_name in registrations:
+            break
+        if time.monotonic() >= deadline:
+            raise SoperatorMigrationPhasePending(
+                "accounting handoff historical source registration did not become "
+                "visible through target-version sacctmgr within the bounded wait."
+            )
+        time.sleep(max(poll_interval_seconds, 1))
+    _accounting_handoff_validate_registration_details(
+        registrations=registrations,
+        source_cluster_name=source_cluster_name,
+        target_cluster_name=target_cluster_name,
+    )
+    return tuple(registrations)
+
+
+def _accounting_handoff_sacct_history_evidence(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    source_cluster_name: str,
+    source_history: Mapping[str, Any],
+) -> dict[str, Any]:
+    jobs = _non_negative_int(source_history.get("jobs"), fallback=0)
+    max_job_id = _non_negative_int(source_history.get("max_job_id"), fallback=0)
+    args = [
+        "sacct",
+        f"--clusters={source_cluster_name}",
+        "--allusers",
+        "--starttime=1970-01-01T00:00:00",
+        "--noheader",
+        "--allocations",
+        "--parsable2",
+        "--format=JobIDRaw,State,ExitCode",
+    ]
+    if jobs:
+        if max_job_id <= 0:
+            raise SoperatorMigrationPhasePending(
+                "accounting handoff source SQL history has jobs but no positive max job id."
+            )
+        args.append(f"--jobs={max_job_id}")
+    result = _kubectl_exec_login(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        args=args,
+        check=False,
+        timeout_seconds=300,
+    )
+    if result.returncode != 0:
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff source history is not queryable through target-version "
+            f"sacct: {_command_detail(result)}"
+        )
+    rows = tuple(line.strip() for line in result.stdout.splitlines() if line.strip())
+    if jobs:
+        expected_id = str(max_job_id)
+        visible = any(row.split("|", 1)[0].strip() == expected_id for row in rows)
+        if not visible:
+            raise SoperatorMigrationPhasePending(
+                "accounting handoff SQL counts match, but target-version sacct cannot "
+                f"read source cluster job {max_job_id}."
+            )
+    return {
+        "cluster": source_cluster_name,
+        "max_job_id": max_job_id,
+        "matching_rows": len(rows),
+    }
+
+
+def _write_sensitive_text_atomic(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with suppress(OSError):
+        os.chmod(path.parent, 0o700)
+    fd = -1
+    temp_path: Path | None = None
+    try:
+        fd, raw_temp_path = tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=path.parent,
+        )
+        temp_path = Path(raw_temp_path)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            os.fchmod(handle.fileno(), 0o600)
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+        os.chmod(path, 0o600)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+
+
+def _accounting_handoff_dump_metadata(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        raise SoperatorMigrationPhasePending(
+            f"accounting handoff checkpoint dump is missing: {path}."
+        )
+    mode = stat.S_IMODE(path.stat().st_mode)
+    if mode & 0o077:
+        raise SoperatorMigrationPhasePending(
+            f"accounting handoff checkpoint dump permissions are {mode:o}, not private mode 600."
+        )
+    content = path.read_bytes()
+    return {
+        "path": str(path),
+        "size_bytes": len(content),
+        "sha256": hashlib.sha256(content).hexdigest(),
+    }
+
+
+def _prepare_accounting_handoff_source_dump(
+    *,
+    checkpoint: dict[str, Any],
+    phase: dict[str, Any],
+    source_report: Mapping[str, Any],
+    values: Mapping[str, Any],
+    target_ref: str,
+    kube_context: str,
+    command_runner: SoperatorMigrationCommandRunner,
+    artifact_dir: Path,
+    checkpoint_writer: Callable[[], None] | None,
+) -> list[str]:
+    state = _accounting_handoff_state(phase)
+    if state.get("status") == "skipped":
+        return ["Accounting history handoff skipped: source chart-managed accounting is absent."]
+    if state.get("status") in {"source-dumped", "importing", "in-place-pending", "verified"}:
+        resumed_status = str(state.get("status") or "")
+        if resumed_status == "in-place-pending":
+            return [
+                "Accounting history handoff reused the checkpointed in-place "
+                "Pod/PVC continuity requirement."
+            ]
+        dump_path = Path(str(_mapping(state.get("dump")).get("path", "") or ""))
+        observed = _accounting_handoff_dump_metadata(dump_path)
+        expected = _mapping(state.get("dump"))
+        if any(observed.get(key) != expected.get(key) for key in ("size_bytes", "sha256")):
+            raise SoperatorMigrationPhasePending(
+                "accounting handoff checkpoint dump no longer matches its recorded size/SHA256."
+            )
+        if resumed_status in {"source-dumped", "importing"}:
+            source_resource_name = _accounting_handoff_cluster_name(
+                state.get("source_resource_name"),
+                label="source SlurmCluster resource",
+            )
+            observed_source = _accounting_handoff_mariadb_pod_identity(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                pod_name=f"{source_resource_name}-acct-db-0",
+            )
+            expected_source = _mapping(state.get("source"))
+            if any(
+                observed_source.get(key) != expected_source.get(key)
+                for key in ("pod", "pod_uid", "pvc", "pvc_uid")
+            ):
+                raise SoperatorMigrationPhasePending(
+                    "accounting handoff source MariaDB Pod/PVC identity changed after the "
+                    "final dump; the checkpointed dump cannot be reused."
+                )
+            observed_deployment = _accounting_handoff_deployment_state(
+                command_runner=command_runner,
+                kube_context=kube_context,
+            )
+            expected_deployment = _mapping(state.get("source_accounting_deployment"))
+            if (
+                observed_deployment.get("uid") != expected_deployment.get("uid")
+                or int(observed_deployment.get("replicas", -1)) != 0
+            ):
+                raise SoperatorMigrationPhasePending(
+                    "accounting handoff final source dump is stale because its bound "
+                    "accounting Deployment is no longer the same quiesced object."
+                )
+        return ["Accounting history handoff reused the checkpointed final source DB dump."]
+    if not _source_accounting_handoff_required(
+        checkpoint=checkpoint,
+        source_report=source_report,
+    ):
+        state.update({"status": "skipped", "reason": "source accounting was not detected"})
+        if checkpoint_writer is not None:
+            checkpoint_writer()
+        return ["Accounting history handoff skipped: source chart-managed accounting is absent."]
+
+    source_resource_name = _accounting_handoff_source_resource_name(
+        source_report,
+        target_ref=target_ref,
+    )
+    source_pod = f"{source_resource_name}-acct-db-0"
+    source_identity = _accounting_handoff_mariadb_pod_identity(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        pod_name=source_pod,
+    )
+    source_cluster_name = _accounting_handoff_source_cluster_name(
+        source_report,
+        target_ref=target_ref,
+        command_runner=command_runner,
+        kube_context=kube_context,
+        source_pod=source_pod,
+    )
+    target_cluster_name = _accounting_handoff_target_cluster_name(
+        values,
+        target_ref=target_ref,
+    )
+    if source_cluster_name == target_cluster_name:
+        evidence = _accounting_handoff_history_evidence(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            pod_name=source_pod,
+            source_cluster_name=source_cluster_name,
+        )
+        state.update(
+            {
+                "status": "in-place-pending",
+                "source_resource_name": source_resource_name,
+                "source_cluster_name": source_cluster_name,
+                "target_cluster_name": target_cluster_name,
+                "target_resource_name": target_ref,
+                "source": source_identity,
+                "source_history": evidence,
+            }
+        )
+        if checkpoint_writer is not None:
+            checkpoint_writer()
+        return [
+            "Accounting history handoff detected one in-place Slurm accounting identity; "
+            "destructive SQL import is disabled and exact MariaDB Pod/PVC continuity will "
+            "be verified after chart apply."
+        ]
+    deployment = _accounting_handoff_deployment_state(
+        command_runner=command_runner,
+        kube_context=kube_context,
+    )
+    original_replicas = int(deployment["replicas"])
+    try:
+        _accounting_handoff_scale_deployment(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            replicas=0,
+        )
+        source_database_tables = _accounting_handoff_database_tables(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            pod_name=source_pod,
+        )
+        dump = _accounting_handoff_dump_source_database(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            pod_name=source_pod,
+        )
+        evidence = _accounting_handoff_history_evidence(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            pod_name=source_pod,
+            source_cluster_name=source_cluster_name,
+        )
+    except (Exception, KeyboardInterrupt):
+        _accounting_handoff_scale_deployment(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            replicas=original_replicas,
+        )
+        raise
+
+    try:
+        dump_path = artifact_dir / _ACCOUNTING_HANDOFF_DUMP_FILENAME
+        _write_sensitive_text_atomic(dump_path, dump)
+        state.update(
+            {
+                "status": "source-dumped",
+                "source_resource_name": source_resource_name,
+                "source_cluster_name": source_cluster_name,
+                "target_cluster_name": target_cluster_name,
+                "target_resource_name": target_ref,
+                "source": source_identity,
+                "source_accounting_deployment": {
+                    "uid": str(deployment["uid"]),
+                    "replicas": original_replicas,
+                },
+                "source_history": evidence,
+                "source_database_tables": list(source_database_tables),
+                "dump": _accounting_handoff_dump_metadata(dump_path),
+                "source_quiesced_at": _utc_now(),
+            }
+        )
+        if checkpoint_writer is not None:
+            checkpoint_writer()
+    except (Exception, KeyboardInterrupt):
+        _accounting_handoff_scale_deployment(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            replicas=original_replicas,
+        )
+        raise
+    return [
+        "Accounting history handoff captured a final quiesced source slurm_acct_db dump "
+        f"({evidence['jobs']} jobs, {evidence['steps']} steps)."
+    ]
+
+
+def _complete_accounting_handoff_import(
+    *,
+    phase: dict[str, Any],
+    kube_context: str,
+    command_runner: SoperatorMigrationCommandRunner,
+    checkpoint_writer: Callable[[], None] | None,
+) -> list[str]:
+    state = _accounting_handoff_state(phase)
+    status = str(state.get("status", "") or "")
+    if status == "skipped":
+        return []
+    if status == "verified":
+        return ["Accounting history handoff already verified from the checkpoint."]
+    if status not in {"source-dumped", "importing", "in-place-pending"}:
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff lacks a checkpointed final source dump before target import."
+        )
+    source_cluster_name = _accounting_handoff_cluster_name(
+        state.get("source_cluster_name"),
+        label="source",
+    )
+    target_cluster_name = _accounting_handoff_cluster_name(
+        state.get("target_cluster_name"),
+        label="target",
+    )
+    target_resource_name = _accounting_handoff_cluster_name(
+        state.get("target_resource_name"),
+        label="target SlurmCluster resource",
+    )
+    target_pod = f"{target_resource_name}-acct-db-0"
+    _accounting_handoff_wait_for_mariadb_pod(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        pod_name=target_pod,
+    )
+    target_identity = _accounting_handoff_mariadb_pod_identity(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        pod_name=target_pod,
+    )
+    source_evidence = dict(_mapping(state.get("source_history")))
+
+    if status == "in-place-pending":
+        source_identity = _mapping(state.get("source"))
+        if any(
+            target_identity.get(key) != source_identity.get(key)
+            for key in ("pod", "pod_uid", "pvc", "pvc_uid")
+        ):
+            raise SoperatorMigrationPhasePending(
+                "accounting handoff found one source/target Slurm DB identity, but chart "
+                "apply did not preserve the exact MariaDB Pod/PVC binding; destructive "
+                "self-import is disabled."
+            )
+        restored_evidence = _accounting_handoff_history_evidence(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            pod_name=target_pod,
+            source_cluster_name=source_cluster_name,
+        )
+        if restored_evidence != source_evidence:
+            raise SoperatorMigrationPhasePending(
+                "accounting handoff in-place MariaDB history changed across chart apply."
+            )
+        registered = _accounting_handoff_ensure_slurm_registrations(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            source_cluster_name=source_cluster_name,
+            target_cluster_name=target_cluster_name,
+        )
+        sacct_evidence = _accounting_handoff_sacct_history_evidence(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            source_cluster_name=source_cluster_name,
+            source_history=source_evidence,
+        )
+        state.update(
+            {
+                "status": "verified",
+                "target": target_identity,
+                "target_history": restored_evidence,
+                "registered_clusters": list(registered),
+                "sacct_verification": sacct_evidence,
+                "in_place_verified_at": _utc_now(),
+            }
+        )
+        if checkpoint_writer is not None:
+            checkpoint_writer()
+        return [
+            "Accounting history handoff verified in-place MariaDB Pod/PVC continuity "
+            "and target-version sacct visibility."
+        ]
+
+    dump_path = Path(str(_mapping(state.get("dump")).get("path", "") or ""))
+    observed_dump = _accounting_handoff_dump_metadata(dump_path)
+    expected_dump = _mapping(state.get("dump"))
+    if any(observed_dump.get(key) != expected_dump.get(key) for key in ("size_bytes", "sha256")):
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff final source dump failed its size/SHA256 checkpoint guard."
+        )
+    target_deployment = _accounting_handoff_deployment_state(
+        command_runner=command_runner,
+        kube_context=kube_context,
+    )
+    if status == "source-dumped":
+        original_replicas = int(target_deployment["replicas"])
+        if original_replicas <= 0:
+            raise SoperatorMigrationPhasePending(
+                "accounting handoff cannot checkpoint target accounting because its "
+                "Deployment is already scaled to zero without a recorded restore count."
+            )
+        raw_source_tables = state.get("source_database_tables")
+        if not isinstance(raw_source_tables, Sequence) or isinstance(
+            raw_source_tables, (str, bytes, bytearray)
+        ):
+            raise SoperatorMigrationPhasePending(
+                "accounting handoff final source dump lacks its database table inventory."
+            )
+        target_schema_path = dump_path.parent / _ACCOUNTING_HANDOFF_TARGET_SCHEMA_FILENAME
+        target_schema_metadata = _accounting_handoff_capture_target_global_schema(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            pod_name=target_pod,
+            source_tables=tuple(str(item) for item in raw_source_tables),
+            source_cluster_name=source_cluster_name,
+            target_cluster_name=target_cluster_name,
+            path=target_schema_path,
+        )
+        state.update(
+            {
+                "status": "importing",
+                "target": target_identity,
+                "target_accounting_deployment": {
+                    "uid": str(target_deployment["uid"]),
+                    "replicas": original_replicas,
+                },
+                "target_global_schema": target_schema_metadata,
+                "target_quiesce_started_at": _utc_now(),
+                "import_started_at": _utc_now(),
+            }
+        )
+        if checkpoint_writer is not None:
+            checkpoint_writer()
+    else:
+        expected_target = _mapping(state.get("target"))
+        if any(
+            target_identity.get(key) != expected_target.get(key)
+            for key in ("pod", "pvc", "pvc_uid")
+        ):
+            raise SoperatorMigrationPhasePending(
+                "accounting handoff target MariaDB Pod/PVC binding changed during an "
+                "importing retry; the final source dump was not replayed."
+            )
+        expected_deployment = _mapping(state.get("target_accounting_deployment"))
+        original_replicas = _non_negative_int(
+            expected_deployment.get("replicas"),
+            fallback=0,
+        )
+        if target_deployment.get("uid") != expected_deployment.get("uid") or original_replicas <= 0:
+            raise SoperatorMigrationPhasePending(
+                "accounting handoff target accounting Deployment identity/restore count "
+                "changed during an importing retry."
+            )
+    target_global_schema = _accounting_handoff_load_target_global_schema(
+        state=state,
+        source_cluster_name=source_cluster_name,
+    )
+    _accounting_handoff_scale_deployment(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        replicas=0,
+    )
+    state["target_quiesced_at"] = _utc_now()
+    if checkpoint_writer is not None:
+        checkpoint_writer()
+
+    restore_command = (
+        _ACCOUNTING_HANDOFF_CLIENT_PREAMBLE
+        + "client_bin=$(command -v mariadb || command -v mysql); "
+        + 'test -n "$client_bin"; '
+        + '"$client_bin" --defaults-extra-file="$defaults_file" '
+        + "--one-database slurm_acct_db < /dev/stdin"
+    )
+    result = command_runner(
+        [
+            "kubectl",
+            "--context",
+            kube_context,
+            "-n",
+            _SOPERATOR_NAMESPACE,
+            "exec",
+            target_pod,
+            "--",
+            "bash",
+            "-lc",
+            restore_command,
+        ],
+        input_text=dump_path.read_text(encoding="utf-8"),
+        timeout_seconds=1800,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff target slurm_acct_db import failed while accounting "
+            f"remains quiesced; SQL stdout/stderr was redacted (exit {result.returncode})."
+        )
+    schema_reconciliation = _accounting_handoff_reconcile_source_schema(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        pod_name=target_pod,
+        source_cluster_name=source_cluster_name,
+        target_cluster_name=target_cluster_name,
+    )
+    state["schema_reconciliation"] = schema_reconciliation
+    state["global_schema_reconciliation"] = _accounting_handoff_reconcile_global_schema(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        pod_name=target_pod,
+        definitions=target_global_schema,
+    )
+    if checkpoint_writer is not None:
+        checkpoint_writer()
+    target_evidence = _accounting_handoff_history_evidence(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        pod_name=target_pod,
+        source_cluster_name=source_cluster_name,
+    )
+    if target_evidence != source_evidence:
+        state["target_history"] = target_evidence
+        if checkpoint_writer is not None:
+            checkpoint_writer()
+        raise SoperatorMigrationPhasePending(
+            "accounting handoff imported slurm_acct_db, but exact source-history counts "
+            "do not match on the target; accounting remains quiesced and source resources "
+            "were not retired."
+        )
+    replicas = _non_negative_int(
+        _mapping(state.get("target_accounting_deployment")).get("replicas"),
+        fallback=1,
+    )
+    _accounting_handoff_scale_deployment(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        replicas=replicas,
+    )
+    try:
+        registered = _accounting_handoff_ensure_slurm_registrations(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            source_cluster_name=source_cluster_name,
+            target_cluster_name=target_cluster_name,
+        )
+        sacct_evidence = _accounting_handoff_sacct_history_evidence(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            source_cluster_name=source_cluster_name,
+            source_history=source_evidence,
+        )
+        restored_evidence = _accounting_handoff_history_evidence(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            pod_name=target_pod,
+            source_cluster_name=source_cluster_name,
+        )
+        if restored_evidence != source_evidence:
+            raise SoperatorMigrationPhasePending(
+                "accounting handoff history changed after target accounting resumed; "
+                "source resources were not retired."
+            )
+    except (Exception, KeyboardInterrupt):
+        _accounting_handoff_scale_deployment(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            replicas=0,
+        )
+        raise
+    state.update(
+        {
+            "status": "verified",
+            "target_history": restored_evidence,
+            "registered_clusters": list(registered),
+            "sacct_verification": sacct_evidence,
+            "import_completed_at": _utc_now(),
+            "target_accounting_restored_at": _utc_now(),
+        }
+    )
+    if checkpoint_writer is not None:
+        checkpoint_writer()
+    return [
+        "Accounting history handoff imported and schema-reconciled the final source "
+        "slurm_acct_db, then verified both registrations and target-version sacct "
+        f"visibility ({restored_evidence['jobs']} jobs, {restored_evidence['steps']} steps)."
+    ]
+
+
 def _execute_rolling_compute_migration_phase(
     *,
     checkpoint: dict[str, Any],
@@ -19274,6 +21452,7 @@ def _execute_rolling_compute_migration_phase(
     worker_node_groups: Sequence[str],
     nebius_api: SoperatorMigrationNebiusApi,
     command_runner: SoperatorMigrationCommandRunner,
+    accounting_handoff_artifact_dir: Path | None = None,
     checkpoint_writer: Callable[[], None] | None = None,
     job_policy: str | None = None,
     populate_jail_refresh: str = "auto",
@@ -19329,10 +21508,11 @@ def _execute_rolling_compute_migration_phase(
     phase["slurm_job_scope"] = (
         "live-worker-nodesets" if live_worker_slurm_nodes else "source-worker-node-groups"
     )
-    slurm_quiesce_records = _rolling_compute_checkpoint_quiesce_records(phase)
-    target_handoff_resume = bool(slurm_quiesce_records) and _rolling_compute_target_handoff_started(
-        phase
-    )
+    checkpointed_slurm_quiesce_records = _rolling_compute_checkpoint_quiesce_records(phase)
+    slurm_quiesce_records = checkpointed_slurm_quiesce_records
+    target_handoff_resume = bool(
+        checkpointed_slurm_quiesce_records
+    ) and _rolling_compute_target_handoff_started(phase)
     if target_handoff_resume:
         quiet_lines = [
             "Slurm quiet window check reused checkpointed partition quiesce from the "
@@ -19340,7 +21520,7 @@ def _execute_rolling_compute_migration_phase(
         ]
     else:
         try:
-            quiet_lines, slurm_quiesce_records = _ensure_slurm_quiet(
+            quiet_lines, live_slurm_quiesce_records = _ensure_slurm_quiet(
                 command_runner=command_runner,
                 kube_context=kube_context,
                 node_names=quiet_nodes,
@@ -19355,6 +21535,14 @@ def _execute_rolling_compute_migration_phase(
                 allow_resolved_interactive_job_policy=allow_resolved_interactive_job_policy,
                 slurm_scheduling_quiesce=slurm_scheduling_quiesce,
             )
+            slurm_quiesce_records = _merge_slurm_partition_quiesce_records(
+                checkpointed_slurm_quiesce_records,
+                live_slurm_quiesce_records,
+            )
+            if checkpointed_slurm_quiesce_records and not live_slurm_quiesce_records:
+                quiet_lines.append(
+                    "Slurm scheduling quiesce: reused checkpointed partition restore state."
+                )
         except RuntimeError as exc:
             if not slurm_quiesce_records or not _slurm_handoff_mismatch_detail(str(exc)):
                 raise
@@ -19467,6 +21655,33 @@ def _execute_rolling_compute_migration_phase(
             checkpoint=checkpoint,
             phase=phase,
         )
+        if (
+            _source_accounting_handoff_required(
+                checkpoint=checkpoint,
+                source_report=source_report,
+            )
+            and accounting_handoff_artifact_dir is None
+        ):
+            raise SoperatorMigrationPhasePending(
+                "accounting handoff requires a durable checkpoint artifact directory."
+            )
+        lines.extend(
+            _prepare_accounting_handoff_source_dump(
+                checkpoint=checkpoint,
+                phase=phase,
+                source_report=source_report,
+                values=values,
+                target_ref=target_ref,
+                kube_context=kube_context,
+                command_runner=command_runner,
+                artifact_dir=(
+                    accounting_handoff_artifact_dir
+                    if accounting_handoff_artifact_dir is not None
+                    else Path(".")
+                ),
+                checkpoint_writer=checkpoint_writer,
+            )
+        )
         _helm_upgrade_target_soperator(
             command_runner=command_runner,
             kube_context=kube_context,
@@ -19491,6 +21706,14 @@ def _execute_rolling_compute_migration_phase(
         )
         if checkpoint_writer is not None:
             checkpoint_writer()
+        lines.extend(
+            _complete_accounting_handoff_import(
+                phase=phase,
+                kube_context=kube_context,
+                command_runner=command_runner,
+                checkpoint_writer=checkpoint_writer,
+            )
+        )
         lines.extend(
             _suspend_legacy_flux_helmreleases(
                 command_runner=command_runner,
@@ -19560,6 +21783,19 @@ def _execute_rolling_compute_migration_phase(
             timeout_seconds=1800,
         )
     except (Exception, KeyboardInterrupt) as exc:
+        accounting_handoff = _mapping(phase.get("accounting_handoff"))
+        if str(accounting_handoff.get("status", "") or "") in {
+            "source-dumped",
+            "importing",
+            "in-place-pending",
+        }:
+            phase["slurm_partition_restore_deferred_reason"] = (
+                "accounting history handoff is incomplete; scheduling remains quiesced "
+                "until the same rolling-compute phase resumes successfully"
+            )
+            if checkpoint_writer is not None:
+                checkpoint_writer()
+            raise
         try:
             _restore_external_upgrade_slurm_partitions(
                 command_runner=command_runner,
@@ -19600,6 +21836,8 @@ def _execute_rolling_compute_migration_phase(
                 "partitions": [record.as_payload() for record in slurm_quiesce_records],
             }
         )
+    phase["slurm_quiesced_partitions"] = []
+    phase["slurm_resumed_at"] = _utc_now()
     phase["slurm_partition_restore_manual_command"] = None
     mutation_performed = True
     phase["target_values_revision"] = _ROLLING_COMPUTE_VALUES_REVISION
@@ -24767,6 +27005,7 @@ def _execute_populate_jail_refresh_phase(
                     kube_context=kube_context,
                     records=slurm_quiesce_records,
                 )
+                phase["slurm_quiesced_partitions"] = []
                 phase["slurm_resumed_at"] = _utc_now()
                 phase["slurm_partition_restore_manual_command"] = None
                 if slurm_decision_recorder is not None:
@@ -25111,12 +27350,10 @@ def _execute_populate_jail_refresh_phase(
         allow_resolved_interactive_job_policy=allow_resolved_interactive_job_policy,
         slurm_scheduling_quiesce=slurm_scheduling_quiesce,
     )
-    slurm_quiesce_records_by_partition = {
-        record.partition: record for record in checkpointed_slurm_quiesce_records
-    }
-    for record in live_slurm_quiesce_records:
-        slurm_quiesce_records_by_partition.setdefault(record.partition, record)
-    slurm_quiesce_records = tuple(slurm_quiesce_records_by_partition.values())
+    slurm_quiesce_records = _merge_slurm_partition_quiesce_records(
+        checkpointed_slurm_quiesce_records,
+        live_slurm_quiesce_records,
+    )
     if checkpointed_slurm_quiesce_records and not live_slurm_quiesce_records:
         quiet_lines.append("Slurm scheduling quiesce: reused checkpointed partition restore state.")
 
@@ -25831,6 +28068,7 @@ def _execute_populate_jail_refresh_phase(
                 kube_context=kube_context,
                 records=slurm_quiesce_records,
             )
+            phase["slurm_quiesced_partitions"] = []
             phase["slurm_resumed_at"] = _utc_now()
             _record_slurm_restored(reason="populate-jail refresh completed")
         post_jail_smoke_lines.extend(
@@ -26601,12 +28839,55 @@ def _phase_report_status(
     return "not_run"
 
 
-def _phase_report_summary(phase_id: str, phase: Mapping[str, Any]) -> str:
+def _phase_report_summary(
+    phase_id: str,
+    phase: Mapping[str, Any],
+    *,
+    checkpoint: Mapping[str, Any] | None = None,
+) -> str:
+    checkpoint = _mapping(checkpoint)
+    if phase_id == "discovery-and-plan":
+        locked_path = _checkpoint_locked_upgrade_path(checkpoint)
+        segment_count = len(_sequence_of_mappings(locked_path.get("segments")))
+        planned_count = len(
+            tuple(
+                item
+                for item in checkpoint.get("planned_phases", []) or []
+                if str(item or "").strip()
+            )
+        )
+        if segment_count or planned_count:
+            return (
+                "discovery and locked upgrade path recorded: "
+                f"segments={segment_count}; planned phases={planned_count}."
+            )
+    if phase_id == "customer-approval":
+        approved_at = str(checkpoint.get("customer_approved_at", "") or "").strip()
+        if approved_at:
+            return f"customer approval recorded at {approved_at}."
     if not phase:
         return "No phase state recorded."
     if phase_id == _EXTERNAL_NODE_TEMPLATE_PHASE_ID:
-        updates = _sequence_of_mappings(phase.get("node_group_updates"))
-        return f"external node-template updates recorded: {len(updates)}."
+        node_groups = _mapping(phase.get("node_groups"))
+        planned_groups = tuple(
+            dict.fromkeys(
+                str(group or "").strip()
+                for key in ("service_groups", "worker_groups")
+                for group in (
+                    phase.get(key)
+                    if isinstance(phase.get(key), Sequence)
+                    and not isinstance(phase.get(key), (str, bytes, bytearray))
+                    else ()
+                )
+                if str(group or "").strip()
+            )
+        ) or tuple(str(group) for group in node_groups)
+        handled = sum(
+            str(_mapping(node_groups.get(group)).get("status", "") or "").strip()
+            in {"completed", "already-current"}
+            for group in planned_groups
+        )
+        return f"external node-template groups handled: {handled}/{len(planned_groups)}."
     if phase_id == _TARGET_GPU_STACK_PHASE_ID:
         charts = _sequence_of_mappings(phase.get("charts"))
         return f"target GPU stack charts applied or verified: {len(charts)}."
@@ -26625,10 +28906,21 @@ def _phase_report_summary(phase_id: str, phase: Mapping[str, Any]) -> str:
             if isinstance(workers, Sequence) and not isinstance(workers, (str, bytes, bytearray))
             else 0
         )
-        return (
+        summary = (
             f"service-role target groups recorded: {len(target_groups)}; "
             f"in-place worker groups preserved: {worker_count}."
         )
+        accounting_handoff = _mapping(phase.get("accounting_handoff"))
+        accounting_status = str(accounting_handoff.get("status", "") or "").strip()
+        if accounting_status:
+            history = _mapping(
+                accounting_handoff.get("target_history") or accounting_handoff.get("source_history")
+            )
+            counts = ""
+            if "jobs" in history and "steps" in history:
+                counts = f" (jobs={history['jobs']}; steps={history['steps']})"
+            summary += f" Accounting history handoff={accounting_status}{counts}."
+        return summary
     if phase_id == "final-control-plane-cutover":
         target = str(
             phase.get("target_slurmcluster", "") or phase.get("target_ref", "") or ""
@@ -26767,6 +29059,7 @@ def _external_upgrade_resume_command(
     *,
     pending_phase: str = "",
     pending_reason: str = "",
+    checkpoint: Mapping[str, Any] | None = None,
 ) -> str:
     del config_path, target_ref
     if (
@@ -26776,6 +29069,38 @@ def _external_upgrade_resume_command(
         return (
             "rerun the exact original command with every option unchanged, adding "
             "--login-session-policy wait-active"
+        )
+    if pending_phase == "validation-and-rollback-hold" and (
+        "protected-state-comparison" in pending_reason
+    ):
+        safety = _mapping((checkpoint or {}).get("upgrade_safety"))
+        verification = _mapping(safety.get("post_upgrade_verification"))
+        comparison = _mapping(verification.get("comparison"))
+        blocked_count = int(comparison.get("blocked_count") or 0)
+        approval_count = int(comparison.get("approval_required_count") or 0)
+        approval = _mapping(safety.get("remediation_approval"))
+        if blocked_count:
+            return (
+                "review the blocked protected-state deltas in the JSON report and "
+                "repair or recover the protected state before rerunning; "
+                "--approve-remediation cannot override blocked deltas"
+            )
+        if approval_count and not bool(approval.get("approved")):
+            return (
+                "review the protected-state deltas in the JSON report; if every "
+                "approval-required delta is expected, rerun the original command adding "
+                "--approve-remediation"
+            )
+        if approval_count:
+            return (
+                "remediation approval is already recorded; resolve the remaining failed "
+                "verification checks, then rerun the exact original command with every "
+                "option unchanged"
+            )
+        return (
+            "review the protected-state deltas in the JSON report and resolve every "
+            "blocked delta; add --approve-remediation only when the report shows zero "
+            "blocked deltas and one or more expected approval-required deltas"
         )
     return "rerun the exact original command with every option unchanged"
 
@@ -26979,14 +29304,25 @@ def _write_soperator_migrate_report(
                 "id": phase_id,
                 "top_level_stage": top_level_stage,
                 "status": status_label(status),
-                "summary": _phase_report_summary(phase_id, phase),
+                "summary": _phase_report_summary(
+                    phase_id,
+                    phase,
+                    checkpoint=checkpoint,
+                ),
                 "fast_verification": fast_verification,
                 "state": to_plain_data(phase),
             }
         )
         lines.extend([f"### {phase_id}", "", f"- Status: `{status_label(status)}`"])
         lines.append(f"- Top-level stage: `{top_level_stage}`")
-        lines.append(f"- Summary: {_phase_report_summary(phase_id, phase)}")
+        lines.append(
+            "- Summary: "
+            + _phase_report_summary(
+                phase_id,
+                phase,
+                checkpoint=checkpoint,
+            )
+        )
         if phase_id in _FAST_STAGE_VERIFICATION_PHASE_IDS:
             lines.append(
                 "- Fast verification: `"
@@ -30311,6 +32647,106 @@ def _rolling_compute_fast_verification_checks(
             ],
         )
     checks: list[Mapping[str, str]] = []
+    accounting_handoff = _mapping(phase.get("accounting_handoff"))
+    accounting_required = _source_accounting_handoff_required(
+        checkpoint=checkpoint,
+        source_report=source_report,
+    )
+    accounting_status = str(accounting_handoff.get("status", "") or "").strip()
+    if accounting_required:
+        accounting_detail = f"status={accounting_status or 'not-recorded'}"
+        accounting_passed = False
+        if accounting_status == "verified":
+            try:
+                target_cluster_name = _accounting_handoff_cluster_name(
+                    accounting_handoff.get("target_cluster_name"),
+                    label="target",
+                )
+                source_cluster_name = _accounting_handoff_cluster_name(
+                    accounting_handoff.get("source_cluster_name"),
+                    label="source",
+                )
+                target_resource_name = _accounting_handoff_cluster_name(
+                    accounting_handoff.get("target_resource_name"),
+                    label="target SlurmCluster resource",
+                )
+                target_identity = _accounting_handoff_mariadb_pod_identity(
+                    command_runner=command_runner,
+                    kube_context=kube_context,
+                    pod_name=f"{target_resource_name}-acct-db-0",
+                )
+                expected_identity = _mapping(accounting_handoff.get("target"))
+                if any(
+                    target_identity.get(key) != expected_identity.get(key)
+                    for key in ("pod", "pvc", "pvc_uid")
+                ):
+                    raise SoperatorMigrationPhasePending(
+                        "target MariaDB Pod/PVC identity changed after accounting handoff"
+                    )
+                observed_history = _accounting_handoff_history_evidence(
+                    command_runner=command_runner,
+                    kube_context=kube_context,
+                    pod_name=target_identity["pod"],
+                    source_cluster_name=source_cluster_name,
+                )
+                expected_history = _mapping(accounting_handoff.get("target_history"))
+                history_keys = (
+                    "jobs",
+                    "steps",
+                    "completed_jobs",
+                    "max_job_id",
+                    "max_time_submit",
+                )
+                if any(key not in expected_history for key in history_keys):
+                    raise SoperatorMigrationPhasePending(
+                        "checkpointed target accounting history evidence is incomplete"
+                    )
+                if any(
+                    _non_negative_int(observed_history.get(key), fallback=0)
+                    < _non_negative_int(expected_history.get(key), fallback=0)
+                    for key in history_keys
+                ):
+                    raise SoperatorMigrationPhasePending(
+                        "source history evidence regressed after accounting handoff"
+                    )
+                registrations = _accounting_handoff_slurm_registration_details(
+                    command_runner=command_runner,
+                    kube_context=kube_context,
+                )
+                _accounting_handoff_validate_registration_details(
+                    registrations=registrations,
+                    source_cluster_name=source_cluster_name,
+                    target_cluster_name=target_cluster_name,
+                )
+                _accounting_handoff_sacct_history_evidence(
+                    command_runner=command_runner,
+                    kube_context=kube_context,
+                    source_cluster_name=source_cluster_name,
+                    source_history=expected_history,
+                )
+            except (RuntimeError, SoperatorMigrationPhasePending) as exc:
+                accounting_detail = str(exc)
+            else:
+                accounting_passed = True
+                accounting_detail = (
+                    "source history counts, target Pod/PVC identity, both registrations, "
+                    "and target-version sacct visibility were reverified"
+                )
+        checks.append(
+            _fast_verification_check(
+                "Accounting history handoff",
+                "passed" if accounting_passed else "failed",
+                accounting_detail,
+            )
+        )
+    else:
+        checks.append(
+            _fast_verification_check(
+                "Accounting history handoff",
+                "skipped",
+                "source chart-managed accounting was not detected",
+            )
+        )
     try:
         _kubectl_rollout_status(
             command_runner=command_runner,
@@ -32138,6 +34574,9 @@ def _execute_soperator_migration_unlocked(
                 worker_node_groups=approved_worker_groups,
                 nebius_api=active_nebius_api,
                 command_runner=active_command_runner,
+                accounting_handoff_artifact_dir=(
+                    checkpoint_path.parent / _ACCOUNTING_HANDOFF_DIRNAME
+                ),
                 checkpoint_writer=_checkpoint_progress,
                 job_policy=resolved_job_policy,
                 cancel_job_ids=selected_cancel_job_ids,
@@ -32689,6 +35128,7 @@ def _execute_soperator_migration_unlocked(
                 normalized_target,
                 pending_phase=str(checkpoint["pending_phase"]),
                 pending_reason=pending_reason,
+                checkpoint=checkpoint,
             )
         )
     footer.extend(

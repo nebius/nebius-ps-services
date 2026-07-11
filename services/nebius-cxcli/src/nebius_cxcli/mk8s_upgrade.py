@@ -10,6 +10,7 @@ import subprocess
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from .component_instances import component_instance_id, component_type_id
@@ -1381,18 +1382,39 @@ def _node_group_latest_event_code(status: Any) -> str:
     events = getattr(status, "events", None)
     if not isinstance(events, Sequence) or isinstance(events, (str, bytes)):
         return "-"
-    for event in reversed(events):
+    timestamped: list[tuple[datetime, int, str]] = []
+    fallback = "-"
+    for index, event in enumerate(events):
         occurrence = getattr(event, "last_occurrence", None) or getattr(
             event,
             "lastOccurrence",
             None,
         )
-        event_code = _text(getattr(occurrence, "code", None)) or _text(
-            getattr(event, "code", None)
+        event_code = _text(getattr(occurrence, "code", None)) or _text(getattr(event, "code", None))
+        if not event_code:
+            continue
+        fallback = event_code
+        raw_occurred_at = getattr(occurrence, "occurred_at", None) or getattr(
+            occurrence,
+            "occurredAt",
+            None,
         )
-        if event_code:
-            return event_code
-    return "-"
+        if isinstance(raw_occurred_at, datetime):
+            occurred_at = raw_occurred_at
+        else:
+            raw = _text(raw_occurred_at)
+            if not raw:
+                continue
+            try:
+                occurred_at = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+        if occurred_at.tzinfo is None:
+            occurred_at = occurred_at.replace(tzinfo=UTC)
+        timestamped.append((occurred_at.astimezone(UTC), index, event_code))
+    if timestamped:
+        return max(timestamped)[2]
+    return fallback
 
 
 _PROVIDER_ACTIVE_ROLLOUT_EVENTS = frozenset(

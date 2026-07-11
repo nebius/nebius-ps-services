@@ -6,6 +6,84 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Fixed external Soperator accounting continuity during chart takeover. After
+  affected jobs reach the quiet gate, rolling compute now quiesces source
+  accounting, captures a fresh `slurm_acct_db`-only dump under the
+  cluster-scoped checkpoint directory with mode `0600`, imports it into the
+  quiesced target MariaDB, preserves target schema/registration metadata,
+  reconciles older source and global tables additively against a checksum-bound
+  target schema snapshot, and verifies exact source job/step history plus both
+  target-version `sacct` and `sacctmgr` registrations before source Slurm
+  resources can be retired. Dump replay excludes Slurm's internal schema tables
+  that can collide for long cluster names. The earlier restore-capable
+  backup remains the DR restore point; it is not reused as the later live
+  accounting transfer image. Failed MariaDB query/history probes redact SQL
+  stdout and stderr from terminal, checkpoint, and report surfaces.
+- Fixed explicit `create` and `ext-soperator onboard --region-id` handling so
+  unsupported or empty values fail fast instead of being persisted or silently
+  replaced by the default. Supported canonical ids are `eu-north1`,
+  `eu-west1`, `me-west1`, `us-central1`, `eu-north2`, and `uk-south1`.
+- Aligned external Soperator first-adoption guidance with execute preflight.
+  Onboard, render, and command-help output now include
+  `--login-session-policy wait-active` in the generated execute command when
+  legacy persistent paths must be migrated. The generated execute command in
+  dry-run output substitutes `wait-active` for the default `target-ready` plan
+  while preserving an explicit compatible policy; the screen still reports
+  the policy used to produce the dry-run plan. Generated next commands preserve
+  any explicit non-default policy and its paired drain timeout on later locked
+  segments; later node-only and manual Jail Upgrade plans do not synthesize a
+  first-adoption policy when the default remains valid.
+- Fixed the external node-template phase-start screen so provider node groups
+  are reported as not started before mutation instead of already upgraded, and
+  use the provider status version when the list response omits the spec version.
+  Serial service and worker groups without durable provider-dispatch evidence
+  now remain counted as not started while earlier groups roll out, including
+  when checkpoint keys differ from provider node-group names. Planned groups
+  absent from a provider response are called out and keep the screen unknown,
+  including the first control-plane frame before rollout metadata is persisted.
+  Provider rollout events are now selected by their occurrence timestamps
+  instead of their unstable API list order in both managed and external MK8s
+  status tables.
+- Fixed protected-state pending output to direct operators to review the JSON
+  deltas and add `--approve-remediation` only when every approval-required delta
+  is expected and no blocked deltas exist. Blocked deltas now direct the
+  operator to repair or recover protected state instead of suggesting an
+  ineffective approval flag.
+- Fixed external-upgrade Slurm status counts for nodes that belong to multiple
+  partitions. `sinfo -N` rows are now deduplicated by node name, with the least
+  healthy duplicate state retained, instead of reporting one worker per
+  node-partition pair. During a planned rolling-compute/Jail handoff, a known
+  target-era config mismatch now reports status as deferred/upgrading even when
+  that phase did not create a new partition-transition record because admission
+  was already quiesced. Maintenance, performance-counter, reboot, power-up, and
+  other non-serving/transitional node states now render as degraded or upgrading
+  with named worker details instead of healthy/serving, and Ctrl-C during the
+  best-effort queue probe is no longer swallowed before a mutating phase.
+- Fixed the Jail Upgrade live signal before passive-slot population. A running
+  or completed persistent migration now reports `upgrading`, while failed or
+  writer-drift-stale migration evidence reports `degraded`, instead of every
+  pre-population state being labeled `not-started`. Slurm status is also
+  deferred/upgrading while the checkpointed Jail writer hold intentionally
+  downscales Slurm workloads.
+- Fixed `wait-active` login continuity on minimal Soperator login images. The
+  SSH-session probe now falls back to Linux procfs when neither `ss` nor
+  `netstat` is installed, treats an explicitly tracked source login Pod that
+  has already been retired as drained, and still fails closed if any remaining
+  source Pod cannot be checked. A pre-update login guard failure now restores
+  any zero-surge service-role quiesce before leaving the phase pending. Only an
+  exact Pod-specific Kubernetes NotFound response counts a tracked source Pod
+  as retired; namespace, wrong-Pod, and unrelated NotFound responses fail
+  closed. Quiesced service roles are also restored when checkpoint persistence
+  or the post-update login readiness guard fails, including an operator interrupt
+  during the provider update. Resume reconciles any older
+  durable `quiesced` record before provider dispatch, then reapplies quiesce
+  from the restored baseline when the update still needs to run.
+- Fixed external upgrade reports so node-template summaries count both completed
+  and already-current groups against the full planned service/worker inventory,
+  and cleared active partition-quiesce fields after successful restoration.
+  External node-template and rolling-compute crash resumes now merge durable
+  partition restore records with the live quiet probe, so an already-`DOWN`
+  partition cannot lose its checkpointed original `UP` state.
 - Fixed Soperator protected-state comparison so a Slurm runtime field whose
   pre-upgrade probe was unavailable but whose post-upgrade probe succeeds is
   recorded as non-comparable audit evidence instead of false policy drift.

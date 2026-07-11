@@ -35,6 +35,7 @@ from .duration_utils import parse_go_duration_seconds
 from .mk8s_gpu import mk8s_gpu_dependency_issues
 from .mysterybox_eso import mysterybox_eso_dependency_issues
 from .observability import observability_dependency_issues
+from .regions import SUPPORTED_REGION_IDS
 from .runtime_component_validation import validate_soperator_qos_partition_profiles
 from .runtime_config import read_path_with_catalog
 from .runtime_plugin_validation import run_runtime_validation_plugins
@@ -577,6 +578,7 @@ def _validate_soperator_onboarding_rollout(onboarding: Mapping[str, Any], field_
         rollout.get("max_parallel_worker_groups"),
         f"{field_label}.node_template_upgrade.rollout.max_parallel_worker_groups",
     )
+
     def _validate_group_strategy(
         node: Any,
         *,
@@ -587,9 +589,7 @@ def _validate_soperator_onboarding_rollout(onboarding: Mapping[str, Any], field_
         if node is None:
             return
         if not isinstance(node, Mapping):
-            raise ValueError(
-                f"{field_label}.node_template_upgrade.rollout.{key} must be a mapping"
-            )
+            raise ValueError(f"{field_label}.node_template_upgrade.rollout.{key} must be a mapping")
         max_surge = _non_negative_int_for_validation(
             node.get("max_surge_count"),
             f"{field_label}.node_template_upgrade.rollout.{key}.max_surge_count",
@@ -700,8 +700,7 @@ def _planned_vpc_private_cidr_entries(
     for subnet_key, raw_subnet in subnets.items():
         if not isinstance(raw_subnet, Mapping):
             raise ValueError(
-                f"infra.components[{component_index}].inputs.subnets.{subnet_key} "
-                "must be a mapping"
+                f"infra.components[{component_index}].inputs.subnets.{subnet_key} must be a mapping"
             )
         if raw_subnet.get("use_network_private_pools") is True:
             raise ValueError(
@@ -903,6 +902,10 @@ def _validate_client_info(payload: Mapping[str, Any]) -> None:
         value = _as_text(nebius.get(field))
         if not value:
             raise ValueError(f"client_info.nebius.{field} is required")
+    region_id = _as_text(nebius.get("region_id"))
+    if region_id not in SUPPORTED_REGION_IDS:
+        available = ", ".join(SUPPORTED_REGION_IDS)
+        raise ValueError("client_info.nebius.region_id must be one of: " + available)
 
     notifications = client_info.get("notifications")
     if not isinstance(notifications, Mapping):
@@ -1173,9 +1176,7 @@ def _validate_deployment_testing(raw: Any, *, field_label: str) -> None:
                 )
             max_nodes = section.get("max_nodes")
             if max_nodes is not None and _coerce_int(max_nodes, default=0) <= 0:
-                raise ValueError(
-                    f"{field_label}.mk8s_gpu.{section_name}.max_nodes must be > 0"
-                )
+                raise ValueError(f"{field_label}.mk8s_gpu.{section_name}.max_nodes must be > 0")
 
     soperator = raw.get("soperator")
     if soperator is not None:
@@ -1184,8 +1185,7 @@ def _validate_deployment_testing(raw: Any, *, field_label: str) -> None:
         unknown_soperator = sorted(str(key) for key in soperator if str(key) not in {"smoke"})
         if unknown_soperator:
             raise ValueError(
-                f"{field_label}.soperator has unsupported field(s): "
-                + ", ".join(unknown_soperator)
+                f"{field_label}.soperator has unsupported field(s): " + ", ".join(unknown_soperator)
             )
         smoke = soperator.get("smoke")
         if smoke is not None:
@@ -1798,7 +1798,9 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
                             f"apps.charts[{index}].placements.{placement} must not be empty"
                         )
                 elif isinstance(raw_groups, list):
-                    if not raw_groups or not all(isinstance(item, str) and item.strip() for item in raw_groups):
+                    if not raw_groups or not all(
+                        isinstance(item, str) and item.strip() for item in raw_groups
+                    ):
                         raise ValueError(
                             f"apps.charts[{index}].placements.{placement} must be a non-empty string or list of non-empty strings"
                         )
