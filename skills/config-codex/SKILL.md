@@ -1,6 +1,6 @@
 ---
 name: config-codex
-description: Configure a public-safe Codex home setup for a developer machine, including global AGENTS.md policy, config.toml features and MCP servers, hooks, task-state layout, custom read-only agents, and validation. Use when a user wants Codex configured similarly to this repo's global context-management workflow without copying personal paths or secrets.
+description: Configure a public-safe Codex home setup for a developer machine, including global AGENTS.md policy, config.toml features and MCP servers, hooks, task-state layout, custom read-only agents, optional private task-implementer workspace access, and validation. Use when a user wants Codex configured similarly to this repo's global context-management workflow without copying personal paths or secrets.
 ---
 
 # Config Codex
@@ -19,6 +19,8 @@ read-only agents that support `global-context-management`.
 - Patching `config.toml` for supported Codex features, MCP servers, custom
   agent config layers, and skill discovery.
 - Installing hook and custom-agent templates for global context management.
+- Opting in to private prompt-workspace storage and write access for
+  `task-implementer` without relaxing existing sandbox or approval policy.
 - Validating that the resulting local Codex config parses and is ready for
   hook review.
 - Re-running against an already configured laptop and reporting "no changes"
@@ -52,6 +54,8 @@ read-only agents that support `global-context-management`.
   config patch, do not bypass the guard. Report the exact blocked surface,
   the smallest intended change, and the manual out-of-band step the user can
   apply after reviewing it.
+- Never create the optional task-implementer directory inside a Git worktree,
+  follow a symlink for it, expose prompt contents, or loosen its `0700` mode.
 
 ## Patch-Only Contract
 
@@ -80,6 +84,11 @@ For existing `$CODEX_HOME/config.toml`:
   settings, MCP servers, project trust entries, `[[skills.config]]` entries, or
   writable roots when the current config already provides the requested
   behavior or the user did not ask for that integration.
+- Add `$CODEX_HOME/task-implementer` to
+  `sandbox_workspace_write.writable_roots` only when the user explicitly opts
+  in and the existing `sandbox_mode` is `workspace-write`. Preserve every
+  existing writable root and never change `sandbox_mode` or `approval_policy`
+  as part of this opt-in.
 - Treat `hooks = true`, `multi_agent = true`, `agents.max_threads`,
   `agents.max_depth`, and the three read-only custom-agent config references as
   the minimal config surface for global context management.
@@ -110,6 +119,8 @@ For existing `$CODEX_HOME/config.toml`:
    - `$CODEX_HOME/task-state/`
    - optional `$CODEX_HOME/hooks/global_context_policy.json` only when the
      user deliberately wants hook-assisted read-only subagent delegation
+   - optional `$CODEX_HOME/task-implementer/` with mode `0700` only when the
+     user deliberately requests the private prompt-workspace integration
 8. Render or adapt templates from `assets/`:
    - `AGENTS.md.template`
    - `config.toml.template`
@@ -151,7 +162,8 @@ For existing `$CODEX_HOME/config.toml`:
    discoverable, or explicitly enabled as skill folders. Do not add explicit
    skill entries if discovery already works.
 10. Validate local hook scripts, TOML, JSON, feature flags, idempotency, and
-    secret hygiene.
+    secret hygiene. When prompt-workspace integration was requested, run the
+    idempotency preflight with `--require-task-implementer-workspace`.
 11. Produce an alignment report that lists each checked surface as
     `Aligned`, `Not aligned`, or `Blocked`, with exact manual remediation for
     every `Not aligned` or `Blocked` item. Include the minimal file/scope to
@@ -201,6 +213,13 @@ Use the focused checks in `references/local-setup.md`. At minimum:
   audits, and use
   `--require-template-mcp-servers` only when the user explicitly wants the
   public MCP baseline audited against the template.
+- Add `--require-task-implementer-workspace` only for the explicit private
+  prompt-workspace opt-in. It validates that the external directory is outside
+  every Git worktree and Git metadata directory, is not a symlink, has `0700`
+  mode, and has the matching workspace-write root without printing the real
+  Codex home.
+  If persistent access is absent or blocked, report exactly:
+  `codex --add-dir "${CODEX_HOME:-$HOME/.codex}/task-implementer"`.
 - For source changes to the idempotency script, run
   `python3 scripts/test-check-local-idempotency.py`; it uses disposable local
   fixtures and does not inspect the user's real Codex home.
@@ -252,6 +271,8 @@ Return:
   - hook scripts and optional hook policy
   - `hooks.json` required global entries and preserved workflow hooks
   - task-state directory
+  - optional task-implementer private directory and workspace access when the
+    user requested that integration
 - what local files were created or patched
 - what backups were made
 - what validations passed or failed

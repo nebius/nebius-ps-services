@@ -12664,6 +12664,27 @@ def test_soperator_onboarding_sdk_node_group_template_snapshot_extracts_fields()
     }
 
 
+def test_soperator_onboarding_sdk_node_group_template_snapshot_uses_status_version() -> None:
+    raw_group = SimpleNamespace(
+        metadata=SimpleNamespace(id="mk8snodegroup-system", name="system"),
+        spec=SimpleNamespace(
+            template=SimpleNamespace(
+                os=SimpleNamespace(name="ubuntu22.04"),
+                resources=SimpleNamespace(platform="cpu-d3", preset="4vcpu-16gb"),
+            )
+        ),
+        status=SimpleNamespace(
+            state=SimpleNamespace(name="RUNNING"),
+            reconciling=False,
+            version="v1.31.9-nebius-node.67",
+        ),
+    )
+
+    snapshot = cli_module._sdk_mk8s_node_group_template_snapshot(raw_group)
+
+    assert snapshot["provider"]["node_template"]["k8s_version"] == "1.31"
+
+
 def test_existing_soperator_4x_onboarding_resolves_active_passive_jail_sfs_identity() -> None:
     snapshot = {
         "cluster_identity": {
@@ -14513,13 +14534,20 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "Persistent jail mounts:" in result.output
     assert "Status:" in result.output
     assert "Decisions:" in result.output
-    assert "/data=pending-probe" in result.output
-    assert "/scripts=pending-probe" in result.output
-    assert "/models=pending-probe" in result.output
+    assert "/home=existing-submount" in result.output
+    assert "/data=adopted-in-place" in result.output
+    assert "/scripts=adopted-in-place" in result.output
+    assert "/models=adopted-in-place" in result.output
+    assert "no data copy or maintenance=downscale writer hold is planned" in result.output
+    assert "Pre-switch safety gate: execute read-only probes the host and legacy-PVC paths" in (
+        result.output
+    )
+    assert "requires immutable Bound legacy, slot, and persistent PVC identities" in (result.output)
     assert "Resolved paths:" in result.output
-    assert "/data -> /mnt/jail/shared/data" in result.output
-    assert "/scripts -> /mnt/jail/shared/scripts" in result.output
-    assert "/models -> /mnt/jail/shared/models" in result.output
+    assert "/home -> /mnt/jail/home" not in result.output
+    assert "/data -> /mnt/jail/data" in result.output
+    assert "/scripts -> /mnt/jail/scripts" in result.output
+    assert "/models -> /mnt/jail/models" in result.output
     assert "External node-template rollout:" in result.output
     assert "external-node-template-upgrade" in result.output
     assert (
@@ -14579,11 +14607,11 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert "Execution controls:" in result.output
     assert "Execution mode: dry-run; no cluster changes were made." in result.output
     assert "Login SSH session policy: target-ready" in result.output
-    assert (
-        "First-adoption persistent mount migration requires an explicit login-session "
-        "drain policy before mutation; the generated execute command uses "
-        "--login-session-policy wait-active." in result.output
-    )
+    assert "Existing TCP sessions cannot migrate between pods" in result.output
+    assert "wait-active pauses before mutation until observed sessions drain" in result.output
+    assert "cannot lock out a new connection after its final probe" in result.output
+    assert "First-adoption Jail Upgrade login continuity" in result.output
+    assert "active SSH sessions are considered before login rollout" in result.output
     assert "Slurm job policy: fail" in result.output
     assert "Slurm job policy: interactive" not in result.output
     assert "Backup: restore-capable archive" in result.output
@@ -14607,6 +14635,7 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
     assert manual.exit_code == 0, manual.output
     assert "--login-session-policy wait-active" not in manual.output
     assert "First-adoption persistent mount migration requires" not in manual.output
+    assert "First-adoption Jail Upgrade login continuity" not in manual.output
 
     grace_period = runner.invoke(
         app,
@@ -14627,7 +14656,7 @@ def test_ext_soperator_upgrade_dry_run_prints_onboarding_upgrade_plan(
         "--login-session-policy grace-period --login-session-drain-timeout 1m --execute --approve"
     ) in grace_period.output
     assert (
-        "the generated execute command uses --login-session-policy grace-period."
+        "the generated execute command uses --login-session-policy grace-period"
         in grace_period.output
     )
 
@@ -16712,8 +16741,10 @@ def test_external_soperator_execute_snapshot_collector_uses_cluster_id_inventory
         *,
         cluster_id: str,
         access: str,
+        slurmcluster_identity_scope: Mapping[str, object] | None,
     ) -> tuple[dict[str, object], str]:
         assert source_payload is payload
+        assert slurmcluster_identity_scope is None
         calls.append((cluster_id, access))
         return {"provider": {"mk8s_cluster": {"id": cluster_id}}}, "generated-context"
 
@@ -16737,6 +16768,473 @@ def test_external_soperator_execute_snapshot_collector_uses_cluster_id_inventory
         "provider": {"mk8s_cluster": {"id": "mk8scluster-123"}}
     }
     assert calls == [("mk8scluster-123", "internal")]
+
+
+def _active_dual_cr_resume_checkpoint() -> dict[str, object]:
+    return {
+        "target_ref": "target-cluster",
+        "target_version": "4.0.2-ps.4",
+        "pending_phase": "rolling-compute-migration",
+        "completed_phases": [],
+        "source_slurmcluster_ref": {
+            "namespace": "soperator",
+            "name": "source-cluster",
+            "uid": "source-uid",
+        },
+        "phase_state": {
+            "rolling-compute-migration": {
+                "target_values_apply_started_at": "2026-07-12T00:00:00Z",
+            }
+        },
+    }
+
+
+def test_external_soperator_resume_scope_bootstraps_only_active_target_handoff() -> None:
+    checkpoint = _active_dual_cr_resume_checkpoint()
+
+    scope = cli_module._external_soperator_resume_slurmcluster_identity_scope(  # noqa: SLF001
+        checkpoint,
+        target_ref="target-cluster",
+    )
+
+    assert scope == {
+        "schema": "nebius-cxcli-ext-soperator-resume-slurmcluster-identity/v1",
+        "mode": "target-handoff",
+        "phase_id": "rolling-compute-migration",
+        "source": {
+            "namespace": "soperator",
+            "name": "source-cluster",
+            "uid": "source-uid",
+        },
+        "target": {
+            "namespace": "soperator",
+            "name": "target-cluster",
+            "uid": "",
+        },
+        "target_version": "4.0.2-ps.4",
+        "allow_target_uid_bootstrap": True,
+    }
+    checkpoint["phase_state"] = {"rolling-compute-migration": {}}
+    assert (
+        cli_module._external_soperator_resume_slurmcluster_identity_scope(  # noqa: SLF001
+            checkpoint,
+            target_ref="target-cluster",
+        )
+        is None
+    )
+
+
+def test_external_soperator_resume_scope_requires_explicit_source_namespace() -> None:
+    checkpoint = _active_dual_cr_resume_checkpoint()
+    source = checkpoint["source_slurmcluster_ref"]
+    assert isinstance(source, dict)
+    source.pop("namespace")
+
+    with pytest.raises(RuntimeError, match="missing namespace"):
+        cli_module._external_soperator_resume_slurmcluster_identity_scope(  # noqa: SLF001
+            checkpoint,
+            target_ref="target-cluster",
+        )
+
+
+def test_external_soperator_resume_scope_tracks_cleanup_crash_windows() -> None:
+    checkpoint = _active_dual_cr_resume_checkpoint()
+    rolling = checkpoint["phase_state"]["rolling-compute-migration"]  # type: ignore[index]
+    assert isinstance(rolling, dict)
+    source = checkpoint["source_slurmcluster_ref"]
+    assert isinstance(source, dict)
+    rolling["slurmcluster_handoff_binding"] = {
+        "source": copy.deepcopy(source),
+        "target": {
+            "namespace": "soperator",
+            "name": "target-cluster",
+            "uid": "target-uid",
+        },
+    }
+    rolling["source_cleanup_started_at"] = "2026-07-12T00:01:00Z"
+    rolling["source_cleanup_binding"] = copy.deepcopy(source)
+
+    source_cleanup = cli_module._external_soperator_resume_slurmcluster_identity_scope(  # noqa: SLF001
+        checkpoint,
+        target_ref="target-cluster",
+    )
+    assert source_cleanup is not None
+    assert source_cleanup["mode"] == "source-cleanup"
+    assert source_cleanup["target"]["uid"] == "target-uid"
+    assert source_cleanup["allow_target_uid_bootstrap"] is False
+
+    rolling["source_cleanup_completed_at"] = "2026-07-12T00:02:00Z"
+    target_only = cli_module._external_soperator_resume_slurmcluster_identity_scope(  # noqa: SLF001
+        checkpoint,
+        target_ref="target-cluster",
+    )
+    assert target_only is not None
+    assert target_only["mode"] == "target-only"
+
+
+def test_external_soperator_resume_scope_uses_campaign_transition_after_phase_reset() -> None:
+    checkpoint = _active_dual_cr_resume_checkpoint()
+    checkpoint["phase_state"] = {}
+    checkpoint["completed_segment_ids"] = ["segment-1"]
+    checkpoint["slurmcluster_identity_transition"] = {
+        "schema": "nebius-cxcli-ext-soperator-slurmcluster-identity-transition/v1",
+        "phase_id": "rolling-compute-migration",
+        "target_ref": "target-cluster",
+        "origin_segment_id": "segment-1",
+        "source": {
+            "namespace": "soperator",
+            "name": "source-cluster",
+            "uid": "source-uid",
+        },
+        "target": {
+            "namespace": "soperator",
+            "name": "target-cluster",
+            "uid": "target-uid",
+        },
+        "target_values_apply_started_at": "2026-07-12T00:00:00Z",
+        "handoff_bound_at": "2026-07-12T00:01:00Z",
+        "source_cleanup": {
+            "binding": {
+                "namespace": "soperator",
+                "name": "source-cluster",
+                "uid": "source-uid",
+            },
+            "started_at": "2026-07-12T00:02:00Z",
+            "completed_at": "2026-07-12T00:03:00Z",
+        },
+    }
+
+    scope = cli_module._external_soperator_resume_slurmcluster_identity_scope(  # noqa: SLF001
+        checkpoint,
+        target_ref="target-cluster",
+    )
+
+    assert scope is not None
+    assert scope["mode"] == "target-only"
+    assert scope["source"]["uid"] == "source-uid"
+    assert scope["target"]["uid"] == "target-uid"
+    assert scope["allow_target_uid_bootstrap"] is False
+
+
+def test_external_soperator_resume_scope_rejects_missing_saved_target_or_cleanup_namespace() -> (
+    None
+):
+    checkpoint = _active_dual_cr_resume_checkpoint()
+    rolling = checkpoint["phase_state"]["rolling-compute-migration"]  # type: ignore[index]
+    assert isinstance(rolling, dict)
+    source = checkpoint["source_slurmcluster_ref"]
+    assert isinstance(source, dict)
+    rolling["slurmcluster_handoff_binding"] = {
+        "source": copy.deepcopy(source),
+        "target": {"name": "target-cluster", "uid": "target-uid"},
+    }
+
+    with pytest.raises(RuntimeError, match="target SlurmCluster binding is incomplete"):
+        cli_module._external_soperator_resume_slurmcluster_identity_scope(  # noqa: SLF001
+            checkpoint,
+            target_ref="target-cluster",
+        )
+
+    rolling["slurmcluster_handoff_binding"]["target"]["namespace"] = "soperator"
+    rolling["source_cleanup_started_at"] = "2026-07-12T00:01:00Z"
+    rolling["source_cleanup_binding"] = {"name": "source-cluster", "uid": "source-uid"}
+    with pytest.raises(RuntimeError, match="source-cleanup resume lacks an exact"):
+        cli_module._external_soperator_resume_slurmcluster_identity_scope(  # noqa: SLF001
+            checkpoint,
+            target_ref="target-cluster",
+        )
+
+
+def test_external_soperator_resume_scope_rejects_incomplete_cleanup_binding() -> None:
+    checkpoint = _active_dual_cr_resume_checkpoint()
+    rolling = checkpoint["phase_state"]["rolling-compute-migration"]  # type: ignore[index]
+    assert isinstance(rolling, dict)
+    source = checkpoint["source_slurmcluster_ref"]
+    assert isinstance(source, dict)
+    rolling.update(
+        {
+            "slurmcluster_handoff_binding": {
+                "source": copy.deepcopy(source),
+                "target": {
+                    "namespace": "soperator",
+                    "name": "target-cluster",
+                    "uid": "",
+                },
+            },
+            "source_cleanup_started_at": "2026-07-12T00:01:00Z",
+            "source_cleanup_binding": copy.deepcopy(source),
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="target SlurmCluster binding is incomplete"):
+        cli_module._external_soperator_resume_slurmcluster_identity_scope(  # noqa: SLF001
+            checkpoint,
+            target_ref="target-cluster",
+        )
+
+
+def test_external_soperator_handoff_revalidation_rejects_approval_delay_uid_race() -> None:
+    proposed = {
+        "source": {
+            "namespace": "soperator",
+            "name": "source-cluster",
+            "uid": "source-uid",
+        },
+        "target": {
+            "namespace": "soperator",
+            "name": "target-cluster",
+            "uid": "target-uid",
+        },
+    }
+
+    def collector(*, kube_context: str) -> Mapping[str, object]:
+        assert kube_context == "external-context"
+        return {
+            "resume_slurmcluster_identity": {
+                **proposed,
+                "target": {
+                    "namespace": "soperator",
+                    "name": "target-cluster",
+                    "uid": "replacement-target-uid",
+                },
+            }
+        }
+
+    with pytest.raises(RuntimeError, match="changed after plan or TUI approval"):
+        cli_module._external_soperator_revalidate_slurmcluster_handoff_proposal(  # noqa: SLF001
+            snapshot_collector=collector,
+            kube_context="external-context",
+            proposed_identity=proposed,
+        )
+
+
+def test_external_soperator_handoff_revalidation_returns_exact_current_target() -> None:
+    proposed = {
+        "source": {
+            "namespace": "soperator",
+            "name": "source-cluster",
+            "uid": "source-uid",
+        },
+        "target": {
+            "namespace": "soperator",
+            "name": "target-cluster",
+            "uid": "target-uid",
+        },
+    }
+
+    target = cli_module._external_soperator_revalidate_slurmcluster_handoff_proposal(  # noqa: SLF001
+        snapshot_collector=lambda **_kwargs: {"resume_slurmcluster_identity": proposed},
+        kube_context="external-context",
+        proposed_identity=proposed,
+    )
+
+    assert target == proposed["target"]
+
+
+def test_external_soperator_execute_snapshot_collector_reloads_cleanup_scope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload: dict[str, object] = {
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {"project_id": "project-123"},
+        },
+        "deploy": {
+            "targets": [
+                {
+                    "instance_id": "target-cluster",
+                    "kind": "external-mk8s",
+                    "ownership": "external",
+                    "cluster_id": "mk8scluster-123",
+                    "access": "internal",
+                    "soperator_onboarding": {"accepted": True},
+                }
+            ]
+        },
+    }
+    checkpoint = _active_dual_cr_resume_checkpoint()
+    observed_modes: list[str] = []
+
+    monkeypatch.setattr(
+        cli_module,
+        "_locked_upgrade_checkpoint_payload",
+        lambda **_kwargs: copy.deepcopy(checkpoint),
+    )
+
+    def fake_collect(
+        _payload: Mapping[str, object],
+        *,
+        cluster_id: str,
+        access: str,
+        slurmcluster_identity_scope: Mapping[str, object] | None,
+    ) -> tuple[dict[str, object], str]:
+        assert cluster_id == "mk8scluster-123"
+        assert access == "internal"
+        assert slurmcluster_identity_scope is not None
+        observed_modes.append(str(slurmcluster_identity_scope["mode"]))
+        return {"mode": slurmcluster_identity_scope["mode"]}, "generated-context"
+
+    monkeypatch.setattr(
+        cli_module,
+        "_collect_soperator_snapshot_for_nebius_mk8s_cluster",
+        fake_collect,
+    )
+    collector = cli_module._external_soperator_execute_snapshot_collector(  # noqa: SLF001
+        payload,
+        target_ref="target-cluster",
+        config_path=tmp_path / "config.yaml",
+    )
+
+    assert collector(kube_context="ignored")["mode"] == "target-handoff"
+    rolling = checkpoint["phase_state"]["rolling-compute-migration"]  # type: ignore[index]
+    assert isinstance(rolling, dict)
+    source = checkpoint["source_slurmcluster_ref"]
+    assert isinstance(source, dict)
+    rolling["slurmcluster_handoff_binding"] = {
+        "source": copy.deepcopy(source),
+        "target": {
+            "namespace": "soperator",
+            "name": "target-cluster",
+            "uid": "target-uid",
+        },
+    }
+    rolling["source_cleanup_started_at"] = "2026-07-12T00:01:00Z"
+    rolling["source_cleanup_binding"] = copy.deepcopy(source)
+    assert collector(kube_context="ignored")["mode"] == "source-cleanup"
+    rolling["source_cleanup_completed_at"] = "2026-07-12T00:02:00Z"
+    assert collector(kube_context="ignored")["mode"] == "target-only"
+    assert observed_modes == ["target-handoff", "source-cleanup", "target-only"]
+
+
+def test_ext_soperator_upgrade_execute_terminal_target_only_skips_handoff_recorder(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = _write_old_soperator_migration_config(
+        tmp_path,
+        source_soperator_version="1.22.3",
+        current_k8s_version="1.31",
+        target_k8s_version="1.34",
+    )
+    campaign = _locked_upgrade_path_from_config(config_path)
+    segments = campaign["segments"]
+    assert isinstance(segments, list) and len(segments) >= 2
+    first_segment_id = str(segments[0]["id"])
+    second_segment_id = str(segments[1]["id"])
+    checkpoint_path = _write_locked_ext_soperator_checkpoint(
+        config_path=config_path,
+        target_ref="external-cluster",
+        upgrade_path=campaign,
+        current_segment_id=second_segment_id,
+        completed_segment_ids=[first_segment_id],
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    source_ref = {
+        "namespace": "soperator",
+        "name": "soperator",
+        "uid": "source-slurmcluster-uid",
+    }
+    target_ref = {
+        "namespace": "soperator",
+        "name": "external-cluster",
+        "uid": "target-slurmcluster-uid",
+    }
+    checkpoint["slurmcluster_identity_transition"] = {
+        "schema": "nebius-cxcli-ext-soperator-slurmcluster-identity-transition/v1",
+        "phase_id": "rolling-compute-migration",
+        "target_ref": "external-cluster",
+        "origin_segment_id": first_segment_id,
+        "source": source_ref,
+        "target": target_ref,
+        "target_values_apply_started_at": "2026-07-12T00:00:00Z",
+        "handoff_bound_at": "2026-07-12T00:01:00Z",
+        "source_cleanup": {
+            "binding": source_ref,
+            "started_at": "2026-07-12T00:02:00Z",
+            "completed_at": "2026-07-12T00:03:00Z",
+        },
+    }
+    checkpoint_path.write_text(json.dumps(checkpoint), encoding="utf-8")
+    observed_modes: list[str] = []
+    execute_calls: list[str] = []
+    recorder_calls: list[dict[str, object]] = []
+
+    def collect_snapshot(**kwargs: object) -> dict[str, object]:
+        scope = kwargs.get("slurmcluster_identity_scope")
+        snapshot = _old_soperator_snapshot_with_provider(
+            soperator_version=_soperator_test_chart_version(),
+            current_k8s_version="1.32",
+        )
+        target_resource = copy.deepcopy(snapshot["soperator_resources"][0])  # type: ignore[index]
+        target_resource["metadata"] = {  # type: ignore[index]
+            "namespace": "soperator",
+            "name": "external-cluster",
+            "uid": "target-slurmcluster-uid",
+        }
+        snapshot["soperator_resources"] = [target_resource]
+        cluster_identity = snapshot["cluster_identity"]
+        assert isinstance(cluster_identity, dict)
+        cluster_identity["slurmcluster_uid"] = "source-slurmcluster-uid"
+        if scope is not None:
+            assert isinstance(scope, Mapping)
+            assert scope["mode"] == "target-only"
+            observed_modes.append(str(scope["mode"]))
+            snapshot["identity_soperator_resources"] = [target_resource]
+            snapshot["resume_slurmcluster_identity"] = {
+                **copy.deepcopy(dict(scope)),
+                "target_uid_bootstrapped": False,
+                "identity_role": "target",
+            }
+        return snapshot
+
+    def execute(**_kwargs: object) -> SoperatorMigrationExecutionResult:
+        execute_calls.append("execute")
+        return SoperatorMigrationExecutionResult(
+            checkpoint_path=checkpoint_path,
+            completed_phases=("discovery-and-plan", "customer-approval"),
+            pending_phase="external-node-template-upgrade",
+            pending_reason="test stop after approval boundary",
+            live_source_version=_soperator_test_app_version(),
+            target_version=_soperator_test_chart_version(),
+            mutation_performed=False,
+            lines=("terminal target-only execute reached",),
+        )
+
+    _stub_external_soperator_upgrade_kubeconfig(monkeypatch)
+    _stub_external_soperator_upgrade_backup(monkeypatch)
+    monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", collect_snapshot)
+    monkeypatch.setattr(
+        cli_module,
+        "_collect_soperator_snapshot_for_nebius_mk8s_cluster",
+        lambda _payload, **kwargs: (collect_snapshot(**kwargs), "external-context"),
+    )
+    monkeypatch.setattr(cli_module, "execute_soperator_migration", execute)
+    monkeypatch.setattr(
+        cli_module,
+        "record_soperator_migration_slurmcluster_handoff_binding",
+        lambda **kwargs: recorder_calls.append(dict(kwargs)),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "upgrade",
+            str(config_path),
+            "--target",
+            "external-cluster",
+            "--execute",
+            "--approve",
+            "--approve-service-role-downtime",
+        ],
+    )
+
+    assert result.exit_code == 1, result.output
+    assert execute_calls == ["execute"], result.output
+    assert recorder_calls == []
+    assert observed_modes and set(observed_modes) == {"target-only"}
+    assert "terminal target-only execute reached" in result.output
 
 
 def test_ext_soperator_upgrade_execute_reuses_checkpoint_backup_after_mutation_started(
@@ -18747,7 +19245,7 @@ def test_external_discovery_merges_sdk_capabilities_for_stored_explicit_context(
     monkeypatch.setattr(
         cli_module,
         "collect_kubectl_soperator_snapshot",
-        lambda *, kube_context: (
+        lambda *, kube_context, slurmcluster_identity_scope=None: (
             calls.append(f"kubernetes:{kube_context}") or copy.deepcopy(kubernetes_snapshot)
         ),
     )
@@ -18795,7 +19293,7 @@ def test_external_discovery_merges_sdk_capabilities_for_generated_cluster_contex
     monkeypatch.setattr(
         cli_module,
         "collect_kubectl_soperator_snapshot",
-        lambda *, kube_context: (
+        lambda *, kube_context, slurmcluster_identity_scope=None: (
             observed_contexts.append(kube_context) or copy.deepcopy(kubernetes_snapshot)
         ),
     )

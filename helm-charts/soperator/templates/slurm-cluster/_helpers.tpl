@@ -105,15 +105,15 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 	{{- if not (regexMatch "^/[-A-Za-z0-9._/]+$" $storePath) -}}
 	  {{- fail (printf "jailRootfs.store.mountPath must be an absolute normalized path; got %q." $storePath) -}}
 	{{- end -}}
-	{{- if contains ".." $storePath -}}
-	  {{- fail (printf "jailRootfs.store.mountPath must not contain '..'; got %q." $storePath) -}}
+	{{- if or (regexMatch "(^|/)(\\.|\\.\\.)(/|$)" $storePath) (contains "//" $storePath) -}}
+	  {{- fail (printf "jailRootfs.store.mountPath must not contain '.' or '..' path components; got %q." $storePath) -}}
 	{{- end -}}
 	{{- $rootfsPath := default (printf "%s/rootfs" $storePath) $store.rootfsPath -}}
 	{{- if not (regexMatch "^/[-A-Za-z0-9._/]+$" $rootfsPath) -}}
 	  {{- fail (printf "jailRootfs.store.rootfsPath must be an absolute normalized path; got %q." $rootfsPath) -}}
 	{{- end -}}
-	{{- if contains ".." $rootfsPath -}}
-	  {{- fail (printf "jailRootfs.store.rootfsPath must not contain '..'; got %q." $rootfsPath) -}}
+	{{- if or (regexMatch "(^|/)(\\.|\\.\\.)(/|$)" $rootfsPath) (contains "//" $rootfsPath) -}}
+	  {{- fail (printf "jailRootfs.store.rootfsPath must not contain '.' or '..' path components; got %q." $rootfsPath) -}}
 	{{- end -}}
 	{{- if not (hasPrefix (printf "%s/" $storePath) $rootfsPath) -}}
 	  {{- fail (printf "jailRootfs.store.rootfsPath must be below jailRootfs.store.mountPath %s; got %q." $storePath $rootfsPath) -}}
@@ -123,6 +123,9 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 	{{- $seenSlotPvcs := dict -}}
 	{{- $legacyRootfsReferenced := eq (include "slurm-cluster-storage.jailRootfs.legacyReferenced" .) "true" -}}
 	{{- $legacyPvcName := include "slurm-cluster-storage.jailRootfs.legacyPvc" . -}}
+	{{- if or (gt (len $legacyPvcName) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*$" $legacyPvcName)) -}}
+	  {{- fail (printf "jailRootfs.adoption.legacyPvcName must be a DNS-1123 subdomain with labels of at most 63 characters; got %q." $legacyPvcName) -}}
+	{{- end -}}
 	{{- $managedLegacyPvc := include "slurm-cluster-storage.volume.jail.pvc" . | trimAll "\"" -}}
 	{{- $managedLegacyVolumeName := include "slurm-cluster-storage.volume.jail.name" . -}}
 	{{- $chartOwnsLegacy := and $legacyRootfsReferenced (eq $legacyPvcName $managedLegacyPvc) -}}
@@ -137,10 +140,13 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
   {{- if not (regexMatch "^/[-A-Za-z0-9._/]+$" $path) -}}
     {{- fail (printf "jailRootfs.slots.%s.localPath must be an absolute normalized path; got %q." $slotName $path) -}}
   {{- end -}}
-  {{- if contains ".." $path -}}
-    {{- fail (printf "jailRootfs.slots.%s.localPath must not contain '..'; got %q." $slotName $path) -}}
+  {{- if regexMatch "(^|/)(\\.|\\.\\.)(/|$)" $path -}}
+    {{- fail (printf "jailRootfs.slots.%s.localPath must not contain '.' or '..' components; got %q." $slotName $path) -}}
   {{- end -}}
 	  {{- $volumeSourceName := required (printf "jailRootfs.slots.%s.volumeSourceName is required." $slotName) (default (printf "jail-rootfs-%s" $slotName) $slot.volumeSourceName) -}}
+	  {{- if or (gt (len $volumeSourceName) 63) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $volumeSourceName)) -}}
+	    {{- fail (printf "jailRootfs.slots.%s.volumeSourceName must be a DNS-1123 label of at most 63 characters; got %q." $slotName $volumeSourceName) -}}
+	  {{- end -}}
 	  {{- if hasKey $seenSlotVolumeSources $volumeSourceName -}}
 	    {{- fail (printf "jailRootfs slot volumeSourceName values must be distinct; %q is duplicated." $volumeSourceName) -}}
 	  {{- end -}}
@@ -152,6 +158,9 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 	  {{- end -}}
 	  {{- $_ := set $seenSlotVolumeSources $volumeSourceName true -}}
 	  {{- $pvcName := required (printf "jailRootfs.slots.%s.pvcName is required." $slotName) (default (printf "jail-rootfs-%s-pvc" $slotName) $slot.pvcName) -}}
+	  {{- if or (gt (len $pvcName) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*$" $pvcName)) -}}
+	    {{- fail (printf "jailRootfs.slots.%s.pvcName must be a DNS-1123 subdomain with labels of at most 63 characters; got %q." $slotName $pvcName) -}}
+	  {{- end -}}
 	  {{- if hasKey $seenSlotPvcs $pvcName -}}
 	    {{- fail (printf "jailRootfs slot pvcName values must be distinct; %q is duplicated." $pvcName) -}}
 	  {{- end -}}
@@ -161,6 +170,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 	  {{- $_ := set $seenSlotPvcs $pvcName true -}}
 	{{- end -}}
 	{{- $seenPersistentMounts := dict -}}
+	{{- $seenPersistentLocalPaths := dict -}}
 	{{- $seenPersistentVolumeSources := dict -}}
 	{{- $seenPersistentPvcs := dict -}}
 	{{- range $index, $mount := default list .Values.jailPersistentMounts -}}
@@ -168,15 +178,21 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 	  {{- $localPath := required (printf "jailPersistentMounts[%d].localPath is required." $index) $mount.localPath -}}
 	  {{- $normalizedMountPath := trimSuffix "/" $mountPath -}}
 	  {{- $normalizedLocalPath := trimSuffix "/" $localPath -}}
-	  {{- if or (eq $normalizedMountPath "") (eq $normalizedMountPath "/") (not (hasPrefix "/" $normalizedMountPath)) (contains ".." $normalizedMountPath) (contains "//" $normalizedMountPath) -}}
-	    {{- fail (printf "jailPersistentMounts[%d].mountPath must be an absolute normalized non-root path without '..'; got %q." $index $mountPath) -}}
+	  {{- if or (eq $normalizedMountPath "") (eq $normalizedMountPath "/") (not (hasPrefix "/" $normalizedMountPath)) (regexMatch "(^|/)(\\.|\\.\\.)(/|$)" $normalizedMountPath) (contains "//" $normalizedMountPath) -}}
+	    {{- fail (printf "jailPersistentMounts[%d].mountPath must be an absolute normalized non-root path without '.' or '..' components; got %q." $index $mountPath) -}}
+	  {{- end -}}
+	  {{- if not (regexMatch "^/[-A-Za-z0-9._/]+$" $normalizedMountPath) -}}
+	    {{- fail (printf "jailPersistentMounts[%d].mountPath must contain only shell-safe path characters; got %q." $index $mountPath) -}}
 	  {{- end -}}
 	  {{- if hasKey $seenPersistentMounts $normalizedMountPath -}}
 	    {{- fail (printf "duplicate jailPersistentMounts mountPath %q." $normalizedMountPath) -}}
 	  {{- end -}}
 	  {{- $_ := set $seenPersistentMounts $normalizedMountPath true -}}
-	  {{- if or (eq $normalizedLocalPath "") (eq $normalizedLocalPath "/") (not (hasPrefix "/" $normalizedLocalPath)) (contains ".." $normalizedLocalPath) (contains "//" $normalizedLocalPath) -}}
-	    {{- fail (printf "jailPersistentMounts[%d].localPath must be an absolute normalized non-root path without '..'; got %q." $index $localPath) -}}
+	  {{- if or (eq $normalizedLocalPath "") (eq $normalizedLocalPath "/") (not (hasPrefix "/" $normalizedLocalPath)) (regexMatch "(^|/)(\\.|\\.\\.)(/|$)" $normalizedLocalPath) (contains "//" $normalizedLocalPath) -}}
+	    {{- fail (printf "jailPersistentMounts[%d].localPath must be an absolute normalized non-root path without '.' or '..' components; got %q." $index $localPath) -}}
+	  {{- end -}}
+	  {{- if not (regexMatch "^/[-A-Za-z0-9._/]+$" $normalizedLocalPath) -}}
+	    {{- fail (printf "jailPersistentMounts[%d].localPath must contain only shell-safe path characters; got %q." $index $localPath) -}}
 	  {{- end -}}
 	  {{- if not (hasPrefix (printf "%s/" $storePath) $normalizedLocalPath) -}}
 	    {{- fail (printf "jailPersistentMounts[%d].localPath must be below jailRootfs.store.mountPath %s; got %q." $index $storePath $localPath) -}}
@@ -186,6 +202,12 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 	      {{- fail (printf "jailPersistentMounts[%d].localPath must not overlap rootfs or cxcli system path %s; got %q." $index $systemPath $localPath) -}}
 	    {{- end -}}
 	  {{- end -}}
+	  {{- range $seenLocalPath, $_ := $seenPersistentLocalPaths -}}
+	    {{- if or (eq $normalizedLocalPath $seenLocalPath) (hasPrefix (printf "%s/" $seenLocalPath) $normalizedLocalPath) (hasPrefix (printf "%s/" $normalizedLocalPath) $seenLocalPath) -}}
+	      {{- fail (printf "jailPersistentMounts[%d].localPath %q overlaps another persistent localPath %q." $index $localPath $seenLocalPath) -}}
+	    {{- end -}}
+	  {{- end -}}
+	  {{- $_ := set $seenPersistentLocalPaths $normalizedLocalPath true -}}
 	  {{- $persistentName := include "slurm-cluster-storage.jailPersistentMount.name" (list $ $mount) -}}
 	  {{- $persistentPvc := include "slurm-cluster-storage.jailPersistentMount.pvc" (list $ $mount) | trimAll "\"" -}}
 	  {{- if hasKey $seenSlotVolumeSources $persistentName -}}

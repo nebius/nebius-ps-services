@@ -15,6 +15,7 @@ from typing import Any, Protocol
 from .runtime_config import to_plain_data
 
 SOPERATOR_UPGRADE_SAFETY_SCHEMA = "nebius-cxcli-soperator-upgrade-safety/v1"
+EXTERNAL_JAIL_OPEN_METRICS_HANDOFF_REVISION = 1
 _PROTECTED_PVC_KEYS = ("jail", "controller-spool", "accounting")
 _READONLY_KUBECTL_VERBS = frozenset({"api-resources", "exec", "get", "logs", "rollout", "version"})
 _MUTATING_KUBECTL_VERBS = frozenset(
@@ -404,15 +405,73 @@ def _classify_external_intentional_deltas(
     comparison: Mapping[str, Any],
     *,
     target_ref: str,
+    namespace: str = "soperator",
+    open_metrics_handoff: Mapping[str, Any] | None = None,
+    open_metrics_handoff_verified: bool = False,
+    open_metrics_comparison_hashes_match: bool = False,
 ) -> dict[str, Any]:
     return _classify_intentional_deltas(
         comparison,
-        predicate=lambda delta: _is_external_intentional_migration_delta(
-            delta,
-            target_ref=target_ref,
+        predicate=lambda delta: (
+            _is_external_intentional_migration_delta(
+                delta,
+                target_ref=target_ref,
+            )
+            or _is_external_restored_open_metrics_delta(
+                delta,
+                target_ref=target_ref,
+                namespace=namespace,
+                handoff=open_metrics_handoff,
+                handoff_verified=open_metrics_handoff_verified,
+                comparison_hashes_match=open_metrics_comparison_hashes_match,
+            )
         ),
-        remediation="Expected external migration ownership, chart takeover, or node replacement drift.",
+        remediation=(
+            "Expected external migration ownership, chart takeover, node replacement, "
+            "or checkpoint-verified OpenMetrics restoration drift."
+        ),
     )
+
+
+def _is_external_restored_open_metrics_delta(
+    delta: Mapping[str, Any],
+    *,
+    target_ref: str,
+    namespace: str,
+    handoff: Mapping[str, Any] | None,
+    handoff_verified: bool,
+    comparison_hashes_match: bool,
+) -> bool:
+    proof = handoff if isinstance(handoff, Mapping) else {}
+    desired_enabled = proof.get("desired_enabled")
+    observed_enabled = proof.get("observed_enabled")
+    field = str(delta.get("field", "") or "")
+    base_contract_matches = bool(
+        handoff_verified
+        and str(delta.get("kind", "") or "") == "slurmclusters"
+        and str(delta.get("resource", "") or "") == f"{namespace}/{target_ref}"
+        and proof.get("revision") == EXTERNAL_JAIL_OPEN_METRICS_HANDOFF_REVISION
+        and str(proof.get("status", "") or "").strip() == "restored"
+        and isinstance(desired_enabled, bool)
+        and isinstance(observed_enabled, bool)
+        and observed_enabled == desired_enabled
+    )
+    if not base_contract_matches:
+        return False
+    if field == "controller_open_metrics_enabled":
+        # ProtectedStateDelta summaries stringify scalar values.  Normalize the
+        # summary before binding this delta to the verified desired boolean.
+        summarized_after = delta.get("after")
+        if isinstance(summarized_after, bool):
+            after_enabled = summarized_after
+        elif summarized_after == "True":
+            after_enabled = True
+        elif summarized_after == "False":
+            after_enabled = False
+        else:
+            return False
+        return after_enabled is desired_enabled
+    return bool(field in {"spec_hash", "spec_keys"} and comparison_hashes_match)
 
 
 def _classify_managed_chart_upgrade_deltas(comparison: Mapping[str, Any]) -> dict[str, Any]:
@@ -673,6 +732,7 @@ def _is_managed_chart_upgrade_delta(
     if kind in {"nodesets", "slurmclusters"}:
         return _delta_resource_key(delta) in chart_touched_resources and field in {
             "spec_hash",
+            "spec_hash_without_controller_open_metrics_enabled",
             "spec_keys",
         }
     if kind == "slurm_runtime":
@@ -710,6 +770,125 @@ def build_remediation_approval_plan(
     }
 
 
+def _external_open_metrics_handoff_check(
+    *,
+    after_state: ProtectedCustomerState,
+    target_ref: str,
+    namespace: str,
+    handoff: Mapping[str, Any] | None,
+    required: bool,
+) -> tuple[dict[str, Any], bool]:
+    proof = handoff if isinstance(handoff, Mapping) else {}
+    if not proof and not required:
+        return (
+            {
+                "name": "external-open-metrics-handoff",
+                "status": "skipped",
+                "summary": "No external Jail Upgrade OpenMetrics handoff was recorded.",
+            },
+            False,
+        )
+    desired_enabled = proof.get("desired_enabled")
+    observed_enabled = proof.get("observed_enabled")
+    checkpointed_uid = str(proof.get("slurmcluster_uid", "") or "").strip()
+    restored_at = str(proof.get("restored_at", "") or "").strip()
+    readiness_verified_at = str(proof.get("post_restore_readiness_verified_at", "") or "").strip()
+    expected_resource = f"{namespace}/{target_ref}"
+    live_resource = _items_by_name(after_state.sections.get("slurmclusters")).get(expected_resource)
+    failures: list[str] = []
+    if not proof:
+        failures.append("handoff proof is missing")
+    if proof.get("revision") != EXTERNAL_JAIL_OPEN_METRICS_HANDOFF_REVISION:
+        failures.append("handoff revision is not current")
+    if str(proof.get("status", "") or "").strip() != "restored":
+        failures.append("handoff status is not restored")
+    if not isinstance(desired_enabled, bool):
+        failures.append("desired value is not boolean")
+    if not isinstance(observed_enabled, bool) or observed_enabled != desired_enabled:
+        failures.append("checkpoint observed value does not match desired")
+    if not checkpointed_uid:
+        failures.append("checkpoint SlurmCluster UID is missing")
+    if not restored_at:
+        failures.append("restoration timestamp is missing")
+    if not readiness_verified_at:
+        failures.append("post-restore readiness timestamp is missing")
+    if live_resource is None:
+        failures.append(f"live SlurmCluster {expected_resource} is missing")
+    else:
+        live_uid = str(live_resource.get("resource_uid", "") or "").strip()
+        live_enabled = live_resource.get("controller_open_metrics_enabled")
+        if not live_uid or live_uid != checkpointed_uid:
+            failures.append("live SlurmCluster UID does not match the checkpoint")
+        if not isinstance(live_enabled, bool) or live_enabled != desired_enabled:
+            failures.append("live OpenMetrics value does not match restored desired state")
+    if failures:
+        return (
+            {
+                "name": "external-open-metrics-handoff",
+                "status": "failed",
+                "summary": "External Jail Upgrade OpenMetrics proof failed: "
+                + "; ".join(failures)
+                + ".",
+            },
+            False,
+        )
+    return (
+        {
+            "name": "external-open-metrics-handoff",
+            "status": "passed",
+            "summary": (
+                f"OpenMetrics restored value and SlurmCluster identity match {expected_resource}."
+            ),
+        },
+        True,
+    )
+
+
+def _external_open_metrics_comparison_hashes_match(
+    *,
+    before_state: ProtectedCustomerState | None,
+    after_state: ProtectedCustomerState,
+    target_ref: str,
+    namespace: str,
+) -> bool:
+    if before_state is None:
+        return False
+    resource = f"{namespace}/{target_ref}"
+    before_item = _items_by_name(before_state.sections.get("slurmclusters")).get(resource)
+    after_item = _items_by_name(after_state.sections.get("slurmclusters")).get(resource)
+    if before_item is None or after_item is None:
+        return False
+    field = "spec_hash_without_controller_open_metrics_enabled"
+    before_hash = str(before_item.get(field, "") or "").strip()
+    after_hash = str(after_item.get(field, "") or "").strip()
+    return bool(before_hash and after_hash and before_hash == after_hash)
+
+
+def _external_open_metrics_value_changed(
+    *,
+    before_state: ProtectedCustomerState | None,
+    after_state: ProtectedCustomerState,
+    target_ref: str,
+    namespace: str,
+) -> bool:
+    if before_state is None:
+        return False
+    resource = f"{namespace}/{target_ref}"
+    before_item = _items_by_name(before_state.sections.get("slurmclusters")).get(resource)
+    after_item = _items_by_name(after_state.sections.get("slurmclusters")).get(resource)
+    if before_item is None or after_item is None:
+        return False
+    # Baselines captured before the split OpenMetrics fields existed must keep
+    # their original whole-spec drift semantics.  A recorded handoff is still
+    # checked independently, but the mere appearance of the new field must not
+    # create a non-waivable proof requirement for older non-handoff upgrades.
+    comparison_field = "spec_hash_without_controller_open_metrics_enabled"
+    if comparison_field not in before_item:
+        return False
+    field = "controller_open_metrics_enabled"
+    return _stable_hash(before_item.get(field)) != _stable_hash(after_item.get(field))
+
+
 def run_post_upgrade_fast_verification(
     *,
     command_runner: SafetyCommandRunner,
@@ -720,6 +899,7 @@ def run_post_upgrade_fast_verification(
     source_payload: Mapping[str, Any] | None = None,
     terraform_plan_command: Sequence[str] | None = None,
     external_cluster: bool = False,
+    external_open_metrics_handoff: Mapping[str, Any] | None = None,
     managed_chart_upgrade: bool = False,
     managed_node_template_upgrade: bool = False,
     remediation_approved: bool = False,
@@ -740,6 +920,29 @@ def run_post_upgrade_fast_verification(
         _activechecks_check(before_state, after_state),
         _observability_check(after_state),
     ]
+    open_metrics_handoff_verified = False
+    open_metrics_comparison_hashes_match = False
+    if external_cluster:
+        open_metrics_handoff_required = _external_open_metrics_value_changed(
+            before_state=before_state,
+            after_state=after_state,
+            target_ref=target_ref,
+            namespace=namespace,
+        )
+        open_metrics_check, open_metrics_handoff_verified = _external_open_metrics_handoff_check(
+            after_state=after_state,
+            target_ref=target_ref,
+            namespace=namespace,
+            handoff=external_open_metrics_handoff,
+            required=open_metrics_handoff_required,
+        )
+        checks.append(open_metrics_check)
+        open_metrics_comparison_hashes_match = _external_open_metrics_comparison_hashes_match(
+            before_state=before_state,
+            after_state=after_state,
+            target_ref=target_ref,
+            namespace=namespace,
+        )
     comparison: dict[str, Any] = {
         "schema": SOPERATOR_UPGRADE_SAFETY_SCHEMA,
         "status": "not-run",
@@ -755,6 +958,10 @@ def run_post_upgrade_fast_verification(
             comparison = _classify_external_intentional_deltas(
                 comparison,
                 target_ref=target_ref,
+                namespace=namespace,
+                open_metrics_handoff=external_open_metrics_handoff,
+                open_metrics_handoff_verified=open_metrics_handoff_verified,
+                open_metrics_comparison_hashes_match=(open_metrics_comparison_hashes_match),
             )
         else:
             if managed_chart_upgrade:
@@ -1374,6 +1581,31 @@ def _sanitize_workloads(payload: Mapping[str, Any], *, workload_kind: str) -> di
     }
 
 
+def _slurmcluster_protected_spec(
+    spec: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], Any]:
+    protected = to_plain_data(spec)
+    if not isinstance(protected, dict):
+        protected = dict(spec)
+    slurm_nodes = protected.get("slurmNodes")
+    if not isinstance(slurm_nodes, dict):
+        return protected, None
+    controller = slurm_nodes.get("controller")
+    if not isinstance(controller, dict):
+        return protected, None
+    open_metrics = controller.get("openMetrics")
+    if not isinstance(open_metrics, dict):
+        return protected, None
+    enabled = open_metrics.pop("enabled", None)
+    if not open_metrics:
+        controller.pop("openMetrics", None)
+    if not controller:
+        slurm_nodes.pop("controller", None)
+    if not slurm_nodes:
+        protected.pop("slurmNodes", None)
+    return protected, enabled
+
+
 def _sanitize_custom_resources(payload: Mapping[str, Any], *, kind: str) -> dict[str, Any]:
     items: list[dict[str, Any]] = []
     for item in payload.get("items", []) or []:
@@ -1381,11 +1613,30 @@ def _sanitize_custom_resources(payload: Mapping[str, Any], *, kind: str) -> dict
             continue
         spec = item.get("spec") if isinstance(item.get("spec"), Mapping) else {}
         status = item.get("status") if isinstance(item.get("status"), Mapping) else {}
+        comparison_spec: Mapping[str, Any] = spec
+        open_metrics_enabled: Any = None
+        if kind == "SlurmCluster":
+            comparison_spec, open_metrics_enabled = _slurmcluster_protected_spec(spec)
         items.append(
             {
                 **_resource_identity(item, kind=kind),
+                **(
+                    {"resource_uid": str(_metadata(item).get("uid", "") or "")}
+                    if kind == "SlurmCluster"
+                    else {}
+                ),
                 "spec_keys": sorted(str(key) for key in spec),
                 "spec_hash": _stable_hash(_redact_secrets(spec)),
+                **(
+                    {
+                        "controller_open_metrics_enabled": open_metrics_enabled,
+                        "spec_hash_without_controller_open_metrics_enabled": _stable_hash(
+                            _redact_secrets(comparison_spec)
+                        ),
+                    }
+                    if kind == "SlurmCluster"
+                    else {}
+                ),
                 "status_phase": str(status.get("phase", "") or status.get("state", "") or ""),
                 "conditions": _conditions(status.get("conditions")),
             }

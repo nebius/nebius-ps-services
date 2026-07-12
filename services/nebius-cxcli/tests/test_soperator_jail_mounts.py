@@ -11,7 +11,7 @@ from nebius_cxcli.soperator_jail_mounts import (
 )
 
 
-def test_apply_external_persistent_mount_values_adds_home_in_shared_area() -> None:
+def test_apply_external_persistent_mount_values_adopts_legacy_paths_in_place() -> None:
     values = apply_jail_persistent_mount_values(
         {"nodesets": [{"name": "worker"}]},
         target_ref="external-cluster",
@@ -22,10 +22,10 @@ def test_apply_external_persistent_mount_values_adds_home_in_shared_area() -> No
     assert values["jailRootfs"]["store"]["rootfsPath"] == "/mnt/jail/.cxcli/rootfs"
     assert values["jailRootfs"]["adoption"]["activeSource"] == "legacy-rootfs"
     assert values["jailPersistentMounts"] == [
-        {"mountPath": "/home", "localPath": "/mnt/jail/shared/home"},
-        {"mountPath": "/data", "localPath": "/mnt/jail/shared/data"},
-        {"mountPath": "/scripts", "localPath": "/mnt/jail/shared/scripts"},
-        {"mountPath": "/models", "localPath": "/mnt/jail/shared/models"},
+        {"mountPath": "/home", "localPath": "/mnt/jail/home"},
+        {"mountPath": "/data", "localPath": "/mnt/jail/data"},
+        {"mountPath": "/scripts", "localPath": "/mnt/jail/scripts"},
+        {"mountPath": "/models", "localPath": "/mnt/jail/models"},
     ]
     volume_sources = {item["name"]: item for item in values["volumeSources"]}
     assert set(volume_sources) == {
@@ -66,14 +66,14 @@ def test_external_persistent_mount_decisions_record_auto_explicit_and_existing_s
     assert {item["mount_path"]: item["status"] for item in decisions} == {
         "/home": "existing-submount",
         "/data": "explicit",
-        "/scripts": "pending-probe",
-        "/models": "pending-probe",
+        "/scripts": "adopted-in-place",
+        "/models": "adopted-in-place",
     }
     assert {item["mount_path"]: item["copy_required"] for item in decisions} == {
         "/home": False,
         "/data": True,
-        "/scripts": True,
-        "/models": True,
+        "/scripts": False,
+        "/models": False,
     }
 
 
@@ -134,7 +134,7 @@ def test_apply_persistent_mount_values_adds_referenced_controller_spool_source()
 
 
 def test_external_first_adoption_keeps_all_consumers_on_legacy_jail_pvc() -> None:
-    service_roles = ("controller", "login", "exporter", "rest")
+    configurable_jail_roles = ("controller", "login")
     values = apply_jail_persistent_mount_values(
         {
             "slurmNodes": {
@@ -166,8 +166,10 @@ def test_external_first_adoption_keeps_all_consumers_on_legacy_jail_pvc() -> Non
 
     volume_sources = {item["name"]: item for item in values["volumeSources"]}
     assert volume_sources["jail"]["persistentVolumeClaim"]["claimName"] == "jail-pvc"
-    for role in service_roles:
+    for role in configurable_jail_roles:
         assert values["slurmNodes"][role]["volumes"]["jail"] == {"volumeSourceName": "jail"}
+    assert "volumes" not in values["slurmNodes"]["exporter"]
+    assert "volumes" not in values["slurmNodes"]["rest"]
     assert values["nodesets"][0]["slurmd"]["volumes"]["jail"] == {
         "persistentVolumeClaim": {"claimName": "jail-pvc"}
     }
@@ -240,9 +242,9 @@ def test_explicit_home_persistent_mount_replaces_default_home() -> None:
 
     assert values["jailPersistentMounts"] == [
         {"mountPath": "/home", "localPath": "/mnt/jail/customer-home"},
-        {"mountPath": "/data", "localPath": "/mnt/jail/shared/data"},
-        {"mountPath": "/scripts", "localPath": "/mnt/jail/shared/scripts"},
-        {"mountPath": "/models", "localPath": "/mnt/jail/shared/models"},
+        {"mountPath": "/data", "localPath": "/mnt/jail/data"},
+        {"mountPath": "/scripts", "localPath": "/mnt/jail/scripts"},
+        {"mountPath": "/models", "localPath": "/mnt/jail/models"},
     ]
 
 
@@ -261,9 +263,9 @@ def test_existing_external_home_submount_prevents_duplicate_default_home() -> No
     )
 
     assert values["jailPersistentMounts"] == [
-        {"mountPath": "/data", "localPath": "/mnt/jail/shared/data"},
-        {"mountPath": "/scripts", "localPath": "/mnt/jail/shared/scripts"},
-        {"mountPath": "/models", "localPath": "/mnt/jail/shared/models"},
+        {"mountPath": "/data", "localPath": "/mnt/jail/data"},
+        {"mountPath": "/scripts", "localPath": "/mnt/jail/scripts"},
+        {"mountPath": "/models", "localPath": "/mnt/jail/models"},
     ]
     assert jail_persistent_mount_status(values).status == "verified"
 
@@ -290,3 +292,26 @@ def test_persistent_mount_validation_rejects_bad_paths() -> None:
             include_home=False,
             store_path="/mnt/jail",
         )
+
+    with pytest.raises(ValueError, match="must not overlap"):
+        normalize_jail_persistent_mounts(
+            [
+                {"mountPath": "/data", "localPath": "/mnt/jail/data"},
+                {"mountPath": "/models", "localPath": "/mnt/jail/data/models"},
+            ],
+            include_home=False,
+        )
+
+
+@pytest.mark.parametrize(
+    "spec",
+    (
+        "/data=/mnt/jail/$(touch-pwned)",
+        "/data=/mnt/jail/data;touch-pwned",
+        "/data=/mnt/jail/data with-space",
+        "/data;touch-pwned=/mnt/jail/data",
+    ),
+)
+def test_parse_persistent_mount_spec_rejects_shell_unsafe_paths(spec: str) -> None:
+    with pytest.raises(ValueError, match="shell-safe path components"):
+        parse_jail_persistent_mount_spec(spec)

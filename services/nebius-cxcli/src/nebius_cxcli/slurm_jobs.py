@@ -7,7 +7,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 
-_EMPTY_SLURM_VALUES = {"", "-", "(null)", "N/A", "NONE", "NOT_SET", "UNLIMITED"}
+_EMPTY_SLURM_VALUES = {"", "-", "(NULL)", "N/A", "NONE", "NOT_SET", "UNLIMITED"}
 _PENDING_STATES = {"PD", "PENDING"}
 _TERMINATING_STATES = {"CG", "COMPLETING"}
 _ACTIVE_STATES = {

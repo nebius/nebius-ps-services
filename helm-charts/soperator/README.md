@@ -297,6 +297,13 @@ Common direct Helm settings:
   objects (typically through `qosConfiguration`) before enabling enforcement.
   Keep `PluginDir` unset unless the image-specific plugin directory is known:
   Slurm fails startup when any path in `PluginDir` is absent.
+- `slurmNodes.controller.openMetrics.enabled`: controls the SlurmCluster's
+  native OpenMetrics endpoint and its `MetricsType=metrics/openmetrics`
+  configuration. It defaults to `true` for the pinned Slurm 25.11 images.
+  External first-adoption Jail Upgrade may temporarily render it as `false`
+  while consumers still run an older legacy rootfs and through exact
+  target-slot consumer verification, then restores this chart value before
+  final pre-release checks.
 - `controllerManager.manager.kubeClient.{qps,burst}`: optional Kubernetes
   client tuning for the Soperator manager on large clusters (2k-5k nodes).
   Empty by default; non-empty values are emitted as `KUBE_API_QPS` /
@@ -317,12 +324,17 @@ Common direct Helm settings:
   chart derives `volumeSources[name=jail]`, every configured service-role jail
   reference, and every worker NodeSet jail claim from that value. While this
   value is active, those consumers remain on the legacy PVC and generated
-  `jailPersistentMounts` submounts are not attached. After the external copy and
-  passive-slot population complete, cxcli changes `activeSource` to `slot`,
-  selects the refreshed slot, and the chart moves the canonical `jail` alias to
-  that slot before attaching the shared submounts. SConfigController and REST
-  consume this alias even when controller, login, and workers use explicit slot
-  references. Accounting retains an alias-backed volume declaration, but the
+  `jailPersistentMounts` submounts are not attached. Automatic external paths
+  can point at their existing legacy directories, so no copy is needed; an
+  explicitly relocated non-overlapping path may still use cxcli's guarded copy
+  workflow. Paths accept only shell-safe letters, digits, `.`, `_`, `-`, and
+  `/`, and persistent local paths must not overlap. After passive-slot
+  population and any required copy complete, cxcli changes `activeSource` to `slot`,
+  selects the refreshed slot, and the chart derives the canonical `jail`
+  alias, controller and login volume-source references, and every worker
+  NodeSet PVC from that one active-slot value before attaching the shared
+  submounts. SConfigController and REST consume the same active alias.
+  Accounting retains an alias-backed volume declaration, but the
   current operator workload does not mount the jail. Retaining `rollbackSource:
   legacy-rootfs` keeps the old PV/PVC only; it never pins the active alias. An
   explicitly configured canonical `legacyPvcName: jail-pvc` keeps the

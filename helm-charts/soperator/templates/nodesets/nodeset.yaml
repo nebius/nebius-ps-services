@@ -147,16 +147,16 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
 
-      {{- with (required ".Values.nodesets[*].slurmd.volumes.jail is required" .jail) }}
       jail:
         {{- if eq (include "slurm-cluster-storage.jailRootfs.legacyActive" $) "true" }}
         persistentVolumeClaim:
           claimName: {{ include "slurm-cluster-storage.jailRootfs.legacyPvc" $ | quote }}
           readOnly: false
         {{- else }}
-        {{- toYaml . | nindent 8 }}
+        persistentVolumeClaim:
+          claimName: {{ include "slurm-cluster-storage.jailRootfs.active.pvc" $ }}
+          readOnly: false
         {{- end }}
-      {{- end }}
 
       {{- $jailSubMounts := (.jailSubMounts | default list) }}
       {{- $existingMounts := dict }}

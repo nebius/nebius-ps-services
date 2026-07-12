@@ -81,6 +81,10 @@ log_error() {
   printf 'ERROR: %s\n' "$*" >&2
 }
 
+log_warn() {
+  printf 'WARNING: %s\n' "$*" >&2
+}
+
 color_enabled() {
   if [[ -n "${NO_COLOR:-}" || "${TERM:-}" == "dumb" ]]; then
     return 1
@@ -678,10 +682,12 @@ verify_explicit_missing_jobs() {
     fi
     if state_is_interrupted "$state"; then
       log_error "Explicit Slurm job id ${job_id} left squeue with interrupted accounting state: ${state}"
+      watch_terminal_failure=1
+      watch_failures=$((watch_failures + 1))
     else
-      log_error "Explicit Slurm job id ${job_id} is not visible in squeue and accounting is not complete."
+      log_warn "Explicit Slurm job id ${job_id} is temporarily not visible in squeue and accounting is not terminal; retrying."
+      watch_unresolved=1
     fi
-    watch_failures=$((watch_failures + 1))
   done
 }
 
@@ -731,6 +737,10 @@ watch_slurm_jobs() {
   local sleep_seconds
   local remaining_seconds
   local duration_label
+  local accounting_status
+  local watch_unresolved=0
+  local watch_terminal_failure=0
+  local visibility_gap_samples=0
 
   if ((dry_run)); then
     print_command squeue -h -o "%i|%T|%M|%L|%P|%N|%j"
@@ -759,6 +769,7 @@ watch_slurm_jobs() {
 
   while true; do
     sample=$((sample + 1))
+    watch_unresolved=0
     now="$(date +%s)"
     matching_count=0
     print_watch_sample_header "$sample"
@@ -788,21 +799,45 @@ watch_slurm_jobs() {
       fi
     done <<<"$squeue_output"
     verify_explicit_missing_jobs "$visible_job_ids"
+    if ((watch_terminal_failure)); then
+      break
+    fi
     if ((matching_count == 0)); then
+      accounting_status=0
       if observed_jobs_completed_in_sacct; then
         printf 'All observed Slurm smoke jobs left squeue with COMPLETED accounting state.\n'
         break
+      else
+        accounting_status=$?
       fi
-      log_error "No matching Slurm smoke jobs are visible in squeue and accounting is not complete."
-      watch_failures=$((watch_failures + 1))
+      if ((accounting_status == 2)); then
+        log_error "Observed Slurm smoke jobs left squeue with an interrupted accounting state."
+        watch_failures=$((watch_failures + 1))
+        break
+      fi
+      watch_unresolved=1
+      if [[ -z "$watch_job_ids" ]]; then
+        log_warn "No matching Slurm smoke jobs are visible in squeue and accounting is not terminal; retrying."
+      fi
+    fi
+    if ((watch_unresolved)); then
+      visibility_gap_samples=$((visibility_gap_samples + 1))
     fi
     if ((watch_once)); then
+      if ((watch_unresolved)); then
+        log_error "Slurm job watch snapshot ended before missing jobs reached a terminal accounting state."
+        watch_failures=$((watch_failures + 1))
+      fi
       break
     fi
     now="$(date +%s)"
     sleep_seconds="$watch_interval_seconds"
     if [[ -n "$watch_duration_seconds" ]]; then
       if ((now >= deadline)); then
+        if ((watch_unresolved)); then
+          log_error "Slurm job watch duration ended before missing jobs reached a terminal accounting state."
+          watch_failures=$((watch_failures + 1))
+        fi
         break
       fi
       remaining_seconds=$((deadline - now))
@@ -817,6 +852,10 @@ watch_slurm_jobs() {
   if ((watch_failures > 0)); then
     log_error "Slurm job watch result: FAIL - interruption or visibility gap detected."
     return 1
+  fi
+  if ((visibility_gap_samples > 0)); then
+    printf 'Slurm accounting visibility recovered after %s transient gap sample(s); terminal accounting is authoritative.\n' \
+      "$visibility_gap_samples"
   fi
   printf 'Slurm job watch result: PASS - observed %s job id(s) across %s sample(s) with no interruption signal.\n' \
     "$(count_csv_items "$seen_job_ids")" "$sample"

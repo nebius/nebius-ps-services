@@ -6,6 +6,7 @@ from collections.abc import Callable
 
 import pytest
 
+import nebius_cxcli.soperator_discovery as soperator_discovery_module
 import nebius_cxcli.soperator_onboarding as soperator_onboarding_module
 from nebius_cxcli import soperator_migration as soperator_migration_module
 from nebius_cxcli.runtime_validation import validate_runtime_payload
@@ -447,6 +448,300 @@ def test_collect_snapshot_rejects_multiple_slurmcluster_identities(
         match="expected exactly one discovered SlurmCluster identity, found 2",
     ):
         collect_kubectl_soperator_snapshot(kube_context="ctx")
+
+
+def _target_handoff_slurmcluster_resource(
+    *,
+    uid: str = "target-slurmcluster-uid",
+    helm_owned: bool = True,
+    chart_name: str = "soperator",
+) -> dict[str, object]:
+    target = _jail_slurmcluster_resource()
+    metadata = target["metadata"]
+    assert isinstance(metadata, dict)
+    metadata.update({"name": "target-cluster", "uid": uid})
+    if helm_owned:
+        metadata["annotations"] = {
+            "meta.helm.sh/release-name": "soperator",
+            "meta.helm.sh/release-namespace": "soperator",
+        }
+        metadata["labels"] = {
+            "app.kubernetes.io/managed-by": "Helm",
+            "helm.sh/chart": f"{chart_name}-4.0.2-ps.4",
+        }
+    return target
+
+
+def _resume_slurmcluster_scope(
+    *,
+    mode: str = "target-handoff",
+    target_uid: str = "",
+) -> dict[str, object]:
+    return {
+        "schema": "nebius-cxcli-ext-soperator-resume-slurmcluster-identity/v1",
+        "mode": mode,
+        "phase_id": "rolling-compute-migration",
+        "source": {
+            "namespace": "soperator",
+            "name": "source-cluster",
+            "uid": "slurmcluster-uid",
+        },
+        "target": {
+            "namespace": "soperator",
+            "name": "target-cluster",
+            "uid": target_uid,
+        },
+        "target_version": "4.0.2-ps.4",
+        "allow_target_uid_bootstrap": mode == "target-handoff" and not target_uid,
+    }
+
+
+def test_resume_slurmcluster_identity_bootstraps_exact_helm_owned_target_uid() -> None:
+    source = _jail_slurmcluster_resource()
+    target = _target_handoff_slurmcluster_resource()
+
+    selected, scope = soperator_onboarding_module._resume_slurmcluster_identity_resources(  # noqa: SLF001
+        (source, target),
+        identity_scope=_resume_slurmcluster_scope(),
+    )
+
+    assert selected == (source,)
+    assert scope["identity_role"] == "source"
+    assert scope["target_uid_bootstrapped"] is True
+    assert scope["target"] == {
+        "namespace": "soperator",
+        "name": "target-cluster",
+        "uid": "target-slurmcluster-uid",
+    }
+
+
+def test_resume_slurmcluster_identity_bootstrap_requires_checkpoint_target_version() -> None:
+    scope = _resume_slurmcluster_scope()
+    scope["target_version"] = ""
+
+    with pytest.raises(RuntimeError, match="requires exact Helm ownership"):
+        soperator_onboarding_module._resume_slurmcluster_identity_resources(  # noqa: SLF001
+            (_jail_slurmcluster_resource(), _target_handoff_slurmcluster_resource()),
+            identity_scope=scope,
+        )
+
+
+def test_resume_slurmcluster_identity_bootstrap_rejects_wrong_chart_same_version() -> None:
+    with pytest.raises(RuntimeError, match="requires exact Helm ownership"):
+        soperator_onboarding_module._resume_slurmcluster_identity_resources(  # noqa: SLF001
+            (
+                _jail_slurmcluster_resource(),
+                _target_handoff_slurmcluster_resource(chart_name="unrelated"),
+            ),
+            identity_scope=_resume_slurmcluster_scope(),
+        )
+
+
+@pytest.mark.parametrize("binding", ["source", "target"])
+def test_resume_slurmcluster_identity_requires_explicit_checkpoint_namespace(
+    binding: str,
+) -> None:
+    scope = _resume_slurmcluster_scope()
+    bound_ref = scope[binding]
+    assert isinstance(bound_ref, dict)
+    bound_ref.pop("namespace")
+
+    with pytest.raises(
+        RuntimeError, match=f"incomplete {binding} binding|incomplete target binding"
+    ):
+        soperator_onboarding_module._resume_slurmcluster_identity_resources(  # noqa: SLF001
+            (_jail_slurmcluster_resource(), _target_handoff_slurmcluster_resource()),
+            identity_scope=scope,
+        )
+
+
+@pytest.mark.parametrize(
+    ("resources", "scope", "message"),
+    [
+        (
+            (_target_handoff_slurmcluster_resource(),),
+            _resume_slurmcluster_scope(),
+            "expected exactly 2 object",
+        ),
+        (
+            (_jail_slurmcluster_resource(),),
+            _resume_slurmcluster_scope(),
+            "expected exactly 2 object",
+        ),
+        (
+            (
+                _jail_slurmcluster_resource(),
+                _target_handoff_slurmcluster_resource(),
+                {
+                    "kind": "SlurmCluster",
+                    "metadata": {
+                        "namespace": "soperator",
+                        "name": "unexpected",
+                        "uid": "unexpected-uid",
+                    },
+                },
+            ),
+            _resume_slurmcluster_scope(),
+            "expected exactly 2 object",
+        ),
+        (
+            (
+                {
+                    **_jail_slurmcluster_resource(),
+                    "metadata": {
+                        "namespace": "soperator",
+                        "name": "source-cluster",
+                        "uid": "replaced-source-uid",
+                    },
+                },
+                _target_handoff_slurmcluster_resource(),
+            ),
+            _resume_slurmcluster_scope(),
+            "live source SlurmCluster UID differs",
+        ),
+        (
+            (
+                _jail_slurmcluster_resource(),
+                _target_handoff_slurmcluster_resource(uid="replacement-target-uid"),
+            ),
+            _resume_slurmcluster_scope(target_uid="target-slurmcluster-uid"),
+            "live target SlurmCluster UID differs",
+        ),
+        (
+            (
+                _jail_slurmcluster_resource(),
+                _target_handoff_slurmcluster_resource(helm_owned=False),
+            ),
+            _resume_slurmcluster_scope(),
+            "requires exact Helm ownership",
+        ),
+    ],
+)
+def test_resume_slurmcluster_identity_rejects_unbound_or_drifted_inventory(
+    resources: tuple[dict[str, object], ...],
+    scope: dict[str, object],
+    message: str,
+) -> None:
+    with pytest.raises(RuntimeError, match=message):
+        soperator_onboarding_module._resume_slurmcluster_identity_resources(  # noqa: SLF001
+            resources,
+            identity_scope=scope,
+        )
+
+
+def test_resume_slurmcluster_identity_source_cleanup_accepts_before_and_after_delete() -> None:
+    source = _jail_slurmcluster_resource()
+    target = _target_handoff_slurmcluster_resource()
+    scope = _resume_slurmcluster_scope(
+        mode="source-cleanup",
+        target_uid="target-slurmcluster-uid",
+    )
+
+    before, before_scope = soperator_onboarding_module._resume_slurmcluster_identity_resources(  # noqa: SLF001
+        (source, target),
+        identity_scope=scope,
+    )
+    after, after_scope = soperator_onboarding_module._resume_slurmcluster_identity_resources(  # noqa: SLF001
+        (target,),
+        identity_scope=scope,
+    )
+
+    assert before == (source,)
+    assert before_scope["identity_role"] == "source"
+    assert after == (target,)
+    assert after_scope["identity_role"] == "target"
+
+
+def test_resume_slurmcluster_identity_target_only_rejects_source_reappearance() -> None:
+    scope = _resume_slurmcluster_scope(
+        mode="target-only",
+        target_uid="target-slurmcluster-uid",
+    )
+
+    with pytest.raises(RuntimeError, match="expected exactly 1 object"):
+        soperator_onboarding_module._resume_slurmcluster_identity_resources(  # noqa: SLF001
+            (_jail_slurmcluster_resource(), _target_handoff_slurmcluster_resource()),
+            identity_scope=scope,
+        )
+
+
+def test_collect_snapshot_scopes_exact_dual_cr_resume_to_immutable_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _jail_slurmcluster_resource()
+    target = _target_handoff_slurmcluster_resource()
+
+    def fake_kubectl_json(cmd, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+        resource = cmd[4] if len(cmd) > 4 else ""
+        if resource == "crd":
+            return {"items": [{"metadata": {"name": "slurmclusters.slurm.nebius.ai"}}]}
+        if resource == "namespace":
+            return {
+                "items": [
+                    {"metadata": {"name": "kube-system", "uid": "kubernetes-uid"}},
+                    {"metadata": {"name": "soperator", "uid": "soperator-uid"}},
+                ]
+            }
+        if resource == "pv":
+            return {"items": [_bound_jail_pv()]}
+        if resource == "pvc":
+            return {"items": [_bound_jail_pvc()]}
+        if resource == "slurmclusters":
+            return {"items": [source, target]}
+        return {"items": []}
+
+    monkeypatch.setattr(soperator_onboarding_module, "_kubectl_json", fake_kubectl_json)
+    monkeypatch.setattr(soperator_onboarding_module, "_helm_json", lambda *_args, **_kwargs: [])
+
+    snapshot = collect_kubectl_soperator_snapshot(
+        kube_context="ctx",
+        slurmcluster_identity_scope=_resume_slurmcluster_scope(),
+    )
+
+    assert snapshot["cluster_identity"]["slurmcluster_uid"] == "slurmcluster-uid"
+    assert len(snapshot["soperator_resources"]) == 2
+    assert snapshot["identity_soperator_resources"] == [source]
+    assert snapshot["resume_slurmcluster_identity"]["target"]["uid"] == ("target-slurmcluster-uid")
+
+
+def test_collect_snapshot_source_cleanup_after_delete_retains_logical_source_uid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = _target_handoff_slurmcluster_resource()
+
+    def fake_kubectl_json(cmd, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+        resource = cmd[4] if len(cmd) > 4 else ""
+        if resource == "crd":
+            return {"items": [{"metadata": {"name": "slurmclusters.slurm.nebius.ai"}}]}
+        if resource == "namespace":
+            return {
+                "items": [
+                    {"metadata": {"name": "kube-system", "uid": "kubernetes-uid"}},
+                    {"metadata": {"name": "soperator", "uid": "soperator-uid"}},
+                ]
+            }
+        if resource == "pv":
+            return {"items": [_bound_jail_pv()]}
+        if resource == "pvc":
+            return {"items": [_bound_jail_pvc()]}
+        if resource == "slurmclusters":
+            return {"items": [target]}
+        return {"items": []}
+
+    monkeypatch.setattr(soperator_onboarding_module, "_kubectl_json", fake_kubectl_json)
+    monkeypatch.setattr(soperator_onboarding_module, "_helm_json", lambda *_args, **_kwargs: [])
+
+    snapshot = collect_kubectl_soperator_snapshot(
+        kube_context="ctx",
+        slurmcluster_identity_scope=_resume_slurmcluster_scope(
+            mode="source-cleanup",
+            target_uid="target-slurmcluster-uid",
+        ),
+    )
+
+    assert snapshot["resume_slurmcluster_identity"]["identity_role"] == "target"
+    assert snapshot["cluster_identity"]["slurmcluster_uid"] == "slurmcluster-uid"
+    assert snapshot["identity_soperator_resources"] == [target]
 
 
 def test_slurmcluster_identity_requires_immutable_uid() -> None:
@@ -4178,6 +4473,76 @@ def test_completed_passive_populate_job_is_not_current_before_consumer_switch() 
     assert jail_rootfs["current_pvc_name"] == "jail-rootfs-slot-a-pvc"
     assert jail_rootfs["current_evidence_status"] == "active-slot-verified"
     assert jail_rootfs["refresh_required"] is True
+
+
+def test_active_jail_binding_follows_exact_resume_identity_across_dual_cr_handoff() -> None:
+    def slurmcluster(*, name: str, uid: str, pvc_name: str) -> dict[str, object]:
+        return {
+            "apiVersion": "slurm.nebius.ai/v1",
+            "kind": "SlurmCluster",
+            "metadata": {"name": name, "namespace": "soperator", "uid": uid},
+            "spec": {
+                "volumeSources": [
+                    {
+                        "name": "jail",
+                        "persistentVolumeClaim": {"claimName": pvc_name},
+                    }
+                ],
+                "slurmNodes": {"login": {"volumes": {"jail": {"volumeSourceName": "jail"}}}},
+            },
+        }
+
+    source = slurmcluster(name="source-cluster", uid="source-uid", pvc_name="source-jail-pvc")
+    target = slurmcluster(name="target-cluster", uid="target-uid", pvc_name="target-jail-pvc")
+    source_ref = {"namespace": "soperator", "name": "source-cluster", "uid": "source-uid"}
+    target_ref = {"namespace": "soperator", "name": "target-cluster", "uid": "target-uid"}
+    snapshot = {
+        "soperator_resources": [source, target],
+        "identity_soperator_resources": [source],
+        "resume_slurmcluster_identity": {
+            "identity_role": "source",
+            "source": source_ref,
+            "target": target_ref,
+        },
+        "pvcs": [
+            {
+                "metadata": {
+                    "name": "source-jail-pvc",
+                    "namespace": "soperator",
+                    "uid": "source-jail-pvc-uid",
+                },
+                "status": {"phase": "Bound"},
+            },
+            {
+                "metadata": {
+                    "name": "target-jail-pvc",
+                    "namespace": "soperator",
+                    "uid": "target-jail-pvc-uid",
+                },
+                "status": {"phase": "Bound"},
+            },
+        ],
+        "cluster_identity": {"jail_filesystem_id": "source-jail-filesystem-id"},
+    }
+
+    source_binding = soperator_discovery_module._active_jail_pvc_binding(snapshot)  # noqa: SLF001
+    assert source_binding["status"] == "bound"
+    assert source_binding["slurmcluster_name"] == "source-cluster"
+    assert source_binding["pvc_name"] == "source-jail-pvc"
+    assert source_binding["pvc_uid"] == "source-jail-pvc-uid"
+
+    snapshot["identity_soperator_resources"] = [target]
+    snapshot["resume_slurmcluster_identity"] = {
+        "identity_role": "target",
+        "source": source_ref,
+        "target": target_ref,
+    }
+    snapshot["cluster_identity"] = {"jail_filesystem_id": "target-jail-filesystem-id"}
+    target_binding = soperator_discovery_module._active_jail_pvc_binding(snapshot)  # noqa: SLF001
+    assert target_binding["status"] == "bound"
+    assert target_binding["slurmcluster_name"] == "target-cluster"
+    assert target_binding["pvc_name"] == "target-jail-pvc"
+    assert target_binding["pvc_uid"] == "target-jail-pvc-uid"
 
 
 def test_failed_active_slot_populate_job_is_not_current_evidence() -> None:

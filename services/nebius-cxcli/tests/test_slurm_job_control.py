@@ -24,10 +24,12 @@ from nebius_cxcli.slurm_job_control import (
     prompt_slurm_job_control,
     slurm_job_control_pending_selected_ids,
     slurm_job_control_selected_ids_for_action,
+    slurm_table_value,
 )
 from nebius_cxcli.slurm_jobs import (
     AffectedSlurmJob,
     parse_scontrol_show_partition_states,
+    parse_squeue_jobs,
     slurm_job_is_active,
     slurm_job_is_terminating,
     slurm_partition_quiesce_records,
@@ -157,6 +159,9 @@ def test_slurm_job_control_all_requeue_actions_select_only_active_jobs() -> None
     assert slurm_job_control_selected_ids_for_action("cancel-all", jobs, ()) == ("41", "44")
     assert slurm_job_control_selected_ids_for_action("requeue-all", jobs, ()) == ("41",)
     assert slurm_job_control_selected_ids_for_action("requeue-hold-all", jobs, ()) == ("41",)
+    assert slurm_job_control_selected_ids_for_action(
+        "cancel-selected", jobs, ("missing", "44", "41")
+    ) == ("44", "41")
     assert slurm_job_control_pending_selected_ids(jobs, ("41", "44")) == ("44",)
 
 
@@ -194,6 +199,39 @@ def test_slurm_jobs_table_renders_aligned_columns_and_selection_marks() -> None:
     assert "Priority" in rendered
 
 
+@pytest.mark.parametrize(
+    "sentinel",
+    ("", "-", "(null)", "(NULL)", "N/A", "none", "not_set", "unlimited"),
+)
+def test_slurm_table_value_normalizes_empty_slurm_sentinels(sentinel: str) -> None:
+    assert slurm_table_value(sentinel) == "-"
+
+
+def test_slurm_job_control_normalizes_live_squeue_sentinels() -> None:
+    jobs = parse_squeue_jobs(
+        "10|root|RUNNING|main|worker-1|N/A|(null)|NONE|00:05|35:00|30:00|job-10",
+        impact_scope="allocated-node",
+    )
+
+    assert jobs[0].allocated_nodes == "worker-1"
+    assert jobs[0].requested_nodes == ""
+    assert jobs[0].scheduled_nodes == ""
+    assert jobs[0].reason == ""
+
+    async def _run() -> tuple[str, tuple[str, ...]]:
+        app = create_slurm_job_control_app(jobs, title="Affected Slurm jobs")
+        async with app.run_test(size=(160, 40)):
+            table = app.query_one("#jobs", DataTable)
+            title = app.query_one("#title", Static)
+            row = table.get_row("10")
+            return str(title.content), tuple(str(row[index]) for index in range(5, 9))
+
+    assert asyncio.run(_run()) == (
+        "Affected Slurm jobs",
+        ("worker-1", "-", "-", "-"),
+    )
+
+
 def test_slurm_job_control_textual_app_marks_completing_jobs() -> None:
     async def _run():
         app = create_slurm_job_control_app(
@@ -203,10 +241,27 @@ def test_slurm_job_control_textual_app_marks_completing_jobs() -> None:
         async with app.run_test(size=(160, 40)):
             table = app.query_one("#jobs", DataTable)
             status = app.query_one("#status", Static)
-            return table.get_row("8")[2], str(status.content)
+            headers = [column.label.plain for column in table.columns.values()]
+            return table.get_row("8")[3], str(status.content), headers
 
-    state_cell, status_text = asyncio.run(_run())
+    state_cell, status_text, headers = asyncio.run(_run())
 
+    assert headers == [
+        "Sel",
+        "Job",
+        "User",
+        "State",
+        "Partition",
+        "Allocated",
+        "Requested",
+        "Scheduled",
+        "Reason",
+        "Elapsed",
+        "Limit",
+        "Remaining",
+        "Scope",
+        "Name",
+    ]
     assert isinstance(state_cell, Text)
     assert state_cell.plain == "COMPLETING"
     assert "yellow" in str(state_cell.style)
@@ -393,7 +448,7 @@ def test_slurm_job_control_textual_app_ticks_remaining_time() -> None:
         async with app.run_test(size=(160, 40)) as pilot:
             await pilot.pause(1.25)
             table = app.query_one("#jobs", DataTable)
-            return table.get_row("41")[9]
+            return table.get_row("41")[11]
 
     remaining = asyncio.run(_run())
 
@@ -579,6 +634,145 @@ def test_slurm_job_control_textual_callback_runs_action_and_refreshes_in_place()
     assert row_count == 1
     assert job_id == "44"
     assert result is None
+
+
+def test_slurm_job_control_textual_queues_action_during_refresh() -> None:
+    refresh_started = threading.Event()
+    release_refresh = threading.Event()
+    actions: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = []
+
+    def _jobs_provider() -> tuple[AffectedSlurmJob, ...]:
+        refresh_started.set()
+        assert release_refresh.wait(timeout=5)
+        return (_job("41"), _job("44", state="PENDING", allocated_nodes=""))
+
+    def _action_handler(
+        action: str,
+        selected: tuple[str, ...],
+        displayed_jobs: tuple[AffectedSlurmJob, ...],
+    ) -> tuple[AffectedSlurmJob, ...]:
+        actions.append((action, selected, tuple(job.job_id for job in displayed_jobs)))
+        return (_job("44", state="PENDING", allocated_nodes=""),)
+
+    async def _run():
+        app = create_slurm_job_control_app(
+            (_job("41"), _job("44", state="PENDING", allocated_nodes="")),
+            title="Affected Slurm jobs",
+            jobs_provider=_jobs_provider,
+            action_handler=_action_handler,
+            poll_interval_seconds=30,
+        )
+        async with app.run_test(size=(160, 40)) as pilot:
+            await pilot.press("space")
+            app._schedule_poll(reason="test")  # noqa: SLF001
+            assert await asyncio.to_thread(refresh_started.wait, 2)
+            await pilot.press("c")
+            await pilot.pause(0.1)
+            status = app.query_one("#status", Static)
+            queued_status = str(status.content)
+            release_refresh.set()
+            await pilot.pause(0.5)
+            return queued_status, app.return_value
+
+    queued_status, result = asyncio.run(_run())
+
+    assert "Queued cancel-selected" in queued_status
+    assert actions == [("cancel-selected", ("41",), ("41", "44"))]
+    assert result is None
+
+
+def test_slurm_job_control_textual_queued_all_action_does_not_include_new_jobs() -> None:
+    refresh_started = threading.Event()
+    release_refresh = threading.Event()
+    actions: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = []
+
+    def _jobs_provider() -> tuple[AffectedSlurmJob, ...]:
+        refresh_started.set()
+        assert release_refresh.wait(timeout=5)
+        return (_job("41"), _job("45"))
+
+    def _action_handler(
+        action: str,
+        selected: tuple[str, ...],
+        displayed_jobs: tuple[AffectedSlurmJob, ...],
+    ) -> tuple[AffectedSlurmJob, ...]:
+        actions.append((action, selected, tuple(job.job_id for job in displayed_jobs)))
+        return (_job("45"),)
+
+    async def _run():
+        app = create_slurm_job_control_app(
+            (_job("41"),),
+            title="Affected Slurm jobs",
+            jobs_provider=_jobs_provider,
+            action_handler=_action_handler,
+            poll_interval_seconds=30,
+        )
+        async with app.run_test(size=(160, 40)) as pilot:
+            app._schedule_poll(reason="test")  # noqa: SLF001
+            assert await asyncio.to_thread(refresh_started.wait, 2)
+            await pilot.press("upper_c")
+            release_refresh.set()
+            await pilot.pause(0.5)
+
+    asyncio.run(_run())
+
+    assert actions == [("cancel-selected", ("41",), ("41", "45"))]
+
+
+@pytest.mark.parametrize(
+    ("key", "select_first", "exit_after_action"),
+    [("c", True, True), ("upper_c", False, True), ("c", True, False)],
+)
+def test_slurm_job_control_textual_queued_action_handles_vanished_snapshot(
+    key: str,
+    select_first: bool,
+    exit_after_action: bool,
+) -> None:
+    refresh_started = threading.Event()
+    release_refresh = threading.Event()
+
+    def _jobs_provider() -> tuple[AffectedSlurmJob, ...]:
+        refresh_started.set()
+        assert release_refresh.wait(timeout=5)
+        return (_job("45"),)
+
+    def _unexpected_action(
+        _action: str,
+        _selected: tuple[str, ...],
+        _displayed_jobs: tuple[AffectedSlurmJob, ...],
+    ) -> tuple[AffectedSlurmJob, ...]:
+        raise AssertionError("a vanished queued selection must not reach the action handler")
+
+    async def _run():
+        app = create_slurm_job_control_app(
+            (_job("41"),),
+            title="Affected Slurm jobs",
+            jobs_provider=_jobs_provider,
+            action_handler=_unexpected_action,
+            poll_interval_seconds=30,
+            exit_after_action=exit_after_action,
+        )
+        async with app.run_test(size=(160, 40)) as pilot:
+            if select_first:
+                await pilot.press("space")
+            app._schedule_poll(reason="test")  # noqa: SLF001
+            assert await asyncio.to_thread(refresh_started.wait, 2)
+            await pilot.press(key)
+            release_refresh.set()
+            await pilot.pause(0.5)
+            status = "" if exit_after_action else str(app.query_one("#status", Static).content)
+        return app.return_value, status
+
+    result, status = asyncio.run(_run())
+
+    if exit_after_action:
+        assert result is not None
+        assert result.action == SLURM_JOB_CONTROL_JOBS_CHANGED
+        assert result.selected_job_ids == ()
+        assert status == ""
+    else:
+        assert result is None
+        assert "Queued cancel-selected no longer applies after the Slurm refresh" in status
 
 
 def test_slurm_job_control_textual_callback_can_exit_after_action_for_fast_scheduler() -> None:

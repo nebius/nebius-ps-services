@@ -652,11 +652,13 @@ and chart source-family changes.
   `/mnt/jail-store/shared/...`. External adoption keeps the existing physical
   jail SFS, creates only logical slot directories under
   `/mnt/jail/.cxcli/rootfs`, treats legacy `/mnt/jail` as the active rootfs
-  until first switch, and migrates those same paths into `/mnt/jail/shared/...`.
-  In both layouts, cxcli keeps ownership and permissions, symlinks, ACLs, and
-  xattrs preserved where supported. The migration records exact source decisions in
-  checkpoint/report state and counts only present source paths in shared-copy
-  capacity.
+  until first switch. Automatic external `/home`, `/data`, `/scripts`, and
+  `/models` stay in place under `/mnt/jail` and require neither a writer hold
+  nor a copy. Only an explicitly requested non-overlapping relocation uses a
+  path such as `/mnt/jail/shared/...` and the guarded copy workflow. When a
+  copy is required, cxcli preserves ownership and permissions, symlinks, ACLs,
+  and xattrs where supported. The migration records exact source decisions in
+  checkpoint/report state and counts only present copied paths in capacity.
   Before passive-slot values or the populate Job are applied, cxcli probes
   physical jail SFS capacity, measuring legacy rootfs usage while excluding
   the layout-specific cxcli system directory and configured persistent jail
@@ -1350,17 +1352,34 @@ The current Nebius node-template executor is provider-unit scoped, so reports
 show `provider-unit` and do not claim exact-node replacement inside a mixed
 busy/free node group. Reports and checkpoints record quiesced partitions,
 restore verification, target mode, and a per-job hold operation containing the
-immutable Slurm identity, exact pre-state, durable mutation intent, and exact
-observed held post-state. Successful upgrades release only jobs that cxcli
-requeue-held, and only when a fresh observation still matches that cxcli-owned
-post-state. Exact restoration to the recorded pre-state is a no-op; identity
-drift, customer re-hold/state drift, or unknown observation is
-`recovery-required` and preserves the compensation without dispatching release.
-An intent-only resume that observes a held job is also recovery-required because
-cxcli cannot distinguish an interrupted cxcli command from a customer hold; it
-does not adopt the live hold as its post-state. Recovery guidance is inspection-only
-(`scontrol show job <jobid> -o`), not a blind mutation command. TTY managed and external upgrade runs default to `interactive`;
-non-TTY and `--no-interactive` upgrade runs default to `fail`, so automation
+immutable Slurm identity, full pre-state record, durable mutation intent, and
+full observed held post-state. Compare-and-set derives a stable control
+projection from those v1 records: `RunTime`, `EndTime`, and `LastSchedEval` may
+advance between observations, while state, reason, priority/held status,
+requeueability, restart count, partition, allocation, and every other
+nonvolatile field remain exact. Successful upgrades release only jobs that
+cxcli requeue-held. After dispatch, Slurm must show the same stable job lineage,
+a reset `SubmitTime`, `Restarts` incremented by exactly one, unchanged
+partition/requeue/time-limit controls, and a settled unallocated held state;
+that full post-transition observation owns later release. A fresh observation
+still matches that cxcli-owned post-state immediately before release. An exact
+stable pre-state after an undispatched intent is a no-op; lineage drift,
+customer re-hold/state drift, or unknown observation is `recovery-required` and
+preserves the compensation without dispatching release. An intent-only resume
+that observes a held job, or a release-intent resume that observes an unheld
+job, is also recovery-required because cxcli cannot distinguish an interrupted
+cxcli command from a customer action; it does not adopt the live state without
+explicit exact recovery approval. `--approve-remediation` permits only an exact
+intent-to-held transition to be adopted. cxcli checkpoints recovery intent
+before promoting the full live held observation, performs no second hold
+mutation, and completes this reconciliation before partition quiesce or
+worker/provider classification. The same-attempt release proof accepts either
+the exact unallocated pending state or an immediately allocated
+`CONFIGURING`/`RUNNING` state. Recovery guidance is inspection-only outside
+this explicit exact approval path (`scontrol show job <jobid> -o`), not a blind
+mutation command. TTY managed and
+external upgrade runs default to `interactive`; non-TTY and `--no-interactive`
+upgrade runs default to `fail`, so automation
 should pass an explicit policy such as `--job-policy wait-to-finish` and
 destructive cancel/requeue or wait-then-cancel policies remain deliberate.
 Prompt-capable interactive runs render the affected jobs in an aligned Textual
@@ -1371,7 +1390,11 @@ displayed jobs as appropriate. The `?` key opens a scrollable help overlay, `b`
 hides the full-screen table and keeps polling silently at the current Slurm
 gate, cancel action keys call `scancel` and then wait for the selected
 job ids to leave the affected Slurm scope, action keys refresh the same table in
-place after Slurm updates. In Slurm-clear fast worker scheduling, a completed
+place after Slurm updates. One action entered during an in-flight refresh is
+queued against the displayed job-ID snapshot; newly appearing jobs are excluded,
+and a snapshot whose IDs all vanished never invokes an action handler. The
+persistent TUI stays open with a no-longer-applies status, while fast scheduler
+mode returns `jobs-changed`. In Slurm-clear fast worker scheduling, a completed
 operator action can return control to the scheduler so newly clear provider
 units are dispatched before reopening the monitor for remaining blockers, and
 idle polling exits automatically when no affected jobs remain. Slurm may report cancelled jobs as `COMPLETING` while processes
@@ -1394,19 +1417,33 @@ into every later target Helm and Jail Upgrade values reapply so server-side
 apply cannot remove the retained allocation; and verifies the original Service
 UID, ClusterIP, LoadBalancer ingress, allocation id, target login StatefulSet
 readiness, preserved-Service EndpointSlice readiness, and login-side Slurm smoke
-before source login retirement, defers that Slurm CLI smoke only when Jail
-Upgrade is planned and the failure matches known old-rootfs/target-config
-handoff markers, and requires post-Jail `scontrol`, `sbatch`, and accounting/QOS
-smoke after consumers switch,
-refuses the later first-adoption persistent-mount login writer hold under the
-default `target-ready` session policy because that hold temporarily removes
-continuous login endpoints; operators must explicitly choose `wait-active` or
-`grace-period` for that maintenance window; onboard and render next-step output
-uses `wait-active` in the generated execute command when the current locked
-segment contains that first-adoption migration. The generated execute command
-in dry-run output substitutes it for the default `target-ready` plan and
-preserves an explicit compatible policy plus its drain timeout on any locked
-segment, while the dry-run screen reports the policy used to produce the plan,
+before source login retirement. Immediately before every target Helm values
+reconciliation, cxcli captures the currently backing login Pods and enforces the
+selected session policy. `wait-active` leaves target values unchanged when any
+session is active or any Pod cannot be probed; `grace-period` waits its configured
+interval before mutation; and `target-ready` does not wait for existing TCP
+sessions. The post-apply readiness gates preserve fresh SSH endpoint availability,
+but no policy migrates an established TCP connection when its backing Pod is
+replaced, and the point-in-time probe cannot lock out a new connection that
+arrives after its final observation. Effective target Helm values explicitly disable
+controller OpenMetrics while consumers use the legacy rootfs so Slurm 24.x does
+not parse the Slurm 25.11-only `MetricsType` key. The override remains through
+slot switch and exact target-slot consumer verification without rewriting
+`config.yaml`; a second checkpointed Helm reconciliation then restores the
+configured/default value, verifies SlurmCluster readiness and the exact live
+value, and runs the full pre-release Slurm suite against that final
+configuration before user partitions reopen. A checkpoint-owned
+crash-window resume defers that Slurm CLI smoke only when Jail Upgrade is planned
+and the failure matches known old-rootfs/target-config handoff markers, and
+requires post-Jail `scontrol`, `sbatch`, and accounting/QOS smoke after consumers
+switch, keeps automatic external persistent paths in
+place without a login writer hold, and refuses an explicitly relocated
+first-adoption path's copy-time writer hold under the default `target-ready`
+session policy because that hold temporarily removes continuous login
+endpoints; operators must explicitly choose `wait-active` or `grace-period`
+for that maintenance window. The generated execute command preserves an
+explicit compatible policy plus its drain timeout, while the dry-run screen
+reports the policy used to produce the plan,
 provides ad hoc `ext-soperator scale-up` and `ext-soperator scale-down`
 commands for external maintenance without onboarding, requiring both Nebius
 `--project-id`/`--cluster-id` for node-group lookup and `--kube-context` for
@@ -1427,8 +1464,9 @@ creates or reuses aligned controller-spool and accounting SFS
 filesystems, keeps the existing physical jail SFS for single-SFS rootfs slot
 adoption, models `/home`, `/data`, `/scripts`, `/models`, plus explicitly
 declared additional customer paths as persistent jail mounts on the same
-physical jail SFS, migrates legacy in-rootfs data into those shared mount paths
-during first adoption, attaches required storage to
+physical jail SFS, adopts the automatic legacy paths in place without a data
+copy or all-consumer writer hold, retains guarded copying only for explicitly
+relocated non-overlapping paths, attaches required storage to
 discovered Nebius node groups, runs Kubernetes data-copy Jobs when old and
 target PVC pairs exist for non-jail storage, normalizes target Slurm
 plugin runtime settings, recreates target worker Kruise StatefulSets when
@@ -1529,6 +1567,12 @@ state, reports that an upgrade mutation was performed, and waits on live
 readback rather than retrying the Nebius node-group update. A zero-surge
 service role quiesced before that provider call is restored and checkpointed
 before the interrupt propagates.
+Provider-operation reconciliation uses the service-scoped MK8s node-group,
+MK8s cluster, Compute filesystem, or VPC allocation operation client selected
+from the exact journaled operation kind; it promotes state only when the
+returned operation ID is terminal-successful and its resource ID matches the
+journal. Unknown, failed, or mismatched observations remain fail-closed without
+dispatching another provider mutation.
 The executor-owned live status surface uses concise
 `External Soperator upgrade phase ...` comments for preflight, Slurm job
 preflight, protected-state capture, final post-upgrade checks, and report
@@ -1559,10 +1603,18 @@ worker pools scan-friendly without mixing in Kubernetes registered-node counts
 and still shows provider replacement when `ready/current` is already full.
 Active or degraded groups sort before
 unchanged ready groups, and missing provider fields render as `unknown`, except
-an omitted `outdated_node_count` on a fully ready `RUNNING` group is treated as
-zero remaining. While a control-plane hop is active before node-template rollout
-state exists, node groups render as `not-started` with `upgraded=0`,
-`upgrading=0`, and `remaining=<total>` when the provider reports total counts.
+an omitted `outdated_node_count` on a fully ready provider-active group, or on
+a fully ready non-active `RUNNING` group, is treated as zero remaining. A
+provider-active rollout with target capacity still ready
+renders as `upgrading`. A checkpoint-owned active worker rollout also remains
+`upgrading` while its readiness deficit stays within both the exact per-group
+admission budget and the pinned global unavailable-node budget. A deficit
+without accepted checkpoint ownership or unambiguous budgets, a budget
+overrun, a non-rollout provider state, or a failed state remains `degraded`.
+While a control-plane hop is active before
+node-template rollout state exists, node groups render as `not-started` with
+`upgraded=0`, `upgrading=0`, and `remaining=<total>` when the provider reports
+total counts.
 The external node-template phase label covers both the MK8s control-plane hop
 and node-template rollout, and live status reports a separate `MK8s Control
 Plane` signal while a control-plane hop is active. Terminal output highlights provider
@@ -1576,12 +1628,25 @@ from either status probe propagate before phase mutation. Queue health and Soper
 SlurmCluster reconciliation remain adjacent component details. The checkpoint
 records compact status snapshots at phase start, phase end, and pending gates.
 These status lines describe best-effort service continuity and degradation
-during external upgrade; they do not promise that downtime cannot occur. During
-checkpointed rolling-compute target handoff, Slurm worker status reports
-deferred/upgrading from checkpoint state instead of probing old Slurm clients
-with `sinfo` after target-era config has started applying. A recognized config
-mismatch uses the durable target-apply marker even when this phase recorded no
-new partition transition because admission was already quiesced.
+during external upgrade; they do not promise that downtime cannot occur. The
+legacy-rootfs compatibility bridge suppresses target-only OpenMetrics and
+`PluginDir` config while old-rootfs clients remain. Before restoring the target
+Soperator manager after source-owner retirement, cxcli checkpoints the exact
+target SConfig replica contract and service-account identity, sets the target
+SConfig writer size to zero, and proves that the captured source Deployment,
+ReplicaSets, and Pods no longer run a writer. The compatible config already in
+the shared Jail remains authoritative even if the restored manager regenerates
+the target ConfigMap. After the other target-slot consumers are verified, cxcli
+restores the target SConfig replica contract, requires a target-owned pod using
+the actual target service account and active slot, and verifies delivery of the
+target config before completing `rootfs_handoff_verification`. It then restores
+the configured OpenMetrics value before final pre-release checks and partition
+release. During checkpointed rolling-compute target
+handoff, Slurm worker status can still report deferred/upgrading from checkpoint
+state instead of probing an old Slurm client after a crash-window target config
+apply. A recognized config mismatch uses the durable target-apply marker even
+when this phase recorded no new partition transition because admission was
+already quiesced.
 Before the passive-slot Job exists, Jail Upgrade status follows persistent-copy
 state: active or completed copy work is `upgrading`, failed or writer-drift-stale
 evidence is `degraded`, and planned work remains `not-started`.
@@ -1729,14 +1794,34 @@ one-node controller/accounting workloads, and known drain-blocking webhook
 replicas only for lower-continuity zero-surge service-role rollouts, and
 requires spare surge capacity for active service groups or worker waves only
 when the operator explicitly chooses safe-surge for that role.
+Before a zero-surge `system` update, cxcli mutates the owning SlurmCluster rather
+than fighting its generated Deployment: it temporarily changes
+`sConfigController.node.k8sNodeFilterName` from `system` to the already-upgraded
+`controller` filter while retaining the original replica count. Provider
+dispatch is blocked unless the Deployment is controller-owned by that exact
+SlurmCluster UID and its rolling strategy preserves at least one available
+replica. cxcli then waits until the Deployment has observed the new generation,
+has exactly the preserved number of updated/ready/available replicas, has no
+unavailable or extra terminating replica, and its Pod template requires the
+temporary filter. Restoration uses the journaled SlurmCluster UID and live
+`resourceVersion`, rejects desired-state drift, and waits for the same
+conditions on the original filter before marking the quiesce restored.
 Checkpoint-write and post-update readiness failures restore any quiesced
 service role before the phase exits. On resume, an older durable `quiesced`
 record is restored and checkpointed before reconciliation; cxcli reapplies
 quiesce from that restored baseline only if provider dispatch still needs to
-run. The `wait-active` source-Pod probe treats only an exact Pod-specific
-Kubernetes NotFound response as retirement; all namespace, wrong-Pod,
-unrelated-resource, and ambiguous probe failures remain unknown and fail
-closed before provider mutation.
+run. Before a zero-surge login quiesce changes either the SlurmCluster login
+size or the rendered Kruise login replicas, cxcli captures the source login
+Pod set, verifies a ready login Service endpoint, and enforces the selected
+session policy. Under `wait-active`, an active or unresolved source-Pod session
+probe leaves that desired state unchanged and blocks the provider mutation.
+This is a drain gate; an established TCP connection cannot migrate through
+replacement of its own backing Pod or node. The `wait-active` source-Pod probe
+treats only an exact Pod-specific Kubernetes server NotFound response or the
+exact Pod-specific `kubectl exec` connection-upgrade not-found response as
+retirement; all namespace, wrong-Pod, unrelated-resource, container, and
+ambiguous probe failures remain unknown and fail closed before provider
+mutation.
 Interactive external onboarding asks `slurm_scheduling_quiesce` before rollout
 pacing. With the default `true`, cxcli skips normal worker wave and worker
 `max_unavailable_count` prompts because Slurm-clear workers dispatch as soon as
@@ -1825,6 +1910,19 @@ clients. The durable checkpoint records the handoff marker before Helm mutation
 starts so a Helm timeout or partial apply has an idempotent resume point.
 Generic login-continuity state does not prove target handoff by itself; missing
 or non-v3 journal evidence fails closed instead of using a markerless fallback.
+Discovery itself stays singleton-strict unless an active v3 checkpoint supplies
+the handoff scope. A target-handoff scope must resolve exactly the immutable
+source plus one target; a missing target UID may be bootstrapped only from exact
+Helm ownership and the checkpointed chart version, then revalidated under the
+execution lock and persisted before backup. Source-cleanup scope permits only
+the bound pair or the target after source deletion, and target-only scope
+permits exactly the bound target. UID drift, missing namespaces, or any extra
+`SlurmCluster` fails closed. Source `SlurmCluster` and `NodeSet` cleanup uses an
+API `DeleteOptions` UID precondition rather than a name-only delete. A completed
+handoff is promoted to a compact campaign-level source-to-target transition;
+later segments retain that immutable evidence without carrying operational
+rolling phase state or repeating source cleanup. Jail rootfs/PVC discovery uses
+the scope-selected identity resource, not the ambiguous full handoff inventory.
 Slurm partition restore and resume commands remain tied to Slurm control-plane
 authority rather than login availability: cxcli uses login-side Slurm clients
 when possible and falls back to the controller `slurmctld` container for Slurm
@@ -1849,22 +1947,153 @@ must preserve those values through typed chart fields or explicit raw config
 escape hatches; profile defaults must not erase customer partitions,
 associations, QOS, or accounting enforcement. The pre-mutation backup is a DR
 restore point, not the transactional handoff image: after affected jobs finish
-and Slurm admission is quiet, rolling compute quiesces source accounting and
-captures a fresh `slurm_acct_db`-only dump under the cluster-scoped checkpoint
-directory with mode `0600`. Target accounting remains quiesced while that dump
-is imported into the new chart-managed MariaDB. The import preserves target
-cluster and internal schema metadata, reconciles source-prefixed and shared
-global tables only through additive changes against a private checksum-bound
-target-current schema snapshot, and registers the old source name as a
-controller-free historical cluster. Exact source job, step,
-completed-job, maximum job-id, and submission-time evidence must match on the
-target and be readable through target-version `sacct`; target-version
-`sacctmgr` must show the live target controller and historical source
-registration before source Slurm resources may be retired. A missing dump, changed
-Pod/PVC identity, failed import, or count mismatch leaves the phase pending,
-keeps Slurm scheduling quiesced, and does not resume target accounting after it
-has been quiesced for import. SQL and credentials are never written to reports
-or terminal output. Post-cutover validation compares protected-state hashes
+and Slurm admission is quiet, rolling compute captures a preliminary source
+snapshot without changing accounting. Target Helm values provision a separate
+MariaDB with accounting enabled. cxcli then compare-and-set replaces the
+SlurmDBD command/args on both exact source and target `SlurmCluster` objects
+with an inert command while leaving `accounting.enabled=true`. It does not
+disable accounting: Soperator treats that setting as removal of the CR-owned
+MariaDB resource.
+
+The command-fence journal binds both CR namespace/name/UID/resourceVersion
+identities, their original command/args field presence and values, the global
+accounting Deployment, and every pre-fence ReplicaSet UID. Convergence requires
+both CRs to retain the inert command, the globally named Deployment to use
+`Recreate`, its template and every current owned Pod to carry the same command,
+all pre-fence Pods to be absent, port 6819 to have no listener, and both MariaDB
+process lists to have no other `slurm_acct_db` connection. This explicit dual
+proof is required because source and target CRs contend for one accounting
+Deployment name even though their MariaDB resources are distinct. If an older
+interrupted attempt removed the source MariaDB, cxcli records recovery intent,
+atomically re-enables that exact source CR with the inert command, requires the
+new Pod to reattach the checkpointed retained PVC, and never accepts a rebound
+PVC. Both the fence and restore require the live accounting enabled value,
+command, and args to be either the checkpointed predecessor or the exact
+checkpointed destination at the inspected resourceVersion; any other live
+configuration is external drift and is not overwritten. The intent checkpoint
+precedes every CAS, so a canonical inert fence observed without its durable
+intent is also ambiguous external state and cannot be adopted.
+The private campaign checkpoint and every latest or per-segment report store
+only command/args field-presence flags, item counts, and SHA-256 identities.
+Before the restore mutation, cxcli transiently re-derives the exact original
+values from the fingerprint-bound deployed Helm revision and verifies those
+hashes; it never serializes the raw writer material. Sensitive patch content is
+supplied to `kubectl patch` through stdin rather than process argv.
+
+Under the dual fence, cxcli writes a new private mode-`0600`
+`slurm_acct_db`-only dump and seals its generation/SHA, source history, and both
+database identities. Each identity follows the exact Pod -> StatefulSet ->
+MariaDB -> checkpointed `SlurmCluster` controller-UID chain and a Bound PVC
+name/UID; every import, retirement, cleanup, and fast-verification boundary
+revalidates that chain. The import preserves target internal/global schema,
+reconciles compatible source-prefixed and shared tables additively, and uses
+drop-table reset semantics.
+
+A fresh target MariaDB may contain only Slurm's global/internal tables because
+the no-wait target chart and fixed-name child handoff do not guarantee that a
+target controller registered before both SlurmDBD writers were fenced. cxcli
+therefore treats schema initialization as its own journaled boundary. It accepts
+either a complete existing target-version proof or an exactly empty registration
+and per-cluster-table state. For the empty state, it checkpoints bootstrap
+intent and binds the Helm-proven target image across the exact target CR,
+Deployment, Pod image, and runtime image ID. The target binary's `slurmdbd -V`
+must match the pinned image version and `slurmdbd -u` must report that no
+conversion is pending, including when complete live tables are adopted. Before
+starting SlurmDBD, cxcli starts an inert listener for a cross-Pod positive
+control, creates a deny-ingress `NetworkPolicy` selecting the exact fenced Pod,
+rejects every other applicable additive policy that could allow the non-Service
+bootstrap port, then proves the same cross-Pod probe is denied while a Pod-local
+probe still reaches the listener. The design does not rely on `DbdAddr` to
+constrain the daemon listener. Target-version `sacctmgr -i add cluster` adds both
+the source historical name and final target name, making Slurm's own
+`create_cluster_tables()` path the schema authority and retaining
+target-version-only suffix tables. Handwritten or cloned Slurm DDL is forbidden.
+
+The bootstrap process is explicitly represented as `intent -> running ->
+verified`. It is terminated gracefully without a forced-kill path. Before
+`verified`, cxcli requires the owned process and non-Service listener to be gone,
+zero target database connections, both exact registrations, equal non-empty
+source/target suffix sets, the immutable target Pod/PVC/image identity, and both
+production command fences again. The schema snapshot and proof hash precede a
+UID/resourceVersion-preconditioned policy deletion. Complete live proof can be
+adopted after a checkpoint crash; a partial registration/table set, live
+bootstrap process, extra registration, or identity drift fails closed because
+Slurm cluster-table creation is not transactional.
+
+`cluster_table` is deliberately excluded from the SQL dump. Before bootstrap,
+cxcli seals the old internal cluster ID and accepts only the exact default source
+policy projection: `classification=0`, `dimensions=1`, `flags=0`, empty
+`federation`, empty `features`, `fed_id=0`, and `fed_state=0`. Non-default policy
+metadata fails before import instead of being silently reset. Runtime
+registration fields are regenerated by target-version SlurmDBD. Because
+`sacctmgr add cluster` reallocates internal IDs on a fresh database, cxcli
+requires both new IDs to be unique and within Slurm's `2..4095` range, and the
+final target ID must not reuse the old source ID; this keeps future target SLUIDs
+out of the historical source SLUID namespace without claiming that the source ID
+is deterministically preserved.
+
+The SQL stream is delivered only through `kubectl exec -i`. Before execution,
+cxcli binds the dump generation/SHA, target database identity, global schema
+snapshot, and bootstrap proof. The stream ends by writing a private completion
+marker with the operation ID and immutable dump binding. MariaDB exit zero alone
+does not advance state: cxcli also requires that exact marker, the complete
+source-prefixed inventory, and exact source-history equality before checkpointing
+`import_execution.status=applied`. Source-schema and global-schema reconciliation
+then have separate idempotent checkpoints. A crash during either reconciliation
+resumes from `applied` without SQL replay. Before dispatch, cxcli single-opens
+each private mode-`0600` artifact without following symlinks, verifies the exact
+opened bytes against size/SHA, and freezes SQL stdin before checkpointing the
+attempt. An absent or empty completion journal permits only the same immutable
+drop-table reset, bounded to three approved attempts; an exact marker is adopted
+even after a nonzero client/transport result, while a malformed or mismatched
+marker never replays. Successful schema reconciliation first checkpoints
+`import-reconciled`; the marker table is then removed under a separate
+drop-intent/absence journal before advancing to `imported-quiesced`. An exact
+legacy `importing` checkpoint from the former
+no-stdin command is converted only after proving the target database is still the
+unchanged baseline with zero registrations and zero cluster-prefixed tables.
+`imported-quiesced` and `target-enabling` never replay SQL, and every checkpointed
+command fence suppresses Helm replay.
+
+Source-owner retirement occurs before target writer restore so the two CRs
+cannot fight over the global Deployment. While both writers remain fenced,
+cxcli first requires the controller, login workload, and all login Services to
+carry the exact target `SlurmCluster` API/name/UID controller owner. Controller
+and login workload replica intent must equal the corresponding target CR sizes,
+and ready login Pods must carry the exact OpenKruise login workload
+API/name/UID owner before Service endpoints can count. It also requires every
+target-parented Helm NodeSet plus the worker workload owned
+by that exact NodeSet UID to request the configured replica count and be ready.
+The NodeSet/workload UIDs and configured counts are checkpointed. `scontrol
+ping` and `squeue` execute through an exact target-owned login Pod. These
+identity/readiness gates run again at the final delete boundary. After that
+potentially long worker wait, every active cxcli-owned `held-observed` Slurm job
+is re-read through an exact target login Pod and must exactly match its durable
+held observation; missing, substituted, unheld, or changed lineage blocks
+retirement.
+Cleanup intent captures the final source resourceVersion plus a stable exact
+API-path/kind/name/UID inventory of source-owned apps workloads, Kruise
+Advanced StatefulSets, Services, MariaDB CRs, and NodeSets. Kubernetes
+DeleteOptions then carry both UID and resourceVersion preconditions and
+`Orphan` propagation to delete only the source CR. Before restoring the target,
+cxcli proves source absence,
+old writer-Pod absence, target-only fence ownership, the unchanged target
+MariaDB, and retention of the source PVC plus sealed dump. It restores the
+target's original command/args exactly, verifies Deployment and Pod rollout,
+history, registrations, `sacctmgr`, and target-version `sacct`, and only then
+performs broader source child-resource cleanup. Child cleanup enumerates strict
+resource identities, preserves exact target-controller-owned children despite
+stale source labels, and accepts an orphaned former source child only when its
+API path and UID equal the pre-retirement binding. Each delete uses the current
+resourceVersion plus the exact UID, then polls that API path until the deleted
+UID is absent or a different UID proves replacement; an HTTP `202` alone cannot
+advance cleanup completion. Every captured source NodeSet follows this path;
+NodeSet cleanup is not restricted by a `worker*` name convention. The retained
+source accounting PVC is not a cleanup
+candidate. Any identity drift,
+ambiguous ownership, unhealthy target control plane, lost rollback asset, import mismatch, or stale deletion
+precondition leaves scheduling quiesced and the phase pending. SQL and
+credentials are never written to reports or terminal output. Post-cutover validation compares protected-state hashes
 and verifies live partitions, selected Slurm config keys, and
 SlurmDBD/accounting reachability before old rootfs/storage resources can be
 retired.
@@ -1972,7 +2201,10 @@ cxcli-managed Nebius Soperator profiles pin
 The supported Nebius Slurm 25 images place SPANK plugins in that Debian
 multi-arch directory. The standalone chart default still leaves `PluginDir` unset, and direct Helm users should set it only when the
 selected image path is known because Slurm fails startup when any listed
-`PluginDir` directory is absent.
+`PluginDir` directory is absent. The chart also exposes
+`slurmNodes.controller.openMetrics.enabled`; it defaults to `true` for Slurm
+25.11, while external first adoption overrides it through target-slot consumer
+verification and restores it before final pre-release checks.
 See the Scheduling And Preemption section in the soperator chart design
 document for the full field-to-Slurm.conf mapping and operational patterns.
 
@@ -3440,8 +3672,15 @@ or reboot behavior, and those paths are separate.
 
 ### Jail Upgrade
 
-Soperator uses a shared jail rootfs as the Linux filesystem that Slurm login and
-worker pods mount at `/mnt/jail`. The target jail content comes from
+Soperator uses a shared jail rootfs as the Slurm runtime filesystem mounted at
+`/mnt/jail`; it is not the Kubernetes container's literal `/`. The slot-switch
+contract covers the controller, login, enabled REST (`slurmrestd`),
+SConfigController, and every worker NodeSet. Controller and login workloads
+reference the selected rootfs volume source, REST and SConfigController follow
+the canonical `jail` volume-source alias, and every worker NodeSet references
+the selected rootfs PVC. Each individual pod mounts exactly one active rootfs
+source, and every enabled consumer must converge on the refreshed slot before
+user partitions resume. The target jail content comes from
 `SlurmCluster.spec.populateJail.image`. Updating that image in Helm values is
 only a desired-state change; it does not rewrite a rootfs slot that has already
 been populated. cxcli therefore treats jail refresh as a separate
@@ -3453,12 +3692,15 @@ order is the first supported Kubernetes staging hop, then target Soperator chart
 handoff plus Jail rootfs refresh in that same segment, then later Kubernetes-only
 hops after Slurm has passed post-Jail smoke.
 
-The jail refresh design uses active/passive rootfs slots plus a shared
-persistent-mount area on the same physical jail SFS:
+The jail refresh design uses active/passive rootfs slots plus stable
+persistent-mount directories on the same physical jail SFS:
 
 - the physical jail backing store contains `slot-a` and `slot-b`;
-- exactly one slot is the active rootfs that login and worker consumers mount;
-- the other slot is passive and can be repopulated with the target image;
+- before first external-adoption switch, `legacy-rootfs` is the active rootfs
+  source and `slot-b` is passive;
+- afterward, exactly one slot is the active rootfs mounted by the controller,
+  login, enabled REST, SConfigController, and every worker NodeSet, while the
+  other slot is passive and can be repopulated with the target image;
 - customer-owned paths such as `/home`, `/data`, `/scripts`, and `/models` live
   outside the replaceable rootfs slots and are mounted back into whichever slot
   is active.
@@ -3475,52 +3717,64 @@ the existing physical jail SFS, creates logical slots under
 source until the first successful switch. External discovery resolves the
 legacy PVC from the selected source SlurmCluster/owned NodeSets and stores it as
 `jailRootfs.adoption.legacyPvcName`; service and worker consumers stay on that
-PVC, and chart-generated shared persistent submounts remain detached, until the
-first passive-slot switch. In managed and external first
+PVC until the first passive-slot switch. In managed and external first
 adoption, `/home`, `/data`, `/scripts`, and `/models` are automatically modeled
 as persistent jail mounts. Managed targets use `/mnt/jail-store/shared/...`;
-external targets use `/mnt/jail/shared/...`. Additional paths such as
+external targets adopt `/mnt/jail/home`, `/mnt/jail/data`,
+`/mnt/jail/scripts`, and `/mnt/jail/models` in place. Additional paths such as
 `/checkpoints` must be declared with
 `--jail-persistent-mount <mountPath>=<localPath>` because cxcli does not infer
 arbitrary root-level folders as customer data.
-If an automatic path was absent in the legacy rootfs, the mount is still
-persistent after adoption: for example, missing `/models` is recorded with a
-`source_missing` marker, `/models` is wired to the shared target, and later user
-writes under `/models` land in `/mnt/jail/shared/models` on external clusters or
-`/mnt/jail-store/shared/models` on managed clusters.
+If an automatic path was absent in the legacy rootfs, the chart creates the
+stable directory before mounting it. Later `/models` writes land in
+`/mnt/jail/models` on external clusters or `/mnt/jail-store/shared/models` on
+managed clusters.
+
+Persistence and copying are separate decisions. During external first
+adoption, `/home`, `/data`, `/scripts`, and `/models` remain at their existing
+`/mnt/jail/...` directories and are remounted into the refreshed rootfs; their
+contents are not copied. Operators must declare every additional customer path.
+A same-location mapping is adopted in place, while only an explicitly relocated,
+non-overlapping mapping uses the guarded one-time copy workflow. An undeclared
+directory inside the legacy rootfs remains replaceable rootfs content and is not
+guaranteed to appear in the refreshed slot.
 
 The refresh sequence is deliberately ordered:
+
+External first adoption enters this sequence only after rolling compute has
+established one canonical dual-JailedConfig payload. With the exact manager
+paused, cxcli scales the exact source SConfig writer from its checkpointed
+replica count to zero and proves its ReplicaSets/Pods absent. An exact Ready
+Login Service endpoint classifies the complete frozen Jail as either the
+checkpointed target-canonical payload or one complete checkpointed
+source-legacy-safe payload and verifies legacy Slurm health. cxcli then
+compare-and-set writes the canonical target payload to the target ConfigMap
+first and source ConfigMap second, binds the intended service account only at
+zero, restores the exact original source-writer replica count, and verifies all
+JailedConfig files plus legacy Slurm health again. Any mixed, partial, unknown,
+or drifted payload blocks. This pre-Jail dual bridge is distinct from the later
+target-only compatible slot seed.
 
 1. Plan the refresh. `auto` refreshes when the populate-jail image changed, or
    when selected chart/rootfs evidence means compatibility cannot be proven. `force`
    always refreshes. `manual` records the required action and stops before
    mutation.
-2. Verify persistent mounts and passive-slot capacity. For managed and external
-   first adoption, cxcli first probes each known and explicit source path in the
-   old rootfs and records it as `present`, `absent`, `existing-submount`, or
-   `explicit`. The capacity probe measures the physical jail SFS while
+2. Verify persistent mounts and passive-slot capacity. Automatic external paths
+   are recorded as `adopted-in-place`; existing customer submounts remain
+   `existing-submount`, and explicitly relocated paths remain `explicit`. The
+   capacity probe measures the physical jail SFS while
    excluding the layout-specific cxcli system directory and persistent-mount
    source paths from the rootfs-copy estimate, counts only present
-   persistent-mount data for the one-time shared-data copy, skips absent paths
-   cleanly, and requires enough free space for both the passive rootfs slot and
-   that copy.
-3. During first adoption from a legacy rootfs, drain Slurm with the selected
-   job policy, checkpoint the immutable target SlurmCluster UID and current
-   maintenance value, and apply `spec.maintenance=downscale` only after an
-   explicit `wait-active` or `grace-period` login-session policy gate. This
-   Soperator-owned hold scales rendered login and worker workloads to zero
-   without changing NodeSet replica intent or removing workers from declarative
-   Slurm topology. With the default `target-ready` policy, cxcli stops during
-   execute preflight before any upgrade mutation because continuous SSH
-   endpoints cannot be preserved during that writer hold. After onboarding or
-   rendering a current locked segment with this migration, the generated
-   execute command already includes `--login-session-policy wait-active`.
-   The generated execute command in dry-run output substitutes that policy for
-   the default `target-ready` plan and preserves an explicit `wait-active` or
-   `grace-period` together with its drain timeout, including on later locked
-   segments; the dry-run screen itself reports the policy used to produce the
-   plan, and a manually composed `target-ready` command still fails closed.
-   After the gate, cxcli runs a Kubernetes persistent migration Job before
+   explicit copy data separately, and requires enough free space for the
+   passive rootfs plus any configured copy.
+3. During automatic external first adoption, drain only affected Slurm work
+   according to the selected job policy, populate the passive rootfs, and roll
+   consumers while the persistent directories remain live. No
+   `maintenance=downscale` hold is used. If an operator explicitly relocates a
+   persistent path to a different non-overlapping target, checkpoint the
+   immutable target SlurmCluster UID and maintenance value, require
+   `wait-active` or `grace-period`, and apply `maintenance=downscale` as a
+   copy-time writer hold. After the gate, cxcli runs a Kubernetes persistent migration Job before
    passive-slot population. The Job mounts the existing
    jail PVC once at `/store`, copies only present known or explicit paths such
    as `/store/home`, `/store/data`, `/store/scripts`, and `/store/models` into
@@ -3563,7 +3817,8 @@ The refresh sequence is deliberately ordered:
    revalidation after proof logs are read.
    On managed clusters those store paths map to `/mnt/jail-store/...`; on
    external clusters they map to `/mnt/jail/...`.
-   If a later refresh step fails after the copy is marked complete, cxcli keeps
+   This copy-only boundary is not used by automatic in-place adoption. If a
+   later refresh step fails after an explicit copy is marked complete, cxcli keeps
    `maintenance=downscale` and Slurm quiet instead of reopening legacy-rootfs
    writes that would make the shared copy stale. Resume accepts only the same
    SlurmCluster UID and either the recorded original or held maintenance value;
@@ -3574,7 +3829,7 @@ The refresh sequence is deliberately ordered:
    source, shared target, markers, and checkpoint are manually reconciled
    under an approved maintenance window.
    External execute resume treats any durable Jail Upgrade mutation evidence
-   (writer hold, copy/recovery intent or completion, passive population, switch,
+   (optional writer hold, copy/recovery intent or completion, passive population, switch,
    handoff, or post-Jail smoke) as a cross-phase fence until Jail Upgrade is
    durably completed. Policy-bearing quota/job preflight is deferred and no
    planned predecessor is reconciled, demoted, or rerun. A rolling/final phase
@@ -3588,38 +3843,81 @@ The refresh sequence is deliberately ordered:
    that name, exact pod contract, Job UID, and passive PVC UID before reuse.
    The Job runs the target
    populate-jail image and mounts the passive slot PVC at `/mnt/jail`. Existing
-   login and worker pods still use the old active slot while this Job writes
-   the new rootfs generation.
+   controller, login, enabled REST, and worker pods still use the old active
+   slot while this Job writes the new rootfs generation. Both captured source
+   and target SConfig writers are stopped; SConfigController is not an old-slot
+   consumer during passive population.
 5. Wait for the passive-slot Job to complete with the expected image.
-6. Verify that the login Service has at least one ready EndpointSlice backend
-   before switching consumers. First-adoption migration holds consumers during
-   the copy window, so cxcli defers this check until writer restore after the
-   slot switch.
-7. Switch values so the passive slot becomes the active slot. For every
-   configured service role, the jail `volumeSourceName` changes to the
-   refreshed slot. For worker NodeSets, the
-   `slurmd.volumes.jail.persistentVolumeClaim.claimName` changes
-   to the refreshed slot PVC. The previous active slot becomes the rollback
-   slot. For first adoption, the same switch restores the checkpointed
-   SlurmCluster maintenance value.
-8. Let Soperator reconcile the changed SlurmCluster and NodeSet desired state,
-   then verify the restored maintenance value against the checkpointed
-   SlurmCluster UID. The original NodeSet desired topology remains unchanged.
-   New or restarted consumers mount the refreshed rootfs, and
+6. For in-place first adoption, enforce a checkpointed host/PVC readiness
+   contract at two boundaries. Before refresh Helm mutation, a digest-pinned
+   read-only Job inspects the actual host-side jail store through a read-only
+   `/mnt` host mount and the legacy jail PVC through a separate read-only mount.
+   The store must be a real root-owned directory, not group- or world-writable;
+   every existing component of each declared persistent path must be a
+   directory and never a symlink. Missing automatic paths are allowed only at
+   this first boundary. After the mount DaemonSet creates the declared paths and
+   passive population completes, wait for the chart-derived jail-mount
+   DaemonSet, require the legacy, slot-a, slot-b, and every persistent-mount PVC
+   to be `Bound`, checkpoint their immutable UIDs, and re-run the read-only
+   probe with every path required to be a directory. Contract, PVC UID, root
+   permission, path-type, or host/PVC-view drift sets
+   `in_place_persistent_mount_adoption.status=pending` and blocks before the
+   switching Helm apply. Retries, including a live-corroborated post-switch
+   resume, re-run the gate rather than trusting old results.
+7. Verify that the login Service has at least one ready EndpointSlice backend
+   before switching consumers. Only an explicit copy-time writer hold defers
+   this check until writer restore after the slot switch.
+8. Switch desired state so the passive slot becomes the active slot. That one
+   decision drives the controller and login rootfs references, the canonical
+   `jail` alias consumed by enabled REST and SConfigController workloads, and
+   the Jail PVC reference for every configured worker NodeSet. The previous
+   active slot becomes the rollback slot. First adoption switches
+   `legacy-rootfs` to `slot-b`; later refreshes alternate between `slot-a` and
+   `slot-b`. Accounting values and storage bindings do not participate in this
+   switch. During first-adoption compatibility, the canonical SConfig alias
+   moves to the passive slot while the target SConfig desired size remains zero.
+   Before any SlurmCluster availability or non-writer consumer-rollout wait,
+   cxcli pauses the exact manager, compare-and-set restores the checkpointed
+   compatible all-file ConfigMap payload, and runs a generation-bounded target
+   SConfig `0 -> 1 -> 0` seed pulse with the target service account and exact
+   passive-slot PVC. The pulse must prove its Pod mount and compatible Jail
+   digest, then return every target writer ReplicaSet and Pod to zero. cxcli
+   restores the exact manager at its checkpointed replica count while the
+   target SConfig CR desired size remains zero, and only then begins non-writer
+   consumer reconciliation/readiness. The pulse does
+   not restore the normal target writer contract or full target config. An
+   explicit copy workflow also restores the checkpointed SlurmCluster
+   maintenance value.
+9. Let Soperator reconcile the changed SlurmCluster and NodeSet desired state.
+   The original NodeSet desired topology remains unchanged; automatic in-place
+   adoption retains steady maintenance throughout, while an explicit copy
+   workflow verifies the restored value against the checkpointed SlurmCluster UID.
+   New or restarted controller, login, REST, and worker consumers mount the
+   refreshed rootfs, and
    persistent submounts such as `/home`, `/data`, `/scripts`, and `/models` are
-   attached back into that rootfs. cxcli records `rootfs_handoff_verification`
-   with the active slot, rollback slot, target worker NodeSets, persistent mount
-   state, and live login/worker consumer checks, waits for login and target
-   worker readiness, reconciles desired versus Ready replica counts, and checks
-   every Ready target-owned login pod and worker pod for every target NodeSet.
+   attached back into that rootfs. After the bounded seed pulse has returned
+   SConfig to an exact zero-writer state, cxcli checkpoints a non-writer
+   consumer boundary, waits for controller, login, enabled REST, and target
+   worker readiness, proves each uses the active slot PVC, reconciles desired
+   versus Ready replica counts, and checks every Ready target-owned login pod
+   and worker pod for every target NodeSet.
    Each pod must mount the
    configured NFS, host path, bound PVC, or validated claim template at
    `/mnt/jail.upper/home`. Live probes require the upper path and
    `/mnt/jail/home` to be exact mounts with identical device/inode identity;
    stable runtime source strings must exactly match the configured NFS or jail
-   backing source and subpath before source retirement.
-9. Keep user partitions controlled/DOWN while running post-rootfs `scontrol`,
-   `sbatch --test-only`, and accounting/QOS pre-release checks from a login pod.
+   backing source and subpath before source retirement. cxcli then restores the
+   checkpointed target SConfig size using the actual target service account,
+   proves that no captured source writer survived, waits for the target-owned
+   SConfigController pod on the active slot, and verifies delivery of the
+   checkpointed full target config and exact digest into the Jail. Only then
+   does it record
+   `rootfs_handoff_verification.status=verified` with all consumer, slot,
+   persistent-mount, and SConfig evidence.
+10. Keep user partitions controlled/DOWN. After the complete rootfs handoff,
+   restore the configured/default OpenMetrics value, then run post-rootfs
+   `scontrol`, `sbatch --test-only`, and accounting/QOS pre-release checks from
+   a login pod.
    Slurm configuration-parse failures keep scheduling quiesced. Only after
    those checks pass, resume partitions and run a bounded live `sbatch` job,
    checkpointed before and after its single submission, polled through
@@ -3658,22 +3956,36 @@ restart is deferred to the controlled maintenance/slot handoff to avoid a
 transient pre-Jail Slurm controller start.
 
 The switch-over is not a live bind-mount flip inside an already-running
-login or worker container. The chart exposes both slot volumes as possible
+consumer container. The chart exposes both slot volumes as possible
 SlurmCluster volume sources, and the physical backing store has both slot
-directories, but each consumer pod has one main jail rootfs mount. During the
-rollout the cluster can temporarily contain old pods still using the previous
-slot and replacement pods using the refreshed slot. Persistent submounts such
-as `/home`, `/data`, `/scripts`, and `/models` are the pieces shared across
-generations; the rootfs slots themselves remain separate.
+directories, but each controller, login, REST, SConfigController, or worker pod
+has one main Jail rootfs mount. During passive population and the compatibility
+seed fence, both SConfig writers are stopped. The later rollout can temporarily
+contain old non-SConfig pods still using the previous slot and replacement pods
+using the refreshed slot. Persistent submounts such as `/home`, `/data`, `/scripts`, and
+`/models` are the pieces shared across generations; the rootfs slots themselves
+remain separate.
+
+Accounting is deliberately outside the Jail slot contract. SlurmDBD and its
+MUNGE sidecar run from their container images and neither mounts `/mnt/jail`;
+MariaDB data lives on the dedicated accounting PVC. Upstream Soperator 4.0.2
+still places an unused canonical-Jail volume in the accounting Pod template,
+so an alias change may reconcile that workload, but it does not make accounting
+a rootfs consumer and no accounting data is copied between rootfs slots.
+External chart takeover protects accounting separately through dual-writer
+fencing, the final SQL dump/import, target-writer restoration, and
+`sacctmgr`/`sacct` validation before scheduling resumes.
 
 The one-time migration runs only while
-`jailRootfs.adoption.activeSource == "legacy-rootfs"`. After cxcli has copied
-known automatic and explicit persistent paths into the shared area and switched
-consumers to a slot-backed rootfs, those paths are external to the rootfs
-lifecycle. Future Jail Upgrade runs repopulate only the passive rootfs slot and
-remount the same shared paths into each newly active slot. If an automatic path
-was absent during first adoption, it remains an empty shared persistent mount
-until users write data there. The old legacy rootfs and old in-rootfs data remain
+`jailRootfs.adoption.activeSource == "legacy-rootfs"`. Automatic external paths
+are adopted at their existing `/mnt/jail/<path>` locations; only explicitly
+relocated non-overlapping paths are copied. After the readiness gate passes and
+consumers switch to a slot-backed rootfs, those persistent directories are
+external to the rootfs lifecycle. Future Jail Upgrade runs repopulate only the
+passive rootfs slot and remount the same persistent paths into each newly active
+slot. If an automatic path was absent during first adoption, the chart creates
+it and the readiness gate proves it is a real directory before switch-over; it
+remains empty until users write data there. The old legacy rootfs remains
 untouched for rollback until an explicit cleanup policy is added. The chart
 derives the canonical `jail` volume-source alias from the active source and slot
 for SConfigController and REST. Fresh switch and post-switch resume
@@ -3688,7 +4000,12 @@ pre-reconcile generation. Completed-phase reconciliation
 repeats the live alias, alias-consumer, login/worker, `/home`, and Slurm admission
 checks even when the historical populate Job still exists.
 
-![Soperator jail upgrade workflow](jail-upgrade-workflow.png)
+![Soperator Jail Upgrade rootfs workflow with two controller pods and two example worker pods](jail-upgrade-workflow.png)
+
+The diagram uses two controller pods and two example worker pods for
+readability. The worker pair is illustrative: the rootfs handoff still applies
+to every configured worker NodeSet and to enabled REST and SConfigController
+workloads.
 
 ## Config Model
 
@@ -3856,7 +4173,10 @@ The command boundary is intentional:
   when live available service-role capacity is less than or equal to
   `max_unavailable_count` unless `--approve-service-role-downtime` records the
   exact campaign fingerprint and affected provider groups in the operation
-  journal; selecting service-role safe-surge preserves service
+  journal. Resume observation/reconciliation bypasses this new-mutation gate
+  only for a group whose exact accepted provider operation is durably journaled;
+  planned and unaccepted groups remain fail-closed. Selecting service-role
+  safe-surge preserves service
   capacity with one temporary replacement node per active service group and
   fails before mutation when quota/capacity is unavailable. During login
   node-group updates, cxcli verifies ready login Service endpoints before and

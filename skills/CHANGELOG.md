@@ -144,6 +144,14 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Refactored the explicit-only `task-implementer` around private file-first
+  intake: one external Markdown prompt per ask, canonical checkout/scope
+  workspaces, deterministic prompt creation, immutable run revisions,
+  review-only `prepare`, one-task `run`/`continue`, planning-only
+  reconciliation, and scope-wide single-writer safety. Added the
+  standard-library helper, prompt and handoff assets, functional and contract
+  tests, and an opt-in `config-codex` validator/setup contract that preserves
+  existing sandbox and approval settings.
 - Lightened all repo-owned runtime `SKILL.md` files by replacing the repeated
   long learning-loop section with a concise equivalent, and moved detailed
   command, checklist, and standards material from `align`, `align-skill`,

@@ -185,6 +185,17 @@ def test_active_passive_jail_rootfs_default_storage_contract() -> None:
     assert slurm_cluster["spec"]["slurmNodes"]["login"]["volumes"]["jail"] == {
         "volumeSourceName": "jail-rootfs-slot-a"
     }
+    assert slurm_cluster["spec"]["slurmNodes"]["controller"]["volumes"]["jail"] == {
+        "volumeSourceName": "jail-rootfs-slot-a"
+    }
+    assert "volumes" not in slurm_cluster["spec"]["slurmNodes"]["accounting"]
+    assert worker_nodeset["spec"]["slurmd"]["volumes"]["jail"] == {
+        "persistentVolumeClaim": {
+            "claimName": "jail-rootfs-slot-a-pvc",
+            "readOnly": False,
+        }
+    }
+    assert slurm_cluster["spec"]["slurmNodes"]["controller"]["openMetrics"] == {"enabled": True}
     assert "SlurmdParameters=l3cache_as_socket" in slurm_cluster["spec"]["customSlurmConfig"]
     assert worker_nodeset["spec"]["customInitContainers"][0]["name"] == "cxcli-slurm-config-jail"
     assert {
@@ -228,6 +239,16 @@ def test_active_passive_jail_rootfs_default_storage_contract() -> None:
     } in worker_nodeset["spec"]["slurmd"]["volumes"]["customVolumeMounts"]
 
 
+def test_controller_open_metrics_override_is_rendered(tmp_path: Path) -> None:
+    values = _chart_values()
+    values["slurmNodes"]["controller"]["openMetrics"] = {"enabled": False}
+
+    docs = _render_values(tmp_path, values)
+
+    slurm_cluster = _by_kind_name(docs, "SlurmCluster", "soperator")
+    assert slurm_cluster["spec"]["slurmNodes"]["controller"]["openMetrics"] == {"enabled": False}
+
+
 def test_external_single_sfs_layout_uses_legacy_jail_store_paths(tmp_path: Path) -> None:
     values = _chart_values()
     values["jailRootfs"]["store"] = {
@@ -267,6 +288,57 @@ def test_external_single_sfs_layout_uses_legacy_jail_store_paths(tmp_path: Path)
     }
     assert not slurm_cluster["spec"]["slurmNodes"]["login"]["volumes"]["jailSubMounts"]
     assert not worker_nodeset["spec"]["slurmd"]["volumes"].get("jailSubMounts")
+
+
+def test_persistent_mount_paths_allow_safe_dotted_names(tmp_path: Path) -> None:
+    values = _chart_values()
+    values["jailPersistentMounts"] = [
+        {
+            "mountPath": "/data..archive",
+            "localPath": "/mnt/jail-store/shared/data..archive",
+        }
+    ]
+
+    docs = _render_values(tmp_path, values)
+
+    persistent_pv = _by_kind_name(
+        docs,
+        "PersistentVolume",
+        "jail-persistent-data-archive-pv",
+    )
+    assert persistent_pv["spec"]["local"]["path"] == ("/mnt/jail-store/shared/data..archive")
+
+
+def test_jail_store_paths_allow_safe_dotted_names(tmp_path: Path) -> None:
+    values = _chart_values()
+    values["jailRootfs"]["store"] = {
+        "mountPath": "/mnt/jail..archive",
+        "rootfsPath": "/mnt/jail..archive/rootfs..versions",
+        "volumeKey": "jail",
+    }
+    values["jailRootfs"]["slots"]["slot-a"]["localPath"] = (
+        "/mnt/jail..archive/rootfs..versions/slot-a"
+    )
+    values["jailRootfs"]["slots"]["slot-b"]["localPath"] = (
+        "/mnt/jail..archive/rootfs..versions/slot-b"
+    )
+    values["jailPersistentMounts"] = [
+        {
+            "mountPath": "/home",
+            "localPath": "/mnt/jail..archive/shared/home",
+        }
+    ]
+
+    docs = _render_values(tmp_path, values)
+
+    assert (
+        _by_kind_name(docs, "PersistentVolume", "jail-rootfs-slot-a-pv")["spec"]["local"]["path"]
+        == "/mnt/jail..archive/rootfs..versions/slot-a"
+    )
+    assert (
+        _by_kind_name(docs, "PersistentVolume", "jail-persistent-home-pv")["spec"]["local"]["path"]
+        == "/mnt/jail..archive/shared/home"
+    )
 
 
 def test_legacy_rootfs_with_external_home_renders_worker_jail_submount(
@@ -349,6 +421,9 @@ def test_external_single_sfs_legacy_jail_pvc_stays_rendered_for_rollback(
     tmp_path: Path,
 ) -> None:
     values = _chart_values()
+    assert "jail" not in values["slurmNodes"]["controller"]["volumes"]
+    assert "jail" not in values["slurmNodes"]["login"]["volumes"]
+    assert "jail" not in values["nodesets"][0]["slurmd"]["volumes"]
     values["jailRootfs"].update(
         {
             "activeSlot": "slot-b",
@@ -364,11 +439,6 @@ def test_external_single_sfs_legacy_jail_pvc_stays_rendered_for_rollback(
             },
         }
     )
-    for role in ("controller", "login"):
-        values["slurmNodes"][role]["volumes"]["jail"] = {"volumeSourceName": "jail-rootfs-slot-b"}
-    values["nodesets"][0]["slurmd"]["volumes"]["jail"] = {
-        "persistentVolumeClaim": {"claimName": "jail-rootfs-slot-b-pvc"}
-    }
     values["jailPersistentMounts"] = [{"mountPath": "/home", "localPath": "/mnt/jail/home"}]
 
     docs = _render_values(tmp_path, values)
@@ -390,9 +460,20 @@ def test_external_single_sfs_legacy_jail_pvc_stays_rendered_for_rollback(
     assert slurm_cluster["spec"]["slurmNodes"]["login"]["volumes"]["jail"] == {
         "volumeSourceName": "jail-rootfs-slot-b"
     }
+    assert "volumes" not in slurm_cluster["spec"]["slurmNodes"]["accounting"]
     assert worker_nodeset["spec"]["slurmd"]["volumes"]["jail"] == {
-        "persistentVolumeClaim": {"claimName": "jail-rootfs-slot-b-pvc"}
+        "persistentVolumeClaim": {
+            "claimName": "jail-rootfs-slot-b-pvc",
+            "readOnly": False,
+        }
     }
+    for nodeset in (doc for doc in docs if doc.get("kind") == "NodeSet"):
+        assert nodeset["spec"]["slurmd"]["volumes"]["jail"] == {
+            "persistentVolumeClaim": {
+                "claimName": "jail-rootfs-slot-b-pvc",
+                "readOnly": False,
+            }
+        }
     assert {
         "name": "jail-persistent-home",
         "mountPath": "/home",
@@ -455,6 +536,50 @@ def test_active_passive_jail_rootfs_rejects_invalid_slot_path() -> None:
     assert "jailRootfs.slots.slot-a.localPath must be /mnt/jail-store/rootfs/slot-a" in (
         result.stderr + result.stdout
     )
+
+
+@pytest.mark.parametrize("field", ["volumeSourceName", "pvcName"])
+def test_active_passive_jail_rootfs_rejects_invalid_slot_resource_name(field: str) -> None:
+    result = _helm_template(
+        "--set-string",
+        f"jailRootfs.slots.slot-a.{field}=INVALID_NAME",
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert f"/jailRootfs/slots/slot-a/{field}" in result.stderr + result.stdout
+
+
+@pytest.mark.parametrize("name", ["foo..bar", "foo.-bar"])
+@pytest.mark.parametrize(
+    "field",
+    ["jailRootfs.slots.slot-a.pvcName", "jailRootfs.adoption.legacyPvcName"],
+)
+def test_active_passive_jail_rootfs_rejects_invalid_pvc_dns_subdomain(
+    field: str,
+    name: str,
+) -> None:
+    result = _helm_template("--set-string", f"{field}={name}", check=False)
+
+    assert result.returncode != 0
+    assert "/" + field.replace(".", "/") in result.stderr + result.stdout
+
+
+def test_persistent_mount_local_paths_must_not_overlap() -> None:
+    result = _helm_template(
+        "--set",
+        "jailPersistentMounts[0].mountPath=/data",
+        "--set",
+        "jailPersistentMounts[0].localPath=/mnt/jail-store/shared/data",
+        "--set",
+        "jailPersistentMounts[1].mountPath=/models",
+        "--set",
+        "jailPersistentMounts[1].localPath=/mnt/jail-store/shared/data/models",
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "overlaps another persistent localPath" in result.stderr + result.stdout
 
 
 def test_active_passive_jail_rootfs_rejects_invalid_adoption_source() -> None:
@@ -574,4 +699,39 @@ def test_active_passive_jail_rootfs_rejects_non_normalized_persistent_mount_path
     assert result.returncode != 0
     assert "mountPath must be an absolute normalized non-root path" in (
         result.stderr + result.stdout
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("mountPath", "/data;touch-pwned"),
+        ("mountPath", "/data/./training"),
+        ("localPath", "/mnt/jail-store/$(touch-pwned)"),
+        ("localPath", "/mnt/jail-store/data with-space"),
+        ("localPath", "/mnt/jail-store/./.cxcli"),
+        ("localPath", "/mnt/jail-store/data/."),
+    ),
+)
+def test_active_passive_jail_rootfs_rejects_shell_unsafe_persistent_mount_paths(
+    field: str,
+    value: str,
+) -> None:
+    result = _helm_template(
+        "--skip-schema-validation",
+        "--set-string",
+        "jailPersistentMounts[0].mountPath=/data",
+        "--set-string",
+        "jailPersistentMounts[0].localPath=/mnt/jail-store/data",
+        "--set-string",
+        f"jailPersistentMounts[0].{field}={value}",
+        check=False,
+    )
+
+    assert result.returncode != 0
+    output = result.stderr + result.stdout
+    assert (
+        "shell-safe" in output
+        or "does not match pattern" in output
+        or "without '.' or '..' components" in output
     )

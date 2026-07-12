@@ -38,6 +38,15 @@
           "type": "string",
           "enum": ["slot-a", "slot-b"]
         },
+        "slots": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["slot-a", "slot-b"],
+          "properties": {
+            "slot-a": { "$ref": "#/definitions/jailRootfsSlot" },
+            "slot-b": { "$ref": "#/definitions/jailRootfsSlot" }
+          }
+        },
         "adoption": {
           "type": "object",
           "additionalProperties": false,
@@ -54,7 +63,7 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 253,
-              "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+              "pattern": "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*$"
             }
           }
         }
@@ -67,8 +76,16 @@
         "additionalProperties": false,
         "required": ["mountPath", "localPath"],
         "properties": {
-          "mountPath": { "type": "string", "minLength": 2 },
-          "localPath": { "type": "string", "minLength": 2 }
+          "mountPath": {
+            "type": "string",
+            "minLength": 2,
+            "pattern": "^/[-A-Za-z0-9._/]+$"
+          },
+          "localPath": {
+            "type": "string",
+            "minLength": 2,
+            "pattern": "^/[-A-Za-z0-9._/]+$"
+          }
         }
       }
     },
@@ -443,6 +460,20 @@
     "slurmNodes": {
       "type": "object",
       "properties": {
+        "controller": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "openMetrics": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "serviceMonitor": { "type": "object", "additionalProperties": true }
+              }
+            }
+          }
+        },
         "login": {
           "type": "object",
           "properties": {
@@ -571,10 +602,9 @@
               "volumes": {
                 "type": "object",
                 "additionalProperties": true,
-                "required": ["spool", "jail"],
+                "required": ["spool"],
                 "properties": {
                   "spool": { "type": "object", "minProperties": 1 },
-                  "jail": { "type": "object", "minProperties": 1 },
                   "customVolumeMounts": {
                     "type": "array",
                     "items": {
@@ -628,6 +658,32 @@
             "type": "string",
             "enum": ["Never", "PreemptLowerPriority"]
           }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "jailRootfsSlot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["volumeSourceName", "pvcName", "localPath"],
+      "properties": {
+        "volumeSourceName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 63,
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "pvcName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "pattern": "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*$"
+        },
+        "localPath": {
+          "type": "string",
+          "minLength": 2,
+          "pattern": "^/[-A-Za-z0-9._/]+$"
         }
       }
     }

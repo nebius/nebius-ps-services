@@ -155,7 +155,7 @@ spec:
     {{- $activePassiveRootfs := eq (include "slurm-cluster-storage.jailRootfs.activePassive.enabled" .) "true" }}
     {{- $legacyRootfsActive := eq (include "slurm-cluster-storage.jailRootfs.legacyActive" .) "true" }}
     {{- if $activePassiveRootfs }}
-    {{- $activeJailPvc := include "slurm-cluster-storage.jailRootfs.slot.pvc" (list $ (default "slot-a" .Values.jailRootfs.activeSlot)) | trimAll "\"" }}
+    {{- $activeJailPvc := include "slurm-cluster-storage.jailRootfs.active.pvc" . | trimAll "\"" }}
     {{- if $legacyRootfsActive }}
     {{- $activeJailPvc = include "slurm-cluster-storage.jailRootfs.legacyPvc" . | trimAll "\"" }}
     {{- end }}
@@ -314,6 +314,10 @@ spec:
       {{- if hasKey .Values.slurmNodes.controller "hostUsers" }}
       hostUsers: {{ .Values.slurmNodes.controller.hostUsers }}
       {{- end }}
+      {{- with .Values.slurmNodes.controller.openMetrics }}
+      openMetrics:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       slurmctld:
         image: {{ required "slurmctld image" .Values.images.slurmctld | quote }}
         imagePullPolicy: {{ default "IfNotPresent" .Values.slurmNodes.controller.slurmctld.imagePullPolicy | quote }}
@@ -403,7 +407,7 @@ spec:
           {{- if eq (include "slurm-cluster-storage.jailRootfs.legacyActive" .) "true" }}
           volumeSourceName: "jail"
           {{- else }}
-          {{- required ".Values.slurmNodes.controller.volumes.jail must be provided." .Values.slurmNodes.controller.volumes.jail | toYaml | nindent 10 }}
+          volumeSourceName: {{ include "slurm-cluster-storage.jailRootfs.active.volumeSourceName" . | quote }}
           {{- end }}
         {{- if .Values.slurmNodes.controller.volumes.customMounts }}
         customMounts:
@@ -521,7 +525,7 @@ spec:
           {{- if eq (include "slurm-cluster-storage.jailRootfs.legacyActive" .) "true" }}
           volumeSourceName: "jail"
           {{- else }}
-          {{- required ".Values.slurmNodes.login.volumes.jail must be provided." .Values.slurmNodes.login.volumes.jail | toYaml | nindent 10 }}
+          volumeSourceName: {{ include "slurm-cluster-storage.jailRootfs.active.volumeSourceName" . | quote }}
           {{- end }}
         {{- $loginJailSubMounts := default list .Values.slurmNodes.login.volumes.jailSubMounts }}
         {{- $loginExistingMounts := dict }}

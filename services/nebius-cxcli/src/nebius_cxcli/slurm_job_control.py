@@ -13,6 +13,7 @@ from rich.text import Text
 
 from .slurm_jobs import (
     AffectedSlurmJob,
+    clean_slurm_value,
     format_slurm_duration_seconds,
     slurm_job_is_active,
     slurm_job_is_pending,
@@ -121,7 +122,7 @@ class SlurmJobControlResult:
 
 
 def slurm_table_value(value: str) -> str:
-    return value if str(value or "").strip() else "-"
+    return clean_slurm_value(value) or "-"
 
 
 def _slurm_remaining_display(job: AffectedSlurmJob, *, local_elapsed_seconds: int) -> str:
@@ -166,7 +167,9 @@ def slurm_job_control_pending_selected_ids(
     jobs: Sequence[AffectedSlurmJob],
     selected_job_ids: Sequence[str],
 ) -> tuple[str, ...]:
-    selected = {str(job_id or "").strip() for job_id in selected_job_ids if str(job_id or "").strip()}
+    selected = {
+        str(job_id or "").strip() for job_id in selected_job_ids if str(job_id or "").strip()
+    }
     return tuple(job.job_id for job in jobs if job.job_id in selected and slurm_job_is_pending(job))
 
 
@@ -179,8 +182,11 @@ def slurm_job_control_selected_ids_for_action(
         return tuple(job.job_id for job in jobs)
     if action in {"requeue-all", "requeue-hold-all"}:
         return slurm_job_control_active_job_ids(jobs)
+    displayed = {job.job_id for job in jobs}
     return tuple(
-        str(job_id or "").strip() for job_id in selected_job_ids if str(job_id or "").strip()
+        normalized
+        for job_id in selected_job_ids
+        if (normalized := str(job_id or "").strip()) and normalized in displayed
     )
 
 
@@ -191,7 +197,9 @@ def build_slurm_jobs_table(
     selected_job_ids: Sequence[str] = (),
     include_selection: bool = False,
 ) -> Table:
-    selected = {str(job_id or "").strip() for job_id in selected_job_ids if str(job_id or "").strip()}
+    selected = {
+        str(job_id or "").strip() for job_id in selected_job_ids if str(job_id or "").strip()
+    }
     table = Table(title=title)
     if include_selection:
         table.add_column("Sel", no_wrap=True)
@@ -307,7 +315,9 @@ def prompt_slurm_job_control(
         except SlurmJobControlRefreshError:
             raise
         except Exception as exc:
-            console.print(f"[yellow]Interactive TUI unavailable, using text fallback: {exc}[/yellow]")
+            console.print(
+                f"[yellow]Interactive TUI unavailable, using text fallback: {exc}[/yellow]"
+            )
 
     console.print(build_slurm_jobs_table(jobs, title=table_title))
     raw_ids = text_prompt("Job IDs to select, comma separated (blank for none)", "", False)
@@ -437,6 +447,8 @@ def create_slurm_job_control_app(
             self.help_screen_open = False
             self.running_action = ""
             self.running_action_job_ids: tuple[str, ...] = ()
+            self.pending_action = ""
+            self.pending_action_job_ids: tuple[str, ...] = ()
             self.jobs_refreshed_at = time.monotonic()
             self.last_poll_at = self.jobs_refreshed_at
 
@@ -453,13 +465,15 @@ def create_slurm_job_control_app(
             for header, key in (
                 ("Sel", "selected"),
                 ("Job", "job_id"),
-                ("State", "state"),
                 ("User", "user"),
-                ("Part", "partition"),
+                ("State", "state"),
+                ("Partition", "partition"),
                 ("Allocated", "allocated"),
                 ("Requested", "requested"),
                 ("Scheduled", "scheduled"),
                 ("Reason", "reason"),
+                ("Elapsed", "elapsed"),
+                ("Limit", "limit"),
                 ("Remaining", "remaining"),
                 ("Scope", "scope"),
                 ("Name", "name"),
@@ -512,13 +526,15 @@ def create_slurm_job_control_app(
             return (
                 _slurm_textual_selection_mark(job.job_id in self.selected_job_ids),
                 job.job_id,
-                _slurm_state_text(job),
                 job.user,
+                _slurm_state_text(job),
                 job.partition,
                 slurm_table_value(job.allocated_nodes),
                 slurm_table_value(job.requested_nodes),
                 slurm_table_value(job.scheduled_nodes),
                 slurm_table_value(job.reason),
+                job.elapsed,
+                job.limit,
                 _slurm_remaining_display(job, local_elapsed_seconds=self._local_elapsed_seconds()),
                 job.impact_scope,
                 job.name,
@@ -603,15 +619,24 @@ def create_slurm_job_control_app(
             if self.action_handler is None:
                 self.exit(SlurmJobControlResult(action=action, selected_job_ids=selected))
                 return
-            if self.refreshing or self.action_running:
-                self._refresh_status("Slurm action or refresh already in progress.")
+            if self.action_running:
+                self._refresh_status("Slurm action already in progress.")
+                return
+            if self.refreshing:
+                if self.pending_action:
+                    self._refresh_status(
+                        f"{self.pending_action} is already queued until the current "
+                        "Slurm refresh completes."
+                    )
+                    return
+                self.pending_action = action
+                self.pending_action_job_ids = selected
+                self._refresh_status(f"Queued {action} until the current Slurm refresh completes.")
                 return
             self.action_running = True
             self.running_action = action
             self.running_action_job_ids = selected
-            self._refresh_status(
-                f"Running {action} for displayed job(s): " + ", ".join(selected)
-            )
+            self._refresh_status(f"Running {action} for displayed job(s): " + ", ".join(selected))
             self.run_worker(
                 self._run_action_blocking,
                 name="slurm-job-control-action",
@@ -625,9 +650,7 @@ def create_slurm_job_control_app(
         def _exit_jobs_cleared(self) -> None:
             self._refresh_status("No affected Slurm jobs remain; continuing upgrade.")
             action = (
-                SLURM_JOB_CONTROL_WAIT_COMPLETED
-                if self.waiting
-                else SLURM_JOB_CONTROL_JOBS_CLEARED
+                SLURM_JOB_CONTROL_WAIT_COMPLETED if self.waiting else SLURM_JOB_CONTROL_JOBS_CLEARED
             )
             self.set_timer(
                 0.25,
@@ -685,7 +708,7 @@ def create_slurm_job_control_app(
             if worker_name == "slurm-job-control-poll" and self.exit_after_action:
                 previous_job_ids = tuple(job.job_id for job in self.affected_jobs)
                 current_job_ids = tuple(job.job_id for job in jobs)
-                if current_job_ids != previous_job_ids:
+                if current_job_ids != previous_job_ids and not self.pending_action:
                     self.exit(
                         SlurmJobControlResult(
                             action=SLURM_JOB_CONTROL_JOBS_CHANGED,
@@ -694,6 +717,34 @@ def create_slurm_job_control_app(
                     )
                     return
             self._replace_jobs(jobs)
+            if worker_name == "slurm-job-control-poll" and self.pending_action:
+                action = self.pending_action
+                pending_ids = self.pending_action_job_ids
+                self.pending_action = ""
+                self.pending_action_job_ids = ()
+                snapshot_action = {
+                    "cancel-all": "cancel-selected",
+                    "requeue-all": "requeue-selected",
+                    "requeue-hold-all": "requeue-hold-selected",
+                }.get(action, action)
+                selected = slurm_job_control_selected_ids_for_action(
+                    snapshot_action,
+                    self.affected_jobs,
+                    pending_ids,
+                )
+                if selected:
+                    self._schedule_action(snapshot_action, selected)
+                    return
+                if self.exit_after_action:
+                    self.exit(
+                        SlurmJobControlResult(
+                            action=SLURM_JOB_CONTROL_JOBS_CHANGED,
+                            selected_job_ids=(),
+                        )
+                    )
+                    return
+                self._refresh_status(f"Queued {action} no longer applies after the Slurm refresh.")
+                return
             if worker_name == "slurm-job-control-action":
                 if self.exit_after_action:
                     self.exit(
@@ -708,16 +759,19 @@ def create_slurm_job_control_app(
         def _tick(self) -> None:
             self._refresh_remaining_cells()
             if self.action_running:
-                self._refresh_status(
-                    f"Running {self.running_action}; waiting for Slurm to update."
-                )
+                self._refresh_status(f"Running {self.running_action}; waiting for Slurm to update.")
                 return
             now = time.monotonic()
             if not self.waiting:
                 if self.jobs_provider is None:
                     return
                 if self.refreshing:
-                    self._refresh_status("Refreshing affected Slurm jobs...")
+                    detail = (
+                        f"Queued {self.pending_action}; waiting for the current Slurm refresh."
+                        if self.pending_action
+                        else "Refreshing affected Slurm jobs..."
+                    )
+                    self._refresh_status(detail)
                     return
                 next_poll_seconds = max(
                     0,
@@ -792,9 +846,7 @@ def create_slurm_job_control_app(
                 return
             self.waiting = True
             self.wait_started_at = time.monotonic()
-            self._refresh_status(
-                "Waiting for all affected jobs in this screen. Press x to abort."
-            )
+            self._refresh_status("Waiting for all affected jobs in this screen. Press x to abort.")
             self._schedule_poll(reason="wait-to-finish")
 
         def action_choose(self, action: str) -> None:
@@ -823,15 +875,16 @@ def create_slurm_job_control_app(
                 self.affected_jobs,
                 selected_job_ids,
             )
-            if action in {"cancel-selected", "requeue-selected", "requeue-hold-selected"} and not selected:
+            if (
+                action in {"cancel-selected", "requeue-selected", "requeue-hold-selected"}
+                and not selected
+            ):
                 self._refresh_status("Select at least one displayed job for this action.")
                 return
             if action in {"requeue-selected", "requeue-hold-selected"}:
                 pending = slurm_job_control_pending_selected_ids(self.affected_jobs, selected)
                 if pending:
-                    self._refresh_status(
-                        "Pending jobs cannot be requeued: " + ", ".join(pending)
-                    )
+                    self._refresh_status("Pending jobs cannot be requeued: " + ", ".join(pending))
                     return
             if action in {"requeue-all", "requeue-hold-all"} and not selected:
                 self._refresh_status("No displayed active jobs are available to requeue.")

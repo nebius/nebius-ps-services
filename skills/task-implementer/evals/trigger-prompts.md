@@ -1,57 +1,100 @@
 # Trigger Prompts
 
-`task-implementer` is explicit-only because it mutates code, invokes
-per-task local commits, and may launch fresh implementation sessions.
+`task-implementer` is explicit-only because it creates private workflow state,
+may edit product code after approval, invokes per-task local commits, and
+requires fresh implementation sessions.
 
 ## Should Trigger
 
 ```text
-$task-implementer Break this complex brownfield request into ordered tasks and implement them one by one with a handoff between fresh sessions.
+$task-implementer workspace init services/nebius-cxcli
 ```
 
-```text
-Use $task-implementer for this repo change. Create task-1..task-n, run each task sequentially, gather per-task context, design and plan before editing, review and commit each completed task, and start a fresh Codex context for each task.
-```
+Create or verify the private `CODE` + `PROMPTS` workspace only. Do not prepare
+or implement work.
 
 ```text
-$task-implementer Break this brownfield change into task-1..task-n, implement
-one task at a time after brainstorm/design/plan gates, review and commit each
-task, and keep a handoff between fresh Codex sessions.
+$task-implementer workspace new "Add prompt workspace support"
 ```
 
-```text
-$task-implementer This is bigger than one task: split it into numbered
-dependent work items, then for each item gather context, use design for the
-implementation decision, write the plan, implement, validate, code-review, fix,
-commit, and hand off to the next fresh session.
-```
+Create one editable prompt for one ask. Do not launch Codex from VS Code or
+submit the prompt automatically.
 
 ```text
-$task-implementer Split this multi-layer app change into vertical tasks that
-carry one behavior through frontend, API, and database, then implement each
-task through the normal per-task implementation and commit loop.
+$task-implementer prepare ~/.codex/task-implementer/projects/example/scopes/api/prompts/2026-07-12_1430--add-retries.md
 ```
 
+Validate and snapshot the exact prompt, inspect the repository, create a
+reviewable multi-task queue and handoff, then stop without product edits.
+
 ```text
-$task-implementer Continue from ~/.codex/task-implementer/my-repo/run-2026-06-28/handoff.md and implement the next pending task.
+$task-implementer prepare --new-run <private-prompt-path>
 ```
+
+Create an explicitly requested new run even when the completed run's submitted
+content is unchanged. Stop after preparation.
+
+```text
+$task-implementer run run-20260712t213000z-ab12cd34
+```
+
+Read the immutable bound revision and prepared handoff, implement exactly the
+first pending task through the per-task implementation and commit loop, save
+the checkpoint, and stop.
+
+```text
+$task-implementer continue run-20260712t213000z-ab12cd34
+```
+
+In a fresh session, implement exactly the next pending task with
+brainstorm/design/plan gates, validation, `code-review`, fixes, `$commit`, and
+handoff update. Do not continue into another task.
+
+```text
+$task-implementer reconcile run-20260712t213000z-ab12cd34 <edited-private-prompt-path>
+```
+
+Snapshot the edited prompt, preserve completed work and stable IDs, propose
+additive or superseding queue changes, and stop without product edits.
+
+```text
+$task-implementer Break this complex brownfield request into vertical
+task-1..task-n deliverables and use the private handoff loop one task per fresh
+session.
+```
+
+Preserve the explicit sequential implementation and commit loop. If there is
+no prompt file yet, offer `workspace new` rather than inventing repository-local
+state.
 
 ## Should Not Trigger
+
+```text
+I opened a Markdown prompt from two days ago. Help me improve the wording.
+```
+
+Treat this as ordinary editing or brainstorming. Do not invoke
+`task-implementer` without an explicit action.
+
+```text
+How should I organize prompt files for this project?
+```
+
+Answer or brainstorm. Do not initialize private state implicitly.
 
 ```text
 Implement this small bug fix and run the focused test.
 ```
 
-Use the normal implementation flow. Do not invoke `task-implementer` unless the
-user explicitly asks for `$task-implementer`.
+Use the normal implementation flow.
 
 ```text
-This looks complex, please use global-context-management while you fix it.
+This looks complex. Use global-context-management while you fix it.
 ```
 
-Use `global-context-management` for context hygiene. Do not invoke
-`task-implementer` unless the user also asks for the explicit sequential
-per-task implementation and commit loop.
+Use `global-context-management` for context hygiene. Do not invoke the
+per-task implementation and commit loop without an explicit
+`task-implementer` request.
 
 ```text
 Review this diff and tell me if the design is good.
@@ -75,4 +118,4 @@ Use `brainstorm` for chat-only ideation.
 Commit the current changes.
 ```
 
-Use `$commit` directly for standalone commits.
+Use `$commit` directly for a standalone commit.

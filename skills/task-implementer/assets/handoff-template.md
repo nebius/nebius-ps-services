@@ -2,21 +2,42 @@
 
 ## Run
 
-- Project:
+- Project ID:
+- Scope ID:
 - Repo root:
+- Repo-relative scope:
 - Branch:
 - Run ID:
+- Workspace manifest:
+- Run manifest:
+- Prompt ID:
+- Editable source path:
+- Bound revision:
+- Bound SHA-256:
+- Bound snapshot path:
 - Created:
 - Last updated:
-- Current task:
-- Last completed task:
-- Last commit:
-- Overall status: planning | running | blocked | done
+- Current task: none
+- Last completed task: none
+- Last commit: none
+- Overall status: prepared | running | blocked | done | superseded | abandoned
 
-## User Request
+## Reconciliation
 
-Summarize the user's request and constraints. Do not paste secrets, raw logs, or
-private material.
+- State: none | proposed | applied
+- Previous bound revision: none
+- Current bound revision:
+- Reconciled at: none
+- Summary: none
+- Preserved completed task IDs: none
+- Preserved pending task IDs: none
+- Superseded pending task IDs: none
+- Appended task IDs: none
+
+## Request Summary
+
+Summarize the bound prompt revision and constraints without copying the prompt
+body, secrets, raw logs, or private material.
 
 ## Code Context
 
@@ -24,6 +45,7 @@ private material.
 - Relevant tests:
 - Relevant docs/config:
 - Important repo instructions:
+- Worktree state:
 - Current assumptions:
 - Source context:
 - Brainstorm/context result:
@@ -35,6 +57,8 @@ private material.
 ### task-1
 
 - Status: pending | in_progress | done | blocked | superseded
+- Source revision:
+- Source prompt sections:
 - Priority:
 - Depends on:
 - Goal:
@@ -61,6 +85,8 @@ private material.
 ### task-2
 
 - Status: pending | in_progress | done | blocked | superseded
+- Source revision:
+- Source prompt sections:
 - Priority:
 - Depends on:
 - Goal:
@@ -89,6 +115,7 @@ private material.
 ### checkpoint-1
 
 - Completed task:
+- Bound revision:
 - Summary:
 - Brainstorm/context result:
 - Design result:
@@ -115,8 +142,7 @@ private material.
 ## Session Handoff
 
 - Current session action: stop after saving this handoff
-- Next session mechanism: new `codex` session | `/new` | new `codex exec`
-  process
+- Next session mechanism: new Codex session | `/new` | new `codex exec` process
 - Handoff context path:
 - Next task:
 - Do not continue in current session: yes
@@ -124,16 +150,15 @@ private material.
 ## Next Session Prompt
 
 ```text
-Use $task-implementer to continue from this handoff file:
-<handoff-path>
+Use $task-implementer continue <run-id>.
 
-Read the handoff first, verify the current git status and relevant source files,
-then implement only <task-id>. Do not run parallel write agents. Gather the
+Read the run manifest, exact bound snapshot, and complete handoff first. Verify
+the repository, scope, digest, handoff status, current git state, and relevant
+source files. Implement exactly the next pending task. Do not use the editable
+prompt as execution input and do not run parallel write agents. Gather the
 task-specific context, use brainstorm when source-ranked context or assumption
 checks are useful, route non-trivial design or contract choices through design,
 write the per-task plan with the vertical slice or layers covered, run focused
-and end-to-end validation, use code-review, fix scoped findings, commit through $commit,
-and update the handoff with context, design, plan, vertical slice,
-changed files, validation, review result, fixes, commit hash/message or blocker,
-residual risks, and the next-session prompt before stopping.
+and end-to-end validation, use code-review, fix scoped findings, commit through
+$commit, update the handoff with all checkpoint evidence, and stop.
 ```

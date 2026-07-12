@@ -22,7 +22,7 @@ JAIL_MANAGED_SYSTEM_PATH = "/mnt/jail-store/.cxcli"
 JAIL_MANAGED_HOME_LOCAL_PATH = "/mnt/jail-store/shared/home"
 JAIL_EXTERNAL_ROOTFS_PATH = "/mnt/jail/.cxcli/rootfs"
 JAIL_EXTERNAL_SYSTEM_PATH = "/mnt/jail/.cxcli"
-JAIL_EXTERNAL_HOME_LOCAL_PATH = "/mnt/jail/shared/home"
+JAIL_EXTERNAL_HOME_LOCAL_PATH = "/mnt/jail/home"
 JAIL_ROOTFS_SLOT_A = "slot-a"
 JAIL_ROOTFS_SLOT_B = "slot-b"
 JAIL_LEGACY_ACTIVE_SOURCE = "legacy-rootfs"
@@ -37,6 +37,7 @@ JAIL_EXTERNAL_AUTO_PERSISTENT_MOUNT_PATHS = (
 )
 JAIL_MANAGED_DEFAULT_SHARED_MOUNT_PATHS = JAIL_EXTERNAL_DEFAULT_SHARED_MOUNT_PATHS
 JAIL_MANAGED_AUTO_PERSISTENT_MOUNT_PATHS = JAIL_EXTERNAL_AUTO_PERSISTENT_MOUNT_PATHS
+_SAFE_POSIX_PATH_RE = re.compile(r"^/(?:[A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+$")
 
 
 def _mashed_kebab(value: Any) -> str:
@@ -150,6 +151,11 @@ def _normalize_path(value: Any, *, field: str, allow_root: bool = False) -> str:
         normalized = normalized.rstrip("/")
     if normalized == "/" and not allow_root:
         raise ValueError(f"{field} must not be '/'.")
+    if normalized != "/" and not _SAFE_POSIX_PATH_RE.fullmatch(normalized):
+        raise ValueError(
+            f"{field} must use shell-safe path components containing only "
+            f"letters, digits, '.', '_', or '-'; got {text!r}."
+        )
     return normalized
 
 
@@ -270,8 +276,22 @@ def jail_persistent_mount_decisions(
             configured.get("localPath"),
             field="jailPersistentMount.localPath",
         )
-        status = "explicit" if explicit is not None else "pending-probe"
-        source_status = "explicit" if explicit is not None else "pending-probe"
+        source_path = f"{store_path}{mount_path}"
+        adopted_in_place = source_path == local_path
+        status = (
+            "adopted-in-place"
+            if adopted_in_place
+            else "explicit"
+            if explicit is not None
+            else "pending-probe"
+        )
+        source_status = (
+            "adopted-in-place"
+            if adopted_in_place
+            else "explicit"
+            if explicit is not None
+            else "pending-probe"
+        )
         decisions.append(
             {
                 "mount_path": mount_path,
@@ -279,9 +299,9 @@ def jail_persistent_mount_decisions(
                 "status": status,
                 "source_status": source_status,
                 "origin": "explicit" if explicit is not None else "auto",
-                "source_path": f"{store_path}{mount_path}",
+                "source_path": source_path,
                 "target_local_path": local_path,
-                "copy_required": True,
+                "copy_required": not adopted_in_place,
             }
         )
     return tuple(decisions)
@@ -308,7 +328,7 @@ def external_default_jail_persistent_mounts() -> tuple[JailPersistentMount, ...]
     return tuple(
         JailPersistentMount(
             mount_path=mount_path,
-            local_path=f"{JAIL_LEGACY_ROOT_PATH}/shared/{mount_path.strip('/')}",
+            local_path=f"{JAIL_LEGACY_ROOT_PATH}/{mount_path.strip('/')}",
         )
         for mount_path in JAIL_EXTERNAL_DEFAULT_SHARED_MOUNT_PATHS
     )
@@ -404,6 +424,12 @@ def normalize_jail_persistent_mounts(
                 raise ValueError(
                     "jailPersistentMounts.localPath must not overlap active/passive "
                     f"rootfs or cxcli system paths; got {local_path!r} overlapping {blocked_path!r}."
+                )
+        for existing_mount in result:
+            if _paths_overlap(local_path, existing_mount.local_path):
+                raise ValueError(
+                    "jailPersistentMounts.localPath values must not overlap; "
+                    f"got {local_path!r} overlapping {existing_mount.local_path!r}."
                 )
         normalized_mount = JailPersistentMount(mount_path=mount_path, local_path=local_path)
         if normalized_mount.name in seen_names:
@@ -579,7 +605,12 @@ def sync_jail_volume_sources(values: Mapping[str, Any]) -> dict[str, Any]:
     active_pvc_name = legacy_pvc_name if legacy_active else slot_pvcs[active_slot]
     slurm_nodes = patched.get("slurmNodes")
     if isinstance(slurm_nodes, MutableMapping):
-        for role_values in slurm_nodes.values():
+        # Controller and login expose configurable jail references in the
+        # SlurmCluster API. REST and SConfigController consume the canonical
+        # `jail` alias internally in Soperator; per-role REST volume values are
+        # not part of the CRD and must not be emitted as misleading dead state.
+        for role in ("controller", "login"):
+            role_values = slurm_nodes.get(role)
             if not isinstance(role_values, MutableMapping):
                 continue
             volumes = role_values.get("volumes")
@@ -588,6 +619,16 @@ def sync_jail_volume_sources(values: Mapping[str, Any]) -> dict[str, Any]:
             jail = volumes.get("jail")
             if isinstance(jail, MutableMapping):
                 volumes["jail"] = {"volumeSourceName": active_volume_source}
+        for role in ("rest", "exporter"):
+            role_values = slurm_nodes.get(role)
+            if not isinstance(role_values, MutableMapping):
+                continue
+            volumes = role_values.get("volumes")
+            if not isinstance(volumes, MutableMapping):
+                continue
+            volumes.pop("jail", None)
+            if not volumes:
+                role_values.pop("volumes", None)
     nodesets = patched.get("nodesets")
     if isinstance(nodesets, Sequence) and not isinstance(nodesets, (str, bytes, bytearray)):
         for nodeset in nodesets:

@@ -4271,11 +4271,186 @@ def _soperator_slurmcluster_uid(
     return uid
 
 
+_RESUME_SLURMCLUSTER_IDENTITY_SCOPE_SCHEMA = (
+    "nebius-cxcli-ext-soperator-resume-slurmcluster-identity/v1"
+)
+
+
+def _resume_slurmcluster_identity_resources(
+    soperator_resources: Sequence[Mapping[str, Any]],
+    *,
+    identity_scope: Mapping[str, Any],
+) -> tuple[tuple[Mapping[str, Any], ...], dict[str, Any]]:
+    """Validate one checkpoint-scoped handoff inventory and return its identity view."""
+
+    if identity_scope.get("schema") != _RESUME_SLURMCLUSTER_IDENTITY_SCOPE_SCHEMA:
+        raise RuntimeError(
+            "External Soperator resume SlurmCluster identity scope has an unsupported schema."
+        )
+    mode = str(identity_scope.get("mode", "") or "").strip()
+    if mode not in {"target-handoff", "source-cleanup", "target-only"}:
+        raise RuntimeError(
+            "External Soperator resume SlurmCluster identity scope has an unsupported mode."
+        )
+    if str(identity_scope.get("phase_id", "") or "").strip() != "rolling-compute-migration":
+        raise RuntimeError(
+            "External Soperator resume SlurmCluster identity scope is not bound to the "
+            "rolling-compute-migration phase."
+        )
+    source_ref = _mapping_value(identity_scope.get("source"))
+    target_ref = _mapping_value(identity_scope.get("target"))
+
+    def _required_ref(ref: Mapping[str, Any], *, label: str) -> dict[str, str]:
+        normalized = {
+            "namespace": str(ref.get("namespace", "") or "").strip(),
+            "name": str(ref.get("name", "") or "").strip(),
+            "uid": str(ref.get("uid", "") or "").strip(),
+        }
+        missing = [key for key, value in normalized.items() if not value]
+        if missing:
+            raise RuntimeError(
+                "External Soperator resume SlurmCluster identity scope has an incomplete "
+                f"{label} binding: missing {', '.join(missing)}."
+            )
+        return normalized
+
+    source = _required_ref(source_ref, label="source")
+    target = {
+        "namespace": str(target_ref.get("namespace", "") or "").strip(),
+        "name": str(target_ref.get("name", "") or "").strip(),
+        "uid": str(target_ref.get("uid", "") or "").strip(),
+    }
+    target_uid_bootstrap = not target["uid"]
+    if not target["namespace"] or not target["name"]:
+        raise RuntimeError(
+            "External Soperator resume SlurmCluster identity scope has an incomplete target "
+            "binding."
+        )
+    if mode in {"source-cleanup", "target-only"} and target_uid_bootstrap:
+        raise RuntimeError(
+            "External Soperator source-cleanup/target-only resume requires a checkpointed target "
+            "SlurmCluster UID."
+        )
+    if source["namespace"] != "soperator" or target["namespace"] != "soperator":
+        raise RuntimeError(
+            "External Soperator resume SlurmCluster identity scope is namespace-bound to soperator."
+        )
+    if source["name"] == target["name"]:
+        raise RuntimeError(
+            "External Soperator dual-CR resume requires distinct source and target "
+            "SlurmCluster names."
+        )
+
+    slurmclusters = tuple(
+        item
+        for item in soperator_resources
+        if str(item.get("kind", "") or "").strip().lower() == "slurmcluster"
+    )
+    expected_counts = (
+        {1, 2} if mode == "source-cleanup" else ({2} if mode == "target-handoff" else {1})
+    )
+    if len(slurmclusters) not in expected_counts:
+        expected_text = "1 or 2" if len(expected_counts) > 1 else str(next(iter(expected_counts)))
+        raise RuntimeError(
+            "External Soperator checkpoint-scoped SlurmCluster inventory expected exactly "
+            f"{expected_text} object(s) for {mode}, found {len(slurmclusters)}."
+        )
+
+    def _matches(resource: Mapping[str, Any], ref: Mapping[str, str]) -> bool:
+        metadata = _mapping_value(resource.get("metadata"))
+        return (
+            str(metadata.get("namespace", "") or "soperator").strip() == ref["namespace"]
+            and str(metadata.get("name", "") or "").strip() == ref["name"]
+        )
+
+    source_matches = tuple(item for item in slurmclusters if _matches(item, source))
+    target_matches = tuple(item for item in slurmclusters if _matches(item, target))
+    if mode == "target-handoff" and len(source_matches) != 1:
+        raise RuntimeError(
+            "External Soperator checkpoint-scoped SlurmCluster inventory does not contain "
+            "exactly one immutable source binding."
+        )
+    if len(target_matches) != 1:
+        raise RuntimeError(
+            "External Soperator checkpoint-scoped SlurmCluster inventory does not contain "
+            "exactly one target binding."
+        )
+    source_resource = source_matches[0] if source_matches else None
+    target_resource = target_matches[0]
+    if mode == "source-cleanup" and len(slurmclusters) == 2 and len(source_matches) != 1:
+        raise RuntimeError(
+            "External Soperator source-cleanup resume found an unbound second SlurmCluster."
+        )
+    if mode == "target-only" and source_matches:
+        raise RuntimeError(
+            "External Soperator source SlurmCluster reappeared after checkpointed cleanup."
+        )
+    if source_resource is not None:
+        live_source_uid = str(
+            _mapping_value(source_resource.get("metadata")).get("uid", "") or ""
+        ).strip()
+        if not live_source_uid or live_source_uid != source["uid"]:
+            raise RuntimeError(
+                "External Soperator live source SlurmCluster UID differs from the immutable "
+                "checkpoint binding."
+            )
+    live_target_uid = str(
+        _mapping_value(target_resource.get("metadata")).get("uid", "") or ""
+    ).strip()
+    if not live_target_uid or live_target_uid == source["uid"]:
+        raise RuntimeError(
+            "External Soperator live target SlurmCluster UID is missing or aliases the source UID."
+        )
+    if target["uid"] and live_target_uid != target["uid"]:
+        raise RuntimeError(
+            "External Soperator live target SlurmCluster UID differs from the immutable "
+            "checkpoint binding."
+        )
+    if target_uid_bootstrap:
+        if identity_scope.get("allow_target_uid_bootstrap") is not True:
+            raise RuntimeError(
+                "External Soperator target SlurmCluster UID is not checkpointed and bootstrap "
+                "was not authorized by the target-handoff phase."
+            )
+        metadata = _mapping_value(target_resource.get("metadata"))
+        annotations = _mapping_value(metadata.get("annotations"))
+        labels = _mapping_value(metadata.get("labels"))
+        expected_version = str(identity_scope.get("target_version", "") or "").strip()
+        chart_label = str(labels.get("helm.sh/chart", "") or "").strip()
+        expected_chart_label = f"soperator-{expected_version.replace('+', '_')}"
+        if (
+            not expected_version
+            or str(annotations.get("meta.helm.sh/release-name", "") or "").strip() != "soperator"
+            or str(annotations.get("meta.helm.sh/release-namespace", "") or "").strip()
+            != target["namespace"]
+            or str(labels.get("app.kubernetes.io/managed-by", "") or "").strip().lower() != "helm"
+            or chart_label != expected_chart_label
+        ):
+            raise RuntimeError(
+                "External Soperator target SlurmCluster UID bootstrap requires exact Helm "
+                "ownership and the checkpointed target chart version."
+            )
+        target["uid"] = live_target_uid
+
+    normalized_scope = {
+        "schema": _RESUME_SLURMCLUSTER_IDENTITY_SCOPE_SCHEMA,
+        "mode": mode,
+        "phase_id": str(identity_scope.get("phase_id", "") or "").strip(),
+        "source": source,
+        "target": target,
+        "target_uid_bootstrapped": target_uid_bootstrap,
+        "identity_role": "source" if source_resource is not None else "target",
+    }
+    identity_resources = (source_resource,) if source_resource is not None else (target_resource,)
+    return identity_resources, normalized_scope
+
+
 def collect_kubectl_soperator_snapshot(
     *,
     kube_context: str,
     timeout: int = 30,
     extra_env: Mapping[str, str] | None = None,
+    slurmcluster_identity_scope: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     context = str(kube_context or "").strip()
     if not context:
@@ -4514,15 +4689,24 @@ def collect_kubectl_soperator_snapshot(
     )
     collected_pvcs = pvcs.get("items", []) if isinstance(pvcs, Mapping) else []
     collected_pvs = pvs.get("items", []) if isinstance(pvs, Mapping) else []
-    slurmcluster_uid = _soperator_slurmcluster_uid(
-        _sequence_of_mappings(collected_soperator_resources)
+    identity_resources = _sequence_of_mappings(collected_soperator_resources)
+    normalized_identity_scope: dict[str, Any] = {}
+    if slurmcluster_identity_scope is not None:
+        identity_resources, normalized_identity_scope = _resume_slurmcluster_identity_resources(
+            identity_resources,
+            identity_scope=slurmcluster_identity_scope,
+        )
+    slurmcluster_uid = (
+        str(_mapping_value(normalized_identity_scope.get("source")).get("uid", "") or "").strip()
+        if normalized_identity_scope.get("identity_role") == "target"
+        else _soperator_slurmcluster_uid(identity_resources)
     )
     jail_filesystem_id = _soperator_jail_filesystem_identity(
-        soperator_resources=_sequence_of_mappings(collected_soperator_resources),
+        soperator_resources=identity_resources,
         pvcs=_sequence_of_mappings(collected_pvcs),
         pvs=_sequence_of_mappings(collected_pvs),
     )
-    return {
+    result = {
         "node_groups": node_groups,
         "helm_releases": helm_releases if isinstance(helm_releases, list) else [],
         "crds": crd_names,
@@ -4554,6 +4738,16 @@ def collect_kubectl_soperator_snapshot(
         },
         "collection_errors": collection_errors,
     }
+    if normalized_identity_scope:
+        result["resume_slurmcluster_identity"] = normalized_identity_scope
+        selected_slurmcluster_ids = {id(item) for item in identity_resources}
+        result["identity_soperator_resources"] = [
+            item
+            for item in _sequence_of_mappings(collected_soperator_resources)
+            if str(item.get("kind", "") or "").strip().lower() != "slurmcluster"
+            or id(item) in selected_slurmcluster_ids
+        ]
+    return result
 
 
 def _sanitize_kubernetes_node_items(items: Any) -> list[dict[str, Any]]:

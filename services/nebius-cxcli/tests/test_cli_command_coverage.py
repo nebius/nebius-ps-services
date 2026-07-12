@@ -6993,7 +6993,11 @@ def test_post_jail_slurm_release_order_is_static_then_restore_then_live_job() ->
         restore_position = external_source.find(external_restore_token, pre_release_position)
         smoke_position = external_source.find(full_smoke_token, pre_release_position)
         assert pre_release_position < restore_position < smoke_position
-    assert "if pre_release_failed or consumer_switch_failed:" in external_source
+    assert re.search(
+        r"if\s*\(\s*pre_release_failed\s+or\s+consumer_switch_failed\s+or\s+"
+        r"open_metrics_handoff_incomplete\s+or\s+post_switch_pre_release_incomplete\s*\):",
+        external_source,
+    )
     assert "user partitions remain controlled/DOWN" in external_source
 
     managed_source = inspect.getsource(cli._run_managed_soperator_cluster_upgrade)  # noqa: SLF001
@@ -26276,8 +26280,14 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert (
         "target-ready keeps source login retirement gated" in normalized_ext_soperator_upgrade_help
     )
-    assert "wait-active also waits for active SSH sessions" in normalized_ext_soperator_upgrade_help
-    assert "stops before its temporary login writer hold" in (normalized_ext_soperator_upgrade_help)
+    assert "wait-active also waits for observed active SSH sessions" in (
+        normalized_ext_soperator_upgrade_help
+    )
+    assert "same pre-mutation boundary" in normalized_ext_soperator_upgrade_help
+    assert "Existing TCP SSH sessions remain best-effort" in normalized_ext_soperator_upgrade_help
+    assert "automatic in-place adoption does not use that hold" in (
+        normalized_ext_soperator_upgrade_help
+    )
     assert "--jail-persistent-mount" in normalized_ext_soperator_upgrade_help
     assert "--preserve-jail-home" not in normalized_ext_soperator_upgrade_help
     assert "--no-preserve-jail-home" not in normalized_ext_soperator_upgrade_help
@@ -26348,10 +26358,14 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         "Dry-run refreshes discovery and prints the plan" in normalized_ext_soperator_upgrade_help
     )
     assert (
-        "onboard and render guidance add --login-session-policy wait-active"
+        "Automatic external first adoption keeps /home, /data, /scripts, and /models"
         in normalized_ext_soperator_upgrade_help
     )
-    assert "Dry-run substitutes wait-active for the default target-ready plan" in (
+    assert "does not require a copy-time login writer hold" in (
+        normalized_ext_soperator_upgrade_help
+    )
+    assert "Execute read-only probes those paths" in normalized_ext_soperator_upgrade_help
+    assert "Bound legacy, slot, and persistent PVCs before consumer switch" in (
         normalized_ext_soperator_upgrade_help
     )
     assert (

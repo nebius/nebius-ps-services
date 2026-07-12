@@ -342,7 +342,10 @@ def switch_active_passive_jail_rootfs_values(values: Mapping[str, Any]) -> dict[
     )
 
     slurm_nodes = _mutable_mapping(patched, "slurmNodes")
-    for role in ("controller", "login", "rest"):
+    # REST and SConfigController follow the chart-owned canonical `jail` alias
+    # inside Soperator. Only controller and login expose per-role jail values in
+    # the SlurmCluster API; worker NodeSets carry direct PVC references below.
+    for role in ("controller", "login"):
         role_values = _mutable_mapping(slurm_nodes, role)
         volumes = _mutable_mapping(role_values, "volumes")
         volumes["jail"] = {"volumeSourceName": slots.passive_volume_source}

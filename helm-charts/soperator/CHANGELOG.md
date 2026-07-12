@@ -4,6 +4,22 @@ All notable changes to this chart are tracked here.
 
 ## [Unreleased]
 
+- Fixed the active/passive rootfs switch contract so changing only
+  `jailRootfs.activeSlot`/`passiveSlot` moves the canonical `jail` alias,
+  controller and login volume-source references, and every worker NodeSet PVC
+  to the same slot. REST and SConfigController follow that canonical alias;
+  accounting remains outside rootfs convergence because its SlurmDBD and MUNGE
+  containers do not mount the operator-generated Jail volume. Stale per-role
+  or per-NodeSet defaults can no longer split Slurm consumers across slot-a and
+  slot-b during Jail Upgrade.
+- Exposed `slurmNodes.controller.openMetrics` as an explicit chart value and
+  rendered it into the SlurmCluster. This lets an external Jail Upgrade keep
+  `MetricsType` disabled through rootfs switch-over and exact target-slot
+  consumer verification, then restore the configured Slurm 25.11 setting
+  before final pre-release checks.
+- Hardened active/passive jail path rendering. `jailPersistentMounts` mount and
+  local paths reject shell metacharacters and whitespace before reaching the
+  privileged mount DaemonSet, and persistent local paths may not overlap.
 - Fixed first-adoption switch-over so retaining the legacy jail PV/PVC for
   rollback does not keep the active `jail` volume source pointed at that legacy
   claim. Once `activeSource=slot`, the alias follows the populated active slot,

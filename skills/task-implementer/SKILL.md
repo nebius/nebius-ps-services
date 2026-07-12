@@ -1,289 +1,350 @@
 ---
 name: task-implementer
-description: "Use only when the user explicitly asks for a complex sequential brownfield implementation loop: split multi-task work into ordered task-1..task-n items, inspect target code first, prefer vertical end-to-end tasks for serial multi-layer features, gather per-task context with brainstorm when available, route architecture/contracts/missing-code/ambiguous boundaries through design, then plan and implement one task per fresh Codex session with validation, code-review, fixes, $commit, and a markdown handoff checkpoint. Do not use for ordinary one-shot implementation, Agentic SDLC, chat-only brainstorming, standalone code review, standalone commits, PRs, or parallel multi-agent edits."
+description: "Requires explicit invocation for a complex sequential brownfield workflow: create a private file-backed prompt workspace, prepare an immutable prompt revision into a reviewable task queue, or run, continue, or reconcile that queue one task per fresh Codex session with brainstorm/design/plan, validation, code-review, fixes, $commit, and a private markdown handoff. Do not use for ordinary one-shot implementation, prompt-file organization advice, Agentic SDLC, chat-only brainstorming, standalone review/commit/PR work, or parallel write agents."
 ---
 
 # Task Implementer
 
 ## Purpose
 
-Coordinate complex brownfield implementation work by turning a user request
-that is bigger than one coherent task into an ordered task queue, then
-implementing that queue sequentially with a reviewed, committed checkpoint and
-markdown handoff between fresh Codex sessions.
+Coordinate complex brownfield implementation from durable private Markdown
+prompts. Turn one immutable submitted revision into an ordered
+`task-1..task-n` handoff queue, then implement exactly one queued task per fresh
+Codex session with reviewed, committed checkpoints.
 
-This is a lightweight implementation loop, not the Agentic SDLC state machine.
+The editable prompt records user intent. The immutable run revision fixes the
+approved input. The handoff is the execution truth. This is a lightweight
+sequential implementation loop, not the Agentic SDLC state machine.
+
+## Invocation Policy
+
+This Skill must be explicitly invoked. Do not implicitly invoke it because a
+request is complex or because the user opens or edits a prompt file.
 
 ## When To Use
 
-- The user explicitly invokes `$task-implementer`.
-- The user asks for a complex sequential task implementation loop.
-- A brownfield request is bigger than one coherent task and contains multiple
-  dependent code, test, docs, config, or validation tasks that would benefit
-  from fresh context between tasks.
-- The user wants task ordering, per-task review, per-task local commits,
-  checkpoint handoff, and no concurrent write agents.
+- The user explicitly invokes `$task-implementer workspace init`, `workspace
+  new`, `prepare`, `run`, `continue`, or `reconcile`.
+- The user explicitly requests the existing complex sequential brownfield
+  implementation loop from a prompt or handoff.
+- The work is bigger than one coherent task and benefits from dependency
+  ordering, per-task review and commits, and fresh context between tasks.
+- A serial multi-layer change should be delivered as ordered vertical slices.
 
 ## When Not To Use
 
-- Do not use for a normal single-turn implementation that fits cleanly in the
-  current context; implement directly with the applicable project skills.
-- Do not use automatically for every complex task. `global-context-management`
-  may wrap complex work for context hygiene, but this skill owns an explicit
-  per-task commit workflow and should run only when deliberately requested or
-  selected by a coordinator with the same explicit loop contract.
-- Do not use for the Agentic SDLC workflow; use `$sdlc-start` and `sdlc-*`
-  phase skills.
-- Do not use for chat-only ideation; use `brainstorm`.
-- Do not use for design review without implementation; use `design` and
-  `system-design-rules` when available and appropriate.
-- Do not use for review-only work; use `code-review`, `review-pr`, or `align`.
-- Do not use for standalone commits, pushes, PR creation, PR review, or merge.
-  Use `commit`, `commit-push`, `create-pr`, `review-pr`, or `merge-pr`
-  directly for those jobs.
+- Do not invoke this Skill implicitly. Keep
+  `policy.allow_implicit_invocation: false` in `agents/openai.yaml`.
+- Do not use it for a normal one-shot implementation. Use the applicable
+  project skills directly.
+- Do not use it merely because a user opens, edits, or asks how to organize
+  prompt files.
+- Do not make `global-context-management` always call it. That skill owns
+  context hygiene; this Skill owns an explicitly requested per-task commit and
+  fresh-session workflow.
+- Do not use it for Agentic SDLC; use `$sdlc-start` and the `sdlc-*` skills.
+- Do not use it for chat-only ideation, design-only work, review-only work,
+  standalone commits, PRs, merges, releases, or publication.
 - Do not run parallel write-capable agents or overlapping implementation
   sessions in the same workspace.
 
+## Interface
+
+- `$task-implementer workspace init <scope>`: create or verify the private
+  prompt workspace for a repository scope and optionally open it.
+- `$task-implementer workspace new "<short ask>"`: create one private prompt
+  file for one independent ask and optionally open it.
+- `$task-implementer workspace list [filters]`: list prompt metadata without
+  prompt bodies.
+- `$task-implementer prepare [--new-run] <prompt-path>`: validate and snapshot
+  the prompt, inspect the repository, create a reviewable queue and handoff,
+  then stop without product edits.
+- `$task-implementer run <run-id>`: approve the prepared bound revision and
+  implement exactly the first pending task.
+- `$task-implementer continue <run-id>`: in a fresh session, implement exactly
+  the next pending task.
+- `$task-implementer reconcile <run-id> <prompt-path>`: snapshot an edited
+  active prompt, propose additive or superseding queue changes, and stop
+  without product edits.
+
+The VS Code task is an optional way to create a prompt. It never starts Codex.
+After editing in VS Code, `prepare <prompt-path>` is the stable chat action that
+submits the saved ask.
+
 ## Inputs
 
-- The user's implementation prompt, constraints, acceptance criteria, and
-  explicit non-goals.
-- The current repository, working tree, visible branch state, and local
-  instructions such as `AGENTS.md`.
-- Optional user-provided paths, tickets, issue text, logs, screenshots,
-  sketches, or existing design notes.
-- Optional existing task-implementer handoff markdown from a previous session.
+- An explicit interface action and its scope, prompt path, or run ID.
+- The current repository, worktree and branch state, and instructions such as
+  `AGENTS.md`.
+- The exact immutable prompt snapshot and current handoff for `run`,
+  `continue`, and `reconcile`.
+- Relevant repository paths, tickets, issue text, logs, screenshots, sketches,
+  or design notes referenced by the prompt, when safe and available.
 
 ## Required Reads
 
-- Existing task-implementer handoff markdown when the prompt is a continuation.
-- `references/implementation-loop.md` before creating the queue or launching
-  follow-on sessions.
-- The `code-review` skill before reviewing the active task's code changes.
-- The `commit` skill before committing the active task checkpoint.
-- The `brainstorm` skill before the per-task design pass when installed and
-  relevant, to gather task-specific context without editing files.
-- The relevant `AGENTS.md`, README, design docs, changelog, tests, and source
-  files for the target code.
-- `docs/agentic-sdlc-design.md` only when the boundary with Agentic SDLC is
-  unclear.
-- The `design` skill before implementing each non-trivial task when available.
-  Let `design` use `research`; do not duplicate research orchestration here.
-- Current official vendor documentation when product, cloud, API, CLI, SDK,
-  framework, package manager, or version-sensitive behavior affects the change.
+- `references/prompt-workspace.md` before any `workspace`, `prepare`, or
+  `reconcile` action and whenever prompt identity or run state is unclear.
+- `references/implementation-loop.md` before queue construction or an
+  implementation session.
+- The current run's `manifest.json`, bound snapshot, and complete `handoff.md`
+  before `run`, `continue`, or `reconcile`.
+- The relevant `AGENTS.md`, README, design docs, changelog, tests, source, and
+  Git state before creating a queue or editing product files.
+- The `brainstorm` skill when source-ranked context, tradeoffs, or assumption
+  checks are relevant; keep that pass read-only.
+- The `design` skill before each non-trivial task with architecture, contract,
+  missing-code, ambiguous-boundary, or multiple-path decisions. Let `design`
+  decide when `research` is needed.
+- The `code-review` skill before reviewing an implemented task.
+- The `commit` skill before a per-task local commit.
+- Current official vendor documentation for version-sensitive behavior.
 
 ## Writes
 
-- Private local handoff markdown under:
+Private state lives under:
 
-  ```text
-  ${CODEX_HOME:-$HOME/.codex}/task-implementer/<project-id>/<run-id>/handoff.md
-  ```
+```text
+${CODEX_HOME:-$HOME/.codex}/task-implementer/projects/
+<project-id>/scopes/<scope-id>/
+├── workspace.json
+├── <scope>-prompts.code-workspace
+├── prompts/<created-at>--<ask-slug>.md
+└── runs/<run-id>/
+    ├── manifest.json
+    ├── inputs/<revision>/prompt.md
+    └── handoff.md
+```
 
-- Focused source, test, docs, changelog, config, or generated-artifact edits
-  required by the active task.
-- Per-task validation, review, fix, and local commit evidence summarized in
-  the handoff; avoid raw logs.
+- `workspace init` and `workspace new` write only private workspace state.
+- `prepare` and `reconcile` write only immutable revisions, manifests, and the
+  private handoff. They must not edit product files.
+- `run` and `continue` may make only the focused product, test, docs,
+  changelog, config, or generated-artifact edits required by the active task.
+- Per-task evidence belongs in the handoff as concise summaries, not raw logs.
 
-Do not commit the handoff file, raw logs, secrets, private endpoints, customer
-data, or broad copied documentation.
+Never commit prompt-workspace state. Never write prompts into the repository.
+Never persist secrets, private endpoints, customer data, or broad copied
+internal documentation.
 
 ## Process
 
-1. Confirm the prompt asks for a sequential brownfield implementation loop or
-   continuation from an existing handoff. If not, do not continue as
-   `task-implementer`.
-2. Read an existing handoff if supplied; otherwise create a new private handoff
-   from `assets/handoff-template.md`.
-3. Inspect the target code before ordering tasks. Use targeted `rg`, small file
-   reads, and local docs instead of guessing from the prompt alone.
-4. Extract concrete work items from the prompt and repo evidence. Merge
-   duplicates and split only when a task has a clear independent result.
-5. Identify dependencies and order tasks as `task-1`, `task-2`, ..., `task-n`.
-   Order by prerequisite relationships first, then user priority, user-visible
-   risk, shared contracts, and validation value.
-   For serial multi-layer application work, prefer tasks that complete one
-   coherent vertical slice through the required layers, such as UI -> API ->
-   persistence, instead of broad layer-only tasks. Use foundation-only tasks
-   only for true prerequisites such as schema contracts, auth, migrations, test
-   harnesses, or safety preflights that block vertical slices.
-6. For each task, record: goal, rationale, dependencies, likely files,
-   brainstorm/context needs, design need, vertical slice or layers covered,
-   plan, implementation steps, validation commands, done criteria, and rollback
-   notes.
-7. For the active task, gather only the context needed for that task. Use
-   `brainstorm` when available and relevant for source-ranked context,
-   tradeoffs, and assumption checks; keep it read-only and summarize the useful
-   findings in the handoff. If `brainstorm` is unavailable or unnecessary, say
-   so in the handoff.
-8. Route the active task through `design` before editing when the task is
-   non-trivial, has architecture or contract implications, has missing code or
-   ambiguous boundaries, or presents multiple implementation paths. If `design`
-   is unavailable for a task that needs it, do a compact local design pass and
-   mark the handoff assumption as `design_skill_unavailable`.
-9. Create a short per-task implementation plan after context and design: exact
-   steps, likely files, vertical slice and end-to-end validation, documentation
-   or changelog updates, rollback notes, and stop conditions.
-10. Implement only the active task. Keep edits within its boundary; update docs,
-   README, and changelog only when they are in scope for that task.
-11. Run the narrowest relevant validation for the active task. Broaden only when
-   the changed surface requires it.
-12. Inspect the diff after each task. Do not hide failures, weaken tests, or
-    leave unrelated cleanup mixed into the task.
-13. Invoke `code-review` on the active task's code changes. Treat review
-    findings as a required gate before handoff.
-14. Fix the review findings that are safe, scoped to the active task, and
-    supported by evidence. Re-run focused validation and, when code changed as
-    part of the fix, re-run or refresh the review until no blocking finding
-    remains or a blocker is recorded.
-15. Invoke `$commit` to commit the completed active task only after validation
-    and review/fix gates pass. Let the `commit` skill own repo-root
-    `git add -A`, staged validation, commit hooks, message generation, and
-    no-push behavior. If unrelated or unsafe dirty changes would make the
-    whole-repo commit unsafe, classify `WORKTREE_CONFLICT`, update the
-    handoff, and stop before committing.
-16. Update the handoff with status, brainstorm/context result, design result,
-    plan, changed files, validation, code-review result, fixes applied, commit
-    hash/message or commit blocker, residual risks, and the exact next-session
-    prompt.
-17. End the current task session after the handoff is saved. Start the next
-    task only in a fresh agent session that receives the handoff markdown as
-    context material.
-18. Repeat until every task is `done` or a task is `blocked`.
-19. After all tasks are done, run changed-surface alignment with `$align` when
-    available, or perform the equivalent local checklist across code, tests,
-    docs, changelog, CLI/help, config, and generated artifacts.
+### Workspace Actions
+
+1. Resolve the installed Skill directory and invoke
+   `scripts/prompt_workspace.py` with an argument array.
+2. For `workspace init`, pass the explicit Git root and repo-relative scope to
+   helper `init`. Create or verify the saved `CODE` + `PROMPTS` workspace. Open
+   it only when explicitly requested.
+3. For `workspace new`, resolve the owning `workspace.json`, pass the short ask
+   to helper `new`, and return the generated path. Open it only when explicitly
+   requested.
+4. For `workspace list`, use helper `list` with optional query or creation-date
+   filters. Never print a prompt body.
+5. Stop after the requested workspace operation. Do not infer a preparation or
+   implementation request.
+
+### Prepare
+
+1. Read `references/prompt-workspace.md`. Resolve the prompt's owning
+   `workspace.json`; do not accept repository-local or unowned prompt files.
+2. Use helper `snapshot` to validate and copy the exact prompt bytes. Forward
+   `--new-run` only when the user explicitly requested an exact new run.
+   If an interrupted earlier attempt left exactly one same-prompt,
+   same-digest run in `snapshot_only` state with no handoff, resume that
+   revision instead of creating another. Do not apply this recovery to another
+   prompt, a drifted source, or any run that already has a handoff.
+3. Create `handoff.md` from `assets/handoff-template.md` in the returned run
+   directory using a private atomic write. Bind it to `r0001`, or the helper's
+   returned revision, digest, manifest, source path, prompt ID, project, and
+   scope.
+4. Inspect the target code before ordering tasks. Use targeted `rg`, small file
+   reads, local instructions, tests, docs, and current Git evidence.
+5. Extract concrete work items from the immutable snapshot and repo evidence.
+   Merge duplicates and split only for independent results, dependency edges,
+   review risks, or validation gates.
+6. Order tasks as `task-1..task-n`. Prefer vertical end-to-end slices for serial
+   multi-layer features; create foundation tasks only for real prerequisites.
+7. For every task record the goal, source prompt sections and bound revision,
+   rationale, dependencies, likely files, context/design needs, vertical slice
+   or layers, plan outline, validation, done criteria, and rollback notes.
+8. Set overall status to `prepared`, reconciliation state to `none`, and the
+   active task to `none`. Summarize current worktree risks.
+9. Verify the run and handoff, report the queue for review, and stop. Do not
+   edit product files, approve the queue implicitly, invoke `$commit`, or begin
+   `task-1`.
+
+### Run Or Continue
+
+1. Resolve the run unambiguously within the current canonical repository and
+   scope. Read its manifest and handoff completely.
+2. Use helper `verify` and verify the exact bound revision and SHA-256 recorded
+   in the handoff. Read that snapshot, never the editable source, as execution
+   input. Treat `PROMPT_DRIFT` from an invalid, missing, or edited source as
+   non-binding for `run` and `continue`: report it and continue from the valid
+   bound snapshot unless the user asks to reconcile. Do not silently rebind.
+3. For `run`, require overall status `prepared`, no completed task, and select
+   exactly the first pending task. For `continue`, require a prior checkpoint
+   and select exactly the next dependency-ready pending task.
+4. Verify current Git status and task evidence. Enforce one active task and one
+   writer for the scope.
+5. Gather only the active task's context. Use `brainstorm` when relevant and
+   summarize recommendation-changing findings in the handoff.
+6. Route non-trivial architecture, contract, missing-code, ambiguous-boundary,
+   rollout, migration, security, or reliability choices through `design`. If
+   needed but unavailable, record a compact local design note marked
+   `design_skill_unavailable`.
+7. Write the per-task implementation plan: exact steps, likely files, vertical
+   slice or layers, docs/changelog impact, validation including end-to-end
+   checks, rollback notes, stop conditions, and review/commit gates.
+8. Implement only the selected task. Run focused validation and broaden only
+   when the changed surface requires it. Inspect the diff and remove unrelated
+   cleanup.
+9. Invoke `code-review`. Fix safe scoped findings, re-run validation, and
+   refresh review when fixes materially changed code.
+10. Invoke `$commit` only after validation and review gates pass. Let the
+    `commit` skill own repo-root `git add -A`, staged checks, hooks, message,
+    and no-push behavior.
+11. Update the handoff with context, design, plan, changed files, validation,
+    review, fixes, commit hash/message or blocker, risks, checkpoint, and exact
+    next-session prompt.
+12. Stop. The next task must start in a fresh session with `continue <run-id>`.
+13. After the last task, run changed-surface `$align` or the equivalent local
+    alignment checklist, record the result, set status `done`, and stop.
+
+### Reconcile
+
+1. Read the manifest, current bound snapshot, edited prompt, and handoff. Use
+   helper `snapshot --run-id <run-id>` to append the next revision.
+2. Require an unfinished run and no implementation currently in progress.
+   Reconciliation is a planning-only transition with no product edits.
+   Reject a handoff whose overall status is `running`.
+3. Compare prompt revisions and inspect only source drift that affects the
+   queue.
+4. Never change completed task text or IDs. Never renumber any existing task.
+   Preserve unchanged pending tasks, mark changed or removed pending tasks
+   `superseded`, and append replacements or new tasks with the next unused IDs.
+5. Update the bound revision, digest, manifest path, reconciliation summary,
+   and task source references. Set status `prepared` and active task `none`.
+6. Verify and present the proposal, then stop without implementing it.
+
+If an interrupted earlier reconciliation already appended a same-digest latest
+revision that the handoff has not bound, resume that revision and finish the
+queue proposal. Do not create another revision. If the source changed again,
+stop until the pending reconciliation is resolved.
 
 ## Fresh Session Contract
 
-The skill cannot reset, close, or reopen its own current context. It must hand
-off through a markdown file and one of these operator/session mechanisms:
+The Skill cannot reset its own context. After each task checkpoint, save the
+handoff and stop. Use one of these mechanisms:
 
-- Strict interactive close/open: update the handoff, run `/archive` or
-  `/quit` to close the current session, start a new `codex` session from the
-  repo root, and paste or send the next-session prompt from the handoff.
-- Interactive same-terminal reset: when the operator accepts a fresh
-  conversation inside the same CLI process as the session boundary, update the
-  handoff, run `/new`, and paste or send the next-session prompt from the
-  handoff.
-- Noninteractive automation: run a new `codex exec` process for each task.
-  Let the current process exit after saving the handoff; the supervising
-  script starts the next process and passes the handoff path in the prompt.
-  Grant access to the handoff directory when sandboxing requires it, for
-  example:
+- Close/archive and start a new interactive Codex session from the repository
+  root, then invoke `$task-implementer continue <run-id>`.
+- Use `/new` only when the operator accepts a fresh conversation in the same
+  interactive process as the session boundary.
+- Start one new `codex exec` process per task. Let the previous process exit;
+  do not use `codex exec resume` for normal handoff.
 
-  ```bash
-  codex --ask-for-approval never exec \
-    --cd <repo-root> \
-    --sandbox workspace-write \
-    --add-dir "${CODEX_HOME:-$HOME/.codex}/task-implementer" \
-    'Use $task-implementer to continue <handoff-path>. Implement only task-N, run validation, use code-review, fix scoped findings, commit through $commit, update the handoff, and stop.'
-  ```
+When sandbox access is missing, preserve the current sandbox and approval
+policy and report:
 
-Do not write `codex exec /new`; `/new` is an interactive slash command, while a
-new `codex exec` process is already a fresh noninteractive session. Do not use
-`codex exec resume` for normal next-task handoff because the handoff file is
-the intended context boundary.
+```bash
+codex --add-dir "${CODEX_HOME:-$HOME/.codex}/task-implementer"
+```
+
+Do not launch a new Codex process automatically from the prompt helper or VS
+Code workspace.
 
 ## Ordering Rules
 
-- Preserve explicit user priority unless code dependencies make it impossible.
-- Put prerequisite schema, API, data-model, config, or contract changes before
-  consumers.
-- Put tests with the task they verify unless the task is explicitly a test-only
-  preparation step.
-- For serial multi-layer application work, prefer vertical deliverables that
-  connect the relevant layers for one behavior before starting the next
-  behavior. Avoid broad layer-by-layer tasks unless a shared foundation is a
-  real dependency.
-- Put high-blast-radius shared code before leaf UI/docs cleanup only when the
-  shared change is a prerequisite.
-- Prefer smaller tasks that can be validated and checkpointed independently.
-- Do not create artificial tasks for ceremony. If the request is truly one
-  coherent change, implement it directly unless the user explicitly insists on
-  this loop.
-- Do not split a request only because it touches several files. Split when the
-  work has separate deliverables, dependency edges, review risks, or validation
-  gates that benefit from independent commits.
+- Preserve explicit user priority unless dependencies make it impossible.
+- Put prerequisite schema, API, data-model, config, auth, or migration work
+  before consumers.
+- Keep tests and documentation with the behavior they verify or explain.
+- Prefer vertical deliverables over broad layer-by-layer tasks.
+- Prefer independently validated checkpoints; do not create ceremony-only
+  tasks.
+- Do not split a request merely because it touches several files.
+- One prompt can create many tasks. Never create one task file per task.
 
 ## Idempotency
 
-- On every session, read the handoff first and verify it against current
-  `git status` and relevant source files before editing.
-- Before invoking `$commit`, verify that the dirty diff belongs to the active
-  task or to intentionally preserved prior task changes recorded in the
-  handoff. If not, stop with `WORKTREE_CONFLICT`.
-- Never renumber existing task IDs after implementation starts. Add new tasks
-  as `task-n+1` and mark superseded tasks explicitly.
-- If a task is already done, verify its evidence instead of redoing it.
-- If a task already has a commit hash recorded, verify the commit still exists
-  and the task evidence still matches before moving on.
-- If source drift invalidates a task, update that task to `blocked` or
-  `superseded`, add a new task with the revised plan, and explain why.
-- Keep one active task at a time. Do not launch the next fresh session until
-  the current one has finished, reviewed, committed, and updated the handoff.
+- On every action, verify canonical repository, scope, private paths, schema,
+  permissions, manifest, digest, handoff, and current Git state before writes.
+- Revisions are created only by `prepare` or `reconcile`, never on save.
+- The run manifest is append-only revision metadata. The handoff owns mutable
+  status and the queue.
+- Never renumber task IDs after preparation. Append new IDs and explicitly mark
+  superseded tasks.
+- Never rewrite a completed task during reconciliation.
+- If a task is done, verify its evidence instead of repeating it.
+- If a recorded commit exists, verify it still exists and matches the evidence.
+- Keep one scope-wide writer and exactly one active task.
+- `run` and `continue` always read the immutable bound snapshot. The editable
+  source remains read-only to the Skill.
 
 ## Failure Handling
 
-Classify failures before retrying:
+Preserve helper error tokens from `references/prompt-workspace.md`. Also
+classify implementation-loop failures before retrying:
 
-- `DESIGN_GAP`: architecture, contracts, missing code, or boundary decisions
-  are unresolved. Route to `design`.
-- `CONTEXT_GAP`: required repo, ticket, internal, or vendor context is missing.
-- `IMPLEMENTATION_DEFECT`: code does not satisfy the task.
-- `TEST_DEFECT`: tests are wrong, incomplete, or not aligned with the task.
-- `VALIDATION_DEFECT`: lint, type, build, import, generated artifact, or config
-  validation fails.
-- `REVIEW_BLOCKER`: `code-review` found a blocking issue that cannot be fixed
-  safely inside the active task boundary.
-- `COMMIT_BLOCKER`: `$commit` stopped because staged validation failed,
-  commit hooks failed, the branch state is unsafe, or the commit message/scope
-  would be misleading.
-- `WORKTREE_CONFLICT`: unrelated user changes or concurrent edits block safe
-  progress.
-- `ENVIRONMENT_BLOCKER`: local tools, credentials, services, network, or
-  permissions are unavailable.
-- `HUMAN_INPUT_REQUIRED`: the next decision would be risky to guess.
+- `ACTIVE_RUN_EXISTS`: ordinary preparation cannot bypass unfinished scope
+  work; reconcile the owning run.
+- `NO_CHANGES`: no revision or run was created; stop unless the user explicitly
+  requests `prepare --new-run` for a completed prompt.
+- `PROMPT_DRIFT`: editable source differs from the bound snapshot; continue
+  from the snapshot or reconcile, never rebind silently.
+- `WORKSPACE_BUSY`: another process owns the scope-wide write lock.
+- `RUN_STATE_INVALID`: run, manifest, revision, digest, or handoff state is
+  unsafe; fail closed instead of repairing it by inference.
+- `DESIGN_GAP`: architecture, contract, missing-code, or boundary decisions
+  are unresolved.
+- `CONTEXT_GAP`: required repository, ticket, internal, or vendor context is
+  missing.
+- `IMPLEMENTATION_DEFECT`, `TEST_DEFECT`, or `VALIDATION_DEFECT`: the active
+  task or its checks are incomplete or incorrect.
+- `REVIEW_BLOCKER`: `code-review` found a blocker that cannot be fixed safely
+  inside the task.
+- `COMMIT_BLOCKER`: staged checks, hooks, branch state, or commit scope is
+  unsafe.
+- `WORKTREE_CONFLICT`: unrelated or concurrent changes make whole-repository
+  `$commit` unsafe.
+- `ENVIRONMENT_BLOCKER`: tools, credentials, services, network, sandbox access,
+  or permissions are unavailable.
+- `HUMAN_INPUT_REQUIRED`: a consequential decision is unsafe to guess.
 
-Retry only when the next change is clear and scoped. Stop, update the handoff,
-and report the blocker when the failure needs user input, unsafe permissions,
-or repeated attempts without new evidence.
+Retry only when the next change is clear and scoped. Never silently repair
+malformed prompt-workspace state. Record blockers in the handoff and request
+the minimum safe user action.
 
 ## Must Not
 
-- Do not run multiple write-capable agents or implementation sessions at the
-  same time in the same workspace.
-- Do not treat the user prompt alone as the task order when code evidence says
-  the dependencies differ.
-- Do not create Agentic SDLC `docs/requirements.md`, `docs/design.md`, or
-  `~/.codex/sdlc-runs` state.
-- Do not use compatibility shims, deprecated aliases, or dual old/new paths
-  unless the user explicitly asks for them.
-- Do not bypass `code-review` for completed code tasks unless the handoff
-  records that no code changed and review was not applicable.
-- Do not commit by hand. Use `$commit` for the per-task local checkpoint, and
-  never push, open PRs, merge, publish, or run live external writes unless a
-  separate explicitly invoked skill owns that action.
-- Do not continue into the next task in the same session after a task
-  checkpoint is saved; stop so the next task starts from the handoff in a fresh
-  session.
-- Do not persist secrets, raw logs, private URLs, or customer data in the
-  handoff or reusable skill sources.
+- Do not write prompts into a Git worktree, even as an ignored directory.
+- Do not edit an editable source prompt, print prompt bodies in status output,
+  or treat SHA-256 as encryption.
+- Do not read the editable prompt as execution truth after a run is prepared.
+- Do not create task files, includes, prompt bundles, database state, deprecated
+  custom prompts, or legacy state migration.
+- Do not prepare or reconcile and then continue into product implementation.
+- Do not automatically launch Codex or submit content from VS Code.
+- Do not run overlapping writers or parallel implementation sessions.
+- Do not bypass `code-review`, hand-commit, push, open a PR, merge, publish, or
+  perform live external writes without a separately authorized workflow.
+- Do not use compatibility shims or dual old/new paths unless explicitly
+  requested.
 
 ## Completion Criteria
 
-- The handoff contains an ordered `task-1` through `task-n` queue.
-- Exactly one task is active at a time, and each completed task records files
-  changed, vertical slice or layers covered, validation, `code-review` outcome,
-  fixes, commit hash/message, and a short checkpoint summary.
-- Each task session stops after saving the reviewed and committed handoff
-  checkpoint; the next task starts in a fresh session using the handoff as
-  context.
-- Every task is `done`, `blocked`, or `superseded`.
-- The final session inspected the aggregate diff and ran changed-surface
-  alignment or recorded why it could not.
-- The final answer reports completed tasks, validation, remaining blockers, and
-  the handoff path.
+- Workspace actions leave a private, valid, discoverable prompt workspace and
+  no Git changes.
+- `prepare` leaves an immutable revision and a reviewable `prepared` handoff,
+  with no product edits.
+- `run` and each `continue` complete, validate, review, fix, and locally commit
+  exactly one queued task, save a checkpoint, and stop for a fresh session.
+- `reconcile` preserves completed work and stable IDs, appends revision and
+  queue changes, and stops without product edits.
+- The final handoff records all task evidence and changed-surface alignment,
+  with no unresolved blocker hidden.
 
 ## Learning Loop
 
@@ -298,20 +359,9 @@ URLs, customer data, raw logs, or one-off local state.
 
 Return:
 
-- Handoff path.
-- Ordered task queue with statuses.
-- Current or completed task summary.
-- Files changed and validation performed.
-- Code-review result, fixes applied, and per-task commit hash/message when a
-  task completed.
-- Failure classification and next action when blocked.
-- Exact next-session prompt when work remains.
-
-## References
-
-- Read `references/implementation-loop.md` before creating a queue or launching
-  fresh sessions.
-- Use `assets/handoff-template.md` when creating a new handoff.
-- Use `evals/trigger-prompts.md` when tuning or reviewing invocation behavior.
-- Run `python3 -B scripts/test-task-implementer-contract.py` as the local
-  smoke test after workflow, handoff, metadata, or trigger-example changes.
+- Action and repository scope handled.
+- Private workspace, prompt, run, revision, manifest, and handoff paths created
+  or verified, without quoting prompt bodies.
+- Prepared queue or exactly one completed task checkpoint, as applicable.
+- Validation, review, commit, and final alignment evidence actually obtained.
+- Stable failure classification and the minimum next action when blocked.

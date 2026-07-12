@@ -529,7 +529,30 @@ def _active_jail_pvc_binding(snapshot: Mapping[str, Any]) -> dict[str, str]:
         "pvc_uid": "",
         "jail_filesystem_id": "",
     }
-    slurmclusters = _resource_items(snapshot, "slurmclusters")
+    identity_snapshot = snapshot
+    identity_resources = snapshot.get("identity_soperator_resources")
+    if isinstance(identity_resources, Sequence) and not isinstance(
+        identity_resources, (str, bytes, bytearray)
+    ):
+        identity_snapshot = {**snapshot, "soperator_resources": identity_resources}
+    slurmclusters = _resource_items(identity_snapshot, "slurmclusters")
+    resume_identity = snapshot.get("resume_slurmcluster_identity")
+    if isinstance(resume_identity, Mapping):
+        selected_key = _text(resume_identity.get("identity_role"))
+        if selected_key not in {"source", "target"}:
+            selected_key = "source"
+        selected_ref = resume_identity.get(selected_key)
+        selected_ref = selected_ref if isinstance(selected_ref, Mapping) else {}
+        expected_namespace = _text(selected_ref.get("namespace")) or "soperator"
+        expected_name = _text(selected_ref.get("name"))
+        expected_uid = _text(selected_ref.get("uid"))
+        slurmclusters = [
+            item
+            for item in slurmclusters
+            if _text(_metadata(item).get("namespace")) in {"", expected_namespace}
+            and _text(_metadata(item).get("name")) == expected_name
+            and _text(_metadata(item).get("uid")) == expected_uid
+        ]
     if len(slurmclusters) != 1:
         evidence["reason"] = (
             "active Jail rootfs evidence requires exactly one live SlurmCluster; "

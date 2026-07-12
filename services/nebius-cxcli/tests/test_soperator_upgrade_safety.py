@@ -5,6 +5,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
+import pytest
+
 from nebius_cxcli.soperator_upgrade_safety import (
     ProtectedCustomerState,
     _classify_external_intentional_deltas,
@@ -374,6 +376,69 @@ def _capture(runner: _Runner) -> ProtectedCustomerState:
     )
 
 
+_OPEN_METRICS_UNSET = object()
+
+
+class _OpenMetricsRunner(_Runner):
+    def __init__(
+        self,
+        enabled: object = _OPEN_METRICS_UNSET,
+        *,
+        extra_spec: dict[str, Any] | None = None,
+        resource_name: str = "cluster",
+        resource_uid: str | None = None,
+    ) -> None:
+        super().__init__()
+        self.enabled = enabled
+        self.extra_spec = dict(extra_spec or {})
+        self.resource_name = resource_name
+        self.resource_uid = resource_uid or f"slurmcluster-uid-{resource_name}"
+
+    def _slurmcluster(self) -> dict[str, Any]:
+        spec = dict(self.extra_spec)
+        if self.enabled is not _OPEN_METRICS_UNSET:
+            spec["slurmNodes"] = {
+                "controller": {
+                    "openMetrics": {"enabled": self.enabled},
+                }
+            }
+        return {
+            "kind": "SlurmCluster",
+            "metadata": {
+                "name": self.resource_name,
+                "namespace": "soperator",
+                "uid": self.resource_uid,
+            },
+            "spec": spec,
+            "status": {"phase": "Available"},
+        }
+
+
+def _capture_open_metrics(
+    runner: _OpenMetricsRunner,
+    *,
+    target_ref: str = "cluster",
+) -> ProtectedCustomerState:
+    return capture_protected_customer_state(
+        command_runner=runner,
+        target_ref=target_ref,
+        namespace="soperator",
+        kube_context="external-context",
+    )
+
+
+def _restored_open_metrics_proof(*, desired_enabled: bool = True) -> dict[str, Any]:
+    return {
+        "revision": 1,
+        "status": "restored",
+        "desired_enabled": desired_enabled,
+        "observed_enabled": desired_enabled,
+        "slurmcluster_uid": "slurmcluster-uid-cluster",
+        "restored_at": "2026-07-11T00:00:00Z",
+        "post_restore_readiness_verified_at": "2026-07-11T00:00:01Z",
+    }
+
+
 def test_slurm_runtime_capture_uses_login_sshd_container() -> None:
     runner = _Runner()
 
@@ -477,6 +542,265 @@ def test_comparable_slurm_policy_drift_still_requires_remediation_approval() -> 
     for field in fields:
         assert by_field[field]["classification"] == "remediation_required"
         assert by_field[field]["approval_required"] is True
+
+
+@pytest.mark.parametrize(
+    "before_enabled",
+    (_OPEN_METRICS_UNSET, False),
+    ids=("absent", "false"),
+)
+def test_external_open_metrics_restoration_is_intentional_with_exact_handoff_proof(
+    before_enabled: object,
+) -> None:
+    before = _capture_open_metrics(_OpenMetricsRunner(before_enabled))
+
+    result = run_post_upgrade_fast_verification(
+        command_runner=_OpenMetricsRunner(True),
+        target_ref="cluster",
+        namespace="soperator",
+        kube_context="external-context",
+        before_state=before,
+        external_cluster=True,
+        external_open_metrics_handoff=_restored_open_metrics_proof(),
+    )
+
+    assert result.status == "passed"
+    open_metrics_delta = next(
+        delta
+        for delta in result.comparison["deltas"]
+        if delta["field"] == "controller_open_metrics_enabled"
+    )
+    assert open_metrics_delta["after"] == "True"
+    assert open_metrics_delta["classification"] == "intentional_upgrade"
+    assert open_metrics_delta["approval_required"] is False
+    by_field = {
+        delta["field"]: delta
+        for delta in result.comparison["deltas"]
+        if delta["kind"] == "slurmclusters"
+    }
+    assert by_field["spec_hash"]["classification"] == "intentional_upgrade"
+    if "spec_keys" in by_field:
+        assert by_field["spec_keys"]["classification"] == "intentional_upgrade"
+    assert "spec_hash_without_controller_open_metrics_enabled" not in by_field
+
+
+@pytest.mark.parametrize(
+    ("target_ref", "proof"),
+    (
+        ("other-target", _restored_open_metrics_proof()),
+        ("cluster", {**_restored_open_metrics_proof(), "revision": 2}),
+        ("cluster", {**_restored_open_metrics_proof(), "status": "compatibility-active"}),
+        ("cluster", _restored_open_metrics_proof(desired_enabled=False)),
+        (
+            "cluster",
+            {
+                **_restored_open_metrics_proof(),
+                "observed_enabled": False,
+            },
+        ),
+        ("cluster", None),
+    ),
+    ids=(
+        "wrong-target",
+        "wrong-revision",
+        "wrong-status",
+        "wrong-desired",
+        "wrong-observed",
+        "missing-proof",
+    ),
+)
+def test_external_open_metrics_restoration_stays_protected_without_exact_proof(
+    target_ref: str,
+    proof: dict[str, Any] | None,
+) -> None:
+    before = _capture_open_metrics(
+        _OpenMetricsRunner(False),
+        target_ref=target_ref,
+    )
+
+    result = run_post_upgrade_fast_verification(
+        command_runner=_OpenMetricsRunner(True),
+        target_ref=target_ref,
+        namespace="soperator",
+        kube_context="external-context",
+        before_state=before,
+        external_cluster=True,
+        external_open_metrics_handoff=proof,
+        remediation_approved=True,
+    )
+
+    assert result.status == "failed"
+    delta = next(
+        item
+        for item in result.comparison["deltas"]
+        if item["field"] == "controller_open_metrics_enabled"
+    )
+    assert delta["classification"] == "remediation_required"
+    assert delta["approval_required"] is True
+    assert any(
+        check["name"] == "external-open-metrics-handoff" and check["status"] == "failed"
+        for check in result.checks
+    )
+
+
+def test_external_open_metrics_proof_does_not_exempt_unrelated_slurmcluster_spec_drift() -> None:
+    before = _capture_open_metrics(
+        _OpenMetricsRunner(False, extra_spec={"customerSetting": "before"})
+    )
+
+    result = run_post_upgrade_fast_verification(
+        command_runner=_OpenMetricsRunner(True, extra_spec={"customerSetting": "after"}),
+        target_ref="cluster",
+        namespace="soperator",
+        kube_context="external-context",
+        before_state=before,
+        external_cluster=True,
+        external_open_metrics_handoff=_restored_open_metrics_proof(),
+    )
+
+    assert result.status == "failed"
+    by_field = {
+        delta["field"]: delta
+        for delta in result.comparison["deltas"]
+        if delta["kind"] == "slurmclusters"
+    }
+    assert by_field["controller_open_metrics_enabled"]["classification"] == ("intentional_upgrade")
+    assert by_field["spec_hash"]["classification"] == "remediation_required"
+    assert by_field["spec_hash"]["approval_required"] is True
+
+
+@pytest.mark.parametrize(
+    ("after_enabled", "after_uid", "proof_changes"),
+    (
+        (
+            False,
+            "slurmcluster-uid-cluster",
+            {},
+        ),
+        (
+            True,
+            "replacement-slurmcluster-uid",
+            {},
+        ),
+        (
+            True,
+            "slurmcluster-uid-cluster",
+            {"restored_at": ""},
+        ),
+        (
+            True,
+            "slurmcluster-uid-cluster",
+            {"post_restore_readiness_verified_at": ""},
+        ),
+    ),
+    ids=(
+        "no-delta-wrong-live-value",
+        "wrong-live-uid",
+        "missing-restored-at",
+        "missing-readiness-at",
+    ),
+)
+def test_external_open_metrics_after_state_proof_is_nonwaivable(
+    after_enabled: bool,
+    after_uid: str,
+    proof_changes: dict[str, Any],
+) -> None:
+    before = _capture_open_metrics(_OpenMetricsRunner(False))
+    proof = {**_restored_open_metrics_proof(), **proof_changes}
+
+    result = run_post_upgrade_fast_verification(
+        command_runner=_OpenMetricsRunner(after_enabled, resource_uid=after_uid),
+        target_ref="cluster",
+        namespace="soperator",
+        kube_context="external-context",
+        before_state=before,
+        external_cluster=True,
+        external_open_metrics_handoff=proof,
+        remediation_approved=True,
+    )
+
+    assert result.status == "failed"
+    check = next(item for item in result.checks if item["name"] == "external-open-metrics-handoff")
+    assert check["status"] == "failed"
+
+
+def test_external_open_metrics_restore_keeps_legacy_whole_hash_baseline_protected() -> None:
+    captured = _capture_open_metrics(_OpenMetricsRunner(False))
+    legacy_sections = json.loads(json.dumps(captured.sections))
+    legacy_item = legacy_sections["slurmclusters"]["items"][0]
+    legacy_item.pop("controller_open_metrics_enabled")
+    legacy_item.pop("spec_hash_without_controller_open_metrics_enabled")
+    legacy_item.pop("resource_uid")
+    legacy_item["spec_hash"] = "legacy-whole-slurmcluster-spec-hash"
+    legacy_item["spec_keys"] = ["slurmNodes"]
+    legacy_before = ProtectedCustomerState(
+        target_ref=captured.target_ref,
+        namespace=captured.namespace,
+        captured_at=captured.captured_at,
+        sections=legacy_sections,
+    )
+
+    result = run_post_upgrade_fast_verification(
+        command_runner=_OpenMetricsRunner(True),
+        target_ref="cluster",
+        namespace="soperator",
+        kube_context="external-context",
+        before_state=legacy_before,
+        external_cluster=True,
+        external_open_metrics_handoff=_restored_open_metrics_proof(),
+    )
+
+    assert result.status == "failed"
+    by_field = {
+        delta["field"]: delta
+        for delta in result.comparison["deltas"]
+        if delta["kind"] == "slurmclusters"
+    }
+    assert by_field["controller_open_metrics_enabled"]["classification"] == ("intentional_upgrade")
+    assert by_field["spec_hash"]["classification"] == "remediation_required"
+    assert (
+        by_field["spec_hash_without_controller_open_metrics_enabled"]["classification"]
+        == "remediation_required"
+    )
+
+
+def test_external_open_metrics_legacy_baseline_without_handoff_uses_normal_remediation() -> None:
+    captured = _capture_open_metrics(_OpenMetricsRunner(False))
+    legacy_sections = json.loads(json.dumps(captured.sections))
+    legacy_item = legacy_sections["slurmclusters"]["items"][0]
+    legacy_item.pop("controller_open_metrics_enabled")
+    legacy_item.pop("spec_hash_without_controller_open_metrics_enabled")
+    legacy_item.pop("resource_uid")
+    legacy_before = ProtectedCustomerState(
+        target_ref=captured.target_ref,
+        namespace=captured.namespace,
+        captured_at=captured.captured_at,
+        sections=legacy_sections,
+    )
+
+    result = run_post_upgrade_fast_verification(
+        command_runner=_OpenMetricsRunner(True),
+        target_ref="cluster",
+        namespace="soperator",
+        kube_context="external-context",
+        before_state=legacy_before,
+        external_cluster=True,
+        remediation_approved=True,
+    )
+
+    assert result.status == "passed"
+    open_metrics_check = next(
+        item for item in result.checks if item["name"] == "external-open-metrics-handoff"
+    )
+    assert open_metrics_check["status"] == "skipped"
+    by_field = {
+        delta["field"]: delta
+        for delta in result.comparison["deltas"]
+        if delta["kind"] == "slurmclusters"
+    }
+    assert by_field["controller_open_metrics_enabled"]["classification"] == ("remediation_required")
+    assert by_field["spec_hash"]["classification"] == "remediation_required"
+    assert by_field["resource_uid"]["classification"] == "remediation_required"
 
 
 def test_managed_chart_upgrade_classifies_chart_owned_deltas_as_intentional() -> None:

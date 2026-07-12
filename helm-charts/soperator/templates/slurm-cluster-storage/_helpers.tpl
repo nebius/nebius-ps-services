@@ -53,6 +53,21 @@
     {{- if eq (include "slurm-cluster-storage.jailRootfs.strategy" .) "activePassive" -}}true{{- else -}}false{{- end -}}
 {{- end }}
 
+{{/* Active jail rootfs slot name. */}}
+{{- define "slurm-cluster-storage.jailRootfs.activeSlot" -}}
+    {{- default "slot-a" .Values.jailRootfs.activeSlot | trim -}}
+{{- end }}
+
+{{/* Active jail rootfs volume source name. */}}
+{{- define "slurm-cluster-storage.jailRootfs.active.volumeSourceName" -}}
+    {{- include "slurm-cluster-storage.jailRootfs.slot.volumeSourceName" (list . (include "slurm-cluster-storage.jailRootfs.activeSlot" .)) -}}
+{{- end }}
+
+{{/* Active jail rootfs PVC name. */}}
+{{- define "slurm-cluster-storage.jailRootfs.active.pvc" -}}
+    {{- include "slurm-cluster-storage.jailRootfs.slot.pvc" (list . (include "slurm-cluster-storage.jailRootfs.activeSlot" .)) -}}
+{{- end }}
+
 {{/* Whether first adoption still has login and worker consumers on the legacy rootfs. */}}
 {{- define "slurm-cluster-storage.jailRootfs.legacyActive" -}}
     {{- $adoption := default dict .Values.jailRootfs.adoption -}}
@@ -78,8 +93,21 @@
 {{- end }}
 
 {{/* Active/passive jail rootfs generations path on Kubernetes hosts. */}}
+{{- define "slurm-cluster-storage.safeAbsolutePath" -}}
+    {{- $field := index . 0 -}}
+    {{- $path := index . 1 | trim -}}
+    {{- if not (regexMatch "^/[-A-Za-z0-9._/]+$" $path) -}}
+        {{- fail (printf "%s must contain only shell-safe absolute path characters; got %q." $field $path) -}}
+    {{- end -}}
+    {{- if or (eq $path "/") (regexMatch "(^|/)(\\.|\\.\\.)(/|$)" $path) (contains "//" $path) -}}
+        {{- fail (printf "%s must be an absolute normalized non-root path without '.' or '..' components; got %q." $field $path) -}}
+    {{- end -}}
+    {{- $path -}}
+{{- end }}
+
 {{- define "slurm-cluster-storage.jailRootfs.rootfs.path" -}}
-    {{- default (printf "%s/rootfs" (include "slurm-cluster-storage.jailRootfs.store.path" .)) .Values.jailRootfs.store.rootfsPath | trim -}}
+    {{- $path := default (printf "%s/rootfs" (include "slurm-cluster-storage.jailRootfs.store.path" .)) .Values.jailRootfs.store.rootfsPath | trim -}}
+    {{- include "slurm-cluster-storage.safeAbsolutePath" (list "jailRootfs.store.rootfsPath" $path) -}}
 {{- end }}
 
 {{/* Active/passive slot local path. Usage: include helper with (list $ "slot-a"). */}}
@@ -148,7 +176,8 @@
 {{/* Persistent jail mount local path. Usage: include helper with (list $ mount). */}}
 {{- define "slurm-cluster-storage.jailPersistentMount.path" -}}
     {{- $mount := index . 1 -}}
-    {{- trimSuffix "/" (required "jailPersistentMounts[].localPath is required." $mount.localPath | trim) -}}
+    {{- $path := trimSuffix "/" (required "jailPersistentMounts[].localPath is required." $mount.localPath | trim) -}}
+    {{- include "slurm-cluster-storage.safeAbsolutePath" (list "jailPersistentMounts[].localPath" $path) -}}
 {{- end }}
 
 {{/* Jail volume */}}

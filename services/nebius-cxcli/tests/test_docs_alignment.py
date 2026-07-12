@@ -69,12 +69,22 @@ def test_design_architecture_summary_matches_upgrade_surface() -> None:
     assert "  - [Jail Upgrade](#jail-upgrade)" in design
     assert "### Jail Upgrade" in design
     assert "active/passive rootfs slots" in design_flat
-    assert "shared persistent-mount area on the same physical jail SFS" in design_flat
+    assert "stable persistent-mount directories on the same physical jail SFS" in design_flat
+    assert "checkpointed host/PVC readiness contract at two boundaries" in design_flat
+    assert "`in_place_persistent_mount_adoption.status=pending`" in design_flat
     assert "backup is a restore precondition around mutation, not an upgrade phase" in (design_flat)
     assert (
         "a compatible rerun reuses the checkpointed `UP -> DOWN` partition records" in design_flat
     )
-    assert "Slurm worker status reports deferred/upgrading from checkpoint state" in design_flat
+    assert "Slurm worker status can still report deferred/upgrading from checkpoint state" in (
+        design_flat
+    )
+    assert (
+        "legacy-rootfs compatibility bridge suppresses target-only OpenMetrics and "
+        "`PluginDir` config"
+    ) in design_flat
+    assert "sets the target SConfig writer size to zero" in design_flat
+    assert "actual target service account and active slot" in design_flat
     assert "non-v3 journal evidence fails closed instead of using a markerless fallback" in (
         design_flat
     )
@@ -85,13 +95,22 @@ def test_design_architecture_summary_matches_upgrade_surface() -> None:
     )
     assert "/mnt/jail-store/shared/data" in design_flat
     assert "The one-time migration runs only while" in design_flat
-    assert "permissions, symlinks, ACLs, and xattrs preserved where supported" in (design_flat)
+    assert "preserves ownership and permissions, symlinks, ACLs, and xattrs where supported" in (
+        design_flat
+    )
     assert (
-        "The switch-over is not a live bind-mount flip inside an already-running "
-        "login or worker container"
+        "The switch-over is not a live bind-mount flip inside an already-running consumer container"
     ) in design_flat
     assert "Prompt for a ChatGPT-generated infographic" not in design
-    assert "![Soperator jail upgrade workflow](jail-upgrade-workflow.png)" in design
+    assert (
+        "![Soperator Jail Upgrade rootfs workflow with two controller pods and "
+        "two example worker pods](jail-upgrade-workflow.png)"
+    ) in design
+    assert (
+        "The diagram uses two controller pods and two example worker pods for readability"
+        in design_flat
+    )
+    assert "The worker pair is illustrative" in design_flat
     infographic = REPO_ROOT / "docs" / "jail-upgrade-workflow.png"
     assert infographic.is_file()
     assert infographic.stat().st_size > 0
@@ -857,21 +876,33 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "Slurm and MK8s rollout: when MK8s target flags are supplied" in soperator_flat
     assert "Jail Upgrade: when the target populate-jail image changed" in soperator_flat
     assert "require post-rootfs `scontrol`, `sbatch`, and accounting/QOS smoke" in (soperator_flat)
-    assert "The Soperator jail is the shared Linux root filesystem" in soperator_flat
+    assert "The Soperator jail is the shared Slurm runtime filesystem" in soperator_flat
+    assert "it is not the Kubernetes container's literal `/`" in soperator_flat
+    assert (
+        "contract covers the controller, login, enabled REST (`slurmrestd`), "
+        "SConfigController, and every worker NodeSet"
+    ) in soperator_flat
+    assert "Accounting is deliberately outside the Jail slot contract" in soperator_flat
+    assert "neither mounts `/mnt/jail`" in soperator_flat
+    assert "MariaDB data lives on the dedicated accounting PVC" in soperator_flat
+    assert "contents are not copied" in soperator_flat
+    assert "only an explicitly relocated, non-overlapping mapping" in soperator_flat
     assert "Jail Upgrade follows the Soperator chart/rootfs activation boundary" in (soperator_flat)
     assert "then later Kubernetes-only hops after Slurm has passed post-Jail smoke" in (
         soperator_flat
     )
     assert "The refresh uses an active/passive rootfs model" in soperator_flat
-    assert "contains two logical rootfs slots plus one shared persistent-mount area" in (
+    assert "contains two logical rootfs slots plus stable persistent-mount directories" in (
         soperator_flat
     )
+    assert "In-place first adoption has a checkpointed two-boundary readiness gate" in (
+        soperator_flat
+    )
+    assert "legacy, slot-a, slot-b, and every persistent-mount PVC" in soperator_flat
     assert "/mnt/jail-store/shared/data" in soperator_flat
     assert "/mnt/jail-store/shared/scripts" in soperator_flat
-    assert (
-        "requires enough space on the same physical jail SFS for both the passive rootfs slot"
-        in (soperator_flat)
-    )
+    assert "capacity preflight" in soperator_flat
+    assert "stable persistent paths from the replaceable-rootfs estimate" in soperator_flat
     assert "Completion markers live under `/store/.cxcli/persistent-migrations/`" in (
         soperator_flat
     )
@@ -886,16 +917,27 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "keep the partitions DOWN" in soperator_flat
     assert "submits a bounded live `sbatch` job exactly once" in soperator_flat
     assert "resumes the same smoke state without repopulating the active PVC" in soperator_flat
-    assert "the cluster can briefly contain old pods using the old slot" in soperator_flat
     assert (
-        "A single login or worker pod is not expected to run with both slot-a and "
-        "slot-b mounted as two active root filesystems"
+        "the cluster can briefly contain old non-SConfig pods using the old slot"
+        in soperator_flat
+    )
+    assert (
+        "A single consumer pod is not expected to run with both slot-a and slot-b "
+        "mounted as two active root filesystems"
     ) in soperator_flat
     assert "Infographic prompt for ChatGPT" not in soperator
     assert "Create a multi-step technical infographic as six sequential panels" not in (
         soperator_flat
     )
-    assert "![Soperator jail upgrade workflow](docs/jail-upgrade-workflow.png)" in (soperator)
+    assert (
+        "![Soperator Jail Upgrade rootfs workflow with two controller pods and "
+        "two example worker pods](docs/jail-upgrade-workflow.png)"
+    ) in soperator
+    assert (
+        "The diagram uses two controller pods and two example worker pods for readability"
+        in soperator_flat
+    )
+    assert "The worker pair is illustrative" in soperator_flat
     assert (
         "operator-facing top-level stage (`MK8s Node Upgrades`, `Soperator Upgrade`, "
         "or `Jail Upgrade`)"
@@ -1070,6 +1112,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "Documented when operators should use the structured `upgrade` command" in unreleased
     assert "reusable upgrade wizard choice builder" in unreleased_flat
     assert "Improved external Soperator upgrade completion handoff" in unreleased_flat
+    assert "checkpointed in-place adoption gate before rootfs consumer switch" in (unreleased_flat)
     assert "live post-upgrade discovery refresh" in unreleased_flat
     assert (
         "pending or still-external-upgrade-owned plans blocked from normal deploy"
@@ -1088,6 +1131,58 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
         unreleased_flat
     )
     assert "retrying the Terraform-managed workflow" in unreleased_flat
+
+
+def test_jail_upgrade_image_prompt_is_standalone_and_architecturally_aligned() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
+    prompt = (REPO_ROOT / "docs" / "chat-gpt-prompt.md").read_text(encoding="utf-8")
+    design_flat = _squash(design)
+    prompt_flat = _squash(prompt)
+
+    assert "chat-gpt-prompt.md" not in readme
+    assert "chat-gpt-prompt.md" not in design
+    assert (
+        "contract covers the controller, login, enabled REST (`slurmrestd`), "
+        "SConfigController, and every worker NodeSet"
+    ) in design_flat
+    assert "Accounting is deliberately outside the Jail slot contract" in design_flat
+    assert "neither mounts `/mnt/jail`" in design_flat
+    assert "Controller" in prompt
+    assert "exactly two controller pod cards" in prompt_flat
+    assert "`controller-0`, `controller-1`" in prompt
+    assert "Login workloads behind the Login Service" in prompt_flat
+    assert "two login pod cards (`login-0`, `login-1`)" in prompt_flat
+    assert "REST / `slurmrestd`, when enabled" in prompt
+    assert "SConfigController" in prompt
+    assert "Every configured worker NodeSet" in prompt
+    assert "exactly two example worker NodeSet cards (`worker-0`, `worker-1`)" in prompt_flat
+    assert "Do not add a third worker card" in prompt_flat
+    assert "Accounting is not a Jail rootfs consumer" in prompt_flat
+    assert "SlurmDBD + MUNGE: container images" in prompt
+    assert "MariaDB: dedicated accounting PVC" in prompt
+    assert "In-place adoption - no copy" in prompt
+    assert "Optional guarded one-time copy" in prompt
+    assert "/mnt/jail/checkpoints` to `/mnt/jail/shared/checkpoints" in prompt_flat
+    assert "Never show a copy target outside `/mnt/jail`" in prompt_flat
+    assert (
+        "In-place/no-copy: ready Login endpoint maintained through rolling handoff" in prompt_flat
+    )
+    assert "Explicit copy: writers held; Login readiness restored after switch" in prompt_flat
+    assert "`maintenance=downscale` writer hold" in prompt_flat
+    assert "prior, separate chart-takeover handoff" in prompt_flat
+    assert (
+        "First supported Kubernetes hop -> target chart + accounting handoff -> Jail Upgrade "
+        "-> later Kubernetes-only hops"
+    ) in prompt_flat
+    assert "cxcli does not infer arbitrary legacy-rootfs folders" in prompt
+    assert "Established TCP sessions are pod-bound and do not migrate between pods" in prompt
+    assert "Target SConfig writer fenced at size 0" in prompt
+    assert "Zero old or target SConfig writer pods" in prompt
+    assert "start target-SA SConfigController on slot-b" in prompt_flat
+    assert "No full target config is written into the Jail" in prompt_flat
+    assert "desired OpenMetrics setting is restored only after" in prompt_flat
+    assert "persistent paths are remounted, not recopied" in prompt_flat
 
 
 def test_docs_define_discover_and_bootstrap_ci_boundaries() -> None:
@@ -1434,6 +1529,8 @@ def test_soperator_docs_lock_production_training_child_chart_defaults() -> None:
     assert "cxcli-managed Nebius Soperator profiles pin" in design
     assert "catalog-owned QOS overlays leave that path unchanged" in design
     assert "standalone chart default still leaves `PluginDir` unset" in design
+    assert "`slurmNodes.controller.openMetrics.enabled`" in chart_readme
+    assert "defaults to `true` for the pinned Slurm 25.11 images" in chart_readme
     assert "pinned-image Slurm plugin directory override" not in chart_changelog
 
     changelog_flat = _squash(changelog)
@@ -1807,8 +1904,22 @@ def test_docs_define_component_selector_contract() -> None:
     assert "upgrades the control plane first" in readme_flat
     assert "Service groups run serially" in readme_flat
     assert "provider drain timeout unset" in readme_flat
+    assert (
+        "temporarily moves the SlurmCluster-owned `sconfigcontroller` Deployment from the "
+        "`system` node filter to the already-upgraded `controller` filter without reducing "
+        "its replica count" in readme_flat
+    )
     assert "`max(1, floor(5% * group size))`, capped at 25" in readme_flat
     assert "`upgrading` is provider-active rollout nodes" in readme_flat
+    assert "provider-active rollout with target capacity still ready renders as `upgrading`" in (
+        readme_flat
+    )
+    assert (
+        "checkpoint-owned active worker rollout also remains `upgrading` while its readiness "
+        "deficit stays within both the exact per-group admission budget and the pinned global "
+        "unavailable-node budget" in readme_flat
+    )
+    assert "deficit without accepted checkpoint ownership or unambiguous budgets" in readme_flat
     assert "deduplicated Slurm DOWN/DRAIN nodes from a 5% node-weighted global budget" in (
         readme_flat
     )
@@ -1839,9 +1950,11 @@ def test_docs_define_component_selector_contract() -> None:
     assert (
         "automatically models `/home`, `/data`, `/scripts`, and `/models` as persistent jail mounts"
     ) in readme_flat
-    assert "if `/models` did not exist before first adoption" in readme_flat
-    assert "future files written under `/models` land in `/mnt/jail/shared/models`" in readme_flat
-    assert "First adoption migrates data out of legacy in-rootfs directories" in readme_flat
+    assert "The chart creates an absent automatic directory before mounting it" in readme_flat
+    assert "future files written under `/models` therefore land in `/mnt/jail/models`" in (
+        readme_flat
+    )
+    assert "First adoption keeps the automatic paths at their existing" in readme_flat
     assert (
         "Quota must cover spare target storage for non-jail storage while source storage remains mounted"
         in readme_flat
@@ -2134,11 +2247,47 @@ def test_docs_define_component_selector_contract() -> None:
     assert "do not claim exact-node replacement inside a mixed busy/free node group" in design_flat
     assert "Successful upgrades release only jobs that cxcli requeue-held" in design_flat
     assert "fresh observation still matches that cxcli-owned post-state" in design_flat
+    assert (
+        "same stable job lineage, a reset `SubmitTime`, `Restarts` incremented by exactly one"
+        in design_flat
+    )
+    assert "settled unallocated held state" in design_flat
+    assert "release-intent resume that observes an unheld job" in design_flat
     assert "Recovery guidance is inspection-only" in design_flat
     assert "eight-group ceiling still decide whether it may start" in design_flat
     assert "TTY managed and external upgrade runs default to `interactive`" in design_flat
     assert "non-TTY and `--no-interactive` upgrade runs default to `fail`" in design_flat
     assert "explicit policy such as `--job-policy wait-to-finish`" in design_flat
+    assert (
+        "exact Pod-specific Kubernetes server NotFound response or the exact Pod-specific "
+        "`kubectl exec` connection-upgrade not-found response" in design_flat
+    )
+    assert (
+        "A tracked source login Pod that disappears between discovery and the session probe "
+        "counts as retired only when `kubectl exec` returns an exact Pod-specific not-found "
+        "response" in readme_flat
+    )
+    assert (
+        "enforces this policy before reducing either the SlurmCluster login size or the "
+        "rendered Kruise login replicas" in readme_flat
+    )
+    assert "this is a drain gate, not TCP connection migration" in readme_flat
+    assert (
+        "Before each external target Helm values reconciliation, `wait-active` waits for "
+        "active SSH sessions on the currently backing login Pods to drain" in readme_flat
+    )
+    assert (
+        "Immediately before every target Helm values reconciliation, cxcli captures the "
+        "currently backing login Pods and enforces the selected session policy" in design_flat
+    )
+    assert "no policy migrates an established TCP connection" in design_flat
+    assert (
+        "cannot lock out a new connection that arrives after its final observation" in design_flat
+    )
+    assert (
+        "Before a zero-surge login quiesce changes either the SlurmCluster login size or "
+        "the rendered Kruise login replicas" in design_flat
+    )
     assert "The `?` key opens a scrollable help overlay" in design_flat
     assert "keeps polling silently at the current Slurm gate" in design_flat
     assert "cancel action keys call `scancel`" in design_flat
@@ -2150,13 +2299,16 @@ def test_docs_define_component_selector_contract() -> None:
     assert "`nebius.com/load-balancer-allocation-id`" in design
     assert "`slurmNodes.login.sshdServiceAnnotations`" in design
     assert "cannot be converted into a reusable Nebius allocation" in design_flat
-    assert "refuses the later first-adoption persistent-mount login writer hold" in design_flat
+    assert "keeps automatic external persistent paths in place without a login writer hold" in (
+        design_flat
+    )
     assert (
         "models `/home`, `/data`, `/scripts`, `/models`, plus explicitly declared "
         "additional customer paths as persistent jail mounts"
     ) in design_flat
-    assert "missing `/models` is recorded with a `source_missing` marker" in design_flat
-    assert "later user writes under `/models` land in `/mnt/jail/shared/models`" in design_flat
+    assert "If an automatic path was absent in the legacy rootfs" in design_flat
+    assert "the chart creates the stable directory before mounting it" in design_flat
+    assert "Later `/models` writes land in `/mnt/jail/models`" in design_flat
     assert "provides ad hoc `ext-soperator scale-up` and `ext-soperator scale-down`" in (
         design_flat
     )
@@ -2210,7 +2362,20 @@ def test_docs_define_component_selector_contract() -> None:
     assert "worker groups default to zero-surge" in design_flat
     assert "Service-role groups are serial zero-surge by default" in design_flat
     assert "provider drain timeout unset" in design_flat
+    assert (
+        "temporarily changes `sConfigController.node.k8sNodeFilterName` from `system` to "
+        "the already-upgraded `controller` filter while retaining the original replica count"
+        in design_flat
+    )
     assert "`upgrading` is provider-active rollout nodes" in design_flat
+    assert "provider-active rollout with target capacity still ready" in design_flat
+    assert (
+        "checkpoint-owned active worker rollout also remains `upgrading` while its readiness "
+        "deficit stays within both the exact per-group admission budget and the pinned global "
+        "unavailable-node budget" in design_flat
+    )
+    assert "deficit without accepted checkpoint ownership or unambiguous budgets" in design_flat
+    assert "failed state remains `degraded`" in design_flat
     assert "`max(1, floor(5% * group size))`, capped at 25" in design_flat
     assert "requires spare surge capacity for active service groups by default" not in design_flat
     stale_service_role_safe_surge_default = (
@@ -2239,16 +2404,13 @@ def test_docs_define_component_selector_contract() -> None:
         "models `/home`, `/data`, `/scripts`, `/models`, plus explicitly declared "
         "additional customer paths as persistent jail mounts"
     ) in design_flat
-    assert "migrates legacy in-rootfs data into those shared mount paths during first adoption" in (
-        design_flat
-    )
+    assert "adopts the automatic legacy paths in place without a data copy" in (design_flat)
     assert (
-        "With the default `target-ready` policy, cxcli stops in execute preflight before any "
-        "upgrade mutation and prints a next action to rerun the exact original command "
-        "with `--login-session-policy wait-active` added" in readme_flat
+        "Automatic external first adoption reuses the legacy persistent directories in place"
+        in readme_flat
     )
     assert "records it as `jailRootfs.adoption.legacyPvcName`" in readme_flat
-    assert "keeps service and worker consumers on that PVC" in readme_flat
+    assert "keeps every Jail consumer on that PVC" in readme_flat
     assert "preserves both sides of SSH identity" in readme_flat
     assert "secret-bearing last-applied annotation" in readme_flat
     assert "checkpointed passive-slot Job" in readme_flat
@@ -2318,10 +2480,12 @@ def test_docs_define_component_selector_contract() -> None:
     assert "without mixing in Kubernetes registered-node counts" in design_flat
     assert "separate `MK8s Control Plane` signal" in design_flat
     assert "missing provider fields render as `unknown`" in readme_flat
-    assert "omitted `outdated_node_count` on a fully ready `RUNNING` group" in readme_flat
+    assert "omitted `outdated_node_count` on a fully ready provider-active group" in readme_flat
+    assert "fully ready non-active `RUNNING` group" in readme_flat
     assert "Terminal output highlights provider table labels and states" in readme_flat
     assert "missing provider fields render as `unknown`" in design_flat
-    assert "omitted `outdated_node_count` on a fully ready `RUNNING` group" in design_flat
+    assert "omitted `outdated_node_count` on a fully ready provider-active group" in design_flat
+    assert "fully ready non-active `RUNNING` group" in design_flat
     assert "Terminal output highlights provider table labels and states" in design_flat
     assert "Slurm worker names/states" in readme_flat
     assert "timeout-guarded checkpoints" in design_flat

@@ -195,17 +195,21 @@ Default storage expectations:
   PV/PVC requests are informational and do not allocate a per-slot quota.
 - `jailPersistentMounts` renders writable PVC-backed jail submounts for
   customer-owned paths that stay outside rootfs generation slots. Managed
-  greenfield defaults `/home` to `/mnt/jail-store/shared/home`; external
-  single-SFS adoption stages known and explicit paths under the shared area.
+  greenfield defaults `/home` to `/mnt/jail-store/shared/home`. Automatic
+  external single-SFS adoption keeps `/home`, `/data`, `/scripts`, and
+  `/models` in place under `/mnt/jail`; only an explicitly requested
+  non-overlapping relocation uses another local path.
   While `jailRootfs.adoption.activeSource=legacy-rootfs`, the chart derives all
   controller, login, and worker jail references from `legacyPvcName` and
-  withholds those shared submounts. cxcli holds writers, performs the one-time
-  legacy-to-shared copy, populates the passive rootfs slot, and switches
-  `activeSource` to `slot` before the chart attaches shared paths such as
-  `/home` and `/data`. The chart always derives the canonical `jail` volume
-  source from the active source and slot because SConfigController and REST
-  consume that alias. Accounting keeps an alias-backed volume declaration, but
-  the current operator workload does not mount the jail.
+  withholds the persistent submounts. For automatic in-place paths, cxcli does
+  not hold writers or copy data; an explicit relocation uses the guarded copy
+  workflow. cxcli populates the passive rootfs slot and switches `activeSource`
+  to `slot` before the chart attaches paths such as `/home` and `/data`. The
+  chart always derives the canonical `jail` volume
+  source, controller and login volume-source references, and every worker
+  NodeSet PVC from the active source and slot. SConfigController and REST
+  consume that same alias. Accounting keeps an alias-backed volume declaration,
+  but the current operator workload does not mount the jail.
   `rollbackSource=legacy-rootfs` retains the old
   PV/PVC for rollback without changing the active alias.
 - Nodes that should mount the jail must match
@@ -1904,6 +1908,14 @@ Structured partitions then reference worker NodeSet names through
 The same underlying Kubernetes labels and taints can also be reused by
 `storage.*` node affinity, helper workload affinities, and
 `rebooter.tolerations` when the install needs tighter placement control.
+
+`slurmNodes.controller.openMetrics` is rendered directly into the
+SlurmCluster controller spec. Its chart default enables the native Slurm 25.11
+OpenMetrics endpoint. Because that setting emits the 25.11-only
+`MetricsType=metrics/openmetrics` key, an external first-adoption workflow must
+set it to `false` while login or worker consumers still execute an older legacy
+rootfs and through exact target-slot consumer verification, then restore the
+configured value before final pre-release checks and partition release.
 
 #### Scheduling And Preemption
 

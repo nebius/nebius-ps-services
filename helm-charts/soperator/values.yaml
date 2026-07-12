@@ -731,6 +731,13 @@ slurmNodes:
     priorityClass: ""
     # Uncomment to control whether pod containers use the host user namespace.
     # hostUsers: false
+    # Slurm 25.11 native OpenMetrics support. External Jail Upgrade temporarily
+    # overrides this to false while login and worker consumers still execute
+    # Slurm 24.x clients from the legacy rootfs and through exact target-slot
+    # consumer verification, then restores this configured value before final
+    # pre-release checks.
+    openMetrics:
+      enabled: true
     # RBAC for slurm-controller ephemeral node power-state management. The
     # power-manager binary runs inside slurmctld and is called by Slurm
     # ResumeProgram/SuspendProgram.
@@ -795,8 +802,6 @@ slurmNodes:
     volumes:
       spool:
         volumeSourceName: "controller-spool"
-      jail:
-        volumeSourceName: "jail-rootfs-slot-a"
       customMounts: []
   login:
     size: 2
@@ -867,8 +872,6 @@ slurmNodes:
         ephemeralStorage: "5Gi"
     customInitContainers: []
     volumes:
-      jail:
-        volumeSourceName: "jail-rootfs-slot-a"
       jailSubMounts: []
       # jailSubMounts:
       #   - name: "mlcommons-sd-bench-data"
@@ -941,9 +944,6 @@ slurmNodes:
         memory: "1Gi"
         ephemeralStorage: "5Gi"
     customInitContainers: []
-    volumes:
-      jail:
-        volumeSourceName: "jail-rootfs-slot-a"
   rest:
     enabled: true
     size: 1
@@ -1322,9 +1322,9 @@ jailRootfs:
 jailPersistentMounts:
   # Writable customer-owned paths that stay outside rootfs generation slots and
   # are mounted back into every active rootfs. cxcli-managed clusters default
-  # /home to /mnt/jail-store/shared/home; external single-SFS adoption defaults
-  # /home to /mnt/jail/shared/home and accepts explicit additional mounts under
-  # the same physical jail SFS shared area.
+  # /home to /mnt/jail-store/shared/home. Automatic external single-SFS
+  # adoption keeps /home, /data, /scripts, and /models in place under
+  # /mnt/jail; only an explicit relocation uses another non-overlapping path.
   - mountPath: /home
     localPath: /mnt/jail-store/shared/home
 volume:
@@ -1546,9 +1546,6 @@ nodesets:
       volumes:
         spool:
           emptyDir: {}
-        jail:
-          persistentVolumeClaim:
-            claimName: jail-rootfs-slot-a-pvc
         jailSubMounts: []
         sharedMemorySize: 64Gi
         # Optional additional worker mounts. The chart injects and owns the

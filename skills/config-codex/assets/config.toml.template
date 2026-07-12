@@ -50,6 +50,9 @@ persistence = "save-all"
 
 [sandbox_workspace_write]
 network_access = true
+# Keep task-implementer prompt storage opt-in. When sandbox_mode is
+# workspace-write and the user requests it, append
+# "{{CODEX_HOME}}/task-implementer" without removing existing roots.
 writable_roots = ["{{CODEX_HOME}}/task-state"]
 
 [[skills.config]]

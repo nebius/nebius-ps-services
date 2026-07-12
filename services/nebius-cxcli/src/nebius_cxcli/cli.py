@@ -528,9 +528,11 @@ from .soperator_migration import (
     record_live_satisfied_soperator_upgrade_campaign_segment,
     record_soperator_migration_backup_binding,
     record_soperator_migration_backup_compensation,
+    record_soperator_migration_slurmcluster_handoff_binding,
     resolve_external_node_template_rollout,
     soperator_migration_checkpoint_path,
     soperator_migration_lock_path,
+    soperator_migration_slurmcluster_identity_transition,
     stabilize_soperator_login_load_balancer_allocations,
 )
 from .soperator_onboarding import (
@@ -557,6 +559,7 @@ from .soperator_onboarding import (
     SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME,
     analyze_soperator_onboarding_snapshot,
     collect_kubectl_soperator_snapshot,
+    normalize_k8s_minor_version,
     normalize_soperator_release_version,
     soperator_host_driver_jail_cuda_policy,
     soperator_migration_profile_for_version,
@@ -14134,6 +14137,7 @@ def _run_external_soperator_discovery_command(
     to_os: str | None,
     to_gpu_stack_preset: str | None,
     redaction: str,
+    slurmcluster_identity_scope: Mapping[str, Any] | None = None,
 ) -> Path:
     normalized_redaction = _normalize_soperator_discovery_redaction(redaction)
     resolved_target_ref = _resolve_external_soperator_discovery_target_ref(
@@ -14163,6 +14167,7 @@ def _run_external_soperator_discovery_command(
             payload,
             cluster_id=resolved_cluster_id,
             access=resolved_access,
+            slurmcluster_identity_scope=slurmcluster_identity_scope,
         )
         return _write_soperator_discovery_bundle_from_snapshot(
             project_dir=project_dir,
@@ -14192,7 +14197,10 @@ def _run_external_soperator_discovery_command(
             "External Soperator discovery requires a kube_context or cluster_id. "
             "Pass --kube-context or --cluster-id, or onboard the target first."
         )
-    snapshot = collect_kubectl_soperator_snapshot(kube_context=explicit_context)
+    snapshot = collect_kubectl_soperator_snapshot(
+        kube_context=explicit_context,
+        slurmcluster_identity_scope=slurmcluster_identity_scope,
+    )
     if resolved_cluster_id and not _snapshot_has_complete_provider_mk8s_campaign_capabilities(
         snapshot,
         cluster_id=resolved_cluster_id,
@@ -14955,7 +14963,8 @@ def soperator_upgrade_command(
         typer.Option(
             "--approve-remediation/--no-approve-remediation",
             help=(
-                "Record approval for remediation-required protected-state deltas. "
+                "Record approval for remediation-required protected-state deltas or an "
+                "exact checkpointed Slurm hold recovery. "
                 "Blocked data-loss or downtime deltas are never overrideable."
             ),
         ),
@@ -26812,14 +26821,16 @@ def _sdk_mk8s_cluster_template_snapshot(raw_cluster: Any, *, cluster_id: str) ->
 def _sdk_mk8s_node_group_template_snapshot(raw_group: Any) -> dict[str, Any]:
     metadata = _sdk_field(raw_group, "metadata")
     spec = _sdk_field(raw_group, "spec")
+    status = _sdk_field(raw_group, "status")
     template = _sdk_field(spec, "template")
     resources = _sdk_field(template, "resources")
     gpu_settings = _sdk_field(template, "gpu_settings") or _sdk_field(template, "gpuSettings")
     node_group_id = _sdk_first_text(metadata, "id")
     node_group_name = _sdk_first_text(metadata, "name") or node_group_id
     platform = _sdk_first_text(resources, "platform", "platform_id", "platformId")
+    raw_k8s_version = _sdk_first_text(spec, "version") or _sdk_first_text(status, "version")
     node_template = {
-        "k8s_version": _sdk_first_text(spec, "version"),
+        "k8s_version": normalize_k8s_minor_version(raw_k8s_version),
         "os": _sdk_resource_text(_sdk_field(template, "os")),
         "platform": platform,
         "preset": _sdk_first_text(resources, "preset"),
@@ -27235,6 +27246,7 @@ def _collect_soperator_snapshot_for_nebius_mk8s_cluster(
     *,
     cluster_id: str,
     access: str = "external",
+    slurmcluster_identity_scope: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], str]:
     client_name, _tenant_id, project_id, _region_id, _email = _identity_values_from_payload(payload)
     if not cluster_id:
@@ -27256,6 +27268,7 @@ def _collect_soperator_snapshot_for_nebius_mk8s_cluster(
         snapshot = collect_kubectl_soperator_snapshot(
             kube_context=spec.context_name,
             extra_env={"KUBECONFIG": str(kubeconfig_path)},
+            slurmcluster_identity_scope=slurmcluster_identity_scope,
         )
     try:
         provider_snapshot = _collect_provider_mk8s_template_snapshot(
@@ -62328,6 +62341,187 @@ def _locked_upgrade_checkpoint_payload(
     return checkpoint
 
 
+_EXTERNAL_SOPERATOR_RESUME_SLURMCLUSTER_SCOPE_SCHEMA = (
+    "nebius-cxcli-ext-soperator-resume-slurmcluster-identity/v1"
+)
+
+
+def _external_soperator_resume_slurmcluster_identity_scope(
+    checkpoint: Mapping[str, Any] | None,
+    *,
+    target_ref: str,
+) -> dict[str, Any] | None:
+    """Return the narrow checkpoint-derived identity scope for target handoff resume."""
+
+    if checkpoint is None:
+        return None
+    checkpoint_target = _non_empty_text(checkpoint.get("target_ref"))
+    if checkpoint_target != target_ref:
+        raise RuntimeError(
+            "recovery-required: external Soperator checkpoint target differs from the "
+            "requested resume target."
+        )
+    identity_transition = soperator_migration_slurmcluster_identity_transition(checkpoint)
+    if identity_transition:
+        return {
+            "schema": _EXTERNAL_SOPERATOR_RESUME_SLURMCLUSTER_SCOPE_SCHEMA,
+            "mode": "target-only",
+            "phase_id": "rolling-compute-migration",
+            "source": copy.deepcopy(identity_transition["source"]),
+            "target": copy.deepcopy(identity_transition["target"]),
+            "target_version": _non_empty_text(checkpoint.get("target_version")),
+            "allow_target_uid_bootstrap": False,
+        }
+    phase_state = checkpoint.get("phase_state")
+    phase_state = phase_state if isinstance(phase_state, Mapping) else {}
+    rolling = phase_state.get("rolling-compute-migration")
+    rolling = rolling if isinstance(rolling, Mapping) else {}
+    apply_started_at = _non_empty_text(rolling.get("target_values_apply_started_at"))
+    if not apply_started_at:
+        return None
+
+    source_ref = checkpoint.get("source_slurmcluster_ref")
+    source_ref = source_ref if isinstance(source_ref, Mapping) else {}
+    source = {
+        "namespace": _non_empty_text(source_ref.get("namespace")),
+        "name": _non_empty_text(source_ref.get("name")),
+        "uid": _non_empty_text(source_ref.get("uid")),
+    }
+    missing_source = [key for key, value in source.items() if not value]
+    if missing_source:
+        raise RuntimeError(
+            "recovery-required: target-handoff resume lacks a complete immutable source "
+            "SlurmCluster binding: missing " + ", ".join(missing_source) + "."
+        )
+    if source["namespace"] != "soperator":
+        raise RuntimeError(
+            "recovery-required: target-handoff resume is namespace-bound to soperator."
+        )
+    if source["name"] == target_ref:
+        return None
+
+    handoff_binding = rolling.get("slurmcluster_handoff_binding")
+    handoff_binding = handoff_binding if isinstance(handoff_binding, Mapping) else {}
+    bound_source_ref = handoff_binding.get("source")
+    bound_source_ref = bound_source_ref if isinstance(bound_source_ref, Mapping) else {}
+    saved_target_ref = handoff_binding.get("target")
+    saved_target_ref = saved_target_ref if isinstance(saved_target_ref, Mapping) else {}
+    if handoff_binding and (not bound_source_ref or not saved_target_ref):
+        raise RuntimeError(
+            "recovery-required: rolling-compute SlurmCluster handoff binding must contain "
+            "both exact source and target identities."
+        )
+    if bound_source_ref:
+        normalized_bound_source = {
+            "namespace": _non_empty_text(bound_source_ref.get("namespace")),
+            "name": _non_empty_text(bound_source_ref.get("name")),
+            "uid": _non_empty_text(bound_source_ref.get("uid")),
+        }
+        if normalized_bound_source != source:
+            raise RuntimeError(
+                "recovery-required: rolling-compute handoff source binding differs from the "
+                "immutable checkpoint source SlurmCluster."
+            )
+    target = {
+        "namespace": (
+            _non_empty_text(saved_target_ref.get("namespace")) if saved_target_ref else "soperator"
+        ),
+        "name": _non_empty_text(saved_target_ref.get("name")) or target_ref,
+        "uid": _non_empty_text(saved_target_ref.get("uid")),
+    }
+    if saved_target_ref and (
+        target["namespace"] != "soperator" or target["name"] != target_ref or not target["uid"]
+    ):
+        raise RuntimeError(
+            "recovery-required: checkpointed target SlurmCluster binding is incomplete or "
+            "belongs to a different target."
+        )
+
+    cleanup_started_at = _non_empty_text(rolling.get("source_cleanup_started_at"))
+    cleanup_completed_at = _non_empty_text(rolling.get("source_cleanup_completed_at"))
+    cleanup_binding = rolling.get("source_cleanup_binding")
+    cleanup_binding = cleanup_binding if isinstance(cleanup_binding, Mapping) else {}
+    completed_phases = {
+        _non_empty_text(item)
+        for item in checkpoint.get("completed_phases", []) or []
+        if _non_empty_text(item)
+    }
+    rolling_completed = "rolling-compute-migration" in completed_phases
+    if cleanup_started_at or cleanup_binding or cleanup_completed_at or rolling_completed:
+        normalized_cleanup = {
+            "namespace": _non_empty_text(cleanup_binding.get("namespace")),
+            "name": _non_empty_text(cleanup_binding.get("name")),
+            "uid": _non_empty_text(cleanup_binding.get("uid")),
+        }
+        if not cleanup_started_at or normalized_cleanup != source:
+            raise RuntimeError(
+                "recovery-required: source-cleanup resume lacks an exact checkpointed source "
+                "intent/binding."
+            )
+        if not target["uid"]:
+            raise RuntimeError(
+                "recovery-required: source-cleanup resume lacks the checkpointed target "
+                "SlurmCluster UID."
+            )
+        mode = "target-only" if cleanup_completed_at or rolling_completed else "source-cleanup"
+    else:
+        if _non_empty_text(checkpoint.get("pending_phase")) != "rolling-compute-migration":
+            return None
+        mode = "target-handoff"
+
+    return {
+        "schema": _EXTERNAL_SOPERATOR_RESUME_SLURMCLUSTER_SCOPE_SCHEMA,
+        "mode": mode,
+        "phase_id": "rolling-compute-migration",
+        "source": source,
+        "target": target,
+        "target_version": _non_empty_text(checkpoint.get("target_version")),
+        "allow_target_uid_bootstrap": mode == "target-handoff" and not target["uid"],
+    }
+
+
+def _external_soperator_revalidate_slurmcluster_handoff_proposal(
+    *,
+    snapshot_collector: Callable[..., Mapping[str, Any]],
+    kube_context: str,
+    proposed_identity: Mapping[str, Any],
+) -> dict[str, str]:
+    """Re-read and match a discovery-time target UID proposal before persisting it."""
+
+    current_snapshot = snapshot_collector(kube_context=kube_context)
+    current_identity = current_snapshot.get("resume_slurmcluster_identity")
+    if not isinstance(current_identity, Mapping):
+        raise RuntimeError(
+            "recovery-required: target SlurmCluster handoff revalidation returned no "
+            "checkpoint-scoped identity; no journal or backup mutation was attempted."
+        )
+
+    def _exact_ref(identity: Mapping[str, Any], key: str) -> dict[str, str]:
+        raw = identity.get(key)
+        raw = raw if isinstance(raw, Mapping) else {}
+        return {
+            "namespace": _non_empty_text(raw.get("namespace")),
+            "name": _non_empty_text(raw.get("name")),
+            "uid": _non_empty_text(raw.get("uid")),
+        }
+
+    proposed_source = _exact_ref(proposed_identity, "source")
+    proposed_target = _exact_ref(proposed_identity, "target")
+    current_source = _exact_ref(current_identity, "source")
+    current_target = _exact_ref(current_identity, "target")
+    if (
+        not all(proposed_source.values())
+        or not all(proposed_target.values())
+        or current_source != proposed_source
+        or current_target != proposed_target
+    ):
+        raise RuntimeError(
+            "recovery-required: live source/target SlurmCluster identity changed after plan "
+            "or TUI approval. No handoff binding, backup, or cluster mutation was attempted."
+        )
+    return current_target
+
+
 def _locked_upgrade_path_segments(upgrade_path: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
     segments = upgrade_path.get("segments")
     if not isinstance(segments, list):
@@ -62895,19 +63089,11 @@ def _external_soperator_first_adoption_login_policy_required(
     persistent_mount_migration_planned: bool,
     jail_persistent_mounts: Sequence[str] = (),
 ) -> bool:
-    if not persistent_mount_migration_planned:
-        return False
-    values = _external_soperator_plan_values(payload, target_ref)
-    if values is None:
-        return False
-    explicit_mounts = parse_jail_persistent_mount_specs(jail_persistent_mounts)
-    patched_values = apply_jail_persistent_mount_values(
-        values,
-        target_ref=target_ref,
-        persistent_mounts=explicit_mounts,
-        layout="external",
+    del jail_persistent_mounts
+    return (
+        persistent_mount_migration_planned
+        and _external_soperator_plan_values(payload, target_ref) is not None
     )
-    return bool(_legacy_persistent_mount_migration_entries(patched_values))
 
 
 def _soperator_onboarding_jail_refresh_required(
@@ -62995,6 +63181,23 @@ def _external_soperator_persistent_mount_plan_lines(
     ]
     if decision_parts:
         lines.append("Decisions: " + "; ".join(decision_parts) + ".")
+    in_place_paths = [
+        str(item.get("mount_path") or "")
+        for item in decisions
+        if item.get("status") == "adopted-in-place" and item.get("mount_path")
+    ]
+    if in_place_paths:
+        lines.append(
+            "First-adoption continuity: "
+            + ", ".join(in_place_paths)
+            + " use their existing legacy jail directories in place; no data copy or "
+            "maintenance=downscale writer hold is planned for those paths."
+        )
+        lines.append(
+            "Pre-switch safety gate: execute read-only probes the host and legacy-PVC "
+            "paths, waits for the jail-mount DaemonSet, and requires immutable Bound "
+            "legacy, slot, and persistent PVC identities before switching consumers."
+        )
     if not status.mounts:
         lines.append("Resolved paths: none; existing customer-owned submounts provide /home.")
         return lines
@@ -63241,16 +63444,18 @@ def _format_soperator_migration_plan_lines(
     lines.append(f"Login SSH session policy: {login_session_policy}")
     if first_adoption_login_policy_required:
         lines.append(
-            "First-adoption persistent mount migration requires an explicit login-session "
-            "drain policy before mutation; the generated execute command uses "
-            f"--login-session-policy {execute_login_session_policy}."
+            "First-adoption Jail Upgrade login continuity: the generated execute command "
+            f"uses --login-session-policy {execute_login_session_policy} so active SSH "
+            "sessions are considered before login rollout."
         )
     if login_session_policy != EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY:
         lines.append(f"Login SSH session drain timeout: {login_session_drain_timeout}")
     lines.append(
         "Login continuity: new SSH connections require a ready target login endpoint "
-        "before source login retirement; existing TCP sessions remain best-effort unless "
-        "wait-active or grace-period is selected."
+        "before source login retirement. Existing TCP sessions cannot migrate between "
+        "pods: wait-active pauses before mutation until observed sessions drain but cannot "
+        "lock out a new connection after its final probe; grace-period only delays mutation, "
+        "and target-ready does not wait."
     )
     lines.append(
         "Login LoadBalancer allocation retention: cxcli automatically converts and "
@@ -63318,7 +63523,20 @@ def _external_soperator_execute_snapshot_collector(
     payload: Mapping[str, Any],
     *,
     target_ref: str,
+    config_path: Path | None = None,
 ) -> Callable[..., Mapping[str, Any]]:
+    def _identity_scope() -> Mapping[str, Any] | None:
+        if config_path is None:
+            return None
+        return _external_soperator_resume_slurmcluster_identity_scope(
+            _locked_upgrade_checkpoint_payload(
+                config_path=config_path,
+                target_ref=target_ref,
+                payload_or_config=payload,
+            ),
+            target_ref=target_ref,
+        )
+
     target = soperator_onboarding_target(payload, target_ref=target_ref)
     if isinstance(target, Mapping):
         cluster_id = _non_empty_text(target.get("cluster_id"))
@@ -63334,11 +63552,22 @@ def _external_soperator_execute_snapshot_collector(
                     payload,
                     cluster_id=cluster_id,
                     access=access,
+                    slurmcluster_identity_scope=_identity_scope(),
                 )
                 return snapshot
 
             return _collect_with_provider_inventory
-    return collect_kubectl_soperator_snapshot
+
+    def _collect_with_checkpoint_scope(
+        *,
+        kube_context: str,
+    ) -> Mapping[str, Any]:
+        return collect_kubectl_soperator_snapshot(
+            kube_context=kube_context,
+            slurmcluster_identity_scope=_identity_scope(),
+        )
+
+    return _collect_with_checkpoint_scope
 
 
 @ext_soperator_app.command(
@@ -63582,10 +63811,15 @@ def ext_soperator_scale_up_command(
         "id saved as deploy.targets[].instance_id, not the Nebius cluster_id or "
         "display name. The target must already be onboarded and accepted through "
         "ext-soperator onboard. Dry-run refreshes discovery and prints the plan. "
-        "When first-adoption persistent-mount migration is planned, onboard and "
-        "render guidance add --login-session-policy wait-active to the generated "
-        "execute command. Dry-run substitutes wait-active for the default target-ready "
-        "plan and preserves an explicitly selected compatible policy. "
+        "Automatic external first adoption keeps /home, /data, /scripts, and /models "
+        "at their existing /mnt/jail paths, so it does not require a copy-time login "
+        "writer hold. Execute read-only probes those paths and requires the jail-mount "
+        "DaemonSet plus Bound legacy, slot, and persistent PVCs before consumer switch. "
+        "Onboard/render guidance and the default dry-run plan use wait-active for a "
+        "first-adoption Jail Upgrade so at least one active login session drains before "
+        "source retirement. "
+        "An explicitly relocated non-overlapping persistent path still "
+        "uses the guarded copy workflow and requires wait-active or grace-period. "
         "Core external Soperator execution uses Nebius API and Kubernetes "
         "API/kubectl exec for cloud, cluster, and Slurm actions; it does not SSH "
         "from the operator workstation into login or worker nodes. "
@@ -63638,9 +63872,10 @@ def soperator_external_upgrade_command(
             help=(
                 "Additional persistent in-jail path to mount back into each active/passive "
                 "rootfs slot as <mountPath>=<localPath>, for example "
-                "/checkpoints=/mnt/jail/shared/checkpoints. /home, /data, /scripts, "
-                "and /models are added automatically unless an existing customer-owned "
-                "submount already owns the path."
+                "/checkpoints=/mnt/jail/checkpoints. Paths must contain only shell-safe "
+                "letters, digits, '.', '_', '-', and '/'. /home, /data, /scripts, and "
+                "/models are adopted in place automatically unless an existing "
+                "customer-owned submount already owns the path."
             ),
         ),
     ] = None,
@@ -63716,11 +63951,14 @@ def soperator_external_upgrade_command(
                 "Login SSH continuity policy: target-ready, wait-active, or grace-period. "
                 "target-ready keeps source login retirement gated until the target login "
                 "StatefulSet and the preserved login Service have ready SSH endpoints. "
-                "wait-active also waits for active SSH sessions on old login pods to drain. "
-                "grace-period waits the drain timeout after target readiness. Existing TCP "
+                "Before each target Helm values reconciliation, wait-active also waits for "
+                "observed active SSH sessions on the currently backing login pods to drain; "
+                "grace-period waits the drain timeout at the same pre-mutation boundary. "
+                "Existing TCP "
                 "SSH sessions remain best-effort if their backing pod or node is restarted. "
-                "First-adoption persistent mount migration stops before its temporary login "
-                "writer hold unless wait-active or grace-period is selected."
+                "An explicitly relocated first-adoption persistent path stops before its "
+                "temporary login writer hold unless wait-active or grace-period is selected; "
+                "automatic in-place adoption does not use that hold."
             ),
         ),
     ] = EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
@@ -63774,8 +64012,9 @@ def soperator_external_upgrade_command(
         typer.Option(
             "--approve-remediation/--no-approve-remediation",
             help=(
-                "Record approval for remediation-required protected-state deltas. "
-                "Blocked data-loss or downtime deltas are never overrideable."
+                "Record explicit approval for remediation-required protected-state deltas "
+                "or an exact journaled Slurm hold crash-window recovery. Blocked data-loss "
+                "or downtime deltas and unproven Slurm transitions are never overrideable."
             ),
         ),
     ] = False,
@@ -64063,6 +64302,14 @@ def soperator_external_upgrade_command(
             if slurm_scheduling_quiesce is None
             else bool(slurm_scheduling_quiesce)
         )
+        resume_slurmcluster_identity_scope = _external_soperator_resume_slurmcluster_identity_scope(
+            _locked_upgrade_checkpoint_payload(
+                config_path=config_path,
+                target_ref=target_ref,
+                payload_or_config=effective_payload,
+            ),
+            target_ref=target_ref,
+        )
         with _command_status(
             "[cyan]Refreshing external Soperator discovery and Nebius provider "
             f"inventory for {target_ref}...[/cyan]"
@@ -64092,12 +64339,19 @@ def soperator_external_upgrade_command(
                     or _non_empty_text(node_template_target.get("gpu_stack_preset"))
                 ),
                 redaction="local",
+                slurmcluster_identity_scope=resume_slurmcluster_identity_scope,
             )
         console.print(f"External Soperator discovery refreshed: {discovery_path}", soft_wrap=True)
         source_report = _load_soperator_source_discovery_report(
             config_path=config_path,
             target_ref=target_ref,
             payload_or_config=effective_payload,
+        )
+        refreshed_snapshot = source_report.get("snapshot")
+        refreshed_snapshot = refreshed_snapshot if isinstance(refreshed_snapshot, Mapping) else {}
+        discovered_resume_identity = refreshed_snapshot.get("resume_slurmcluster_identity")
+        discovered_resume_identity = (
+            discovered_resume_identity if isinstance(discovered_resume_identity, Mapping) else {}
         )
         _validate_external_soperator_live_campaign_identity(
             campaign=locked_upgrade_path,
@@ -64487,6 +64741,37 @@ def soperator_external_upgrade_command(
                             campaign_segment_id=segment_id,
                         )
                         cluster_lease.assert_held()
+                        if discovered_resume_identity:
+                            discovered_target_ref = discovered_resume_identity.get("target")
+                            if not isinstance(discovered_target_ref, Mapping):
+                                raise RuntimeError(
+                                    "recovery-required: checkpoint-scoped discovery returned no "
+                                    "target SlurmCluster binding."
+                                )
+                            revalidated_target_ref = (
+                                _external_soperator_revalidate_slurmcluster_handoff_proposal(
+                                    snapshot_collector=(
+                                        _external_soperator_execute_snapshot_collector(
+                                            execution_payload,
+                                            target_ref=target_ref,
+                                            config_path=config_path,
+                                        )
+                                    ),
+                                    kube_context=_external_soperator_backup_kube_context(
+                                        execution_payload,
+                                        target_ref=target_ref,
+                                        kube_context=None,
+                                    ),
+                                    proposed_identity=discovered_resume_identity,
+                                )
+                            )
+                            if discovered_resume_identity.get("target_uid_bootstrapped") is True:
+                                record_soperator_migration_slurmcluster_handoff_binding(
+                                    config_path=config_path,
+                                    target_ref=target_ref,
+                                    payload=execution_payload,
+                                    target_slurmcluster_ref=revalidated_target_ref,
+                                )
                         initialize_soperator_migration_operation_journal(
                             config_path=config_path,
                             target_ref=target_ref,
@@ -64579,6 +64864,7 @@ def soperator_external_upgrade_command(
                     snapshot_collector=_external_soperator_execute_snapshot_collector(
                         execution_payload,
                         target_ref=target_ref,
+                        config_path=config_path,
                     ),
                     approved=approve,
                     status_callback=emit_status,

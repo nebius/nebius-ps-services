@@ -309,10 +309,11 @@ def test_active_passive_slot_selection_and_switch_values() -> None:
     assert slots.passive_slot == "slot-b"
     assert switched["jailRootfs"]["activeSlot"] == "slot-b"
     assert switched["jailRootfs"]["passiveSlot"] == "slot-a"
-    for role in ("controller", "login", "rest"):
+    for role in ("controller", "login"):
         assert switched["slurmNodes"][role]["volumes"]["jail"] == {
             "volumeSourceName": "jail-rootfs-slot-b"
         }
+    assert "volumes" not in switched["slurmNodes"]["rest"]
     assert switched["nodesets"][0]["slurmd"]["volumes"]["jail"] == {
         "persistentVolumeClaim": {"claimName": "jail-rootfs-slot-b-pvc"}
     }

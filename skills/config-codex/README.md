@@ -21,7 +21,8 @@ $CODEX_HOME/
 |   |-- repo_mapper.toml
 |   |-- test_strategist.toml
 |   `-- risk_reviewer.toml
-`-- task-state/
+|-- task-state/
+`-- task-implementer/  # optional private prompt workspace
 ```
 
 It also points Codex at user-installed skills under `$HOME/.agents/skills`,
@@ -58,7 +59,8 @@ $CODEX_HOME is patched or populated
   +--> config.toml features, MCP, skills, custom agents
   +--> hooks.json and hook scripts
   +--> read-only custom-agent config layers
-  `--> private task-state directory
+  +--> private task-state directory
+  `--> optional private task-implementer directory
   |
   v
 Codex is restarted and hooks are reviewed in /hooks
@@ -110,6 +112,32 @@ cannot otherwise satisfy the requested behavior. If `global-context-management`
 and `config-codex` are already discoverable from the installed skills
 directory, explicit `[[skills.config]]` entries are optional and should not be
 added just to match the template.
+
+### Private Prompt Workspace Is Explicitly Opt-In
+
+When a user asks to enable the `task-implementer` private prompt workspace,
+create `$CODEX_HOME/task-implementer` outside every Git worktree and Git
+metadata directory with mode `0700`. Reject a symlink at that path and never
+print prompt bodies during setup or validation.
+
+For an existing `workspace-write` sandbox, append the rendered absolute prompt
+root to `sandbox_workspace_write.writable_roots` while preserving all current
+roots. A `danger-full-access` setup needs no writable-root patch. Never switch
+the user's `sandbox_mode` or `approval_policy` for this integration. If access
+cannot be persisted, report this exact generic per-session alternative:
+
+```bash
+codex --add-dir "${CODEX_HOME:-$HOME/.codex}/task-implementer"
+```
+
+The normal idempotency preflight ignores this optional integration. Its opt-in
+mode validates the location, symlink, mode, and sandbox access contract:
+
+```bash
+python3 config-codex/scripts/check-local-idempotency.py \
+  --codex-home "$CODEX_HOME" \
+  --require-task-implementer-workspace
+```
 
 The public-safe MCP baseline in `assets/config.toml.template` covers reusable
 servers such as Context7, Playwright, Terraform, MarkItDown, Microsoft Learn,
@@ -320,6 +348,10 @@ setup.
      --codex-home "$CODEX_HOME"
    ```
 
+   If the user also requested private prompt-workspace access, create the
+   `0700` directory, apply only the mode-appropriate writable-root patch, and
+   rerun with `--require-task-implementer-workspace`.
+
 5. If the preflight fails, let Codex patch only the failed surfaces from the
    templates in `assets/`. Existing `AGENTS.md` and `config.toml` must be
    patched in place, not replaced.
@@ -498,6 +530,8 @@ setup.
   current managed `AGENTS.md` block content when the whole file does not match
   the template. Exact `AGENTS.md` template parity and public MCP baseline
   parity are explicit audit modes, not normal laptop setup requirements.
+  Private task-implementer directory and workspace access checks are likewise
+  opt-in through `--require-task-implementer-workspace`.
 
 Low-level hook file sync can use the root installer:
 
