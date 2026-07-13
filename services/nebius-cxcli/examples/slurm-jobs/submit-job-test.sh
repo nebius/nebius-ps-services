@@ -26,7 +26,8 @@ watch_duration_seconds=""
 watch_job_name_pattern="sop-*-job-test*"
 watch_job_ids=""
 login_ip=""
-login_remote_dir="/root/testjobs"
+login_remote_dir=""
+login_shell=0
 
 show_usage() {
   cat <<'EOF'
@@ -34,14 +35,18 @@ Submit public Soperator Slurm smoke jobs for upgrade-policy testing.
 
 Usage:
   submit-job-test.sh [submit options]
-  submit-job-test.sh --login <login-external-ip> [--dry-run]
+  submit-job-test.sh --login <login-external-ip> [submit or watch options]
+  submit-job-test.sh --login <login-external-ip> --login-shell
 
 Options:
-  --login <login-external-ip> Copy examples to the Slurm login node and SSH there.
+  --login <login-external-ip> Stage and run this command on the Slurm login node.
+  --login-shell               Keep an interactive SSH shell open after staging.
+  --login-remote-dir <path>   Private remote staging path. Default: unique /root/testjobs-*.
   --part-type auto|cpu|gpu   CPU/GPU job template to submit. Default: auto.
   --partition <name>         Slurm partition. Defaults to Slurm's default partition.
   --count <n>                Number of jobs to submit. Default: 1.
   --run-minutes <n>          In-job heartbeat duration. Default: 30.
+  --heartbeat-seconds <n>    Seconds between job heartbeats. Default: 30.
   --wall-minutes <n>         Slurm wall time request. Default: 35.
   --submit-mode loop|array   Submit repeated sbatch jobs or one array. Default: loop.
   --gpus-per-job <n>         GPUs per GPU job. Default: 1. Used with the GPU template.
@@ -50,7 +55,7 @@ Options:
   --exclusive                Request exclusive node allocation where policy permits.
   --qos <name>               Pass a Slurm QOS to sbatch.
   --account <name>           Pass a Slurm account to sbatch.
-  --requeue                  Submit jobs as requeueable.
+  --requeue                  Opt disposable probe jobs into requeue; default: --no-requeue.
   --output-dir <path>        Directory for Slurm stdout files. Default: slurm-smoke-logs.
   --watch-jobs               Watch submitted smoke jobs instead of submitting new jobs.
   --watch-once               Print one watch snapshot and exit. Used with --watch-jobs.
@@ -62,13 +67,15 @@ Options:
   -h, --help                 Show this help text.
 
 Login mode:
-  --login copies this directory to root@<login-external-ip>:/root/testjobs,
-  then opens an SSH session in /root/testjobs.
+  --login stages this directory in a unique private path and runs the same submit/watch
+  options remotely. Add --login-shell to open a long-lived interactive SSH session instead.
 
 Examples:
   ./submit-job-test.sh
   ./submit-job-test.sh --login <login-external-ip>
   ./submit-job-test.sh --count 10
+  ./submit-job-test.sh --login <login-external-ip> --count 2 --heartbeat-seconds 2
+  ./submit-job-test.sh --login <login-external-ip> --login-shell
   ./submit-job-test.sh --partition main --count 10 --gpus-per-job 1
   ./submit-job-test.sh --part-type cpu --partition cpu --count 10
   ./submit-job-test.sh --partition main --count 10 --submit-mode array --dry-run
@@ -119,7 +126,7 @@ require_value() {
   local option="$1"
   local value="${2:-}"
 
-  if [[ -z "$value" ]]; then
+  if [[ -z "$value" || "$value" == -* ]]; then
     die "${option} requires a value"
   fi
 }
@@ -184,58 +191,81 @@ run_or_print_command() {
   "$@"
 }
 
-stage_examples_and_login() {
+stage_examples_and_run() {
   local login_target="root@${login_ip}"
+  local quoted_remote_dir
+  local remote_command=""
+  local arg
+  local quoted_arg
+  local -a remote_args=(
+    --part-type "$part_type"
+    --count "$count"
+    --run-minutes "$run_minutes"
+    --wall-minutes "$wall_minutes"
+    --heartbeat-seconds "$heartbeat_seconds"
+    --submit-mode "$submit_mode"
+    --gpus-per-job "$gpus_per_job"
+    --nodes "$nodes"
+    --cpus-per-task "$cpus_per_task"
+    --output-dir "$output_dir"
+  )
 
   if ((!dry_run)); then
     require_command ssh
     require_command scp
   fi
 
-  run_or_print_command ssh "$login_target" "mkdir -p ${login_remote_dir}"
+  printf -v quoted_remote_dir '%q' "$login_remote_dir"
+  run_or_print_command ssh "$login_target" \
+    "umask 077; test ! -e ${quoted_remote_dir} && install -d -m 0700 -- ${quoted_remote_dir}"
   run_or_print_command scp -r "${SCRIPT_DIR}/." "${login_target}:${login_remote_dir}/"
-  run_or_print_command ssh -t "$login_target" "cd ${login_remote_dir} && exec \"\${SHELL:-/bin/bash}\" -i"
+  if ((login_shell)); then
+    run_or_print_command ssh -t "$login_target" \
+      "cd ${quoted_remote_dir} && exec \"\${SHELL:-/bin/bash}\" -i"
+    return 0
+  fi
+
+  if [[ -n "$partition" ]]; then remote_args+=(--partition "$partition"); fi
+  if ((exclusive)); then remote_args+=(--exclusive); fi
+  if [[ -n "$qos" ]]; then remote_args+=(--qos "$qos"); fi
+  if [[ -n "$account" ]]; then remote_args+=(--account "$account"); fi
+  if ((requeue)); then remote_args+=(--requeue); fi
+  if ((watch_jobs)); then remote_args+=(--watch-jobs); fi
+  if ((watch_once)); then remote_args+=(--watch-once); fi
+  remote_args+=(--watch-interval "$watch_interval_seconds")
+  if [[ -n "$watch_duration_seconds" ]]; then
+    remote_args+=(--watch-duration "$watch_duration_seconds")
+  fi
+  remote_args+=(--watch-job-name "$watch_job_name_pattern")
+  if [[ -n "$watch_job_ids" ]]; then remote_args+=(--watch-job-ids "$watch_job_ids"); fi
+  for arg in "${remote_args[@]}"; do
+    printf -v quoted_arg '%q' "$arg"
+    remote_command+=" ${quoted_arg}"
+  done
+  run_or_print_command ssh "$login_target" \
+    "cd ${quoted_remote_dir} && ./submit-job-test.sh${remote_command}"
 }
 
-parse_login_args() {
+parse_args() {
   while (($# > 0)); do
     case "$1" in
       --login)
         require_value "$1" "${2:-}"
-        if [[ "$2" == -* ]]; then
-          die "--login requires <login-external-ip>"
-        fi
         if [[ -n "$login_ip" ]]; then
           die "--login may only be specified once"
         fi
         login_ip="$2"
         shift 2
         ;;
-      --dry-run)
-        dry_run=1
+      --login-shell)
+        login_shell=1
         shift
         ;;
-      -h | --help)
-        show_usage
-        exit 0
+      --login-remote-dir)
+        require_value "$1" "${2:-}"
+        login_remote_dir="$2"
+        shift 2
         ;;
-      --*)
-        die "Unknown login option: $1"
-        ;;
-      *)
-        die "Unexpected login argument: $1"
-        ;;
-    esac
-  done
-
-  if [[ -z "$login_ip" ]]; then
-    die "--login requires <login-external-ip>"
-  fi
-}
-
-parse_args() {
-  while (($# > 0)); do
-    case "$1" in
       --part-type)
         require_value "$1" "${2:-}"
         part_type="$2"
@@ -254,6 +284,11 @@ parse_args() {
       --run-minutes)
         require_value "$1" "${2:-}"
         run_minutes="$2"
+        shift 2
+        ;;
+      --heartbeat-seconds)
+        require_value "$1" "${2:-}"
+        heartbeat_seconds="$2"
         shift 2
         ;;
       --wall-minutes)
@@ -371,6 +406,7 @@ validate_args() {
 
   validate_positive_int "--count" "$count"
   validate_positive_int "--run-minutes" "$run_minutes"
+  validate_positive_int "--heartbeat-seconds" "$heartbeat_seconds"
   validate_positive_int "--wall-minutes" "$wall_minutes"
   validate_positive_int "--gpus-per-job" "$gpus_per_job"
   validate_positive_int "--nodes" "$nodes"
@@ -381,6 +417,34 @@ validate_args() {
     validate_positive_int "--watch-duration" "$watch_duration_seconds"
   fi
   watch_job_ids="$(normalize_csv "$watch_job_ids")"
+  if [[ -n "$watch_job_ids" ]]; then
+    local watch_job_id
+    local -a validated_watch_job_ids=()
+    IFS=',' read -r -a validated_watch_job_ids <<<"$watch_job_ids"
+    for watch_job_id in "${validated_watch_job_ids[@]}"; do
+      if [[ ! "$watch_job_id" =~ ^[0-9]+(_[0-9]+)?$ ]]; then
+        die "--watch-job-ids accepts only numeric Slurm job or array-task IDs"
+      fi
+    done
+  fi
+
+  if ((login_shell)) && [[ -z "$login_ip" ]]; then
+    die "--login-shell requires --login <login-external-ip>"
+  fi
+  if [[ -n "$login_remote_dir" && -z "$login_ip" ]]; then
+    die "--login-remote-dir requires --login <login-external-ip>"
+  fi
+  if [[ -n "$login_ip" ]]; then
+    if [[ "$login_ip" == -* || ! "$login_ip" =~ ^[A-Za-z0-9.-]+$ ]]; then
+      die "--login currently requires a DNS name or IPv4 address"
+    fi
+    if [[ -z "$login_remote_dir" ]]; then
+      login_remote_dir="/root/testjobs-$(date -u '+%Y%m%dT%H%M%SZ')-$$"
+    fi
+    if [[ ! "$login_remote_dir" =~ ^/root/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ || "$login_remote_dir" == *"/../"* || "$login_remote_dir" == *"/.." || "$login_remote_dir" == *"/./"* || "$login_remote_dir" == *"/." ]]; then
+      die "--login-remote-dir must be a child path under /root without dot segments"
+    fi
+  fi
 
   if ((wall_minutes < run_minutes)); then
     die "--wall-minutes must be greater than or equal to --run-minutes"
@@ -451,6 +515,8 @@ build_sbatch_command() {
 
   if ((requeue)); then
     cmd+=(--requeue)
+  else
+    cmd+=(--no-requeue)
   fi
 
   cmd+=("$batch_script")
@@ -609,59 +675,127 @@ state_is_completed() {
   esac
 }
 
-observed_jobs_completed_in_sacct() {
-  local remaining_ids="$seen_job_ids"
-  local job_id
-  local state
-  local rest
+scontrol_record_field() {
+  local record="$1"
+  local field="$2"
+  local pattern="(^|[[:space:]])${field}=([^[:space:]]+)"
 
-  if [[ -z "$remaining_ids" ]] || ! command -v sacct >/dev/null 2>&1; then
-    return 1
+  if [[ "$record" =~ $pattern ]]; then
+    printf '%s\n' "${BASH_REMATCH[2]}"
+    return 0
   fi
-
-  while IFS='|' read -r job_id state rest; do
-    if [[ -z "$job_id" ]] || ! csv_contains "$seen_job_ids" "$job_id"; then
-      continue
-    fi
-    if state_is_interrupted "$state"; then
-      return 2
-    fi
-    if state_is_completed "$state"; then
-      remaining_ids="$(csv_remove "$remaining_ids" "$job_id")"
-    fi
-  done < <(
-    sacct -X -n -P -j "$seen_job_ids" --format=JobIDRaw,State 2>/dev/null || true
-  )
-
-  [[ -z "$remaining_ids" ]]
+  return 1
 }
 
-sacct_state_for_job() {
+capture_or_verify_live_job_lineage() {
+  local job_id="$1"
+  local record
+  local observed_job_id
+  local submit_time
+  local start_time
+  local node_list
+  local restarts
+
+  if ! record="$(scontrol show job "$job_id" -o 2>/dev/null)"; then
+    log_warn "Slurm job ${job_id} is visible in squeue but its exact scontrol lineage is temporarily unavailable."
+    return 1
+  fi
+  observed_job_id="$(scontrol_record_field "$record" JobId || true)"
+  submit_time="$(scontrol_record_field "$record" SubmitTime || true)"
+  start_time="$(scontrol_record_field "$record" StartTime || true)"
+  node_list="$(scontrol_record_field "$record" NodeList || true)"
+  restarts="$(scontrol_record_field "$record" Restarts || true)"
+  if [[ "$observed_job_id" != "$job_id" || -z "$submit_time" || -z "$start_time" || "$start_time" == "Unknown" || -z "$node_list" || "$node_list" == "(null)" || "$node_list" == "N/A" || ! "$restarts" =~ ^[0-9]+$ ]]; then
+    log_error "Slurm job ${job_id} lacks a complete JobID/submit/start/allocation/Restarts lineage record."
+    return 2
+  fi
+  if [[ -z "${baseline_submit_time[$job_id]+present}" ]]; then
+    baseline_submit_time["$job_id"]="$submit_time"
+    baseline_start_time["$job_id"]="$start_time"
+    baseline_node_list["$job_id"]="$node_list"
+    baseline_restarts["$job_id"]="$restarts"
+    printf 'job_id=%s lineage_baseline submit=%s start=%s nodes=%s restarts=%s\n' \
+      "$job_id" "$submit_time" "$start_time" "$node_list" "$restarts"
+    return 0
+  fi
+  if [[ "${baseline_submit_time[$job_id]}" != "$submit_time" || "${baseline_start_time[$job_id]}" != "$start_time" || "${baseline_node_list[$job_id]}" != "$node_list" || "${baseline_restarts[$job_id]}" != "$restarts" ]]; then
+    log_error "Slurm job ${job_id} changed submit/start/allocation/Restarts lineage: expected submit=${baseline_submit_time[$job_id]} start=${baseline_start_time[$job_id]} nodes=${baseline_node_list[$job_id]} restarts=${baseline_restarts[$job_id]}, observed submit=${submit_time} start=${start_time} nodes=${node_list} restarts=${restarts}."
+    return 2
+  fi
+  return 0
+}
+
+verify_sacct_job_lineage() {
   local lookup_job_id="$1"
   local job_id
   local state
+  local exit_code
+  local submit_time
+  local start_time
+  local node_list
+  local restarts
   local rest
 
   if ! command -v sacct >/dev/null 2>&1; then
     return 1
   fi
-
-  while IFS='|' read -r job_id state rest; do
-    if [[ "$job_id" == "$lookup_job_id" ]]; then
-      printf '%s\n' "$state"
-      return 0
+  while IFS='|' read -r job_id state exit_code submit_time start_time node_list restarts rest; do
+    if [[ "$job_id" != "$lookup_job_id" ]]; then
+      continue
     fi
+    if state_is_interrupted "$state"; then
+      log_error "Slurm job ${job_id} reached interrupted accounting state ${state}."
+      return 2
+    fi
+    if ! state_is_completed "$state"; then
+      return 1
+    fi
+    if [[ -z "${baseline_submit_time[$job_id]+present}" ]]; then
+      log_error "Slurm job ${job_id} completed before the watcher captured a pre-upgrade lineage baseline."
+      return 2
+    fi
+    if [[ "$exit_code" != "0:0" || "$submit_time" != "${baseline_submit_time[$job_id]}" || "$start_time" != "${baseline_start_time[$job_id]}" || "$node_list" != "${baseline_node_list[$job_id]}" || "$restarts" != "${baseline_restarts[$job_id]}" || "$restarts" != "0" ]]; then
+      log_error "Slurm job ${job_id} failed the final preservation contract: state=${state} exit_code=${exit_code} submit=${submit_time} start=${start_time} nodes=${node_list} restarts=${restarts}; expected exit_code=0:0 submit=${baseline_submit_time[$job_id]} start=${baseline_start_time[$job_id]} nodes=${baseline_node_list[$job_id]} restarts=0."
+      return 2
+    fi
+    return 0
   done < <(
-    sacct -X -n -P -j "$lookup_job_id" --format=JobIDRaw,State 2>/dev/null || true
+    sacct -X -n -P -j "$lookup_job_id" \
+      --format=JobIDRaw,State,ExitCode,Submit,Start,NodeList,Restarts 2>/dev/null || true
   )
-
   return 1
+}
+
+observed_jobs_completed_in_sacct() {
+  local remaining_ids="$seen_job_ids"
+  local job_id
+  local verification_status
+
+  if [[ -z "$remaining_ids" ]] || ! command -v sacct >/dev/null 2>&1; then
+    return 1
+  fi
+
+  local -a observed_ids=()
+  IFS=',' read -r -a observed_ids <<<"$seen_job_ids"
+  for job_id in "${observed_ids[@]}"; do
+    verification_status=0
+    if verify_sacct_job_lineage "$job_id"; then
+      remaining_ids="$(csv_remove "$remaining_ids" "$job_id")"
+    else
+      verification_status=$?
+      if ((verification_status == 2)); then
+        return 2
+      fi
+    fi
+  done
+
+  [[ -z "$remaining_ids" ]]
 }
 
 verify_explicit_missing_jobs() {
   local visible_ids="$1"
   local job_id
-  local state
+  local verification_status
   local -a expected_ids=()
 
   if [[ -z "$watch_job_ids" ]]; then
@@ -675,13 +809,14 @@ verify_explicit_missing_jobs() {
       continue
     fi
 
-    state="$(sacct_state_for_job "$job_id" || true)"
-    if state_is_completed "$state"; then
-      printf 'job_id=%s state=%s source=sacct terminal=completed\n' "$job_id" "$state"
+    verification_status=0
+    if verify_sacct_job_lineage "$job_id"; then
+      printf 'job_id=%s source=sacct terminal=completed lineage=preserved\n' "$job_id"
       continue
+    else
+      verification_status=$?
     fi
-    if state_is_interrupted "$state"; then
-      log_error "Explicit Slurm job id ${job_id} left squeue with interrupted accounting state: ${state}"
+    if ((verification_status == 2)); then
       watch_terminal_failure=1
       watch_failures=$((watch_failures + 1))
     else
@@ -696,26 +831,29 @@ print_watch_sacct_evidence() {
   local state
   local exit_code
   local elapsed
+  local submit_time
   local start_time
   local end_time
+  local node_list
+  local restarts
 
   if [[ -z "$seen_job_ids" ]] || ! command -v sacct >/dev/null 2>&1; then
     return 0
   fi
 
   printf 'Accounting evidence from sacct for observed jobs:\n'
-  while IFS='|' read -r job_id state exit_code elapsed start_time end_time; do
+  while IFS='|' read -r job_id state exit_code elapsed submit_time start_time end_time node_list restarts rest; do
     if [[ -z "$job_id" ]]; then
       continue
     fi
-    printf 'job_id=%s state=%s exit_code=%s elapsed=%s start=%s end=%s\n' \
-      "$job_id" "$state" "$exit_code" "$elapsed" "$start_time" "$end_time"
+    printf 'job_id=%s state=%s exit_code=%s elapsed=%s submit=%s start=%s end=%s nodes=%s restarts=%s\n' \
+      "$job_id" "$state" "$exit_code" "$elapsed" "$submit_time" "$start_time" "$end_time" "$node_list" "$restarts"
     if state_is_interrupted "$state"; then
       watch_failures=$((watch_failures + 1))
     fi
   done < <(
     sacct -X -n -P -j "$seen_job_ids" \
-      --format=JobIDRaw,State,ExitCode,Elapsed,Start,End 2>/dev/null || true
+      --format=JobIDRaw,State,ExitCode,Elapsed,Submit,Start,End,NodeList,Restarts 2>/dev/null || true
   )
 }
 
@@ -738,20 +876,26 @@ watch_slurm_jobs() {
   local remaining_seconds
   local duration_label
   local accounting_status
+  local lineage_status
   local watch_unresolved=0
   local watch_terminal_failure=0
   local visibility_gap_samples=0
+  local -A baseline_submit_time=()
+  local -A baseline_start_time=()
+  local -A baseline_node_list=()
+  local -A baseline_restarts=()
 
   if ((dry_run)); then
     print_command squeue -h -o "%i|%T|%M|%L|%P|%N|%j"
     if [[ -n "$watch_job_ids" ]]; then
       print_command sacct -X -n -P -j "$watch_job_ids" \
-        --format=JobIDRaw,State,ExitCode,Elapsed,Start,End
+        --format=JobIDRaw,State,ExitCode,Elapsed,Submit,Start,End,NodeList,Restarts
     fi
     return 0
   fi
 
   require_command squeue
+  require_command scontrol
   started_at="$(date +%s)"
   if [[ -n "$watch_duration_seconds" ]]; then
     deadline=$((started_at + watch_duration_seconds))
@@ -773,32 +917,44 @@ watch_slurm_jobs() {
     now="$(date +%s)"
     matching_count=0
     print_watch_sample_header "$sample"
-    if ! squeue_output="$(squeue -h -o "%i|%T|%M|%L|%P|%N|%j")"; then
-      log_error "squeue failed while watching Slurm jobs"
-      watch_failures=$((watch_failures + 1))
-      break
-    fi
     visible_job_ids=""
-    while IFS='|' read -r job_id state elapsed remaining partition_name nodes job_name; do
-      if [[ -z "$job_id" ]]; then
-        continue
-      fi
-      if ! job_matches_watch_filter "$job_id" "$job_name"; then
-        continue
-      fi
-      matching_count=$((matching_count + 1))
-      append_seen_job_id "$job_id"
-      if [[ -n "$visible_job_ids" ]]; then
-        visible_job_ids+=","
-      fi
-      visible_job_ids+="$job_id"
-      printf 'job_id=%s state=%s elapsed=%s remaining=%s partition=%s nodes=%s name=%s\n' \
-        "$job_id" "$state" "$elapsed" "$remaining" "$partition_name" "$nodes" "$job_name"
-      if state_is_interrupted "$state"; then
-        watch_failures=$((watch_failures + 1))
-      fi
-    done <<<"$squeue_output"
-    verify_explicit_missing_jobs "$visible_job_ids"
+    if ! squeue_output="$(squeue -h -o "%i|%T|%M|%L|%P|%N|%j")"; then
+      log_warn "squeue is temporarily unavailable while watching Slurm jobs; preserving the prior lineage snapshot and retrying."
+      watch_unresolved=1
+    else
+      while IFS='|' read -r job_id state elapsed remaining partition_name nodes job_name; do
+        if [[ -z "$job_id" ]]; then
+          continue
+        fi
+        if ! job_matches_watch_filter "$job_id" "$job_name"; then
+          continue
+        fi
+        matching_count=$((matching_count + 1))
+        append_seen_job_id "$job_id"
+        if [[ -n "$visible_job_ids" ]]; then
+          visible_job_ids+=","
+        fi
+        visible_job_ids+="$job_id"
+        printf 'job_id=%s state=%s elapsed=%s remaining=%s partition=%s nodes=%s name=%s\n' \
+          "$job_id" "$state" "$elapsed" "$remaining" "$partition_name" "$nodes" "$job_name"
+        if state_is_interrupted "$state"; then
+          watch_failures=$((watch_failures + 1))
+        fi
+        lineage_status=0
+        if capture_or_verify_live_job_lineage "$job_id"; then
+          :
+        else
+          lineage_status=$?
+          if ((lineage_status == 2)); then
+            watch_terminal_failure=1
+            watch_failures=$((watch_failures + 1))
+          else
+            watch_unresolved=1
+          fi
+        fi
+      done <<<"$squeue_output"
+      verify_explicit_missing_jobs "$visible_job_ids"
+    fi
     if ((watch_terminal_failure)); then
       break
     fi
@@ -862,18 +1018,13 @@ watch_slurm_jobs() {
 }
 
 main() {
-  local arg
-
-  for arg in "$@"; do
-    if [[ "$arg" == "--login" ]]; then
-      parse_login_args "$@"
-      stage_examples_and_login
-      return 0
-    fi
-  done
-
   parse_args "$@"
   validate_args
+
+  if [[ -n "$login_ip" ]]; then
+    stage_examples_and_run
+    return $?
+  fi
 
   if ((watch_jobs)); then
     watch_slurm_jobs

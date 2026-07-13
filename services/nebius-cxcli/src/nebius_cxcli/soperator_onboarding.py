@@ -492,7 +492,7 @@ def validate_soperator_onboarding_acceptance(
     raise ValueError(
         f"apps:soperator target '{target}' uses onboard-existing-cluster but does not have "
         "a current accepted configuration. External Soperator upgrade requires a locked "
-        "v3 campaign in deploy.targets[].soperator_onboarding.upgrade_path. Run "
+        "v4 campaign in deploy.targets[].soperator_onboarding.upgrade_path. Run "
         "`nebius-cxcli ext-soperator onboard` for this cluster; a journal is never an "
         "upgrade-path authority."
     )
@@ -566,32 +566,6 @@ def _report_has_finding(
     status: str,
 ) -> bool:
     return any(finding.layer == layer and finding.status == status for finding in report.findings)
-
-
-def soperator_onboarding_effective_storage_mode(
-    report: SoperatorOnboardingReport,
-    storage_mode: str,
-) -> str:
-    """Return the storage mode after analyzer compatibility evidence is applied."""
-
-    if storage_mode == ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS and _report_has_finding(
-        report, layer="storage-sfs", status="target-compatible"
-    ):
-        return ONBOARDING_STORAGE_MODE_KEEP_EXISTING
-    return storage_mode
-
-
-def soperator_onboarding_effective_compute_mode(
-    report: SoperatorOnboardingReport,
-    compute_mode: str,
-) -> str:
-    """Return the compute mode after analyzer compatibility evidence is applied."""
-
-    if compute_mode == ONBOARDING_COMPUTE_MODE_CREATE_ALIGNED_NODE_GROUPS and _report_has_finding(
-        report, layer="placements", status="target-compatible"
-    ):
-        return ONBOARDING_COMPUTE_MODE_KEEP_EXISTING
-    return compute_mode
 
 
 def _node_group_inventory_from_target(target: Mapping[str, Any] | None) -> Mapping[str, Any]:
@@ -1544,6 +1518,11 @@ def _default_soperator_migration_plan(
     include_target_gpu_reconciliation: bool = False,
     include_external_node_template_upgrade: bool = False,
 ) -> tuple[SoperatorMigrationPhase, ...]:
+    replacement_compute_required = bool(
+        include_compute_migration
+        or include_soperator_upgrade
+        or include_external_node_template_upgrade
+    )
     phases = [
         _migration_phase(
             "discovery-and-plan",
@@ -1555,27 +1534,58 @@ def _default_soperator_migration_plan(
             "customer-approval",
             _migration_approval_phase_title(
                 include_data_migration=include_data_migration,
-                include_compute_migration=include_compute_migration,
+                include_compute_migration=(
+                    include_compute_migration or include_external_node_template_upgrade
+                ),
                 include_soperator_upgrade=include_soperator_upgrade,
             ),
             requires_customer_approval=True,
         ),
     ]
+    if include_data_migration:
+        phases.append(
+            _migration_phase(
+                "create-aligned-sfs",
+                "Create aligned Nebius SFS filesystems without rolling source nodes",
+                progress_label="Creating aligned SFS filesystems...",
+                requires_customer_approval=True,
+                notes=(
+                    "Create or reuse target filesystems; do not attach them by updating a source node group.",
+                    "The temporary controller bridge nodes receive controller SFS at creation time.",
+                ),
+            )
+        )
+    if (
+        include_data_migration
+        or include_compute_migration
+        or include_soperator_upgrade
+        or include_external_node_template_upgrade
+    ):
+        phases.append(
+            _migration_phase(
+                "controller-ha-bridge",
+                "Establish the temporary two-controller Slurm HA bridge",
+                progress_label="Controller Bridge: transferring source authority to HA pair",
+                requires_customer_approval=True,
+                notes=(
+                    "Create two fixed one-node bridge groups in distinct failure domains at the source Kubernetes version.",
+                    "Fence the source writer before the final cold spool delta and atomic state promotion.",
+                    "After the first bridge state write, recovery is roll-forward only.",
+                ),
+            )
+        )
     if include_external_node_template_upgrade:
         phases.append(
             _migration_phase(
                 "external-node-template-upgrade",
-                "Upgrade external MK8s control plane and node templates",
-                progress_label=(
-                    "External MK8s Upgrade: control plane first, service roles zero-surge by default"
-                ),
+                "Upgrade the external MK8s control plane",
+                progress_label="External MK8s Upgrade: control plane only",
                 requires_customer_approval=True,
                 notes=(
-                    "Run direct Nebius cluster and node-group updates; do not call Terraform.",
-                    "Upgrade the control plane first, one Kubernetes minor at a time when needed.",
-                    "Upgrade service-role source node groups with serial zero-surge by default.",
-                    "Upgrade worker source node groups with zero-surge by default, or safe-surge "
-                    "waves when selected, and restore each group's original strategy.",
+                    "Upgrade only the Nebius control plane in this phase; do not call Terraform.",
+                    "Advance one Kubernetes minor at a time when needed.",
+                    "Leave every source service and worker node group untouched.",
+                    "Create and validate blue/green target groups during compute migration.",
                 ),
             )
         )
@@ -1591,56 +1601,54 @@ def _default_soperator_migration_plan(
                     "Apply the target-scoped Network Operator app row when the target GPU "
                     "shape requires RDMA.",
                     "Validate scheduler-visible GPU/RDMA and NCCL readiness after the "
-                    "target rollout.",
+                    "target replacement activation.",
                 ),
             )
         )
     if include_data_migration:
-        phases.extend(
-            [
-                _migration_phase(
-                    "create-aligned-sfs",
-                    "Create aligned Nebius SFS filesystems and attach old and new storage",
-                    progress_label="Creating aligned SFS filesystems...",
-                    requires_customer_approval=True,
-                    notes=(
-                        "Old storage remains mounted and active while target SFS is attached.",
-                        "No storage references are cut over in this phase.",
-                    ),
+        phases.append(
+            _migration_phase(
+                "online-bulk-data-sync",
+                "Online bulk data sync from old storage to target SFS",
+                progress_label="Data Migration: online bulk sync",
+                notes=(
+                    "Preserve ownership, ACLs, xattrs, symlinks, hardlinks, and timestamps.",
+                    "Run while old storage remains the active writer.",
                 ),
-                _migration_phase(
-                    "online-bulk-data-sync",
-                    "Online bulk data sync from old storage to target SFS",
-                    progress_label="Data Migration: online bulk sync",
-                    notes=(
-                        "Preserve ownership, ACLs, xattrs, symlinks, hardlinks, and timestamps.",
-                        "Run while old storage remains the active writer.",
-                    ),
-                ),
-            ]
+            )
         )
-    if include_compute_migration or include_soperator_upgrade:
+    if replacement_compute_required:
         if include_compute_migration:
-            rolling_title = "In-place compute remediation with preserved worker node groups"
+            rolling_title = "Blue/green compute migration with preserved running jobs"
             rolling_progress_label = (
-                "Compute Remediation: service roles aligned, preserved worker groups verified, "
+                "Compute Migration: target groups aligned, busy source workers retained, "
                 "<running jobs> jobs remaining"
             )
             rolling_notes = (
-                "Create or reuse service-role node groups without duplicating worker capacity.",
-                "Map worker NodeSets to detected existing worker node groups.",
-                "Apply migration-owned template changes with serial safe-surge service-role "
-                "updates and zero-surge worker updates by default.",
+                "Create replacement controller, system, accounting, login, and worker groups.",
+                "Validate target node and workload identities before source retirement.",
+                "Keep each busy source worker until its allocation and epilog finish.",
             )
-        else:
-            rolling_title = "Soperator chart upgrade with existing compute layout"
+        elif include_soperator_upgrade:
+            rolling_title = "Soperator chart upgrade on blue/green target compute"
             rolling_progress_label = (
-                "Soperator Upgrade: existing compute layout verified, <running jobs> jobs remaining"
+                "Soperator Upgrade: replacement compute verified, <running jobs> jobs remaining"
             )
             rolling_notes = (
-                "Reuse detected service-role and worker node groups.",
-                "Apply target Soperator values without creating parallel worker capacity.",
-                "Verify the preserved worker NodeSets before accepting production jobs.",
+                "Create replacement groups before changing source capacity.",
+                "Apply target Soperator values against exact replacement identities.",
+                "Verify target worker NodeSets before accepting production jobs.",
+            )
+        else:
+            rolling_title = "Kubernetes target-version blue/green compute replacement"
+            rolling_progress_label = (
+                "Kubernetes Upgrade: target-version replacement compute verified, "
+                "<running jobs> jobs remaining"
+            )
+            rolling_notes = (
+                "Create target-version replacement groups before changing source capacity.",
+                "Keep every source node-group template immutable.",
+                "Keep each busy source worker until its allocation and epilog finish.",
             )
         phases.append(
             _migration_phase(
@@ -1650,8 +1658,8 @@ def _default_soperator_migration_plan(
                 notes=rolling_notes,
             )
         )
-    if include_data_migration or include_compute_migration or include_soperator_upgrade:
-        if include_data_migration and include_compute_migration:
+    if include_data_migration or replacement_compute_required:
+        if include_data_migration and replacement_compute_required:
             final_title = "Final Slurm controller, accounting, login, and storage-reference cutover"
             final_progress_label = "Data/Compute Migration: final delta and control-plane cutover"
             final_notes = (
@@ -1683,6 +1691,18 @@ def _default_soperator_migration_plan(
                 "Keep preserved worker node groups available until validation passes.",
             )
             retire_title = "Retire replaced service-role resources only after explicit approval"
+        elif include_external_node_template_upgrade and not include_soperator_upgrade:
+            final_title = "Final Kubernetes target-version compute and control-plane cutover"
+            final_progress_label = "Kubernetes Upgrade: final target-version cutover"
+            final_notes = (
+                "Pause new scheduling according to customer policy.",
+                "Validate target-version NodeSets and SlurmCluster reconciliation before "
+                "accepting production jobs.",
+            )
+            validation_notes = (
+                "Keep source node groups available until target-version validation passes.",
+            )
+            retire_title = "Retire replaced source node groups only after explicit approval"
         else:
             final_title = "Final Soperator chart cutover"
             final_progress_label = "Soperator Upgrade: final control-plane cutover"
@@ -1749,12 +1769,8 @@ def soperator_onboarding_report_for_modes(
 ) -> SoperatorOnboardingReport:
     """Return a report whose selected actions and phases match operator choices."""
 
-    effective_storage_mode = soperator_onboarding_effective_storage_mode(report, storage_mode)
-    effective_compute_mode = soperator_onboarding_effective_compute_mode(report, compute_mode)
-    include_data_migration = effective_storage_mode == ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS
-    include_compute_migration = (
-        effective_compute_mode == ONBOARDING_COMPUTE_MODE_CREATE_ALIGNED_NODE_GROUPS
-    )
+    include_data_migration = storage_mode == ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS
+    include_compute_migration = compute_mode == ONBOARDING_COMPUTE_MODE_CREATE_ALIGNED_NODE_GROUPS
     include_soperator_upgrade = any(
         action.id == ONBOARDING_ACTION_UPGRADE_SOPERATOR and action.selected
         for action in report.actions
@@ -1772,16 +1788,53 @@ def soperator_onboarding_report_for_modes(
             continue
         if action.id == ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION and not include_compute_migration:
             continue
-        if action.id == ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE:
-            action = replace(
-                action,
-                title=_external_upgrade_approval_action_title(
-                    include_data_migration=include_data_migration,
-                    include_compute_migration=include_compute_migration,
-                    include_soperator_upgrade=include_soperator_upgrade,
-                ),
-            )
         filtered_actions.append(action)
+    required_mode_actions: list[str] = []
+    if include_data_migration:
+        required_mode_actions.extend(
+            [
+                ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
+                ONBOARDING_ACTION_PLAN_DATA_MIGRATION,
+            ]
+        )
+    if include_compute_migration:
+        required_mode_actions.append(ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION)
+    selected_ids = {action.id for action in filtered_actions if action.selected}
+    analyzed_actions = {action.id: action for action in report.actions}
+    insertion_index = next(
+        (
+            index
+            for index, action in enumerate(filtered_actions)
+            if action.id == ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE
+        ),
+        len(filtered_actions),
+    )
+    for action_id in required_mode_actions:
+        if action_id in selected_ids:
+            continue
+        action = _configured_soperator_action(
+            action_id,
+            selected_ids=selected_ids | set(required_mode_actions),
+            analyzed_actions=analyzed_actions,
+        )
+        if action is None:
+            raise RuntimeError(f"No Soperator onboarding action template exists for {action_id}.")
+        filtered_actions.insert(insertion_index, action)
+        insertion_index += 1
+        selected_ids.add(action_id)
+    filtered_actions = [
+        replace(
+            action,
+            title=_external_upgrade_approval_action_title(
+                include_data_migration=include_data_migration,
+                include_compute_migration=include_compute_migration,
+                include_soperator_upgrade=include_soperator_upgrade,
+            ),
+        )
+        if action.id == ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE
+        else action
+        for action in filtered_actions
+    ]
     migration_plan: tuple[SoperatorMigrationPhase, ...] = ()
     if report.migration_plan:
         selected_ids = {action.id for action in filtered_actions if action.selected}
@@ -1952,7 +2005,10 @@ def _configured_soperator_action(
             layer="storage-sfs",
             selected=True,
             disruptive=True,
-            reason="Detected storage is not compatible with the target Soperator layout.",
+            reason=(
+                "The selected storage mode requires independently owned aligned SFS "
+                "targets before cutover."
+            ),
         ),
         ONBOARDING_ACTION_PLAN_DATA_MIGRATION: SoperatorOnboardingAction(
             id=ONBOARDING_ACTION_PLAN_DATA_MIGRATION,
@@ -1964,14 +2020,13 @@ def _configured_soperator_action(
         ),
         ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION: SoperatorOnboardingAction(
             id=ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
-            title="Plan in-place compute remediation without duplicating workers",
+            title="Plan blue/green target compute replacements",
             layer="placements",
             selected=True,
             disruptive=True,
             reason=(
-                "Service-role layout changes need guarded remediation; worker node groups "
-                "stay in place while external node-template upgrades run through the "
-                "migration executor."
+                "Service and worker roles move to target-version replacement groups; source "
+                "groups remain immutable until their workload-specific retirement gates pass."
             ),
         ),
         ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK: SoperatorOnboardingAction(
@@ -1988,14 +2043,14 @@ def _configured_soperator_action(
         ),
         ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE: SoperatorOnboardingAction(
             id=ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
-            title="Upgrade external MK8s control plane and node templates",
+            title="Upgrade external MK8s control plane only",
             layer="mk8s-node-template",
             selected=True,
             disruptive=True,
             reason=(
-                "External Soperator targets are not Terraform-owned, so cxcli must align "
-                "Kubernetes version, node OS image, and Nebius GPU driver preset through "
-                "direct Nebius updates during the external upgrade."
+                "External Soperator targets are not Terraform-owned, so cxcli advances "
+                "the MK8s control plane directly. Source node-group templates remain "
+                "immutable; target compute alignment uses blue/green replacements."
             ),
         ),
         ONBOARDING_ACTION_ENABLE_TOPOLOGY: SoperatorOnboardingAction(
@@ -2054,6 +2109,150 @@ def _migration_plan_for_action_ids(
         ),
         include_compute_migration=ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION in selected_ids,
     )
+
+
+def soperator_migration_plan_for_actions(
+    action_ids: Sequence[str],
+) -> tuple[SoperatorMigrationPhase, ...]:
+    """Return the canonical upgrade plan authorized by accepted action ids."""
+
+    return _migration_plan_for_action_ids(action_ids)
+
+
+def soperator_report_with_accepted_onboarding_contract(
+    report: Mapping[str, Any],
+    onboarding: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Overlay accepted config authority without discarding live discovery evidence."""
+
+    effective = copy.deepcopy(to_plain_data(dict(report)))
+    if not isinstance(effective, dict):
+        effective = {}
+    collection_errors = onboarding.get("collection_errors")
+    if isinstance(collection_errors, list) and collection_errors:
+        return effective
+    action_ids = _onboarding_action_ids(onboarding)
+    if not action_ids:
+        return effective
+
+    analyzed_actions = {
+        str(action.get("id", "") or "").strip(): action
+        for action in effective.get("actions", []) or []
+        if isinstance(action, Mapping) and str(action.get("id", "") or "").strip()
+    }
+    selected_ids = set(action_ids)
+    selected_actions: list[dict[str, Any]] = []
+    for action_id in action_ids:
+        analyzed = analyzed_actions.get(action_id)
+        if analyzed is not None:
+            selected = copy.deepcopy(to_plain_data(dict(analyzed)))
+            if not isinstance(selected, dict):
+                selected = {}
+            selected["id"] = action_id
+            selected["selected"] = True
+            selected_actions.append(selected)
+            continue
+        configured = _configured_soperator_action(
+            action_id,
+            selected_ids=selected_ids,
+            analyzed_actions={},
+        )
+        if configured is None:
+            raise ValueError(
+                "Accepted Soperator onboarding action has no canonical implementation: "
+                f"{action_id}. Rerun ext-soperator onboard with the current cxcli."
+            )
+        selected_actions.append(asdict(configured))
+
+    findings = effective.get("findings")
+    if isinstance(findings, list):
+        effective["findings"] = [
+            copy.deepcopy(to_plain_data(dict(finding)))
+            for finding in findings
+            if isinstance(finding, Mapping)
+            and (
+                not str(finding.get("action_id", "") or "").strip()
+                or str(finding.get("action_id", "") or "").strip() in selected_ids
+            )
+        ]
+    effective["actions"] = selected_actions
+    effective["state"] = (
+        str(onboarding.get("state", "") or "").strip()
+        or str(effective.get("state", "") or "").strip()
+    )
+    for key in ("source_version", "target_version", "migration_profile_id"):
+        accepted = str(onboarding.get(key, "") or "").strip()
+        if accepted:
+            effective[key] = accepted
+    effective["migration_plan"] = [
+        asdict(phase) for phase in _migration_plan_for_action_ids(action_ids)
+    ]
+    upgrade_path = onboarding.get("upgrade_path")
+    if isinstance(upgrade_path, Mapping):
+        effective["upgrade_path"] = copy.deepcopy(to_plain_data(dict(upgrade_path)))
+    return effective
+
+
+def _selected_report_action_ids(report: Mapping[str, Any]) -> set[str]:
+    return {
+        str(action.get("id", "") or "").strip()
+        for action in report.get("actions", []) or []
+        if isinstance(action, Mapping)
+        and action.get("selected") is True
+        and str(action.get("id", "") or "").strip()
+    }
+
+
+def soperator_runtime_report_with_accepted_upgrade_plan(
+    report: Mapping[str, Any],
+    onboarding: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Bind the accepted plan while retaining and validating fresh live evidence."""
+
+    effective = copy.deepcopy(to_plain_data(dict(report)))
+    if not isinstance(effective, dict):
+        effective = {}
+    live_state = str(effective.get("state", "") or "").strip()
+    if live_state not in ONBOARDING_ACCEPTABLE_STATES:
+        raise ValueError(
+            "Fresh Soperator discovery is not in an upgradeable state: "
+            f"{live_state or '<missing>'}. Rerun ext-soperator onboard."
+        )
+    # Known analyzer actions remain fresh evidence; exact version, identity, mode,
+    # and source-contract gates decide whether the locked campaign is still valid.
+    # Keep this explicit instead of deriving it from ONBOARDING_ACTION_IDS so a new
+    # analyzer action fails closed until its runtime semantics are reviewed here.
+    reviewed_live_evidence_actions = {
+        ONBOARDING_ACTION_ADOPT_SOPERATOR,
+        ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
+        ONBOARDING_ACTION_CONFIGURE_STORAGE,
+        ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
+        ONBOARDING_ACTION_ENABLE_TOPOLOGY,
+        ONBOARDING_ACTION_INSTALL_SOPERATOR,
+        ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
+        ONBOARDING_ACTION_PLAN_DATA_MIGRATION,
+        ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK,
+        ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
+        ONBOARDING_ACTION_UPGRADE_SOPERATOR,
+    }
+    unexpected_actions = sorted(
+        _selected_report_action_ids(effective) - reviewed_live_evidence_actions
+    )
+    if unexpected_actions:
+        raise ValueError(
+            "Fresh Soperator discovery selected action(s) not recognized by the accepted "
+            "runtime contract: "
+            + ", ".join(unexpected_actions)
+            + ". Rerun ext-soperator onboard before upgrade."
+        )
+    action_ids = _onboarding_action_ids(onboarding)
+    effective["migration_plan"] = [
+        asdict(phase) for phase in _migration_plan_for_action_ids(action_ids)
+    ]
+    upgrade_path = onboarding.get("upgrade_path")
+    if isinstance(upgrade_path, Mapping):
+        effective["upgrade_path"] = copy.deepcopy(to_plain_data(dict(upgrade_path)))
+    return effective
 
 
 def _release_chart_identity(release: Mapping[str, Any]) -> str:
@@ -2819,7 +3018,10 @@ def analyze_soperator_onboarding_snapshot(
                     severity="info",
                     message=(
                         "Existing Soperator service-role and worker node-group labels were "
-                        "detected and can be reused without creating a replacement compute layout."
+                        "detected. cxcli can preserve these role and placement mappings on "
+                        "target-version blue/green replacement groups whenever upgrade work "
+                        "is required; compatibility never authorizes a source node-group "
+                        "template update."
                     ),
                     evidence={"roles": role_evidence},
                 )
@@ -3326,15 +3528,15 @@ def analyze_soperator_onboarding_snapshot(
                         status="remediation-planned",
                         severity="required",
                         message=(
-                            "External MK8s control plane and node templates will be "
-                            "upgraded during the external upgrade through direct Nebius updates "
-                            "because the target is not Terraform-owned by cxcli."
+                            "The external MK8s control plane will be upgraded directly; "
+                            "source node-group templates remain immutable and target compute "
+                            "alignment uses blue/green replacements."
                             if provider_inventory_available
                             else (
-                                "External MK8s control plane and node-template provider "
+                                "External MK8s control-plane and node-group provider "
                                 "inventory was not available during onboarding; cxcli will "
-                                "verify and align the external node templates during "
-                                "the external upgrade."
+                                "verify the control-plane hop and blue/green target compute "
+                                "plan during the external upgrade."
                             )
                         ),
                         action_id=ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
@@ -3344,25 +3546,25 @@ def analyze_soperator_onboarding_snapshot(
                 actions.append(
                     SoperatorOnboardingAction(
                         id=ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
-                        title="Upgrade external MK8s control plane and node templates",
+                        title="Upgrade external MK8s control plane only",
                         layer="mk8s-node-template",
                         selected=True,
                         disruptive=True,
                         reason=(
                             "The Soperator chart is already current, but the external MK8s "
-                            "control plane or node-group templates do not match the requested "
-                            "Kubernetes/node-template target."
+                            "control plane has not reached the requested Kubernetes target; "
+                            "compute alignment remains blue/green."
                         ),
                     )
                 )
                 actions.append(
                     SoperatorOnboardingAction(
                         id=ONBOARDING_ACTION_APPROVE_EXTERNAL_UPGRADE,
-                        title="Approve external MK8s node-template remediation",
+                        title="Approve external MK8s control-plane remediation",
                         layer="external-upgrade",
                         selected=True,
                         disruptive=True,
-                        reason="External node-template changes require customer approval before execution.",
+                        reason="External control-plane changes require customer approval before execution.",
                     )
                 )
         else:
@@ -3474,15 +3676,15 @@ def analyze_soperator_onboarding_snapshot(
                             status="remediation-planned",
                             severity="required",
                             message=(
-                                "External MK8s control plane and node templates will be "
-                                "upgraded during the external upgrade through direct Nebius updates "
-                                "because the target is not Terraform-owned by cxcli."
+                                "The external MK8s control plane will be upgraded directly; "
+                                "source node-group templates remain immutable and target compute "
+                                "alignment uses blue/green replacements."
                                 if provider_inventory_available
                                 else (
-                                    "External MK8s control plane and node-template provider "
+                                    "External MK8s control-plane and node-group provider "
                                     "inventory was not available during onboarding; cxcli will "
-                                    "verify and align the external node templates during "
-                                    "the external upgrade before it manages Soperator."
+                                    "verify the control-plane hop and blue/green target compute "
+                                    "plan before it manages Soperator."
                                 )
                             ),
                             action_id=ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
@@ -3494,14 +3696,14 @@ def analyze_soperator_onboarding_snapshot(
                     actions.append(
                         SoperatorOnboardingAction(
                             id=ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
-                            title="Upgrade external MK8s control plane and node templates",
+                            title="Upgrade external MK8s control plane only",
                             layer="mk8s-node-template",
                             selected=True,
                             disruptive=True,
                             reason=(
                                 "External Soperator targets are not Terraform-owned, so cxcli "
-                                "must align Kubernetes version, node OS image, and Nebius GPU "
-                                "driver preset through direct Nebius updates during the external upgrade."
+                                "advances the MK8s control plane directly while target OS/GPU "
+                                "alignment is staged through blue/green compute replacements."
                             ),
                         )
                     )
@@ -3515,7 +3717,8 @@ def analyze_soperator_onboarding_snapshot(
                                 "External MK8s control plane and discovered node-group "
                                 "templates already match the target Kubernetes version, node "
                                 "OS image, and GPU driver preset requirements. cxcli will "
-                                "skip external node-template remediation unless live state drifts."
+                                "skip external control-plane and blue/green compute remediation "
+                                "unless live state drifts."
                             ),
                             evidence=_node_template_inventory_finding_evidence(
                                 node_template_inventory
@@ -3550,14 +3753,13 @@ def analyze_soperator_onboarding_snapshot(
                     actions.append(
                         SoperatorOnboardingAction(
                             id=ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
-                            title="Plan in-place compute remediation without duplicating workers",
+                            title="Plan blue/green target compute replacements",
                             layer="placements",
                             selected=True,
                             disruptive=True,
                             reason=(
-                                "Service-role layout changes need guarded remediation; worker node "
-                                "groups stay in place while external node-template upgrades run "
-                                "through the migration executor."
+                                "Service and worker roles move to target-version replacement groups; "
+                                "source groups remain immutable until workload-specific retirement."
                             ),
                         )
                     )
@@ -3698,20 +3900,6 @@ def target_snapshot_from_config(
     }
 
 
-def _source_report_selected_action_ids(report: Mapping[str, Any]) -> tuple[str, ...]:
-    actions = report.get("actions", [])
-    if not isinstance(actions, list):
-        return ()
-    ids: list[str] = []
-    for action in actions:
-        if not isinstance(action, Mapping) or action.get("selected") is not True:
-            continue
-        action_id = str(action.get("id", "") or "").strip()
-        if action_id:
-            ids.append(action_id)
-    return tuple(ids)
-
-
 def _matching_source_discovery_report(
     *,
     source_report_path: Path | None,
@@ -3731,19 +3919,12 @@ def _matching_source_discovery_report(
         return None
     if normalize_component_token(report.get("target_ref")) != normalize_component_token(target_ref):
         return None
-    action_ids = _onboarding_action_ids(onboarding)
-    if _source_report_selected_action_ids(report) != action_ids:
-        return None
     for key in ("state", "source_version", "target_version", "migration_profile_id"):
         expected = str(onboarding.get(key, "") or "").strip()
         actual = str(report.get(key, "") or "").strip()
         if expected and actual != expected:
             return None
-    upgrade_path = onboarding.get("upgrade_path")
-    if isinstance(upgrade_path, Mapping):
-        report = dict(report)
-        report["upgrade_path"] = copy.deepcopy(to_plain_data(upgrade_path))
-    return copy.deepcopy(dict(report))
+    return soperator_report_with_accepted_onboarding_contract(report, onboarding)
 
 
 def _report_with_accepted_onboarding_contract(
@@ -4483,13 +4664,13 @@ def collect_kubectl_soperator_snapshot(
         if isinstance(namespaces, Mapping)
         else []
     )
-    pvs = _kubectl_json(
+    pvs = _kubectl_list_json_with_single_retry(
         ["kubectl", "--context", context, "get", "pv", "-o", "json"],
         timeout,
         errors=collection_errors,
         extra_env=extra_env,
     )
-    pvcs = _kubectl_json(
+    pvcs = _kubectl_list_json_with_single_retry(
         ["kubectl", "--context", context, "get", "pvc", "-A", "-o", "json"],
         timeout,
         errors=collection_errors,
@@ -4503,7 +4684,8 @@ def collect_kubectl_soperator_snapshot(
                 "--context",
                 context,
                 "get",
-                "deployments,statefulsets,daemonsets,pods,jobs,services,configmaps,secrets",
+                "deployments,statefulsets,statefulsets.apps.kruise.io,"
+                "daemonsets,pods,jobs,services,configmaps,secrets",
                 "-n",
                 "soperator",
                 "-o",
@@ -4701,10 +4883,30 @@ def collect_kubectl_soperator_snapshot(
         if normalized_identity_scope.get("identity_role") == "target"
         else _soperator_slurmcluster_uid(identity_resources)
     )
+    jail_binding = _soperator_jail_pvc_binding(identity_resources)
+    if jail_binding is not None and not isinstance(pvcs.get("items"), list):
+        raise RuntimeError(
+            "Soperator Jail identity resolution failed: live PVC inventory collection "
+            "failed after 2 attempts; refusing to treat a failed read as an empty inventory."
+        )
+    if jail_binding is not None and not isinstance(pvs.get("items"), list):
+        raise RuntimeError(
+            "Soperator Jail identity resolution failed: live PV inventory collection "
+            "failed after 2 attempts; refusing to treat a failed read as an empty inventory."
+        )
     jail_filesystem_id = _soperator_jail_filesystem_identity(
         soperator_resources=identity_resources,
         pvcs=_sequence_of_mappings(collected_pvcs),
         pvs=_sequence_of_mappings(collected_pvs),
+    )
+    controller_bridge_source = _controller_bridge_source_record(
+        workloads=_sequence_of_mappings(
+            workloads.get("items", []) if isinstance(workloads, Mapping) else []
+        ),
+        soperator_resources=identity_resources,
+        pvcs=_sequence_of_mappings(collected_pvcs),
+        pvs=_sequence_of_mappings(collected_pvs),
+        slurm_health=slurm_health,
     )
     result = {
         "node_groups": node_groups,
@@ -4721,6 +4923,7 @@ def collect_kubectl_soperator_snapshot(
             nodes.get("items", []) if isinstance(nodes, Mapping) else []
         ),
         "slurm_health": slurm_health,
+        "controller_bridge_source": controller_bridge_source,
         "worker_topology_by_nodeset": worker_topology_by_nodeset,
         "gpu_stack": {
             "helm_releases": gpu_stack_helm_releases,
@@ -4851,6 +5054,407 @@ def _collect_slurm_health_from_login(
     }
 
 
+def _bridge_resource_identity(resource: Mapping[str, Any]) -> dict[str, str]:
+    metadata = _mapping_value(resource.get("metadata"))
+    return {
+        "api_version": str(resource.get("apiVersion", "") or "").strip(),
+        "kind": str(resource.get("kind", "") or "").strip(),
+        "namespace": str(metadata.get("namespace", "") or "").strip(),
+        "name": str(metadata.get("name", "") or "").strip(),
+        "uid": str(metadata.get("uid", "") or "").strip(),
+        "resource_version": str(metadata.get("resourceVersion", "") or "").strip(),
+    }
+
+
+def _bridge_referenced_object_names(
+    pod_spec: Mapping[str, Any],
+) -> tuple[set[str], set[str]]:
+    config_maps: set[str] = set()
+    credentials: set[str] = set()
+    for volume in _sequence_of_mappings(pod_spec.get("volumes")):
+        config_map = _mapping_value(volume.get("configMap"))
+        credential = _mapping_value(volume.get("secret"))
+        config_name = str(config_map.get("name", "") or "").strip()
+        credential_name = str(credential.get("secretName", "") or "").strip()
+        if config_name:
+            config_maps.add(config_name)
+        if credential_name:
+            credentials.add(credential_name)
+        projected = _mapping_value(volume.get("projected"))
+        for source in _sequence_of_mappings(projected.get("sources")):
+            config_name = str(_mapping_value(source.get("configMap")).get("name", "") or "").strip()
+            credential_name = str(
+                _mapping_value(source.get("secret")).get("name", "") or ""
+            ).strip()
+            if config_name:
+                config_maps.add(config_name)
+            if credential_name:
+                credentials.add(credential_name)
+    for container_kind in ("initContainers", "containers"):
+        for container in _sequence_of_mappings(pod_spec.get(container_kind)):
+            for source in _sequence_of_mappings(container.get("envFrom")):
+                config_name = str(
+                    _mapping_value(source.get("configMapRef")).get("name", "") or ""
+                ).strip()
+                credential_name = str(
+                    _mapping_value(source.get("secretRef")).get("name", "") or ""
+                ).strip()
+                if config_name:
+                    config_maps.add(config_name)
+                if credential_name:
+                    credentials.add(credential_name)
+            for item in _sequence_of_mappings(container.get("env")):
+                value_from = _mapping_value(item.get("valueFrom"))
+                config_name = str(
+                    _mapping_value(value_from.get("configMapKeyRef")).get("name", "") or ""
+                ).strip()
+                credential_name = str(
+                    _mapping_value(value_from.get("secretKeyRef")).get("name", "") or ""
+                ).strip()
+                if config_name:
+                    config_maps.add(config_name)
+                if credential_name:
+                    credentials.add(credential_name)
+    return config_maps, credentials
+
+
+def _bridge_pullable_image_digest(declared_image: str, image_id: str) -> str:
+    digest_match = re.search(r"sha256:[0-9a-f]{64}$", image_id)
+    if not digest_match:
+        return ""
+    digest = digest_match.group(0)
+    candidate = re.sub(r"^[a-z][a-z0-9+.-]*://", "", image_id.strip())
+    if "@sha256:" in candidate and "/" in candidate.rsplit("@", 1)[0]:
+        return candidate
+    repository = declared_image.split("@", 1)[0]
+    final_slash = repository.rfind("/")
+    final_colon = repository.rfind(":")
+    if final_colon > final_slash:
+        repository = repository[:final_colon]
+    if not repository:
+        return ""
+    return f"{repository}@{digest}"
+
+
+def _bridge_resource_fingerprint(
+    resources: Sequence[Mapping[str, Any]],
+    *,
+    names: set[str],
+    key_markers: tuple[str, ...] = (),
+) -> tuple[str, tuple[str, ...]]:
+    material: list[dict[str, Any]] = []
+    matched_keys: set[str] = set()
+    for resource in resources:
+        identity = _bridge_resource_identity(resource)
+        if identity["name"] not in names:
+            continue
+        hashed_fields: dict[str, str] = {}
+        for key, value in sorted(
+            _mapping_value(resource.get("data")).items(),
+            key=lambda item: str(item[0]),
+        ):
+            normalized_key = str(key)
+            if key_markers and not any(marker in normalized_key.lower() for marker in key_markers):
+                continue
+            matched_keys.add(normalized_key)
+            hashed_fields[normalized_key] = hashlib.sha256(
+                str(value or "").encode("utf-8")
+            ).hexdigest()
+        if hashed_fields:
+            material.append({"identity": identity, "field_hashes": hashed_fields})
+    if not material:
+        return "", ()
+    return (
+        hashlib.sha256(_stable_json(material).encode("utf-8")).hexdigest(),
+        tuple(sorted(matched_keys)),
+    )
+
+
+def _controller_bridge_source_record(
+    *,
+    workloads: Sequence[Mapping[str, Any]],
+    soperator_resources: Sequence[Mapping[str, Any]],
+    pvcs: Sequence[Mapping[str, Any]],
+    pvs: Sequence[Mapping[str, Any]],
+    slurm_health: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Capture immutable bridge inputs and one-way hashes, never credential values."""
+
+    blockers: list[str] = []
+    controller_pods = [
+        item
+        for item in workloads
+        if str(item.get("kind", "") or "") == "Pod"
+        and str(_mapping_value(item.get("metadata")).get("namespace", "") or "") == "soperator"
+        and (
+            str(_mapping_value(item.get("metadata")).get("name", "") or "") == "controller-0"
+            or normalize_component_token(
+                _mapping_value(_mapping_value(item.get("metadata")).get("labels")).get(
+                    "slurm.nebius.ai/nodeset-name"
+                )
+            )
+            == "controller"
+        )
+    ]
+    controller_workloads = [
+        item
+        for item in workloads
+        if str(item.get("kind", "") or "") == "StatefulSet"
+        and normalize_component_token(_mapping_value(item.get("metadata")).get("name"))
+        == "controller"
+    ]
+    slurmclusters = [
+        item
+        for item in soperator_resources
+        if str(item.get("kind", "") or "").lower() == "slurmcluster"
+        and str(_mapping_value(item.get("metadata")).get("namespace", "") or "") == "soperator"
+    ]
+    if len(controller_pods) != 1:
+        blockers.append("expected exactly one live source controller Pod")
+    if len(controller_workloads) != 1:
+        blockers.append("expected exactly one live source controller StatefulSet")
+    if len(slurmclusters) != 1:
+        blockers.append("expected exactly one source SlurmCluster")
+
+    pod = controller_pods[0] if len(controller_pods) == 1 else {}
+    workload = controller_workloads[0] if len(controller_workloads) == 1 else {}
+    slurmcluster = slurmclusters[0] if len(slurmclusters) == 1 else {}
+    pod_spec = _mapping_value(pod.get("spec"))
+    pod_status = _mapping_value(pod.get("status"))
+
+    containers = _sequence_of_mappings(pod_spec.get("containers"))
+    slurmctld_container = next(
+        (
+            item
+            for item in containers
+            if "slurmctld" in str(item.get("name", "") or "").lower()
+            or str(item.get("name", "") or "").lower() == "controller"
+        ),
+        containers[0] if containers else {},
+    )
+    container_name = str(slurmctld_container.get("name", "") or "").strip()
+    declared_image = str(slurmctld_container.get("image", "") or "").strip()
+    container_status = next(
+        (
+            item
+            for item in _sequence_of_mappings(pod_status.get("containerStatuses"))
+            if str(item.get("name", "") or "") == container_name
+        ),
+        {},
+    )
+    image_id = str(container_status.get("imageID", "") or "").strip()
+    resolved_image = _bridge_pullable_image_digest(declared_image, image_id)
+    if not declared_image:
+        blockers.append("source controller declared image is missing")
+    if not re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", resolved_image):
+        blockers.append("source controller resolved image digest is missing")
+
+    config_map_names, credential_names = _bridge_referenced_object_names(pod_spec)
+    config_maps = [item for item in workloads if str(item.get("kind", "") or "") == "ConfigMap"]
+    credentials = [item for item in workloads if str(item.get("kind", "") or "") == "Secret"]
+    configuration_fingerprint, configuration_keys = _bridge_resource_fingerprint(
+        config_maps,
+        names=config_map_names,
+    )
+    munge_fingerprint, munge_keys = _bridge_resource_fingerprint(
+        credentials,
+        names=credential_names,
+        key_markers=("munge",),
+    )
+    jwt_fingerprint, jwt_keys = _bridge_resource_fingerprint(
+        credentials,
+        names=credential_names,
+        key_markers=("jwt", "jwks"),
+    )
+    if not configuration_fingerprint:
+        blockers.append("referenced source controller configuration could not be fingerprinted")
+    if not munge_fingerprint:
+        blockers.append("referenced source MUNGE material could not be fingerprinted")
+    if not jwt_fingerprint:
+        blockers.append("referenced source JWT material could not be fingerprinted")
+
+    return _complete_controller_bridge_source_record(
+        blockers=blockers,
+        pod=pod,
+        workload=workload,
+        slurmcluster=slurmcluster,
+        pvcs=pvcs,
+        pvs=pvs,
+        slurm_health=slurm_health,
+        container_name=container_name,
+        declared_image=declared_image,
+        resolved_image=resolved_image,
+        config_map_names=config_map_names,
+        configuration_keys=configuration_keys,
+        configuration_fingerprint=configuration_fingerprint,
+        credential_names=credential_names,
+        munge_keys=munge_keys,
+        munge_fingerprint=munge_fingerprint,
+        jwt_keys=jwt_keys,
+        jwt_fingerprint=jwt_fingerprint,
+    )
+
+
+def _complete_controller_bridge_source_record(
+    *,
+    blockers: list[str],
+    pod: Mapping[str, Any],
+    workload: Mapping[str, Any],
+    slurmcluster: Mapping[str, Any],
+    pvcs: Sequence[Mapping[str, Any]],
+    pvs: Sequence[Mapping[str, Any]],
+    slurm_health: Mapping[str, Any],
+    container_name: str,
+    declared_image: str,
+    resolved_image: str,
+    config_map_names: set[str],
+    configuration_keys: Sequence[str],
+    configuration_fingerprint: str,
+    credential_names: set[str],
+    munge_keys: Sequence[str],
+    munge_fingerprint: str,
+    jwt_keys: Sequence[str],
+    jwt_fingerprint: str,
+) -> dict[str, Any]:
+    pod_spec = _mapping_value(pod.get("spec"))
+    claim_names = {
+        str(_mapping_value(volume.get("persistentVolumeClaim")).get("claimName", "") or "").strip()
+        for volume in _sequence_of_mappings(pod_spec.get("volumes"))
+        if str(
+            _mapping_value(volume.get("persistentVolumeClaim")).get("claimName", "") or ""
+        ).strip()
+    }
+    controller_pvcs = [
+        item
+        for item in pvcs
+        if str(_mapping_value(item.get("metadata")).get("namespace", "") or "") == "soperator"
+        and str(_mapping_value(item.get("metadata")).get("name", "") or "") in claim_names
+        and any(
+            marker in str(_mapping_value(item.get("metadata")).get("name", "") or "").lower()
+            for marker in ("controller", "spool", "slurm-state")
+        )
+    ]
+    if len(controller_pvcs) != 1:
+        blockers.append("expected exactly one source controller state PVC")
+    controller_pvc = controller_pvcs[0] if len(controller_pvcs) == 1 else {}
+    controller_pvc_identity = _bridge_resource_identity(controller_pvc)
+    volume_name = str(_mapping_value(controller_pvc.get("spec")).get("volumeName", "") or "")
+    controller_pvs = [
+        item
+        for item in pvs
+        if str(_mapping_value(item.get("metadata")).get("name", "") or "") == volume_name
+    ]
+    if len(controller_pvs) != 1:
+        blockers.append("source controller state PV binding is missing or ambiguous")
+    controller_pv_identity = _bridge_resource_identity(
+        controller_pvs[0] if len(controller_pvs) == 1 else {}
+    )
+
+    jail_binding = _soperator_jail_pvc_binding((slurmcluster,)) if slurmcluster else None
+    jail_pvcs = [
+        item
+        for item in pvcs
+        if jail_binding is not None
+        and str(_mapping_value(item.get("metadata")).get("namespace", "") or "") == jail_binding[0]
+        and str(_mapping_value(item.get("metadata")).get("name", "") or "") == jail_binding[1]
+    ]
+    if jail_binding is None or len(jail_pvcs) != 1:
+        blockers.append("expected exactly one source controller Jail PVC")
+    jail_pvc = jail_pvcs[0] if len(jail_pvcs) == 1 else {}
+    jail_pvc_identity = _bridge_resource_identity(jail_pvc)
+    jail_pv_name = str(_mapping_value(jail_pvc.get("spec")).get("volumeName", "") or "")
+    jail_pvs = [
+        item
+        for item in pvs
+        if str(_mapping_value(item.get("metadata")).get("name", "") or "") == jail_pv_name
+    ]
+    if len(jail_pvs) != 1:
+        blockers.append("source controller Jail PV binding is missing or ambiguous")
+    jail_pv = jail_pvs[0] if len(jail_pvs) == 1 else {}
+    jail_pv_identity = _bridge_resource_identity(jail_pv)
+    jail_pv_spec = _mapping_value(jail_pv.get("spec"))
+    jail_local_path = str(_mapping_value(jail_pv_spec.get("local")).get("path", "") or "")
+    jail_capacity = str(_mapping_value(jail_pv_spec.get("capacity")).get("storage", "") or "")
+    jail_storage_class = str(
+        _mapping_value(jail_pvc.get("spec")).get("storageClassName", "")
+        or jail_pv_spec.get("storageClassName", "")
+        or ""
+    )
+    jail_access_modes = [
+        str(item) for item in jail_pv_spec.get("accessModes", []) or [] if str(item).strip()
+    ]
+    jail_volume_mode = str(jail_pv_spec.get("volumeMode", "") or "Filesystem")
+    if jail_pvc_identity.get("name") not in claim_names:
+        blockers.append("source controller Pod does not mount the discovered Jail PVC")
+    if not jail_local_path.startswith("/"):
+        blockers.append("source controller Jail PV must expose an absolute local SFS path")
+    if not jail_capacity or not jail_storage_class or not jail_access_modes:
+        blockers.append("source controller Jail PV/PVC storage contract is incomplete")
+
+    identities = {
+        "SlurmCluster": _bridge_resource_identity(slurmcluster),
+        "controller StatefulSet": _bridge_resource_identity(workload),
+        "controller Pod": _bridge_resource_identity(pod),
+        "controller PVC": controller_pvc_identity,
+        "controller PV": controller_pv_identity,
+        "controller Jail PVC": jail_pvc_identity,
+        "controller Jail PV": jail_pv_identity,
+    }
+    for label, identity in identities.items():
+        if not identity.get("name") or not identity.get("uid"):
+            blockers.append(f"{label} immutable identity is incomplete")
+
+    version_material = " ".join(
+        [declared_image, resolved_image, str(slurm_health.get("output", "") or "")]
+    )
+    version_match = re.search(r"(?<!\d)(\d{2}\.\d{2}(?:\.\d+)?)(?!\d)", version_material)
+    slurm_version = version_match.group(1) if version_match else ""
+    if not slurm_version:
+        blockers.append("source Slurm version could not be resolved")
+
+    return {
+        "status": "ready" if not blockers else "blocked",
+        "blockers": blockers,
+        "slurmcluster": identities["SlurmCluster"],
+        "controller_workload": identities["controller StatefulSet"],
+        "controller_pod": {
+            **identities["controller Pod"],
+            "node_name": str(pod_spec.get("nodeName", "") or "").strip(),
+            "container_name": container_name,
+            "declared_image": declared_image,
+            "resolved_image_digest": resolved_image,
+            "slurm_version": slurm_version,
+        },
+        "controller_pvc": controller_pvc_identity,
+        "controller_pv": controller_pv_identity,
+        "jail_pvc": jail_pvc_identity,
+        "jail_pv": jail_pv_identity,
+        "jail_storage": {
+            "filesystem_id": "",
+            "local_path": jail_local_path,
+            "storage_class_name": jail_storage_class,
+            "storage_size": jail_capacity,
+            "access_modes": jail_access_modes,
+            "volume_mode": jail_volume_mode,
+        },
+        "configuration": {
+            "config_map_names": sorted(config_map_names),
+            "data_keys": list(configuration_keys),
+            "fingerprint": configuration_fingerprint,
+        },
+        "munge": {
+            "object_names": sorted(credential_names),
+            "data_keys": list(munge_keys),
+            "fingerprint": munge_fingerprint,
+        },
+        "jwt": {
+            "object_names": sorted(credential_names),
+            "data_keys": list(jwt_keys),
+            "fingerprint": jwt_fingerprint,
+        },
+    }
+
+
 def _sanitize_namespace_resource_items(items: Any) -> list[dict[str, Any]]:
     sanitized: list[dict[str, Any]] = []
     if not isinstance(items, Sequence) or isinstance(items, (str, bytes, bytearray)):
@@ -4973,6 +5577,38 @@ def _kubectl_json(
             errors.append(_subprocess_error_payload(command, exc))
         return {}
     return payload if isinstance(payload, Mapping) else {}
+
+
+def _kubectl_list_json_with_single_retry(
+    command: Sequence[str],
+    timeout: int,
+    *,
+    errors: list[dict[str, Any]] | None = None,
+    extra_env: Mapping[str, str] | None = None,
+) -> Mapping[str, Any]:
+    """Retry one failed list read without treating an authoritative empty list as failure."""
+    first_errors: list[dict[str, Any]] = []
+    payload = _kubectl_json(
+        command,
+        timeout,
+        errors=first_errors,
+        extra_env=extra_env,
+    )
+    if isinstance(payload.get("items"), list):
+        return payload
+
+    retry_errors: list[dict[str, Any]] = []
+    payload = _kubectl_json(
+        command,
+        timeout,
+        errors=retry_errors,
+        extra_env=extra_env,
+    )
+    if isinstance(payload.get("items"), list):
+        return payload
+    if errors is not None:
+        errors.extend((*first_errors, *retry_errors))
+    return payload
 
 
 def _helm_json(

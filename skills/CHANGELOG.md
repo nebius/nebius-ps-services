@@ -144,14 +144,31 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
-- Refactored the explicit-only `task-implementer` around private file-first
-  intake: one external Markdown prompt per ask, canonical checkout/scope
-  workspaces, deterministic prompt creation, immutable run revisions,
-  review-only `prepare`, one-task `run`/`continue`, planning-only
-  reconciliation, and scope-wide single-writer safety. Added the
-  standard-library helper, prompt and handoff assets, functional and contract
-  tests, and an opt-in `config-codex` validator/setup contract that preserves
-  existing sandbox and approval settings.
+- Refactored the explicit-only `task-implementer` to two public actions:
+  idempotent `workspace init [project-folder]` and retry-safe
+  `run <prompt-path-or-unique-filename>`. Initialization creates a starter only
+  when needed and preserves all prompt/run history; running privately creates,
+  continues, or reconciles immutable revisions while implementing one task per
+  fresh session. Stable prompt filenames are ordered in command output by
+  private `last_invoked_at`, and users never supply internal IDs.
+- Added a durable per-task execution plane to `task-implementer`: the Skill now
+  atomically claims one dependency-ready task in planning, requires and hashes a
+  complete plan and queue before authorizing product edits, requires a clean
+  claim-time Git baseline, validates exact changed-path and commit evidence,
+  rejects multiple task commits, retains all recovery-session participants,
+  preserves reconciliation-safe completed checkpoint digests, enforces a
+  bijection across completed tasks/checkpoints/stopped planes, and requires a
+  distinct runtime Codex session before every other task in the scope.
+- Extended `task-implementer` with same-prompt steering and incremental
+  specifications without adding a public command. Accepted edits are immutable
+  ordered revisions with private dispositions; implementation-time steering is
+  queued without changing the locked plane and is reconciled in the next fresh
+  session. The workflow now normalizes stable `TI-REQ-nnn` requirements before
+  task creation, records just-in-time `TI-DES-nnn` designs, and validates
+  byte-preserving managed regions in project `docs/requirements.md` and
+  `docs/design.md` inside the affected task's single commit. Agentic SDLC
+  ownership and unsafe paths, markers, mappings, or document-envelope drift
+  fail closed.
 - Lightened all repo-owned runtime `SKILL.md` files by replacing the repeated
   long learning-loop section with a concise equivalent, and moved detailed
   command, checklist, and standards material from `align`, `align-skill`,

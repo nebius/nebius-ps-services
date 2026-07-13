@@ -2422,7 +2422,7 @@ def _nodeset_gpu_driver_jail_mount_ok(spec: Mapping[str, Any]) -> bool:
             continue
         if mount_path != SOPERATOR_GPU_DRIVER_JAIL_MOUNT_PATH:
             return False
-        if raw_mount.get("readOnly") not in (None, False):
+        if raw_mount.get("readOnly") is not True:
             return False
         volume_source = _as_mapping(raw_mount.get("volumeSource"))
         host_path = _as_mapping(volume_source.get("hostPath"))
@@ -2543,7 +2543,7 @@ def _check_gpu_driver_jail_nodeset_contract(
         name="GPU driver jail NodeSet contract",
         status="passed",
         summary=(
-            "GPU worker NodeSets include the chart-owned host driver root mount "
+            "GPU worker NodeSets include the chart-owned read-only host driver root mount "
             "and GPU driver jail init guard."
         ),
         command=command,

@@ -39,6 +39,7 @@ ALL_SECTIONS = (
     "Non-goals",
     "References",
 )
+OPTIONAL_SECTIONS = ("Steering",)
 
 
 class PromptWorkspaceError(Exception):
@@ -314,6 +315,23 @@ def workspace_identity(root: Path, source_root: Path, scope: str) -> tuple[str, 
     return project_id, scope_id, scope_slug
 
 
+def project_workspace_manifest(project_path: Path, codex_home: Path) -> Path:
+    """Resolve the private workspace manifest for one exact project folder."""
+
+    requested = project_path.expanduser().resolve()
+    root, source_root, scope = repo_and_scope(requested, str(requested))
+    project_id, scope_id, _ = workspace_identity(root, source_root, scope)
+    return (
+        codex_home.expanduser().resolve()
+        / "task-implementer"
+        / "projects"
+        / project_id
+        / "scopes"
+        / scope_id
+        / "workspace.json"
+    )
+
+
 def template_path() -> Path:
     return Path(__file__).resolve().parent.parent / "assets" / "prompt-template.md"
 
@@ -454,7 +472,16 @@ def init_workspace(
             )
         private_chmod(manifest_path, 0o600)
     else:
-        write_exclusive(manifest_path, stable_json(manifest))
+        try:
+            write_exclusive(manifest_path, stable_json(manifest))
+        except FileExistsError:
+            concurrent = load_json_object(manifest_path, "workspace manifest")
+            manifest["created_at"] = concurrent.get("created_at")
+            if concurrent != manifest:
+                raise PromptWorkspaceError(
+                    "WORKSPACE_MISMATCH",
+                    "concurrent workspace initialization produced different state",
+                )
 
     if vscode_path.is_symlink():
         raise PromptWorkspaceError(
@@ -703,7 +730,7 @@ def parse_sections(lines: list[str], start: int) -> dict[str, str]:
                 raise PromptWorkspaceError(
                     "PROMPT_INPUT_INVALID", f"prompt repeats section: {heading}"
                 )
-            if heading not in ALL_SECTIONS:
+            if heading not in {*ALL_SECTIONS, *OPTIONAL_SECTIONS}:
                 current = None
                 continue
             sections[heading] = []
@@ -717,7 +744,12 @@ def parse_sections(lines: list[str], start: int) -> dict[str, str]:
             "PROMPT_INPUT_INVALID",
             f"prompt is missing sections: {', '.join(missing)}",
         )
-    return {heading: "\n".join(content).strip() for heading, content in sections.items()}
+    result = {
+        heading: "\n".join(content).strip() for heading, content in sections.items()
+    }
+    for heading in OPTIONAL_SECTIONS:
+        result.setdefault(heading, "")
+    return result
 
 
 def meaningful_section(value: str) -> str:
@@ -805,6 +837,31 @@ def read_prompt(path: Path, prompt_root: Path, *, require_content: bool) -> Prom
         created_at=created_at,
         sections=sections,
     )
+
+
+def resolve_prompt_reference(
+    manifest_path: Path,
+    prompt_reference: str | Path,
+    *,
+    require_content: bool,
+) -> PromptDocument:
+    """Resolve an absolute prompt path or one flat-workspace filename."""
+
+    manifest = verify_workspace(manifest_path)
+    prompt_root = Path(required_string(manifest, "prompt_root", "workspace manifest"))
+    reference = Path(prompt_reference).expanduser()
+    if reference.is_absolute():
+        candidate = reference
+    else:
+        if len(reference.parts) != 1 or reference.name in {"", ".", ".."}:
+            raise PromptWorkspaceError(
+                "PROMPT_PATH_INVALID",
+                "prompt reference must be an absolute path or one prompt filename",
+            )
+        candidate = prompt_root / reference.name
+    document = read_prompt(candidate, prompt_root, require_content=require_content)
+    ensure_unique_prompt_id(document, prompt_root)
+    return document
 
 
 def ensure_unique_prompt_id(document: PromptDocument, prompt_root: Path) -> None:

@@ -251,6 +251,15 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if hasKey .Values "nodeGroupMapping" -}}
   {{- fail "values.nodeGroupMapping is not supported. Use chart-native nodesets[] and partitionConfiguration.partitions[].nodeSetRefs; cxcli must materialize worker groups before Helm." -}}
 {{- end -}}
+{{- $slurmNodes := get .Values "slurmNodes" | default dict -}}
+{{- $controller := get $slurmNodes "controller" | default dict -}}
+{{- if kindIs "map" $controller -}}
+  {{- range $key := list "ha" "highAvailability" "replicas" "replicaCount" "size" -}}
+    {{- if hasKey $controller $key -}}
+      {{- fail (printf "slurmNodes.controller.%s is not supported; the downstream chart keeps the upstream-compatible singleton controller surface." $key) -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
 {{- $inputs := get .Values "inputs" | default dict -}}
 {{- if kindIs "map" $inputs -}}
   {{- $soperatorInputs := get $inputs "soperator" | default dict -}}

@@ -1,0 +1,745 @@
+from __future__ import annotations
+
+import inspect
+import json
+from collections.abc import Mapping, Sequence
+from typing import Any
+
+import pytest
+
+from nebius_cxcli import soperator_migration as migration
+from nebius_cxcli.soperator_migration import SoperatorMigrationCommandResult
+
+_BRIDGE_NAMESPACE = "cxcli-soperator-upgrade"
+_BRIDGE_WORKLOAD_UID = "bridge-workload-uid"
+_BRIDGE_PODS = (
+    (_BRIDGE_NAMESPACE, "cxcli-slurm-controller-bridge-0", "bridge-pod-0-uid"),
+    (_BRIDGE_NAMESPACE, "cxcli-slurm-controller-bridge-1", "bridge-pod-1-uid"),
+)
+_ORIGINAL_RUNTIME_PROCESS_CENSUS = migration._prove_controller_runtime_process_census  # noqa: SLF001
+
+
+@pytest.fixture(autouse=True)
+def _stub_runtime_process_census(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        migration,
+        "_prove_controller_runtime_process_census",
+        lambda **_kwargs: [],
+    )
+
+
+def _result(args: Sequence[str]) -> SoperatorMigrationCommandResult:
+    return SoperatorMigrationCommandResult(tuple(args), 0, "", "")
+
+
+def _pod(
+    namespace: str,
+    name: str,
+    uid: str,
+    *,
+    phase: str = "Running",
+    container: Mapping[str, Any] | None = None,
+    owner_uid: str = _BRIDGE_WORKLOAD_UID,
+    crash_loop: bool = False,
+) -> dict[str, Any]:
+    status: dict[str, Any] = {"phase": phase}
+    if crash_loop:
+        status["containerStatuses"] = [
+            {
+                "name": "slurmctld",
+                "state": {"waiting": {"reason": "CrashLoopBackOff"}},
+            }
+        ]
+    return {
+        "metadata": {
+            "namespace": namespace,
+            "name": name,
+            "uid": uid,
+            "ownerReferences": [{"uid": owner_uid, "controller": True}],
+        },
+        "spec": {"containers": [dict(container or {"name": "slurmctld"})]},
+        "status": status,
+    }
+
+
+def _workload(
+    resource: str,
+    namespace: str,
+    name: str,
+    uid: str,
+    *,
+    replicas: int = 1,
+    container: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    template = {"spec": {"containers": [dict(container or {"name": "slurmctld"})]}}
+    spec: dict[str, Any]
+    if resource == "cronjobs.batch":
+        spec = {"jobTemplate": {"spec": {"template": template}}}
+    else:
+        spec = {"replicas": replicas, "template": template}
+    return {
+        "metadata": {"namespace": namespace, "name": name, "uid": uid},
+        "spec": spec,
+    }
+
+
+def _gated_container() -> dict[str, Any]:
+    values = migration.target_controller_gate_values({})
+    return {
+        "name": "slurmctld",
+        **values["slurmNodes"]["controller"]["slurmctld"],
+    }
+
+
+def _runner(
+    *,
+    extra_pods: Sequence[Mapping[str, Any]] = (),
+    extra_workloads: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
+) -> migration.SoperatorMigrationCommandRunner:
+    pods = [_pod(namespace, name, uid) for namespace, name, uid in _BRIDGE_PODS]
+    pods.extend(dict(item) for item in extra_pods)
+    pods.append(
+        _pod(
+            "soperator",
+            "controller-0",
+            "gated-controller-uid",
+            container=_gated_container(),
+            owner_uid="gated-workload-uid",
+        )
+    )
+    workloads: dict[str, list[Mapping[str, Any]]] = {
+        resource: [] for resource in migration._SLURMCTLD_CAPABLE_WORKLOAD_RESOURCES
+    }
+    workloads["statefulsets.apps"].append(
+        _workload(
+            "statefulsets.apps",
+            _BRIDGE_NAMESPACE,
+            "cxcli-slurm-controller-bridge",
+            _BRIDGE_WORKLOAD_UID,
+            replicas=2,
+        )
+    )
+    workloads["statefulsets.apps.kruise.io"].append(
+        _workload(
+            "statefulsets.apps.kruise.io",
+            "soperator",
+            "controller",
+            "gated-workload-uid",
+            container=_gated_container(),
+        )
+    )
+    for resource, items in (extra_workloads or {}).items():
+        workloads[resource].extend(items)
+
+    def run(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        resource = command[command.index("get") + 1]
+        payload = {"items": pods if resource == "pods" else workloads[resource]}
+        return SoperatorMigrationCommandResult(command, 0, json.dumps(payload), "")
+
+    return run
+
+
+def _prove(command_runner: migration.SoperatorMigrationCommandRunner) -> None:
+    migration._prove_cluster_wide_slurmctld_exclusivity(  # noqa: SLF001
+        expected_pods=_BRIDGE_PODS,
+        expected_workload=(
+            "statefulsets.apps",
+            _BRIDGE_NAMESPACE,
+            "cxcli-slurm-controller-bridge",
+            _BRIDGE_WORKLOAD_UID,
+        ),
+        expected_replicas=2,
+        proof_label="test bridge activation",
+        campaign_fingerprint="a" * 64,
+        kube_context="test-context",
+        command_runner=command_runner,
+    )
+
+
+def test_bridge_exclusivity_allows_only_exact_command_gated_target() -> None:
+    _prove(_runner())
+
+
+@pytest.mark.parametrize(
+    ("phase", "crash_loop"),
+    (("Pending", False), ("Running", True)),
+)
+def test_bridge_exclusivity_rejects_extra_nonterminal_controller_pod(
+    phase: str,
+    crash_loop: bool,
+) -> None:
+    extra = _pod(
+        "foreign",
+        "unexpected-controller",
+        "unexpected-controller-uid",
+        phase=phase,
+        owner_uid="unexpected-workload-uid",
+        crash_loop=crash_loop,
+    )
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="second nonterminal",
+    ):
+        _prove(_runner(extra_pods=(extra,)))
+
+
+def test_bridge_exclusivity_rejects_extra_desired_controller_workload() -> None:
+    extra = _workload(
+        "deployments.apps",
+        "foreign",
+        "unexpected-controller",
+        "unexpected-workload-uid",
+    )
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="another desired workload",
+    ):
+        _prove(_runner(extra_workloads={"deployments.apps": (extra,)}))
+
+
+def test_bridge_exclusivity_runtime_census_rejects_generic_config_script_controller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generic = _pod(
+        "foreign",
+        "generic-runner",
+        "generic-runner-uid",
+        owner_uid="generic-workload-uid",
+        container={
+            "name": "runner",
+            "image": "registry.example/generic@sha256:" + "9" * 64,
+            "command": ["/bin/sh", "/config/start-controller.sh"],
+        },
+    )
+    calls: list[Sequence[tuple[str, str, str]]] = []
+
+    def reject_runtime_process(**kwargs: Any) -> list[dict[str, Any]]:
+        calls.append(kwargs["expected_pods"])
+        raise migration.SoperatorMigrationPhasePending(
+            "runtime census found an unexpected host slurmctld process"
+        )
+
+    monkeypatch.setattr(
+        migration,
+        "_prove_controller_runtime_process_census",
+        reject_runtime_process,
+    )
+
+    with pytest.raises(migration.SoperatorMigrationPhasePending, match="unexpected host"):
+        _prove(_runner(extra_pods=(generic,)))
+    assert calls == [_BRIDGE_PODS]
+
+
+def _authority_runner(
+    *,
+    pods: Sequence[Mapping[str, Any]],
+    workloads: Mapping[str, Sequence[Mapping[str, Any]]],
+) -> migration.SoperatorMigrationCommandRunner:
+    by_resource = {
+        resource: list(workloads.get(resource, ()))
+        for resource in migration._SLURMCTLD_CAPABLE_WORKLOAD_RESOURCES  # noqa: SLF001
+    }
+    lease = migration.controller_authority_lease(
+        namespace=_BRIDGE_NAMESPACE,
+        campaign_fingerprint="a" * 64,
+        authority_epoch="target-aaaaaaaaaaaa",
+        owner="target-singleton",
+    )
+    lease["metadata"].update({"uid": "authority-lease-uid", "resourceVersion": "17"})
+
+    def run(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        resource = command[command.index("get") + 1]
+        if resource == "lease":
+            payload = lease
+        else:
+            payload = {"items": list(pods) if resource == "pods" else by_resource[resource]}
+        return SoperatorMigrationCommandResult(command, 0, json.dumps(payload), "")
+
+    return run
+
+
+def test_zero_authority_proof_allows_only_the_command_gated_target() -> None:
+    gated_pod = _pod(
+        "soperator",
+        "controller-0",
+        "gated-pod-uid",
+        container=_gated_container(),
+        owner_uid="gated-workload-uid",
+    )
+    gated_workload = _workload(
+        "statefulsets.apps.kruise.io",
+        "soperator",
+        "controller",
+        "gated-workload-uid",
+        container=_gated_container(),
+    )
+
+    migration._prove_cluster_wide_slurmctld_absence(  # noqa: SLF001
+        proof_label="test fenced bridge",
+        campaign_fingerprint="a" * 64,
+        kube_context="test-context",
+        command_runner=_authority_runner(
+            pods=(gated_pod,),
+            workloads={"statefulsets.apps.kruise.io": (gated_workload,)},
+        ),
+    )
+
+
+def test_target_singleton_proof_rejects_a_foreign_controller() -> None:
+    target_pod = _pod(
+        "soperator",
+        "controller-0",
+        "target-pod-uid",
+        owner_uid="target-workload-uid",
+    )
+    foreign_pod = _pod(
+        "foreign",
+        "controller-0",
+        "foreign-pod-uid",
+        owner_uid="foreign-workload-uid",
+    )
+    target_workload = _workload(
+        "statefulsets.apps.kruise.io",
+        "soperator",
+        "controller",
+        "target-workload-uid",
+    )
+    foreign_workload = _workload(
+        "deployments.apps",
+        "foreign",
+        "controller",
+        "foreign-workload-uid",
+    )
+    journal = {
+        "namespace": _BRIDGE_NAMESPACE,
+        "campaign_fingerprint": "a" * 64,
+        "authority": {"epoch": "target-aaaaaaaaaaaa", "owner": "target-singleton"},
+        "target_singleton_takeover": {
+            "controller_pod_uid": "target-pod-uid",
+            "controller_workload_uid": "target-workload-uid",
+        },
+    }
+
+    with pytest.raises(migration.SoperatorMigrationPhasePending, match="unexpected"):
+        migration._prove_journaled_target_singleton_exclusivity(  # noqa: SLF001
+            journal=journal,
+            proof_label="test target handoff",
+            kube_context="test-context",
+            command_runner=_authority_runner(
+                pods=(target_pod, foreign_pod),
+                workloads={
+                    "statefulsets.apps.kruise.io": (target_workload,),
+                    "deployments.apps": (foreign_workload,),
+                },
+            ),
+        )
+
+
+def test_every_action_dispatch_boundary_has_a_cluster_wide_authority_proof() -> None:
+    recovery = inspect.getsource(
+        migration._restart_target_version_bridge_after_failed_takeover  # noqa: SLF001
+    )
+    handoff = inspect.getsource(
+        migration._complete_target_singleton_final_config  # noqa: SLF001
+    )
+    satisfied = inspect.getsource(migration._controller_bridge_satisfied)  # noqa: SLF001
+
+    assert recovery.index("_prove_journaled_controller_bridge_exclusivity") < recovery.index(
+        'set_slurm_action_broker_mode(action_journal, "dispatch-enabled")'
+    )
+    assert handoff.index("_prove_journaled_target_singleton_exclusivity") < handoff.index(
+        'set_slurm_action_broker_mode(action_journal, "dispatch-enabled")'
+    )
+    assert "_prove_journaled_controller_bridge_exclusivity" in satisfied
+    assert "_prove_journaled_target_singleton_exclusivity" in satisfied
+    assert "_prove_cluster_wide_slurmctld_absence" in satisfied
+
+
+def test_runtime_census_starts_all_node_inspectors_together_and_removes_them() -> None:
+    source = inspect.getsource(  # noqa: SLF001
+        _ORIGINAL_RUNTIME_PROCESS_CENSUS
+    )
+
+    assert source.index("objects=tuple(desired for _target, desired") < source.index(
+        '"--for=jsonpath={.status.phase}=Succeeded"'
+    )
+    assert "namespace=CONTROLLER_INSPECTOR_NAMESPACE" in source
+    assert source.index("try:") < source.index("_kubectl_apply_objects(")
+    finally_index = source.index("finally:")
+    assert finally_index < source.index("_delete_census_pods_and_prove_absence()", finally_index)
+    assert '"--wait=true"' in source
+    assert "if exists:" in source
+
+
+def test_source_reconciliation_is_fenced_before_source_config_mutation() -> None:
+    bridge_phase = inspect.getsource(migration._execute_controller_ha_bridge_phase)  # noqa: SLF001
+    source_fence = inspect.getsource(migration._fence_source_controller_for_bridge)  # noqa: SLF001
+
+    assert bridge_phase.index("_suspend_source_reconciliation_for_bridge") < (
+        bridge_phase.index("_configure_source_controller_for_bridge")
+    )
+    assert source_fence.index("_suspend_source_reconciliation_for_bridge") < (
+        source_fence.index("_prove_controller_bridge_client_configuration")
+    )
+    assert source_fence.index("_prove_controller_bridge_client_configuration") < (
+        source_fence.index("_kubectl_scale_namespace_resource")
+    )
+
+
+def test_inspector_admission_precedes_every_source_bridge_mutation() -> None:
+    bridge_phase = inspect.getsource(migration._execute_controller_ha_bridge_phase)  # noqa: SLF001
+    preflight = inspect.getsource(  # noqa: SLF001
+        migration._preflight_controller_inspector_namespace
+    )
+
+    preflight_index = bridge_phase.index("_preflight_controller_inspector_namespace")
+    assert preflight_index < bridge_phase.index("_protect_upgrade_login_sessions")
+    assert preflight_index < bridge_phase.index("_bridge_pause_all_partitions")
+    assert preflight_index < bridge_phase.index("_create_controller_bridge_node_groups")
+    assert '"--server-side"' in preflight
+    assert '"--dry-run=server"' in preflight
+    assert "CONTROLLER_INSPECTOR_NAMESPACE" in preflight
+
+
+def test_every_writer_start_revalidates_security_and_full_node_membership() -> None:
+    for function, writer_call in (
+        (migration._activate_source_version_controller_bridge, "_kubectl_scale_namespace_resource"),
+        (
+            migration._upgrade_controller_bridge_to_target_version,
+            "_kubectl_scale_namespace_resource",
+        ),
+        (
+            migration._restart_target_version_bridge_after_failed_takeover,
+            "_kubectl_scale_namespace_resource",
+        ),
+        (
+            migration._handoff_controller_bridge_to_target_singleton,
+            "_helm_upgrade_target_soperator",
+        ),
+    ):
+        source = inspect.getsource(function)
+        writer_index = source.rindex(writer_call)
+        security_index = source.rindex(
+            "_revalidate_controller_bridge_security_contract", 0, writer_index
+        )
+        nodes_index = source.rindex("_revalidate_controller_runtime_census_nodes", 0, writer_index)
+        assert security_index < nodes_index < writer_index
+
+
+def test_every_writer_handoff_runtime_fences_then_cas_authority_before_start() -> None:
+    bridge_takeover_fence = inspect.getsource(
+        migration._fence_target_version_bridge_for_takeover  # noqa: SLF001
+    )
+    failed_takeover_recovery = inspect.getsource(
+        migration._restart_target_version_bridge_after_failed_takeover  # noqa: SLF001
+    )
+    target_handoff = inspect.getsource(
+        migration._handoff_controller_bridge_to_target_singleton  # noqa: SLF001
+    )
+    source_activation = inspect.getsource(
+        migration._activate_source_version_controller_bridge  # noqa: SLF001
+    )
+    version_transition = inspect.getsource(
+        migration._upgrade_controller_bridge_to_target_version  # noqa: SLF001
+    )
+
+    assert bridge_takeover_fence.count("fresh_attempt=True") == 1
+    takeover_runtime_index = bridge_takeover_fence.index("_prove_controller_runtime_fence")
+    takeover_fresh_index = bridge_takeover_fence.index("fresh_attempt=True", takeover_runtime_index)
+    assert (
+        takeover_runtime_index
+        < takeover_fresh_index
+        < bridge_takeover_fence.index("_prove_cluster_wide_slurmctld_absence", takeover_fresh_index)
+        < bridge_takeover_fence.index("_transition_controller_authority_lease")
+    )
+
+    assert target_handoff.count("fresh_attempt=True") == 1
+    target_start_runtime_index = target_handoff.index(
+        'boundary="target-singleton-pre-writer-start"'
+    )
+    target_start_fresh_index = target_handoff.index(
+        "fresh_attempt=True", target_start_runtime_index
+    )
+    assert (
+        target_handoff.index("_fence_target_version_bridge_for_takeover")
+        < (target_start_runtime_index)
+        < target_start_fresh_index
+        < target_handoff.index("_prove_cluster_wide_slurmctld_absence", target_start_fresh_index)
+        < target_handoff.index("_helm_upgrade_target_soperator", target_start_fresh_index)
+    )
+
+    assert failed_takeover_recovery.count("fresh_attempt=True") == 3
+    recovery_pre_authority_index = failed_takeover_recovery.index(
+        'boundary="failed-target-takeover-recovery-pre-authority"'
+    )
+    recovery_pre_authority_fresh = failed_takeover_recovery.index(
+        "fresh_attempt=True", recovery_pre_authority_index
+    )
+    recovery_absence_before_lease = failed_takeover_recovery.index(
+        "_prove_cluster_wide_slurmctld_absence", recovery_pre_authority_fresh
+    )
+    recovery_lease_index = failed_takeover_recovery.index(
+        "_transition_controller_authority_lease", recovery_absence_before_lease
+    )
+    recovery_pre_scale_index = failed_takeover_recovery.index(
+        'boundary="failed-target-takeover-recovery-pre-writer-scale"',
+        recovery_lease_index,
+    )
+    recovery_pre_scale_fresh = failed_takeover_recovery.index(
+        "fresh_attempt=True", recovery_pre_scale_index
+    )
+    recovery_absence_before_scale = failed_takeover_recovery.index(
+        "_prove_cluster_wide_slurmctld_absence", recovery_pre_scale_fresh
+    )
+    recovery_bridge_start_index = failed_takeover_recovery.index(
+        "_kubectl_scale_namespace_resource", recovery_absence_before_scale
+    )
+    assert (
+        recovery_pre_authority_index
+        < recovery_pre_authority_fresh
+        < recovery_absence_before_lease
+        < recovery_lease_index
+        < recovery_pre_scale_index
+        < recovery_pre_scale_fresh
+        < recovery_absence_before_scale
+        < recovery_bridge_start_index
+    )
+
+    assert source_activation.count("fresh_attempt=True") == 3
+    source_pre_authority_index = source_activation.index(
+        'boundary="source-version-bridge-pre-authority"'
+    )
+    source_pre_authority_fresh = source_activation.index(
+        "fresh_attempt=True", source_pre_authority_index
+    )
+    source_absence_before_lease = source_activation.index(
+        "_prove_cluster_wide_slurmctld_absence", source_pre_authority_fresh
+    )
+    source_lease_index = source_activation.index("_transition_controller_authority_lease")
+    source_pre_scale_index = source_activation.index(
+        'boundary="source-version-bridge-pre-writer-scale"', source_lease_index
+    )
+    source_pre_scale_fresh = source_activation.index("fresh_attempt=True", source_pre_scale_index)
+    source_absence_before_scale = source_activation.index(
+        "_prove_cluster_wide_slurmctld_absence", source_pre_scale_fresh
+    )
+    source_scale_index = source_activation.index(
+        "_kubectl_scale_namespace_resource", source_absence_before_scale
+    )
+    assert (
+        source_pre_authority_index
+        < source_pre_authority_fresh
+        < source_absence_before_lease
+        < source_lease_index
+        < source_pre_scale_index
+        < source_pre_scale_fresh
+        < source_absence_before_scale
+        < source_scale_index
+    )
+    source_rollback_index = source_activation.index(
+        'boundary="source-version-bridge-scale-rejected-pre-authority-rollback"',
+        source_scale_index,
+    )
+    source_rollback_fresh = source_activation.index("fresh_attempt=True", source_rollback_index)
+    source_rollback_absence = source_activation.index(
+        "_prove_cluster_wide_slurmctld_absence", source_rollback_fresh
+    )
+    source_rollback_lease = source_activation.index(
+        "_transition_controller_authority_lease", source_rollback_absence
+    )
+    assert (
+        source_scale_index
+        < source_rollback_index
+        < source_rollback_fresh
+        < source_rollback_absence
+        < source_rollback_lease
+    )
+
+    assert version_transition.count("fresh_attempt=True") == 3
+    target_bridge_pre_authority_index = version_transition.index(
+        'boundary="target-version-bridge-pre-authority"'
+    )
+    target_bridge_pre_authority_fresh = version_transition.index(
+        "fresh_attempt=True", target_bridge_pre_authority_index
+    )
+    target_bridge_absence_before_lease = version_transition.index(
+        "_prove_cluster_wide_slurmctld_absence", target_bridge_pre_authority_fresh
+    )
+    target_bridge_lease_index = version_transition.index(
+        "_transition_controller_authority_lease", target_bridge_absence_before_lease
+    )
+    target_bridge_pre_scale_index = version_transition.index(
+        'boundary="target-version-bridge-pre-writer-scale"', target_bridge_lease_index
+    )
+    target_bridge_pre_scale_fresh = version_transition.index(
+        "fresh_attempt=True", target_bridge_pre_scale_index
+    )
+    target_bridge_absence_before_scale = version_transition.index(
+        "_prove_cluster_wide_slurmctld_absence", target_bridge_pre_scale_fresh
+    )
+    target_bridge_scale_index = version_transition.index(
+        "_kubectl_scale_namespace_resource", target_bridge_absence_before_scale
+    )
+    assert (
+        target_bridge_pre_authority_index
+        < target_bridge_pre_authority_fresh
+        < target_bridge_absence_before_lease
+        < target_bridge_lease_index
+        < target_bridge_pre_scale_index
+        < target_bridge_pre_scale_fresh
+        < target_bridge_absence_before_scale
+        < target_bridge_scale_index
+    )
+
+
+def test_checkpointed_target_start_revalidates_bridge_fence_without_demanding_absence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal: dict[str, Any] = {
+        "stage": "bridge-fenced",
+        "namespace": "cxcli-soperator-upgrade-bridge",
+        "campaign_fingerprint": "a" * 64,
+        "authority": {"epoch": "target-aaaaaaaaaaaa", "owner": "target-singleton"},
+        "target_singleton_takeover": {
+            "client_handoff_propagation": {
+                "status": "verified",
+                "live_rpc_verified": True,
+                "proof_stage": "before-target-takeover",
+            },
+            "target_start": {"state": "dispatching"},
+            "bridge_stop_attempt": 1,
+            "bridge_stop_pods": [
+                {
+                    "pod_name": f"bridge-{slot}",
+                    "pod_uid": f"bridge-pod-uid-{slot}",
+                    "node_name": f"bridge-node-{slot}",
+                    "node_uid": f"bridge-node-uid-{slot}",
+                }
+                for slot in range(2)
+            ],
+        },
+        "state_precopy": {"source_state_save_location": "/var/spool/slurmctld"},
+        "version_transition": {"target_image": f"registry.example/slurm@sha256:{'b' * 64}"},
+        "fencing": {"bridge": {}},
+    }
+    stopped_workload = {
+        "metadata": {"uid": "bridge-workload-uid", "resourceVersion": "10"},
+        "spec": {"replicas": 0},
+    }
+    monkeypatch.setattr(
+        migration,
+        "_kubectl_get_namespace_resource",
+        lambda **_kwargs: (True, stopped_workload),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_json_from_command",
+        lambda *_args, **_kwargs: {"items": []},
+    )
+    monkeypatch.setattr(
+        migration,
+        "_prove_controller_runtime_fence",
+        lambda **_kwargs: [],
+    )
+    revalidated: list[bool] = []
+    monkeypatch.setattr(
+        migration,
+        "_revalidate_controller_authority_lease",
+        lambda **_kwargs: revalidated.append(True),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_prove_cluster_wide_slurmctld_absence",
+        lambda **_kwargs: pytest.fail(
+            "a checkpointed target writer must be adopted before any global absence proof"
+        ),
+    )
+
+    stopped = migration._fence_target_version_bridge_for_takeover(  # noqa: SLF001
+        journal=journal,
+        kube_context="context",
+        command_runner=lambda args, **_kwargs: _result(args),
+        checkpoint_writer=None,
+    )
+
+    assert stopped == ["bridge-pod-uid-0", "bridge-pod-uid-1"]
+    assert revalidated == [True]
+    assert journal["authority"]["owner"] == "target-singleton"
+
+
+def test_cleaned_bridge_satisfaction_uses_terminal_absence_without_deleted_lease(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal = {"stage": "cleaned", "cleanup": {"completed_at": "2026-07-12T12:00:00Z"}}
+    target_state = {
+        "pvc_name": "controller-spool",
+        "pvc_uid": "target-pvc-uid",
+        "pv_name": "controller-spool-pv",
+        "pv_uid": "target-pv-uid",
+        "state_path": "/mnt/controller-spool/current",
+    }
+    absence_proofs: list[Mapping[str, Any]] = []
+    monkeypatch.setattr(migration, "validate_bridge_journal", lambda _journal: None)
+    monkeypatch.setattr(
+        migration,
+        "_prove_controller_bridge_cleanup_target_singleton",
+        lambda **_kwargs: target_state,
+    )
+    monkeypatch.setattr(
+        migration,
+        "_controller_bridge_cleanup_prove_absent",
+        lambda **kwargs: absence_proofs.append(kwargs),
+    )
+    monkeypatch.setattr(
+        migration,
+        "_revalidate_controller_authority_lease",
+        lambda **_kwargs: pytest.fail("the bridge authority Lease is deleted at CLEANED"),
+    )
+
+    assert migration._controller_bridge_satisfied(  # noqa: SLF001
+        checkpoint={"controller_bridge": journal},
+        kube_context="context",
+        nebius_api=object(),  # type: ignore[arg-type]
+        command_runner=lambda args, **_kwargs: _result(args),
+    )
+    assert absence_proofs[0]["target_state"] == target_state
+
+
+def test_cleaned_bridge_proof_failure_never_demotes_to_recreation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(migration, "validate_bridge_journal", lambda _journal: None)
+    monkeypatch.setattr(
+        migration,
+        "_prove_controller_bridge_cleanup_target_singleton",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("target unavailable")),
+    )
+
+    with pytest.raises(
+        migration.SoperatorMigrationPhasePending,
+        match="will not recreate deleted bridge resources",
+    ):
+        migration._controller_bridge_satisfied(  # noqa: SLF001
+            checkpoint={"controller_bridge": {"stage": "cleaned", "cleanup": {}}},
+            kube_context="context",
+            nebius_api=object(),  # type: ignore[arg-type]
+            command_runner=lambda args, **_kwargs: _result(args),
+        )

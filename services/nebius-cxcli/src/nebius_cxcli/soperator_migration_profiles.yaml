@@ -129,7 +129,7 @@ profile_groups:
       - OpenKruise
       - ActiveChecks
     execution_contract:
-      source_controller_quiesce:
+      source_controller_pause:
         required_before_target_compute_reconcile: true
         admission_webhooks:
         - kind: MutatingWebhookConfiguration
@@ -180,7 +180,7 @@ profile_groups:
       - OpenKruise
       - ActiveChecks
     execution_contract:
-      source_controller_quiesce:
+      source_controller_pause:
         required_before_target_compute_reconcile: true
         admission_webhooks:
         - kind: MutatingWebhookConfiguration
@@ -224,7 +224,7 @@ profile_groups:
       - OpenKruise
       - ActiveChecks
     execution_contract:
-      source_controller_quiesce:
+      source_controller_pause:
         required_before_target_compute_reconcile: true
         admission_webhooks:
         - kind: MutatingWebhookConfiguration

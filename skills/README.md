@@ -86,7 +86,7 @@ The catalog below mirrors the live skill folders in this source tree. The
 | `python-project` | Implicit allowed | Scaffold or harden Python projects with modern packaging, `src/` layout, Ruff, pytest, Typer, Pydantic, services, APIs, and CI. |
 | `shell-scripting` | Implicit allowed | Create, refactor, or review Bash automation with strict mode, safe argument parsing, idempotency, and readable CLI output. |
 | `system-design-rules` | Implicit allowed | Evaluate system designs, ADRs, architecture options, APIs, data ownership, reliability, security, observability, scale, cost, and team boundaries with a practical design checklist. |
-| `task-implementer` | Explicit only | Keep one private Markdown file per ask outside Git, prepare an immutable revision into a reviewable `task-1`..`task-n` handoff queue, and run or reconcile it one task per fresh session with validation, review, and commit gates. |
+| `task-implementer` | Explicit only | Initialize one private prompt workspace, steer the same prompt, maintain managed requirements/design records, and run one planned task per fresh session through locked authorization, checkpoint, and handoff. |
 | `terraform` | Implicit allowed | Scaffold, standardize, or improve Terraform repositories and modules with state guidance, validation, security controls, examples, and CI. |
 
 ### Agentic SDLC Workflow
@@ -179,7 +179,7 @@ $system-design-rules Review this ADR against the system design checklist, compar
 
 $task-implementer workspace init services/nebius-cxcli
 
-$task-implementer prepare <private-prompt-path>
+$task-implementer run <prompt-path-or-unique-filename>
 
 $apply-security Scan this repository for infrastructure, CI/CD, shell, and application security issues, then produce a prioritized remediation plan with safe patch candidates.
 
@@ -351,17 +351,49 @@ editable Markdown file per independent ask. A generated VS Code workspace puts
 `CODE` first and `PROMPTS` second so source and historical asks are visible
 together without making Codex depend on multi-root behavior.
 
-`prepare <prompt-path>` validates and snapshots exact prompt bytes, inspects
-the target code, writes a reviewable `task-1` through `task-n` handoff queue,
-and stops without product edits. `run <run-id>` and
-`continue <run-id>` read only the bound immutable revision and implement
-exactly one task per fresh session through context gathering, `brainstorm` and
-`design` when needed, a short plan, focused and end-to-end validation,
-`code-review`, scoped fixes, and `$commit`. `reconcile` appends an edited prompt
-revision, preserves completed tasks and stable IDs, proposes superseding or
-additive queue changes, and stops without implementation. The handoff remains
-the execution truth; there are no separate task files or prompt-to-task 1:1
-mapping.
+`workspace init [project-folder]` defaults to the exact current directory. It
+creates or verifies the private workspace, creates one starter prompt only when
+none exists, opens VS Code when available, and is safe to repeat without
+changing prompts or history. `run <prompt-path-or-unique-filename>` validates
+and snapshots exact prompt bytes, creates or reconciles the internal
+`task-1` through `task-n` handoff queue, and implements exactly one
+dependency-ready task per fresh session through context gathering,
+`brainstorm` and `design` when needed, a mechanically required and locked plan,
+focused and end-to-end validation, `code-review`, scoped fixes, and `$commit`.
+
+Users steer the workflow by editing the same prompt—preferably appending to its
+optional `## Steering` section—and running the same command. There is no public
+`steer` command or user-supplied ID. Same-owner clean planning can replan before
+authorization; steering submitted during another owner's planning or any
+implementation phase is stored once and returns
+`STEERING_QUEUED_AFTER_TASK` without changing the active plane. The next fresh
+session reconciles ordered pending revisions before claiming another task.
+
+Requirements are normalized before tasks into stable `TI-REQ-nnn` records, and
+each selected task receives a just-in-time `TI-DES-nnn` design. After plan
+authorization, the Skill creates or updates only marked regions in project
+`docs/requirements.md` and `docs/design.md`, byte-preserving generic content
+outside them. Agentic SDLC ownership or malformed/unsafe managed state fails
+closed. These documents share the affected task's single commit.
+
+Before product edits, a private execution plane claims the dependency-ready
+task for the runtime Codex session, requires a clean Git baseline, and
+authorizes implementation only after all plan fields and the exact file
+allowlist are populated. Checkpointing verifies the locked plan/queue,
+requirement/design mappings, managed-region digests and envelopes, exact
+changed paths, commit message, next task, and stop instruction. Every session
+that participated in the task is retired from all other tasks in the scope; a
+task gets exactly one post-claim commit and a reconciliation-safe stopped
+checkpoint digest. A fresh session repeats the same `run` command and starts
+again in planning.
+
+Users repeat the same `run` command after each checkpoint. Prompt IDs, run IDs,
+revisions, and handoff paths remain private. Filenames stay stable; accepted
+run invocations update private activity used for newest-first command output,
+not filename dates or filesystem mtime. An unchanged completed prompt returns
+`ALREADY_COMPLETE`, while an edited completed prompt starts a new internal run.
+The handoff remains the execution truth; there are no separate task files or
+prompt-to-task 1:1 mapping.
 
 The helper uses only the Python standard library, applies private POSIX modes,
 rejects path and symlink escapes, and never starts Codex or prints prompt

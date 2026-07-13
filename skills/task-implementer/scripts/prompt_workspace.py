@@ -19,19 +19,37 @@ if str(SCRIPT_DIR) not in sys.path:
 from prompt_workspace_core import (  # noqa: E402
     MAX_PROMPT_BYTES,
     PROMPT_SCHEMA,
+    REVISION_RE,
     RUN_SCHEMA,
     WORKSPACE_SCHEMA,
     PromptWorkspaceError,
     create_prompt,
     init_workspace,
+    project_workspace_manifest,
     prompt_slug,
+    resolve_prompt_reference,
     verify_workspace,
 )
+from prompt_workspace_intake import route_project_prompt  # noqa: E402
+from prompt_workspace_execution import (  # noqa: E402
+    authorize_execution_plane,
+    checkpoint_execution_plane,
+    claim_execution_plane,
+    rebind_planning_execution_plane,
+)
 from prompt_workspace_runs import (  # noqa: E402
+    initialize_project_workspace,
+    load_run_manifests,
+    manifest_revisions,
     prompt_rows,
+    scope_lock,
     snapshot_prompt,
     verify_command,
     verify_run,
+)
+from prompt_workspace_specs import (  # noqa: E402
+    inspect_spec_documents,
+    resolve_steering_revision,
 )
 
 
@@ -41,11 +59,21 @@ __all__ = [
     "RUN_SCHEMA",
     "WORKSPACE_SCHEMA",
     "PromptWorkspaceError",
+    "authorize_execution_plane",
+    "checkpoint_execution_plane",
+    "claim_execution_plane",
     "create_prompt",
     "init_workspace",
+    "initialize_project_workspace",
+    "inspect_spec_documents",
     "main",
+    "project_workspace_manifest",
+    "rebind_planning_execution_plane",
     "prompt_rows",
     "prompt_slug",
+    "resolve_prompt_reference",
+    "resolve_steering_revision",
+    "route_project_prompt",
     "snapshot_prompt",
     "verify_command",
     "verify_run",
@@ -78,25 +106,45 @@ def add_common_workspace(parser: argparse.ArgumentParser) -> None:
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Manage private task-implementer prompt workspaces."
+        description="Internal mechanical helper for task-implementer private state."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    init_parser = subparsers.add_parser("init", help="Create or verify a private workspace.")
-    init_parser.add_argument("--repo-root", type=Path, default=Path.cwd())
-    init_parser.add_argument("--scope", default=".")
+    init_parser = subparsers.add_parser(
+        "init", help="Internal: create or verify one project workspace."
+    )
+    init_parser.add_argument("project_path", nargs="?", type=Path, default=Path.cwd())
     init_parser.add_argument(
         "--codex-home",
         type=Path,
         default=Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")),
     )
-    init_parser.add_argument("--open", action="store_true")
+    init_parser.add_argument("--no-open", action="store_true")
     init_parser.add_argument(
         "--editor", default=os.environ.get("TASK_IMPLEMENTER_EDITOR", "code")
     )
     init_parser.add_argument("--json", action="store_true")
 
-    new_parser = subparsers.add_parser("new", help="Create one prompt file for one ask.")
+    intake_parser = subparsers.add_parser(
+        "intake", help="Internal: resolve one prompt to its next run transition."
+    )
+    intake_parser.add_argument("prompt")
+    intake_parser.add_argument("--project-path", type=Path, default=Path.cwd())
+    intake_parser.add_argument(
+        "--codex-home",
+        type=Path,
+        default=Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")),
+    )
+    intake_parser.add_argument("--json", action="store_true")
+    intake_parser.add_argument(
+        "--internal-json",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+
+    new_parser = subparsers.add_parser(
+        "new", help="Internal: create one prompt file for the editor task."
+    )
     add_common_workspace(new_parser)
     new_parser.add_argument("--ask", required=True)
     new_parser.add_argument("--open", action="store_true")
@@ -104,13 +152,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--editor", default=os.environ.get("TASK_IMPLEMENTER_EDITOR", "code")
     )
 
-    list_parser = subparsers.add_parser("list", help="List prompt metadata without bodies.")
+    list_parser = subparsers.add_parser(
+        "list", help="Internal: list prompt metadata without bodies."
+    )
     add_common_workspace(list_parser)
     list_parser.add_argument("--query")
     list_parser.add_argument("--date")
 
     snapshot_parser = subparsers.add_parser(
-        "snapshot", help="Create an immutable submitted prompt revision."
+        "snapshot", help="Internal: create an immutable prompt revision."
     )
     add_common_workspace(snapshot_parser)
     snapshot_parser.add_argument("--prompt", required=True, type=Path)
@@ -118,11 +168,58 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     snapshot_parser.add_argument("--new-run", action="store_true")
 
     verify_parser = subparsers.add_parser(
-        "verify", help="Validate workspace, prompt, snapshot, and drift state."
+        "verify", help="Internal: validate private workspace and run state."
     )
     add_common_workspace(verify_parser)
     verify_parser.add_argument("--prompt", type=Path)
     verify_parser.add_argument("--run-id")
+
+    claim_parser = subparsers.add_parser(
+        "plane-claim", help="Internal: claim one task for planning."
+    )
+    add_common_workspace(claim_parser)
+    claim_parser.add_argument("--run-id", required=True)
+    claim_parser.add_argument("--recover", action="store_true")
+    claim_parser.add_argument(
+        "--confirmed-recovery-worktree-sha256",
+        help=argparse.SUPPRESS,
+    )
+
+    authorize_parser = subparsers.add_parser(
+        "plane-authorize", help="Internal: authorize a locked task plan."
+    )
+    add_common_workspace(authorize_parser)
+    authorize_parser.add_argument("--run-id", required=True)
+
+    replan_parser = subparsers.add_parser(
+        "plane-replan", help="Internal: rebind one clean planning task for steering."
+    )
+    add_common_workspace(replan_parser)
+    replan_parser.add_argument("--run-id", required=True)
+
+    checkpoint_parser = subparsers.add_parser(
+        "plane-checkpoint", help="Internal: checkpoint one task and stop."
+    )
+    add_common_workspace(checkpoint_parser)
+    checkpoint_parser.add_argument("--run-id", required=True)
+
+    steering_parser = subparsers.add_parser(
+        "steering-resolve", help="Internal: record one steering disposition."
+    )
+    add_common_workspace(steering_parser)
+    steering_parser.add_argument("--run-id", required=True)
+    steering_parser.add_argument("--revision", required=True)
+    steering_parser.add_argument(
+        "--disposition",
+        required=True,
+        choices=("applied", "blocked", "no_effect"),
+    )
+
+    specs_parser = subparsers.add_parser(
+        "spec-inspect", help="Internal: validate managed specification documents."
+    )
+    add_common_workspace(specs_parser)
+    specs_parser.add_argument("--commit")
     return parser.parse_args(argv)
 
 
@@ -130,8 +227,8 @@ def emit(value: object, json_output: bool) -> None:
     if json_output:
         print(json.dumps(value, sort_keys=True))
         return
-    if isinstance(value, list):
-        for item in value:
+    def emit_rows(rows: list[object]) -> None:
+        for item in rows:
             if isinstance(item, dict):
                 print(
                     "\t".join(
@@ -141,19 +238,36 @@ def emit(value: object, json_output: bool) -> None:
                             str(item.get(key) or "-"),
                         )
                         for key in (
-                            "created_at",
-                            "modified_at",
-                            "last_submitted_at",
+                            "last_invoked_at",
                             "status",
-                            "prompt_id",
                             "title",
-                            "latest_run_id",
                             "path",
                         )
                     )
                 )
+
+    if isinstance(value, list):
+        emit_rows(value)
         return
     if isinstance(value, dict):
+        prompts = value.get("prompts")
+        if isinstance(prompts, list):
+            for key in (
+                "workspace",
+                "vscode_workspace",
+                "prompt_root",
+                "starter_prompt",
+                "starter_created",
+                "action",
+                "prompt",
+                "last_invoked_at",
+                "status",
+                "outcome",
+            ):
+                if key in value:
+                    print(f"{key}: {value[key]}")
+            emit_rows(prompts)
+            return
         for key, item in value.items():
             if isinstance(item, dict):
                 print(f"{key}: {json.dumps(item, sort_keys=True)}")
@@ -167,9 +281,18 @@ def main(argv: list[str]) -> int:
     args = parse_args(argv)
     try:
         if args.command == "init":
-            result = init_workspace(args.repo_root, args.scope, args.codex_home)
-            if args.open:
+            result = initialize_project_workspace(
+                args.project_path,
+                args.codex_home,
+            )
+            if not args.no_open:
                 open_in_editor(args.editor, Path(str(result["vscode_workspace"])), workspace=True)
+        elif args.command == "intake":
+            result = route_project_prompt(
+                args.project_path,
+                args.codex_home,
+                args.prompt,
+            )
         elif args.command == "new":
             result = create_prompt(args.workspace, args.ask)
             if args.open:
@@ -188,12 +311,79 @@ def main(argv: list[str]) -> int:
                 result = verify_command(args.workspace, None, args.run_id)
             else:
                 result = verify_command(args.workspace, args.prompt, args.run_id)
+        elif args.command == "plane-claim":
+            result = claim_execution_plane(
+                args.workspace,
+                args.run_id,
+                recover=args.recover,
+                confirmed_recovery_worktree_sha256=(
+                    args.confirmed_recovery_worktree_sha256
+                ),
+            )
+        elif args.command == "plane-authorize":
+            result = authorize_execution_plane(
+                args.workspace,
+                args.run_id,
+            )
+        elif args.command == "plane-replan":
+            result = rebind_planning_execution_plane(
+                args.workspace,
+                args.run_id,
+            )
+        elif args.command == "plane-checkpoint":
+            result = checkpoint_execution_plane(
+                args.workspace,
+                args.run_id,
+            )
+        elif args.command == "steering-resolve":
+            workspace = verify_workspace(args.workspace)
+            runs_root = Path(str(workspace["runs_root"]))
+            with scope_lock(runs_root.parent):
+                verified = verify_run(workspace, args.run_id, None)
+                revision_match = REVISION_RE.fullmatch(args.revision)
+                if revision_match is None:
+                    raise PromptWorkspaceError(
+                        "RUN_STATE_INVALID", "steering revision is invalid"
+                    )
+                run_dir, manifest = next(
+                    item
+                    for item in load_run_manifests(runs_root)
+                    if item[0].name == args.run_id
+                )
+                if args.disposition in {"applied", "no_effect"} and int(
+                    str(verified["revision"])[1:]
+                ) < int(revision_match.group(1)):
+                    raise PromptWorkspaceError(
+                        "RUN_STATE_INVALID",
+                        "steering cannot resolve before the handoff binds its revision",
+                    )
+                result = resolve_steering_revision(
+                    run_dir,
+                    manifest_revisions(manifest),
+                    args.revision,
+                    args.disposition,
+                )
+        elif args.command == "spec-inspect":
+            workspace = verify_workspace(args.workspace)
+            result = inspect_spec_documents(workspace, commit=args.commit)
         else:  # pragma: no cover - argparse enforces the command set.
             raise AssertionError(args.command)
     except PromptWorkspaceError as exc:
         print(f"{exc.code}: {exc.message}", file=sys.stderr)
         return 2
-    emit(result, args.json)
+    if args.command == "init" and args.json:
+        result = {
+            key: value
+            for key, value in result.items()
+            if key not in {"project_id", "scope_id"}
+        }
+    if args.command == "intake" and args.json:
+        result = {
+            key: value
+            for key, value in result.items()
+            if key != "_internal"
+        }
+    emit(result, args.json or getattr(args, "internal_json", False))
     return 0
 
 

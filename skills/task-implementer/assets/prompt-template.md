@@ -42,3 +42,11 @@ created_at: {{CREATED_AT}}
 ## References
 
 <!-- Optional: list repo-relative paths, tickets, or public URLs. No secrets. -->
+
+## Steering
+
+<!--
+Optional: append clarifications, corrections, priorities, removals, or new
+requirements here, then rerun the same `$task-implementer run <prompt>`
+command. No IDs or timestamps are required. Edits elsewhere remain supported.
+-->

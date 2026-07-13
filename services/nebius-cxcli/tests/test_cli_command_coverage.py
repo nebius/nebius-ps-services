@@ -3,10 +3,13 @@ from __future__ import annotations
 import copy
 import inspect
 import json
+import logging
 import os
 import re
 import subprocess
 import sys
+import threading
+import time
 import types
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
@@ -294,7 +297,7 @@ def _external_soperator_chart_upgrade_campaign() -> dict[str, Any]:
         "rollout": {
             "strategy": "zero-surge",
             "service_role_strategy": "zero-surge",
-            "slurm_scheduling_quiesce": True,
+            "slurm_scheduling_pause": True,
             "service_role_group_strategy": {
                 "max_surge_count": 0,
                 "max_unavailable_count": 1,
@@ -312,7 +315,7 @@ def _external_soperator_chart_upgrade_campaign() -> dict[str, Any]:
             "hard_concurrent_worker_group_ceiling": 32,
             "failure_domain_budgeting": ["partition", "zone", "gpu"],
             "service_role_mode": "serial",
-            "quiesced_worker_max_surge": 0,
+            "paused_worker_max_surge": 0,
             "provider_drain_timeout": "unset",
         },
         "segments": [segment],
@@ -976,7 +979,7 @@ def test_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path) -> 
         requeue_job=("42", "43"),
         job_wait_timeout="45m",
         job_refresh_interval="10s",
-        slurm_scheduling_quiesce=True,
+        slurm_scheduling_pause=True,
         login_session_policy="wait-active",
         login_session_drain_timeout="20m",
         dry_run=False,
@@ -991,7 +994,7 @@ def test_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path) -> 
     assert "--home-sfs-size-multiplier" not in args
     assert "--home-sfs-size-gib" not in args
     assert "--confirm-jail-rootfs-overwrite" not in args
-    assert "--slurm-scheduling-quiesce" in args
+    assert "--slurm-scheduling-pause" in args
     assert args[args.index("--cancel-job") + 1] == "17"
     assert args[args.index("--login-session-policy") + 1] == "wait-active"
     assert args[args.index("--login-session-drain-timeout") + 1] == "20m"
@@ -1001,7 +1004,7 @@ def test_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path) -> 
     ]
 
 
-def test_soperator_upgrade_command_omitted_quiesce_flag_defaults_true(
+def test_soperator_upgrade_command_omitted_pause_flag_defaults_true(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1025,7 +1028,7 @@ def test_soperator_upgrade_command_omitted_quiesce_flag_defaults_true(
     )
 
     assert result.exit_code == 0, result.output
-    assert captured["slurm_scheduling_quiesce"] is True
+    assert captured["slurm_scheduling_pause"] is True
 
 
 def test_ext_soperator_scale_execute_requires_approve_before_discovery() -> None:
@@ -1216,21 +1219,10 @@ def test_ext_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path)
         requeue_job=("42", "43"),
         job_wait_timeout="45m",
         job_refresh_interval="10s",
-        slurm_scheduling_quiesce=False,
-        login_session_policy="wait-active",
-        login_session_drain_timeout="20m",
-        worker_rollout_strategy="safe-surge",
-        service_role_rollout_strategy=None,
-        worker_wave_groups=2,
-        worker_wave_percent=None,
-        max_parallel_worker_groups=None,
-        strategy_max_surge_count=1,
-        strategy_max_unavailable_count=None,
-        strategy_drain_timeout="20m",
+        slurm_scheduling_pause=False,
         dry_run=False,
         approve=True,
         approve_remediation=False,
-        approve_service_role_downtime=True,
         allow_unsupported_soperator_upgrade_path=False,
         interactive=False,
     )
@@ -1247,21 +1239,21 @@ def test_ext_soperator_upgrade_command_args_include_requeue_jobs(tmp_path: Path)
     assert args[args.index("--jail-persistent-mount") + 1] == "/data=/mnt/jail/shared/data"
     assert args[args.index("--jail-sfs-resize-policy") + 1] == "apply"
     assert args[args.index("--jail-sfs-resize-to-gib") + 1] == "2304"
-    assert "--no-slurm-scheduling-quiesce" in args
+    assert "--no-slurm-scheduling-pause" in args
     assert "--home-sfs-size-multiplier" not in args
     assert "--home-sfs-size-gib" not in args
     assert "--confirm-jail-rootfs-overwrite" not in args
     assert args[args.index("--target") + 1] == "external"
     assert args[args.index("--cancel-job") + 1] == "17"
-    assert args[args.index("--login-session-policy") + 1] == "wait-active"
-    assert args[args.index("--login-session-drain-timeout") + 1] == "20m"
+    assert "--login-session-policy" not in args
+    assert "--login-session-drain-timeout" not in args
     assert [args[index + 1] for index, item in enumerate(args) if item == "--requeue-job"] == [
         "42",
         "43",
     ]
     assert "--execute" in args
     assert "--approve" in args
-    assert "--approve-service-role-downtime" in args
+    assert "--approve-service-role-downtime" not in args
 
 
 def _run_soperator_upgrade_for_test(
@@ -1278,7 +1270,7 @@ def _run_soperator_upgrade_for_test(
     jail_persistent_mounts: Sequence[str] = (),
     login_session_policy: str = "wait-active",
     login_session_drain_timeout: str = "30m",
-    slurm_scheduling_quiesce: bool = True,
+    slurm_scheduling_pause: bool = True,
     dry_run: bool = False,
     allow_unsupported_soperator_upgrade_path: bool = False,
     interactive: bool = False,
@@ -1304,7 +1296,7 @@ def _run_soperator_upgrade_for_test(
         requeue_job=(),
         job_wait_timeout=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
         job_refresh_interval=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
-        slurm_scheduling_quiesce=slurm_scheduling_quiesce,
+        slurm_scheduling_pause=slurm_scheduling_pause,
         login_session_policy=login_session_policy,
         login_session_drain_timeout=login_session_drain_timeout,
         dry_run=dry_run,
@@ -6690,13 +6682,14 @@ def _cli_slurm_partition_state(
     return parsed[0]
 
 
-def _cli_slurm_quiesce_record(
+def _cli_slurm_pause_record(
     partition: str,
     *,
     applied: bool = True,
-) -> cli.SlurmPartitionQuiesceRecord:
-    previous = _cli_slurm_partition_state(partition, "UP")
-    record = cli.SlurmPartitionQuiesceRecord(
+    fields: Mapping[str, str] | None = None,
+) -> cli.SlurmPartitionPauseRecord:
+    previous = _cli_slurm_partition_state(partition, "UP", fields=fields)
+    record = cli.SlurmPartitionPauseRecord(
         partition=partition,
         previous_state="UP",
         previous_record=previous.record,
@@ -6704,13 +6697,15 @@ def _cli_slurm_quiesce_record(
         applied_state="DOWN",
     )
     return (
-        record.with_applied_observation(_cli_slurm_partition_state(partition, "DOWN"))
+        record.with_applied_observation(
+            _cli_slurm_partition_state(partition, "DOWN", fields=fields)
+        )
         if applied
         else record
     )
 
 
-def test_soperator_upgrade_quiesce_treats_pending_jobs_as_queued(
+def test_soperator_upgrade_pause_treats_pending_jobs_as_queued(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     include_pending_values: list[bool] = []
@@ -6723,8 +6718,8 @@ def test_soperator_upgrade_quiesce_treats_pending_jobs_as_queued(
     )
     monkeypatch.setattr(
         cli,
-        "_soperator_upgrade_quiesce_slurm_partitions",
-        lambda **_kwargs: (_cli_slurm_quiesce_record("main"),),
+        "_soperator_upgrade_pause_slurm_partitions",
+        lambda **_kwargs: (_cli_slurm_pause_record("main"),),
     )
     monkeypatch.setattr(
         cli,
@@ -6747,13 +6742,13 @@ def test_soperator_upgrade_quiesce_treats_pending_jobs_as_queued(
         wait_timeout_seconds=0,
         refresh_interval_seconds=1,
         checkpoint_id="checkpoint",
-        slurm_scheduling_quiesce=True,
+        slurm_scheduling_pause=True,
         decision_recorder=decisions.append,
     )
 
     assert restored == ("worker-0",)
     assert include_pending_values == [False, False]
-    assert decisions[0]["action"] == "scheduling-quiesce-applied"
+    assert decisions[0]["action"] == "scheduling-pause-applied"
     assert decisions[0]["pending_jobs"] == "queued-not-blocking"
 
 
@@ -6764,7 +6759,7 @@ def test_soperator_upgrade_quiesce_treats_pending_jobs_as_queued(
         "scontrol: error: PluginDir: bad value",
     ],
 )
-def test_post_jail_pre_release_rejects_slurm_config_errors_while_quiesced(
+def test_post_jail_pre_release_rejects_slurm_config_errors_while_paused(
     monkeypatch: pytest.MonkeyPatch,
     stderr: str,
 ) -> None:
@@ -6783,7 +6778,7 @@ def test_post_jail_pre_release_rejects_slurm_config_errors_while_quiesced(
     monkeypatch.setattr(soperator_migration, "_kubectl_exec_login_once", _exec_login)
     phase: dict[str, Any] = {
         "slurm_quiet_at": "2026-07-10T12:00:00Z",
-        "slurm_quiesced_partitions": [_cli_slurm_quiesce_record("main").as_payload()],
+        "slurm_paused_partitions": [_cli_slurm_pause_record("main").as_payload()],
     }
 
     with pytest.raises(
@@ -6800,8 +6795,8 @@ def test_post_jail_pre_release_rejects_slurm_config_errors_while_quiesced(
     pre_release = phase["post_jail_slurm_smoke"]["pre_release"]
     assert pre_release["status"] == "failed"
     assert pre_release["failed_check"] == "sbatch-test-only"
-    assert "accepted_quiesced_scheduling_result" not in pre_release["checks"][-1]
-    assert phase["slurm_quiesced_partitions"][0]["applied_state"] == "DOWN"
+    assert "accepted_paused_scheduling_result" not in pre_release["checks"][-1]
+    assert phase["slurm_paused_partitions"][0]["applied_state"] == "DOWN"
     assert "slurm_resumed_at" not in phase
     assert calls == [
         ("scontrol", "ping"),
@@ -6810,7 +6805,7 @@ def test_post_jail_pre_release_rejects_slurm_config_errors_while_quiesced(
     assert checkpoints == ["checkpoint"]
 
 
-def test_managed_pre_release_config_failure_keeps_slurm_quiesced_without_restore(
+def test_managed_pre_release_config_failure_keeps_slurm_paused_without_restore(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -6852,7 +6847,7 @@ def test_managed_pre_release_config_failure_keeps_slurm_quiesced_without_restore
     manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
     calls: list[object] = []
     restore_mutations: list[str] = []
-    quiesce_record = _cli_slurm_quiesce_record("main")
+    pause_record = _cli_slurm_pause_record("main")
 
     monkeypatch.setattr(
         cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
@@ -6875,18 +6870,18 @@ def test_managed_pre_release_config_failure_keeps_slurm_quiesced_without_restore
         lambda **_kwargs: ("worker-0",),
     )
 
-    def _quiesce_running_jobs(**kwargs: Any) -> tuple[str, ...]:
+    def _pause_running_jobs(**kwargs: Any) -> tuple[str, ...]:
         kwargs["decision_recorder"](
             {
                 "at": "2026-07-10T12:00:00Z",
-                "action": "scheduling-quiesce-applied",
-                "partitions": [quiesce_record.as_payload()],
+                "action": "scheduling-pause-applied",
+                "partitions": [pause_record.as_payload()],
                 "pending_jobs": "queued-not-blocking",
             }
         )
         return ("worker-0",)
 
-    monkeypatch.setattr(cli, "_handle_soperator_upgrade_running_jobs", _quiesce_running_jobs)
+    monkeypatch.setattr(cli, "_handle_soperator_upgrade_running_jobs", _pause_running_jobs)
     monkeypatch.setattr(
         cli,
         "_soperator_upgrade_restore_slurm_partitions",
@@ -6928,9 +6923,9 @@ def test_managed_pre_release_config_failure_keeps_slurm_quiesced_without_restore
     ]
     assert pre_release["status"] == "failed"
     assert restore_mutations == []
-    assert checkpoint["slurm"]["quiesced_partitions"] == [quiesce_record.as_payload()]
+    assert checkpoint["slurm"]["paused_partitions"] == [pause_record.as_payload()]
     assert checkpoint["failure"]["slurm_restore"] == "left-changed"
-    assert "slurm-partitions-kept-quiesced-after-pre-release-failure" in {
+    assert "slurm-partitions-kept-paused-after-pre-release-failure" in {
         event["event"] for event in checkpoint["events"]
     }
 
@@ -6968,21 +6963,20 @@ def test_post_jail_pre_release_accepts_partition_down_sbatch_test_only(
     )
     assert sbatch_check["status"] == "passed"
     assert sbatch_check["returncode"] == 1
-    assert sbatch_check["accepted_quiesced_scheduling_result"] is True
+    assert sbatch_check["accepted_paused_scheduling_result"] is True
     assert calls == [
         ("scontrol", "ping"),
         ("sbatch", "--test-only", "--wrap=/bin/true"),
         ("sacctmgr", "-nP", "show", "qos", "format=name"),
     ]
-    assert "user scheduling remained quiesced" in " ".join(lines)
+    assert "user scheduling remained paused" in " ".join(lines)
 
 
-def test_post_jail_slurm_release_order_is_static_then_restore_then_live_job() -> None:
+def test_post_jail_slurm_release_order_defers_restore_until_final_gates() -> None:
     external_source = inspect.getsource(
         soperator_migration._execute_populate_jail_refresh_phase  # noqa: SLF001
     )
     pre_release_token = "_ensure_post_jail_slurm_pre_release_checks("
-    external_restore_token = "_restore_external_upgrade_slurm_partitions("
     full_smoke_token = "_ensure_post_jail_slurm_smoke("
     pre_release_positions = [
         match.start() for match in re.finditer(re.escape(pre_release_token), external_source)
@@ -6990,15 +6984,44 @@ def test_post_jail_slurm_release_order_is_static_then_restore_then_live_job() ->
 
     assert len(pre_release_positions) == 2
     for pre_release_position in pre_release_positions:
-        restore_position = external_source.find(external_restore_token, pre_release_position)
         smoke_position = external_source.find(full_smoke_token, pre_release_position)
-        assert pre_release_position < restore_position < smoke_position
-    assert re.search(
-        r"if\s*\(\s*pre_release_failed\s+or\s+consumer_switch_failed\s+or\s+"
-        r"open_metrics_handoff_incomplete\s+or\s+post_switch_pre_release_incomplete\s*\):",
-        external_source,
+        assert pre_release_position < smoke_position
+    assert "_restore_external_upgrade_slurm_partitions(" not in external_source
+    assert 'phase["slurm_partition_restore_status"] = "deferred"' in external_source
+    assert "records restore before destructive bridge cleanup" in external_source
+
+    restore_source = inspect.getsource(
+        soperator_migration._restore_slurm_partitions_before_controller_bridge_cleanup  # noqa: SLF001
     )
-    assert "user partitions remain controlled/DOWN" in external_source
+    bridge_gate_position = restore_source.find('bridge.get("stage")')
+    action_gate_position = restore_source.find("_finalize_controller_bridge_target_actions(")
+    final_restore_position = restore_source.find("_restore_external_upgrade_slurm_partitions(")
+    stage_advance_position = restore_source.find(
+        "advance_bridge_stage(bridge, BridgeStage.PARTITIONS_RESTORED)"
+    )
+    assert bridge_gate_position < action_gate_position < final_restore_position
+    assert final_restore_position < stage_advance_position
+    assert 'login_handoff.get("state") != "complete"' in restore_source
+    assert 'final_health.get("status") != "passed"' in restore_source
+
+    action_finalize_source = inspect.getsource(
+        soperator_migration._finalize_controller_bridge_target_actions  # noqa: SLF001
+    )
+    accept_only_position = action_finalize_source.find(
+        'set_slurm_action_broker_mode(action_journal, "accept-only")'
+    )
+    admission_closed_position = action_finalize_source.find(
+        "set_slurm_action_broker_mode(action_journal, SLURM_ACTION_ADMISSION_CLOSED)"
+    )
+    terminal_gate_position = action_finalize_source.find(
+        "slurm_action_finalization_blockers(action_journal)"
+    )
+    freeze_position = action_finalize_source.find(
+        "finalize_target_slurm_action_generation(action_journal)"
+    )
+    assert (
+        accept_only_position < admission_closed_position < terminal_gate_position < freeze_position
+    )
 
     managed_source = inspect.getsource(cli._run_managed_soperator_cluster_upgrade)  # noqa: SLF001
     managed_pre_release_position = managed_source.find(pre_release_token)
@@ -7008,8 +7031,8 @@ def test_post_jail_slurm_release_order_is_static_then_restore_then_live_job() ->
     )
     managed_smoke_position = managed_source.find(full_smoke_token, managed_pre_release_position)
     assert managed_pre_release_position < managed_restore_position < managed_smoke_position
-    assert "if slurm_quiesce_records and not post_jail_pre_release_failed:" in managed_source
-    assert "slurm-partitions-kept-quiesced-after-pre-release-failure" in managed_source
+    assert "if slurm_pause_records and not post_jail_pre_release_failed:" in managed_source
+    assert "slurm-partitions-kept-paused-after-pre-release-failure" in managed_source
 
     full_smoke_source = inspect.getsource(
         soperator_migration._ensure_post_jail_slurm_smoke  # noqa: SLF001
@@ -7017,7 +7040,7 @@ def test_post_jail_slurm_release_order_is_static_then_restore_then_live_job() ->
     assert "_run_post_jail_live_job_smoke(" in full_smoke_source
 
 
-def test_soperator_upgrade_quiesce_restores_partial_partition_on_apply_failure(
+def test_soperator_upgrade_pause_restores_partial_partition_on_apply_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     commands: list[str] = []
@@ -7052,7 +7075,7 @@ def test_soperator_upgrade_quiesce_restores_partial_partition_on_apply_failure(
     monkeypatch.setattr(cli, "_run_soperator_upgrade_login_command", _login_command)
 
     with pytest.raises(RuntimeError, match="scontrol update failed"):
-        cli._soperator_upgrade_quiesce_slurm_partitions(
+        cli._soperator_upgrade_pause_slurm_partitions(
             namespace="soperator",
             node_names=("worker-0",),
             record_recorder=lambda _record: None,
@@ -7089,10 +7112,61 @@ def test_soperator_upgrade_restore_accepts_already_restored_partition(
 
     cli._soperator_upgrade_restore_slurm_partitions(
         namespace="soperator",
-        records=(_cli_slurm_quiesce_record("main"),),
+        records=(_cli_slurm_pause_record("main"),),
     )
 
     assert commands == []
+
+
+def test_soperator_upgrade_restore_allows_derived_topology_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = "DOWN"
+    fields = {
+        "MaxTime": "01:00:00",
+        "TotalNodes": "4",
+        "TotalCPUs": "448",
+        "TRES": "cpu=448,gres/gpu=32,node=4",
+        "NodeIndices": "8-11",
+    }
+    commands: list[str] = []
+    record = _cli_slurm_pause_record(
+        "gpu",
+        fields={
+            "MaxTime": "01:00:00",
+            "TotalNodes": "2",
+            "TotalCPUs": "224",
+            "TRES": "cpu=224,gres/gpu=16,node=2",
+            "NodeIndices": "0-1",
+        },
+    )
+
+    def _login_command(
+        _namespace: str,
+        command: str,
+        **_kwargs: Any,
+    ) -> SimpleNamespace:
+        nonlocal state
+        commands.append(command)
+        match = re.search(r"PartitionName=(\S+) State=(\S+)", command)
+        if match:
+            state = match.group(2)
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_login_command", _login_command)
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_partition_state_snapshot",
+        lambda **_kwargs: (_cli_slurm_partition_state("gpu", state, fields=fields),),
+    )
+
+    cli._soperator_upgrade_restore_slurm_partitions(
+        namespace="soperator",
+        records=(record,),
+    )
+
+    assert state == "UP"
+    assert commands == ["scontrol update PartitionName=gpu State=UP"]
 
 
 def test_soperator_upgrade_affected_jobs_include_scoped_pending_jobs(
@@ -7649,7 +7723,7 @@ def test_soperator_upgrade_interactive_callback_cancels_in_tui_without_reprompt(
         action_handler = cast(
             Callable[..., tuple[cli.AffectedSlurmJob, ...]], kwargs["action_handler"]
         )
-        assert action_handler("cancel-selected", ("42",), tuple(jobs)) == ()
+        assert action_handler("cancel", ("42",), tuple(jobs)) == ()
         return cli.SLURM_JOB_CONTROL_JOBS_CLEARED, ()
 
     monkeypatch.setattr(cli, "_prompt_soperator_upgrade_job_control", _prompt)
@@ -7708,7 +7782,7 @@ def test_soperator_upgrade_interactive_callback_requeue_holds_in_tui(
         action_handler = cast(
             Callable[..., tuple[cli.AffectedSlurmJob, ...]], kwargs["action_handler"]
         )
-        assert action_handler("requeue-hold-selected", ("42",), tuple(jobs)) == ()
+        assert action_handler("requeue-hold", ("42",), tuple(jobs)) == ()
         return cli.SLURM_JOB_CONTROL_JOBS_CLEARED, ()
 
     monkeypatch.setattr(cli, "_prompt_soperator_upgrade_job_control", _prompt)
@@ -7729,12 +7803,12 @@ def test_soperator_upgrade_interactive_callback_requeue_holds_in_tui(
     assert queue_results == []
 
 
-def test_soperator_upgrade_interactive_background_wait_uses_silent_poll(
+def test_soperator_upgrade_interactive_hold_uses_canonical_tui_action(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     job = _soperator_slurm_job(job_id="42")
-    queue_results = [(job,), (job,), (), ()]
-    sleeps: list[int] = []
+    queue_results = [(job,), (job,), ()]
+    commands: list[str] = []
 
     monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
     monkeypatch.setattr(
@@ -7752,17 +7826,25 @@ def test_soperator_upgrade_interactive_background_wait_uses_silent_poll(
         "_soperator_upgrade_affected_jobs",
         lambda **_kwargs: queue_results.pop(0),
     )
-    monkeypatch.setattr(cli.time, "sleep", lambda seconds: sleeps.append(seconds))
     monkeypatch.setattr(
         cli,
-        "_soperator_upgrade_wait_for_jobs",
-        lambda **_kwargs: pytest.fail("background wait must not use the Rich wait path"),
+        "_run_soperator_upgrade_login_command",
+        lambda _namespace, command, **_kwargs: (
+            commands.append(command) or SimpleNamespace(stdout="", stderr="", returncode=0)
+        ),
     )
-    monkeypatch.setattr(
-        cli,
-        "_prompt_soperator_upgrade_job_control",
-        lambda _jobs, **_kwargs: (cli.SLURM_JOB_CONTROL_BACKGROUND_WAIT, ("42",)),
-    )
+
+    def _prompt(
+        jobs: Sequence[cli.AffectedSlurmJob],
+        **kwargs: object,
+    ) -> tuple[str, tuple[str, ...]]:
+        action_handler = cast(
+            Callable[..., tuple[cli.AffectedSlurmJob, ...]], kwargs["action_handler"]
+        )
+        assert action_handler("hold", ("42",), tuple(jobs)) == (job,)
+        return cli.SLURM_JOB_CONTROL_JOBS_CLEARED, ()
+
+    monkeypatch.setattr(cli, "_prompt_soperator_upgrade_job_control", _prompt)
 
     restored = cli._handle_soperator_upgrade_running_jobs(
         namespace="soperator",
@@ -7776,7 +7858,7 @@ def test_soperator_upgrade_interactive_background_wait_uses_silent_poll(
     )
 
     assert restored == ("worker-gpu-0-0",)
-    assert sleeps == [1]
+    assert commands == ["scontrol hold 42"]
     assert queue_results == []
 
 
@@ -8229,7 +8311,7 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
         requeue_job=(),
         job_wait_timeout=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT,
         job_refresh_interval=cli._SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
-        slurm_scheduling_quiesce=True,
+        slurm_scheduling_pause=True,
         login_session_policy="wait-active",
         login_session_drain_timeout="30m",
         dry_run=False,
@@ -11727,13 +11809,6 @@ def test_ext_soperator_upgrade_interactive_non_tty_fails_before_backup(
             approve=True,
             approve_remediation=False,
             interactive=True,
-            worker_rollout_strategy=None,
-            worker_wave_groups=None,
-            worker_wave_percent=None,
-            max_parallel_worker_groups=None,
-            strategy_max_surge_count=None,
-            strategy_max_unavailable_count=None,
-            strategy_drain_timeout=None,
         )
 
     assert excinfo.value.exit_code == 1
@@ -11742,9 +11817,9 @@ def test_ext_soperator_upgrade_interactive_non_tty_fails_before_backup(
 
 @pytest.mark.parametrize(
     ("tty", "interactive", "expected_policy"),
-    [(True, True, "interactive"), (False, True, "fail"), (True, False, "fail")],
+    [(True, True, "preserve"), (False, True, "preserve"), (True, False, "preserve")],
 )
-def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_by_terminal_mode(
+def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_to_preserve(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     tty: bool,
@@ -11876,23 +11951,16 @@ def test_ext_soperator_upgrade_execute_omitted_job_policy_defaults_by_terminal_m
         approve=True,
         approve_remediation=False,
         interactive=interactive,
-        worker_rollout_strategy=None,
-        worker_wave_groups=None,
-        worker_wave_percent=None,
-        max_parallel_worker_groups=None,
-        strategy_max_surge_count=None,
-        strategy_max_unavailable_count=None,
-        strategy_drain_timeout=None,
     )
 
     rendered = rich_console.export_text()
     assert f"Slurm job policy: {expected_policy}" in rendered
-    assert "Login SSH session policy: target-ready" in rendered
+    assert "Login SSH continuity: unconditional voluntary handoff" in rendered
     assert "Login LoadBalancer allocation retention: cxcli automatically converts" in rendered
     assert captured["job_policy"] == expected_policy
-    assert captured["slurm_scheduling_quiesce"] is True
-    assert captured["login_session_policy"] == "target-ready"
-    assert captured["login_session_drain_timeout_seconds"] == 1800
+    assert captured["slurm_scheduling_pause"] is True
+    assert captured["login_session_policy"] == "wait-active"
+    assert captured["login_session_drain_timeout_seconds"] == 0
     assert events == ["backup", "execute"]
 
 
@@ -12050,13 +12118,6 @@ def test_ext_soperator_upgrade_execute_prints_final_output_after_status_exits(
         approve=True,
         approve_remediation=False,
         interactive=False,
-        worker_rollout_strategy=None,
-        worker_wave_groups=None,
-        worker_wave_percent=None,
-        max_parallel_worker_groups=None,
-        strategy_max_surge_count=None,
-        strategy_max_unavailable_count=None,
-        strategy_drain_timeout=None,
     )
 
     assert (False, "execute complete") in printed
@@ -23455,7 +23516,8 @@ def test_mk8s_cluster_handoff_spec_selects_control_plane_endpoint_for_access(
     captured: dict[str, Any] = {}
 
     class FakeSdk:
-        def sync_close(self) -> None:
+        def sync_close(self, timeout=None) -> None:  # type: ignore[no-untyped-def]
+            captured["close_timeout"] = timeout
             captured["closed"] = True
 
     class FakeGetClusterRequest:
@@ -24245,7 +24307,8 @@ def test_mk8s_token_command_emits_exec_credential_from_sdk(
                 expiration=cli.datetime(2026, 1, 2, 3, 4, 5, tzinfo=cli.UTC),
             )
 
-        def sync_close(self) -> None:
+        def sync_close(self, timeout=None) -> None:  # type: ignore[no-untyped-def]
+            captured["close_timeout"] = timeout
             captured["closed"] = True
 
     monkeypatch.setattr(cli, "_runtime_auth_env_available", lambda: False)
@@ -24281,12 +24344,277 @@ def test_mk8s_token_command_emits_exec_credential_from_sdk(
     payload = json.loads(result.stdout)
     assert captured["cache_load"] == ("project-456", "client-a")
     assert captured["sdk_init"] == ("project-456", "api.example.invalid", "MK8s exec auth")
-    assert captured["timeout"] == 20.0
+    assert captured["timeout"] == cli._MK8S_CREDENTIAL_ATTEMPT_TIMEOUT_SECONDS
+    assert captured["close_timeout"] == cli._MK8S_CREDENTIAL_CLOSE_TIMEOUT_SECONDS
     assert captured["closed"] is True
     assert payload["apiVersion"] == "client.authentication.k8s.io/v1"
     assert payload["kind"] == "ExecCredential"
     assert payload["status"]["token"] == "token-123"
     assert payload["status"]["expirationTimestamp"] == "2026-01-02T03:04:05Z"
+
+
+def test_mk8s_exec_auth_sdk_retries_one_timeout_with_fresh_clients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected = object()
+    attempts = 0
+    closed = 0
+    sleeps: list[float] = []
+
+    class _FakeSDK:
+        def __init__(self, attempt: int) -> None:
+            self.attempt = attempt
+
+        def get_token_sync(self, *, timeout):  # type: ignore[no-untyped-def]
+            assert timeout == cli._MK8S_CREDENTIAL_ATTEMPT_TIMEOUT_SECONDS
+            if self.attempt == 1:
+                raise TimeoutError("transient")
+            return expected
+
+        def sync_close(self, timeout=None) -> None:  # type: ignore[no-untyped-def]
+            nonlocal closed
+            assert timeout == cli._MK8S_CREDENTIAL_CLOSE_TIMEOUT_SECONDS
+            closed += 1
+
+    def _init_sdk(**_kwargs):  # type: ignore[no-untyped-def]
+        nonlocal attempts
+        attempts += 1
+        return _FakeSDK(attempts)
+
+    monkeypatch.setattr(cli, "init_nebius_sdk", _init_sdk)
+    monkeypatch.setattr(cli.time, "sleep", sleeps.append)
+    sdk = cli._Mk8sExecAuthSdk(parent_id="project-456", endpoint=None, context="test")
+
+    assert sdk.get_token_sync(timeout=20.0) is expected
+    assert attempts == 2
+    assert closed == 2
+    assert sleeps == [cli._MK8S_CREDENTIAL_RETRY_DELAY_SECONDS]
+
+
+def test_mk8s_exec_auth_sdk_bounds_timeout_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+    closed = 0
+    sleeps: list[float] = []
+
+    class _FakeSDK:
+        def get_token_sync(self, *, timeout):  # type: ignore[no-untyped-def]
+            assert timeout == cli._MK8S_CREDENTIAL_ATTEMPT_TIMEOUT_SECONDS
+            raise TimeoutError("sensitive-timeout-detail")
+
+        def sync_close(self, timeout=None) -> None:  # type: ignore[no-untyped-def]
+            nonlocal closed
+            assert timeout == cli._MK8S_CREDENTIAL_CLOSE_TIMEOUT_SECONDS
+            closed += 1
+
+    def _init_sdk(**_kwargs):  # type: ignore[no-untyped-def]
+        nonlocal attempts
+        attempts += 1
+        return _FakeSDK()
+
+    monkeypatch.setattr(cli, "init_nebius_sdk", _init_sdk)
+    monkeypatch.setattr(cli.time, "sleep", sleeps.append)
+    sdk = cli._Mk8sExecAuthSdk(parent_id="project-456", endpoint=None, context="test")
+
+    with pytest.raises(TimeoutError, match="timed out while creating") as exc_info:
+        sdk.get_token_sync(timeout=20.0)
+
+    assert "sensitive-timeout-detail" not in str(exc_info.value)
+    assert attempts == cli._MK8S_CREDENTIAL_MAX_ATTEMPTS
+    assert closed == cli._MK8S_CREDENTIAL_MAX_ATTEMPTS
+    assert sleeps == [cli._MK8S_CREDENTIAL_RETRY_DELAY_SECONDS]
+
+
+def test_mk8s_exec_auth_sdk_does_not_retry_permanent_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+    closed = 0
+    sleeps: list[float] = []
+
+    class _FakeSDK:
+        def get_token_sync(self, *, timeout):  # type: ignore[no-untyped-def]
+            raise RuntimeError("permanent-auth-failure")
+
+        def sync_close(self, timeout=None) -> None:  # type: ignore[no-untyped-def]
+            nonlocal closed
+            assert timeout == cli._MK8S_CREDENTIAL_CLOSE_TIMEOUT_SECONDS
+            closed += 1
+
+    def _init_sdk(**_kwargs):  # type: ignore[no-untyped-def]
+        nonlocal attempts
+        attempts += 1
+        return _FakeSDK()
+
+    monkeypatch.setattr(cli, "init_nebius_sdk", _init_sdk)
+    monkeypatch.setattr(cli.time, "sleep", sleeps.append)
+    sdk = cli._Mk8sExecAuthSdk(parent_id="project-456", endpoint=None, context="test")
+
+    with pytest.raises(RuntimeError, match="permanent-auth-failure"):
+        sdk.get_token_sync(timeout=20.0)
+
+    assert attempts == 1
+    assert closed == 1
+    assert sleeps == []
+
+
+def test_mk8s_exec_auth_sdk_elapsed_budget_is_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timeouts: list[float] = []
+
+    class _FakeSDK:
+        def get_token_sync(self, *, timeout):  # type: ignore[no-untyped-def]
+            timeouts.append(timeout)
+            time.sleep(timeout)
+            raise TimeoutError("slow exchange")
+
+        def sync_close(self, timeout=None) -> None:  # type: ignore[no-untyped-def]
+            assert timeout == 0.01
+
+    monkeypatch.setattr(cli, "init_nebius_sdk", lambda **_kwargs: _FakeSDK())
+    monkeypatch.setattr(cli, "_MK8S_CREDENTIAL_ATTEMPT_TIMEOUT_SECONDS", 0.02)
+    monkeypatch.setattr(cli, "_MK8S_CREDENTIAL_TOTAL_BUDGET_SECONDS", 0.10)
+    monkeypatch.setattr(cli, "_MK8S_CREDENTIAL_CLOSE_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(cli, "_MK8S_CREDENTIAL_RETRY_DELAY_SECONDS", 0.01)
+    sdk = cli._Mk8sExecAuthSdk(parent_id="project-456", endpoint=None, context="test")
+
+    started = time.monotonic()
+    with pytest.raises(TimeoutError, match="timed out while creating"):
+        sdk.get_token_sync(timeout=20.0)
+    elapsed = time.monotonic() - started
+
+    assert timeouts == [0.02, 0.02]
+    assert elapsed < 0.10
+
+
+def test_mk8s_exec_auth_sdk_bounds_hanging_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release_close = threading.Event()
+    close_finished = threading.Event()
+    close_timeouts: list[float] = []
+
+    class _FakeSDK:
+        def get_token_sync(self, *, timeout):  # type: ignore[no-untyped-def]
+            return object()
+
+        def sync_close(self, timeout=None) -> None:  # type: ignore[no-untyped-def]
+            close_timeouts.append(timeout)
+            release_close.wait()
+            close_finished.set()
+
+    monkeypatch.setattr(cli, "init_nebius_sdk", lambda **_kwargs: _FakeSDK())
+    monkeypatch.setattr(cli, "_MK8S_CREDENTIAL_CLOSE_TIMEOUT_SECONDS", 0.01)
+    sdk = cli._Mk8sExecAuthSdk(parent_id="project-456", endpoint=None, context="test")
+
+    started = time.monotonic()
+    with pytest.raises(TimeoutError, match="cleanup timed out"):
+        sdk.get_token_sync(timeout=20.0)
+    elapsed = time.monotonic() - started
+    release_close.set()
+
+    assert close_finished.wait(timeout=1.0)
+    assert close_timeouts == [0.01]
+    assert elapsed < 0.5
+
+
+def test_mk8s_exec_auth_sdk_bounds_hanging_init_and_cleans_up_late_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release_init = threading.Event()
+    close_finished = threading.Event()
+
+    class _FakeSDK:
+        def get_token_sync(self, *, timeout):  # type: ignore[no-untyped-def]
+            return object()
+
+        def sync_close(self, timeout=None) -> None:  # type: ignore[no-untyped-def]
+            close_finished.set()
+
+    def _init_sdk(**_kwargs):  # type: ignore[no-untyped-def]
+        release_init.wait()
+        return _FakeSDK()
+
+    monkeypatch.setattr(cli, "init_nebius_sdk", _init_sdk)
+    monkeypatch.setattr(cli, "_MK8S_CREDENTIAL_ATTEMPT_WALL_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(cli, "_MK8S_CREDENTIAL_TOTAL_BUDGET_SECONDS", 0.10)
+    monkeypatch.setattr(cli, "_MK8S_CREDENTIAL_CLOSE_TIMEOUT_SECONDS", 0.01)
+    sdk = cli._Mk8sExecAuthSdk(parent_id="project-456", endpoint=None, context="test")
+
+    started = time.monotonic()
+    with pytest.raises(TimeoutError, match="initialization or exchange exceeded"):
+        sdk.get_token_sync(timeout=20.0)
+    elapsed = time.monotonic() - started
+    release_init.set()
+
+    assert close_finished.wait(timeout=1.0)
+    assert elapsed < 0.5
+
+
+def test_mk8s_token_command_suppresses_sensitive_sdk_logs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logger = logging.getLogger("nebius.aio.token.renewable")
+
+    class _FakeSDK:
+        def get_token_sync(self, *, timeout):  # type: ignore[no-untyped-def]
+            logger.error("sensitive-refresh-detail")
+            raise RuntimeError("sensitive-auth-detail")
+
+        def sync_close(self, timeout=None) -> None:  # type: ignore[no-untyped-def]
+            logger.error("sensitive-cleanup-detail")
+
+    monkeypatch.setattr(cli, "_runtime_auth_env_available", lambda: True)
+    monkeypatch.setattr(cli, "init_nebius_sdk", lambda **_kwargs: _FakeSDK())
+
+    result = runner.invoke(cli.app, ["mk8s-token", "--project-id", "project-456"])
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr.strip() == "ERROR: Unable to create an MK8s exec credential."
+
+
+def test_mk8s_token_command_failure_keeps_stdout_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeSDK:
+        def get_token_sync(self, *, timeout):  # type: ignore[no-untyped-def]
+            raise RuntimeError("sensitive-auth-detail")
+
+        def sync_close(self) -> None:
+            pass
+
+    monkeypatch.setattr(cli, "_runtime_auth_env_available", lambda: True)
+    monkeypatch.setattr(cli, "_init_mk8s_exec_auth_sdk", lambda **_kwargs: _FakeSDK())
+
+    result = runner.invoke(cli.app, ["mk8s-token", "--project-id", "project-456"])
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert "Unable to create an MK8s exec credential" in result.stderr
+    assert "sensitive-auth-detail" not in result.stderr
+
+
+def test_mk8s_token_command_rejects_empty_credential_without_retry_noise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeSDK:
+        def get_token_sync(self, *, timeout):  # type: ignore[no-untyped-def]
+            return SimpleNamespace()
+
+        def sync_close(self) -> None:
+            pass
+
+    monkeypatch.setattr(cli, "_runtime_auth_env_available", lambda: True)
+    monkeypatch.setattr(cli, "_init_mk8s_exec_auth_sdk", lambda **_kwargs: _FakeSDK())
+
+    result = runner.invoke(cli.app, ["mk8s-token", "--project-id", "project-456"])
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr.strip() == "ERROR: Unable to create an MK8s exec credential."
 
 
 def test_wait_for_cluster_nodes_ready_returns_immediately_when_nodes_are_already_ready(
@@ -25403,9 +25731,12 @@ def test_cli_help_examples_have_visual_separator_and_comments_block() -> None:
         "./deployments/tenant/project/config.yaml --target external-cluster --dry-run; "
         "| nebius-cxcli ext-soperator upgrade "
         "./deployments/tenant/project/config.yaml --target external-cluster "
-        "--login-session-policy wait-active --execute --approve"
+        "--execute --approve"
     ) in normalized_ext_soperator_upgrade_help
-    assert "--execute --approve. Comments: --target is the cxcli target id" in (
+    assert "--target is the cxcli target id saved as deploy.targets[].instance_id" in (
+        normalized_ext_soperator_upgrade_help
+    )
+    assert "Comments: The target must already be onboarded" in (
         normalized_ext_soperator_upgrade_help
     )
     assert "--execute --approve. --target is the cxcli target id" not in (
@@ -25909,7 +26240,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--to-os" in normalized_managed_soperator_upgrade_help
     assert "--to-gpu-stack-preset" in normalized_managed_soperator_upgrade_help
     assert "--job-policy" in normalized_managed_soperator_upgrade_help
-    assert "--slurm-scheduling-quiesce" in normalized_managed_soperator_upgrade_help
+    assert "--slurm-scheduling-pause" in normalized_managed_soperator_upgrade_help
     assert "--requeue-job" in normalized_managed_soperator_upgrade_help
     assert "--backup-dir" in normalized_managed_soperator_upgrade_help
     assert "--jail-persistent-mount" in normalized_managed_soperator_upgrade_help
@@ -26100,7 +26431,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         normalized_soperator_help
     )
     assert (
-        "onboard registers one cluster identity or reconciles its complete v3 campaign "
+        "onboard registers one cluster identity or reconciles its complete v4 campaign "
         "in config.yaml"
     ) in normalized_soperator_help
     assert "upgrade reconciles live state and advances at most one campaign segment" in (
@@ -26133,7 +26464,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     ) in normalized_soperator_help
     assert "CXCLI managed clusters use soperator upgrade" in (normalized_soperator_help)
     assert (
-        "external MK8s control-plane, node-template, chart, and Jail changes remain owned "
+        "external MK8s control-plane, blue/green compute, chart, and Jail changes remain owned "
         "by ext-soperator upgrade"
     ) in normalized_soperator_help
     assert "Terraform-managed MK8s node-template upgrades use upgrade node-template" in (
@@ -26191,9 +26522,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "keep-existing-storage preserves live PVC/PV sizes and selectors" in (
         normalized_soperator_onboard_help
     )
-    assert "keep-existing-compute reuses discovered node groups" in (
-        normalized_soperator_onboard_help
-    )
+    assert "keep-existing-compute preserves discovered role" in (normalized_soperator_onboard_help)
     assert "source version used only when discovery cannot infer" in (
         normalized_soperator_onboard_help
     )
@@ -26209,27 +26538,18 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--target-id external-cluster" in normalized_soperator_onboard_help
     assert "--storage-mode keep-existing-storage" in normalized_soperator_onboard_help
     assert "--compute-mode keep-existing-compute" in normalized_soperator_onboard_help
-    assert "--worker-rollout-strategy safe-surge --worker-wave-groups 1" in (
-        normalized_soperator_onboard_help
-    )
-    assert (
-        "Non-interactive onboarding deterministically leaves Slurm scheduling active "
-        "for safe-surge and quiesces scheduling for zero-surge; both values are "
-        "fingerprinted"
-    ) in normalized_soperator_onboard_help
     assert "create a project config under the deployments root" in normalized_soperator_onboard_help
-    assert "--worker-rollout-strategy" in normalized_soperator_onboard_help
-    assert "--service-role-rollout-strategy" in normalized_soperator_onboard_help
-    assert "Default: zero-surge" in normalized_soperator_onboard_help
-    assert "--worker-wave-groups" in normalized_soperator_onboard_help
-    assert "--worker-wave-percent" in normalized_soperator_onboard_help
-    assert "--max-parallel-worker-groups" in normalized_soperator_onboard_help
-    assert "percent-based safe-surge waves" in normalized_soperator_onboard_help
-    assert "--strategy-max-surge-count" in normalized_soperator_onboard_help
-    assert "--strategy-max-unavailable-count" in normalized_soperator_onboard_help
-    assert "--strategy-drain-timeout" in normalized_soperator_onboard_help
-    assert "Default: 0 for zero-surge / 1 for safe-surge" in (normalized_soperator_onboard_help)
-    assert "Default: 1 for zero-surge / 0 for safe-surge" in (normalized_soperator_onboard_help)
+    for removed_option in (
+        "--worker-rollout-strategy",
+        "--service-role-rollout-strategy",
+        "--worker-wave-groups",
+        "--worker-wave-percent",
+        "--max-parallel-worker-groups",
+        "--strategy-max-surge-count",
+        "--strategy-max-unavailable-count",
+        "--strategy-drain-timeout",
+    ):
+        assert removed_option not in normalized_soperator_onboard_help
     assert "--source-version 1.23.3" not in normalized_soperator_onboard_help
     assert "nebius-cxcli validate <config.yaml>" not in normalized_soperator_onboard_help
     assert "nebius-cxcli render <config.yaml>" not in normalized_soperator_onboard_help
@@ -26270,22 +26590,22 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--target" in normalized_ext_soperator_upgrade_help
     assert "--backup-dir" in normalized_ext_soperator_upgrade_help
     assert "--job-policy" in normalized_ext_soperator_upgrade_help
-    assert "--slurm-scheduling-quiesce" in normalized_ext_soperator_upgrade_help
+    assert "--slurm-scheduling-pause" in normalized_ext_soperator_upgrade_help
     assert "--cancel-job" in normalized_ext_soperator_upgrade_help
     assert "--requeue-job" in normalized_ext_soperator_upgrade_help
     assert "--job-wait-timeout" in normalized_ext_soperator_upgrade_help
     assert "--job-refresh-interval" in normalized_ext_soperator_upgrade_help
-    assert "--login-session-policy" in normalized_ext_soperator_upgrade_help
-    assert "--login-session-drain-timeout" in normalized_ext_soperator_upgrade_help
-    assert (
-        "target-ready keeps source login retirement gated" in normalized_ext_soperator_upgrade_help
-    )
-    assert "wait-active also waits for observed active SSH sessions" in (
+    assert "--login-session-policy" not in normalized_ext_soperator_upgrade_help
+    assert "--login-session-drain-timeout" not in normalized_ext_soperator_upgrade_help
+    assert "Login continuity is unconditional" in normalized_ext_soperator_upgrade_help
+    assert "exact source login Pod/node, host-key identity, shell process, and TCP connection" in (
         normalized_ext_soperator_upgrade_help
     )
-    assert "same pre-mutation boundary" in normalized_ext_soperator_upgrade_help
-    assert "Existing TCP SSH sessions remain best-effort" in normalized_ext_soperator_upgrade_help
-    assert "automatic in-place adoption does not use that hold" in (
+    assert "upgrade remains pending indefinitely" in normalized_ext_soperator_upgrade_help
+    assert "never times out or forces the SSH session closed" in (
+        normalized_ext_soperator_upgrade_help
+    )
+    assert "existing TCP sessions are not migrated between Pods" in (
         normalized_ext_soperator_upgrade_help
     )
     assert "--jail-persistent-mount" in normalized_ext_soperator_upgrade_help
@@ -26303,9 +26623,11 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--dry-run" in normalized_ext_soperator_upgrade_help
     assert "--execute" in normalized_ext_soperator_upgrade_help
     assert "--approve --no-approve" in normalized_ext_soperator_upgrade_help
-    assert "--approve-service-role-downtime" in normalized_ext_soperator_upgrade_help
-    assert "exact campaign fingerprint" in normalized_ext_soperator_upgrade_help
-    assert "Generic --approve remains required" in normalized_ext_soperator_upgrade_help
+    assert "--approve-service-role-downtime" not in normalized_ext_soperator_upgrade_help
+    assert "checkpointed mutating phase can run" in normalized_ext_soperator_upgrade_help
+    assert "Confirm approval for the accepted external upgrade plan" in (
+        normalized_ext_soperator_upgrade_help
+    )
     assert "--allow-unsupported-soperator-upgrade-path" not in (
         normalized_ext_soperator_upgrade_help
     )
@@ -26330,27 +26652,20 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         normalized_ext_soperator_upgrade_help
     )
     assert (
-        "Slurm job policy: interactive, wait-to-finish, wait-then-cancel, cancel-selected, "
+        "Slurm job policy for external in-place upgrade: preserve, interactive, "
+        "wait-to-finish, wait-then-cancel, cancel-selected, "
         "cancel-all, requeue-selected, requeue-all, requeue-hold-selected, "
         "requeue-hold-all, or fail"
     ) in normalized_ext_soperator_upgrade_help
-    assert "Default: interactive in a prompt-capable terminal" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert "Automation should pass --no-interactive --job-policy <policy>" in (
-        normalized_ext_soperator_upgrade_help
-    )
+    assert "Default: preserve" in normalized_ext_soperator_upgrade_help
     assert "Maximum wait for Slurm jobs" in normalized_ext_soperator_upgrade_help
     assert (
         "nebius-cxcli ext-soperator upgrade ./deployments/tenant/project/config.yaml "
-        "--target external-cluster --login-session-policy wait-active --execute --approve"
+        "--target external-cluster --execute --approve"
     ) in normalized_ext_soperator_upgrade_help
     assert "--job-policy wait-to-finish --job-wait-timeout 2h --dry-run" in (
         normalized_ext_soperator_upgrade_help
     )
-    assert (
-        "--worker-rollout-strategy safe-surge --worker-wave-groups 1 --job-policy wait-to-finish"
-    ) in normalized_ext_soperator_upgrade_help
     assert "The target must already be onboarded and accepted through ext-soperator onboard" in (
         normalized_ext_soperator_upgrade_help
     )
@@ -26390,39 +26705,26 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         in (normalized_ext_soperator_upgrade_help)
     )
     assert (
-        "The v3 operation journal never supplies a missing desired path"
+        "The v4 operation journal never supplies a missing desired path"
         in normalized_ext_soperator_upgrade_help
     )
     assert "rerun the idempotent onboard command only to check for and accept a later campaign" in (
         normalized_ext_soperator_upgrade_help
     )
-    assert "--worker-rollout-strategy" in normalized_ext_soperator_upgrade_help
-    assert "--service-role-rollout-strategy" in normalized_ext_soperator_upgrade_help
-    assert "--worker-wave-groups" in normalized_ext_soperator_upgrade_help
-    assert "--worker-wave-percent" in normalized_ext_soperator_upgrade_help
-    assert "--max-parallel-worker-groups" in normalized_ext_soperator_upgrade_help
-    assert "Use --worker-wave-groups instead for an exact fixed group count" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert "--strategy-max-surge-count" in normalized_ext_soperator_upgrade_help
-    assert "--strategy-max-unavailable-count" in normalized_ext_soperator_upgrade_help
-    assert "--strategy-drain-timeout" in normalized_ext_soperator_upgrade_help
-    assert "must be none and must match the accepted v3 campaign" in (
-        normalized_ext_soperator_upgrade_help
-    )
+    for removed_option in (
+        "--worker-rollout-strategy",
+        "--service-role-rollout-strategy",
+        "--worker-wave-groups",
+        "--worker-wave-percent",
+        "--max-parallel-worker-groups",
+        "--strategy-max-surge-count",
+        "--strategy-max-unavailable-count",
+        "--strategy-drain-timeout",
+    ):
+        assert removed_option not in normalized_ext_soperator_upgrade_help
     assert "--max-global-unavailable-worker-nodes" not in normalized_ext_soperator_upgrade_help
     assert "--max-global-unavailable-worker-percent" not in normalized_ext_soperator_upgrade_help
-    assert "zero-surge is the worker default and requires no spare worker quota" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert "safe-surge uses temporary worker surge capacity" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert "zero-surge is the service-role default" in (normalized_ext_soperator_upgrade_help)
-    assert "safe-surge uses temporary service-role surge capacity" in (
-        normalized_ext_soperator_upgrade_help
-    )
-    assert "Unsupported campaigns and non-v3 journals fail closed" in (
+    assert "Unsupported campaigns and non-v4 journals fail closed" in (
         normalized_ext_soperator_upgrade_help
     )
     assert "external upgrade has no support-policy override" in (

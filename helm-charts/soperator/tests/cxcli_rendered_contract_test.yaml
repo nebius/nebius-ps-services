@@ -1,7 +1,84 @@
-suite: cxcli rendered worker contract
+suite: cxcli rendered chart contract
 templates:
   - templates/slurm-cluster/slurm-cluster-cr.yaml
 tests:
+  - it: keeps the upstream-compatible controller surface singleton
+    asserts:
+      - exists:
+          path: spec.slurmNodes.controller
+      - notExists:
+          path: spec.slurmNodes.controller.ha
+      - notExists:
+          path: spec.slurmNodes.controller.highAvailability
+      - notExists:
+          path: spec.slurmNodes.controller.replicas
+      - notExists:
+          path: spec.slurmNodes.controller.replicaCount
+      - notExists:
+          path: spec.slurmNodes.controller.size
+
+  - it: rejects a controller ha value
+    set:
+      slurmNodes.controller.ha: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "slurmNodes.controller.ha is not supported; the downstream chart keeps the upstream-compatible singleton controller surface."
+
+  - it: rejects a controller highAvailability value
+    set:
+      slurmNodes.controller.highAvailability: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "slurmNodes.controller.highAvailability is not supported; the downstream chart keeps the upstream-compatible singleton controller surface."
+
+  - it: rejects a controller replicas value
+    set:
+      slurmNodes.controller.replicas: 2
+    asserts:
+      - failedTemplate:
+          errorMessage: "slurmNodes.controller.replicas is not supported; the downstream chart keeps the upstream-compatible singleton controller surface."
+
+  - it: rejects a controller replicaCount value
+    set:
+      slurmNodes.controller.replicaCount: 2
+    asserts:
+      - failedTemplate:
+          errorMessage: "slurmNodes.controller.replicaCount is not supported; the downstream chart keeps the upstream-compatible singleton controller surface."
+
+  - it: rejects a controller size value
+    set:
+      slurmNodes.controller.size: 2
+    asserts:
+      - failedTemplate:
+          errorMessage: "slurmNodes.controller.size is not supported; the downstream chart keeps the upstream-compatible singleton controller surface."
+
+  - it: renders the cxcli controller gate command and suppresses disabled probes
+    set:
+      slurmNodes:
+        controller:
+          slurmctld:
+            command:
+              - /bin/sh
+              - -ec
+            args:
+              - while :; do sleep 3600; done
+            livenessProbe: null
+            readinessProbe: null
+    asserts:
+      - equal:
+          path: spec.slurmNodes.controller.slurmctld.command[0]
+          value: /bin/sh
+      - equal:
+          path: spec.slurmNodes.controller.slurmctld.command[1]
+          value: -ec
+      - equal:
+          path: spec.slurmNodes.controller.slurmctld.args[0]
+          value: while :; do sleep 3600; done
+      - notExists:
+          path: spec.slurmNodes.controller.slurmctld.livenessProbe
+      - notExists:
+          path: spec.slurmNodes.controller.slurmctld.readinessProbe
+
   - it: fails when legacy nodeGroupMapping is passed to the chart
     set:
       nodeGroupMapping:

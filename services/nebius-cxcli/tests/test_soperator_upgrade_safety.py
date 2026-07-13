@@ -806,7 +806,7 @@ def test_external_open_metrics_legacy_baseline_without_handoff_uses_normal_remed
 def test_managed_chart_upgrade_classifies_chart_owned_deltas_as_intentional() -> None:
     before = _capture(_ManagedChartRunner("4.0.1-ps.2"))
     result = run_post_upgrade_fast_verification(
-        command_runner=_ManagedChartRunner("4.0.2-ps.3"),
+        command_runner=_ManagedChartRunner("4.0.2-ps.4"),
         target_ref="gpu",
         namespace="soperator",
         kube_context="external-context",

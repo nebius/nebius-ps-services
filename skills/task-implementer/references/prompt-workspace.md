@@ -1,8 +1,8 @@
 # Private Prompt Workspace
 
 Use this reference for the file-first intake lifecycle owned by
-`task-implementer`. The editable prompt captures intent; an immutable revision
-binds a run; the handoff owns the executable queue and mutable run status.
+`task-implementer`. Users see two Skill actions; prompt IDs, run IDs, immutable
+revisions, locks, and handoffs are private implementation state.
 
 ## Storage And Identity
 
@@ -15,45 +15,47 @@ ${CODEX_HOME:-$HOME/.codex}/task-implementer/
         └── scopes/
             └── <scope-slug>-<scope-hash>/
                 ├── workspace.json
+                ├── activity.json
                 ├── <scope-slug>-prompts.code-workspace
                 ├── prompts/
                 │   └── <created-at>--<ask-slug>.md
                 └── runs/
-                    └── <run-id>/
+                    └── <internal-run-id>/
                         ├── manifest.json
-                        ├── inputs/
-                        │   └── <revision>/prompt.md
+                        ├── steering.json
+                        ├── inputs/<revision>/prompt.md
+                        ├── execution/task-n.json
                         └── handoff.md
 ```
 
 `workspace.json` is the workspace identity record. It contains the schema,
 canonical Git root, repo-relative scope, source root, prompt root, runs root,
 project ID, and scope ID. Hash the resolved Git root so different clones remain
-isolated. Moving a checkout changes its identity and requires `workspace init`
-again in v1.
+isolated. The scope is the exact canonical project folder passed to
+`workspace init`, or the exact current directory when omitted. Relative and
+absolute references to the same folder must resolve to the same workspace.
 
 Reject storage that resolves inside any Git worktree or Git metadata directory.
-Create managed directories as `0700` and files as `0600` on POSIX systems. Reject symlinks,
-path traversal, path escapes, unsafe modes, malformed state, and moved source
-roots. Treat SHA-256 as drift detection, not encryption.
+Create managed directories as `0700` and files as `0600` on POSIX systems.
+Reject symlinks, path traversal, path escapes, unsafe modes, malformed state,
+and moved source roots. Treat SHA-256 as drift detection, not encryption.
 
 ## VS Code Workspace
 
-Generate one saved multi-root workspace per repository scope:
+Generate one saved multi-root workspace per project scope:
 
 1. `CODE`: the canonical source scope. Keep it first for extensions that use
    the first root when they do not support multi-root workspaces.
 2. `PROMPTS`: the private flat prompt directory.
 
-Treat the saved workspace as editor convenience only. Skill actions must use
-explicit workspace manifest, repository, scope, prompt, run, and handoff paths;
-do not depend on an editor's multi-root semantics.
+Initialization opens the saved workspace when VS Code is available. Editor
+launch failure is non-fatal and must not roll back valid private state.
 
 Generate exactly one manual workspace task named
-`Task Implementer: New Prompt`. It must be a VS Code `process` task, pass
-arguments as an array, and use one `promptString` input for the short ask. It
-must not auto-run, change Workspace Trust, install an extension, start Codex,
-or submit prompt content.
+`Task Implementer: New Prompt`. It is an editor convenience for additional
+prompts. It must be a VS Code `process` task, pass arguments as an array, and
+use one `promptString` input for the short ask. It must not auto-run, change
+Workspace Trust, install an extension, start Codex, or submit prompt content.
 
 ## Prompt Files
 
@@ -69,210 +71,353 @@ YYYY-MM-DD_HHmm--<slug>.md
 
 Normalize the short ask to lowercase ASCII, join at most eight words with
 hyphens, retain at most 60 slug characters, and fall back to `prompt`. Resolve
-collisions with `--02`, `--03`, and so on. Never rename a prompt automatically
-after edits. Its `prompt_id` is the durable identity and the filename date is
-the creation date.
-
-A manual rename preserves identity only when exactly one managed prompt has
-the same bound bytes and prompt ID. Missing content is `PROMPT_DRIFT`; duplicate
-prompt IDs are `PROMPT_CONFLICT`, even when their contents differ.
+collisions with `--02`, `--03`, and so on. The filename date is creation
+metadata only. Never rename a prompt, rewrite it, or deliberately change its
+mtime during initialization, submission, ordering, or retry.
 
 Use `assets/prompt-template.md`. Require strict scalar frontmatter with schema
-`task-implementer/prompt-v1`, a unique `prompt-<uuid>` ID, a title, and a
-timezone-aware creation timestamp. Before submission, require non-empty `Ask`,
-`Outcome`, `Acceptance criteria`, and `Verification` sections. `Context`,
-`Non-goals`, and `References` may be empty. Reject unresolved template
-instructions, duplicate frontmatter keys or prompt IDs, invalid UTF-8, NUL
-bytes, files larger than 256 KiB, symlinks, and paths outside the managed prompt
-root.
+`task-implementer/prompt-v1`, an internally generated unique `prompt-<uuid>`
+identity, a title, and a timezone-aware creation timestamp. The user never
+supplies that identity to a Skill command. Before submission, require non-empty
+`Ask`, `Outcome`, `Acceptance criteria`, and `Verification` sections. `Context`,
+`Non-goals`, `References`, and `Steering` may be empty.
+
+Users may append clarifications, corrections, priorities, removals, or new
+requirements under `Steering` without IDs or timestamps, then repeat the same
+`run` command. Edits elsewhere remain valid; the complete prompt is current
+desired state. The Skill never marks steering as consumed inside the editable
+file.
+
+Reject unresolved template instructions, duplicate frontmatter keys or prompt
+identities, invalid UTF-8, NUL bytes, files larger than 256 KiB, non-Markdown
+inputs, symlinks, and paths outside the managed prompt root. A manually renamed
+prompt preserves identity only when it is the sole managed prompt with those
+bound bytes and identity.
 
 Prompts are private local files, not encrypted secret stores. Do not put
 credentials, tokens, private keys, customer data, or confidential copied
-material in them. The Skill may read and snapshot a source prompt but must not
-edit it.
+material in them. The Skill may validate and snapshot a source prompt but must
+not edit it.
 
-## Mechanical Helper
+## Public Skill Actions
+
+```text
+$task-implementer workspace init [project-folder]
+$task-implementer run <prompt-path-or-unique-filename>
+```
+
+There are no public creation, listing, preparation, continuation,
+reconciliation, steering, run-ID, or new-run actions. The editor task creates
+additional prompts. The same `run` command performs every safe submission,
+steering, retry, and continuation transition.
+
+## Internal Mechanical Helper
 
 The standard-library-only helper is `scripts/prompt_workspace.py`. It manages
 private files but never decomposes tasks, starts Codex, edits product code, or
-prints prompt bodies.
+prints prompt bodies. Its subcommands are Skill implementation details, not
+additional public actions.
 
-Use its public commands through absolute paths resolved from the installed
-Skill directory:
+For initialization, the Skill invokes:
 
 ```bash
 python3 <skill-dir>/scripts/prompt_workspace.py init \
-  --repo-root <git-root> --scope <repo-relative-scope> --json
-
-python3 <skill-dir>/scripts/prompt_workspace.py new \
-  --workspace <workspace.json> --ask '<short ask>' --json
-
-python3 <skill-dir>/scripts/prompt_workspace.py list \
-  --workspace <workspace.json> --json
-
-python3 <skill-dir>/scripts/prompt_workspace.py snapshot \
-  --workspace <workspace.json> --prompt <prompt.md> --json
-
-python3 <skill-dir>/scripts/prompt_workspace.py verify \
-  --workspace <workspace.json> --run-id <run-id> --json
+  [<project-folder>] --json
 ```
 
-Add `--open` only for explicit `workspace init` or `workspace new` requests.
-Use `list --query <text>` or `list --date YYYY-MM-DD` for discovery. Human and
-JSON output report creation, modification, last-submission, run status, prompt
-identity, title, and path metadata, never prompt bodies.
+Omit the project folder to use the helper process's exact current directory.
+Initialization returns the canonical workspace and editor paths, starter
+creation result, and submission-ordered prompt metadata. Opening is enabled by
+default; internal `--no-open` suppresses it only for validation or automation.
 
-For reconciliation, snapshot into an unfinished run:
+For every user `run`, the Skill invokes the private intake router:
 
 ```bash
-python3 <skill-dir>/scripts/prompt_workspace.py snapshot \
-  --workspace <workspace.json> --prompt <prompt.md> \
-  --run-id <run-id> --json
+python3 <skill-dir>/scripts/prompt_workspace.py intake \
+  <prompt-path-or-unique-filename> --project-path <current-project> \
+  --internal-json
 ```
 
-For an explicit exact rerun after completion, use `--new-run`. Do not combine
-`--run-id` and `--new-run`.
+The router validates prompt ownership and content before mutation, acquires the
+scope lock, verifies internal state, records accepted activity, and returns one
+private action: `new`, `continue`, `reconcile`, `reconcile_planning`,
+`steering_queued`, or `done`. `steering_queued` also returns user outcome
+`STEERING_QUEUED_AFTER_TASK`. Explicit internal machine output may contain IDs
+and private paths needed by the agent; never reproduce that payload in
+user-facing output. Ordinary `--json` and human output omit it.
 
-## Ownership Model
+After queue creation or reconciliation, the Skill owns these private execution
+transitions:
+
+```bash
+python3 <skill-dir>/scripts/prompt_workspace.py plane-claim \
+  --workspace <workspace.json> --run-id <internal-run-id> --json
+
+python3 <skill-dir>/scripts/prompt_workspace.py plane-authorize \
+  --workspace <workspace.json> --run-id <internal-run-id> --json
+
+python3 <skill-dir>/scripts/prompt_workspace.py plane-replan \
+  --workspace <workspace.json> --run-id <internal-run-id> --json
+
+python3 <skill-dir>/scripts/prompt_workspace.py plane-checkpoint \
+  --workspace <workspace.json> --run-id <internal-run-id> --json
+
+python3 <skill-dir>/scripts/prompt_workspace.py steering-resolve \
+  --workspace <workspace.json> --run-id <internal-run-id> \
+  --revision <internal-revision> \
+  --disposition applied|blocked|no_effect --json
+
+python3 <skill-dir>/scripts/prompt_workspace.py spec-inspect \
+  --workspace <workspace.json> --json
+```
+
+`plane-replan` is valid only for the same session's clean, un-authorized
+planning plane. It rebinds the same task to the latest immutable revision,
+clears required plan fields, and requires reconciliation before authorization.
+It never changes an implementation or stopped plane. `steering-resolve`
+changes only mutable disposition state and cannot mark a revision applied or
+no-effect until the handoff binds it.
+
+`spec-inspect` validates both exact project-relative specification paths,
+managed markers, schemas, stable IDs, mappings, Agentic SDLC ownership,
+private-state redaction, and user-owned envelopes. It returns only
+repo-relative paths, managed-region digests, IDs, mappings, and next IDs for
+the locked plan and checkpoint.
+
+These commands use runtime-provided `CODEX_THREAD_ID` automatically and persist
+only SHA-256 fingerprints. This is a cooperative correlation guard, not a
+cryptographic identity. Internal tests may inject a session identifier; users
+never do. When a previous session was interrupted, the Skill may add private
+`--recover --confirmed-recovery-worktree-sha256 <digest>` to `plane-claim` only
+after explicit confirmation that the prior writer is gone and after reviewing
+the exact worktree digest and changed paths against the locked task allowlist.
+Without digest-bound confirmation, recovery fails with `HUMAN_INPUT_REQUIRED`
+and cannot transfer ownership.
+
+The filesystem lock serializes each transition. The execution plane then keeps
+the selected task exclusively owned while the filesystem lock is released for
+planning and product implementation. Another session receives `WORKSPACE_BUSY`;
+after checkpointing, every session fingerprint that participated in a
+different completed task in the scope receives `FRESH_SESSION_REQUIRED`,
+including after recovery or an intervening fresh session.
+
+Internal `new`, `list`, `snapshot`, `verify`, and execution-plane helper
+operations may remain for editor integration, state construction, recovery,
+validation, and tests. Users must not be asked to call them. They must preserve
+the same path, permission, symlink, digest, lock, and redaction checks.
+
+## Initialization Contract
+
+`workspace init` is safe to repeat:
+
+1. Resolve and validate the exact project folder, Git root, and repo-relative
+   scope.
+2. Create or verify the private directory tree and `workspace.json`.
+3. Regenerate only derived VS Code workspace/task metadata when repair is
+   needed.
+4. Under the scope lock, create one starter prompt only when no managed prompt
+   exists.
+5. Never delete, rename, rewrite, duplicate, or touch prompts, revisions, run
+   history, or handoffs.
+6. Return workspace paths and the newest-first prompt table.
+
+Initialization must leave the Git worktree unchanged. Paths containing spaces
+and equivalent relative/absolute project paths are supported.
+
+## Prompt Resolution
+
+`run` accepts:
+
+- an absolute path to one prompt in the current workspace; or
+- a basename that matches exactly one prompt in the current workspace.
+
+Resolve the current workspace from the exact current project folder. Fail
+before state changes when initialization is missing, a basename is ambiguous,
+the prompt belongs to another workspace, a path traverses or escapes, a file is
+a symlink, permissions are unsafe, the extension is not `.md`, or content is
+invalid. Do not accept internal IDs as prompt references.
+
+## Internal Ownership Model
 
 ```text
-editable prompt with stable prompt_id
-    -> one or more historical runs
+editable prompt with stable internal identity
+    -> one or more historical internal runs
         -> one or more immutable revisions
-            -> one bound revision for execution state
+            -> ordered private steering dispositions
+            -> one bound execution revision
                 -> one handoff queue containing task-1..task-n
+                    -> one execution plane per claimed task
 ```
 
 There is no prompt-to-task 1:1 mapping. The manifest is append-only revision
-metadata: identity, source filename, exact digest, revision path, and snapshot
-time. Do not store mutable run status in it. The handoff is the execution truth
-for queue order, active task, run status, checkpoints, and reconciliation.
+metadata: internal identity, source filename, exact digest, revision path, and
+snapshot time. Do not store mutable run status in it. `steering.json` records
+each accepted revision at most once with `pending`, `applied`, `blocked`, or
+`no_effect` disposition; it never stores prompt content. The handoff is the
+execution truth for queue order, active task, run status, checkpoints,
+requirement/design mappings, reconciliation overrides, and `Last invoked at`.
+Each `execution/task-n.json` is the
+durable ownership and phase record for exactly one task. It binds the task,
+revision, runtime session participant history, claim-time worktree digest,
+locked plan and queue digests, immutable stopped-checkpoint digest, timestamps,
+recovery evidence, and mandatory stop state.
+
+Before claiming any next task, validate every stopped plane against its
+completed task, globally unique checkpoint index, exact commit evidence, and
+checkpoint digest. Use the handoff's unique `Run.Last completed task` to select
+the immediate predecessor; second-resolution timestamps are activity metadata,
+not execution order.
+
+For plane-backed runs, require a one-to-one index between `done` tasks,
+populated checkpoints, and stopped planes. Reject orphan checkpoints and
+fabricated completed tasks. Legacy completed runs without execution planes
+remain readable and non-destructive but do not gain fabricated plane history.
 
 The handoff's `## Run` section binds execution to one manifest revision and
-digest. Later checkpoint sections may repeat revision evidence; verification
-must parse the binding only from `## Run`. A newly appended reconciliation
-revision is not executable until the handoff is rebound.
+digest. Verification parses the binding only from `## Run`. An appended
+revision is not executable until reconciliation atomically rebinds the handoff.
 
-`run` and `continue` read only the immutable bound snapshot recorded in the
-handoff. They may compare the editable source for drift, but source edits never
-alter an active run implicitly.
+Implementation reads only the immutable bound snapshot. It may compare the
+editable source for drift, but source edits never rewrite an existing snapshot
+or completed task.
 
-## Lifecycle
+## Managed Specification Documents
 
-### `workspace init <scope>`
+The only committed specification paths are relative to the initialized source
+scope:
 
-Resolve the Git root and scope, create or verify the private workspace, and
-return its explicit paths. Opening the generated VS Code workspace is optional
-and only occurs when the user requests it.
+```text
+docs/requirements.md
+docs/design.md
+```
 
-### `workspace new "<short ask>"`
+When absent, create compact documents from the managed-region assets. When a
+generic document exists, append exactly one managed region and preserve every
+existing byte as its user-owned envelope. On later updates, replace only the
+managed body and preserve the prefix, suffix, Unicode, and newline style.
 
-Resolve the workspace for the current repository scope, create one prompt
-atomically from the template, return its path, and optionally open it. The
-short ask is used once for its title and deterministic filename.
+Use schemas `task-implementer/requirements-v1` and
+`task-implementer/design-v1`, IDs `TI-REQ-nnn` and `TI-DES-nnn`, and monotonic
+scope-wide counters recovered from committed managed regions. Never renumber or
+delete IDs. Mark removed requirements `superseded`; append corrective designs
+instead of rewriting implemented history.
 
-### `prepare <prompt-path>`
+Fail before repository edits when a file or `docs` ancestor is a symlink, a
+path escapes the source scope, a document is invalid UTF-8, markers are absent
+on only one side, duplicated, or reversed, IDs or mappings are invalid, or a
+managed body contains private prompt/run/revision paths or identities. Exact
+Agentic SDLC frontmatter schemas produce `SPEC_OWNER_CONFLICT`; do not share
+ownership or silently select alternate paths.
 
-1. Resolve and verify the owning workspace and prompt.
-2. Snapshot the exact prompt bytes. A normal first submission creates a new run
-   and `r0001`.
-3. Create `handoff.md` from the handoff asset without changing product files.
-4. Inspect repository instructions, code, tests, docs, and current Git state.
-5. Build a reviewable dependency-first `task-1..task-n` queue from the bound
-   snapshot and repository evidence.
-6. Record status `prepared`, prompt identity, source path, bound revision,
-   digest, manifest path, and reconciliation state.
-7. Stop. Preparing never approves or implements a task.
+## Single Run Transition
 
-The mechanical snapshot exists before semantic queue preparation. Until a
-valid handoff is written, list and verify report `snapshot_only`, not
-`prepared`. If preparation is interrupted at that boundary, a repeated
-same-prompt, same-digest `prepare` may resume the verified snapshot-only run.
-It must not create another revision or resume a run for another prompt.
+After validation and lock acquisition, route the prompt as follows:
 
-### `run <run-id>`
+- No historical run: create an immutable revision and new internal run, build
+  the queue, and claim `task-1` in phase `planning`.
+- Unchanged unfinished prompt: verify current evidence and claim the next
+  dependency-ready task, or resume the already claimed task.
+- Edited unfinished prompt: append an immutable revision exactly once,
+  record it as pending steering, reconcile requirements and pending tasks while
+  preserving completed work and stable IDs, resolve processed revisions, and
+  claim the next safe task in `planning`.
+- Edited same-owner planning task with an unchanged clean baseline: append the
+  revision, privately rebind the same task, clear its unfinished plan,
+  reconcile it, and authorize only after resolving the disposition.
+- Edited planning task owned by another session, or any edited implementation
+  task: append the revision and disposition without rebinding the handoff,
+  plane, plan, queue, or checkpoint. Return
+  `STEERING_QUEUED_AFTER_TASK` and apply it after the task stops.
+- Multiple pending edits: append each digest that differs from the immediately
+  preceding revision. Preserve A-B-A as three historical states; an unchanged
+  retry appends nothing. Reconcile pending events in order toward the latest
+  desired state.
+- Edited prompt contradicts completed work or leaves an ambiguous contract:
+  update accepted activity, then stop with `HUMAN_INPUT_REQUIRED` before
+  product edits.
+- Interrupted task: resume that task or reconstruct the missing checkpoint
+  from verified commit evidence. Never duplicate a revision, edit, or commit.
+- Completed unchanged prompt: update activity and return `ALREADY_COMPLETE`
+  without product changes.
+- Completed edited prompt: create a new internal run and implement its first
+  task.
+- Another prompt has unfinished work in the same scope: fail closed with the
+  active prompt path. Do not expose its run ID.
 
-Verify the run and exact bound revision, confirm the queue is `prepared`, then
-implement exactly the first pending task through the per-task context, design,
-plan, implementation, validation, review, fix, commit, and checkpoint loop.
-Stop after saving the handoff.
+If an interrupted reconciliation already appended the same latest digest,
+reuse its revision and disposition. A later different edit may append another
+pending revision; never discard or reorder earlier events. Formatting-only
+changes may resolve as `no_effect`, rebind execution truth, and make no task,
+document, product, or commit change.
 
-### `continue <run-id>`
+## Activity Ordering And Output
 
-In a fresh session, verify the handoff and immutable bound revision, then
-implement exactly the next pending task. Never implement two tasks in one
-session.
+Every validated, lock-acquired `run` invocation records a timezone-aware
+`last_invoked_at` in mutable handoff/activity state. Accepted continuation,
+queued steering, reconciliation, blocked, and completed-no-op invocations all
+move the prompt to the top. Validation failures and lock-busy calls do not reorder prompts.
 
-### `reconcile <run-id> <prompt-path>`
+Sort output by:
 
-Require an unfinished run with no task currently being edited. Snapshot the
-changed prompt as the next immutable revision, inspect its differences and any
-relevant source drift, and propose queue changes without product edits.
+1. `last_invoked_at`, newest first;
+2. prompt creation time, newest first;
+3. canonical prompt path for deterministic ties.
 
-- Never rewrite completed tasks or renumber existing task IDs.
-- Preserve a pending task only when its identity and completion contract are
-  unchanged.
-- Mark changed or removed pending tasks `superseded`.
-- Append replacements and new work using the next unused task IDs.
-- Bind the handoff to the new revision only after recording the proposal and
-  reconciliation summary.
-- Return the run to `prepared` and stop before implementation.
+Draft prompts without runs use creation time as their activity fallback. Both
+initialization and run output include only:
 
-If the revision append succeeds but handoff update is interrupted, verification
-reports `reconciliation_pending`: the manifest latest revision is newer than
-the handoff binding. Retrying reconciliation with the same source resumes that
-existing revision instead of creating another. A different source edit or a
-`running` handoff fails closed until the pending state is resolved.
+- last invocation
+- status
+- title
+- prompt path
 
-## Resubmission And Drift
+Never output prompt bodies, internal prompt IDs, run IDs, revision IDs, digests,
+snapshot paths, manifests, handoffs, or lock paths as list metadata.
 
-- Revisions are created only by submission, not on every save.
-- If any run in the scope is unfinished, ordinary `prepare` returns
-  `ACTIVE_RUN_EXISTS`; reconcile that run instead. The sole exception is
-  idempotent recovery of the same prompt and digest from a verified
-  `snapshot_only` run that has no handoff.
-- An unchanged submission returns `NO_CHANGES`.
-- After a run is complete, an edited prompt creates a new run linked to the
-  same `prompt_id`.
-- An exact rerun after completion requires explicit `prepare --new-run`.
-- Source edits after preparation do not mutate the run. `verify` reports
-  `PROMPT_DRIFT`; `run` and `continue` remain bound to the snapshot.
-- Missing, malformed, or unresolved editable source content is also
-  non-binding `PROMPT_DRIFT` after a valid run exists. It never invalidates the
-  immutable bound snapshot.
-- Retain run history until the user explicitly deletes it.
-- Enforce one writer across the entire scope, not merely one writer per
-  prompt.
+## Stable Failure Classification
 
-## Failure Classification
-
-Surface the helper's stable error token and stop on validation or state
-failures:
+Surface the helper's stable token and stop on unsafe input or state:
 
 - `REPO_ROOT_INVALID`, `SCOPE_INVALID`, `WORKSPACE_NOT_FOUND`,
   `WORKSPACE_PATH_INVALID`, `WORKSPACE_STATE_INVALID`, or
   `WORKSPACE_PERMISSION_INVALID`: workspace identity, path, schema, or
   permissions are unsafe.
-- `PROMPT_INPUT_INVALID` or `PROMPT_CONFLICT`: the prompt contract, content,
-  path, or identity is invalid.
-- `ACTIVE_RUN_EXISTS`: the scope already has unfinished work; use reconcile,
-  or resume only a verified same-input `snapshot_only` preparation.
-- `NO_CHANGES`: no revision or new run was created.
-- `PROMPT_DRIFT`: editable source differs from the latest bound revision.
-- `WORKSPACE_BUSY`: another scope writer holds the workspace lock.
-- `RUN_STATE_INVALID`: run, manifest, revision, digest, or handoff state is
-  malformed or incompatible with the requested transition.
+- `PROMPT_INPUT_INVALID` or `PROMPT_CONFLICT`: prompt path, type, content,
+  uniqueness, or identity is invalid.
+- `ACTIVE_RUN_EXISTS`: another prompt owns unfinished scope work; show only its
+  prompt path.
+- `PROMPT_DRIFT`: immutable binding and editable source differ where the
+  requested internal transition cannot safely proceed.
+- `WORKSPACE_BUSY`: another process holds the scope lock; do not reorder.
+- `RUN_STATE_INVALID`: manifest, revision, digest, or handoff is malformed or
+  incompatible with the transition.
+- `EXECUTION_STATE_INVALID`: task queue or execution-plane state is malformed,
+  unsafe, or inconsistent.
+- `SESSION_ID_UNAVAILABLE`: no runtime session identifier is available for the
+  cooperative fresh-session guard.
+- `PLAN_REQUIRED`: required task planning fields are incomplete.
+- `PLAN_LOCKED`: the authorized plan changed before checkpointing.
+- `CHECKPOINT_REQUIRED`: validation, review, commit, next-task, or session-stop
+  evidence is incomplete or inconsistent.
+- `FRESH_SESSION_REQUIRED`: the completed task's session attempted to claim
+  another task.
+- `HUMAN_INPUT_REQUIRED`: reconciliation would contradict completed work or
+  requires a consequential decision.
+- `STEERING_QUEUED_AFTER_TASK`: accepted steering is durably pending while an
+  active execution plane remains unchanged.
+- `SPEC_OWNER_CONFLICT`: Agentic SDLC owns an exact specification path.
+- `SPEC_CONFLICT`: a specification path, marker, ID, mapping, managed body, or
+  user-owned envelope is unsafe or inconsistent.
 
-Do not repair malformed state by guessing or silently replacing it. Record the
-failure in the handoff when one exists, then request the minimum safe user
-action.
+Do not repair malformed state by guessing or silently replacing it. Record a
+failure in the handoff only after the invocation has passed validation and lock
+acquisition.
 
 ## Sandbox Access
 
 Private state may be outside the active workspace-write root. Prefer the
-opt-in `config-codex` setup contract when the user wants persistent access. Do
-not weaken an existing sandbox or approval policy. When access is missing,
-report this exact per-invocation remediation:
+opt-in `config-codex` setup contract for persistent access. Do not weaken an
+existing sandbox or approval policy. When access is missing, report:
 
 ```bash
 codex --add-dir "${CODEX_HOME:-$HOME/.codex}/task-implementer"
@@ -287,5 +432,4 @@ Do not create repository-local prompt storage as a fallback.
 - [VS Code input variables](https://code.visualstudio.com/docs/reference/variables-reference)
 - [VS Code Workspace Trust](https://code.visualstudio.com/docs/editing/workspaces/workspace-trust)
 - [Codex IDE extension](https://developers.openai.com/codex/ide)
-- [Codex Skills](https://developers.openai.com/codex/skills)
-- [Codex custom prompts](https://learn.chatgpt.com/docs/custom-prompts)
+- [OpenAI Build Skills](https://learn.chatgpt.com/docs/build-skills#optional-metadata)

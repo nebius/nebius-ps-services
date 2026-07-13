@@ -764,6 +764,10 @@ slurmNodes:
         periodSeconds: 60
         successThreshold: 1
         failureThreshold: 5
+      # Optional Jail Upgrade gate. cxcli sets this together with command/args
+      # while the target controller is staged, then restores the configured
+      # controller process and probes for ownership handoff.
+      readinessProbe: null
       port: 6817
       resources:
         cpu: "1000m"
@@ -1494,8 +1498,9 @@ priorityClasses:
 # /run/nvidia/driver so Soperator tools and the shared Slurm jail can resolve
 # libcuda.so.1, libnvidia-ml.so.1, and the host nvidia-smi binary
 # consistently. When this is enabled, GPU NodeSets receive the chart-owned
-# nvidia-driver-root hostPath mount plus an init guard that rejects stale or
-# corrupt shared-jail driver library state before slurmd starts.
+# read-only nvidia-driver-root hostPath mount plus a validation-only init guard
+# that requires cxcli's passive-rootfs evidence marker and rejects stale,
+# mixed-driver, or corrupt shared-jail state before slurmd starts.
 gpuDriverJail:
   enabled: true
 

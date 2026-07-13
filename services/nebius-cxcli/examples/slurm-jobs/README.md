@@ -9,18 +9,58 @@ These samples test scheduler allocation, job visibility, cancellation, requeue,
 wait, and interactive upgrade-policy behavior. They are not GPU benchmarks,
 NCCL tests, storage tests, or application performance tests.
 
-## Copy To The Login Node
+## Run On The Login Node
 
-From the local checkout root, let the submitter create `/root/testjobs`, copy
-the example files there, and open an SSH session already landed in that
-directory:
+From the local checkout root, `--login` stages this directory on the login node
+and runs the same submit or watch operation there. The default staging path is
+a unique `/root/testjobs-<UTC timestamp>-<process ID>` directory created with
+mode `0700`:
 
 ```bash
 ./examples/slurm-jobs/submit-job-test.sh --login <login-external-ip>
 ```
 
-Run the submit commands below from that login-node SSH session so `sbatch` can
-reach the cluster's Slurm controller.
+Pass the same submission controls for a denser preservation proof:
+
+```bash
+./examples/slurm-jobs/submit-job-test.sh \
+  --login <login-external-ip> \
+  --count 2 \
+  --heartbeat-seconds 2
+```
+
+Use an explicit, not-yet-existing staging path when you need a predictable
+location:
+
+```bash
+./examples/slurm-jobs/submit-job-test.sh \
+  --login <login-external-ip> \
+  --login-remote-dir /root/my-private-testjobs \
+  --count 2
+```
+
+`--login-remote-dir` requires `--login`. The path must be a child of `/root`,
+use only letters, digits, `.`, `_`, `/`, and `-`, and must not contain `.` or
+`..` path segments. Remote staging fails if the path already exists, preventing
+the helper from changing permissions or overwriting files in an existing
+directory. The helper does not delete staged files, so retain them for upgrade
+evidence or remove them explicitly after the campaign.
+
+To stage the examples and open a long-lived interactive session without
+submitting or watching jobs, add `--login-shell`:
+
+```bash
+./examples/slurm-jobs/submit-job-test.sh \
+  --login <login-external-ip> \
+  --login-shell
+```
+
+The login target is intentionally limited to a DNS name or IPv4 address and
+the remote account is fixed to `root`; arbitrary SSH options are not accepted.
+Both `--login-shell` and `--login-remote-dir` fail unless `--login` is present.
+With `--login`, `--dry-run` prints the SSH, SCP, and remote execution commands
+without connecting to the login node. The printed remote command represents a
+real submission and therefore does not include `--dry-run` itself.
 
 ## Submit GPU Jobs
 
@@ -69,6 +109,20 @@ default. Change the count and duration with:
 ./submit-job-test.sh --part-type cpu --partition cpu --count 10 --run-minutes 60 --wall-minutes 65
 ```
 
+## Heartbeat Evidence
+
+Both templates write timestamped heartbeats every 30 seconds by default. For a
+disposable upgrade campaign, use two-second heartbeats so an interruption is
+visible with a narrow evidence gap:
+
+```bash
+./submit-job-test.sh --run-minutes 60 --wall-minutes 65 --heartbeat-seconds 2
+```
+
+`--heartbeat-seconds` must be a positive integer. The helper exports it to the
+batch job as `HEARTBEAT_SECONDS`; it changes evidence frequency, not the Slurm
+job's requested wall time.
+
 ## Repeated Jobs And Array Mode
 
 The default submit mode is `loop`, which sends one `sbatch` command per job and
@@ -110,6 +164,15 @@ subject to the cluster's Slurm policy:
 Pass Slurm accounting options when your cluster requires them:
 
 ```bash
+./submit-job-test.sh --qos normal --account my-account
+```
+
+The helper explicitly passes `sbatch --no-requeue` by default so preservation
+jobs do not inherit a cluster-level `JobRequeue=1` default. Use `--requeue` only
+for disposable action probes that are intended to test requeue behavior; that
+option replaces `--no-requeue` with `sbatch --requeue`:
+
+```bash
 ./submit-job-test.sh --qos normal --account my-account --requeue
 ```
 
@@ -122,19 +185,18 @@ with `--output-dir`:
 
 ## Upgrade Policy Demo
 
-After submitting jobs, run the Soperator upgrade workflow with interactive job
-policy selection so the operator can choose what to do with each affected
-running job:
+After submitting jobs, run the external Soperator upgrade and keep the separate
+jobs screen open when the operator needs to act during a controller gap:
 
 ```bash
-nebius-cxcli soperator upgrade CONFIG_YAML --target TARGET \
-  --to-chart-version TARGET_VERSION \
-  --job-policy interactive
+nebius-cxcli ext-soperator upgrade CONFIG_YAML --target TARGET --execute --approve
+nebius-cxcli ext-soperator jobs CONFIG_YAML --target TARGET
 ```
 
-Other job policies can still be selected for non-interactive runs when that is
-the desired test. The smoke jobs exit non-zero on `TERM` or `INT`, so
-interruption, cancellation, and requeue behavior are visible in Slurm output.
+The smoke jobs exit non-zero on `TERM` or `INT`, so interruption, cancellation,
+and requeue behavior are visible in Slurm output. Keep at least one dedicated
+preservation job out of cancel/requeue tests; use separate probe jobs when
+exercising the TUI action journal intentionally.
 
 ## Watch During Upgrade
 
@@ -146,9 +208,11 @@ a timestamped proof stream from Slurm's live queue:
 ```
 
 The watcher matches `sop-*-job-test*` job names by default, polls `squeue`, and
-prints each observed job ID, state, elapsed time, remaining time, partition,
-nodes, and name until the observed jobs finish and leave the queue. Scope the
-proof to known IDs when needed:
+captures each visible job's exact JobID, submit time, start time, allocation,
+and `Restarts` value through `scontrol` before the upgrade. Every later sample
+must keep that lineage unchanged. Brief controller-RPC visibility gaps are
+reported and retried without discarding the last baseline. Scope the proof to
+known IDs when needed:
 
 ```bash
 ./submit-job-test.sh --watch-jobs --watch-job-ids 12345,12346
@@ -156,5 +220,7 @@ proof to known IDs when needed:
 
 Use `--watch-duration <seconds>` only when you want an explicit maximum watch
 window, and use `--watch-once` for a single snapshot. If `sacct` is available,
-the watcher also prints final accounting evidence for observed jobs before
-reporting pass or fail.
+the watcher requires the final allocation record to match the pre-upgrade
+baseline with `Restarts=0`, `State=COMPLETED`, and `ExitCode=0:0`. A job that
+finishes before the watcher captures its baseline is not accepted as continuity
+evidence.

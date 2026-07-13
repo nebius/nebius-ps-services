@@ -276,61 +276,61 @@ def test_generator_profile_payload_records_scope_contracts_and_compatibility_axe
     assert payload["profile_groups"]["v4-to-target"]["compatibility_axes"]["node_label_layout"][
         "source_role_label_keys"
     ] == ["slurm.nebius.ai/nodeset-name"]
-    v1_quiesce = payload["profile_groups"]["legacy-v1-to-target"]["execution_contract"][
-        "source_controller_quiesce"
+    v1_pause = payload["profile_groups"]["legacy-v1-to-target"]["execution_contract"][
+        "source_controller_pause"
     ]
-    assert v1_quiesce["required_before_target_compute_reconcile"] is True
+    assert v1_pause["required_before_target_compute_reconcile"] is True
     assert {
         "kind": "MutatingWebhookConfiguration",
         "name": "soperator-controller-mutating-webhook-configuration",
-    } in v1_quiesce["admission_webhooks"]
+    } in v1_pause["admission_webhooks"]
     assert {
         "kind": "ValidatingWebhookConfiguration",
         "name": "soperator-controller-validating-webhook-configuration",
-    } in v1_quiesce["admission_webhooks"]
+    } in v1_pause["admission_webhooks"]
     assert {
         "kind": "MutatingWebhookConfiguration",
         "name": "slurm-operator-mutating-webhook-configuration",
-    } in v1_quiesce["admission_webhooks"]
+    } in v1_pause["admission_webhooks"]
     assert {
         "kind": "ValidatingWebhookConfiguration",
         "name": "slurm-operator-validating-webhook-configuration",
-    } in v1_quiesce["admission_webhooks"]
+    } in v1_pause["admission_webhooks"]
     assert {
         "namespace": "soperator-system",
         "name": "soperator-controller-manager",
         "release_name": "soperator-controller",
         "chart_prefix": "helm-soperator",
-    } in v1_quiesce["deployments"]
+    } in v1_pause["deployments"]
     assert {
         "namespace": "soperator",
         "release_name": "slurm-operator",
         "chart_prefix": "slurm-operator",
-    } in v1_quiesce["deployments"]
-    v2_quiesce = payload["profile_groups"]["v2-to-target"]["execution_contract"][
-        "source_controller_quiesce"
+    } in v1_pause["deployments"]
+    v2_pause = payload["profile_groups"]["v2-to-target"]["execution_contract"][
+        "source_controller_pause"
     ]
-    assert v2_quiesce["required_before_target_compute_reconcile"] is True
+    assert v2_pause["required_before_target_compute_reconcile"] is True
     assert {
         "kind": "MutatingWebhookConfiguration",
         "name": "soperator-controller-mutating-webhook-configuration",
-    } in v2_quiesce["admission_webhooks"]
+    } in v2_pause["admission_webhooks"]
     assert {
         "kind": "ValidatingWebhookConfiguration",
         "name": "soperator-controller-validating-webhook-configuration",
-    } in v2_quiesce["admission_webhooks"]
+    } in v2_pause["admission_webhooks"]
     assert all(
         webhook["name"] != "slurm-operator-mutating-webhook-configuration"
-        for webhook in v2_quiesce["admission_webhooks"]
+        for webhook in v2_pause["admission_webhooks"]
     )
     assert all(
         deployment.get("release_name") != "slurm-operator"
-        for deployment in v2_quiesce["deployments"]
+        for deployment in v2_pause["deployments"]
     )
-    v3_quiesce = payload["profile_groups"]["v3-to-target"]["execution_contract"][
-        "source_controller_quiesce"
+    v3_pause = payload["profile_groups"]["v3-to-target"]["execution_contract"][
+        "source_controller_pause"
     ]
-    assert v3_quiesce == v2_quiesce
+    assert v3_pause == v2_pause
     release = payload["releases"][1]
     assert release["chart_path"] == "helm/soperator"
     assert release["chart_name"] == "helm-soperator"

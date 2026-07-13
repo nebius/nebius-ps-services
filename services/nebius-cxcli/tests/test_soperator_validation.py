@@ -57,7 +57,7 @@ def _standard_gpu_nodeset_payload() -> dict[str, object]:
                                 {
                                     "name": "nvidia-driver-root",
                                     "mountPath": "/run/nvidia/driver",
-                                    "readOnly": False,
+                                    "readOnly": True,
                                     "volumeSource": {
                                         "hostPath": {
                                             "path": "/",
@@ -1923,7 +1923,7 @@ def test_soperator_cluster_validation_runs_slurm_gpu_and_nccl_benchmark(
         if check["name"] == "GPU driver jail NodeSet contract"
     )
     assert contract_check["summary"] == (
-        "GPU worker NodeSets include the chart-owned host driver root mount "
+        "GPU worker NodeSets include the chart-owned read-only host driver root mount "
         "and GPU driver jail init guard."
     )
     partition_check = next(

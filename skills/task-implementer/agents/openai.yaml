@@ -1,6 +1,6 @@
 interface:
   display_name: "Task Implementer"
-  short_description: "Private prompts to sequential brownfield tasks"
-  default_prompt: "Use $task-implementer prepare <prompt-path> to validate and snapshot one private Markdown ask, inspect the brownfield repository, create a reviewable task-1..task-n handoff queue, and stop without product edits. After approval, use run or continue for exactly one task per fresh Codex session through brainstorm/design/plan, validation, code-review, scoped fixes, and $commit; use reconcile for edited active prompts without implementation."
+  short_description: "Steer private prompts through planned brownfield tasks"
+  default_prompt: "Use $task-implementer workspace init [project-folder] once, then $task-implementer run <prompt-path-or-unique-filename> in each fresh session. Reuse the same edited prompt for steering, keep IDs private, reconcile managed requirements and just-in-time design, claim exactly one dependency-ready task from a clean worktree, lock its plan and exact file allowlist before product edits, validate/review/commit/checkpoint once, hand off, and stop the session."
 policy:
   allow_implicit_invocation: false

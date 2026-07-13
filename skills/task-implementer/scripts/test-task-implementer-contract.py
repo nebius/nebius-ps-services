@@ -7,6 +7,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+REPO_README = ROOT.parent / "README.md"
 
 
 def read(relative: str) -> str:
@@ -33,6 +34,11 @@ def main() -> int:
     prompt = read("assets/prompt-template.md")
     metadata = read("agents/openai.yaml")
     evals = read("evals/trigger-prompts.md")
+    readme = read("README.md")
+    repo_surface_present = REPO_README.is_file()
+    repo_readme = (
+        REPO_README.read_text(encoding="utf-8") if repo_surface_present else ""
+    )
 
     checks: list[tuple[str, str, tuple[str, ...]]] = [
         (
@@ -40,30 +46,35 @@ def main() -> int:
             skill,
             (
                 "Requires explicit invocation",
-                "workspace init",
-                "workspace new",
-                "prepare [--new-run] <prompt-path>",
-                "run <run-id>",
-                "continue <run-id>",
-                "reconcile <run-id> <prompt-path>",
-                "without product edits",
-                "immutable bound snapshot",
-                "Inspect the target code before ordering tasks",
-                "vertical end-to-end slices",
-                "per-task implementation plan",
+                "$task-implementer workspace init [project-folder]",
+                "$task-implementer run <prompt-path-or-unique-filename>",
+                "Expose exactly these two actions",
+                "Never require the user to supply a prompt ID, run ID",
+                "create exactly one starter prompt",
+                "private `plane-claim`",
+                "private `plane-authorize`",
+                "Product edits are",
+                "`plane-checkpoint`",
+                "FRESH_SESSION_REQUIRED",
+                "A completed edited prompt starts a new internal run",
+                "ALREADY_COMPLETE",
+                "Last invoked at",
+                "HUMAN_INPUT_REQUIRED",
+                "STEERING_QUEUED_AFTER_TASK",
+                "SPEC_OWNER_CONFLICT",
+                "TI-REQ-nnn",
+                "TI-DES-nnn",
+                "Do not expose a separate `steer` action",
                 "Invoke `code-review`",
                 "Invoke `$commit`",
                 "fresh session",
-                "ACTIVE_RUN_EXISTS",
-                "NO_CHANGES",
-                "PROMPT_DRIFT",
+                "same-prompt-path-or-unique-filename",
                 "WORKSPACE_BUSY",
                 "RUN_STATE_INVALID",
                 "WORKTREE_CONFLICT",
-                "global-context-management",
                 "one active task",
-                "Never renumber",
-                "Do not write prompts into a Git worktree",
+                "Never renumber task IDs",
+                "Do not expose or require internal prompt IDs",
             ),
         ),
         (
@@ -76,17 +87,31 @@ def main() -> int:
                 "YYYY-MM-DD_HHmm--<slug>.md",
                 "task-implementer/prompt-v1",
                 "256 KiB",
-                "scripts/prompt_workspace.py",
-                "process` task",
-                "promptString",
-                "There is no prompt-to-task 1:1 mapping",
-                "The handoff is the execution truth",
-                "### `prepare <prompt-path>`",
-                "### `run <run-id>`",
-                "### `continue <run-id>`",
-                "### `reconcile <run-id> <prompt-path>`",
-                "reconciliation_pending",
-                "parse the binding only from `## Run`",
+                "filename date is creation",
+                "Never rename a prompt, rewrite it, or deliberately change its",
+                "workspace init [project-folder]",
+                "run <prompt-path-or-unique-filename>",
+                "private intake router",
+                "plane-claim",
+                "plane-authorize",
+                "plane-checkpoint",
+                "runtime-provided `CODEX_THREAD_ID`",
+                "confirmed-recovery-worktree-sha256",
+                "FRESH_SESSION_REQUIRED",
+                "last_invoked_at",
+                "Validation failures and lock-busy calls do not reorder prompts",
+                "last invocation",
+                "status",
+                "title",
+                "prompt path",
+                "ALREADY_COMPLETE",
+                "HUMAN_INPUT_REQUIRED",
+                "reconcile_planning",
+                "steering_queued",
+                "steering-resolve",
+                "spec-inspect",
+                "Managed Specification Documents",
+                "SPEC_OWNER_CONFLICT",
                 "codex --add-dir",
             ),
         ),
@@ -94,15 +119,27 @@ def main() -> int:
             "references/implementation-loop.md",
             loop,
             (
+                "claims `task-1` for planning",
+                "Execution Plane State Machine",
+                "No product edit is",
+                "plane-checkpoint",
+                "distinct runtime session",
+                "A-B-A",
                 "Per-Task Context, Design, And Plan",
                 "vertical tasks",
                 "Use `brainstorm`",
                 "Route to `design`",
-                "Create a short implementation plan",
                 "Use `code-review`",
                 "Use `$commit`",
-                "Reconciliation is a planning-only transition",
-                "Never use the editable prompt as execution truth",
+                "Automatic Reconciliation",
+                "Incremental Requirements And Design",
+                "STEERING_QUEUED_AFTER_TASK",
+                "TI-REQ-nnn",
+                "TI-DES-nnn",
+                "Never reuse",
+                "Interruption Recovery",
+                "Never create duplicate revisions",
+                "run <same-prompt-path-or-unique-filename>",
                 "Final Alignment",
             ),
         ),
@@ -115,16 +152,25 @@ def main() -> int:
                 "Prompt ID:",
                 "Bound revision:",
                 "Bound SHA-256:",
+                "Last invoked at:",
+                "Execution Plane",
+                "Phase: unclaimed | planning | implementation | stopped",
+                "Plan SHA-256:",
+                "Queue SHA-256:",
+                "Checkpoint SHA-256:",
                 "Reconciliation",
+                "Specification State",
+                "Next-task overrides:",
+                "Requirement IDs:",
+                "Design ID:",
+                "Requirements SHA-256:",
                 "Source prompt sections:",
                 "Brainstorm/context result:",
                 "Design result:",
-                "Vertical slice or layers:",
                 "End-to-end validation:",
-                "Plan:",
-                "Plan followed:",
+                "Stop conditions:",
                 "Do not continue in current session: yes",
-                "commit through",
+                "run <same-prompt-path-or-unique-filename>",
             ),
         ),
         (
@@ -139,6 +185,7 @@ def main() -> int:
                 "## Verification",
                 "## Non-goals",
                 "## References",
+                "## Steering",
             ),
         ),
         (
@@ -146,12 +193,12 @@ def main() -> int:
             metadata,
             (
                 "allow_implicit_invocation: false",
-                "prepare <prompt-path>",
-                "stop without product edits",
-                "brainstorm/design/plan",
-                "code-review",
-                "$commit",
-                "reconcile",
+                "workspace init [project-folder]",
+                "run <prompt-path-or-unique-filename>",
+                "claim exactly one dependency-ready task",
+                "exact file allowlist before product edits",
+                "stop the session",
+                "Reuse the same edited prompt for steering",
             ),
         ),
         (
@@ -159,37 +206,95 @@ def main() -> int:
             evals,
             (
                 "Should Trigger",
+                "Retired Public Actions",
                 "Should Not Trigger",
                 "$task-implementer workspace init",
-                "$task-implementer workspace new",
-                "$task-implementer prepare",
                 "$task-implementer run",
-                "$task-implementer continue",
-                "$task-implementer reconcile",
-                "without product edits",
-                "exactly the next pending task",
+                "ALREADY_COMPLETE",
+                "FRESH_SESSION_REQUIRED",
+                "HUMAN_INPUT_REQUIRED",
+                "STEERING_QUEUED_AFTER_TASK",
+                "SPEC_OWNER_CONFLICT",
+                "Never require an internal",
                 "global-context-management",
+            ),
+        ),
+        (
+            "README.md",
+            readme,
+            (
+                "Two-Command Workflow",
+                "$task-implementer workspace init",
+                "$task-implementer run <prompt-path-or-unique-filename>",
+                "last_invoked_at",
+                "ALREADY_COMPLETE",
+                "execution plane",
+                "## Steering",
+                "docs/requirements.md",
+            ),
+        ),
+        (
+            "../README.md",
+            repo_readme,
+            (
+                "$task-implementer workspace init services/nebius-cxcli",
+                "$task-implementer run <prompt-path-or-unique-filename>",
+                "Prompt IDs, run IDs,",
+                "mechanically required and locked plan",
+                "STEERING_QUEUED_AFTER_TASK",
+                "TI-REQ-nnn",
             ),
         ),
     ]
 
     failures: list[str] = []
     for label, text, needles in checks:
+        if label == "../README.md" and not repo_surface_present:
+            continue
         for needle in needles:
             failures.extend(require(text, needle, label))
 
-    failures.extend(
-        reject(skill, "codex exec /new", "SKILL.md")
+    public_docs = {
+        "SKILL.md": skill,
+        "README.md": readme,
+        "agents/openai.yaml": metadata,
+    }
+    if repo_surface_present:
+        public_docs["../README.md"] = repo_readme
+    retired_invocations = (
+        "$task-implementer workspace new",
+        "$task-implementer workspace list",
+        "$task-implementer prepare",
+        "$task-implementer continue",
+        "$task-implementer reconcile",
+        "$task-implementer run <run-id>",
+        "$task-implementer run --new-run",
+        "$task-implementer steer",
     )
+    for label, text in public_docs.items():
+        for invocation in retired_invocations:
+            failures.extend(reject(text, invocation, label))
+
+    failures.extend(reject(skill, "codex exec /new", "SKILL.md"))
+    failures.extend(reject(workspace, "runOn", "references/prompt-workspace.md"))
     failures.extend(
-        reject(workspace, "runOn", "references/prompt-workspace.md")
+        reject(
+            read("scripts/prompt_workspace.py"),
+            '"--session-id"',
+            "scripts/prompt_workspace.py",
+        )
     )
 
     helper_files = (
         "scripts/prompt_workspace.py",
         "scripts/prompt_workspace_core.py",
+        "scripts/prompt_workspace_intake.py",
+        "scripts/prompt_workspace_execution.py",
         "scripts/prompt_workspace_runs.py",
+        "scripts/prompt_workspace_specs.py",
         "scripts/test-prompt-workspace.py",
+        "scripts/test-task-execution.py",
+        "scripts/test-task-specs.py",
     )
     for relative in helper_files:
         if not (ROOT / relative).is_file():

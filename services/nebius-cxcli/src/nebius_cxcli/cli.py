@@ -10,6 +10,7 @@ import hashlib
 import inspect
 import ipaddress
 import json
+import logging
 import math
 import os
 import re
@@ -21,6 +22,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -406,7 +408,6 @@ from .slack_notifier_runtime import (
     soperator_notifier_enabled_for_target,
 )
 from .slurm_job_control import (
-    SLURM_JOB_CONTROL_BACKGROUND_WAIT,
     SLURM_JOB_CONTROL_JOBS_CLEARED,
     SLURM_JOB_CONTROL_WAIT_COMPLETED,
     SLURM_JOB_CONTROL_WAIT_TIMEOUT,
@@ -416,7 +417,7 @@ from .slurm_job_control import (
 )
 from .slurm_jobs import (
     AffectedSlurmJob,
-    SlurmPartitionQuiesceRecord,
+    SlurmPartitionPauseRecord,
     SlurmPartitionState,
     affected_slurm_partitions_from_scontrol_show_node,
     dedupe_slurm_jobs,
@@ -425,7 +426,9 @@ from .slurm_jobs import (
     parse_scontrol_show_partition_states,
     parse_squeue_jobs,
     selected_display_job_ids,
-    slurm_partition_quiesce_records,
+    slurm_partition_owned_fields_match,
+    slurm_partition_pause_records,
+    slurm_partition_record_fingerprint,
     slurm_partitions_overlapping_nodes,
 )
 from .soperator_artifacts import (
@@ -474,9 +477,6 @@ from .soperator_migration import (
     EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
     EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE,
     SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
-    SOPERATOR_WORKER_ROLLOUT_DEFAULT_WAVE_PERCENT,
-    SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE,
-    SOPERATOR_WORKER_ROLLOUT_STRATEGY_ZERO_SURGE,
     SoperatorMigrationClusterLease,
     SoperatorMigrationCommandResult,
     SoperatorMigrationExecutionLock,
@@ -484,13 +484,13 @@ from .soperator_migration import (
     SoperatorMigrationPhasePending,
     _bind_passive_populate_job_checkpoint,
     _bind_passive_populate_pvc_uid,
+    _checkpoint_mutating_progress_started,
     _ensure_passive_populate_job,
     _ensure_persistent_migration_login_hold_allowed,
     _ensure_persistent_migration_writer_hold_intact_after_copy,
     _ensure_post_jail_slurm_pre_release_checks,
     _ensure_post_jail_slurm_smoke,
     _execute_legacy_persistent_mount_migration,
-    _external_node_template_rollout_plan_lines,
     _fast_verification_failed,
     _hold_persistent_migration_writers,
     _legacy_persistent_mount_migration_entries,
@@ -529,7 +529,7 @@ from .soperator_migration import (
     record_soperator_migration_backup_binding,
     record_soperator_migration_backup_compensation,
     record_soperator_migration_slurmcluster_handoff_binding,
-    resolve_external_node_template_rollout,
+    run_external_soperator_upgrade_jobs,
     soperator_migration_checkpoint_path,
     soperator_migration_lock_path,
     soperator_migration_slurmcluster_identity_transition,
@@ -556,7 +556,6 @@ from .soperator_onboarding import (
     ONBOARDING_STORAGE_MODE_KEEP_EXISTING,
     SOPERATOR_UPGRADE_SUPPORT_LAYER,
     SOPERATOR_UPGRADE_SUPPORT_REJECT_STATUSES,
-    SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME,
     analyze_soperator_onboarding_snapshot,
     collect_kubectl_soperator_snapshot,
     normalize_k8s_minor_version,
@@ -564,13 +563,12 @@ from .soperator_onboarding import (
     soperator_host_driver_jail_cuda_policy,
     soperator_migration_profile_for_version,
     soperator_migration_profile_versions,
-    soperator_onboarding_effective_compute_mode,
-    soperator_onboarding_effective_storage_mode,
     soperator_onboarding_fingerprint,
     soperator_onboarding_report_for_modes,
     soperator_onboarding_target,
     soperator_onboarding_target_refs,
     soperator_provider_driver_presets_for_jail_cuda,
+    soperator_runtime_report_with_accepted_upgrade_plan,
     soperator_upgrade_support_findings,
     soperator_upgrade_support_requires_override,
     source_soperator_discovery_report_path,
@@ -2175,9 +2173,10 @@ ext_soperator_app = typer.Typer(
     help=(
         "Manage existing external Nebius MK8s clusters for Soperator. "
         "discover writes a support-safe read-only Soperator discovery bundle; "
-        "onboard registers one cluster identity or reconciles its complete v3 campaign "
+        "onboard registers one cluster identity or reconciles its complete v4 campaign "
         "in config.yaml without Terraform-owning it; upgrade reconciles live state and "
-        "advances at most one campaign segment. backup/restore move restore-capable "
+        "advances at most one campaign segment; jobs opens the durable v4 job-control "
+        "screen during that upgrade. backup/restore move restore-capable "
         "Soperator state to new empty target clusters only."
     ),
     epilog=(
@@ -2187,6 +2186,7 @@ ext_soperator_app = typer.Typer(
         "nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> --dry-run; "
         "nebius-cxcli ext-soperator upgrade <config.yaml> --target <target> "
         "--execute --approve; "
+        "nebius-cxcli ext-soperator jobs <config.yaml> --target <target>; "
         "repeat dry-run/execute for each remaining segment. Optional support bundle: "
         "nebius-cxcli ext-soperator discover --project-id PROJECT "
         "--cluster-id MK8SCLUSTER --output-dir ./support-bundles; "
@@ -2206,14 +2206,14 @@ ext_soperator_app = typer.Typer(
         "derived from the live MK8s cluster name, or it can be set with --target-id. "
         "A complete campaign is a live-verified no-op; a later campaign is proposed only by "
         "rerunning onboard after completion. CXCLI managed clusters use soperator upgrade; "
-        "external MK8s control-plane, node-template, chart, and Jail changes remain owned by "
-        "ext-soperator upgrade; Terraform-managed MK8s node-template "
+        "external MK8s control-plane, blue/green compute, chart, and Jail changes remain "
+        "owned by ext-soperator upgrade; Terraform-managed MK8s node-template "
         "upgrades use upgrade node-template. Use the separate discover command only when you "
         "need a support-safe discovery bundle, and the separate backup command only when you "
         "need an operator-requested archive outside the upgrade run; upgrade --execute --approve "
         "refreshes discovery and creates its restore-capable backup before mutation. "
         "Onboarding locks the full discovery-guided external upgrade path in config.yaml. "
-        "External Kubernetes node-template work advances one Kubernetes minor hop per "
+        "External Kubernetes control-plane work advances one Kubernetes minor hop per "
         "upgrade run; repeat the same ext-soperator upgrade --execute --approve command "
         "until all locked path segments are complete instead of rerunning discovery or "
         "onboarding between normal Kubernetes hops. No prepare-upgrade command exists."
@@ -2805,6 +2805,13 @@ _SOPERATOR_UPGRADE_JOB_POLICY_HELP = (
     "cancel-all, requeue-selected, requeue-all, requeue-hold-selected, requeue-hold-all, "
     "or fail. Default: interactive in a prompt-capable terminal, fail with --no-interactive "
     "or non-TTY. Automation should pass --no-interactive --job-policy <policy>."
+)
+_EXTERNAL_SOPERATOR_UPGRADE_JOB_POLICY_HELP = (
+    "Slurm job policy for external in-place upgrade: preserve, interactive, "
+    "wait-to-finish, wait-then-cancel, cancel-selected, cancel-all, requeue-selected, "
+    "requeue-all, requeue-hold-selected, requeue-hold-all, or fail. Default: preserve. "
+    "The canonical path pauses scheduling while running allocations continue unchanged; "
+    "explicit action policies remain operator-selected."
 )
 _SOPERATOR_POPULATE_JAIL_REFRESH_HELP = (
     "Active/passive jail rootfs refresh mode: auto refreshes the passive slot when "
@@ -6229,7 +6236,7 @@ def _soperator_upgrade_accounting_deployment_state(
     return state
 
 
-def _soperator_upgrade_quiesce_accounting(
+def _soperator_upgrade_pause_accounting(
     namespace: str,
     *,
     kube_context: str | None = None,
@@ -6665,11 +6672,11 @@ def _create_restore_capable_soperator_upgrade_backup(
                 )
             )
             if checkpoint_event is not None:
-                checkpoint_event("accounting-quiesce-started")
+                checkpoint_event("accounting-pause-started")
             accounting_db_included = False
             accounting_dump_relative: str | None = None
             try:
-                accounting_state = _soperator_upgrade_quiesce_accounting(
+                accounting_state = _soperator_upgrade_pause_accounting(
                     namespace,
                     kube_context=kube_context,
                     compensation_intent=(
@@ -6691,7 +6698,7 @@ def _create_restore_capable_soperator_upgrade_backup(
                     checkpoint_event("accounting-not-collected")
             else:
                 if checkpoint_event is not None:
-                    checkpoint_event("accounting-quiesced")
+                    checkpoint_event("accounting-paused")
                 dump_path, accounting_verification = _soperator_upgrade_dump_accounting_db(
                     namespace=namespace,
                     output_dir=root / "accounting",
@@ -7261,7 +7268,7 @@ def _soperator_restore_accounting_db(
     dump_path = _soperator_restore_member_path(root, dump_relative, checksums=None)
     accounting_state: dict[str, Any] | None = None
     try:
-        accounting_state = _soperator_upgrade_quiesce_accounting(
+        accounting_state = _soperator_upgrade_pause_accounting(
             namespace,
             kube_context=kube_context,
         )
@@ -7502,6 +7509,15 @@ def _soperator_upgrade_job_policy(*, policy: str | None, interactive: bool) -> s
             "requeue-hold-all with --no-interactive."
         )
     return resolved
+
+
+def _external_soperator_upgrade_job_policy(*, policy: str | None, interactive: bool) -> str:
+    resolved = _non_empty_text(policy)
+    if not resolved:
+        return "preserve"
+    if resolved == "preserve":
+        return resolved
+    return _soperator_upgrade_job_policy(policy=resolved, interactive=interactive)
 
 
 def _external_login_session_policy(policy: str | None) -> str:
@@ -8249,37 +8265,6 @@ def _soperator_upgrade_wait_for_jobs(
         )
 
 
-def _soperator_upgrade_wait_for_jobs_silently(
-    *,
-    namespace: str,
-    node_names: Sequence[str],
-    timeout_seconds: int,
-    refresh_interval_seconds: int,
-    kube_context: str | None = None,
-    extra_env: Mapping[str, str] | None = None,
-    include_pending: bool = True,
-) -> None:
-    deadline = time.monotonic() + timeout_seconds if timeout_seconds > 0 else None
-    poll_interval = max(refresh_interval_seconds, 1)
-    while True:
-        remaining = _soperator_upgrade_affected_jobs(
-            namespace=namespace,
-            node_names=node_names,
-            kube_context=kube_context,
-            extra_env=extra_env,
-            include_pending=include_pending,
-        )
-        if not remaining:
-            return
-        if deadline is not None and time.monotonic() >= deadline:
-            raise RuntimeError(
-                "Timed out waiting for Slurm jobs to finish. Rerun with a longer "
-                "--job-wait-timeout, cancel, requeue, or requeue-hold selected jobs, "
-                "or use --job-policy wait-then-cancel."
-            )
-        time.sleep(poll_interval)
-
-
 def _soperator_upgrade_slurm_nodes_for_rollout(
     *,
     namespace: str,
@@ -8423,7 +8408,7 @@ def _soperator_upgrade_partition_state_snapshot(
     )
     if result.returncode != 0:
         raise RuntimeError(
-            "Could not inspect Slurm partition states before scheduling quiesce: "
+            "Could not inspect Slurm partition states before scheduling pause: "
             + (result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}")
         )
     return parse_scontrol_show_partition_states(result.stdout)
@@ -8450,14 +8435,28 @@ def _soperator_upgrade_partition_state(
     )
 
 
-def _soperator_upgrade_quiesce_slurm_partitions(
+def _soperator_upgrade_partition_observation_matches(
+    observation: SlurmPartitionState,
+    *,
+    record: str,
+    fingerprint: str,
+) -> bool:
+    try:
+        expected_fingerprint = slurm_partition_record_fingerprint(record)
+        owned_fields_match = slurm_partition_owned_fields_match(observation.record, record)
+    except ValueError:
+        return False
+    return expected_fingerprint == fingerprint and owned_fields_match
+
+
+def _soperator_upgrade_pause_slurm_partitions(
     *,
     namespace: str,
     node_names: Sequence[str],
     kube_context: str | None = None,
     extra_env: Mapping[str, str] | None = None,
-    record_recorder: Callable[[SlurmPartitionQuiesceRecord], None] | None = None,
-) -> tuple[SlurmPartitionQuiesceRecord, ...]:
+    record_recorder: Callable[[SlurmPartitionPauseRecord], None] | None = None,
+) -> tuple[SlurmPartitionPauseRecord, ...]:
     selected_nodes = tuple(_non_empty_text(node) for node in node_names if _non_empty_text(node))
     if not selected_nodes:
         return ()
@@ -8484,13 +8483,13 @@ def _soperator_upgrade_quiesce_slurm_partitions(
     )
     if not partitions and fallback_error is not None:
         raise fallback_error
-    records = slurm_partition_quiesce_records(partitions=partitions, states=snapshot)
+    records = slurm_partition_pause_records(partitions=partitions, states=snapshot)
     if records and record_recorder is None:
         raise RuntimeError(
-            "recovery-required: Slurm scheduling quiesce requires a durable full-record "
+            "recovery-required: Slurm scheduling pause requires a durable full-record "
             "ownership journal before State=DOWN."
         )
-    applied: list[SlurmPartitionQuiesceRecord] = []
+    applied: list[SlurmPartitionPauseRecord] = []
 
     def _compensate_applied() -> None:
         if not applied:
@@ -8504,8 +8503,8 @@ def _soperator_upgrade_quiesce_slurm_partitions(
             )
         except Exception as restore_exc:
             raise RuntimeError(
-                "Could not restore partially quiesced Slurm partitions after "
-                "scheduling quiesce failed. Inspect: "
+                "Could not restore partially paused Slurm partitions after "
+                "scheduling pause failed. Inspect: "
                 + _soperator_upgrade_slurm_partition_restore_command(applied)
             ) from restore_exc
 
@@ -8519,13 +8518,14 @@ def _soperator_upgrade_quiesce_slurm_partitions(
                 kube_context=kube_context,
                 extra_env=extra_env,
             )
-            if (
-                live_before.record != record.previous_record
-                or live_before.record_fingerprint != record.previous_record_fingerprint
+            if not _soperator_upgrade_partition_observation_matches(
+                live_before,
+                record=record.previous_record,
+                fingerprint=record.previous_record_fingerprint,
             ):
                 raise RuntimeError(
                     "recovery-required: Slurm partition "
-                    f"{record.partition!r} changed after cxcli persisted quiesce intent "
+                    f"{record.partition!r} changed after cxcli persisted pause intent "
                     "and before State=DOWN. No partition mutation was issued."
                 )
             result = _run_soperator_upgrade_login_command(
@@ -8545,9 +8545,10 @@ def _soperator_upgrade_quiesce_slurm_partitions(
                 kube_context=kube_context,
                 extra_env=extra_env,
             )
-            if (
-                live_after.record == record.previous_record
-                and live_after.record_fingerprint == record.previous_record_fingerprint
+            if _soperator_upgrade_partition_observation_matches(
+                live_after,
+                record=record.previous_record,
+                fingerprint=record.previous_record_fingerprint,
             ):
                 detail = (
                     result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
@@ -8587,7 +8588,7 @@ def _soperator_upgrade_quiesce_slurm_partitions(
 def _soperator_upgrade_restore_slurm_partitions(
     *,
     namespace: str,
-    records: Sequence[SlurmPartitionQuiesceRecord],
+    records: Sequence[SlurmPartitionPauseRecord],
     kube_context: str | None = None,
     extra_env: Mapping[str, str] | None = None,
 ) -> None:
@@ -8602,9 +8603,10 @@ def _soperator_upgrade_restore_slurm_partitions(
             kube_context=kube_context,
             extra_env=extra_env,
         )
-        if (
-            live_before.record == record.previous_record
-            and live_before.record_fingerprint == record.previous_record_fingerprint
+        if _soperator_upgrade_partition_observation_matches(
+            live_before,
+            record=record.previous_record,
+            fingerprint=record.previous_record_fingerprint,
         ):
             continue
         if not record.applied_record or not record.applied_record_fingerprint:
@@ -8613,14 +8615,16 @@ def _soperator_upgrade_restore_slurm_partitions(
                 f"{partition!r}: the journal lacks a durable full post-mutation "
                 "fingerprint proving cxcli owns the live change."
             )
-        if (
-            live_before.record != record.applied_record
-            or live_before.record_fingerprint != record.applied_record_fingerprint
+        if not _soperator_upgrade_partition_observation_matches(
+            live_before,
+            record=record.applied_record,
+            fingerprint=record.applied_record_fingerprint,
         ):
             raise RuntimeError(
                 "recovery-required: cxcli will not restore Slurm partition "
-                f"{partition!r}: the full live fingerprint differs from both the "
-                "saved customer record and cxcli's recorded State=DOWN record."
+                f"{partition!r}: the live customer-owned/unknown field view differs "
+                "from both the saved customer record and cxcli's recorded State=DOWN "
+                "record. Known derived topology totals are ignored."
             )
         result = _run_soperator_upgrade_login_command(
             namespace,
@@ -8639,9 +8643,10 @@ def _soperator_upgrade_restore_slurm_partitions(
             kube_context=kube_context,
             extra_env=extra_env,
         )
-        if (
-            live_after.record == record.previous_record
-            and live_after.record_fingerprint == record.previous_record_fingerprint
+        if _soperator_upgrade_partition_observation_matches(
+            live_after,
+            record=record.previous_record,
+            fingerprint=record.previous_record_fingerprint,
         ):
             continue
         if result.returncode != 0:
@@ -8650,13 +8655,13 @@ def _soperator_upgrade_restore_slurm_partitions(
             )
         raise RuntimeError(
             "recovery-required: Slurm accepted cxcli's restore request for partition "
-            f"{partition!r}, but the full live record does not match the exact saved "
-            "pre-mutation fingerprint."
+            f"{partition!r}, but its customer-owned/unknown field view does not match "
+            "the saved pre-mutation record."
         )
 
 
 def _soperator_upgrade_slurm_partition_restore_command(
-    records: Sequence[SlurmPartitionQuiesceRecord],
+    records: Sequence[SlurmPartitionPauseRecord],
 ) -> str:
     commands = [
         "scontrol show partition " + shlex.quote(record.partition) + " -o"
@@ -8666,12 +8671,12 @@ def _soperator_upgrade_slurm_partition_restore_command(
     return "; ".join(commands)
 
 
-def _soperator_upgrade_quiesce_record_from_payload(
+def _soperator_upgrade_pause_record_from_payload(
     payload: Mapping[str, Any],
-) -> SlurmPartitionQuiesceRecord:
+) -> SlurmPartitionPauseRecord:
     partition = _non_empty_text(payload.get("partition"))
     try:
-        return SlurmPartitionQuiesceRecord(
+        return SlurmPartitionPauseRecord(
             partition=partition,
             previous_state=_non_empty_text(payload.get("previous_state")),
             previous_record=_non_empty_text(payload.get("previous_record")),
@@ -8682,35 +8687,34 @@ def _soperator_upgrade_quiesce_record_from_payload(
         )
     except ValueError as exc:
         raise RuntimeError(
-            "recovery-required: managed Soperator Slurm quiesce journal has invalid "
+            "recovery-required: managed Soperator Slurm pause journal has invalid "
             f"full-record ownership evidence for {partition or 'unknown partition'}."
         ) from exc
 
 
-def _soperator_upgrade_quiesce_records_from_payload(
+def _soperator_upgrade_pause_records_from_payload(
     payload: Any,
-) -> tuple[SlurmPartitionQuiesceRecord, ...]:
+) -> tuple[SlurmPartitionPauseRecord, ...]:
     if payload is None:
         return ()
     if not isinstance(payload, Sequence) or isinstance(payload, (str, bytes, bytearray)):
         raise RuntimeError(
-            "recovery-required: managed Soperator Slurm quiesce journal must be a list."
+            "recovery-required: managed Soperator Slurm pause journal must be a list."
         )
-    records: list[SlurmPartitionQuiesceRecord] = []
+    records: list[SlurmPartitionPauseRecord] = []
     for item in payload:
         if not isinstance(item, Mapping):
             raise RuntimeError(
-                "recovery-required: managed Soperator Slurm quiesce journal entries "
-                "must be mappings."
+                "recovery-required: managed Soperator Slurm pause journal entries must be mappings."
             )
-        records.append(_soperator_upgrade_quiesce_record_from_payload(item))
+        records.append(_soperator_upgrade_pause_record_from_payload(item))
     return tuple(records)
 
 
-def _merge_soperator_upgrade_quiesce_records(
-    existing: Sequence[SlurmPartitionQuiesceRecord],
-    incoming: Sequence[SlurmPartitionQuiesceRecord],
-) -> tuple[SlurmPartitionQuiesceRecord, ...]:
+def _merge_soperator_upgrade_pause_records(
+    existing: Sequence[SlurmPartitionPauseRecord],
+    incoming: Sequence[SlurmPartitionPauseRecord],
+) -> tuple[SlurmPartitionPauseRecord, ...]:
     merged = {record.partition: record for record in existing}
     for record in incoming:
         current = merged.get(record.partition)
@@ -8719,17 +8723,23 @@ def _merge_soperator_upgrade_quiesce_records(
             continue
         if (
             current.previous_state != record.previous_state
-            or current.previous_record_fingerprint != record.previous_record_fingerprint
+            or not slurm_partition_owned_fields_match(
+                current.previous_record,
+                record.previous_record,
+            )
             or current.applied_state != record.applied_state
         ):
             raise RuntimeError(
-                "recovery-required: conflicting managed Soperator Slurm quiesce "
+                "recovery-required: conflicting managed Soperator Slurm pause "
                 f"ownership evidence for {record.partition}."
             )
         if (
-            current.applied_record_fingerprint
-            and record.applied_record_fingerprint
-            and current.applied_record_fingerprint != record.applied_record_fingerprint
+            current.applied_record
+            and record.applied_record
+            and not slurm_partition_owned_fields_match(
+                current.applied_record,
+                record.applied_record,
+            )
         ):
             raise RuntimeError(
                 "recovery-required: conflicting managed Soperator Slurm post-mutation "
@@ -8754,7 +8764,7 @@ def _handle_soperator_upgrade_running_jobs(
     kube_context: str | None = None,
     extra_env: Mapping[str, str] | None = None,
     drain_nodes: bool = True,
-    slurm_scheduling_quiesce: bool = False,
+    slurm_scheduling_pause: bool = False,
     decision_recorder: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> tuple[str, ...]:
     if policy == "interactive" and not _is_tty_session():
@@ -8794,39 +8804,39 @@ def _handle_soperator_upgrade_running_jobs(
     if not selected_node_names:
         return ()
 
-    include_pending = not slurm_scheduling_quiesce
-    if slurm_scheduling_quiesce:
+    include_pending = not slurm_scheduling_pause
+    if slurm_scheduling_pause:
         if decision_recorder is None:
             raise RuntimeError(
-                "recovery-required: Slurm scheduling quiesce requires a durable "
+                "recovery-required: Slurm scheduling pause requires a durable "
                 "partition ownership journal before State=DOWN."
             )
 
-        def _record_partition_evidence(record: SlurmPartitionQuiesceRecord) -> None:
+        def _record_partition_evidence(record: SlurmPartitionPauseRecord) -> None:
             _record(
-                "scheduling-quiesce-recorded",
+                "scheduling-pause-recorded",
                 node_names=selected_node_names,
                 partitions=[record.as_payload()],
                 pending_jobs="queued-not-blocking",
             )
 
-        quiesced_partitions = _soperator_upgrade_quiesce_slurm_partitions(
+        paused_partitions = _soperator_upgrade_pause_slurm_partitions(
             namespace=namespace,
             node_names=selected_node_names,
             kube_context=kube_context,
             extra_env=extra_env,
             record_recorder=_record_partition_evidence,
         )
-        if quiesced_partitions:
+        if paused_partitions:
             _record(
-                "scheduling-quiesce-applied",
+                "scheduling-pause-applied",
                 node_names=selected_node_names,
-                partitions=[record.as_payload() for record in quiesced_partitions],
+                partitions=[record.as_payload() for record in paused_partitions],
                 pending_jobs="queued-not-blocking",
             )
         else:
             _record(
-                "scheduling-quiesce-skipped",
+                "scheduling-pause-skipped",
                 node_names=selected_node_names,
                 reason="no affected UP partitions required cxcli changes",
                 pending_jobs="queued-not-blocking",
@@ -8854,6 +8864,26 @@ def _handle_soperator_upgrade_running_jobs(
             namespace,
             job_ids,
             hold=hold,
+            kube_context=kube_context,
+            extra_env=extra_env,
+        )
+
+    def _hold(job_ids: Sequence[str]) -> None:
+        selected = tuple(_non_empty_text(job_id) for job_id in job_ids if _non_empty_text(job_id))
+        if not selected:
+            return
+        _run_soperator_upgrade_login_command(
+            namespace,
+            "scontrol hold " + " ".join(shlex.quote(job_id) for job_id in selected),
+            kube_context=kube_context,
+            extra_env=extra_env,
+            timeout_seconds=120,
+        )
+
+    def _release(job_ids: Sequence[str]) -> None:
+        _soperator_upgrade_release_jobs(
+            namespace,
+            job_ids,
             kube_context=kube_context,
             extra_env=extra_env,
         )
@@ -8993,25 +9023,31 @@ def _handle_soperator_upgrade_running_jobs(
         selected_ids: tuple[str, ...],
         displayed_jobs: tuple[AffectedSlurmJob, ...],
     ) -> tuple[AffectedSlurmJob, ...]:
-        if action in {"cancel-selected", "cancel-all"}:
+        if action == "refresh":
+            return _jobs()
+        if action == "wait":
+            return displayed_jobs
+        if action == "cancel":
             selected = selected_display_job_ids(displayed_jobs, selected_ids, action=action)
             if not selected:
                 raise RuntimeError("Select at least one displayed job to cancel.")
             _record(action, job_ids=selected)
             _cancel(selected)
             return _wait_for_cancelled(selected)
-        if action in {
-            "requeue-selected",
-            "requeue-all",
-            "requeue-hold-selected",
-            "requeue-hold-all",
-        }:
+        if action in {"requeue", "requeue-hold"}:
             selected = ensure_requeueable_slurm_jobs(displayed_jobs, selected_ids, action=action)
             if not selected:
                 raise RuntimeError("Select at least one displayed active job to requeue.")
             _record(action, job_ids=selected)
-            _requeue(selected, hold=action in {"requeue-hold-selected", "requeue-hold-all"})
+            _requeue(selected, hold=action == "requeue-hold")
             _wait_for_requeued(selected)
+            return _jobs()
+        if action in {"hold", "release"}:
+            selected = selected_display_job_ids(displayed_jobs, selected_ids, action=action)
+            if not selected:
+                raise RuntimeError(f"Select at least one displayed job to {action}.")
+            _record(action, job_ids=selected)
+            (_hold if action == "hold" else _release)(selected)
             return _jobs()
         raise RuntimeError(f"Unsupported Slurm job-control action: {action}")
 
@@ -9063,24 +9099,7 @@ def _handle_soperator_upgrade_running_jobs(
                     "--job-wait-timeout, cancel, requeue, or requeue-hold selected jobs, "
                     "or use --job-policy wait-then-cancel."
                 )
-            if action == SLURM_JOB_CONTROL_BACKGROUND_WAIT:
-                _record(
-                    "background-wait-started",
-                    timeout_seconds=wait_timeout_seconds,
-                    refresh_interval_seconds=refresh_interval_seconds,
-                )
-                _soperator_upgrade_wait_for_jobs_silently(
-                    namespace=namespace,
-                    node_names=selected_node_names,
-                    timeout_seconds=wait_timeout_seconds,
-                    refresh_interval_seconds=refresh_interval_seconds,
-                    kube_context=kube_context,
-                    extra_env=extra_env,
-                    include_pending=include_pending,
-                )
-                _record("background-wait-completed")
-                return _drain_after_jobs_clear()
-            if action == "wait-to-finish":
+            if action == "wait":
                 _record(
                     "wait-started",
                     timeout_seconds=wait_timeout_seconds,
@@ -9089,97 +9108,16 @@ def _handle_soperator_upgrade_running_jobs(
                 _wait_for_all()
                 _record("wait-completed")
                 return _drain_after_jobs_clear()
-            if action == "cancel-selected":
-                selected = selected_display_job_ids(jobs, selected_ids, action=action)
-                if not selected:
-                    console.print("[yellow]Select at least one displayed job to cancel.[/yellow]")
-                    continue
-                _record("cancel-selected", job_ids=selected)
-                _cancel(selected)
-                jobs = _wait_for_cancelled(selected)
-                if not jobs:
-                    return _drain_after_jobs_clear()
-                continue
-            if action == "cancel-all":
-                selected = tuple(job.job_id for job in jobs)
-                _record("cancel-all", job_ids=selected)
-                _cancel(selected)
-                jobs = _wait_for_cancelled(selected)
-                if not jobs:
-                    return _drain_after_jobs_clear()
-                continue
-            if action == "requeue-selected":
+            if action in {"cancel", "requeue", "requeue-hold", "hold", "release"}:
                 try:
-                    selected = ensure_requeueable_slurm_jobs(jobs, selected_ids, action=action)
+                    jobs = _interactive_action_handler(action, selected_ids, jobs)
                 except RuntimeError as exc:
                     console.print(f"[yellow]{exc}[/yellow]")
                     continue
-                if not selected:
-                    console.print("[yellow]Select at least one displayed job to requeue.[/yellow]")
-                    continue
-                _record("requeue-selected", job_ids=selected)
-                _requeue(selected)
-                _wait_for_requeued(selected)
-                jobs = _jobs()
                 if not jobs:
                     return _drain_after_jobs_clear()
                 continue
-            if action == "requeue-all":
-                selected = tuple(selected_ids) or tuple(job.job_id for job in jobs)
-                try:
-                    selected = ensure_requeueable_slurm_jobs(jobs, selected, action=action)
-                except RuntimeError as exc:
-                    console.print(f"[yellow]{exc}[/yellow]")
-                    continue
-                _record("requeue-all", job_ids=selected)
-                _requeue(selected)
-                _wait_for_requeued(selected)
-                jobs = _jobs()
-                if not jobs:
-                    return _drain_after_jobs_clear()
-                continue
-            if action == "requeue-hold-selected":
-                try:
-                    selected = ensure_requeueable_slurm_jobs(jobs, selected_ids, action=action)
-                except RuntimeError as exc:
-                    console.print(f"[yellow]{exc}[/yellow]")
-                    continue
-                if not selected:
-                    console.print(
-                        "[yellow]Select at least one displayed job to requeue and hold.[/yellow]"
-                    )
-                    continue
-                _record("requeue-hold-selected", job_ids=selected)
-                _requeue(selected, hold=True)
-                _wait_for_requeued(selected)
-                jobs = _jobs()
-                if not jobs:
-                    return _drain_after_jobs_clear()
-                continue
-            if action == "requeue-hold-all":
-                selected = tuple(selected_ids) or tuple(job.job_id for job in jobs)
-                try:
-                    selected = ensure_requeueable_slurm_jobs(jobs, selected, action=action)
-                except RuntimeError as exc:
-                    console.print(f"[yellow]{exc}[/yellow]")
-                    continue
-                _record("requeue-hold-all", job_ids=selected)
-                _requeue(selected, hold=True)
-                _wait_for_requeued(selected)
-                jobs = _jobs()
-                if not jobs:
-                    return _drain_after_jobs_clear()
-                continue
-            if action == "abort":
-                _record("abort")
-                raise RuntimeError(
-                    "Soperator upgrade aborted while affected Slurm jobs are still present."
-                )
-            console.print(
-                "[yellow]Unknown action; choose refresh, wait-to-finish, cancel-selected, "
-                "cancel-all, requeue-selected, requeue-all, requeue-hold-selected, "
-                "requeue-hold-all, or abort.[/yellow]"
-            )
+            console.print("[yellow]Unknown action; use r, w, c, q, h, H, or u.[/yellow]")
     if policy == "fail":
         with _soperator_upgrade_job_prompt_paused():
             _print_soperator_upgrade_jobs_table(jobs)
@@ -9980,11 +9918,11 @@ def _new_soperator_upgrade_checkpoint(
         },
         "slurm": {
             "drained_nodes": [],
-            "quiesced_partitions": [],
+            "paused_partitions": [],
             "restore_manual_command": None,
             "partition_restore_manual_command": None,
             "job_policy": None,
-            "scheduling_quiesce": True,
+            "scheduling_pause": True,
         },
         "config_comparison": {
             "pre_upgrade": None,
@@ -10658,24 +10596,24 @@ def _write_soperator_upgrade_report(
     slurm = checkpoint.get("slurm")
     slurm_map = slurm if isinstance(slurm, Mapping) else {}
     drained_nodes = slurm_map.get("drained_nodes")
-    quiesced_partitions = slurm_map.get("quiesced_partitions")
+    paused_partitions = slurm_map.get("paused_partitions")
     slurm_lines = [
         f"- Job policy: `{slurm_map.get('job_policy') or 'not-run'}`",
-        f"- Scheduling quiesce: `{bool(slurm_map.get('scheduling_quiesce'))}`",
+        f"- Scheduling pause: `{bool(slurm_map.get('scheduling_pause'))}`",
         "- cxcli-owned drained nodes: "
         + (
             ", ".join(f"`{node}`" for node in drained_nodes)
             if isinstance(drained_nodes, list) and drained_nodes
             else "none"
         ),
-        "- cxcli-owned quiesced partitions: "
+        "- cxcli-owned paused partitions: "
         + (
             ", ".join(
                 f"`{item.get('partition')}` ({item.get('previous_state')} -> {item.get('applied_state')})"
-                for item in quiesced_partitions
+                for item in paused_partitions
                 if isinstance(item, Mapping)
             )
-            if isinstance(quiesced_partitions, list) and quiesced_partitions
+            if isinstance(paused_partitions, list) and paused_partitions
             else "none"
         ),
     ]
@@ -12823,7 +12761,7 @@ def _format_soperator_backup_plan_lines(
         "only when live chart-managed accounting is present",
     ]
     if dry_run:
-        lines.append("Dry run only: no archive was written and accounting was not quiesced.")
+        lines.append("Dry run only: no archive was written and accounting was not paused.")
     return tuple(lines)
 
 
@@ -12896,21 +12834,10 @@ def _external_soperator_upgrade_command_args(
     requeue_job: Sequence[str],
     job_wait_timeout: str,
     job_refresh_interval: str,
-    slurm_scheduling_quiesce: bool,
-    login_session_policy: str,
-    login_session_drain_timeout: str,
-    worker_rollout_strategy: str | None,
-    service_role_rollout_strategy: str | None,
-    worker_wave_groups: int | None,
-    worker_wave_percent: int | None,
-    max_parallel_worker_groups: int | None,
-    strategy_max_surge_count: int | None,
-    strategy_max_unavailable_count: int | None,
-    strategy_drain_timeout: str | None,
+    slurm_scheduling_pause: bool,
     dry_run: bool,
     approve: bool,
     approve_remediation: bool,
-    approve_service_role_downtime: bool,
     allow_unsupported_soperator_upgrade_path: bool,
     interactive: bool,
 ) -> tuple[str, ...]:
@@ -12931,34 +12858,12 @@ def _external_soperator_upgrade_command_args(
     args.extend(["--job-wait-timeout", job_wait_timeout])
     args.extend(["--job-refresh-interval", job_refresh_interval])
     args.append(
-        "--slurm-scheduling-quiesce"
-        if slurm_scheduling_quiesce
-        else "--no-slurm-scheduling-quiesce"
+        "--slurm-scheduling-pause" if slurm_scheduling_pause else "--no-slurm-scheduling-pause"
     )
-    args.extend(["--login-session-policy", login_session_policy])
-    args.extend(["--login-session-drain-timeout", login_session_drain_timeout])
-    if _non_empty_text(worker_rollout_strategy):
-        args.extend(["--worker-rollout-strategy", str(worker_rollout_strategy)])
-    if _non_empty_text(service_role_rollout_strategy):
-        args.extend(["--service-role-rollout-strategy", str(service_role_rollout_strategy)])
-    if worker_wave_groups is not None:
-        args.extend(["--worker-wave-groups", str(worker_wave_groups)])
-    if worker_wave_percent is not None:
-        args.extend(["--worker-wave-percent", str(worker_wave_percent)])
-    if max_parallel_worker_groups is not None:
-        args.extend(["--max-parallel-worker-groups", str(max_parallel_worker_groups)])
-    if strategy_max_surge_count is not None:
-        args.extend(["--strategy-max-surge-count", str(strategy_max_surge_count)])
-    if strategy_max_unavailable_count is not None:
-        args.extend(["--strategy-max-unavailable-count", str(strategy_max_unavailable_count)])
-    if _non_empty_text(strategy_drain_timeout):
-        args.extend(["--strategy-drain-timeout", str(strategy_drain_timeout)])
     args.append("--interactive" if interactive else "--no-interactive")
     args.append("--dry-run" if dry_run else "--execute")
     args.append("--approve" if approve else "--no-approve")
     args.append("--approve-remediation" if approve_remediation else "--no-approve-remediation")
-    if approve_service_role_downtime:
-        args.append("--approve-service-role-downtime")
     if allow_unsupported_soperator_upgrade_path:
         args.append("--allow-unsupported-soperator-upgrade-path")
     return tuple(args)
@@ -12983,13 +12888,13 @@ def _external_soperator_upgrade_target_k8s_version(
     )
 
 
-def _soperator_onboarding_slurm_scheduling_quiesce(
+def _soperator_onboarding_slurm_scheduling_pause(
     onboarding: Mapping[str, Any],
 ) -> bool:
     configured = onboarding.get("node_template_upgrade")
     if not isinstance(configured, Mapping):
         return True
-    raw_value = configured.get("slurm_scheduling_quiesce", True)
+    raw_value = configured.get("slurm_scheduling_pause", True)
     if isinstance(raw_value, bool):
         return raw_value
     normalized = str(raw_value or "").strip().lower()
@@ -12999,7 +12904,7 @@ def _soperator_onboarding_slurm_scheduling_quiesce(
         return True
     raise RuntimeError(
         "deploy.targets[].soperator_onboarding.node_template_upgrade."
-        "slurm_scheduling_quiesce must be true or false."
+        "slurm_scheduling_pause must be true or false."
     )
 
 
@@ -14437,7 +14342,7 @@ def soperator_backup_command(
         bool,
         typer.Option(
             "--dry-run",
-            help="Print the backup plan without quiescing accounting or writing an archive.",
+            help="Print the backup plan without pausing accounting or writing an archive.",
         ),
     ] = False,
     interactive: Annotated[
@@ -14917,10 +14822,10 @@ def soperator_upgrade_command(
             "--job-refresh-interval", help="Refresh interval while waiting for Slurm jobs."
         ),
     ] = _SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
-    slurm_scheduling_quiesce: Annotated[
+    slurm_scheduling_pause: Annotated[
         bool,
         typer.Option(
-            "--slurm-scheduling-quiesce/--no-slurm-scheduling-quiesce",
+            "--slurm-scheduling-pause/--no-slurm-scheduling-pause",
             help=(
                 "During MK8s worker node-template phases, set affected Slurm partitions "
                 "DOWN so newly submitted jobs queue until cxcli restores scheduling."
@@ -15010,7 +14915,7 @@ def soperator_upgrade_command(
             requeue_job=tuple(requeue_job or ()),
             job_wait_timeout=job_wait_timeout,
             job_refresh_interval=job_refresh_interval,
-            slurm_scheduling_quiesce=slurm_scheduling_quiesce,
+            slurm_scheduling_pause=slurm_scheduling_pause,
             login_session_policy=login_session_policy,
             login_session_drain_timeout=login_session_drain_timeout,
             dry_run=dry_run,
@@ -15046,7 +14951,7 @@ def _run_soperator_upgrade_command(
     requeue_job: Sequence[str],
     job_wait_timeout: str,
     job_refresh_interval: str,
-    slurm_scheduling_quiesce: bool,
+    slurm_scheduling_pause: bool,
     login_session_policy: str,
     login_session_drain_timeout: str,
     dry_run: bool,
@@ -15117,7 +15022,7 @@ def _run_soperator_upgrade_command(
         requeue_job=requeue_job,
         job_wait_timeout=job_wait_timeout,
         job_refresh_interval=job_refresh_interval,
-        slurm_scheduling_quiesce=slurm_scheduling_quiesce,
+        slurm_scheduling_pause=slurm_scheduling_pause,
         login_session_policy=_external_login_session_policy(login_session_policy),
         login_session_drain_timeout=login_session_drain_timeout,
         dry_run=dry_run,
@@ -15149,7 +15054,7 @@ def _soperator_upgrade_command_args(
     requeue_job: Sequence[str],
     job_wait_timeout: str,
     job_refresh_interval: str,
-    slurm_scheduling_quiesce: bool,
+    slurm_scheduling_pause: bool,
     dry_run: bool,
     login_session_policy: str = EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
     login_session_drain_timeout: str = "30m",
@@ -15195,9 +15100,7 @@ def _soperator_upgrade_command_args(
     args.extend(["--job-wait-timeout", job_wait_timeout])
     args.extend(["--job-refresh-interval", job_refresh_interval])
     args.append(
-        "--slurm-scheduling-quiesce"
-        if slurm_scheduling_quiesce
-        else "--no-slurm-scheduling-quiesce"
+        "--slurm-scheduling-pause" if slurm_scheduling_pause else "--no-slurm-scheduling-pause"
     )
     args.extend(["--login-session-policy", login_session_policy])
     args.extend(["--login-session-drain-timeout", login_session_drain_timeout])
@@ -15363,7 +15266,7 @@ def _managed_soperator_upgrade_order_issue(
     requeue_job: Sequence[str],
     job_wait_timeout: str,
     job_refresh_interval: str,
-    slurm_scheduling_quiesce: bool,
+    slurm_scheduling_pause: bool,
     login_session_policy: str,
     login_session_drain_timeout: str,
     approve_remediation: bool,
@@ -15415,7 +15318,7 @@ def _managed_soperator_upgrade_order_issue(
             requeue_job=requeue_job,
             job_wait_timeout=job_wait_timeout,
             job_refresh_interval=job_refresh_interval,
-            slurm_scheduling_quiesce=slurm_scheduling_quiesce,
+            slurm_scheduling_pause=slurm_scheduling_pause,
             login_session_policy=login_session_policy,
             login_session_drain_timeout=login_session_drain_timeout,
             dry_run=False,
@@ -15445,7 +15348,7 @@ def _managed_soperator_upgrade_order_issue(
             requeue_job=requeue_job,
             job_wait_timeout=job_wait_timeout,
             job_refresh_interval=job_refresh_interval,
-            slurm_scheduling_quiesce=slurm_scheduling_quiesce,
+            slurm_scheduling_pause=slurm_scheduling_pause,
             login_session_policy=login_session_policy,
             login_session_drain_timeout=login_session_drain_timeout,
             dry_run=False,
@@ -15573,7 +15476,7 @@ def _format_managed_soperator_cluster_upgrade_plan(
     to_gpu_stack_preset: str | None,
     node_group: str,
     job_policy: str,
-    slurm_scheduling_quiesce: bool,
+    slurm_scheduling_pause: bool,
     populate_jail_refresh: str,
     jail_persistent_mounts: Sequence[str],
     login_session_policy: str,
@@ -15604,10 +15507,10 @@ def _format_managed_soperator_cluster_upgrade_plan(
             f"`{_non_empty_text(to_gpu_stack_preset) or 'unchanged/operator-managed'}`",
             f"  - node group: `{_non_empty_text(node_group) or 'all selected by plan'}`",
             f"- Slurm job policy: `{job_policy}`",
-            "- Slurm scheduling quiesce: "
+            "- Slurm scheduling pause: "
             + (
                 "enabled for worker node-template gates; new submissions queue until restore"
-                if slurm_scheduling_quiesce
+                if slurm_scheduling_pause
                 else "disabled; pending affected jobs remain blocking"
             ),
             f"- Jail Upgrade refresh mode: `{populate_jail_refresh}`",
@@ -16045,7 +15948,7 @@ def _run_managed_soperator_cluster_upgrade(
     requeue_job: Sequence[str],
     job_wait_timeout: str,
     job_refresh_interval: str,
-    slurm_scheduling_quiesce: bool,
+    slurm_scheduling_pause: bool,
     login_session_policy: str,
     login_session_drain_timeout: str,
     dry_run: bool,
@@ -16101,7 +16004,7 @@ def _run_managed_soperator_cluster_upgrade(
         requeue_job=requeue_job,
         job_wait_timeout=job_wait_timeout,
         job_refresh_interval=job_refresh_interval,
-        slurm_scheduling_quiesce=slurm_scheduling_quiesce,
+        slurm_scheduling_pause=slurm_scheduling_pause,
         login_session_policy=login_session_policy,
         login_session_drain_timeout=login_session_drain_timeout,
         approve_remediation=approve_remediation,
@@ -16128,7 +16031,7 @@ def _run_managed_soperator_cluster_upgrade(
         requeue_job=requeue_job,
         job_wait_timeout=job_wait_timeout,
         job_refresh_interval=job_refresh_interval,
-        slurm_scheduling_quiesce=slurm_scheduling_quiesce,
+        slurm_scheduling_pause=slurm_scheduling_pause,
         login_session_policy=login_session_policy,
         login_session_drain_timeout=login_session_drain_timeout,
         dry_run=True,
@@ -16146,7 +16049,7 @@ def _run_managed_soperator_cluster_upgrade(
             to_gpu_stack_preset=to_gpu_stack_preset,
             node_group=node_group,
             job_policy=job_policy,
-            slurm_scheduling_quiesce=slurm_scheduling_quiesce,
+            slurm_scheduling_pause=slurm_scheduling_pause,
             populate_jail_refresh=populate_jail_refresh,
             jail_persistent_mounts=jail_persistent_mounts,
             login_session_policy=login_session_policy,
@@ -16223,7 +16126,7 @@ def _run_managed_soperator_cluster_upgrade(
             requeue_job=requeue_job,
             job_wait_timeout=job_wait_timeout,
             job_refresh_interval=job_refresh_interval,
-            slurm_scheduling_quiesce=slurm_scheduling_quiesce,
+            slurm_scheduling_pause=slurm_scheduling_pause,
             login_session_policy=login_session_policy,
             login_session_drain_timeout=login_session_drain_timeout,
             dry_run=False,
@@ -16268,12 +16171,12 @@ def _run_managed_soperator_cluster_upgrade(
     slurm_state = _state_mapping(checkpoint.get("slurm"))
     slurm_state.setdefault("drained_nodes", [])
     slurm_state.setdefault("restore_manual_command", None)
-    slurm_state.setdefault("quiesced_partitions", [])
+    slurm_state.setdefault("paused_partitions", [])
     slurm_state.setdefault("partition_restore_manual_command", None)
     slurm_state.setdefault("cxcli_held_job_ids", [])
     slurm_state.setdefault("held_job_release_manual_command", None)
     slurm_state["job_policy"] = job_policy
-    slurm_state["scheduling_quiesce"] = slurm_scheduling_quiesce
+    slurm_state["scheduling_pause"] = slurm_scheduling_pause
     checkpoint["slurm"] = slurm_state
     checkpoint["populate_jail_refresh"] = {
         **_state_mapping(checkpoint.get("populate_jail_refresh")),
@@ -16296,12 +16199,8 @@ def _run_managed_soperator_cluster_upgrade(
         for node in (existing_slurm_nodes if isinstance(existing_slurm_nodes, list) else [])
         if str(node or "").strip()
     )
-    existing_quiesced_partitions = _state_mapping(checkpoint.get("slurm")).get(
-        "quiesced_partitions"
-    )
-    slurm_quiesce_records = _soperator_upgrade_quiesce_records_from_payload(
-        existing_quiesced_partitions
-    )
+    existing_paused_partitions = _state_mapping(checkpoint.get("slurm")).get("paused_partitions")
+    slurm_pause_records = _soperator_upgrade_pause_records_from_payload(existing_paused_partitions)
     protected_state_before = _managed_soperator_upgrade_baseline_from_checkpoint(checkpoint)
     component_label = f"{target.selector} ({plan.namespace or 'default'}/{plan.release_name})"
     completed_phases = _soperator_upgrade_verified_completed_phase_set(
@@ -16876,7 +16775,7 @@ def _run_managed_soperator_cluster_upgrade(
             )
 
     def _record_slurm_decision(decision: Mapping[str, Any]) -> None:
-        nonlocal slurm_quiesce_records
+        nonlocal slurm_pause_records
         slurm_state = checkpoint.setdefault("slurm", {})
         if not isinstance(slurm_state, dict):
             slurm_state = {}
@@ -16885,23 +16784,23 @@ def _run_managed_soperator_cluster_upgrade(
         if isinstance(decisions, list):
             decisions.append(copy.deepcopy(to_plain_data(decision)))
         action = str(decision.get("action", "") or "")
-        if action in {"scheduling-quiesce-recorded", "scheduling-quiesce-applied"}:
+        if action in {"scheduling-pause-recorded", "scheduling-pause-applied"}:
             raw_partitions = decision.get("partitions")
-            records = _soperator_upgrade_quiesce_records_from_payload(raw_partitions)
+            records = _soperator_upgrade_pause_records_from_payload(raw_partitions)
             if records:
-                slurm_quiesce_records = _merge_soperator_upgrade_quiesce_records(
-                    slurm_quiesce_records,
+                slurm_pause_records = _merge_soperator_upgrade_pause_records(
+                    slurm_pause_records,
                     records,
                 )
-                slurm_state["quiesced_partitions"] = [
-                    record.as_payload() for record in slurm_quiesce_records
+                slurm_state["paused_partitions"] = [
+                    record.as_payload() for record in slurm_pause_records
                 ]
                 slurm_state["partition_restore_manual_command"] = (
-                    _soperator_upgrade_slurm_partition_restore_command(slurm_quiesce_records)
+                    _soperator_upgrade_slurm_partition_restore_command(slurm_pause_records)
                 )
-        elif action == "scheduling-quiesce-restored":
-            slurm_quiesce_records = ()
-            slurm_state["quiesced_partitions"] = []
+        elif action == "scheduling-pause-restored":
+            slurm_pause_records = ()
+            slurm_state["paused_partitions"] = []
             slurm_state["partition_restore_manual_command"] = None
         elif action in {"requeue-hold-selected", "requeue-hold-all"}:
             raw_job_ids = decision.get("job_ids")
@@ -16932,8 +16831,8 @@ def _run_managed_soperator_cluster_upgrade(
         *,
         phase_state: dict[str, Any],
     ) -> list[str]:
-        nonlocal slurm_quiesce_records, slurm_restore_nodes
-        restored_partitions = tuple(slurm_quiesce_records)
+        nonlocal slurm_pause_records, slurm_restore_nodes
+        restored_partitions = tuple(slurm_pause_records)
         restored_nodes = tuple(slurm_restore_nodes)
         lines: list[str] = []
         if restored_partitions:
@@ -16945,7 +16844,7 @@ def _run_managed_soperator_cluster_upgrade(
             _record_slurm_decision(
                 {
                     "at": _soperator_upgrade_now_iso(),
-                    "action": "scheduling-quiesce-restored",
+                    "action": "scheduling-pause-restored",
                     "partitions": [record.as_payload() for record in restored_partitions],
                     "reason": "post-Jail managed Slurm submission smoke",
                 }
@@ -17373,7 +17272,7 @@ def _run_managed_soperator_cluster_upgrade(
                     refresh_interval_seconds=job_refresh_interval_seconds,
                     checkpoint_id=checkpoint_id,
                     kube_context=managed_kube_context or None,
-                    slurm_scheduling_quiesce=slurm_scheduling_quiesce,
+                    slurm_scheduling_pause=slurm_scheduling_pause,
                     decision_recorder=_record_slurm_decision,
                 )
                 _record_slurm_restore_nodes(slurm_restore_nodes, scope="mk8s-node-template")
@@ -17397,12 +17296,12 @@ def _run_managed_soperator_cluster_upgrade(
                             f"drained_nodes={len(slurm_map.get('drained_nodes') or [])}",
                         ),
                         stage_fast_verification_check(
-                            "Slurm scheduling quiesce",
+                            "Slurm scheduling pause",
                             "passed"
-                            if bool(slurm_map.get("scheduling_quiesce"))
-                            == bool(slurm_scheduling_quiesce)
+                            if bool(slurm_map.get("scheduling_pause"))
+                            == bool(slurm_scheduling_pause)
                             else "failed",
-                            "enabled" if slurm_scheduling_quiesce else "disabled",
+                            "enabled" if slurm_scheduling_pause else "disabled",
                         ),
                     ],
                 )
@@ -19438,11 +19337,11 @@ def _run_managed_soperator_cluster_upgrade(
             "slurm-restore",
             "Restoring Slurm scheduling and nodes that cxcli changed for the managed rollout.",
         ):
-            if slurm_quiesce_records:
+            if slurm_pause_records:
                 with _phase_spinner("slurm-restore", "Restoring checkpointed Slurm partitions."):
                     _soperator_upgrade_restore_slurm_partitions(
                         namespace=plan.namespace or "default",
-                        records=slurm_quiesce_records,
+                        records=slurm_pause_records,
                         kube_context=managed_kube_context or None,
                     )
                 _record_slurm_decision(
@@ -19450,8 +19349,8 @@ def _run_managed_soperator_cluster_upgrade(
                         "at": datetime.now(UTC)
                         .isoformat(timespec="seconds")
                         .replace("+00:00", "Z"),
-                        "action": "scheduling-quiesce-restored",
-                        "partitions": [record.as_payload() for record in slurm_quiesce_records],
+                        "action": "scheduling-pause-restored",
+                        "partitions": [record.as_payload() for record in slurm_pause_records],
                     }
                 )
             if slurm_restore_nodes:
@@ -19496,22 +19395,22 @@ def _run_managed_soperator_cluster_upgrade(
                     ),
                     stage_fast_verification_check(
                         "Slurm restored partitions",
-                        "passed" if slurm_quiesce_records else "skipped",
-                        f"partitions={len(slurm_quiesce_records)}",
+                        "passed" if slurm_pause_records else "skipped",
+                        f"partitions={len(slurm_pause_records)}",
                     ),
                 ],
                 report_paths=staged_paths,
             )
             _complete_checkpoint_phase("slurm-restore")
             slurm_restore_nodes = ()
-            slurm_quiesce_records = ()
+            slurm_pause_records = ()
         else:
             slurm_state = checkpoint.get("slurm")
             slurm_map = slurm_state if isinstance(slurm_state, Mapping) else {}
             if not _non_empty_text(slurm_map.get("restore_manual_command")):
                 slurm_restore_nodes = ()
             if not _non_empty_text(slurm_map.get("partition_restore_manual_command")):
-                slurm_quiesce_records = ()
+                slurm_pause_records = ()
         if _start_checkpoint_phase(
             "shared-safety-verification",
             "Running the shared protected-state and fast smoke verification.",
@@ -19687,7 +19586,7 @@ def _run_managed_soperator_cluster_upgrade(
             ).strip()
             == "failed"
         )
-        if slurm_quiesce_records and not post_jail_pre_release_failed:
+        if slurm_pause_records and not post_jail_pre_release_failed:
             try:
                 with _phase_spinner(
                     "slurm-partition-restore-after-failure",
@@ -19695,7 +19594,7 @@ def _run_managed_soperator_cluster_upgrade(
                 ):
                     _soperator_upgrade_restore_slurm_partitions(
                         namespace=plan.namespace or "default",
-                        records=slurm_quiesce_records,
+                        records=slurm_pause_records,
                         kube_context=managed_kube_context or None,
                     )
                 _record_slurm_decision(
@@ -19703,13 +19602,13 @@ def _run_managed_soperator_cluster_upgrade(
                         "at": datetime.now(UTC)
                         .isoformat(timespec="seconds")
                         .replace("+00:00", "Z"),
-                        "action": "scheduling-quiesce-restored",
-                        "partitions": [record.as_payload() for record in slurm_quiesce_records],
+                        "action": "scheduling-pause-restored",
+                        "partitions": [record.as_payload() for record in slurm_pause_records],
                         "reason": "managed upgrade failed before normal Slurm restore phase",
                     }
                 )
                 _checkpoint("slurm-partitions-restored-after-failure")
-                slurm_quiesce_records = ()
+                slurm_pause_records = ()
             except Exception as restore_exc:
                 _checkpoint(
                     "slurm-partition-restore-after-failure-failed",
@@ -19720,9 +19619,9 @@ def _run_managed_soperator_cluster_upgrade(
                     f"upgrade attempt:[/yellow] {restore_exc}",
                     soft_wrap=True,
                 )
-        elif slurm_quiesce_records:
+        elif slurm_pause_records:
             _checkpoint(
-                "slurm-partitions-kept-quiesced-after-pre-release-failure",
+                "slurm-partitions-kept-paused-after-pre-release-failure",
                 reason=(
                     "post-Jail pre-release Slurm validation failed before user "
                     "scheduling was reopened"
@@ -19734,14 +19633,14 @@ def _run_managed_soperator_cluster_upgrade(
                 slurm_state["restore_manual_command"] = (
                     "scontrol update NodeName=" + ",".join(slurm_restore_nodes) + " State=RESUME"
                 )
-        if slurm_quiesce_records:
+        if slurm_pause_records:
             slurm_state = checkpoint.setdefault("slurm", {})
             if isinstance(slurm_state, dict):
-                slurm_state["quiesced_partitions"] = [
-                    record.as_payload() for record in slurm_quiesce_records
+                slurm_state["paused_partitions"] = [
+                    record.as_payload() for record in slurm_pause_records
                 ]
                 slurm_state["partition_restore_manual_command"] = (
-                    _soperator_upgrade_slurm_partition_restore_command(slurm_quiesce_records)
+                    _soperator_upgrade_slurm_partition_restore_command(slurm_pause_records)
                 )
         checkpoint["status"] = "failed"
         checkpoint["failure"] = {
@@ -19750,7 +19649,7 @@ def _run_managed_soperator_cluster_upgrade(
             "pending_phase": checkpoint.get("pending_phase") or "none",
             "activechecks_restore": activechecks_restore_status,
             "slurm_restore": (
-                "left-changed" if (slurm_restore_nodes or slurm_quiesce_records) else "not-required"
+                "left-changed" if (slurm_restore_nodes or slurm_pause_records) else "not-required"
             ),
         }
         _write_soperator_upgrade_checkpoint(checkpoint_path, checkpoint)
@@ -20972,7 +20871,7 @@ def _soperator_migration_reason_labels(onboarding: Mapping[str, Any]) -> tuple[s
     if flags["soperator_upgrade_required"]:
         reasons.append("Soperator chart upgrade")
     if flags["external_node_template_upgrade_required"]:
-        reasons.append("external MK8s control-plane/node-template upgrade")
+        reasons.append("external MK8s control-plane-only upgrade with blue/green compute")
     if flags["storage_migration_required"]:
         reasons.append("aligned SFS/data migration")
     if flags["compute_migration_required"]:
@@ -21034,12 +20933,6 @@ def _print_render_deploy_hint(config_path: Path) -> None:
         if len(migration_targets) == 1:
             target_ref, onboarding = migration_targets[0]
             target_arg = shlex.quote(target_ref)
-            login_policy_suffix = _external_soperator_execute_login_policy_suffix(
-                config_path=config_path,
-                payload=payload,
-                target_ref=target_ref,
-                onboarding=onboarding,
-            )
             for line in _soperator_route_guidance_lines(
                 onboarding=onboarding,
                 migration_required=True,
@@ -21052,7 +20945,7 @@ def _print_render_deploy_hint(config_path: Path) -> None:
             console.print("After accepting the dry-run plan, execute it:")
             _print_copy_paste_command(
                 "nebius-cxcli ext-soperator upgrade "
-                f"{config_arg} --target {target_arg}{login_policy_suffix} --execute --approve"
+                f"{config_arg} --target {target_arg} --execute --approve"
             )
         else:
             console.print("Accepted onboarding actions:")
@@ -21069,18 +20962,11 @@ def _print_render_deploy_hint(config_path: Path) -> None:
                     f"{config_arg} --target {target_arg} --dry-run"
                 )
             console.print("After accepting each dry-run plan, execute that target:")
-            for target_ref, onboarding in migration_targets:
+            for target_ref, _onboarding in migration_targets:
                 target_arg = shlex.quote(target_ref)
-                login_policy_suffix = _external_soperator_execute_login_policy_suffix(
-                    config_path=config_path,
-                    payload=payload,
-                    target_ref=target_ref,
-                    onboarding=onboarding,
-                )
                 _print_copy_paste_command(
                     "nebius-cxcli ext-soperator upgrade "
-                    f"{config_arg} --target {target_arg}{login_policy_suffix} "
-                    "--execute --approve"
+                    f"{config_arg} --target {target_arg} --execute --approve"
                 )
         return
     if install_targets:
@@ -21153,6 +21039,7 @@ def _print_soperator_onboard_next_steps(
     migration_required: bool,
     onboarding: Mapping[str, Any],
 ) -> None:
+    del payload
     _ = migration_required
     config_arg = _config_cli_arg(config_path)
     target_arg = shlex.quote(normalize_component_token(target_ref) or target_ref)
@@ -21164,12 +21051,6 @@ def _print_soperator_onboard_next_steps(
     for line in guidance_lines:
         console.print(f"  {line}", soft_wrap=True)
     console.print("Next steps:")
-    login_policy_suffix = _external_soperator_execute_login_policy_suffix(
-        config_path=config_path,
-        payload=payload,
-        target_ref=target_ref,
-        onboarding=onboarding,
-    )
     commands: list[tuple[str, str]] = [
         (
             f"nebius-cxcli ext-soperator upgrade {config_arg} --target {target_arg} --dry-run",
@@ -21177,8 +21058,7 @@ def _print_soperator_onboard_next_steps(
         ),
         (
             "nebius-cxcli ext-soperator upgrade "
-            f"{config_arg} --target {target_arg}{login_policy_suffix} "
-            "--execute --approve",
+            f"{config_arg} --target {target_arg} --execute --approve",
             "After the dry run is accepted:",
         ),
     ]
@@ -23258,7 +23138,7 @@ def _soperator_onboarding_next_k8s_minor(current_version: str, max_version: str)
             f"{current.minor_text} is newer than the cxcli-supported external "
             f"onboarding target {maximum.minor_text}. Upgrade cxcli before running "
             "external Soperator onboarding for this cluster; cxcli will not generate "
-            "an external node-template target that it cannot validate."
+            "an external control-plane target that it cannot validate."
         )
     if current.major != maximum.major:
         return ""
@@ -23411,7 +23291,7 @@ def _resolve_soperator_onboarding_target_k8s_version(
             raw_version = default_version
     if not raw_version and required:
         raise RuntimeError(
-            "External Soperator onboarding selected an external MK8s node-template upgrade. "
+            "External Soperator onboarding selected an external MK8s control-plane upgrade. "
             f"Pass --to-k8s-version with the final Kubernetes target, for example {default_version}. "
             "cxcli will not silently choose a Kubernetes target for this accepted upgrade plan."
         )
@@ -24544,43 +24424,19 @@ def _locked_upgrade_path_from_report(
         _locked_upgrade_path_stable_json(catalog_material).encode("utf-8")
     ).hexdigest()
     campaign_node_template = onboarding.get("node_template_upgrade")
-    campaign_rollout = resolve_external_node_template_rollout(onboarding).to_manifest_dict()
-    slurm_scheduling_quiesce = bool(
-        campaign_node_template.get("slurm_scheduling_quiesce", True)
+    slurm_scheduling_pause = bool(
+        campaign_node_template.get("slurm_scheduling_pause", True)
         if isinstance(campaign_node_template, Mapping)
         else True
     )
-    rollout_contract = dict(copy.deepcopy(to_plain_data(campaign_rollout)))
-    worker_strategy = normalize_component_token(rollout_contract.get("strategy"))
-    worker_group_strategy = rollout_contract.get("worker_group_strategy")
-    worker_max_surge = (
-        worker_group_strategy.get("max_surge_count")
-        if isinstance(worker_group_strategy, Mapping)
-        else None
-    )
-    if slurm_scheduling_quiesce and (
-        worker_strategy != SOPERATOR_WORKER_ROLLOUT_STRATEGY_ZERO_SURGE or worker_max_surge != 0
-    ):
-        raise RuntimeError(
-            "External Soperator campaign cannot lock a quiesced worker rollout with "
-            "surge: rollout.strategy must be zero-surge and "
-            "rollout.worker_group_strategy.max_surge_count must be 0 when "
-            "slurm_scheduling_quiesce is true. Service-role rollout remains independent."
-        )
-    rollout_contract.update(
-        {
-            "slurm_scheduling_quiesce": slurm_scheduling_quiesce,
-            "global_unavailable_percent": 5,
-            "per_group_unavailable_percent": 5,
-            "per_group_unavailable_cap": 25,
-            "max_concurrent_worker_groups": 8,
-            "hard_concurrent_worker_group_ceiling": 32,
-            "failure_domain_budgeting": ["partition", "zone", "gpu"],
-            "service_role_mode": "serial",
-            "quiesced_worker_max_surge": 0,
-            "provider_drain_timeout": "unset",
-        }
-    )
+    compute_migration_contract = {
+        "mode": "blue-green-replacement",
+        "slurm_scheduling_pause": slurm_scheduling_pause,
+        "source_node_groups": "immutable-until-retirement",
+        "target_node_groups": "replacement",
+        "busy_worker_policy": "retain-until-job-and-epilog-finish",
+        "login_session_policy": "voluntary-handoff",
+    }
     jail_target_image = _non_empty_text(jail_rootfs.get("target_image"))
     jail_target_digest = _non_empty_text(jail_rootfs.get("target_digest"))
     jail_identity_warning = _non_empty_text(jail_rootfs.get("target_identity_warning"))
@@ -24643,7 +24499,7 @@ def _locked_upgrade_path_from_report(
             "jail_artifact_identity_warning": jail_identity_warning,
         },
         "managed_operators": managed_operator_targets,
-        "rollout": rollout_contract,
+        "compute_migration": compute_migration_contract,
         "segments": segments,
     }
     return finalize_soperator_upgrade_campaign(
@@ -25096,22 +24952,27 @@ def _print_soperator_onboarding_decision_summary(target_row: Mapping[str, Any]) 
                     role_text = _soperator_onboarding_layout_groups_text(raw_roles)
             suffix = f" Discovered placements: {role_text}." if role_text else ""
             console.print(
-                "[dim]- Compute layout decision: keep existing compute. Existing "
-                "Soperator service-role and worker node-group labels match the target "
-                "layout; no replacement compute node groups or compute migration are "
-                f"planned.{suffix}[/dim]"
+                "[dim]- Compute layout decision: preserve discovered compute shapes. "
+                "Existing Soperator service-role and worker labels match the target "
+                "layout; cxcli will clone those mappings onto target-version blue/green "
+                "replacement groups and will not update source node-group templates in "
+                f"place.{suffix}[/dim]"
             )
         else:
             console.print(
-                "[dim]- Compute layout decision: keep existing compute. cxcli will reuse "
-                "discovered node groups through apps.charts[].placements; no replacement "
-                "compute node groups are planned.[/dim]"
+                "[dim]- Compute layout decision: preserve discovered compute shapes. "
+                "cxcli will preserve discovered role and placement mappings on "
+                "target-version blue/green replacement groups; source node-group "
+                "templates remain immutable.[/dim]"
             )
     elif compute_mode == ONBOARDING_COMPUTE_MODE_CREATE_ALIGNED_NODE_GROUPS:
         console.print(
-            "[dim]- Compute layout decision: create profile-aligned node groups. cxcli "
-            "records compute remediation for the external upgrade plan; worker migration "
-            "is guarded by ext-soperator upgrade.[/dim]"
+            "[dim]- Compute layout decision: require blue/green replacement migration. "
+            "The explicit choice is authoritative even when current role labels are "
+            "compatible; target groups clone the accepted source hardware shape while "
+            "normalizing the target role, placement, storage, OS, and driver contract. "
+            "Source templates remain immutable and worker/login retirement stays guarded "
+            "by ext-soperator upgrade.[/dim]"
         )
     for line in _soperator_support_policy_plan_lines(
         report,
@@ -25136,9 +24997,11 @@ def _soperator_onboarding_storage_mode_choices(default: str) -> list[OptionChoic
 
 def _soperator_onboarding_compute_mode_choices(default: str) -> list[OptionChoice]:
     labels = {
-        ONBOARDING_COMPUTE_MODE_KEEP_EXISTING: "Keep existing compute node groups",
+        ONBOARDING_COMPUTE_MODE_KEEP_EXISTING: (
+            "Preserve source shapes on blue/green replacements"
+        ),
         ONBOARDING_COMPUTE_MODE_CREATE_ALIGNED_NODE_GROUPS: (
-            "Create profile-aligned Soperator node groups"
+            "Require blue/green replacement migration"
         ),
     }
     return [
@@ -25150,94 +25013,11 @@ def _soperator_onboarding_compute_mode_choices(default: str) -> list[OptionChoic
 def _print_soperator_onboarding_mode_choice_guidance() -> None:
     console.print()
     console.print(
-        "[dim]If you are not sure, choose the Create aligned SFS and node-groups "
-        "options. cxcli will keep existing storage or compute automatically when "
-        "the live cluster already satisfies the target Soperator layout.[/dim]"
+        "[dim]If you are not sure, choose the aligned SFS and required blue/green "
+        "migration options. The selected modes are authoritative; compatible live "
+        "resources may be exactly reused, but cxcli never silently changes your "
+        "choice or updates source node-group templates in place.[/dim]"
     )
-
-
-def _soperator_rollout_strategy_choices(default: str) -> list[OptionChoice]:
-    labels = {
-        SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE: (
-            "safe-surge  (uses temporary surge nodes; quota/capacity preflight)"
-        ),
-        SOPERATOR_WORKER_ROLLOUT_STRATEGY_ZERO_SURGE: (
-            "zero-surge  (default; no spare quota, active capacity can drop)"
-        ),
-    }
-    return [
-        OptionChoice(value=value, label=labels[value], recommended=value == default)
-        for value in (
-            SOPERATOR_WORKER_ROLLOUT_STRATEGY_ZERO_SURGE,
-            SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE,
-        )
-    ]
-
-
-def _soperator_rollout_wave_mode_choices(default: str) -> list[OptionChoice]:
-    return [
-        OptionChoice(
-            value="percent",
-            label="percent  (percentage of worker groups per wave)",
-            recommended=default == "percent",
-        ),
-        OptionChoice(
-            value="groups",
-            label="groups  (fixed worker groups per wave)",
-            recommended=default == "groups",
-        ),
-    ]
-
-
-_SOPERATOR_ROLLOUT_FIELD_GUIDANCE = {
-    "strategy": (
-        "Worker strategy: zero-surge is the default and avoids spare worker quota by "
-        "allowing one unavailable worker node per group; worker safe-surge preserves "
-        "worker capacity with temporary surge nodes and requires quota/capacity preflight."
-    ),
-    "service_role_strategy": (
-        "Service-role strategy: zero-surge is the default and avoids service-role "
-        "surge quota by allowing one unavailable service-role node per group; "
-        "safe-surge preserves service-role capacity with temporary surge nodes and "
-        "requires quota/capacity preflight."
-    ),
-    "wave_budget": (
-        "Safe-surge wave budget: choose groups for a fixed batch size, or percent to "
-        "scale each wave from the total worker-group count."
-    ),
-    "worker_wave_groups": (
-        "Safe-surge worker wave groups: fixed number of worker groups updated per "
-        "wave. This is already the concurrent worker-group limit; larger values "
-        "finish faster but increase quota needs and rollout blast radius."
-    ),
-    "worker_wave_percent": (
-        "Safe-surge worker wave percent: percentage of worker groups updated per wave. "
-        "cxcli rounds up to at least one group; optionally cap the result with "
-        "max_parallel_worker_groups."
-    ),
-    "max_parallel_worker_groups": (
-        "Max parallel worker groups: optional upper cap for percent-based "
-        "safe-surge waves. Leave blank to use the percentage result."
-    ),
-    "max_surge_count": (
-        "Max surge count: temporary extra nodes per active group. Use 1 for capacity-"
-        "preserving safe-surge; 0 requires max_unavailable_count greater than 0."
-    ),
-    "max_unavailable_count": (
-        "Max unavailable count: nodes per group allowed down during rollout. "
-        "0 preserves service and worker capacity; higher values allow temporary capacity loss."
-    ),
-    "drain_timeout": (
-        "Drain timeout: time to wait for pod eviction before MK8s may delete the node. "
-        "Use none to wait indefinitely."
-    ),
-}
-
-
-def _print_soperator_rollout_field_guidance(field_key: str) -> None:
-    message = _SOPERATOR_ROLLOUT_FIELD_GUIDANCE.get(field_key)
-    if message:
-        console.print(f"[dim]{message}[/dim]")
 
 
 def _prompt_soperator_validated_value(
@@ -25272,214 +25052,6 @@ def _prompt_soperator_validated_value(
             current = value
             continue
         return value
-
-
-def _prompt_soperator_rollout_value(
-    path_label: str,
-    current: object,
-    *,
-    validator: Callable[[object], dict[str, Any]],
-    choices: list[OptionChoice] | None = None,
-    type_hint: str | None = None,
-    required: bool = True,
-    unset_on_skip: bool = False,
-) -> object:
-    return _prompt_soperator_validated_value(
-        path_label,
-        current,
-        validator=validator,
-        choices=choices,
-        type_hint=type_hint,
-        required=required,
-        unset_on_skip=unset_on_skip,
-    )
-
-
-def _prompt_soperator_onboarding_rollout_manifest(
-    target_row: Mapping[str, Any],
-) -> dict[str, Any]:
-    onboarding = target_row.get("soperator_onboarding")
-    if not isinstance(onboarding, Mapping):
-        return _soperator_rollout_manifest_from_options()
-    current = resolve_external_node_template_rollout(onboarding)
-    console.print(
-        "[dim]Configure external worker node-template rollout for preserved worker "
-        "groups during the external upgrade.[/dim]"
-    )
-
-    def _strategy_defaults(strategy_value: str) -> tuple[int, int]:
-        if strategy_value == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE:
-            return (1, 0)
-        return (0, 1)
-
-    _print_soperator_rollout_field_guidance("strategy")
-    strategy = str(
-        _prompt_soperator_rollout_value(
-            "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.strategy",
-            current.strategy,
-            validator=lambda value: _soperator_rollout_manifest_from_options(
-                onboarding,
-                worker_rollout_strategy=str(value or ""),
-                strategy_max_surge_count=_strategy_defaults(str(value or ""))[0],
-                strategy_max_unavailable_count=_strategy_defaults(str(value or ""))[1],
-            ),
-            choices=_soperator_rollout_strategy_choices(current.strategy),
-            type_hint="string",
-            required=True,
-        )
-    )
-    _print_soperator_rollout_field_guidance("service_role_strategy")
-    service_role_strategy = str(
-        _prompt_soperator_rollout_value(
-            "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.service_role_strategy",
-            current.service_role_strategy,
-            validator=lambda value: _soperator_rollout_manifest_from_options(
-                onboarding,
-                worker_rollout_strategy=strategy,
-                service_role_rollout_strategy=str(value or ""),
-            ),
-            choices=_soperator_rollout_strategy_choices(current.service_role_strategy),
-            type_hint="string",
-            required=True,
-        )
-    )
-    selected_current = resolve_external_node_template_rollout(
-        onboarding,
-        strategy=strategy,
-        service_role_strategy=service_role_strategy,
-        strategy_max_surge_count=_strategy_defaults(strategy)[0],
-        strategy_max_unavailable_count=_strategy_defaults(strategy)[1],
-    )
-    worker_wave_groups: int | None = None
-    worker_wave_percent: int | None = None
-    max_parallel: int | None = None
-    if strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE:
-        wave_mode_default = (
-            "groups" if selected_current.worker_wave_groups is not None else "percent"
-        )
-        _print_soperator_rollout_field_guidance("wave_budget")
-        wave_mode = str(
-            _prompt_soperator_rollout_value(
-                "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.wave_budget",
-                wave_mode_default,
-                validator=lambda value: (
-                    {"value": value}
-                    if str(value or "") in {"percent", "groups"}
-                    else (_ for _ in ()).throw(ValueError("choose percent or groups"))
-                ),
-                choices=_soperator_rollout_wave_mode_choices(wave_mode_default),
-                type_hint="string",
-                required=True,
-            )
-        )
-        if wave_mode == "groups":
-            default_groups = selected_current.worker_wave_groups or 1
-            _print_soperator_rollout_field_guidance("worker_wave_groups")
-            worker_wave_groups = int(
-                _prompt_soperator_rollout_value(
-                    "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.worker_wave_groups",
-                    default_groups,
-                    validator=lambda value: _soperator_rollout_manifest_from_options(
-                        onboarding,
-                        worker_rollout_strategy=strategy,
-                        service_role_rollout_strategy=service_role_strategy,
-                        worker_wave_groups=int(value),
-                        worker_wave_percent=None,
-                    ),
-                    type_hint="integer",
-                    required=True,
-                )
-            )
-        else:
-            default_percent = (
-                selected_current.worker_wave_percent
-                or SOPERATOR_WORKER_ROLLOUT_DEFAULT_WAVE_PERCENT
-            )
-            _print_soperator_rollout_field_guidance("worker_wave_percent")
-            worker_wave_percent = int(
-                _prompt_soperator_rollout_value(
-                    "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.worker_wave_percent",
-                    default_percent,
-                    validator=lambda value: _soperator_rollout_manifest_from_options(
-                        onboarding,
-                        worker_rollout_strategy=strategy,
-                        service_role_rollout_strategy=service_role_strategy,
-                        worker_wave_groups=None,
-                        worker_wave_percent=int(value),
-                    ),
-                    type_hint="integer",
-                    required=True,
-                )
-            )
-            _print_soperator_rollout_field_guidance("max_parallel_worker_groups")
-            max_parallel_raw = _prompt_soperator_rollout_value(
-                "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.max_parallel_worker_groups",
-                selected_current.max_parallel_worker_groups,
-                validator=lambda value: _soperator_rollout_manifest_from_options(
-                    onboarding,
-                    worker_rollout_strategy=strategy,
-                    service_role_rollout_strategy=service_role_strategy,
-                    worker_wave_groups=worker_wave_groups,
-                    worker_wave_percent=worker_wave_percent,
-                    max_parallel_worker_groups=None if value in {None, ""} else int(value),
-                ),
-                type_hint="integer",
-                required=False,
-                unset_on_skip=True,
-            )
-            max_parallel = None if max_parallel_raw in {None, ""} else int(max_parallel_raw)
-    _print_soperator_rollout_field_guidance("max_surge_count")
-    max_surge = int(
-        _prompt_soperator_rollout_value(
-            "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.worker_group_strategy.max_surge_count",
-            selected_current.strategy_max_surge_count,
-            validator=lambda value: _soperator_rollout_manifest_from_options(
-                onboarding,
-                worker_rollout_strategy=strategy,
-                service_role_rollout_strategy=service_role_strategy,
-                worker_wave_groups=worker_wave_groups,
-                worker_wave_percent=worker_wave_percent,
-                max_parallel_worker_groups=max_parallel,
-                strategy_max_surge_count=int(value),
-            ),
-            type_hint="integer",
-            required=True,
-        )
-    )
-    _print_soperator_rollout_field_guidance("max_unavailable_count")
-    max_unavailable = int(
-        _prompt_soperator_rollout_value(
-            "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.worker_group_strategy.max_unavailable_count",
-            selected_current.strategy_max_unavailable_count,
-            validator=lambda value: _soperator_rollout_manifest_from_options(
-                onboarding,
-                worker_rollout_strategy=strategy,
-                service_role_rollout_strategy=service_role_strategy,
-                worker_wave_groups=worker_wave_groups,
-                worker_wave_percent=worker_wave_percent,
-                max_parallel_worker_groups=max_parallel,
-                strategy_max_surge_count=max_surge,
-                strategy_max_unavailable_count=int(value),
-            ),
-            type_hint="integer",
-            required=True,
-        )
-    )
-    # V3 deliberately leaves the provider drain timeout unset. This is not a
-    # customer choice: cxcli owns a separate bounded observation timeout and
-    # returns the segment as pending instead of allowing forced node deletion.
-    drain_timeout = "none"
-    return _soperator_rollout_manifest_from_options(
-        onboarding,
-        worker_rollout_strategy=strategy,
-        service_role_rollout_strategy=service_role_strategy,
-        worker_wave_groups=worker_wave_groups,
-        worker_wave_percent=worker_wave_percent,
-        max_parallel_worker_groups=max_parallel,
-        strategy_max_surge_count=max_surge,
-        strategy_max_unavailable_count=max_unavailable,
-        strategy_drain_timeout=drain_timeout,
-    )
 
 
 def _soperator_onboarding_required_storage_mode_for_report(report: Any) -> str:
@@ -25519,42 +25091,7 @@ def _validate_soperator_onboarding_storage_mode_for_report(
     return normalized_storage_mode
 
 
-def _soperator_rollout_manifest_from_options(
-    onboarding: Mapping[str, Any] | None = None,
-    *,
-    worker_rollout_strategy: str | None = None,
-    service_role_rollout_strategy: str | None = None,
-    worker_wave_groups: int | None = None,
-    worker_wave_percent: int | None = None,
-    max_parallel_worker_groups: int | None = None,
-    strategy_max_surge_count: int | None = None,
-    strategy_max_unavailable_count: int | None = None,
-    strategy_drain_timeout: str | None = None,
-) -> dict[str, Any]:
-    return resolve_external_node_template_rollout(
-        onboarding or {},
-        strategy=worker_rollout_strategy,
-        service_role_strategy=service_role_rollout_strategy,
-        worker_wave_groups=worker_wave_groups,
-        worker_wave_percent=worker_wave_percent,
-        max_parallel_worker_groups=max_parallel_worker_groups,
-        strategy_max_surge_count=strategy_max_surge_count,
-        strategy_max_unavailable_count=strategy_max_unavailable_count,
-        strategy_drain_timeout=strategy_drain_timeout,
-    ).to_manifest_dict()
-
-
-def _soperator_onboarding_default_slurm_scheduling_quiesce(
-    rollout_manifest: Mapping[str, Any],
-) -> bool:
-    """Derive the compatible scheduling default before campaign fingerprinting."""
-
-    return normalize_component_token(rollout_manifest.get("strategy")) != (
-        SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE
-    )
-
-
-def _soperator_target_row_requires_external_node_template_rollout(
+def _soperator_target_row_requires_external_node_template_upgrade(
     target_row: Mapping[str, Any],
 ) -> bool:
     onboarding = target_row.get("soperator_onboarding")
@@ -25568,20 +25105,7 @@ def _soperator_target_row_requires_external_node_template_rollout(
     }
 
 
-def _apply_soperator_rollout_manifest_to_target_row(
-    target_row: dict[str, Any],
-    rollout_manifest: Mapping[str, Any],
-) -> None:
-    onboarding = target_row.get("soperator_onboarding")
-    if not isinstance(onboarding, dict):
-        return
-    node_template = onboarding.setdefault("node_template_upgrade", {})
-    if not isinstance(node_template, dict):
-        return
-    node_template["rollout"] = copy.deepcopy(dict(rollout_manifest))
-
-
-def _apply_soperator_slurm_scheduling_quiesce_prompt_to_target_row(
+def _apply_soperator_slurm_scheduling_pause_prompt_to_target_row(
     target_row: dict[str, Any],
 ) -> None:
     onboarding = target_row.get("soperator_onboarding")
@@ -25590,11 +25114,11 @@ def _apply_soperator_slurm_scheduling_quiesce_prompt_to_target_row(
     node_template = onboarding.setdefault("node_template_upgrade", {})
     if not isinstance(node_template, dict):
         return
-    current = _soperator_onboarding_slurm_scheduling_quiesce(onboarding)
+    current = _soperator_onboarding_slurm_scheduling_pause(onboarding)
     value = _prompt_soperator_validated_value(
-        "deploy.targets[].soperator_onboarding.node_template_upgrade.slurm_scheduling_quiesce",
+        "deploy.targets[].soperator_onboarding.node_template_upgrade.slurm_scheduling_pause",
         "true" if current else "false",
-        validator=lambda raw: _validate_soperator_onboarding_slurm_scheduling_quiesce_prompt(raw),
+        validator=lambda raw: _validate_soperator_onboarding_slurm_scheduling_pause_prompt(raw),
         choices=[
             OptionChoice(value="true", label="true  (pause scheduling during worker upgrades)"),
             OptionChoice(value="false", label="false  (leave scheduling active)"),
@@ -25607,10 +25131,10 @@ def _apply_soperator_slurm_scheduling_quiesce_prompt_to_target_row(
         ),
     )
     normalized = str(value or "").strip().lower()
-    node_template["slurm_scheduling_quiesce"] = normalized in {"true", "yes", "1", "on"}
+    node_template["slurm_scheduling_pause"] = normalized in {"true", "yes", "1", "on"}
 
 
-def _validate_soperator_onboarding_slurm_scheduling_quiesce_prompt(value: object) -> bool:
+def _validate_soperator_onboarding_slurm_scheduling_pause_prompt(value: object) -> bool:
     normalized = str(value or "").strip().lower()
     if normalized in {"true", "yes", "1", "on"}:
         return True
@@ -25619,74 +25143,11 @@ def _validate_soperator_onboarding_slurm_scheduling_quiesce_prompt(value: object
     raise ValueError("choose true or false")
 
 
-def _soperator_target_row_slurm_scheduling_quiesce(target_row: Mapping[str, Any]) -> bool:
+def _soperator_target_row_slurm_scheduling_pause(target_row: Mapping[str, Any]) -> bool:
     onboarding = target_row.get("soperator_onboarding")
     if not isinstance(onboarding, Mapping):
         return True
-    return _soperator_onboarding_slurm_scheduling_quiesce(onboarding)
-
-
-def _warn_soperator_rollout_with_active_slurm_scheduling() -> None:
-    console.print(
-        f"{warning_markup('WARNING:', bold=True)} Slurm scheduling will remain active; "
-        "new jobs can continue landing on affected workers, so the upgrade may take "
-        "longer while cxcli waits for jobs to finish, requeue, or cancel.",
-        soft_wrap=True,
-    )
-
-
-def _soperator_rollout_options_provided(
-    *,
-    worker_rollout_strategy: str | None = None,
-    service_role_rollout_strategy: str | None = None,
-    worker_wave_groups: int | None = None,
-    worker_wave_percent: int | None = None,
-    max_parallel_worker_groups: int | None = None,
-    strategy_max_surge_count: int | None = None,
-    strategy_max_unavailable_count: int | None = None,
-    strategy_drain_timeout: str | None = None,
-) -> bool:
-    return any(
-        value is not None
-        for value in (
-            worker_rollout_strategy,
-            service_role_rollout_strategy,
-            worker_wave_groups,
-            worker_wave_percent,
-            max_parallel_worker_groups,
-            strategy_max_surge_count,
-            strategy_max_unavailable_count,
-            strategy_drain_timeout,
-        )
-    )
-
-
-def _soperator_rollout_command_options_from_target_row(
-    target_row: Mapping[str, Any],
-) -> dict[str, object]:
-    if not _soperator_target_row_requires_external_node_template_rollout(target_row):
-        return {}
-    onboarding = target_row.get("soperator_onboarding")
-    if not isinstance(onboarding, Mapping):
-        return {}
-    rollout = resolve_external_node_template_rollout(onboarding)
-    options: dict[str, object] = {
-        "strategy_max_surge_count": rollout.strategy_max_surge_count,
-        "strategy_max_unavailable_count": rollout.strategy_max_unavailable_count,
-        "strategy_drain_timeout": rollout.strategy_drain_timeout,
-    }
-    if rollout.strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE:
-        options["worker_rollout_strategy"] = rollout.strategy
-    if rollout.service_role_strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE:
-        options["service_role_rollout_strategy"] = rollout.service_role_strategy
-    if rollout.strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE:
-        if rollout.worker_wave_groups is not None:
-            options["worker_wave_groups"] = rollout.worker_wave_groups
-        elif rollout.worker_wave_percent is not None:
-            options["worker_wave_percent"] = rollout.worker_wave_percent
-        if rollout.max_parallel_worker_groups is not None:
-            options["max_parallel_worker_groups"] = rollout.max_parallel_worker_groups
-    return options
+    return _soperator_onboarding_slurm_scheduling_pause(onboarding)
 
 
 def _soperator_onboarding_target_defaults(
@@ -25702,7 +25163,6 @@ def _soperator_onboarding_target_defaults(
     pinned_chart_version: str = "",
     pinned_app_version: str = "",
     target_k8s_version: str | None = None,
-    rollout_manifest: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     normalized_target = normalize_component_token(target_ref) or "mk8s"
     if snapshot is None:
@@ -25730,23 +25190,10 @@ def _soperator_onboarding_target_defaults(
     requested_compute_mode = compute_mode or _soperator_onboarding_default_compute_mode_for_report(
         report
     )
-    effective_storage_mode = soperator_onboarding_effective_storage_mode(
-        report,
-        requested_storage_mode,
-    )
-    effective_compute_mode = soperator_onboarding_effective_compute_mode(
-        report,
-        requested_compute_mode,
-    )
     adjusted_report = soperator_onboarding_report_for_modes(
         report,
-        storage_mode=effective_storage_mode,
-        compute_mode=effective_compute_mode,
-    )
-    resolved_rollout_manifest = copy.deepcopy(
-        dict(rollout_manifest)
-        if rollout_manifest is not None
-        else _soperator_rollout_manifest_from_options()
+        storage_mode=requested_storage_mode,
+        compute_mode=requested_compute_mode,
     )
     target_row: dict[str, Any] = {
         "instance_id": normalized_target,
@@ -25758,8 +25205,8 @@ def _soperator_onboarding_target_defaults(
             "accepted": adjusted_report.state in ONBOARDING_ACCEPTABLE_STATES,
             "analysis_fingerprint": "",
             "state": adjusted_report.state,
-            "storage_mode": effective_storage_mode,
-            "compute_mode": effective_compute_mode,
+            "storage_mode": requested_storage_mode,
+            "compute_mode": requested_compute_mode,
             "actions": [action.id for action in adjusted_report.actions if action.selected],
             "target_version": adjusted_report.target_version,
             "source_version": adjusted_report.source_version,
@@ -25780,10 +25227,7 @@ def _soperator_onboarding_target_defaults(
             ),
             "target_os": ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS,
             "target_gpu_stack_preset": ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_GPU_STACK_PRESET,
-            "slurm_scheduling_quiesce": (
-                _soperator_onboarding_default_slurm_scheduling_quiesce(resolved_rollout_manifest)
-            ),
-            "rollout": resolved_rollout_manifest,
+            "slurm_scheduling_pause": True,
         }
     onboarding = target_row["soperator_onboarding"]
     enriched_report, _target_versions = _soperator_onboarding_enriched_report_payload(
@@ -25879,6 +25323,11 @@ def _print_soperator_campaign_acceptance(
         )
         mk8s = segment.get("mk8s")
         node_groups = mk8s.get("node_groups") if isinstance(mk8s, Mapping) else None
+        if node_groups:
+            console.print(
+                "  Source node groups below are immutable inventory/template locks; "
+                "the target values apply to separate blue/green replacement groups."
+            )
         for node_group in node_groups if isinstance(node_groups, list) else []:
             if not isinstance(node_group, Mapping):
                 continue
@@ -25886,7 +25335,7 @@ def _print_soperator_campaign_acceptance(
             if not isinstance(target, Mapping):
                 continue
             console.print(
-                "  - node group "
+                "  - replacement template from source node group "
                 f"{_non_empty_text(node_group.get('id')) or _non_empty_text(node_group.get('name'))}: "
                 f"Kubernetes {_non_empty_text(target.get('kubernetes_version'))}, "
                 f"OS {_non_empty_text(target.get('os'))}, drivers_preset "
@@ -25916,14 +25365,6 @@ def _soperator_onboard_bundle_command_args(
     compute_mode: str | None = None,
     source_version: str | None = None,
     to_k8s_version: str | None = None,
-    worker_rollout_strategy: str | None = None,
-    service_role_rollout_strategy: str | None = None,
-    worker_wave_groups: int | None = None,
-    worker_wave_percent: int | None = None,
-    max_parallel_worker_groups: int | None = None,
-    strategy_max_surge_count: int | None = None,
-    strategy_max_unavailable_count: int | None = None,
-    strategy_drain_timeout: str | None = None,
     validate_sources: bool | None = None,
     no_interactive: bool | None = None,
     use_accepted_row: bool = True,
@@ -25977,19 +25418,6 @@ def _soperator_onboard_bundle_command_args(
         "--to-k8s-version",
         to_k8s_version if to_k8s_version is not None else accepted_target_k8s_version,
     )
-    _append_text_option("--worker-rollout-strategy", worker_rollout_strategy)
-    _append_text_option("--service-role-rollout-strategy", service_role_rollout_strategy)
-    if worker_wave_groups is not None:
-        args.extend(["--worker-wave-groups", str(worker_wave_groups)])
-    if worker_wave_percent is not None:
-        args.extend(["--worker-wave-percent", str(worker_wave_percent)])
-    if max_parallel_worker_groups is not None:
-        args.extend(["--max-parallel-worker-groups", str(max_parallel_worker_groups)])
-    if strategy_max_surge_count is not None:
-        args.extend(["--strategy-max-surge-count", str(strategy_max_surge_count)])
-    if strategy_max_unavailable_count is not None:
-        args.extend(["--strategy-max-unavailable-count", str(strategy_max_unavailable_count)])
-    _append_text_option("--strategy-drain-timeout", strategy_drain_timeout)
     if validate_sources is False:
         args.append("--no-validate-sources")
     if no_interactive:
@@ -27204,12 +26632,16 @@ def _merge_provider_mk8s_template_snapshot(
             soperator_jail_filesystem_identity_from_provider_node_groups,
         )
 
-        cluster_identity["jail_filesystem_id"] = (
-            soperator_jail_filesystem_identity_from_provider_node_groups(
-                node_groups,
-                kubernetes_identity=_non_empty_text(cluster_identity.get("jail_filesystem_id")),
-            )
+        jail_filesystem_id = soperator_jail_filesystem_identity_from_provider_node_groups(
+            node_groups,
+            kubernetes_identity=_non_empty_text(cluster_identity.get("jail_filesystem_id")),
         )
+        cluster_identity["jail_filesystem_id"] = jail_filesystem_id
+        bridge_source = merged.get("controller_bridge_source")
+        if isinstance(bridge_source, dict):
+            jail_storage = bridge_source.get("jail_storage")
+            if isinstance(jail_storage, dict):
+                jail_storage["filesystem_id"] = jail_filesystem_id
     return merged
 
 
@@ -27446,14 +26878,6 @@ def _prompt_soperator_onboarding_target_row(
     to_k8s_version: str | None = None,
     allow_unsupported_soperator_upgrade_path: bool = False,
     validate_sources: bool = True,
-    worker_rollout_strategy: str | None = None,
-    service_role_rollout_strategy: str | None = None,
-    worker_wave_groups: int | None = None,
-    worker_wave_percent: int | None = None,
-    max_parallel_worker_groups: int | None = None,
-    strategy_max_surge_count: int | None = None,
-    strategy_max_unavailable_count: int | None = None,
-    strategy_drain_timeout: str | None = None,
 ) -> dict[str, Any]:
     if _non_empty_text(to_chart_version):
         raise RuntimeError(
@@ -27467,16 +26891,6 @@ def _prompt_soperator_onboarding_target_row(
         )
     explicit_storage_mode = storage_mode is not None
     explicit_compute_mode = compute_mode is not None
-    explicit_rollout_options = _soperator_rollout_options_provided(
-        worker_rollout_strategy=worker_rollout_strategy,
-        service_role_rollout_strategy=service_role_rollout_strategy,
-        worker_wave_groups=worker_wave_groups,
-        worker_wave_percent=worker_wave_percent,
-        max_parallel_worker_groups=max_parallel_worker_groups,
-        strategy_max_surge_count=strategy_max_surge_count,
-        strategy_max_unavailable_count=strategy_max_unavailable_count,
-        strategy_drain_timeout=strategy_drain_timeout,
-    )
     normalized_storage_mode = _normalize_soperator_onboarding_storage_mode(storage_mode)
     normalized_compute_mode = _normalize_soperator_onboarding_compute_mode(compute_mode)
     resolved_project_id = _non_empty_text(project_id)
@@ -27612,29 +27026,9 @@ def _prompt_soperator_onboarding_target_row(
         pinned_chart_version=chart_version,
         pinned_app_version=app_version,
         target_k8s_version=target_k8s_version,
-        rollout_manifest=_soperator_rollout_manifest_from_options(
-            worker_rollout_strategy=worker_rollout_strategy,
-            service_role_rollout_strategy=service_role_rollout_strategy,
-            worker_wave_groups=worker_wave_groups,
-            worker_wave_percent=worker_wave_percent,
-            max_parallel_worker_groups=max_parallel_worker_groups,
-            strategy_max_surge_count=strategy_max_surge_count,
-            strategy_max_unavailable_count=strategy_max_unavailable_count,
-            strategy_drain_timeout=strategy_drain_timeout,
-        ),
     )
-    if _soperator_target_row_requires_external_node_template_rollout(target_row):
-        _apply_soperator_slurm_scheduling_quiesce_prompt_to_target_row(target_row)
-    if (
-        _soperator_target_row_requires_external_node_template_rollout(target_row)
-        and not explicit_rollout_options
-        and not _soperator_target_row_slurm_scheduling_quiesce(target_row)
-    ):
-        _warn_soperator_rollout_with_active_slurm_scheduling()
-        _apply_soperator_rollout_manifest_to_target_row(
-            target_row,
-            _prompt_soperator_onboarding_rollout_manifest(target_row),
-        )
+    if _soperator_target_row_requires_external_node_template_upgrade(target_row):
+        _apply_soperator_slurm_scheduling_pause_prompt_to_target_row(target_row)
     _apply_soperator_support_policy_to_target_row(
         target_row,
         allow_unsupported_soperator_upgrade_path=allow_unsupported_soperator_upgrade_path,
@@ -27721,14 +27115,6 @@ def _soperator_onboarding_target_row_from_options(
     allow_unsupported_soperator_upgrade_path: bool = False,
     interactive: bool = False,
     validate_sources: bool = True,
-    worker_rollout_strategy: str | None = None,
-    service_role_rollout_strategy: str | None = None,
-    worker_wave_groups: int | None = None,
-    worker_wave_percent: int | None = None,
-    max_parallel_worker_groups: int | None = None,
-    strategy_max_surge_count: int | None = None,
-    strategy_max_unavailable_count: int | None = None,
-    strategy_drain_timeout: str | None = None,
 ) -> dict[str, Any]:
     if _non_empty_text(to_chart_version):
         raise RuntimeError(
@@ -27742,16 +27128,6 @@ def _soperator_onboarding_target_row_from_options(
         )
     explicit_storage_mode = storage_mode is not None
     explicit_compute_mode = compute_mode is not None
-    explicit_rollout_options = _soperator_rollout_options_provided(
-        worker_rollout_strategy=worker_rollout_strategy,
-        service_role_rollout_strategy=service_role_rollout_strategy,
-        worker_wave_groups=worker_wave_groups,
-        worker_wave_percent=worker_wave_percent,
-        max_parallel_worker_groups=max_parallel_worker_groups,
-        strategy_max_surge_count=strategy_max_surge_count,
-        strategy_max_unavailable_count=strategy_max_unavailable_count,
-        strategy_drain_timeout=strategy_drain_timeout,
-    )
     normalized_cluster_id = _non_empty_text(cluster_id)
     if not normalized_cluster_id:
         raise RuntimeError(
@@ -27939,30 +27315,9 @@ def _soperator_onboarding_target_row_from_options(
         pinned_chart_version=chart_version,
         pinned_app_version=app_version,
         target_k8s_version=target_k8s_version,
-        rollout_manifest=_soperator_rollout_manifest_from_options(
-            worker_rollout_strategy=worker_rollout_strategy,
-            service_role_rollout_strategy=service_role_rollout_strategy,
-            worker_wave_groups=worker_wave_groups,
-            worker_wave_percent=worker_wave_percent,
-            max_parallel_worker_groups=max_parallel_worker_groups,
-            strategy_max_surge_count=strategy_max_surge_count,
-            strategy_max_unavailable_count=strategy_max_unavailable_count,
-            strategy_drain_timeout=strategy_drain_timeout,
-        ),
     )
-    if interactive and _soperator_target_row_requires_external_node_template_rollout(target_row):
-        _apply_soperator_slurm_scheduling_quiesce_prompt_to_target_row(target_row)
-    if (
-        interactive
-        and _soperator_target_row_requires_external_node_template_rollout(target_row)
-        and not explicit_rollout_options
-        and not _soperator_target_row_slurm_scheduling_quiesce(target_row)
-    ):
-        _warn_soperator_rollout_with_active_slurm_scheduling()
-        _apply_soperator_rollout_manifest_to_target_row(
-            target_row,
-            _prompt_soperator_onboarding_rollout_manifest(target_row),
-        )
+    if interactive and _soperator_target_row_requires_external_node_template_upgrade(target_row):
+        _apply_soperator_slurm_scheduling_pause_prompt_to_target_row(target_row)
     _apply_soperator_support_policy_to_target_row(
         target_row,
         allow_unsupported_soperator_upgrade_path=allow_unsupported_soperator_upgrade_path,
@@ -50746,6 +50101,195 @@ def _mk8s_token_exec_command(
     return sys.executable, ("-m", "nebius_cxcli", *args)
 
 
+_MK8S_CREDENTIAL_MAX_ATTEMPTS = 2
+_MK8S_CREDENTIAL_ATTEMPT_TIMEOUT_SECONDS = 8.0
+_MK8S_CREDENTIAL_ATTEMPT_WALL_TIMEOUT_SECONDS = 12.0
+_MK8S_CREDENTIAL_TOTAL_BUDGET_SECONDS = 28.0
+_MK8S_CREDENTIAL_CLOSE_TIMEOUT_SECONDS = 1.0
+_MK8S_CREDENTIAL_RETRY_DELAY_SECONDS = 1.0
+
+
+class _Mk8sExecSdkLogSilencer:
+    def __init__(self) -> None:
+        self.logger = logging.getLogger("nebius")
+        self.handlers = list(self.logger.handlers)
+        self.level = self.logger.level
+        self.propagate = self.logger.propagate
+        self.disabled = self.logger.disabled
+        self.global_disable_level = logging.root.manager.disable
+        self._restored = False
+        self._lock = threading.Lock()
+
+    def activate(self) -> None:
+        logging.disable(logging.CRITICAL)
+        self.logger.handlers = [logging.NullHandler()]
+        self.logger.setLevel(logging.CRITICAL + 1)
+        self.logger.propagate = False
+        self.logger.disabled = False
+
+    def restore(self) -> None:
+        with self._lock:
+            if self._restored:
+                return
+            self.logger.handlers = self.handlers
+            self.logger.setLevel(self.level)
+            self.logger.propagate = self.propagate
+            self.logger.disabled = self.disabled
+            logging.disable(self.global_disable_level)
+            self._restored = True
+
+
+def _close_mk8s_exec_sdk(
+    sdk: object,
+    *,
+    silencer: _Mk8sExecSdkLogSilencer,
+    timeout_seconds: float,
+) -> bool:
+    completed = threading.Event()
+
+    def _close() -> None:
+        try:
+            sync_close = getattr(sdk, "sync_close", None)
+            if callable(sync_close):
+                sync_close(timeout=timeout_seconds)
+        except Exception:
+            pass
+        finally:
+            silencer.restore()
+            completed.set()
+
+    thread = threading.Thread(
+        target=_close,
+        name="nebius-cxcli-mk8s-exec-auth-close",
+        daemon=True,
+    )
+    thread.start()
+    thread.join(timeout=timeout_seconds)
+    return completed.is_set()
+
+
+class _Mk8sExecAuthSdk:
+    def __init__(self, *, parent_id: str | None, endpoint: str | None, context: str) -> None:
+        self.parent_id = parent_id
+        self.endpoint = endpoint
+        self.context = context
+
+    def get_token_sync(self, *, timeout: float) -> object:
+        last_timeout: TimeoutError | None = None
+        deadline = time.monotonic() + _MK8S_CREDENTIAL_TOTAL_BUDGET_SECONDS
+        for attempt in range(1, _MK8S_CREDENTIAL_MAX_ATTEMPTS + 1):
+            silencer = _Mk8sExecSdkLogSilencer()
+            silencer.activate()
+            result: dict[str, object] = {}
+            completed = threading.Event()
+            decision = threading.Event()
+            abandoned = threading.Event()
+            attempt_timeout = min(timeout, _MK8S_CREDENTIAL_ATTEMPT_TIMEOUT_SECONDS)
+
+            def _acquire(
+                attempt_result: dict[str, object] = result,
+                attempt_completed: threading.Event = completed,
+                attempt_decision: threading.Event = decision,
+                attempt_abandoned: threading.Event = abandoned,
+                attempt_silencer: _Mk8sExecSdkLogSilencer = silencer,
+                exchange_timeout: float = attempt_timeout,
+            ) -> None:
+                local_sdk = None
+                try:
+                    local_sdk = init_nebius_sdk(
+                        parent_id=self.parent_id,
+                        endpoint=self.endpoint,
+                        context=self.context,
+                    )
+                    attempt_result["sdk"] = local_sdk
+                    attempt_result["credential"] = local_sdk.get_token_sync(
+                        timeout=exchange_timeout
+                    )
+                except Exception as exc:
+                    attempt_result["error"] = exc
+                finally:
+                    attempt_completed.set()
+                    attempt_decision.wait()
+                    if attempt_abandoned.is_set():
+                        if local_sdk is None:
+                            attempt_silencer.restore()
+                        else:
+                            _close_mk8s_exec_sdk(
+                                local_sdk,
+                                silencer=attempt_silencer,
+                                timeout_seconds=_MK8S_CREDENTIAL_CLOSE_TIMEOUT_SECONDS,
+                            )
+
+            remaining = deadline - time.monotonic()
+            attempt_wall_timeout = min(
+                _MK8S_CREDENTIAL_ATTEMPT_WALL_TIMEOUT_SECONDS,
+                max(0.0, remaining - _MK8S_CREDENTIAL_CLOSE_TIMEOUT_SECONDS),
+            )
+            if attempt_wall_timeout <= 0:
+                silencer.restore()
+                break
+            thread = threading.Thread(
+                target=_acquire,
+                name="nebius-cxcli-mk8s-exec-auth-acquire",
+                daemon=True,
+            )
+            thread.start()
+            if not completed.wait(timeout=attempt_wall_timeout):
+                abandoned.set()
+                decision.set()
+                raise TimeoutError(
+                    "Nebius SDK initialization or exchange exceeded the MK8s exec auth budget."
+                )
+
+            decision.set()
+            sdk = result.get("sdk")
+            if sdk is None:
+                silencer.restore()
+            else:
+                remaining = max(0.0, deadline - time.monotonic())
+                close_timeout = max(
+                    0.01,
+                    min(_MK8S_CREDENTIAL_CLOSE_TIMEOUT_SECONDS, remaining),
+                )
+                if not _close_mk8s_exec_sdk(
+                    sdk,
+                    silencer=silencer,
+                    timeout_seconds=close_timeout,
+                ):
+                    raise TimeoutError(
+                        "Nebius SDK cleanup timed out for MK8s exec auth."
+                    ) from last_timeout
+
+            error = result.get("error")
+            if isinstance(error, TimeoutError):
+                last_timeout = error
+            elif isinstance(error, Exception):
+                raise error
+            elif "credential" in result:
+                return result["credential"]
+            else:  # pragma: no cover - worker postcondition guard
+                raise RuntimeError("MK8s exec auth worker returned no result.")
+            if attempt < _MK8S_CREDENTIAL_MAX_ATTEMPTS:
+                if (
+                    deadline - time.monotonic()
+                    <= _MK8S_CREDENTIAL_RETRY_DELAY_SECONDS + _MK8S_CREDENTIAL_CLOSE_TIMEOUT_SECONDS
+                ):
+                    break
+                time.sleep(_MK8S_CREDENTIAL_RETRY_DELAY_SECONDS)
+        raise TimeoutError(
+            "Nebius credential service timed out while creating an MK8s exec credential."
+        ) from last_timeout
+
+    def sync_close(self) -> None:
+        """Underlying SDK clients are closed after every bounded attempt."""
+
+
+def _init_mk8s_exec_auth_sdk(
+    *, parent_id: str | None, endpoint: str | None, context: str
+) -> _Mk8sExecAuthSdk:
+    return _Mk8sExecAuthSdk(parent_id=parent_id, endpoint=endpoint, context=context)
+
+
 def _mk8s_kubeconfig_payload(spec: _Mk8sKubeconfigSpec) -> dict[str, Any]:
     ca_data = base64.b64encode(spec.ca_pem.encode("utf-8")).decode("ascii")
     return {
@@ -56459,7 +56003,8 @@ def _external_soperator_live_provider_observations_for_segment(
         template = group_provider.get("node_template")
         if not isinstance(template, Mapping):
             raise RuntimeError(
-                f"External Soperator live node group {group_id} lacks node-template evidence."
+                "External Soperator live source compute group "
+                f"{group_id} lacks immutable template evidence."
             )
         observations.append(
             {
@@ -56528,7 +56073,7 @@ def _external_soperator_campaign_journal(
     except RuntimeError as exc:
         raise RuntimeError(
             "recovery-required: external Soperator operation journal does not satisfy "
-            f"the strict v3 contract in {path}: {exc}"
+            f"the strict v4 contract in {path}: {exc}"
         ) from exc
     return path, raw
 
@@ -56573,10 +56118,10 @@ def _reject_unsupported_external_soperator_onboarding_checkpoints(
     payload: Mapping[str, Any],
     candidate_target: Mapping[str, Any],
 ) -> None:
-    """Fail closed on every known retired or non-v3 journal for this cluster.
+    """Fail closed on every known retired or non-v4 journal for this cluster.
 
     Onboarding is the campaign authority, but it is not a checkpoint migration
-    command.  A retired checkpoint location or a non-v3 campaign journal is an
+    command. A retired checkpoint location or non-v4 journal is an
     explicit recovery boundary and must be handled by the operator without any
     config/archive mutation.
     """
@@ -56658,7 +56203,7 @@ def _reject_unsupported_external_soperator_onboarding_checkpoints(
     if existing_target is None and orphaned_active_paths:
         orphaned = sorted(orphaned_active_paths)[0]
         raise RuntimeError(
-            "recovery-required: a v3 external Soperator operation journal exists for an "
+            "recovery-required: a v4 external Soperator operation journal exists for an "
             f"unregistered target at {orphaned}. Restore the matching config-owned "
             "campaign or archive the orphan after review; onboarding did not mutate "
             "config.yaml."
@@ -57220,7 +56765,7 @@ def _reconcile_external_soperator_onboarding_campaign(
             if not _external_soperator_campaign(row):
                 raise RuntimeError(
                     "recovery-required: existing external Soperator target "
-                    f"'{existing_ref}' has no v3 campaign; automatic adoption or "
+                    f"'{existing_ref}' has no v4 campaign; automatic adoption or "
                     "conversion is not supported."
                 )
 
@@ -57228,7 +56773,7 @@ def _reconcile_external_soperator_onboarding_campaign(
     candidate_campaign = _external_soperator_campaign(candidate_target)
     if not candidate_campaign:
         raise RuntimeError(
-            "External Soperator onboarding did not compile a v3 campaign; config.yaml "
+            "External Soperator onboarding did not compile a v4 campaign; config.yaml "
             "was not changed."
         )
     _reject_unsupported_external_soperator_onboarding_checkpoints(
@@ -57272,7 +56817,7 @@ def _reconcile_external_soperator_onboarding_campaign(
     existing_campaign = _external_soperator_campaign(existing_target)
     if not existing_campaign:
         raise RuntimeError(
-            "recovery-required: the existing external Soperator target has no v3 campaign; "
+            "recovery-required: the existing external Soperator target has no v4 campaign; "
             "automatic adoption or conversion is not supported."
         )
     conflicts = _external_soperator_campaign_identity_conflicts(
@@ -57413,7 +56958,6 @@ def _reobserve_external_soperator_onboarding_target(
     accepted_source_version = _non_empty_text(source_version) or _non_empty_text(
         onboarding.get("source_version")
     )
-    rollout = _soperator_rollout_command_options_from_target_row(candidate_target)
     return _soperator_onboarding_target_row_from_options(
         payload=payload,
         target_id=component_instance_id(candidate_target),
@@ -57428,26 +56972,6 @@ def _reobserve_external_soperator_onboarding_target(
         allow_unsupported_soperator_upgrade_path=False,
         interactive=False,
         validate_sources=False,
-        worker_rollout_strategy=cast(str | None, rollout.get("worker_rollout_strategy")),
-        service_role_rollout_strategy=cast(
-            str | None,
-            rollout.get("service_role_rollout_strategy"),
-        ),
-        worker_wave_groups=cast(int | None, rollout.get("worker_wave_groups")),
-        worker_wave_percent=cast(int | None, rollout.get("worker_wave_percent")),
-        max_parallel_worker_groups=cast(
-            int | None,
-            rollout.get("max_parallel_worker_groups"),
-        ),
-        strategy_max_surge_count=cast(
-            int | None,
-            rollout.get("strategy_max_surge_count"),
-        ),
-        strategy_max_unavailable_count=cast(
-            int | None,
-            rollout.get("strategy_max_unavailable_count"),
-        ),
-        strategy_drain_timeout=cast(str | None, rollout.get("strategy_drain_timeout")),
     )
 
 
@@ -57491,11 +57015,11 @@ def _collect_external_soperator_active_campaign_observation(
     onboarding = target.get("soperator_onboarding")
     if not campaign or not isinstance(onboarding, Mapping):
         raise RuntimeError(
-            "recovery-required: the active external Soperator target has no v3 campaign."
+            "recovery-required: the active external Soperator target has no v4 campaign."
         )
     final_targets = campaign.get("final_targets")
     if not isinstance(final_targets, Mapping):
-        raise RuntimeError("recovery-required: the active v3 campaign has no final targets.")
+        raise RuntimeError("recovery-required: the active v4 campaign has no final targets.")
     target_chart = _non_empty_text(final_targets.get("soperator_chart"))
     target_app = _non_empty_text(final_targets.get("soperator_app"))
     target_k8s = _non_empty_text(final_targets.get("kubernetes"))
@@ -57647,7 +57171,7 @@ def _report_active_external_soperator_onboard_rerun(
         campaign = _external_soperator_campaign(existing_target)
         if not target_ref or not campaign:
             raise RuntimeError(
-                "recovery-required: the existing external Soperator target has no v3 campaign."
+                "recovery-required: the existing external Soperator target has no v4 campaign."
             )
         _reject_unsupported_external_soperator_onboarding_checkpoints(
             config_path=config_path,
@@ -60395,7 +59919,7 @@ def ext_soperator_backup_command(
         bool,
         typer.Option(
             "--dry-run",
-            help="Print the backup plan without quiescing accounting or writing an archive.",
+            help="Print the backup plan without pausing accounting or writing an archive.",
         ),
     ] = False,
 ) -> None:
@@ -60796,8 +60320,7 @@ def ext_soperator_discover_command(
         "--tenant-id TENANT --project-id PROJECT --region-id eu-north1 "
         "--cluster-id mk8scluster-... --target-id external-cluster "
         "--storage-mode keep-existing-storage --compute-mode keep-existing-compute "
-        "--to-k8s-version <major.minor> "
-        "--worker-rollout-strategy safe-surge --worker-wave-groups 1 --no-interactive. "
+        "--to-k8s-version <major.minor> --no-interactive. "
         "Pass a config path to update an existing project, or pass a deployments root "
         "to create a project config under the deployments root, then choose one existing "
         "Nebius MK8s cluster from the project. "
@@ -60808,8 +60331,8 @@ def ext_soperator_discover_command(
         "API/kubeconfig access; they do not SSH from the operator workstation "
         "into login or worker nodes. "
         "The command updates config.yaml and writes "
-        f"generated/reports/{SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME}/<target>/manifest.json; "
-        "the first run registers immutable cluster identity and locks a complete v3 "
+        "generated/reports/soperator-clusters/<cluster-key>/discovery/manifest.json; "
+        "the first run registers immutable cluster identity and locks a complete v4 "
         "campaign under deploy.targets[].soperator_onboarding.upgrade_path. Reruns "
         "report the active campaign without replacing it, or propose a later complete "
         "campaign after live-verified completion. Non-interactive mode requires the "
@@ -60924,8 +60447,9 @@ def soperator_onboard_command(
             "--storage-mode",
             help=(
                 "Storage decision for an existing Soperator: keep-existing-storage "
-                "preserves live PVC/PV sizes and selectors; create-aligned-sfs "
-                "plans aligned SFS when the accepted profile requires storage remediation."
+                "preserves live PVC/PV sizes and selectors without aligned storage work; "
+                "create-aligned-sfs explicitly creates or exactly reuses independently "
+                "owned aligned SFS targets before handoff."
             ),
         ),
     ] = None,
@@ -60935,8 +60459,12 @@ def soperator_onboard_command(
             "--compute-mode",
             help=(
                 "Compute decision for an existing Soperator: keep-existing-compute "
-                "reuses discovered node groups; create-aligned-node-groups plans "
-                "cxcli-aligned service/worker node groups when upgrade requires it."
+                "preserves discovered role, placement, and shape mappings on blue/green "
+                "target replacements when an upgrade requires them; "
+                "create-aligned-node-groups explicitly requires the blue/green "
+                "replacement-migration action even when current role labels are "
+                "compatible. Replacement templates clone the accepted source hardware "
+                "shape; source node groups are never updated in place."
             ),
         ),
     ] = None,
@@ -60956,97 +60484,11 @@ def soperator_onboard_command(
         typer.Option(
             "--to-k8s-version",
             help=(
-                "Target Kubernetes major.minor version for external node-template upgrade "
+                "Target Kubernetes major.minor version for external control-plane upgrade "
                 "analysis. Interactive onboarding recommends the highest endpoint reachable "
                 "by every concrete node group and locks every contiguous hop. Non-interactive "
                 "runs must pass the exact final target; omission prints the recommendation "
                 "without writing a campaign."
-            ),
-        ),
-    ] = None,
-    worker_rollout_strategy: Annotated[
-        str | None,
-        typer.Option(
-            "--worker-rollout-strategy",
-            help=(
-                "External node-template rollout strategy to persist in config.yaml: "
-                "safe-surge or zero-surge. Worker wave flags control worker-group "
-                "parallelism when safe-surge is selected. Non-interactive onboarding "
-                "deterministically leaves Slurm scheduling active for safe-surge and "
-                "quiesces scheduling for zero-surge; both values are fingerprinted."
-            ),
-        ),
-    ] = None,
-    service_role_rollout_strategy: Annotated[
-        str | None,
-        typer.Option(
-            "--service-role-rollout-strategy",
-            help=(
-                "External service-role node-template rollout strategy to persist in "
-                "config.yaml: zero-surge or safe-surge. Default: zero-surge."
-            ),
-        ),
-    ] = None,
-    worker_wave_groups: Annotated[
-        int | None,
-        typer.Option(
-            "--worker-wave-groups",
-            help=(
-                "Fixed number of worker groups to update per safe-surge wave. "
-                "Mutually exclusive with --worker-wave-percent and "
-                "--max-parallel-worker-groups."
-            ),
-        ),
-    ] = None,
-    worker_wave_percent: Annotated[
-        int | None,
-        typer.Option(
-            "--worker-wave-percent",
-            help=(
-                "Worker rollout wave budget as a percentage of worker groups, rounded "
-                "up to at least one. Can be capped with --max-parallel-worker-groups. "
-                "Mutually exclusive with --worker-wave-groups."
-            ),
-        ),
-    ] = None,
-    max_parallel_worker_groups: Annotated[
-        int | None,
-        typer.Option(
-            "--max-parallel-worker-groups",
-            help=(
-                "Optional upper cap for percent-based safe-surge waves. Use "
-                "--worker-wave-groups instead for an exact fixed group count."
-            ),
-        ),
-    ] = None,
-    strategy_max_surge_count: Annotated[
-        int | None,
-        typer.Option(
-            "--strategy-max-surge-count",
-            help=(
-                "Nebius node-group strategy max_surge count for each active worker group. "
-                "Default: 0 for zero-surge / 1 for safe-surge."
-            ),
-        ),
-    ] = None,
-    strategy_max_unavailable_count: Annotated[
-        int | None,
-        typer.Option(
-            "--strategy-max-unavailable-count",
-            help=(
-                "Nebius node-group strategy max_unavailable count for each active worker group. "
-                "Default: 1 for zero-surge / 0 for safe-surge."
-            ),
-        ),
-    ] = None,
-    strategy_drain_timeout: Annotated[
-        str | None,
-        typer.Option(
-            "--strategy-drain-timeout",
-            help=(
-                "Nebius node-group strategy drain timeout for each active worker group: "
-                "must be none. The provider timeout stays unset so cxcli never "
-                "force-deletes draining nodes."
             ),
         ),
     ] = None,
@@ -61122,14 +60564,6 @@ def soperator_onboard_command(
                     allow_unsupported_soperator_upgrade_path=False,
                     validate_sources=validate_sources,
                     compute_mode=compute_mode_opt,
-                    worker_rollout_strategy=worker_rollout_strategy,
-                    service_role_rollout_strategy=service_role_rollout_strategy,
-                    worker_wave_groups=worker_wave_groups,
-                    worker_wave_percent=worker_wave_percent,
-                    max_parallel_worker_groups=max_parallel_worker_groups,
-                    strategy_max_surge_count=strategy_max_surge_count,
-                    strategy_max_unavailable_count=strategy_max_unavailable_count,
-                    strategy_drain_timeout=strategy_drain_timeout,
                 )
             else:
                 target_row = _prompt_soperator_onboarding_target_row(
@@ -61143,14 +60577,6 @@ def soperator_onboard_command(
                     to_k8s_version=to_k8s_version,
                     allow_unsupported_soperator_upgrade_path=False,
                     validate_sources=validate_sources,
-                    worker_rollout_strategy=worker_rollout_strategy,
-                    service_role_rollout_strategy=service_role_rollout_strategy,
-                    worker_wave_groups=worker_wave_groups,
-                    worker_wave_percent=worker_wave_percent,
-                    max_parallel_worker_groups=max_parallel_worker_groups,
-                    strategy_max_surge_count=strategy_max_surge_count,
-                    strategy_max_unavailable_count=strategy_max_unavailable_count,
-                    strategy_drain_timeout=strategy_drain_timeout,
                 )
         else:
             target_row = _soperator_onboarding_target_row_from_options(
@@ -61167,14 +60593,6 @@ def soperator_onboard_command(
                 allow_unsupported_soperator_upgrade_path=False,
                 interactive=interactive_mode,
                 validate_sources=validate_sources,
-                worker_rollout_strategy=worker_rollout_strategy,
-                service_role_rollout_strategy=service_role_rollout_strategy,
-                worker_wave_groups=worker_wave_groups,
-                worker_wave_percent=worker_wave_percent,
-                max_parallel_worker_groups=max_parallel_worker_groups,
-                strategy_max_surge_count=strategy_max_surge_count,
-                strategy_max_unavailable_count=strategy_max_unavailable_count,
-                strategy_drain_timeout=strategy_drain_timeout,
             )
 
         accepted_onboarding = target_row.get("soperator_onboarding")
@@ -61189,7 +60607,6 @@ def soperator_onboard_command(
                 accepted_to_k8s_version = _non_empty_text(
                     accepted_node_template.get("target_k8s_version")
                 )
-        accepted_rollout_options = _soperator_rollout_command_options_from_target_row(target_row)
         onboard_command_args = _soperator_onboard_bundle_command_args(
             config_path=config_path,
             target_row=target_row,
@@ -61201,29 +60618,6 @@ def soperator_onboard_command(
             compute_mode=_non_empty_text(compute_mode_opt) or accepted_compute_mode,
             source_version=source_version_opt,
             to_k8s_version=_non_empty_text(to_k8s_version) or accepted_to_k8s_version,
-            worker_rollout_strategy=worker_rollout_strategy
-            if worker_rollout_strategy is not None
-            else cast(str | None, accepted_rollout_options.get("worker_rollout_strategy")),
-            service_role_rollout_strategy=service_role_rollout_strategy
-            if service_role_rollout_strategy is not None
-            else cast(str | None, accepted_rollout_options.get("service_role_rollout_strategy")),
-            worker_wave_groups=worker_wave_groups
-            if worker_wave_groups is not None
-            else cast(int | None, accepted_rollout_options.get("worker_wave_groups")),
-            worker_wave_percent=worker_wave_percent
-            if worker_wave_percent is not None
-            else cast(int | None, accepted_rollout_options.get("worker_wave_percent")),
-            max_parallel_worker_groups=max_parallel_worker_groups
-            if max_parallel_worker_groups is not None
-            else cast(int | None, accepted_rollout_options.get("max_parallel_worker_groups")),
-            strategy_max_surge_count=strategy_max_surge_count
-            if strategy_max_surge_count is not None
-            else cast(int | None, accepted_rollout_options.get("strategy_max_surge_count")),
-            strategy_max_unavailable_count=strategy_max_unavailable_count
-            if strategy_max_unavailable_count is not None
-            else cast(int | None, accepted_rollout_options.get("strategy_max_unavailable_count")),
-            strategy_drain_timeout=_non_empty_text(strategy_drain_timeout)
-            or cast(str | None, accepted_rollout_options.get("strategy_drain_timeout")),
             validate_sources=validate_sources,
             no_interactive=no_interactive,
             use_accepted_row=False,
@@ -61466,12 +60860,10 @@ _SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES = (
     "Live executor contract: --execute rechecks source release, discovery "
     "fingerprint, and external upgrade quota before running accepted "
     "checkpointed phases in order.",
-    "External node-template contract: direct Nebius updates run one accepted "
-    "Kubernetes minor hop per upgrade run: control plane first, then service "
-    "groups and bounded worker waves.",
-    "Node-template quota contract: zero-surge needs no spare quota but can "
-    "reduce active capacity; safe-surge needs temporary surge quota/capacity "
-    "and Ready schedulable workers.",
+    "External MK8s contract: direct Nebius updates advance only the control plane "
+    "one accepted Kubernetes minor hop per upgrade run; source node groups are immutable.",
+    "Compute quota contract: cxcli preflights full blue/green replacement capacity "
+    "for target service and worker node groups before mutation.",
     "Status contract: approved --execute reports phase-aware MK8s, storage, "
     "compute, cutover, Jail Upgrade, validation, and retirement status.",
     "Validation contract: validation runs MK8s inventory, configured deploy-time "
@@ -61506,25 +60898,16 @@ _SOPERATOR_MIGRATION_PLAN_TOPIC_STYLES = {
     "Accepted Kubernetes hop": "bold blue",
     "External upgrade required": "bold yellow",
     "Storage migrate work required": "yellow",
-    "Compute migrate work required": "yellow",
+    "Blue/green compute replacement required": "yellow",
     "Soperator upgrade required": "yellow",
-    "External node-template upgrade required": "yellow",
+    "External control-plane upgrade required": "yellow",
     "Target GPU stack reconciliation required": "yellow",
-    "External node-template rollout": "bold cyan",
-    "Worker rollout strategy": "bold cyan",
-    "Worker wave parallelism": "bold cyan",
-    "Node-group per-group strategy": "bold cyan",
-    "Safe-surge spare capacity required": "bold yellow",
-    "Zero-surge spare capacity required": "bold yellow",
-    "Large quiesced worker rollout guidance": "bold yellow",
-    "Node-group drain timeout": "yellow",
-    "Service-role rollout": "cyan",
-    "Planned worker waves": "cyan",
+    "External MK8s and compute migration": "bold cyan",
     "Upgrade phases": "bold magenta",
     "Execution controls": "bold cyan",
     "Live executor contract": "bold blue",
-    "External node-template contract": "bold blue",
-    "Node-template quota contract": "bold blue",
+    "External MK8s contract": "bold blue",
+    "Compute quota contract": "bold blue",
     "Status contract": "bold blue",
     "Validation contract": "bold blue",
     "Failure handling contract": "bold blue",
@@ -61539,9 +60922,9 @@ _SOPERATOR_MIGRATION_REQUIRED_TOPICS = frozenset(
     {
         "External upgrade required",
         "Storage migrate work required",
-        "Compute migrate work required",
+        "Blue/green compute replacement required",
         "Soperator upgrade required",
-        "External node-template upgrade required",
+        "External control-plane upgrade required",
         "Target GPU stack reconciliation required",
     }
 )
@@ -61911,7 +61294,27 @@ def _load_soperator_source_discovery_report(
         raise RuntimeError(
             f"Soperator source discovery bundle is missing report details: {report_path}"
         )
-    return payload
+    snapshot = payload.get("snapshot")
+    collection_errors = snapshot.get("collection_errors") if isinstance(snapshot, Mapping) else None
+    if isinstance(collection_errors, list) and collection_errors:
+        raise RuntimeError(
+            "Fresh Soperator discovery is incomplete and cannot authorize an upgrade plan. "
+            f"Collection errors: {len(collection_errors)}. Rerun ext-soperator onboard after "
+            "resolving discovery access."
+        )
+    target = soperator_onboarding_target(lookup_payload, target_ref=target_ref)
+    onboarding = target.get("soperator_onboarding") if isinstance(target, Mapping) else None
+    if not isinstance(onboarding, Mapping):
+        raise RuntimeError(
+            "Soperator source discovery bundle cannot be bound to accepted onboarding "
+            f"actions for target '{target_ref}'. Rerun ext-soperator onboard."
+        )
+    effective_payload = copy.deepcopy(payload)
+    effective_payload["report"] = soperator_runtime_report_with_accepted_upgrade_plan(
+        report,
+        onboarding,
+    )
+    return effective_payload
 
 
 def _soperator_migration_action_flags(onboarding: Mapping[str, Any]) -> dict[str, bool]:
@@ -61953,7 +61356,11 @@ def _soperator_upgrade_phase_allowed_by_actions(
     if phase_id in {"create-aligned-sfs", "online-bulk-data-sync"}:
         return bool(flags["storage_migration_required"])
     if phase_id == "rolling-compute-migration":
-        return bool(flags["compute_migration_required"] or flags["soperator_upgrade_required"])
+        return bool(
+            flags["compute_migration_required"]
+            or flags["soperator_upgrade_required"]
+            or flags["external_node_template_upgrade_required"]
+        )
     if phase_id in {
         "final-control-plane-cutover",
         "validation-and-rollback-hold",
@@ -61997,7 +61404,7 @@ def _require_soperator_migration_actions(
     )
     raise RuntimeError(
         "External Soperator upgrade requires at least one action in the config-owned "
-        f"v3 campaign. {selected_detail} Rerun ext-soperator onboard to inspect the "
+        f"v4 campaign. {selected_detail} Rerun ext-soperator onboard to inspect the "
         "active campaign."
     )
 
@@ -62073,7 +61480,7 @@ def _soperator_migration_output_phases(
     ):
         external_node_template_phase = {
             "id": _SOPERATOR_EXTERNAL_NODE_TEMPLATE_PHASE_ID,
-            "title": "Upgrade MK8s control plane and node templates",
+            "title": "Upgrade MK8s control plane only",
             "status": "planned",
             "requires_customer_approval": True,
         }
@@ -62109,15 +61516,21 @@ def _soperator_migration_output_phases(
         output_phases.insert(insert_at, target_gpu_phase)
     if (
         output_phases
-        and flags["soperator_upgrade_required"]
+        and (
+            flags["soperator_upgrade_required"] or flags["external_node_template_upgrade_required"]
+        )
         and not any(
             str(phase.get("id", "") or "").strip() == "rolling-compute-migration"
             for phase in output_phases
         )
     ):
-        soperator_upgrade_phase = {
+        rolling_compute_phase = {
             "id": "rolling-compute-migration",
-            "title": "Soperator chart upgrade with existing compute layout",
+            "title": (
+                "Soperator chart upgrade on blue/green target compute"
+                if flags["soperator_upgrade_required"]
+                else "Kubernetes target-version blue/green compute replacement"
+            ),
             "status": "planned",
         }
         insert_at = len(output_phases)
@@ -62135,7 +61548,7 @@ def _soperator_migration_output_phases(
             else:
                 continue
             break
-        output_phases.insert(insert_at, soperator_upgrade_phase)
+        output_phases.insert(insert_at, rolling_compute_phase)
     if (
         output_phases
         and (
@@ -62228,7 +61641,7 @@ def _soperator_migration_phase_display_title(
         if approval_hops:
             return "Customer approval for " + " and ".join(approval_hops)
     if phase_id == _SOPERATOR_EXTERNAL_NODE_TEMPLATE_PHASE_ID and k8s_hop:
-        return f"Kubernetes hop {k8s_hop}: upgrade MK8s control plane and node templates"
+        return f"Kubernetes hop {k8s_hop}: upgrade MK8s control plane only"
     if phase_id == _SOPERATOR_TARGET_GPU_STACK_PHASE_ID and target_k8s:
         return f"Kubernetes {target_k8s} GPU stack: reconcile target MK8s GPU operator stack"
     if (
@@ -62236,16 +61649,13 @@ def _soperator_migration_phase_display_title(
         and flags.get("soperator_upgrade_required")
         and soperator_hop
     ):
-        if not flags.get("compute_migration_required"):
-            return f"Soperator hop {soperator_hop}: upgrade chart with existing compute layout"
-        if "existing compute layout" in title:
-            return f"Soperator hop {soperator_hop}: upgrade chart with existing compute layout"
-        if "preserved worker node groups" in title:
-            return (
-                f"Soperator hop {soperator_hop}: in-place compute remediation "
-                "with preserved worker node groups"
-            )
-        return f"Soperator hop {soperator_hop}: {title}"
+        return f"Soperator hop {soperator_hop}: blue/green target compute replacement"
+    if (
+        phase_id == "rolling-compute-migration"
+        and flags.get("external_node_template_upgrade_required")
+        and k8s_hop
+    ):
+        return f"Kubernetes hop {k8s_hop}: blue/green target compute replacement"
     if (
         phase_id == "final-control-plane-cutover"
         and flags.get("soperator_upgrade_required")
@@ -62257,6 +61667,14 @@ def _soperator_migration_phase_display_title(
             return f"Soperator {target_soperator} cutover: final Soperator chart cutover"
         if title.startswith("Final Soperator "):
             return title.replace("Final Soperator ", f"Final Soperator {target_soperator} ", 1)
+    if (
+        phase_id == "final-control-plane-cutover"
+        and flags.get("external_node_template_upgrade_required")
+        and not flags.get("soperator_upgrade_required")
+        and target_k8s
+        and not flags.get("storage_migration_required")
+    ):
+        return f"Kubernetes {target_k8s} cutover: final target-version compute handoff"
     if phase_id == POPULATE_JAIL_REFRESH_PHASE_ID:
         if flags.get("soperator_upgrade_required") and soperator_hop:
             return (
@@ -62326,7 +61744,7 @@ def _locked_upgrade_checkpoint_payload(
     }.intersection(checkpoint)
     if forbidden_desired_keys:
         raise RuntimeError(
-            "External Soperator v3 operation journal contains forbidden desired-campaign "
+            "External Soperator v4 operation journal contains forbidden desired-campaign "
             "field(s): "
             + ", ".join(sorted(forbidden_desired_keys))
             + ". config.yaml is the only campaign authority."
@@ -62336,7 +61754,7 @@ def _locked_upgrade_checkpoint_payload(
     except RuntimeError as exc:
         raise RuntimeError(
             "recovery-required: external Soperator operation journal does not satisfy "
-            f"the strict v3 contract in {checkpoint_path}: {exc}"
+            f"the strict v4 contract in {checkpoint_path}: {exc}"
         ) from exc
     return checkpoint
 
@@ -62378,6 +61796,20 @@ def _external_soperator_resume_slurmcluster_identity_scope(
     rolling = rolling if isinstance(rolling, Mapping) else {}
     apply_started_at = _non_empty_text(rolling.get("target_values_apply_started_at"))
     if not apply_started_at:
+        return None
+
+    # A prepared Helm intent is durable before the login-session pre-hook runs. If that
+    # hook is still checkpointed as ``checking``, the Helm command was never dispatched,
+    # so discovery must remain source-only instead of requiring a target SlurmCluster
+    # that cannot exist yet. Once the hook passes/deferred, the dual-CR crash window is
+    # real and the narrow target-handoff identity scope remains required.
+    target_gate = rolling.get("target_helm_login_session_gate")
+    target_gate = target_gate if isinstance(target_gate, Mapping) else {}
+    if (
+        _non_empty_text(target_gate.get("status")) == "checking"
+        and not isinstance(rolling.get("slurmcluster_handoff_binding"), Mapping)
+        and not _non_empty_text(rolling.get("target_values_applied_at"))
+    ):
         return None
 
     source_ref = checkpoint.get("source_slurmcluster_ref")
@@ -62552,8 +61984,10 @@ def _locked_upgrade_path_progress(
     progress: dict[str, Any] = {
         "fingerprint": fingerprint,
         "completed_segment_ids": [],
+        "completed_phases": [],
         "current_segment_id": "",
         "checkpoint_path": str(checkpoint_path),
+        "mutating_progress_started": False,
         "pending_phase": "",
         "journal_present": False,
     }
@@ -62578,6 +62012,12 @@ def _locked_upgrade_path_progress(
         if str(segment_id or "").strip()
     ]
     progress["current_segment_id"] = _non_empty_text(checkpoint.get("current_segment_id"))
+    progress["completed_phases"] = [
+        str(phase_id or "").strip()
+        for phase_id in checkpoint.get("completed_phases", []) or []
+        if str(phase_id or "").strip()
+    ]
+    progress["mutating_progress_started"] = _checkpoint_mutating_progress_started(checkpoint)
     progress["pending_phase"] = _non_empty_text(checkpoint.get("pending_phase"))
     segment_state = checkpoint.get("segment_state")
     if isinstance(segment_state, Mapping):
@@ -62586,6 +62026,29 @@ def _locked_upgrade_path_progress(
         checkpoint
     )
     return progress
+
+
+def _locked_upgrade_path_resumes_current_segment(
+    *,
+    progress: Mapping[str, Any],
+    current_segment: Mapping[str, Any] | None,
+) -> bool:
+    """Allow exact mixed waypoints only when the journal proves active segment work."""
+
+    if not progress.get("journal_present") or not isinstance(current_segment, Mapping):
+        return False
+    segment_id = _non_empty_text(current_segment.get("id"))
+    if not segment_id or _non_empty_text(progress.get("current_segment_id")) != segment_id:
+        return False
+    completed = {
+        _non_empty_text(completed_id)
+        for completed_id in progress.get("completed_segment_ids", []) or []
+        if _non_empty_text(completed_id)
+    }
+    if segment_id in completed:
+        return False
+    pending_phase = _non_empty_text(progress.get("pending_phase"))
+    return pending_phase not in {"", "none"} or bool(progress.get("mutating_progress_started"))
 
 
 def _locked_upgrade_path_current_segment(
@@ -62685,7 +62148,7 @@ def _project_campaign_managed_operator_rows(
     managed_operators = upgrade_path.get("managed_operators")
     if not isinstance(managed_operators, Mapping):
         raise RuntimeError(
-            "recovery-required: the v3 campaign is missing immutable managed GPU/network "
+            "recovery-required: the v4 campaign is missing immutable managed GPU/network "
             "operator targets. config.yaml was not changed."
         )
     if not managed_operators:
@@ -62694,7 +62157,7 @@ def _project_campaign_managed_operator_rows(
     charts = apps.get("charts") if isinstance(apps, MutableMapping) else None
     if not isinstance(charts, list):
         raise RuntimeError(
-            "recovery-required: the accepted v3 campaign requires target-scoped managed "
+            "recovery-required: the accepted v4 campaign requires target-scoped managed "
             "GPU/network operator app rows, but apps.charts is missing."
         )
     normalized_target = normalize_component_token(target_ref)
@@ -62722,7 +62185,7 @@ def _project_campaign_managed_operator_rows(
         pin = managed_operators.get(role)
         if not isinstance(pin, Mapping):
             raise RuntimeError(
-                "recovery-required: the v3 campaign is missing its immutable "
+                "recovery-required: the v4 campaign is missing its immutable "
                 f"managed_operators.{role} target."
             )
         component_id = _non_empty_text(pin.get("component_id"))
@@ -62733,18 +62196,18 @@ def _project_campaign_managed_operator_rows(
         namespace = _non_empty_text(pin.get("namespace"))
         if not all((component_id, chart_version, chart_name, repository, release_name, namespace)):
             raise RuntimeError(
-                "recovery-required: the v3 campaign managed operator target is incomplete: "
+                "recovery-required: the v4 campaign managed operator target is incomplete: "
                 f"managed_operators.{role}."
             )
         if normalize_component_token(component_id) != expected_component_id:
             raise RuntimeError(
-                "recovery-required: the v3 campaign managed operator identity conflicts "
+                "recovery-required: the v4 campaign managed operator identity conflicts "
                 f"with its role: managed_operators.{role}.component_id={component_id}."
             )
         row = rows_by_component.get(normalize_component_token(component_id))
         if row is None:
             raise RuntimeError(
-                "recovery-required: the accepted v3 campaign requires the target-scoped "
+                "recovery-required: the accepted v4 campaign requires the target-scoped "
                 f"app row {component_id}@{target_ref}. Rerun ext-soperator onboard only "
                 "after resolving the config conflict."
             )
@@ -62788,12 +62251,11 @@ def _soperator_effective_upgrade_payload_for_segment(
     node_template = onboarding.get("node_template_upgrade")
     if not isinstance(node_template, MutableMapping):
         node_template = {}
-    campaign_rollout = upgrade_path.get("rollout")
-    if isinstance(campaign_rollout, Mapping):
+    compute_migration = upgrade_path.get("compute_migration")
+    if isinstance(compute_migration, Mapping):
         node_template = dict(node_template)
-        node_template["rollout"] = copy.deepcopy(to_plain_data(campaign_rollout))
-        node_template["slurm_scheduling_quiesce"] = bool(
-            campaign_rollout.get("slurm_scheduling_quiesce", True)
+        node_template["slurm_scheduling_pause"] = bool(
+            compute_migration.get("slurm_scheduling_pause", True)
         )
     if ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE in segment_actions:
         node_template = dict(node_template)
@@ -62926,8 +62388,6 @@ def _locked_upgrade_path_plan_lines(
     progress: Mapping[str, Any],
     current_segment: Mapping[str, Any] | None,
     path_source: str = "",
-    execute_login_session_policy: str = "",
-    execute_login_session_drain_timeout: str = "30m",
 ) -> list[str]:
     segments = _locked_upgrade_path_segments(upgrade_path)
     completed = {
@@ -63040,17 +62500,10 @@ def _locked_upgrade_path_plan_lines(
         "Remaining segments: " + (", ".join(remaining_titles) if remaining_titles else "none")
     )
     if current_segment is not None:
-        login_policy_options = ""
-        if execute_login_session_policy:
-            login_policy_options = (
-                f"--login-session-policy {shlex.quote(execute_login_session_policy)} "
-                "--login-session-drain-timeout "
-                f"{shlex.quote(execute_login_session_drain_timeout)} "
-            )
         next_command = (
             "nebius-cxcli ext-soperator upgrade "
             f"{shlex.quote(str(config_path))} --target {shlex.quote(target_ref)} "
-            f"{login_policy_options}--execute --approve"
+            "--execute --approve"
         )
         lines.append(f"Next command: {next_command}")
     else:
@@ -63082,74 +62535,6 @@ def _external_soperator_plan_values(
     return None
 
 
-def _external_soperator_first_adoption_login_policy_required(
-    *,
-    payload: Mapping[str, Any],
-    target_ref: str,
-    persistent_mount_migration_planned: bool,
-    jail_persistent_mounts: Sequence[str] = (),
-) -> bool:
-    del jail_persistent_mounts
-    return (
-        persistent_mount_migration_planned
-        and _external_soperator_plan_values(payload, target_ref) is not None
-    )
-
-
-def _soperator_onboarding_jail_refresh_required(
-    *,
-    config_path: Path,
-    payload: Mapping[str, Any],
-    target_ref: str,
-    onboarding: Mapping[str, Any],
-) -> bool:
-    upgrade_path = _locked_upgrade_path_from_onboarding(onboarding)
-    if not upgrade_path:
-        return False
-    try:
-        progress = _locked_upgrade_path_progress(
-            config_path=config_path,
-            target_ref=target_ref,
-            upgrade_path=upgrade_path,
-            payload_or_config=payload,
-        )
-    except RuntimeError:
-        # Next-step rendering happens after onboarding/render writes succeed. A stale
-        # checkpoint must not turn that successful mutation into an output-only
-        # failure; execute will still reject it with the full repair guidance.
-        progress = {}
-    current_segment = _locked_upgrade_path_current_segment(
-        upgrade_path=upgrade_path,
-        progress=progress,
-    )
-    jail_rootfs = (
-        current_segment.get("jail_rootfs") if isinstance(current_segment, Mapping) else None
-    )
-    return isinstance(jail_rootfs, Mapping) and jail_rootfs.get("refresh_required") is True
-
-
-def _external_soperator_execute_login_policy_suffix(
-    *,
-    config_path: Path,
-    payload: Mapping[str, Any],
-    target_ref: str,
-    onboarding: Mapping[str, Any],
-) -> str:
-    required = _external_soperator_first_adoption_login_policy_required(
-        payload=payload,
-        target_ref=target_ref,
-        persistent_mount_migration_planned=_soperator_onboarding_jail_refresh_required(
-            config_path=config_path,
-            payload=payload,
-            target_ref=target_ref,
-            onboarding=onboarding,
-        ),
-    )
-    if not required:
-        return ""
-    return f" --login-session-policy {EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE}"
-
-
 def _external_soperator_persistent_mount_plan_lines(
     *,
     payload: Mapping[str, Any],
@@ -63159,16 +62544,34 @@ def _external_soperator_persistent_mount_plan_lines(
     values = _external_soperator_plan_values(payload, target_ref)
     if values is None:
         return []
+    jail_rootfs = values.get("jailRootfs")
+    adoption = jail_rootfs.get("adoption") if isinstance(jail_rootfs, Mapping) else None
+    active_source = (
+        str(adoption.get("activeSource") or "").strip() if isinstance(adoption, Mapping) else ""
+    )
+    if active_source not in {"", "legacy-rootfs", "slot"}:
+        raise RuntimeError(
+            "External Soperator Jail rootfs adoption.activeSource must be legacy-rootfs or slot."
+        )
+    legacy_active_source = not active_source or jail_rootfs_uses_legacy_active_source(values)
     explicit_mounts = parse_jail_persistent_mount_specs(jail_persistent_mounts)
     patched_values = apply_jail_persistent_mount_values(
         values,
         target_ref=target_ref,
         persistent_mounts=explicit_mounts,
         layout="external",
+        legacy_active_source=legacy_active_source,
+    )
+    slots = active_passive_jail_rootfs_slots(patched_values)
+    handoff_source = (
+        "legacy-rootfs"
+        if jail_rootfs_uses_legacy_active_source(patched_values)
+        else slots.active_slot
     )
     status = jail_persistent_mount_status(patched_values)
     lines = ["", "Persistent jail mounts:"]
     lines.append(f"Status: {status.status}; {status.reason}.")
+    lines.append(f"Planned Jail rootfs handoff: {handoff_source} -> {slots.passive_slot}.")
     decisions = jail_persistent_mount_decisions(
         original_values=values,
         patched_values=patched_values,
@@ -63213,18 +62616,8 @@ def _format_soperator_migration_plan_lines(
     payload: Mapping[str, Any],
     source_report: Mapping[str, Any],
     dry_run: bool,
-    worker_rollout_strategy: str | None = None,
-    service_role_rollout_strategy: str | None = None,
-    worker_wave_groups: int | None = None,
-    worker_wave_percent: int | None = None,
-    max_parallel_worker_groups: int | None = None,
-    strategy_max_surge_count: int | None = None,
-    strategy_max_unavailable_count: int | None = None,
-    strategy_drain_timeout: str | None = None,
     job_policy: str | None = None,
-    slurm_scheduling_quiesce: bool = True,
-    login_session_policy: str = EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
-    login_session_drain_timeout: str = "30m",
+    slurm_scheduling_pause: bool = True,
     populate_jail_refresh: str = "auto",
     jail_persistent_mounts: Sequence[str] = (),
     upgrade_path: Mapping[str, Any] | None = None,
@@ -63284,24 +62677,6 @@ def _format_soperator_migration_plan_lines(
     )
     resolved_populate_jail_refresh = normalize_populate_jail_refresh_mode(populate_jail_refresh)
     explicit_populate_jail_refresh = resolved_populate_jail_refresh in {"force", "manual"}
-    persistent_mount_migration_planned = resolved_populate_jail_refresh != "manual" and (
-        explicit_persistent_mount_requested
-        or jail_rootfs_refresh_required
-        or resolved_populate_jail_refresh == "force"
-    )
-    first_adoption_login_policy_required = _external_soperator_first_adoption_login_policy_required(
-        payload=payload,
-        target_ref=target_ref,
-        persistent_mount_migration_planned=persistent_mount_migration_planned,
-        jail_persistent_mounts=jail_persistent_mounts,
-    )
-    execute_login_session_policy = (
-        login_session_policy
-        if login_session_policy != EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY
-        else ""
-    )
-    if first_adoption_login_policy_required and not execute_login_session_policy:
-        execute_login_session_policy = EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE
     lines = [
         "External Soperator upgrade plan:",
         "",
@@ -63337,10 +62712,6 @@ def _format_soperator_migration_plan_lines(
                 progress=upgrade_path_progress or {},
                 current_segment=current_segment,
                 path_source=upgrade_path_source,
-                execute_login_session_policy=execute_login_session_policy,
-                execute_login_session_drain_timeout=(
-                    login_session_drain_timeout if execute_login_session_policy else ""
-                ),
             )
         )
     lines.extend(
@@ -63352,11 +62723,19 @@ def _format_soperator_migration_plan_lines(
             "Storage migrate work required: "
             + ("yes" if flags["storage_migration_required"] else "no"),
             "Compute mode: " + _soperator_migration_compute_mode_label(compute_mode),
-            "Compute migrate work required: "
-            + ("yes" if flags["compute_migration_required"] else "no"),
+            "Blue/green compute replacement required: "
+            + (
+                "yes"
+                if (
+                    flags["compute_migration_required"]
+                    or flags["soperator_upgrade_required"]
+                    or flags["external_node_template_upgrade_required"]
+                )
+                else "no"
+            ),
             "Soperator upgrade required: "
             + ("yes" if flags["soperator_upgrade_required"] else "no"),
-            "External node-template upgrade required: "
+            "External control-plane upgrade required: "
             + ("yes" if flags["external_node_template_upgrade_required"] else "no"),
             "Target GPU stack reconciliation required: "
             + ("yes" if flags["target_gpu_reconciliation_required"] else "no"),
@@ -63376,30 +62755,20 @@ def _format_soperator_migration_plan_lines(
             )
         )
     if flags["external_node_template_upgrade_required"]:
-        rollout = resolve_external_node_template_rollout(
-            onboarding,
-            strategy=worker_rollout_strategy,
-            service_role_strategy=service_role_rollout_strategy,
-            worker_wave_groups=worker_wave_groups,
-            worker_wave_percent=worker_wave_percent,
-            max_parallel_worker_groups=max_parallel_worker_groups,
-            strategy_max_surge_count=strategy_max_surge_count,
-            strategy_max_unavailable_count=strategy_max_unavailable_count,
-            strategy_drain_timeout=strategy_drain_timeout,
-        )
-        lines.extend(["", "External node-template rollout:"])
-        lines.extend(
-            _external_node_template_rollout_plan_lines(
-                rollout=rollout,
-                source_report=source_report,
-                slurm_scheduling_quiesce=slurm_scheduling_quiesce,
-            )
+        lines.extend(["", "External MK8s and compute migration:"])
+        lines.append(
+            "Control plane: upgraded first; source service and worker node groups remain "
+            "untouched at their source Kubernetes version."
         )
         lines.append(
-            "Slurm scheduling quiesce: "
+            "Compute: rolling-compute-migration creates and validates blue/green target "
+            "groups before retiring cleared source groups."
+        )
+        lines.append(
+            "Slurm scheduling pause: "
             + (
                 "enabled; affected worker partitions are set DOWN so new jobs queue"
-                if slurm_scheduling_quiesce
+                if slurm_scheduling_pause
                 else "disabled; pending affected jobs remain blocking"
             )
         )
@@ -63441,21 +62810,12 @@ def _format_soperator_migration_plan_lines(
     lines.extend(["", "Execution controls:", f"Execution mode: {mode}."])
     if job_policy:
         lines.append(f"Slurm job policy: {job_policy}")
-    lines.append(f"Login SSH session policy: {login_session_policy}")
-    if first_adoption_login_policy_required:
-        lines.append(
-            "First-adoption Jail Upgrade login continuity: the generated execute command "
-            f"uses --login-session-policy {execute_login_session_policy} so active SSH "
-            "sessions are considered before login rollout."
-        )
-    if login_session_policy != EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY:
-        lines.append(f"Login SSH session drain timeout: {login_session_drain_timeout}")
     lines.append(
-        "Login continuity: new SSH connections require a ready target login endpoint "
-        "before source login retirement. Existing TCP sessions cannot migrate between "
-        "pods: wait-active pauses before mutation until observed sessions drain but cannot "
-        "lock out a new connection after its final probe; grace-period only delays mutation, "
-        "and target-ready does not wait."
+        "Login SSH continuity: unconditional voluntary handoff. cxcli preserves the exact "
+        "source login Pod, node, host-key identity, shell process, and TCP connection while a "
+        "target login endpoint becomes ready. The upgrade remains pending indefinitely until "
+        "the user voluntarily exits the protected source session; there is no timeout or "
+        "forced disconnect. Existing TCP sessions are not migrated between Pods."
     )
     lines.append(
         "Login LoadBalancer allocation retention: cxcli automatically converts and "
@@ -63795,18 +63155,87 @@ def ext_soperator_scale_up_command(
 
 
 @ext_soperator_app.command(
+    "jobs",
+    short_help="Control Slurm jobs through the active v4 upgrade journal.",
+    epilog=(
+        "Example: nebius-cxcli ext-soperator jobs "
+        "./deployments/tenant/project/config.yaml --target external-cluster. "
+        "After the jobs screen reports an absent protected SSH socket, record the user's "
+        "explicit voluntary-exit confirmation with --acknowledge-login-exit FINGERPRINT. "
+        "Run this in a separate terminal while ext-soperator upgrade is active. "
+        "Actions are bound to immutable JobID, user, submit-time, and restart lineage. "
+        "During controller gaps or accept-only handoffs, actions remain durably Queued; "
+        "an uncertain RPC result becomes non-resendable Indeterminate, is reconciled from "
+        "exact postconditions, and blocks cleanup while unresolved."
+    ),
+)
+def ext_soperator_jobs_command(
+    config_path: Annotated[
+        Path,
+        typer.Argument(metavar="CONFIG_YAML", help=_CONFIG_YAML_ARGUMENT_HELP),
+    ],
+    target_ref_opt: Annotated[
+        str | None,
+        typer.Option(
+            "--target",
+            help=(
+                "cxcli target id of the onboarded external MK8s target "
+                "(deploy.targets[].instance_id). Omit only when config.yaml contains "
+                "exactly one onboarded Soperator target."
+            ),
+        ),
+    ] = None,
+    acknowledge_login_exit: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--acknowledge-login-exit",
+            help=(
+                "Acknowledge that the user voluntarily closed the exact protected SSH "
+                "socket fingerprint reported as absent; repeatable. The acknowledgement "
+                "is accepted only for a currently pending fingerprint and never disconnects "
+                "or releases a live session."
+            ),
+        ),
+    ] = None,
+) -> None:
+    """Open the durable during-upgrade Slurm job-control screen."""
+
+    try:
+        payload = _load_source_payload(config_path)
+        target_ref = _resolve_soperator_migration_target_ref(
+            payload,
+            target_ref=target_ref_opt,
+        )
+        validate_soperator_onboarding_acceptance(payload, target_ref=target_ref)
+        with _soperator_migration_execute_payload(
+            payload, target_ref=target_ref
+        ) as execution_payload:
+            checkpoint_path = run_external_soperator_upgrade_jobs(
+                config_path=config_path,
+                target_ref=target_ref,
+                payload=execution_payload,
+                acknowledge_login_exit_fingerprints=tuple(acknowledge_login_exit or ()),
+            )
+        console.print(
+            f"Durable Slurm action journal: {checkpoint_path}",
+            soft_wrap=True,
+        )
+    except typer.Exit:
+        raise
+    except Exception as exc:  # pragma: no cover - CLI surface
+        _exit_with_error(exc)
+
+
+@ext_soperator_app.command(
     "upgrade",
     short_help="Upgrade an onboarded external Soperator cluster end to end.",
     epilog=(
         "Examples: nebius-cxcli ext-soperator upgrade "
         "./deployments/tenant/project/config.yaml --target external-cluster --dry-run; "
         "nebius-cxcli ext-soperator upgrade ./deployments/tenant/project/config.yaml "
-        "--target external-cluster --login-session-policy wait-active --execute --approve; "
+        "--target external-cluster --execute --approve; "
         "nebius-cxcli ext-soperator upgrade ./deployments/tenant/project/config.yaml "
         "--target external-cluster --job-policy wait-to-finish --job-wait-timeout 2h --dry-run; "
-        "nebius-cxcli ext-soperator upgrade ./deployments/tenant/project/config.yaml "
-        "--target external-cluster --worker-rollout-strategy safe-surge "
-        "--worker-wave-groups 1 --job-policy wait-to-finish --execute --approve. "
         "--target is the cxcli target "
         "id saved as deploy.targets[].instance_id, not the Nebius cluster_id or "
         "display name. The target must already be onboarded and accepted through "
@@ -63815,22 +63244,22 @@ def ext_soperator_scale_up_command(
         "at their existing /mnt/jail paths, so it does not require a copy-time login "
         "writer hold. Execute read-only probes those paths and requires the jail-mount "
         "DaemonSet plus Bound legacy, slot, and persistent PVCs before consumer switch. "
-        "Onboard/render guidance and the default dry-run plan use wait-active for a "
-        "first-adoption Jail Upgrade so at least one active login session drains before "
-        "source retirement. "
-        "An explicitly relocated non-overlapping persistent path still "
-        "uses the guarded copy workflow and requires wait-active or grace-period. "
+        "Login continuity is unconditional: cxcli preserves the exact source login "
+        "Pod/node, host-key identity, shell process, and TCP connection until a target "
+        "login endpoint is ready and the user voluntarily exits the protected source "
+        "session. The upgrade remains pending indefinitely; it never times out or forces "
+        "the SSH session closed, and existing TCP sessions are not migrated between Pods. "
         "Core external Soperator execution uses Nebius API and Kubernetes "
         "API/kubectl exec for cloud, cluster, and Slurm actions; it does not SSH "
         "from the operator workstation into login or worker nodes. "
         "--execute --approve refreshes discovery, creates a restore-capable backup, "
         "then reconciles and runs at most one locked campaign segment: one external MK8s "
-        "control-plane/node-template hop plus any Soperator/storage/compute/GPU-stack/"
+        "control-plane hop plus blue/green Soperator/storage/compute/GPU-stack/"
         "Jail Upgrade work assigned to that segment, validation, and reports. If the accepted "
         "campaign still contains more segments, repeat the same ext-soperator "
-        "upgrade --execute --approve command until it is complete. The v3 operation "
+        "upgrade --execute --approve command until it is complete. The v4 operation "
         "journal never supplies a missing desired path. Unsupported campaigns and "
-        "non-v3 journals fail closed; external upgrade has no support-policy override. "
+        "non-v4 journals fail closed; external upgrade has no support-policy override. "
         "After completion, rerun the "
         "idempotent onboard command only to check for and accept a later campaign."
     ),
@@ -63897,7 +63326,7 @@ def soperator_external_upgrade_command(
         str | None,
         typer.Option(
             "--job-policy",
-            help=_SOPERATOR_UPGRADE_JOB_POLICY_HELP,
+            help=_EXTERNAL_SOPERATOR_UPGRADE_JOB_POLICY_HELP,
         ),
     ] = None,
     cancel_job: Annotated[
@@ -63932,46 +63361,17 @@ def soperator_external_upgrade_command(
             "--job-refresh-interval", help="Refresh interval while waiting for Slurm jobs."
         ),
     ] = _SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
-    slurm_scheduling_quiesce: Annotated[
+    slurm_scheduling_pause: Annotated[
         bool | None,
         typer.Option(
-            "--slurm-scheduling-quiesce/--no-slurm-scheduling-quiesce",
+            "--slurm-scheduling-pause/--no-slurm-scheduling-pause",
             help=(
-                "During external worker node-template phases, set affected Slurm "
+                "During external blue/green worker replacement phases, set affected Slurm "
                 "partitions DOWN so newly submitted jobs queue until cxcli restores "
                 "scheduling. Omit to use onboarding config, default enabled."
             ),
         ),
     ] = None,
-    login_session_policy: Annotated[
-        str,
-        typer.Option(
-            "--login-session-policy",
-            help=(
-                "Login SSH continuity policy: target-ready, wait-active, or grace-period. "
-                "target-ready keeps source login retirement gated until the target login "
-                "StatefulSet and the preserved login Service have ready SSH endpoints. "
-                "Before each target Helm values reconciliation, wait-active also waits for "
-                "observed active SSH sessions on the currently backing login pods to drain; "
-                "grace-period waits the drain timeout at the same pre-mutation boundary. "
-                "Existing TCP "
-                "SSH sessions remain best-effort if their backing pod or node is restarted. "
-                "An explicitly relocated first-adoption persistent path stops before its "
-                "temporary login writer hold unless wait-active or grace-period is selected; "
-                "automatic in-place adoption does not use that hold."
-            ),
-        ),
-    ] = EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY,
-    login_session_drain_timeout: Annotated[
-        str,
-        typer.Option(
-            "--login-session-drain-timeout",
-            help=(
-                "Maximum login session drain/grace wait for --login-session-policy "
-                "wait-active or grace-period, for example 30m."
-            ),
-        ),
-    ] = "30m",
     dry_run: Annotated[
         bool,
         typer.Option(
@@ -63990,10 +63390,10 @@ def soperator_external_upgrade_command(
                 "Execute one accepted campaign segment after live reconciliation. "
                 "Mutually exclusive with --dry-run; use with --approve. It performs "
                 "journaled live preflight and "
-                "advances the accepted external MK8s control-plane/node-template hop, "
+                "advances the accepted external MK8s control-plane hop, "
                 "target GPU stack, storage, copy, compute, cutover, Jail Upgrade, "
                 "validation, and retirement phases with guarded resume checkpoints. Kubernetes "
-                "node-template work is one minor hop per external upgrade run."
+                "Control-plane work is one minor hop per external upgrade run."
             ),
         ),
     ] = False,
@@ -64018,19 +63418,6 @@ def soperator_external_upgrade_command(
             ),
         ),
     ] = False,
-    approve_service_role_downtime: Annotated[
-        bool,
-        typer.Option(
-            "--approve-service-role-downtime",
-            help=(
-                "Explicitly accept temporary loss of all live capacity in each "
-                "nonredundant zero-surge service-role node group. Requires --execute; "
-                "the operation journal binds acceptance to the exact campaign fingerprint "
-                "and affected provider node-group identities. Generic --approve remains "
-                "required for mutation."
-            ),
-        ),
-    ] = False,
     interactive: Annotated[
         bool,
         typer.Option(
@@ -64038,94 +63425,6 @@ def soperator_external_upgrade_command(
             help="Prompt for Slurm job decisions when --job-policy is interactive.",
         ),
     ] = True,
-    worker_rollout_strategy: Annotated[
-        str | None,
-        typer.Option(
-            "--worker-rollout-strategy",
-            help=(
-                "External worker node-template rollout strategy. zero-surge is the "
-                "worker default and requires no spare worker quota but can reduce "
-                "worker capacity; safe-surge uses temporary worker surge capacity."
-            ),
-        ),
-    ] = None,
-    service_role_rollout_strategy: Annotated[
-        str | None,
-        typer.Option(
-            "--service-role-rollout-strategy",
-            help=(
-                "External service-role node-template rollout strategy. zero-surge is "
-                "the service-role default and requires no spare service-role quota but "
-                "can reduce service-role capacity; safe-surge uses temporary "
-                "service-role surge capacity."
-            ),
-        ),
-    ] = None,
-    worker_wave_groups: Annotated[
-        int | None,
-        typer.Option(
-            "--worker-wave-groups",
-            help=(
-                "Fixed number of worker groups to update per safe-surge wave. "
-                "Must match the accepted v3 campaign. Mutually exclusive with "
-                "--worker-wave-percent and --max-parallel-worker-groups."
-            ),
-        ),
-    ] = None,
-    worker_wave_percent: Annotated[
-        int | None,
-        typer.Option(
-            "--worker-wave-percent",
-            help=(
-                "Worker rollout wave budget as a percentage of worker groups, rounded "
-                "up to at least one. Can be capped with --max-parallel-worker-groups. "
-                "Must match the accepted v3 campaign. Mutually exclusive with "
-                "--worker-wave-groups."
-            ),
-        ),
-    ] = None,
-    max_parallel_worker_groups: Annotated[
-        int | None,
-        typer.Option(
-            "--max-parallel-worker-groups",
-            help=(
-                "Optional upper cap for percent-based safe-surge waves. Use "
-                "--worker-wave-groups instead for an exact fixed group count. "
-                "Must match the accepted v3 campaign."
-            ),
-        ),
-    ] = None,
-    strategy_max_surge_count: Annotated[
-        int | None,
-        typer.Option(
-            "--strategy-max-surge-count",
-            help=(
-                "Nebius node-group strategy max_surge count for each active worker group. "
-                "Default comes from config.yaml, or 0 for zero-surge / 1 for safe-surge."
-            ),
-        ),
-    ] = None,
-    strategy_max_unavailable_count: Annotated[
-        int | None,
-        typer.Option(
-            "--strategy-max-unavailable-count",
-            help=(
-                "Nebius node-group strategy max_unavailable count for each active worker group. "
-                "Default comes from config.yaml, or 1 for zero-surge / 0 for safe-surge."
-            ),
-        ),
-    ] = None,
-    strategy_drain_timeout: Annotated[
-        str | None,
-        typer.Option(
-            "--strategy-drain-timeout",
-            help=(
-                "Nebius node-group strategy drain timeout for each active worker group: "
-                "must be none and must match the accepted v3 campaign. The provider timeout "
-                "stays unset so draining nodes are never force-deleted by cxcli."
-            ),
-        ),
-    ] = None,
 ) -> None:
     """Plan or execute an accepted external Soperator upgrade."""
     lease_stack = ExitStack()
@@ -64136,11 +63435,6 @@ def soperator_external_upgrade_command(
                 "ext-soperator upgrade requires an explicit execution mode: pass "
                 "exactly one of --dry-run or --execute. Use --execute --approve for "
                 "approved mutation; the two mode flags are mutually exclusive."
-            )
-        if approve_service_role_downtime and not execute:
-            raise RuntimeError(
-                "--approve-service-role-downtime requires --execute. It cannot be accepted "
-                "during --dry-run, and generic --approve remains required for mutation."
             )
         payload = _load_source_payload(config_path)
         target_ref = _resolve_soperator_migration_target_ref(
@@ -64176,7 +63470,7 @@ def soperator_external_upgrade_command(
         locked_upgrade_path_source = "config.yaml campaign"
         if not locked_upgrade_path:
             raise RuntimeError(
-                "External Soperator upgrade requires a locked v3 campaign in "
+                "External Soperator upgrade requires a locked v4 campaign in "
                 "deploy.targets[].soperator_onboarding.upgrade_path. The operation journal "
                 "is never an upgrade-path authority. Run `nebius-cxcli ext-soperator onboard` "
                 "for this cluster before upgrade."
@@ -64264,43 +63558,25 @@ def soperator_external_upgrade_command(
             )
             if not isinstance(effective_onboarding, Mapping):
                 effective_onboarding = {}
-        locked_rollout = resolve_external_node_template_rollout(effective_onboarding)
-        requested_rollout = resolve_external_node_template_rollout(
-            effective_onboarding,
-            strategy=worker_rollout_strategy,
-            service_role_strategy=service_role_rollout_strategy,
-            worker_wave_groups=worker_wave_groups,
-            worker_wave_percent=worker_wave_percent,
-            max_parallel_worker_groups=max_parallel_worker_groups,
-            strategy_max_surge_count=strategy_max_surge_count,
-            strategy_max_unavailable_count=strategy_max_unavailable_count,
-            strategy_drain_timeout=strategy_drain_timeout,
-        )
-        if requested_rollout.to_manifest_dict() != locked_rollout.to_manifest_dict():
-            raise RuntimeError(
-                "recovery-required: external Soperator rollout settings are immutable "
-                "inside the accepted v3 campaign. Rerun `ext-soperator onboard` only "
-                "while the campaign is unstarted to accept a different fingerprint."
-            )
-        locked_slurm_scheduling_quiesce = _soperator_onboarding_slurm_scheduling_quiesce(
+        locked_slurm_scheduling_pause = _soperator_onboarding_slurm_scheduling_pause(
             effective_onboarding
         )
         if (
-            slurm_scheduling_quiesce is not None
-            and bool(slurm_scheduling_quiesce) != locked_slurm_scheduling_quiesce
+            slurm_scheduling_pause is not None
+            and bool(slurm_scheduling_pause) != locked_slurm_scheduling_pause
         ):
             raise RuntimeError(
-                "recovery-required: --slurm-scheduling-quiesce cannot override the "
-                "accepted v3 campaign. Replan an unstarted campaign with "
+                "recovery-required: --slurm-scheduling-pause cannot override the "
+                "accepted v4 campaign. Replan an unstarted campaign with "
                 "`ext-soperator onboard`."
             )
         node_template_target = effective_onboarding.get("node_template_upgrade")
         if not isinstance(node_template_target, Mapping):
             node_template_target = {}
-        resolved_slurm_scheduling_quiesce = (
-            _soperator_onboarding_slurm_scheduling_quiesce(effective_onboarding)
-            if slurm_scheduling_quiesce is None
-            else bool(slurm_scheduling_quiesce)
+        resolved_slurm_scheduling_pause = (
+            _soperator_onboarding_slurm_scheduling_pause(effective_onboarding)
+            if slurm_scheduling_pause is None
+            else bool(slurm_scheduling_pause)
         )
         resume_slurmcluster_identity_scope = _external_soperator_resume_slurmcluster_identity_scope(
             _locked_upgrade_checkpoint_payload(
@@ -64361,17 +63637,9 @@ def soperator_external_upgrade_command(
             campaign=locked_upgrade_path,
             source_report=source_report,
             completed_segment_ids=upgrade_path_progress.get("completed_segment_ids", []),
-            resume_current_segment=(
-                bool(upgrade_path_progress.get("journal_present"))
-                and isinstance(current_segment, Mapping)
-                and _non_empty_text(upgrade_path_progress.get("pending_phase")) not in {"", "none"}
-                and _non_empty_text(upgrade_path_progress.get("current_segment_id"))
-                == _non_empty_text(current_segment.get("id"))
-                and _non_empty_text(current_segment.get("id"))
-                not in {
-                    _non_empty_text(segment_id)
-                    for segment_id in upgrade_path_progress.get("completed_segment_ids", [])
-                }
+            resume_current_segment=_locked_upgrade_path_resumes_current_segment(
+                progress=upgrade_path_progress,
+                current_segment=current_segment,
             ),
             node_group_transitions=node_group_transitions,
         )
@@ -64586,7 +63854,7 @@ def soperator_external_upgrade_command(
             interactive=interactive,
         )
         resolved_jail_sfs_resize_to_gib = _soperator_jail_sfs_resize_to_gib(jail_sfs_resize_to_gib)
-        resolved_job_policy = _soperator_upgrade_job_policy(
+        resolved_job_policy = _external_soperator_upgrade_job_policy(
             policy=job_policy,
             interactive=interactive,
         )
@@ -64600,19 +63868,6 @@ def soperator_external_upgrade_command(
             job_refresh_interval,
             option_name="--job-refresh-interval",
         )
-        resolved_login_session_policy = _external_login_session_policy(login_session_policy)
-        login_session_drain_timeout_seconds = _soperator_upgrade_duration_seconds(
-            login_session_drain_timeout,
-            option_name="--login-session-drain-timeout",
-        )
-        if (
-            login_session_drain_timeout_seconds <= 0
-            and resolved_login_session_policy != EXTERNAL_LOGIN_SESSION_POLICY_TARGET_READY
-        ):
-            raise RuntimeError(
-                "--login-session-drain-timeout must be positive when --login-session-policy "
-                "is wait-active or grace-period."
-            )
         if resolved_job_policy == "wait-then-cancel" and job_wait_timeout_seconds <= 0:
             raise RuntimeError(
                 "--job-policy wait-then-cancel requires a positive --job-wait-timeout. "
@@ -64624,18 +63879,8 @@ def soperator_external_upgrade_command(
             payload=effective_payload,
             source_report=source_report,
             dry_run=dry_run,
-            worker_rollout_strategy=worker_rollout_strategy,
-            service_role_rollout_strategy=service_role_rollout_strategy,
-            worker_wave_groups=worker_wave_groups,
-            worker_wave_percent=worker_wave_percent,
-            max_parallel_worker_groups=max_parallel_worker_groups,
-            strategy_max_surge_count=strategy_max_surge_count,
-            strategy_max_unavailable_count=strategy_max_unavailable_count,
-            strategy_drain_timeout=strategy_drain_timeout,
             job_policy=resolved_job_policy,
-            slurm_scheduling_quiesce=resolved_slurm_scheduling_quiesce,
-            login_session_policy=resolved_login_session_policy,
-            login_session_drain_timeout=login_session_drain_timeout,
+            slurm_scheduling_pause=resolved_slurm_scheduling_pause,
             populate_jail_refresh=resolved_populate_jail_refresh,
             jail_persistent_mounts=tuple(jail_persistent_mount or ()),
             upgrade_path=locked_upgrade_path or None,
@@ -64697,25 +63942,14 @@ def soperator_external_upgrade_command(
                     jail_sfs_resize_policy=resolved_jail_sfs_resize_policy,
                     jail_sfs_resize_to_gib=resolved_jail_sfs_resize_to_gib,
                     job_policy=resolved_job_policy,
-                    slurm_scheduling_quiesce=resolved_slurm_scheduling_quiesce,
+                    slurm_scheduling_pause=resolved_slurm_scheduling_pause,
                     cancel_job=selected_cancel_jobs,
                     requeue_job=selected_requeue_jobs,
                     job_wait_timeout=job_wait_timeout,
                     job_refresh_interval=job_refresh_interval,
-                    login_session_policy=resolved_login_session_policy,
-                    login_session_drain_timeout=login_session_drain_timeout,
-                    worker_rollout_strategy=worker_rollout_strategy,
-                    service_role_rollout_strategy=service_role_rollout_strategy,
-                    worker_wave_groups=worker_wave_groups,
-                    worker_wave_percent=worker_wave_percent,
-                    max_parallel_worker_groups=max_parallel_worker_groups,
-                    strategy_max_surge_count=strategy_max_surge_count,
-                    strategy_max_unavailable_count=strategy_max_unavailable_count,
-                    strategy_drain_timeout=strategy_drain_timeout,
                     dry_run=False,
                     approve=approve,
                     approve_remediation=approve_remediation,
-                    approve_service_role_downtime=approve_service_role_downtime,
                     allow_unsupported_soperator_upgrade_path=False,
                     interactive=interactive,
                 )
@@ -64877,19 +64111,10 @@ def soperator_external_upgrade_command(
                     requeue_job_ids=selected_requeue_jobs,
                     job_wait_timeout_seconds=job_wait_timeout_seconds,
                     job_refresh_interval_seconds=job_refresh_interval_seconds,
-                    slurm_scheduling_quiesce=resolved_slurm_scheduling_quiesce,
-                    login_session_policy=resolved_login_session_policy,
-                    login_session_drain_timeout_seconds=login_session_drain_timeout_seconds,
+                    slurm_scheduling_pause=resolved_slurm_scheduling_pause,
+                    login_session_policy=EXTERNAL_LOGIN_SESSION_POLICY_WAIT_ACTIVE,
+                    login_session_drain_timeout_seconds=0,
                     approve_remediation=approve_remediation,
-                    approve_service_role_downtime=approve_service_role_downtime,
-                    worker_rollout_strategy=worker_rollout_strategy,
-                    service_role_rollout_strategy=service_role_rollout_strategy,
-                    worker_wave_groups=worker_wave_groups,
-                    worker_wave_percent=worker_wave_percent,
-                    max_parallel_worker_groups=max_parallel_worker_groups,
-                    strategy_max_surge_count=strategy_max_surge_count,
-                    strategy_max_unavailable_count=strategy_max_unavailable_count,
-                    strategy_drain_timeout=strategy_drain_timeout,
                     campaign_fingerprint=(
                         _locked_upgrade_path_fingerprint(locked_upgrade_path)
                         if locked_upgrade_path
@@ -67694,7 +66919,7 @@ def mk8s_token_command(
     try:
         if not _runtime_auth_env_available() and project_id and client_name:
             _runtime_auth_cache_load(project_id=project_id, client_name=client_name)
-        sdk = init_nebius_sdk(
+        sdk = _init_mk8s_exec_auth_sdk(
             parent_id=project_id or None,
             endpoint=endpoint,
             context="MK8s exec auth",
@@ -67720,8 +66945,9 @@ def mk8s_token_command(
                 }
             )
         )
-    except Exception as exc:  # pragma: no cover - CLI surface
-        _exit_with_error(exc)
+    except Exception:  # pragma: no cover - CLI surface
+        print("ERROR: Unable to create an MK8s exec credential.", file=sys.stderr)
+        raise typer.Exit(code=1) from None
 
 
 @acceptance_test_app.command(
@@ -68105,7 +67331,7 @@ def deploy_command(
     kubeconfig access for that cluster even if no app charts are configured.
     For external Soperator onboarding targets whose accepted action list
     contains external-upgrade-owned work such as Soperator upgrade, external
-    control-plane/node-template upgrade, storage remediation, or compute
+    control-plane-only upgrade, storage remediation, or blue/green compute
     replacement, deploy refuses before preflight and directs the operator to
     `ext-soperator upgrade`; deploy cannot perform those Nebius SDK/API
     upgrade phases. Use `ext-soperator upgrade` for reruns/resume while those

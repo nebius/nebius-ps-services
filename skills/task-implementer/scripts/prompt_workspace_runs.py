@@ -24,10 +24,13 @@ from prompt_workspace_core import (
     TERMINAL_RUN_STATUSES,
     PromptDocument,
     PromptWorkspaceError,
+    create_prompt,
     ensure_private_dir,
     ensure_unique_prompt_id,
+    init_workspace,
     iso_seconds,
     load_json_object,
+    now_local,
     now_utc,
     parse_frontmatter,
     private_chmod,
@@ -39,6 +42,10 @@ from prompt_workspace_core import (
     write_atomic,
     write_exclusive,
 )
+from prompt_workspace_specs import (
+    load_steering_ledger,
+    pending_steering_revisions,
+)
 
 
 RUN_STATUSES = {
@@ -47,6 +54,15 @@ RUN_STATUSES = {
     "blocked",
     *TERMINAL_RUN_STATUSES,
 }
+
+STARTER_ASK = "Describe the implementation task"
+ACTIVITY_SCHEMA = "task-implementer/activity-v1"
+
+
+def iso_utc(value: datetime) -> str:
+    """Normalize activity timestamps so ordering is offset-independent."""
+
+    return iso_seconds(value.astimezone(timezone.utc))
 
 
 @contextmanager
@@ -188,6 +204,187 @@ def markdown_section(text: str, heading: str) -> str:
     return match.group(1)
 
 
+def handoff_last_invoked_at(run_dir: Path) -> str | None:
+    text = read_handoff_text(run_dir)
+    if text is None:
+        return None
+    run_section = markdown_section(text, "Run")
+    matches = re.findall(
+        r"(?m)^- Last invoked at:\s*(\S(?:.*\S)?)\s*$",
+        run_section,
+    )
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "handoff has multiple Last invoked at fields"
+        )
+    try:
+        value = datetime.fromisoformat(matches[0])
+    except ValueError as exc:
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "handoff Last invoked at is invalid"
+        ) from exc
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "handoff Last invoked at has no UTC offset"
+        )
+    return iso_utc(value)
+
+
+def touch_handoff_invocation(run_dir: Path, invoked_at: datetime) -> None:
+    """Atomically update private prompt activity without touching the prompt."""
+
+    timestamp = iso_utc(invoked_at)
+    handoff = run_dir / "handoff.md"
+    text = read_handoff_text(run_dir)
+    if text is None:
+        return
+    run_section = markdown_section(text, "Run")
+    matches = re.findall(r"(?m)^- Last invoked at:.*$", run_section)
+    if len(matches) > 1:
+        raise PromptWorkspaceError(
+            "RUN_STATE_INVALID", "handoff has multiple Last invoked at fields"
+        )
+    existing = handoff_last_invoked_at(run_dir)
+    if existing is not None and existing > timestamp:
+        timestamp = existing
+    if matches:
+        updated = re.sub(
+            r"(?m)^- Last invoked at:.*$",
+            f"- Last invoked at: {timestamp}",
+            text,
+            count=1,
+        )
+    else:
+        updated, count = re.subn(
+            r"(?m)^(## Run\s*)$",
+            rf"\1\n- Last invoked at: {timestamp}",
+            text,
+            count=1,
+        )
+        if count != 1:
+            raise PromptWorkspaceError(
+                "RUN_STATE_INVALID", "handoff is missing the Run heading"
+            )
+    write_atomic(handoff, updated.encode("utf-8"))
+
+
+def load_prompt_activity(scope_dir: Path) -> dict[str, str]:
+    """Load optional mutable activity without changing existing workspace schemas."""
+
+    path = scope_dir / "activity.json"
+    if not path.exists():
+        return {}
+    if path.is_symlink() or not path.is_file():
+        raise PromptWorkspaceError(
+            "WORKSPACE_PATH_INVALID", "prompt activity path is unsafe"
+        )
+    require_mode(path, 0o600, "prompt activity")
+    value = load_json_object(path, "prompt activity")
+    if value.get("schema") != ACTIVITY_SCHEMA:
+        raise PromptWorkspaceError(
+            "WORKSPACE_STATE_INVALID", "prompt activity schema is invalid"
+        )
+    prompts = value.get("prompts")
+    if not isinstance(prompts, dict):
+        raise PromptWorkspaceError(
+            "WORKSPACE_STATE_INVALID", "prompt activity entries are invalid"
+        )
+    result: dict[str, str] = {}
+    for prompt_id, timestamp in prompts.items():
+        if not isinstance(prompt_id, str) or PROMPT_ID_RE.fullmatch(prompt_id) is None:
+            raise PromptWorkspaceError(
+                "WORKSPACE_STATE_INVALID", "prompt activity identity is invalid"
+            )
+        if not isinstance(timestamp, str):
+            raise PromptWorkspaceError(
+                "WORKSPACE_STATE_INVALID", "prompt activity timestamp is invalid"
+            )
+        try:
+            parsed = datetime.fromisoformat(timestamp)
+        except ValueError as exc:
+            raise PromptWorkspaceError(
+                "WORKSPACE_STATE_INVALID", "prompt activity timestamp is invalid"
+            ) from exc
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise PromptWorkspaceError(
+                "WORKSPACE_STATE_INVALID", "prompt activity timestamp has no UTC offset"
+            )
+        result[prompt_id] = iso_utc(parsed)
+    return result
+
+
+def record_prompt_invocation(
+    scope_dir: Path,
+    prompt_id: str,
+    invoked_at: datetime,
+) -> str:
+    """Persist monotonic prompt activity without touching editable prompt files."""
+
+    timestamp = iso_utc(invoked_at)
+    activity = load_prompt_activity(scope_dir)
+    previous = activity.get(prompt_id)
+    if previous is not None and previous > timestamp:
+        timestamp = previous
+    activity[prompt_id] = timestamp
+    write_atomic(
+        scope_dir / "activity.json",
+        stable_json({"schema": ACTIVITY_SCHEMA, "prompts": activity}),
+    )
+    return timestamp
+
+
+def initialize_project_workspace(
+    project_path: Path,
+    codex_home: Path,
+    *,
+    clock: Callable[[], datetime] = now_local,
+    id_factory: Callable[[], str] | None = None,
+) -> dict[str, object]:
+    """Initialize one exact project folder and ensure one starter prompt."""
+
+    requested = project_path.expanduser().resolve()
+    result = init_workspace(
+        requested,
+        str(requested),
+        codex_home,
+        clock=clock,
+    )
+    workspace_path = Path(str(result["workspace"]))
+    prompt_root = Path(str(result["prompt_root"]))
+    with scope_lock(workspace_path.parent):
+        prompt_paths = sorted(prompt_root.glob("*.md"))
+        starter_created = False
+        if not prompt_paths:
+            if id_factory is None:
+                starter = create_prompt(
+                    workspace_path,
+                    STARTER_ASK,
+                    clock=clock,
+                )
+            else:
+                starter = create_prompt(
+                    workspace_path,
+                    STARTER_ASK,
+                    clock=clock,
+                    id_factory=id_factory,
+                )
+            starter_created = True
+            starter_path = str(starter["path"])
+        else:
+            starter_path = str(prompt_paths[0].resolve())
+        rows = prompt_rows(workspace_path, None, None)
+    result.update(
+        {
+            "starter_prompt": starter_path,
+            "starter_created": starter_created,
+            "prompts": rows,
+        }
+    )
+    return result
+
+
 def load_run_manifests(runs_root: Path, prompt_id: str | None = None) -> list[tuple[Path, dict[str, object]]]:
     results: list[tuple[Path, dict[str, object]]] = []
     for run_dir in sorted(runs_root.glob("run-*")):
@@ -257,12 +454,18 @@ def _snapshot_prompt_unlocked(
     run_id: str | None,
     force_new_run: bool,
     clock: Callable[[], datetime] = now_utc,
+    expected_sha256: str | None = None,
+    allow_running: bool = False,
 ) -> dict[str, object]:
     workspace = verify_workspace(manifest_path)
     prompt_root = Path(required_string(workspace, "prompt_root", "workspace manifest"))
     runs_root = Path(required_string(workspace, "runs_root", "workspace manifest"))
     document = read_prompt(prompt_path, prompt_root, require_content=True)
     ensure_unique_prompt_id(document, prompt_root)
+    if expected_sha256 is not None and document.sha256 != expected_sha256:
+        raise PromptWorkspaceError(
+            "PROMPT_DRIFT", "prompt changed while its run transition was being prepared"
+        )
     created_at = clock()
     if created_at.tzinfo is None or created_at.utcoffset() is None:
         raise PromptWorkspaceError(
@@ -314,17 +517,24 @@ def _snapshot_prompt_unlocked(
             raise PromptWorkspaceError(
                 "RUN_STATE_INVALID", "completed runs cannot be reconciled"
             )
-        if status == "running":
+        if status == "running" and not allow_running:
             raise PromptWorkspaceError(
                 "RUN_STATE_INVALID", "a running task cannot be reconciled"
-            )
-        if status == "snapshot_only":
-            raise PromptWorkspaceError(
-                "RUN_STATE_INVALID", "snapshot-only preparation must be resumed"
             )
         revisions = manifest_revisions(manifest)
         latest = revisions[-1]
         if latest.get("sha256") == document.sha256:
+            if status == "snapshot_only":
+                return {
+                    "run_id": run_id,
+                    "revision": latest["revision"],
+                    "prompt_id": document.prompt_id,
+                    "sha256": document.sha256,
+                    "snapshot": str(run_dir / str(latest["snapshot"])),
+                    "manifest": str(manifest_file),
+                    "resumed_prepare": True,
+                    "created_revision": False,
+                }
             verified = verified_runs[run_id]
             if verified.get("reconciliation_pending") is True:
                 return {
@@ -335,13 +545,9 @@ def _snapshot_prompt_unlocked(
                     "snapshot": str(run_dir / str(latest["snapshot"])),
                     "manifest": str(manifest_file),
                     "resumed_reconciliation": True,
+                    "created_revision": False,
                 }
             raise PromptWorkspaceError("NO_CHANGES", "submitted prompt is unchanged")
-        if verified_runs[run_id].get("reconciliation_pending") is True:
-            raise PromptWorkspaceError(
-                "RUN_STATE_INVALID",
-                "a pending reconciliation revision must be resumed first",
-            )
         latest_id = str(latest.get("revision", ""))
         match = REVISION_RE.fullmatch(latest_id)
         if match is None:
@@ -396,6 +602,7 @@ def _snapshot_prompt_unlocked(
                         "snapshot": str(active_dir / str(active_latest["snapshot"])),
                         "manifest": str(active_dir / "manifest.json"),
                         "resumed_prepare": True,
+                        "created_revision": False,
                     }
             raise PromptWorkspaceError(
                 "ACTIVE_RUN_EXISTS", f"unfinished run requires reconcile: {active[-1]}"
@@ -445,6 +652,7 @@ def _snapshot_prompt_unlocked(
         "sha256": document.sha256,
         "snapshot": str(snapshot_path),
         "manifest": str(manifest_file),
+        "created_revision": True,
     }
 
 
@@ -573,10 +781,12 @@ def verify_run(
                 "RUN_STATE_INVALID", f"snapshot digest is invalid: {revision_id}"
             )
     latest = revisions[-1]
+    load_steering_ledger(run_dir, revisions)
     status = run_status(run_dir)
     handoff_text = read_handoff_text(run_dir)
     bound = latest
     if handoff_text is not None:
+        handoff_last_invoked_at(run_dir)
         run_section = markdown_section(handoff_text, "Run")
         if handoff_field(run_section, "Run ID") != run_id:
             raise PromptWorkspaceError(
@@ -617,6 +827,7 @@ def verify_run(
             raise PromptWorkspaceError(
                 "PROMPT_DRIFT", "editable prompt differs from the bound revision"
             )
+    pending_steering = pending_steering_revisions(run_dir, revisions)
     return {
         "run_id": run_id,
         "prompt_id": manifest["prompt_id"],
@@ -627,6 +838,8 @@ def verify_run(
         "latest_revision": latest["revision"],
         "latest_sha256": latest["sha256"],
         "reconciliation_pending": bound["revision"] != latest["revision"],
+        "pending_steering": pending_steering,
+        "steering_pending": bool(pending_steering),
     }
 
 
@@ -734,12 +947,13 @@ def prompt_rows(manifest_path: Path, query: str | None, date_value: str | None) 
         run_dir.name: verify_run(workspace, run_dir.name, None)
         for run_dir, _ in all_runs
     }
+    activity = load_prompt_activity(runs_root.parent)
     rows: list[dict[str, object]] = []
+    creation_by_path: dict[str, str] = {}
     for candidate in sorted(prompt_root.glob("*.md")):
         document = read_prompt(candidate, prompt_root, require_content=False)
-        searchable = " ".join(
-            (document.prompt_id, document.title, document.path.name)
-        ).casefold()
+        creation_by_path[str(document.path)] = iso_seconds(document.created_at)
+        searchable = " ".join((document.title, document.path.name)).casefold()
         if needle and needle not in searchable:
             continue
         if date_value and document.created_at.date().isoformat() != date_value:
@@ -749,34 +963,43 @@ def prompt_rows(manifest_path: Path, query: str | None, date_value: str | None) 
             for run_dir, run_manifest in all_runs
             if run_manifest.get("prompt_id") == document.prompt_id
         ]
-        latest_run_id: str | None = None
         status = "draft"
-        last_submitted_at: str | None = None
+        last_invoked_at = activity.get(
+            document.prompt_id,
+            iso_seconds(document.created_at),
+        )
         if runs:
-            latest_dir, latest_manifest = runs[-1]
-            latest_run_id = latest_dir.name
-            verified = verified_runs[latest_run_id]
-            status = (
-                "reconcile_pending"
-                if verified["reconciliation_pending"]
-                else str(verified["status"])
-            )
-            latest_revisions = manifest_revisions(latest_manifest)
-            last_submitted_at = str(latest_revisions[-1].get("created_at"))
-        modified_at = datetime.fromtimestamp(
-            document.path.stat().st_mtime
-        ).astimezone()
+            latest_dir, _ = runs[-1]
+            verified = verified_runs[latest_dir.name]
+            if verified["steering_pending"]:
+                status = "steering_pending"
+            elif verified["reconciliation_pending"]:
+                status = "reconcile_pending"
+            else:
+                status = str(verified["status"])
+            handoff_activity = handoff_last_invoked_at(latest_dir)
+            if (
+                handoff_activity is not None
+                and datetime.fromisoformat(handoff_activity)
+                > datetime.fromisoformat(last_invoked_at)
+            ):
+                last_invoked_at = handoff_activity
         rows.append(
             {
-                "prompt_id": document.prompt_id,
                 "title": document.title,
-                "created_at": iso_seconds(document.created_at),
-                "modified_at": iso_seconds(modified_at),
-                "last_submitted_at": last_submitted_at,
-                "latest_run_id": latest_run_id,
+                "last_invoked_at": last_invoked_at,
                 "status": status,
                 "path": str(document.path),
             }
         )
-    rows.sort(key=lambda row: (str(row["created_at"]), str(row["path"])), reverse=True)
+    rows.sort(
+        key=lambda row: (
+            datetime.fromisoformat(str(row["last_invoked_at"])).timestamp(),
+            datetime.fromisoformat(
+                creation_by_path[str(row["path"])]
+            ).timestamp(),
+            str(row["path"]),
+        ),
+        reverse=True,
+    )
     return rows

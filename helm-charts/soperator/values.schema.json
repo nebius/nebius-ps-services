@@ -353,6 +353,20 @@
         }
       }
     },
+    "k8sNodeFilters": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "affinity": { "type": "object", "additionalProperties": true },
+          "tolerations": { "type": "array" },
+          "nodeSelector": { "type": "object", "additionalProperties": true }
+        }
+      }
+    },
     "mariadb-operator": {
       "type": "object",
       "additionalProperties": true,
@@ -464,6 +478,28 @@
           "type": "object",
           "additionalProperties": true,
           "properties": {
+            "slurmctld": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "command": {
+                  "type": "array",
+                  "items": { "type": "string", "minLength": 1 }
+                },
+                "args": {
+                  "type": "array",
+                  "items": { "type": "string", "minLength": 1 }
+                },
+                "livenessProbe": {
+                  "type": ["object", "null"],
+                  "additionalProperties": true
+                },
+                "readinessProbe": {
+                  "type": ["object", "null"],
+                  "additionalProperties": true
+                }
+              }
+            },
             "openMetrics": {
               "type": "object",
               "additionalProperties": true,
@@ -638,6 +674,13 @@
             }
           }
         }
+      }
+    },
+    "images": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "slurmctld": { "type": "string", "minLength": 1 }
       }
     },
     "priorityClasses": {

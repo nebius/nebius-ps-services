@@ -32,7 +32,6 @@ from .deploy_targets import (
     EXTERNAL_TARGET_OWNERSHIP,
     deploy_target_is_external_mk8s,
 )
-from .duration_utils import parse_go_duration_seconds
 from .mk8s_gpu import mk8s_gpu_dependency_issues
 from .mysterybox_eso import mysterybox_eso_dependency_issues
 from .observability import observability_dependency_issues
@@ -67,7 +66,6 @@ _FOLDED_SOPERATOR_CHILD_APP_IDS = frozenset(
     }
 )
 _FOLDED_SOPERATOR_DEPENDENCY_APP_IDS = frozenset({"k8up"})
-_SOPERATOR_WORKER_ROLLOUT_STRATEGIES = frozenset({"safe-surge", "zero-surge"})
 _SOPERATOR_ONBOARDING_KEYS = frozenset(
     {
         "accepted",
@@ -93,8 +91,7 @@ _SOPERATOR_ONBOARDING_NODE_TEMPLATE_KEYS = frozenset(
         "target_k8s_version",
         "target_os",
         "target_gpu_stack_preset",
-        "slurm_scheduling_quiesce",
-        "rollout",
+        "slurm_scheduling_pause",
     }
 )
 _SOPERATOR_UPGRADE_CAMPAIGN_KEYS = frozenset(
@@ -112,7 +109,7 @@ _SOPERATOR_UPGRADE_CAMPAIGN_KEYS = frozenset(
         "mk8s",
         "recommended_order",
         "recommended_order_policy",
-        "rollout",
+        "compute_migration",
         "schema",
         "segments",
         "source_provenance",
@@ -168,29 +165,15 @@ _SOPERATOR_UPGRADE_CAMPAIGN_MANAGED_OPERATOR_KEYS = frozenset(
         "repository",
     }
 )
-_SOPERATOR_UPGRADE_CAMPAIGN_ROLLOUT_KEYS = frozenset(
+_SOPERATOR_UPGRADE_CAMPAIGN_COMPUTE_MIGRATION_KEYS = frozenset(
     {
-        "failure_domain_budgeting",
-        "global_unavailable_percent",
-        "hard_concurrent_worker_group_ceiling",
-        "max_concurrent_worker_groups",
-        "max_parallel_worker_groups",
-        "per_group_unavailable_cap",
-        "per_group_unavailable_percent",
-        "provider_drain_timeout",
-        "quiesced_worker_max_surge",
-        "service_role_group_strategy",
-        "service_role_mode",
-        "service_role_strategy",
-        "slurm_scheduling_quiesce",
-        "strategy",
-        "worker_group_strategy",
-        "worker_wave_groups",
-        "worker_wave_percent",
+        "busy_worker_policy",
+        "login_session_policy",
+        "mode",
+        "slurm_scheduling_pause",
+        "source_node_groups",
+        "target_node_groups",
     }
-)
-_SOPERATOR_UPGRADE_CAMPAIGN_GROUP_STRATEGY_KEYS = frozenset(
-    {"drain_timeout", "max_surge_count", "max_unavailable_count"}
 )
 _SOPERATOR_UPGRADE_CAMPAIGN_SEGMENT_KEYS = frozenset(
     {
@@ -289,53 +272,6 @@ def _coerce_int(value: Any, *, default: int = 0) -> int:
         return default
 
 
-def _positive_int_for_validation(value: Any, field_label: str) -> None:
-    if value is None or value == "":
-        return
-    if isinstance(value, bool):
-        raise ValueError(f"{field_label} must be a positive integer")
-    try:
-        parsed = int(_as_text(value))
-    except ValueError as exc:
-        raise ValueError(f"{field_label} must be a positive integer") from exc
-    if parsed <= 0:
-        raise ValueError(f"{field_label} must be a positive integer")
-
-
-def _non_negative_int_for_validation(value: Any, field_label: str) -> int | None:
-    if value is None or value == "":
-        return None
-    if isinstance(value, bool):
-        raise ValueError(f"{field_label} must be a non-negative integer")
-    try:
-        parsed = int(_as_text(value))
-    except ValueError as exc:
-        raise ValueError(f"{field_label} must be a non-negative integer") from exc
-    if parsed < 0:
-        raise ValueError(f"{field_label} must be a non-negative integer")
-    return parsed
-
-
-def _drain_timeout_for_validation(value: Any, field_label: str) -> None:
-    if value is None or value == "":
-        return
-    raw = _as_text(value).lower()
-    if raw == "none":
-        return
-    if re.fullmatch(r"[0-9]+", raw):
-        raise ValueError(
-            f"{field_label} must be 'none' or an explicit Go-style duration "
-            "(for example 30s, 30m, or 1h)"
-        )
-    try:
-        parse_go_duration_seconds(raw)
-    except ValueError as exc:
-        raise ValueError(
-            f"{field_label} must be 'none' or an explicit Go-style duration "
-            "(for example 30s, 30m, or 1h)"
-        ) from exc
-
-
 def _validate_unknown_keys(
     value: Mapping[str, Any],
     *,
@@ -418,11 +354,11 @@ def _validate_soperator_onboarding_node_template(
         node_template.get("target_gpu_stack_preset"),
         f"{field_label}.target_gpu_stack_preset",
     )
-    if "slurm_scheduling_quiesce" in node_template and not isinstance(
-        node_template.get("slurm_scheduling_quiesce"),
+    if "slurm_scheduling_pause" in node_template and not isinstance(
+        node_template.get("slurm_scheduling_pause"),
         bool,
     ):
-        raise ValueError(f"{field_label}.slurm_scheduling_quiesce must be true or false")
+        raise ValueError(f"{field_label}.slurm_scheduling_pause must be true or false")
 
 
 def _validate_locked_version_record(record: Any, field_label: str) -> tuple[str, str, bool]:
@@ -714,178 +650,27 @@ def _required_campaign_int(
     return value
 
 
-def _validate_soperator_campaign_rollout(value: Any, field_label: str) -> None:
+def _validate_soperator_campaign_compute_migration(value: Any, field_label: str) -> None:
     if not isinstance(value, Mapping):
         raise ValueError(f"{field_label} must be a mapping")
     _validate_unknown_keys(
         value,
-        allowed_keys=_SOPERATOR_UPGRADE_CAMPAIGN_ROLLOUT_KEYS,
+        allowed_keys=_SOPERATOR_UPGRADE_CAMPAIGN_COMPUTE_MIGRATION_KEYS,
         field_label=field_label,
     )
-    global_percent = _required_campaign_int(
-        value.get("global_unavailable_percent"),
-        f"{field_label}.global_unavailable_percent",
-        minimum=1,
-        maximum=100,
-    )
-    if global_percent != 5:
-        raise ValueError(f"{field_label}.global_unavailable_percent must be 5")
-    per_group_percent = _required_campaign_int(
-        value.get("per_group_unavailable_percent"),
-        f"{field_label}.per_group_unavailable_percent",
-        minimum=1,
-        maximum=100,
-    )
-    if per_group_percent > global_percent:
-        raise ValueError(
-            f"{field_label}.per_group_unavailable_percent must not exceed "
-            "global_unavailable_percent"
-        )
-    if per_group_percent != 5:
-        raise ValueError(f"{field_label}.per_group_unavailable_percent must be 5")
-    per_group_cap = _required_campaign_int(
-        value.get("per_group_unavailable_cap"),
-        f"{field_label}.per_group_unavailable_cap",
-        minimum=1,
-    )
-    if per_group_cap != 25:
-        raise ValueError(f"{field_label}.per_group_unavailable_cap must be 25")
-    max_concurrent = _required_campaign_int(
-        value.get("max_concurrent_worker_groups"),
-        f"{field_label}.max_concurrent_worker_groups",
-        minimum=1,
-    )
-    hard_ceiling = _required_campaign_int(
-        value.get("hard_concurrent_worker_group_ceiling"),
-        f"{field_label}.hard_concurrent_worker_group_ceiling",
-        minimum=1,
-        maximum=32,
-    )
-    if max_concurrent > hard_ceiling:
-        raise ValueError(
-            f"{field_label}.max_concurrent_worker_groups must not exceed "
-            "hard_concurrent_worker_group_ceiling"
-        )
-    if max_concurrent != 8:
-        raise ValueError(f"{field_label}.max_concurrent_worker_groups must be 8")
-    if hard_ceiling != 32:
-        raise ValueError(f"{field_label}.hard_concurrent_worker_group_ceiling must be 32")
-    failure_domains = value.get("failure_domain_budgeting")
-    if failure_domains != ["partition", "zone", "gpu"]:
-        raise ValueError(
-            f"{field_label}.failure_domain_budgeting must be ['partition', 'zone', 'gpu']"
-        )
-    if (
-        _required_string_for_validation(
-            value.get("service_role_mode"),
-            f"{field_label}.service_role_mode",
-        )
-        != "serial"
-    ):
-        raise ValueError(f"{field_label}.service_role_mode must be 'serial'")
-    quiesced_surge = _required_campaign_int(
-        value.get("quiesced_worker_max_surge"),
-        f"{field_label}.quiesced_worker_max_surge",
-        minimum=0,
-    )
-    if quiesced_surge != 0:
-        raise ValueError(f"{field_label}.quiesced_worker_max_surge must be 0")
-    provider_drain_timeout = _required_string_for_validation(
-        value.get("provider_drain_timeout"),
-        f"{field_label}.provider_drain_timeout",
-    )
-    if provider_drain_timeout != "unset":
-        raise ValueError(f"{field_label}.provider_drain_timeout must be 'unset'")
-    slurm_scheduling_quiesce = value.get("slurm_scheduling_quiesce")
-    if not isinstance(slurm_scheduling_quiesce, bool):
-        raise ValueError(f"{field_label}.slurm_scheduling_quiesce must be true or false")
-    worker_strategy = ""
-    for key in ("strategy", "service_role_strategy"):
-        if key not in value:
-            continue
-        strategy = _required_string_for_validation(value.get(key), f"{field_label}.{key}")
-        if strategy not in _SOPERATOR_WORKER_ROLLOUT_STRATEGIES:
-            raise ValueError(
-                f"{field_label}.{key} must be one of: "
-                + ", ".join(sorted(_SOPERATOR_WORKER_ROLLOUT_STRATEGIES))
-            )
-        if key == "strategy":
-            worker_strategy = strategy
-    wave_groups = value.get("worker_wave_groups")
-    wave_percent = value.get("worker_wave_percent")
-    if wave_groups is not None:
-        _required_campaign_int(
-            wave_groups,
-            f"{field_label}.worker_wave_groups",
-            minimum=1,
-        )
-    if wave_percent is not None:
-        _required_campaign_int(
-            wave_percent,
-            f"{field_label}.worker_wave_percent",
-            minimum=1,
-            maximum=100,
-        )
-    if wave_groups is not None and wave_percent is not None:
-        raise ValueError(
-            f"{field_label} must set only one of worker_wave_groups or worker_wave_percent"
-        )
-    if value.get("max_parallel_worker_groups") is not None:
-        _required_campaign_int(
-            value.get("max_parallel_worker_groups"),
-            f"{field_label}.max_parallel_worker_groups",
-            minimum=1,
-        )
-        if wave_groups is not None:
-            raise ValueError(
-                f"{field_label}.max_parallel_worker_groups cannot be combined with "
-                "worker_wave_groups"
-            )
-    worker_max_surge: int | None = None
-    for key in ("service_role_group_strategy", "worker_group_strategy"):
-        if key not in value:
-            continue
-        group_strategy = value.get(key)
-        group_label = f"{field_label}.{key}"
-        if not isinstance(group_strategy, Mapping):
-            raise ValueError(f"{group_label} must be a mapping")
-        _validate_unknown_keys(
-            group_strategy,
-            allowed_keys=_SOPERATOR_UPGRADE_CAMPAIGN_GROUP_STRATEGY_KEYS,
-            field_label=group_label,
-        )
-        max_surge = _required_campaign_int(
-            group_strategy.get("max_surge_count"),
-            f"{group_label}.max_surge_count",
-            minimum=0,
-        )
-        if key == "worker_group_strategy":
-            worker_max_surge = max_surge
-        max_unavailable = _required_campaign_int(
-            group_strategy.get("max_unavailable_count"),
-            f"{group_label}.max_unavailable_count",
-            minimum=0,
-        )
-        if max_surge == 0 and max_unavailable == 0:
-            raise ValueError(
-                f"{group_label} must keep max_surge_count or max_unavailable_count above zero"
-            )
-        drain_timeout = _required_string_for_validation(
-            group_strategy.get("drain_timeout"),
-            f"{group_label}.drain_timeout",
-        )
-        if drain_timeout != "none":
-            raise ValueError(f"{group_label}.drain_timeout must be 'none'")
-    if slurm_scheduling_quiesce and worker_strategy != "zero-surge":
-        raise ValueError(
-            f"{field_label}.strategy must be 'zero-surge' when slurm_scheduling_quiesce is true"
-        )
-    if slurm_scheduling_quiesce and worker_max_surge != 0:
-        raise ValueError(
-            f"{field_label}.worker_group_strategy.max_surge_count must be 0 when "
-            "slurm_scheduling_quiesce is true"
-        )
-
+    required_values = {
+        "mode": "blue-green-replacement",
+        "source_node_groups": "immutable-until-retirement",
+        "target_node_groups": "replacement",
+        "busy_worker_policy": "retain-until-job-and-epilog-finish",
+        "login_session_policy": "voluntary-handoff",
+    }
+    for key, expected in required_values.items():
+        actual = _required_string_for_validation(value.get(key), f"{field_label}.{key}")
+        if actual != expected:
+            raise ValueError(f"{field_label}.{key} must be '{expected}'")
+    if not isinstance(value.get("slurm_scheduling_pause"), bool):
+        raise ValueError(f"{field_label}.slurm_scheduling_pause must be true or false")
 
 def _validate_soperator_campaign_node_template(
     value: Any,
@@ -1387,9 +1172,9 @@ def _validate_soperator_upgrade_campaign(
     recommended_order_policy = upgrade_path.get("recommended_order_policy")
     if not isinstance(recommended_order_policy, Mapping):
         raise ValueError(f"{field_label}.recommended_order_policy must be a mapping")
-    _validate_soperator_campaign_rollout(
-        upgrade_path.get("rollout"),
-        f"{field_label}.rollout",
+    _validate_soperator_campaign_compute_migration(
+        upgrade_path.get("compute_migration"),
+        f"{field_label}.compute_migration",
     )
     segments = upgrade_path.get("segments")
     if not isinstance(segments, list):
@@ -1655,7 +1440,6 @@ def _validate_soperator_onboarding(
         onboarding.get("node_template_upgrade"),
         f"{field_label}.node_template_upgrade",
     )
-    _validate_soperator_onboarding_rollout(onboarding, field_label)
     _validate_soperator_upgrade_campaign(
         onboarding.get("upgrade_path"),
         f"{field_label}.upgrade_path",
@@ -1663,149 +1447,6 @@ def _validate_soperator_onboarding(
         expected_cluster_id=campaign_cluster_id,
         expected_target_ref=campaign_target_ref,
     )
-
-
-def _validate_soperator_onboarding_rollout(onboarding: Mapping[str, Any], field_label: str) -> None:
-    node_template = onboarding.get("node_template_upgrade")
-    if node_template is None:
-        return
-    if not isinstance(node_template, Mapping):
-        raise ValueError(f"{field_label}.node_template_upgrade must be a mapping")
-    rollout = node_template.get("rollout")
-    if rollout is None:
-        return
-    if not isinstance(rollout, Mapping):
-        raise ValueError(f"{field_label}.node_template_upgrade.rollout must be a mapping")
-    strategy = normalize_component_token(rollout.get("strategy")) or "zero-surge"
-    if strategy not in _SOPERATOR_WORKER_ROLLOUT_STRATEGIES:
-        raise ValueError(
-            f"{field_label}.node_template_upgrade.rollout.strategy must be one of: "
-            + ", ".join(sorted(_SOPERATOR_WORKER_ROLLOUT_STRATEGIES))
-        )
-    slurm_scheduling_quiesce = node_template.get("slurm_scheduling_quiesce", True)
-    service_role_strategy = (
-        normalize_component_token(rollout.get("service_role_strategy")) or "zero-surge"
-    )
-    if service_role_strategy not in _SOPERATOR_WORKER_ROLLOUT_STRATEGIES:
-        raise ValueError(
-            f"{field_label}.node_template_upgrade.rollout.service_role_strategy must be one of: "
-            + ", ".join(sorted(_SOPERATOR_WORKER_ROLLOUT_STRATEGIES))
-        )
-    legacy_keys = (
-        "max_global_unavailable_worker_nodes",
-        "max_global_unavailable_worker_percent",
-    )
-    for legacy_key in legacy_keys:
-        if rollout.get(legacy_key) is not None and _as_text(rollout.get(legacy_key)) != "":
-            raise ValueError(
-                f"{field_label}.node_template_upgrade.rollout.{legacy_key} is unsupported; "
-                "use worker_wave_groups or worker_wave_percent"
-            )
-    groups_key = "worker_wave_groups"
-    percent_key = "worker_wave_percent"
-    groups_present = rollout.get(groups_key) is not None and _as_text(rollout.get(groups_key)) != ""
-    percent_present = (
-        rollout.get(percent_key) is not None and _as_text(rollout.get(percent_key)) != ""
-    )
-    if groups_present and percent_present:
-        raise ValueError(
-            f"{field_label}.node_template_upgrade.rollout must set only one of "
-            f"{groups_key} or {percent_key}"
-        )
-    parallel_present = (
-        rollout.get("max_parallel_worker_groups") is not None
-        and _as_text(rollout.get("max_parallel_worker_groups")) != ""
-    )
-    if strategy == "safe-surge" and groups_present and parallel_present:
-        raise ValueError(
-            f"{field_label}.node_template_upgrade.rollout.max_parallel_worker_groups "
-            "is only supported with worker_wave_percent; worker_wave_groups already "
-            "sets the fixed concurrent worker-group count"
-        )
-    if strategy == "zero-surge":
-        zero_surge_wave_fields = []
-        if groups_present:
-            zero_surge_wave_fields.append(groups_key)
-        if percent_present:
-            zero_surge_wave_fields.append(percent_key)
-        if parallel_present:
-            zero_surge_wave_fields.append("max_parallel_worker_groups")
-        if zero_surge_wave_fields:
-            raise ValueError(
-                f"{field_label}.node_template_upgrade.rollout.strategy zero-surge "
-                "does not use worker wave budget fields "
-                f"({', '.join(zero_surge_wave_fields)}); set strategy to safe-surge "
-                "or remove those fields"
-            )
-    _positive_int_for_validation(
-        rollout.get(groups_key),
-        f"{field_label}.node_template_upgrade.rollout.{groups_key}",
-    )
-    _positive_int_for_validation(
-        rollout.get(percent_key),
-        f"{field_label}.node_template_upgrade.rollout.{percent_key}",
-    )
-    _positive_int_for_validation(
-        rollout.get("max_parallel_worker_groups"),
-        f"{field_label}.node_template_upgrade.rollout.max_parallel_worker_groups",
-    )
-
-    def _validate_group_strategy(
-        node: Any,
-        *,
-        strategy_value: str,
-        key: str,
-        role_label: str,
-    ) -> None:
-        if node is None:
-            return
-        if not isinstance(node, Mapping):
-            raise ValueError(f"{field_label}.node_template_upgrade.rollout.{key} must be a mapping")
-        max_surge = _non_negative_int_for_validation(
-            node.get("max_surge_count"),
-            f"{field_label}.node_template_upgrade.rollout.{key}.max_surge_count",
-        )
-        max_unavailable = _non_negative_int_for_validation(
-            node.get("max_unavailable_count"),
-            f"{field_label}.node_template_upgrade.rollout.{key}.max_unavailable_count",
-        )
-        if max_surge == 0 and max_unavailable == 0:
-            raise ValueError(
-                f"{field_label}.node_template_upgrade.rollout.{key} must keep "
-                "at least one of max_surge_count or max_unavailable_count greater than zero"
-            )
-        if strategy_value == "zero-surge" and max_surge not in {None, 0}:
-            raise ValueError(
-                f"{field_label}.node_template_upgrade.rollout.{key}."
-                f"max_surge_count must be 0 when {role_label} strategy is zero-surge"
-            )
-        if strategy_value == "safe-surge" and max_surge == 0:
-            raise ValueError(
-                f"{field_label}.node_template_upgrade.rollout.{key}."
-                f"max_surge_count must be greater than 0 when {role_label} strategy is safe-surge"
-            )
-        _drain_timeout_for_validation(
-            node.get("drain_timeout"),
-            f"{field_label}.node_template_upgrade.rollout.{key}.drain_timeout",
-        )
-
-    _validate_group_strategy(
-        rollout.get("service_role_group_strategy"),
-        strategy_value=service_role_strategy,
-        key="service_role_group_strategy",
-        role_label="service-role",
-    )
-    _validate_group_strategy(
-        rollout.get("worker_group_strategy"),
-        strategy_value=strategy,
-        key="worker_group_strategy",
-        role_label="worker",
-    )
-    if slurm_scheduling_quiesce is True and strategy != "zero-surge":
-        raise ValueError(
-            f"{field_label}.node_template_upgrade.rollout.strategy must be zero-surge "
-            "when slurm_scheduling_quiesce is true"
-        )
 
 
 def _resolve_mapping_segment(node: Mapping[str, Any], segment: str) -> Any:

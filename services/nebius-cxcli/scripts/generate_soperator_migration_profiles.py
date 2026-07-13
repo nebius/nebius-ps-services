@@ -412,7 +412,7 @@ def _node_label_layout(*, source_role_label_keys: Sequence[str], action: str) ->
     }
 
 
-def _source_controller_quiesce_contract(
+def _source_controller_pause_contract(
     *,
     include_slurm_operator: bool,
 ) -> dict[str, Any]:
@@ -455,7 +455,7 @@ def _source_controller_quiesce_contract(
             }
         )
     return {
-        "source_controller_quiesce": {
+        "source_controller_pause": {
             "required_before_target_compute_reconcile": True,
             "admission_webhooks": admission_webhooks,
             "deployments": deployments,
@@ -683,7 +683,7 @@ def _profile_payload(
                         "ActiveChecks",
                     ],
                 },
-                "execution_contract": _source_controller_quiesce_contract(
+                "execution_contract": _source_controller_pause_contract(
                     include_slurm_operator=True
                 ),
             },
@@ -712,7 +712,7 @@ def _profile_payload(
                         "ActiveChecks",
                     ],
                 },
-                "execution_contract": _source_controller_quiesce_contract(
+                "execution_contract": _source_controller_pause_contract(
                     include_slurm_operator=False
                 ),
             },
@@ -741,7 +741,7 @@ def _profile_payload(
                         "ActiveChecks",
                     ],
                 },
-                "execution_contract": _source_controller_quiesce_contract(
+                "execution_contract": _source_controller_pause_contract(
                     include_slurm_operator=False
                 ),
             },

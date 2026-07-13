@@ -25,6 +25,72 @@ _ACTIVE_STATES = {
     "STOPPED",
 }
 
+# Slurm exposes no resource version for partitions.  Pause ownership therefore
+# compares the fields customers can configure, including State, and also keeps
+# every unknown field in the guarded view so a newly introduced Slurm field
+# fails closed until it is classified.  Only these controller-derived topology
+# summaries are excluded because they legitimately change while workers are
+# replaced and the controller is upgraded.
+SLURM_PARTITION_DERIVED_TOPOLOGY_FIELDS = frozenset(
+    {
+        "NodeIndices",
+        "TotalCPUs",
+        "TotalNodes",
+        "TRES",
+    }
+)
+SLURM_PARTITION_CUSTOMER_OWNED_FIELDS = frozenset(
+    {
+        "AllocNodes",
+        "AllowAccounts",
+        "AllowGroups",
+        "AllowQOS",
+        "AllowQos",
+        "Alternate",
+        "CpuBind",
+        "Default",
+        "DefaultTime",
+        "DefMemPerCPU",
+        "DefMemPerNode",
+        "DenyAccounts",
+        "DenyQOS",
+        "DenyQos",
+        "DisableRootJobs",
+        "Exclusive",
+        "ExclusiveTopo",
+        "ExclusiveUser",
+        "GraceTime",
+        "Hidden",
+        "JobDefaults",
+        "LLN",
+        "MaxCPUsPerNode",
+        "MaxCPUsPerSocket",
+        "MaxMemPerCPU",
+        "MaxMemPerNode",
+        "MaxNodes",
+        "MaxTime",
+        "MinNodes",
+        "Nodes",
+        "NodeSets",
+        "OverSubscribe",
+        "OverTimeLimit",
+        "PartitionName",
+        "PowerDownOnIdle",
+        "PreemptMode",
+        "PriorityJobFactor",
+        "PriorityTier",
+        "QoS",
+        "ReqResv",
+        "ResumeTimeout",
+        "RootOnly",
+        "SelectTypeParameters",
+        "State",
+        "SuspendTimeout",
+        "Topology",
+        "TRESBillingWeights",
+    }
+)
+
 
 @dataclass(frozen=True)
 class AffectedSlurmJob:
@@ -67,7 +133,7 @@ class SlurmPartitionState:
 
 
 @dataclass(frozen=True)
-class SlurmPartitionQuiesceRecord:
+class SlurmPartitionPauseRecord:
     partition: str
     previous_state: str
     previous_record: str
@@ -79,34 +145,36 @@ class SlurmPartitionQuiesceRecord:
     def __post_init__(self) -> None:
         previous = canonical_slurm_partition_record(self.previous_record)
         if previous != self.previous_record:
-            raise ValueError("Slurm quiesce previous record must use canonical token ordering.")
+            raise ValueError("Slurm pause previous record must use canonical token ordering.")
         if slurm_partition_record_fingerprint(previous) != self.previous_record_fingerprint:
-            raise ValueError("Slurm quiesce previous fingerprint does not match its record.")
+            raise ValueError("Slurm pause previous fingerprint does not match its record.")
         previous_fields = _slurm_partition_record_fields(previous)
         if clean_slurm_value(previous_fields.get("PartitionName", "")) != self.partition:
-            raise ValueError("Slurm quiesce previous record belongs to another partition.")
+            raise ValueError("Slurm pause previous record belongs to another partition.")
         if slurm_partition_state_token(
             previous_fields.get("State", "")
         ) != slurm_partition_state_token(self.previous_state):
-            raise ValueError("Slurm quiesce previous record has a different state.")
+            raise ValueError("Slurm pause previous record has a different state.")
         if bool(self.applied_record) != bool(self.applied_record_fingerprint):
-            raise ValueError(
-                "Slurm quiesce applied record and fingerprint must be present together."
-            )
+            raise ValueError("Slurm pause applied record and fingerprint must be present together.")
         if not self.applied_record:
             return
         applied = canonical_slurm_partition_record(self.applied_record)
         if applied != self.applied_record:
-            raise ValueError("Slurm quiesce applied record must use canonical token ordering.")
+            raise ValueError("Slurm pause applied record must use canonical token ordering.")
         if slurm_partition_record_fingerprint(applied) != self.applied_record_fingerprint:
-            raise ValueError("Slurm quiesce applied fingerprint does not match its record.")
+            raise ValueError("Slurm pause applied fingerprint does not match its record.")
         applied_fields = _slurm_partition_record_fields(applied)
         if clean_slurm_value(applied_fields.get("PartitionName", "")) != self.partition:
-            raise ValueError("Slurm quiesce applied record belongs to another partition.")
+            raise ValueError("Slurm pause applied record belongs to another partition.")
         if slurm_partition_state_token(
             applied_fields.get("State", "")
         ) != slurm_partition_state_token(self.applied_state):
-            raise ValueError("Slurm quiesce applied record has a different state.")
+            raise ValueError("Slurm pause applied record has a different state.")
+        if not slurm_partition_owned_fields_match(previous, applied, include_state=False):
+            raise ValueError(
+                "Slurm pause applied record changed a customer-owned or unknown field."
+            )
 
     def as_payload(self) -> dict[str, str]:
         return {
@@ -122,13 +190,13 @@ class SlurmPartitionQuiesceRecord:
     def with_applied_observation(
         self,
         observation: SlurmPartitionState,
-    ) -> SlurmPartitionQuiesceRecord:
+    ) -> SlurmPartitionPauseRecord:
         if observation.name != self.partition:
-            raise ValueError("Slurm quiesce observation belongs to another partition.")
+            raise ValueError("Slurm pause observation belongs to another partition.")
         if slurm_partition_state_token(observation.state) != slurm_partition_state_token(
             self.applied_state
         ):
-            raise ValueError("Slurm quiesce observation does not show the applied state.")
+            raise ValueError("Slurm pause observation does not show the applied state.")
         return replace(
             self,
             applied_record=observation.record,
@@ -137,11 +205,11 @@ class SlurmPartitionQuiesceRecord:
 
 
 def canonical_slurm_partition_record(record: str) -> str:
-    """Canonicalize one `scontrol show partition -o` record for value-CAS.
+    """Canonicalize one raw `scontrol show partition -o` evidence record.
 
-    Slurm exposes no resource version for a partition. The canonical full record
-    therefore provides a strict best-effort compare-and-set value. Any runtime
-    field change also invalidates ownership and requires manual recovery.
+    Full raw records and their fingerprints remain durable evidence. Pause
+    ownership uses :func:`canonical_slurm_partition_owned_record` so known
+    controller-derived topology summaries do not make a safe restore impossible.
     """
 
     tokens = str(record or "").strip().split()
@@ -153,6 +221,52 @@ def canonical_slurm_partition_record(record: str) -> str:
 def slurm_partition_record_fingerprint(record: str) -> str:
     canonical = canonical_slurm_partition_record(record)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def canonical_slurm_partition_owned_record(
+    record: str,
+    *,
+    include_state: bool = True,
+) -> str:
+    """Return the fail-closed partition pause ownership view.
+
+    Known customer-configurable fields are explicitly catalogued above. Unknown
+    fields remain in this view and therefore invalidate ownership when they
+    change. Only the explicit controller-derived topology fields are ignored.
+    ``State`` is included for normal compare-and-set checks and can be excluded
+    only while validating the immediate ``UP`` to ``DOWN`` mutation itself.
+    """
+
+    customer_owned: list[str] = []
+    unknown_guarded: list[str] = []
+    for token in canonical_slurm_partition_record(record).split():
+        key, _value = token.split("=", 1)
+        if key in SLURM_PARTITION_DERIVED_TOPOLOGY_FIELDS:
+            continue
+        if key == "State" and not include_state:
+            continue
+        if key in SLURM_PARTITION_CUSTOMER_OWNED_FIELDS:
+            customer_owned.append(token)
+        else:
+            unknown_guarded.append(token)
+    return " ".join(sorted((*customer_owned, *unknown_guarded)))
+
+
+def slurm_partition_owned_fields_match(
+    left: str,
+    right: str,
+    *,
+    include_state: bool = True,
+) -> bool:
+    """Compare partition pause ownership while ignoring only known derived fields."""
+
+    return canonical_slurm_partition_owned_record(
+        left,
+        include_state=include_state,
+    ) == canonical_slurm_partition_owned_record(
+        right,
+        include_state=include_state,
+    )
 
 
 def _slurm_partition_record_fields(record: str) -> dict[str, str]:
@@ -306,14 +420,14 @@ def parse_scontrol_show_partition_states(output: str) -> tuple[SlurmPartitionSta
     return tuple(states)
 
 
-def slurm_partition_quiesce_records(
+def slurm_partition_pause_records(
     *,
     partitions: Sequence[str],
     states: Sequence[SlurmPartitionState],
     applied_state: str = "DOWN",
-) -> tuple[SlurmPartitionQuiesceRecord, ...]:
+) -> tuple[SlurmPartitionPauseRecord, ...]:
     by_name = {state.name: state for state in states}
-    records: list[SlurmPartitionQuiesceRecord] = []
+    records: list[SlurmPartitionPauseRecord] = []
     for raw_partition in partitions:
         partition = clean_slurm_value(raw_partition)
         if not partition:
@@ -321,12 +435,12 @@ def slurm_partition_quiesce_records(
         current = by_name.get(partition)
         if current is None:
             raise RuntimeError(
-                f"Could not inspect Slurm partition `{partition}` before scheduling quiesce."
+                f"Could not inspect Slurm partition `{partition}` before scheduling pause."
             )
         if slurm_partition_state_token(current.state) != "UP":
             continue
         records.append(
-            SlurmPartitionQuiesceRecord(
+            SlurmPartitionPauseRecord(
                 partition=partition,
                 previous_state=current.state,
                 previous_record=current.record,

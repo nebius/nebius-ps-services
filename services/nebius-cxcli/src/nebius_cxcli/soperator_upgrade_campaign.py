@@ -12,7 +12,7 @@ from typing import Any
 
 from .runtime_config import to_plain_data
 
-SOPERATOR_UPGRADE_CAMPAIGN_SCHEMA = "nebius-cxcli-ext-soperator-upgrade-campaign/v3"
+SOPERATOR_UPGRADE_CAMPAIGN_SCHEMA = "nebius-cxcli-ext-soperator-upgrade-campaign/v4"
 
 _FINGERPRINT_EXCLUDED_KEYS = frozenset({"campaign_id", "created_at", "fingerprint"})
 
@@ -75,7 +75,7 @@ def finalize_soperator_upgrade_campaign(
     *,
     created_at: str = "",
 ) -> dict[str, Any]:
-    """Attach deterministic identity to a compiled v3 campaign."""
+    """Attach deterministic identity to a compiled v4 campaign."""
 
     plain = to_plain_data(dict(campaign))
     result = dict(plain) if isinstance(plain, Mapping) else {}
@@ -555,7 +555,7 @@ def effective_campaign_segment_for_replacements(
 def journal_node_group_replacement_transitions(
     checkpoint: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Extract exact replacement bindings and retirements from a v3 journal."""
+    """Extract exact replacement bindings and retirements from a v4 journal."""
 
     phase_states: list[Mapping[str, Any]] = []
     current_phase_state = checkpoint.get("phase_state")

@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import importlib.util
 import json
@@ -15,6 +15,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
+
+import prompt_workspace_intake as intake
 
 
 SCRIPT = Path(__file__).resolve().with_name("prompt_workspace.py")
@@ -121,6 +124,7 @@ class PromptWorkspaceTest(unittest.TestCase):
         *,
         status: str = "prepared",
         bound_revision: str | None = None,
+        last_invoked_at: datetime | None = None,
     ) -> None:
         run_dir = Path(
             json.loads(self.workspace.read_text(encoding="utf-8"))["runs_root"]
@@ -136,9 +140,7 @@ class PromptWorkspaceTest(unittest.TestCase):
                 if revision["revision"] == bound_revision
             )
         handoff = run_dir / "handoff.md"
-        handoff.write_text(
-            "\n".join(
-                (
+        run_lines = [
                     "# Task Implementer Handoff",
                     "",
                     "## Run",
@@ -148,20 +150,51 @@ class PromptWorkspaceTest(unittest.TestCase):
                     f"- Prompt ID: {manifest['prompt_id']}",
                     f"- Bound revision: {bound['revision']}",
                     f"- Bound SHA-256: {bound['sha256']}",
+        ]
+        if last_invoked_at is not None:
+            run_lines.append(
+                "- Last invoked at: "
+                f"{last_invoked_at.isoformat(timespec='seconds')}"
+            )
+        run_lines.extend(
+            [
                     f"- Overall status: {status}",
                     "",
                     "## Checkpoints",
                     "",
                     f"- Bound revision: {bound['revision']}",
                     "",
-                )
-            ),
+            ]
+        )
+        handoff.write_text(
+            "\n".join(run_lines),
             encoding="utf-8",
         )
         handoff.chmod(0o600)
 
     def mark_run_done(self, run_id: str) -> None:
         self.write_handoff(run_id, status="done")
+
+    def resolve_steering(
+        self,
+        run_id: str,
+        revision: str,
+        disposition: str = "applied",
+    ) -> None:
+        runs_root = Path(
+            json.loads(self.workspace.read_text(encoding="utf-8"))["runs_root"]
+        )
+        run_dir = runs_root / run_id
+        manifest = json.loads(
+            (run_dir / "manifest.json").read_text(encoding="utf-8")
+        )
+        pw.resolve_steering_revision(
+            run_dir,
+            manifest["revisions"],
+            revision,
+            disposition,
+            clock=lambda: FIXED_UTC + timedelta(minutes=1),
+        )
 
     def assert_error(self, code: str, function: object, *args: object, **kwargs: object) -> None:
         with self.assertRaises(pw.PromptWorkspaceError) as context:
@@ -197,6 +230,171 @@ class PromptWorkspaceTest(unittest.TestCase):
                 clock=lambda: FIXED_LOCAL,
             )
             self.assertEqual(aliased["workspace"], str(self.workspace))
+
+    def test_project_init_defaults_to_cwd_and_preserves_starter(self) -> None:
+        project_home = self.root / "project init home"
+        command = [
+            sys.executable,
+            str(SCRIPT),
+            "init",
+            "--codex-home",
+            str(project_home),
+            "--no-open",
+            "--json",
+        ]
+        first = subprocess.run(
+            command,
+            cwd=self.scope,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        first_result = json.loads(first.stdout)
+        self.assertNotIn("project_id", first_result)
+        self.assertNotIn("scope_id", first_result)
+        starter = Path(first_result["starter_prompt"])
+        self.assertTrue(first_result["starter_created"])
+        self.assertTrue(starter.is_file())
+        starter_bytes = starter.read_bytes()
+        starter_mtime = starter.stat().st_mtime_ns
+
+        repeated = subprocess.run(
+            [*command[:3], str(self.scope), *command[3:]],
+            cwd=self.repo,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(repeated.returncode, 0, repeated.stdout + repeated.stderr)
+        repeated_result = json.loads(repeated.stdout)
+        self.assertEqual(repeated_result["workspace"], first_result["workspace"])
+        self.assertFalse(repeated_result["starter_created"])
+        self.assertEqual(starter.read_bytes(), starter_bytes)
+        self.assertEqual(starter.stat().st_mtime_ns, starter_mtime)
+        self.assertEqual(len(list(starter.parent.glob("*.md"))), 1)
+
+        manifest = json.loads(
+            Path(first_result["workspace"]).read_text(encoding="utf-8")
+        )
+        self.assertEqual(manifest["source_root"], str(self.scope.resolve()))
+        vscode = Path(manifest["vscode_workspace"])
+        vscode_bytes = vscode.read_bytes()
+        vscode.write_text("{}\n", encoding="utf-8")
+        vscode.chmod(0o600)
+        relative = subprocess.run(
+            [*command[:3], "services/example", *command[3:]],
+            cwd=self.repo,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(relative.returncode, 0, relative.stdout + relative.stderr)
+        relative_result = json.loads(relative.stdout)
+        self.assertEqual(relative_result["workspace"], first_result["workspace"])
+        self.assertEqual(vscode.read_bytes(), vscode_bytes)
+        self.assertEqual(starter.read_bytes(), starter_bytes)
+        self.assertEqual(starter.stat().st_mtime_ns, starter_mtime)
+        self.assertEqual(git("status", "--porcelain=v1", cwd=self.repo), "")
+
+    def test_project_init_succeeds_when_editor_is_unavailable(self) -> None:
+        project_home = self.root / "missing editor home"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "init",
+                str(self.scope),
+                "--codex-home",
+                str(project_home),
+                "--editor",
+                "task-implementer-editor-that-does-not-exist",
+                "--json",
+            ],
+            cwd=self.repo,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("WARN editor executable is unavailable", result.stderr)
+        self.assertTrue(Path(json.loads(result.stdout)["workspace"]).is_file())
+        self.assertEqual(git("status", "--porcelain=v1", cwd=self.repo), "")
+
+    def test_project_init_preserves_prompts_and_run_history(self) -> None:
+        prompt = self.new_prompt()
+        self.complete_prompt(prompt)
+        snapshot = pw.snapshot_prompt(
+            self.workspace,
+            prompt,
+            run_id=None,
+            force_new_run=False,
+            clock=lambda: FIXED_UTC,
+        )
+        self.write_handoff(
+            snapshot["run_id"],
+            status="done",
+            last_invoked_at=FIXED_UTC,
+        )
+        prompt_bytes = prompt.read_bytes()
+        prompt_mtime = prompt.stat().st_mtime_ns
+        manifest_path = Path(snapshot["manifest"])
+        manifest_bytes = manifest_path.read_bytes()
+        handoff = manifest_path.parent / "handoff.md"
+        handoff_bytes = handoff.read_bytes()
+
+        result = pw.initialize_project_workspace(
+            self.scope,
+            self.codex_home,
+            clock=lambda: FIXED_LOCAL.replace(second=5),
+        )
+
+        self.assertFalse(result["starter_created"])
+        self.assertEqual(prompt.read_bytes(), prompt_bytes)
+        self.assertEqual(prompt.stat().st_mtime_ns, prompt_mtime)
+        self.assertEqual(manifest_path.read_bytes(), manifest_bytes)
+        self.assertEqual(handoff.read_bytes(), handoff_bytes)
+        self.assertEqual(result["prompts"][0]["path"], str(prompt))
+        self.assertEqual(git("status", "--porcelain=v1", cwd=self.repo), "")
+
+    def test_concurrent_project_init_is_idempotent(self) -> None:
+        project_home = self.root / "concurrent init home"
+        command = [
+            sys.executable,
+            str(SCRIPT),
+            "init",
+            str(self.scope),
+            "--codex-home",
+            str(project_home),
+            "--no-open",
+            "--json",
+        ]
+        processes = [
+            subprocess.Popen(
+                command,
+                cwd=self.repo,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            for _ in range(2)
+        ]
+        results = [process.communicate(timeout=15) for process in processes]
+        for process, (stdout, stderr) in zip(processes, results, strict=True):
+            self.assertEqual(process.returncode, 0, stdout + stderr)
+        parsed = [json.loads(stdout) for stdout, _ in results]
+        self.assertEqual(parsed[0]["workspace"], parsed[1]["workspace"])
+        self.assertEqual(
+            sum(bool(result["starter_created"]) for result in parsed),
+            1,
+        )
+        prompt_root = Path(parsed[0]["prompt_root"])
+        self.assertEqual(len(list(prompt_root.glob("*.md"))), 1)
+        self.assertEqual(git("status", "--porcelain=v1", cwd=self.repo), "")
 
     def test_init_isolates_clones_and_scopes(self) -> None:
         root_scope = pw.init_workspace(
@@ -519,6 +717,609 @@ class PromptWorkspaceTest(unittest.TestCase):
             clock=lambda: FIXED_UTC.replace(second=2),
         )
         self.assertNotEqual(first["run_id"], second["run_id"])
+
+    def test_run_intake_routes_without_user_run_ids_or_prompt_mutation(self) -> None:
+        prompt = self.new_prompt()
+        self.complete_prompt(prompt)
+        source_bytes = prompt.read_bytes()
+        source_mtime = prompt.stat().st_mtime_ns
+
+        first = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC,
+        )
+        self.assertEqual(first["action"], "new")
+        self.assertEqual(first["status"], "snapshot_only")
+        internal = first["_internal"]
+        self.assertIsInstance(internal, dict)
+        run_id = internal["run_id"]
+        self.assertNotIn("run_id", first)
+        self.assertEqual(prompt.read_bytes(), source_bytes)
+        self.assertEqual(prompt.stat().st_mtime_ns, source_mtime)
+
+        self.write_handoff(run_id, status="prepared")
+        continued = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            str(prompt),
+            clock=lambda: FIXED_UTC.replace(second=1),
+        )
+        self.assertEqual(continued["action"], "continue")
+        self.assertEqual(continued["_internal"]["run_id"], run_id)
+        handoff = Path(continued["_internal"]["manifest"]).parent / "handoff.md"
+        self.assertIn(
+            "- Last invoked at: 2026-07-12T21:30:01+00:00",
+            handoff.read_text(encoding="utf-8"),
+        )
+
+        prompt.write_text(
+            prompt.read_text(encoding="utf-8").replace(
+                "The private prompt workflow is usable.",
+                "The private prompt workflow reconciles edits safely.",
+            ),
+            encoding="utf-8",
+        )
+        prompt.chmod(0o600)
+        edited_bytes = prompt.read_bytes()
+        edited_mtime = prompt.stat().st_mtime_ns
+        reconciled = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC.replace(second=2),
+        )
+        self.assertEqual(reconciled["action"], "reconcile")
+        self.assertEqual(reconciled["status"], "reconcile_pending")
+        self.assertEqual(reconciled["_internal"]["revision"], "r0002")
+        self.assertEqual(prompt.read_bytes(), edited_bytes)
+        self.assertEqual(prompt.stat().st_mtime_ns, edited_mtime)
+
+        self.write_handoff(run_id, status="done", bound_revision="r0002")
+        self.resolve_steering(run_id, "r0002")
+        completed = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC.replace(second=3),
+        )
+        self.assertEqual(completed["action"], "done")
+        self.assertEqual(completed["_internal"]["run_id"], run_id)
+
+        prompt.write_text(
+            prompt.read_text(encoding="utf-8").replace(
+                "reconciles edits safely", "starts a new run after completion"
+            ),
+            encoding="utf-8",
+        )
+        prompt.chmod(0o600)
+        restarted = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC.replace(second=4),
+        )
+        self.assertEqual(restarted["action"], "new")
+        self.assertNotEqual(restarted["_internal"]["run_id"], run_id)
+
+    def test_run_intake_rejects_invalid_or_foreign_prompt_references(self) -> None:
+        prompt = self.new_prompt()
+        self.complete_prompt(prompt)
+        self.assert_error(
+            "PROMPT_PATH_INVALID",
+            pw.route_project_prompt,
+            self.scope,
+            self.codex_home,
+            "nested/prompt.md",
+        )
+        self.assert_error(
+            "PROMPT_PATH_INVALID",
+            pw.route_project_prompt,
+            self.scope,
+            self.codex_home,
+            "missing.md",
+        )
+        outside = self.root / "outside.md"
+        outside.write_bytes(prompt.read_bytes())
+        outside.chmod(0o600)
+        self.assert_error(
+            "PROMPT_PATH_INVALID",
+            pw.route_project_prompt,
+            self.scope,
+            self.codex_home,
+            str(outside),
+        )
+        if os.name == "posix":
+            linked = self.prompt_root / "linked.md"
+            linked.symlink_to(outside)
+            self.assert_error(
+                "PROMPT_PATH_INVALID",
+                pw.route_project_prompt,
+                self.scope,
+                self.codex_home,
+                linked.name,
+            )
+
+        missing_home = self.root / "missing home"
+        self.assert_error(
+            "WORKSPACE_NOT_FOUND",
+            pw.route_project_prompt,
+            self.scope,
+            missing_home,
+            prompt.name,
+        )
+
+    def test_first_intake_activity_persists_and_retry_reuses_snapshot(self) -> None:
+        prompt = self.new_prompt()
+        self.complete_prompt(prompt)
+
+        first = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC,
+        )
+        run_id = first["_internal"]["run_id"]
+        persisted = pw.prompt_rows(self.workspace, None, None)
+        self.assertEqual(persisted[0]["path"], str(prompt))
+        self.assertEqual(
+            persisted[0]["last_invoked_at"],
+            "2026-07-12T21:30:00+00:00",
+        )
+        if os.name == "posix":
+            self.assertEqual(mode(self.workspace.parent / "activity.json"), 0o600)
+
+        retried = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC.replace(second=1),
+        )
+        self.assertEqual(retried["action"], "new")
+        self.assertEqual(retried["_internal"]["run_id"], run_id)
+        self.assertEqual(retried["_internal"]["revision"], "r0001")
+        persisted = pw.prompt_rows(self.workspace, None, None)
+        self.assertEqual(
+            persisted[0]["last_invoked_at"],
+            "2026-07-12T21:30:01+00:00",
+        )
+
+        run_dir = Path(retried["_internal"]["manifest"]).parent
+        manifest = json.loads(
+            Path(retried["_internal"]["manifest"]).read_text(encoding="utf-8")
+        )
+        self.assertEqual(len(manifest["revisions"]), 1)
+        self.assertEqual(len(list(run_dir.parent.glob("run-*"))), 1)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX activity safety checks")
+    def test_activity_state_rejects_permissions_and_symlinks(self) -> None:
+        prompt = self.new_prompt()
+        self.complete_prompt(prompt)
+        pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC,
+        )
+        activity = self.workspace.parent / "activity.json"
+        activity.chmod(0o644)
+        self.assert_error(
+            "WORKSPACE_PERMISSION_INVALID",
+            pw.prompt_rows,
+            self.workspace,
+            None,
+            None,
+        )
+
+        activity.chmod(0o600)
+        outside = self.root / "outside activity.json"
+        outside.write_bytes(activity.read_bytes())
+        outside.chmod(0o600)
+        activity.unlink()
+        activity.symlink_to(outside)
+        self.assert_error(
+            "WORKSPACE_PATH_INVALID",
+            pw.prompt_rows,
+            self.workspace,
+            None,
+            None,
+        )
+
+    def test_edited_snapshot_only_intake_reuses_run_with_new_revision(self) -> None:
+        prompt = self.new_prompt()
+        self.complete_prompt(prompt)
+        first = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC,
+        )
+        run_id = first["_internal"]["run_id"]
+
+        prompt.write_text(
+            prompt.read_text(encoding="utf-8").replace(
+                "The private prompt workflow is usable.",
+                "The edited first intake is usable.",
+            ),
+            encoding="utf-8",
+        )
+        prompt.chmod(0o600)
+        resumed = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC.replace(second=1),
+        )
+        self.assertEqual(resumed["action"], "new")
+        self.assertEqual(resumed["_internal"]["run_id"], run_id)
+        self.assertEqual(resumed["_internal"]["revision"], "r0002")
+
+        retry = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC.replace(second=2),
+        )
+        self.assertEqual(retry["_internal"]["run_id"], run_id)
+        self.assertEqual(retry["_internal"]["revision"], "r0002")
+        manifest = json.loads(
+            Path(retry["_internal"]["manifest"]).read_text(encoding="utf-8")
+        )
+        self.assertEqual(len(manifest["revisions"]), 2)
+
+    def test_router_reuses_and_orders_multiple_pending_revisions(self) -> None:
+        prompt = self.new_prompt()
+        self.complete_prompt(prompt)
+        first = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC,
+        )
+        run_id = first["_internal"]["run_id"]
+        self.write_handoff(
+            run_id,
+            status="prepared",
+            last_invoked_at=FIXED_UTC,
+        )
+        prompt.write_text(
+            prompt.read_text(encoding="utf-8").replace(
+                "The private prompt workflow is usable.",
+                "The first reconciliation revision is usable.",
+            ),
+            encoding="utf-8",
+        )
+        prompt.chmod(0o600)
+
+        reconciled = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC.replace(second=1),
+        )
+        self.assertEqual(reconciled["action"], "reconcile")
+        self.assertEqual(reconciled["_internal"]["revision"], "r0002")
+        resumed = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC.replace(second=2),
+        )
+        self.assertEqual(resumed["action"], "reconcile")
+        self.assertEqual(resumed["_internal"]["run_id"], run_id)
+        self.assertEqual(resumed["_internal"]["revision"], "r0002")
+        manifest_path = Path(resumed["_internal"]["manifest"])
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(len(manifest["revisions"]), 2)
+        prompt.write_text(
+            prompt.read_text(encoding="utf-8").replace(
+                "The first reconciliation revision is usable.",
+                "A second pending edit is ordered safely.",
+            ),
+            encoding="utf-8",
+        )
+        prompt.chmod(0o600)
+        second = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC.replace(second=3),
+        )
+        self.assertEqual(second["action"], "reconcile")
+        self.assertEqual(second["_internal"]["revision"], "r0003")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(len(manifest["revisions"]), 3)
+        steering = json.loads(
+            (manifest_path.parent / "steering.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            [event["revision"] for event in steering["events"]],
+            ["r0002", "r0003"],
+        )
+
+    def test_prompt_change_race_fails_before_snapshot_or_activity(self) -> None:
+        prompt = self.new_prompt()
+        self.complete_prompt(prompt)
+        original_snapshot = intake._snapshot_prompt_unlocked
+
+        def mutate_then_snapshot(*args: object, **kwargs: object) -> dict[str, object]:
+            prompt.write_text(
+                prompt.read_text(encoding="utf-8").replace(
+                    "The private prompt workflow is usable.",
+                    "The prompt changed during intake.",
+                ),
+                encoding="utf-8",
+            )
+            prompt.chmod(0o600)
+            return original_snapshot(*args, **kwargs)
+
+        with mock.patch.object(
+            intake,
+            "_snapshot_prompt_unlocked",
+            side_effect=mutate_then_snapshot,
+        ):
+            self.assert_error(
+                "PROMPT_DRIFT",
+                pw.route_project_prompt,
+                self.scope,
+                self.codex_home,
+                prompt.name,
+                clock=lambda: FIXED_UTC,
+            )
+        runs_root = Path(
+            json.loads(self.workspace.read_text(encoding="utf-8"))["runs_root"]
+        )
+        self.assertEqual(list(runs_root.glob("run-*")), [])
+        self.assertFalse((self.workspace.parent / "activity.json").exists())
+
+    def test_rejected_intake_does_not_change_activity_order(self) -> None:
+        active_prompt = self.new_prompt(prompt_hex="a" * 32)
+        rejected_prompt = self.new_prompt(
+            ask="Implement another independent ask",
+            prompt_hex="b" * 32,
+        )
+        self.complete_prompt(active_prompt)
+        self.complete_prompt(rejected_prompt)
+        pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            active_prompt.name,
+            clock=lambda: FIXED_UTC,
+        )
+        activity = self.workspace.parent / "activity.json"
+        activity_before = activity.read_bytes()
+        rows_before = pw.prompt_rows(self.workspace, None, None)
+
+        with self.assertRaises(pw.PromptWorkspaceError) as context:
+            pw.route_project_prompt(
+                self.scope,
+                self.codex_home,
+                rejected_prompt.name,
+                clock=lambda: FIXED_UTC.replace(second=5),
+            )
+        self.assertEqual(context.exception.code, "ACTIVE_RUN_EXISTS")
+        self.assertIn(str(active_prompt), context.exception.message)
+        self.assertNotIn("run-", context.exception.message)
+        self.assertEqual(activity.read_bytes(), activity_before)
+        self.assertEqual(pw.prompt_rows(self.workspace, None, None), rows_before)
+
+        self.assert_error(
+            "PROMPT_PATH_INVALID",
+            pw.route_project_prompt,
+            self.scope,
+            self.codex_home,
+            "missing.md",
+            clock=lambda: FIXED_UTC.replace(second=6),
+        )
+        self.assertEqual(activity.read_bytes(), activity_before)
+        self.assertEqual(pw.prompt_rows(self.workspace, None, None), rows_before)
+
+    def test_running_handoff_without_active_plane_reconciles_edit(self) -> None:
+        prompt = self.new_prompt()
+        self.complete_prompt(prompt)
+        first = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC,
+        )
+        self.write_handoff(
+            first["_internal"]["run_id"],
+            status="running",
+            last_invoked_at=FIXED_UTC,
+        )
+        prompt.write_text(
+            prompt.read_text(encoding="utf-8").replace(
+                "The private prompt workflow is usable.",
+                "The running prompt now contradicts active work.",
+            ),
+            encoding="utf-8",
+        )
+        prompt.chmod(0o600)
+
+        routed = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC.replace(second=3),
+        )
+        self.assertEqual(routed["action"], "reconcile")
+        self.assertEqual(routed["status"], "reconcile_pending")
+        rows = pw.prompt_rows(self.workspace, None, None)
+        self.assertEqual(
+            rows[0]["last_invoked_at"],
+            "2026-07-12T21:30:03+00:00",
+        )
+
+    def test_intake_json_redacts_internal_state(self) -> None:
+        prompt = self.new_prompt()
+        self.complete_prompt(prompt)
+        command = [
+            sys.executable,
+            str(SCRIPT),
+            "intake",
+            prompt.name,
+            "--project-path",
+            str(self.scope),
+            "--codex-home",
+            str(self.codex_home),
+        ]
+        public = subprocess.run(
+            [*command, "--json"],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(public.returncode, 0, public.stdout + public.stderr)
+        public_result = json.loads(public.stdout)
+        self.assertNotIn("_internal", public_result)
+        self.assertNotIn("run_id", public.stdout)
+        self.assertNotIn("prompt_id", public.stdout)
+
+        internal = subprocess.run(
+            [*command, "--internal-json"],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(internal.returncode, 0, internal.stdout + internal.stderr)
+        internal_result = json.loads(internal.stdout)
+        self.assertIn("_internal", internal_result)
+        self.assertIn("run_id", internal_result["_internal"])
+
+    def test_prompt_activity_orders_by_last_invocation(self) -> None:
+        first_prompt = self.new_prompt(prompt_hex="a" * 32)
+        second_prompt = self.new_prompt(
+            ask="Implement another independent ask",
+            prompt_hex="b" * 32,
+        )
+        self.complete_prompt(first_prompt)
+        self.complete_prompt(second_prompt)
+
+        first = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            first_prompt.name,
+            clock=lambda: FIXED_UTC,
+        )
+        first_run = first["_internal"]["run_id"]
+        self.write_handoff(
+            first_run,
+            status="done",
+            last_invoked_at=FIXED_UTC,
+        )
+        second = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            second_prompt.name,
+            clock=lambda: FIXED_UTC.replace(second=1),
+        )
+        second_run = second["_internal"]["run_id"]
+        self.write_handoff(
+            second_run,
+            status="done",
+            last_invoked_at=FIXED_UTC.replace(second=1),
+        )
+
+        reordered = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            first_prompt.name,
+            clock=lambda: FIXED_UTC.replace(second=2),
+        )
+        self.assertEqual(reordered["action"], "done")
+        self.assertEqual(reordered["prompts"][0]["path"], str(first_prompt))
+        self.assertEqual(
+            reordered["prompts"][0]["last_invoked_at"],
+            "2026-07-12T21:30:02+00:00",
+        )
+        self.assertNotIn("prompt_id", reordered["prompts"][0])
+        self.assertNotIn("latest_run_id", reordered["prompts"][0])
+
+    def test_prompt_activity_order_is_timezone_offset_independent(self) -> None:
+        first_prompt = self.new_prompt(prompt_hex="a" * 32)
+        second_prompt = self.new_prompt(
+            ask="Implement another independent ask",
+            prompt_hex="b" * 32,
+        )
+        self.complete_prompt(first_prompt)
+        self.complete_prompt(second_prompt)
+        first = pw.snapshot_prompt(
+            self.workspace,
+            first_prompt,
+            run_id=None,
+            force_new_run=False,
+            clock=lambda: FIXED_UTC,
+        )
+        self.write_handoff(
+            first["run_id"],
+            status="done",
+            last_invoked_at=datetime(
+                2026,
+                7,
+                12,
+                15,
+                0,
+                tzinfo=timezone(-timedelta(hours=7)),
+            ),
+        )
+        second = pw.snapshot_prompt(
+            self.workspace,
+            second_prompt,
+            run_id=None,
+            force_new_run=False,
+            clock=lambda: FIXED_UTC.replace(second=1),
+        )
+        self.write_handoff(
+            second["run_id"],
+            status="done",
+            last_invoked_at=datetime(2026, 7, 12, 21, 30, tzinfo=timezone.utc),
+        )
+
+        rows = pw.prompt_rows(self.workspace, None, None)
+        self.assertEqual(rows[0]["path"], str(first_prompt))
+        self.assertEqual(
+            rows[0]["last_invoked_at"],
+            "2026-07-12T22:00:00+00:00",
+        )
+
+    def test_prompt_activity_never_moves_backward(self) -> None:
+        prompt = self.new_prompt()
+        self.complete_prompt(prompt)
+        first = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC.replace(second=5),
+        )
+        self.write_handoff(
+            first["_internal"]["run_id"],
+            status="done",
+            last_invoked_at=FIXED_UTC.replace(second=5),
+        )
+        repeated = pw.route_project_prompt(
+            self.scope,
+            self.codex_home,
+            prompt.name,
+            clock=lambda: FIXED_UTC,
+        )
+        self.assertEqual(
+            repeated["last_invoked_at"],
+            "2026-07-12T21:30:05+00:00",
+        )
+        rows = pw.prompt_rows(self.workspace, None, None)
+        self.assertEqual(
+            rows[0]["last_invoked_at"],
+            "2026-07-12T21:30:05+00:00",
+        )
+        handoff = Path(repeated["_internal"]["manifest"]).parent / "handoff.md"
+        self.assertIn(
+            "- Last invoked at: 2026-07-12T21:30:05+00:00",
+            handoff.read_text(encoding="utf-8"),
+        )
 
     def test_prepare_retry_resumes_same_snapshot_only_run(self) -> None:
         prompt = self.new_prompt()
@@ -1057,7 +1858,7 @@ class PromptWorkspaceTest(unittest.TestCase):
         sentinel = "PRIVATE_BODY_SENTINEL_17fb"
         prompt = self.new_prompt()
         self.complete_prompt(prompt, sentinel=sentinel)
-        snapshot = pw.snapshot_prompt(
+        pw.snapshot_prompt(
             self.workspace,
             prompt,
             run_id=None,
@@ -1066,8 +1867,12 @@ class PromptWorkspaceTest(unittest.TestCase):
         )
         rows = pw.prompt_rows(self.workspace, "workspace", "2026-07-12")
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["latest_run_id"], snapshot["run_id"])
         self.assertEqual(rows[0]["status"], "snapshot_only")
+        self.assertEqual(
+            rows[0]["last_invoked_at"], "2026-07-12T14:30:00+00:00"
+        )
+        self.assertNotIn("prompt_id", rows[0])
+        self.assertNotIn("latest_run_id", rows[0])
         self.assertNotIn(sentinel, json.dumps(rows))
 
         result = subprocess.run(
@@ -1089,7 +1894,8 @@ class PromptWorkspaceTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn(sentinel, result.stdout + result.stderr)
         parsed = json.loads(result.stdout)
-        self.assertEqual(parsed[0]["prompt_id"], f"prompt-{'a' * 32}")
+        self.assertEqual(parsed[0]["path"], str(prompt))
+        self.assertNotIn("prompt_id", parsed[0])
 
         human = subprocess.run(
             [
@@ -1108,10 +1914,11 @@ class PromptWorkspaceTest(unittest.TestCase):
         )
         self.assertEqual(human.returncode, 0, human.stdout + human.stderr)
         fields = human.stdout.rstrip("\n").split("\t")
-        self.assertEqual(len(fields), 8)
-        self.assertEqual(fields[0], rows[0]["created_at"])
-        self.assertEqual(fields[1], rows[0]["modified_at"])
-        self.assertEqual(fields[2], rows[0]["last_submitted_at"])
+        self.assertEqual(len(fields), 4)
+        self.assertEqual(fields[0], rows[0]["last_invoked_at"])
+        self.assertEqual(fields[1], rows[0]["status"])
+        self.assertEqual(fields[2], rows[0]["title"])
+        self.assertEqual(fields[3], rows[0]["path"])
         self.assertNotIn(sentinel, human.stdout + human.stderr)
 
 

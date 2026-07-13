@@ -4,6 +4,36 @@ All notable changes to this chart are tracked here.
 
 ## [Unreleased]
 
+- Bound cxcli's protected-login capture dependency to the exact pinned
+  `login_sshd` platform image. The upstream verifier now runs a restricted,
+  read-only command-presence probe against the immutable `linux/amd64` digest
+  and requires `sshd`, `ssh-keyscan`, `ssh-keygen`, and every core utility used
+  by the fail-closed session probe before chart promotion.
+- Made upstream pin promotion and review/image baseline acceptance fail closed
+  without non-expired, target-bound disposable upgrade-campaign evidence. The
+  verifier and manual workflow now validate v4 job/TUI/SSH/Jail/final-singleton
+  proof, the exact locked old-cluster source identity, resolved target commit,
+  and the post-validation full chart/dependency/import tree, as well as GitHub
+  artifact-attested source-run provenance. Dependency archive entries and the
+  Helm lock are canonicalized so build timestamps cannot invalidate otherwise
+  identical campaign evidence. The production lock deliberately
+  leaves the trusted producer unconfigured, while chart validation renders the
+  stable cxcli values contract, rejects controller HA/replica fields, and runs
+  the pinned Helm unit-test suite.
+- Made the chart-owned GPU driver Jail init guard validation-only. cxcli now
+  performs the one atomic passive-rootfs repair, while every GPU worker mounts
+  both the active Jail and host root read-only and verifies the strict cxcli
+  marker, host driver/version/hashes, four NVIDIA linker symlinks, linker
+  cache, and jailed `nvidia-smi` before `slurmd` starts.
+- Hardened upstream Soperator synchronization around a resolved commit and an
+  isolated validate-before-promote checkout. The verifier now fail-closes on
+  unallowlisted or overlapping exact-sync targets, orphaned imported scripts,
+  cxcli values/schema drift, changed runtime-image references, image-index or
+  required-platform digests, missing `linux/amd64` manifests, and unreviewed
+  logic-hash changes. Runtime-image and logic baselines now require separate
+  explicit acceptance flags. It also renders the imported
+  Pyxis caching importer into the Slurm scripts ConfigMap, and scheduled CI no
+  longer accepts review-only baselines without explicit manual authorization.
 - Fixed the active/passive rootfs switch contract so changing only
   `jailRootfs.activeSlot`/`passiveSlot` moves the canonical `jail` alias,
   controller and login volume-source references, and every worker NodeSet PVC
